@@ -13,7 +13,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
           - target: x86_64-pc-windows-msvc
-            runner: blacksmith-8vcpu-windows-2025
+            runner: windows-2022
     runs-on: ${{ matrix.settings.runner }}
     timeout-minutes: 150
     env:
@@ -85,10 +85,10 @@ jobs:
               --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
               --example preview-readback-benchmark | tee -a "$RUNNER_TEMP/bench.md"
           done
-          { echo "### ${{ matrix.settings.target }} synthetic"; grep -E '^(adapter|\||## )' "$RUNNER_TEMP/bench.md"; } >> "$GITHUB_STEP_SUMMARY"
       - name: Editor A/B on generated recordings
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then rounds="gl vulkan"; else rounds="warp"; fi
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
             export PATH="$debug_path:$PATH"
@@ -96,10 +96,22 @@ jobs:
             export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           fi
           export CAP_GPUI_MUTE_AUDIO=1
-          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} \
-            --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
-            --bin cap-gpui editor_preview_copies_ab -- --ignored --nocapture --test-threads 1 | tee "$RUNNER_TEMP/editor.md"
-          { echo "### ${{ matrix.settings.target }} editor"; grep -E '^(adapter|\|)' "$RUNNER_TEMP/editor.md"; } >> "$GITHUB_STEP_SUMMARY"
+          for backend in $rounds; do
+            if [[ "$backend" == "vulkan" ]]; then
+              sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools
+              (vulkaninfo --summary 2>/dev/null || true) | grep -E "deviceName|driverName|apiVersion" || true
+              echo "## synthetic on $backend" | tee -a "$RUNNER_TEMP/bench.md"
+              cargo +1.95.0 run --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} \
+                --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
+                --example preview-readback-benchmark | tee -a "$RUNNER_TEMP/bench.md"
+              cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui bgra_readback -- --nocapture --test-threads 1
+            fi
+            echo "## editor on $backend" | tee -a "$RUNNER_TEMP/editor.md"
+            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} \
+              --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
+              --bin cap-gpui editor_preview_copies_ab -- --ignored --nocapture --test-threads 1 | tee -a "$RUNNER_TEMP/editor.md"
+          done
+          { echo "### ${{ matrix.settings.target }}"; grep -E '^(adapter|\||## )' "$RUNNER_TEMP/bench.md" "$RUNNER_TEMP/editor.md"; } >> "$GITHUB_STEP_SUMMARY"
   engine:
     strategy:
       fail-fast: false
@@ -108,7 +120,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
           - target: x86_64-pc-windows-msvc
-            runner: blacksmith-8vcpu-windows-2025
+            runner: windows-2022
     runs-on: ${{ matrix.settings.runner }}
     timeout-minutes: 120
     steps:
