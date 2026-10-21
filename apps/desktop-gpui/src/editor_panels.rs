@@ -668,14 +668,102 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
-/// so does the content unless it is still the placeholder a new segment is
-/// born with; the box is scaled with the font change about its **top** edge,
-/// exactly as the Size slider does.
-pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
-    let style = &preset.style;
+/// The look of one text segment, lifted off it by "Copy Style" on the
+/// timeline. Content, timing, lane, position and layout stay with the target
+/// when it is pasted; the box is rescaled with the font size the same way a
+/// preset does it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyle {
+    pub font_family: String,
+    pub font_size: f32,
+    pub font_weight: f32,
+    pub italic: bool,
+    pub uppercase: bool,
+    pub align: TextAlign,
+    pub letter_spacing: f32,
+    pub line_height: f32,
+    pub opacity: f32,
+    pub shadow: f32,
+    pub glow: f32,
+    pub stroke_width: f32,
+    pub stroke_color: String,
+    pub background_style: TextBackgroundStyle,
+    pub background_color: Option<String>,
+    pub color: String,
+    pub gradient_color: Option<String>,
+    pub animation_in: TextAnimation,
+    pub animation_out: TextAnimation,
+    pub animation_in_duration: f64,
+    pub animation_out_duration: f64,
+    pub fade_duration: f64,
+}
+
+impl TextStyle {
+    pub fn of(segment: &TextSegment) -> Self {
+        Self {
+            font_family: segment.font_family.clone(),
+            font_size: segment.font_size,
+            font_weight: segment.font_weight,
+            italic: segment.italic,
+            uppercase: segment.uppercase,
+            align: segment.align,
+            letter_spacing: segment.letter_spacing,
+            line_height: segment.line_height,
+            opacity: segment.opacity,
+            shadow: segment.shadow,
+            glow: segment.glow,
+            stroke_width: segment.stroke_width,
+            stroke_color: segment.stroke_color.clone(),
+            background_style: segment.background_style,
+            background_color: segment.background_color.clone(),
+            color: segment.color.clone(),
+            gradient_color: segment.gradient_color.clone(),
+            animation_in: segment.animation_in,
+            animation_out: segment.animation_out,
+            animation_in_duration: segment.animation_in_duration,
+            animation_out_duration: segment.animation_out_duration,
+            fade_duration: segment.fade_duration,
+        }
+    }
+
+    pub fn apply_to(&self, segment: &mut TextSegment) -> bool {
+        let previous_style = Self::of(segment);
+        let previous_center = segment.center;
+        let previous_size = segment.size;
+        scale_text_box(segment, self.font_size);
+        segment.font_family = self.font_family.clone();
+        segment.font_size = self.font_size;
+        segment.font_weight = self.font_weight;
+        segment.italic = self.italic;
+        segment.uppercase = self.uppercase;
+        segment.align = self.align;
+        segment.letter_spacing = self.letter_spacing;
+        segment.line_height = self.line_height;
+        segment.opacity = self.opacity;
+        segment.shadow = self.shadow;
+        segment.glow = self.glow;
+        segment.stroke_width = self.stroke_width;
+        segment.stroke_color = self.stroke_color.clone();
+        segment.background_style = self.background_style;
+        segment.background_color = self.background_color.clone();
+        segment.color = self.color.clone();
+        segment.gradient_color = self.gradient_color.clone();
+        segment.animation_in = self.animation_in;
+        segment.animation_out = self.animation_out;
+        segment.animation_in_duration = self.animation_in_duration;
+        segment.animation_out_duration = self.animation_out_duration;
+        segment.fade_duration = self.fade_duration;
+        previous_style != *self
+            || previous_center != segment.center
+            || previous_size != segment.size
+    }
+}
+
+/// Grows or shrinks the text box with a font-size change, top edge fixed,
+/// like the Size slider; the canvas overlay re-hugs the glyph bounds later.
+fn scale_text_box(segment: &mut TextSegment, font_size: f32) {
     let box_scale = f64::from(
-        style.font_size
+        font_size
             / if segment.font_size == 0. {
                 48.
             } else {
@@ -686,6 +774,15 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
     segment.size.x = (segment.size.x * box_scale).min(1.);
     segment.size.y *= box_scale;
     segment.center.y = top_edge + segment.size.y / 2.;
+}
+
+/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
+/// so does the content unless it is still the placeholder a new segment is
+/// born with; the box is scaled with the font change about its **top** edge,
+/// exactly as the Size slider does.
+pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
+    let style = &preset.style;
+    scale_text_box(segment, style.font_size);
 
     segment.font_family = pick_font_family(style.font_stack, installed);
     segment.font_size = style.font_size;
@@ -7935,6 +8032,86 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasting_a_text_style_keeps_content_timing_position_and_layout() {
+        let mut source = crate::editor_edits::default_text_segment(0., 2., 0);
+        source.content = "Hello".into();
+        source.font_family = "Georgia".into();
+        source.font_size = 96.;
+        source.font_weight = 400.;
+        source.italic = true;
+        source.uppercase = true;
+        source.letter_spacing = 3.;
+        source.color = "#ff0000".into();
+        source.background_color = Some("#00000080".into());
+        source.gradient_color = Some("#00ff00".into());
+        source.animation_in = TextAnimation::Pop;
+        source.animation_out = TextAnimation::Wipe;
+        source.animation_in_duration = 0.4;
+        source.animation_out_duration = 0.6;
+        source.center = XY::new(0.2, 0.2);
+        source.layout = TextLayout::Fullscreen;
+
+        let mut target = crate::editor_edits::default_text_segment(5., 8., 1);
+        target.content = "World".into();
+        target.center = XY::new(0.7, 0.8);
+        target.size = XY::new(0.2, 0.1);
+
+        assert!(TextStyle::of(&source).apply_to(&mut target));
+
+        assert_eq!(target.content, "World");
+        assert_eq!(target.start, 5.);
+        assert_eq!(target.end, 8.);
+        assert_eq!(target.track, 1);
+        assert_eq!(target.layout, TextLayout::Overlay);
+        assert_eq!(target.center.x, 0.7);
+        assert_eq!(target.font_family, "Georgia");
+        assert_eq!(target.font_size, 96.);
+        assert!(target.italic && target.uppercase);
+        assert_eq!(target.letter_spacing, 3.);
+        assert_eq!(target.color, "#ff0000");
+        assert_eq!(target.background_color.as_deref(), Some("#00000080"));
+        assert_eq!(target.gradient_color.as_deref(), Some("#00ff00"));
+        assert_eq!(target.animation_in, TextAnimation::Pop);
+        assert_eq!(target.animation_out, TextAnimation::Wipe);
+        assert_eq!(target.animation_in_duration, 0.4);
+        assert_eq!(target.animation_out_duration, 0.6);
+        assert_eq!(TextStyle::of(&target), TextStyle::of(&source));
+    }
+
+    #[test]
+    fn pasting_a_text_style_scales_the_box_from_its_top_edge() {
+        let mut source = crate::editor_edits::default_text_segment(0., 2., 0);
+        source.font_size = 96.;
+        let mut target = crate::editor_edits::default_text_segment(0., 2., 0);
+        target.font_size = 48.;
+        target.center = XY::new(0.5, 0.5);
+        target.size = XY::new(0.2, 0.1);
+
+        assert!(TextStyle::of(&source).apply_to(&mut target));
+
+        assert!((target.size.x - 0.4).abs() < 1e-9);
+        assert!((target.size.y - 0.2).abs() < 1e-9);
+        assert!((target.center.y - 0.55).abs() < 1e-9);
+        assert_eq!(target.center.x, 0.5);
+    }
+
+    #[test]
+    fn pasting_a_text_style_onto_its_own_source_changes_nothing() {
+        let mut segment = crate::editor_edits::default_text_segment(0., 2., 0);
+        segment.color = "#ff0000".into();
+        segment.center = XY::new(0.3, 0.6);
+        segment.size = XY::new(0.25, 0.08);
+        let style = TextStyle::of(&segment);
+        let before = segment.clone();
+
+        assert!(!style.apply_to(&mut segment));
+
+        assert_eq!(TextStyle::of(&segment), style);
+        assert_eq!(segment.center, before.center);
+        assert_eq!(segment.size, before.size);
+    }
 
     fn camera3d(start: f64, end: f64) -> Camera3DSegment {
         Camera3DSegment {
