@@ -11878,9 +11878,9 @@ pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> Edito
 }
 
 /// Whether the pump streams RGBA frames into one [`StreamingImage`] instead of
-/// converting each into a [`RenderImage`]. On by default where RGBA is the
-/// preview's only path (Windows and Linux); `CAP_GPUI_STREAMING_IMAGE=0` turns
-/// it off and `=1` turns it on for macOS's RGBA fallback.
+/// converting each into a [`RenderImage`]. On by default on Linux, where the
+/// in-app A/B measured it; `CAP_GPUI_STREAMING_IMAGE=0` turns it off and `=1`
+/// turns it on for Windows and for macOS's RGBA fallback.
 pub(crate) fn streaming_preview_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -11891,7 +11891,7 @@ pub(crate) fn streaming_preview_enabled() -> bool {
 fn streaming_preview_setting(value: Option<&std::ffi::OsStr>) -> bool {
     match value {
         Some(value) => value != "0",
-        None => !cfg!(target_os = "macos"),
+        None => cfg!(target_os = "linux"),
     }
 }
 
@@ -12927,6 +12927,6 @@ mod tests {
         use std::ffi::OsStr;
         assert!(!streaming_preview_setting(Some(OsStr::new("0"))));
         assert!(streaming_preview_setting(Some(OsStr::new("1"))));
-        assert_eq!(streaming_preview_setting(None), !cfg!(target_os = "macos"));
+        assert_eq!(streaming_preview_setting(None), cfg!(target_os = "linux"));
     }
 }
