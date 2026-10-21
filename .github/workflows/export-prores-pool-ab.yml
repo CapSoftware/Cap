@@ -10,8 +10,8 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          - target: x86_64-pc-windows-msvc
-            runner: blacksmith-8vcpu-windows-2025
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
     runs-on: ${{ matrix.settings.runner }}
     timeout-minutes: 200
     env:
@@ -159,7 +159,43 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ "$ok" != 1 ]]; then echo "::error::base and head outputs differ"; fi
+      - name: Focused software-path samples
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set +e
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          ab="$RUNNER_TEMP/ab"
+          bin="$RUNNER_TEMP/abbin"
+          for round in 1 2 3 4 5 6 7 8; do
+            for variant in base head; do
+              for project in plain mask; do
+                rm -rf "$ab/$project/output"
+                CAP_AB_TAG="$project" CAP_AB_REPORT="$ab/focus-$variant.txt" RUST_LOG=warn \
+                  "$bin/$variant/export-cli" "$ab/$project" mp4 '{"fps":30,"resolution_base":{"x":1920,"y":1080},"compression":"Maximum","custom_bpp":null}' > /dev/null 2>&1
+                rm -rf "$ab/$project/output"
+                CAP_AB_TAG="$project-mov4k" CAP_AB_REPORT="$ab/focus-$variant.txt" RUST_LOG=warn \
+                  "$bin/$variant/export-cli" "$ab/$project" mov '{"fps":30,"resolution_base":{"x":3840,"y":2160},"cursor_only":false}' > /dev/null 2>&1
+              done
+            done
+          done
+          cat > "$ab/focus.py" <<'PY'
+          import sys, statistics
+          rows = {}
+          for variant in ("base", "head"):
+              for line in open(sys.argv[1] + f"/focus-{variant}.txt"):
+                  f = dict(t.split("=", 1) for t in line.split()[2:] if "=" in t)
+                  rows.setdefault((f["tag"], variant), []).append(f)
+          keys = ["wall_ms", "readback_us_per_frame", "readback_alloc_bytes_per_frame", "peak_rss_mb", "cpu_ms", "page_faults"]
+          print("| tag | variant | runs | " + " | ".join(keys) + " |")
+          print("|---|---|---|" + "---|" * len(keys))
+          for (tag, variant), runs in sorted(rows.items()):
+              print(f"| {tag} | {variant} | {len(runs)} | " + " | ".join(f"{statistics.median(float(r[k]) for r in runs):.1f}" for k in keys) + " |")
+          PY
+          { echo "### focused (median of 8, interleaved)"; python3 "$ab/focus.py" "$ab"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          cat "$ab/focus-base.txt" "$ab/focus-head.txt"
       - name: Benchmarks, base vs head
+        if: ${{ runner.os != 'Linux' }}
         shell: bash
         run: |
           set +e
