@@ -981,6 +981,10 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
 }
 
+/// Frames `rate_scratch` is reserved for: a 4096-frame device block read at
+/// the fastest shuttle rate (4x), which also covers the stretcher's refills.
+const RATE_SCRATCH_FRAMES: usize = 4096 * 4 + 1024;
+
 /// Pitch-preserving shuttle audio via WSOLA. Only built for f32 streams (what
 /// macOS output devices use); other formats fall back to `fill_at_rate`.
 fn fill_stretched<T: FromSampleBytes + cpal::FromSample<f32>>(
@@ -1157,7 +1161,9 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         },
         channels: output_channels,
         sample_rate: output_info.sample_rate,
-        rate_scratch: Vec::new(),
+        // Sized for the largest refill either rate path asks for, so the
+        // callback's `resize` never allocates.
+        rate_scratch: Vec::with_capacity(RATE_SCRATCH_FRAMES * output_channels),
         stretch: (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
             && playback_rate.is_finite()
             && playback_rate > 0.0

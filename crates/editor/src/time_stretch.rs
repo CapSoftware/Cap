@@ -5,6 +5,12 @@ const HOP_FRAMES: usize = GRAIN_FRAMES / 2;
 const SEARCH_FRAMES: usize = 384;
 const COARSE_STEP: usize = 8;
 const FINE_STEP: usize = 2;
+/// Source frames the input buffer can hold before it is trimmed (it drops
+/// consumed audio once more than four grains are behind), with room for one
+/// 4x hop and a refill. Reserved up front so the audio callback never grows it.
+const INPUT_CAPACITY_FRAMES: usize = GRAIN_FRAMES * 8 + 1024;
+/// Output frames queued at most: one device block plus a hop.
+const READY_CAPACITY_FRAMES: usize = 8192 + HOP_FRAMES;
 
 /// Streaming WSOLA time-stretcher for interleaved f32 audio: consumes source
 /// audio `rate` times faster than it produces output while keeping pitch.
@@ -35,12 +41,12 @@ impl TimeStretch {
             channels,
             rate: rate.clamp(0.25, 4.0),
             window,
-            input: Vec::new(),
+            input: Vec::with_capacity(INPUT_CAPACITY_FRAMES * channels),
             input_offset: 0,
             analysis_frame: SEARCH_FRAMES as f64,
             previous_frame: None,
             accumulator: vec![0.0; GRAIN_FRAMES * channels],
-            ready: VecDeque::new(),
+            ready: VecDeque::with_capacity(READY_CAPACITY_FRAMES * channels),
         }
     }
 
@@ -48,9 +54,15 @@ impl TimeStretch {
         self.channels
     }
 
+    /// Back to the state `new` builds, clearing the buffers in place: this
+    /// runs on the audio callback (on a resync), so it must not allocate.
     pub fn reset(&mut self) {
-        let (channels, rate) = (self.channels, self.rate);
-        *self = Self::new(channels, rate);
+        self.input.clear();
+        self.input_offset = 0;
+        self.analysis_frame = SEARCH_FRAMES as f64;
+        self.previous_frame = None;
+        self.accumulator.fill(0.0);
+        self.ready.clear();
     }
 
     fn input_frames(&self) -> usize {
@@ -183,6 +195,24 @@ mod tests {
             .windows(2)
             .filter(|pair| (pair[0] < 0.0) != (pair[1] < 0.0))
             .count()
+    }
+
+    #[test]
+    fn reset_clears_in_place_and_matches_a_fresh_stretcher() {
+        let mut stretch = TimeStretch::new(2, 2.0);
+        stretch.push_input(&vec![0.25; 8192 * 2]);
+        stretch.hop();
+        let (input, accumulator) = (stretch.input.as_ptr(), stretch.accumulator.as_ptr());
+        stretch.reset();
+        assert_eq!(stretch.input.as_ptr(), input, "no reallocation");
+        assert_eq!(stretch.accumulator.as_ptr(), accumulator, "no reallocation");
+        let fresh = TimeStretch::new(2, 2.0);
+        assert!(stretch.input.is_empty() && stretch.ready.is_empty());
+        assert_eq!(stretch.input_offset, fresh.input_offset);
+        assert_eq!(stretch.analysis_frame, fresh.analysis_frame);
+        assert_eq!(stretch.previous_frame, fresh.previous_frame);
+        assert!(stretch.accumulator.iter().all(|sample| *sample == 0.0));
+        assert_eq!(stretch.accumulator.len(), fresh.accumulator.len());
     }
 
     #[test]
