@@ -121,7 +121,7 @@ fn is_modifier_glyph(character: char) -> bool {
     matches!(character, '⌘' | '⌃' | '⌥' | '⇧')
 }
 
-pub fn parse_keycaps(display_text: &str) -> Vec<Keycap> {
+pub fn parse_keycaps(display_text: &str, recorded_keys: usize) -> Vec<Keycap> {
     let characters: Vec<char> = display_text
         .chars()
         .filter(|character| !character.is_whitespace())
@@ -130,9 +130,10 @@ pub fn parse_keycaps(display_text: &str) -> Vec<Keycap> {
         .iter()
         .take_while(|character| is_modifier_glyph(**character))
         .count();
-    let merges_rest = characters[..leading]
-        .iter()
-        .any(|character| matches!(character, '⌘' | '⌃'));
+    let merges_rest = recorded_keys <= 1
+        && characters[..leading]
+            .iter()
+            .any(|character| matches!(character, '⌘' | '⌃'));
 
     let keys: Vec<Keycap> = if merges_rest {
         let mut keys: Vec<Keycap> = characters[..leading]
@@ -251,7 +252,7 @@ mod tests {
 
     #[test]
     fn splits_a_shortcut_into_one_key_per_symbol() {
-        let keys = parse_keycaps("⌘⇧T");
+        let keys = parse_keycaps("⌘⇧T", 1);
         let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
         assert_eq!(labels, ["⌘", "⇧", "T"]);
         assert!(keys[0].modifier && keys[1].modifier && !keys[2].modifier);
@@ -259,14 +260,14 @@ mod tests {
 
     #[test]
     fn space_has_no_legend_and_is_wide() {
-        let keys = parse_keycaps("␣");
+        let keys = parse_keycaps("␣", 1);
         assert_eq!(keys[0].label, "");
         assert!(close(keys[0].width_units, 130.0));
     }
 
     #[test]
     fn keeps_only_the_most_recent_keys() {
-        let keys = parse_keycaps("abcdefghijklmnop");
+        let keys = parse_keycaps("abcdefghijklmnop", 16);
         assert_eq!(keys.len(), MAX_KEYCAPS);
         assert_eq!(keys.last().unwrap().label, "p");
         assert_eq!(keys[0].label, "e");
@@ -274,28 +275,34 @@ mod tests {
 
     #[test]
     fn only_non_alphanumeric_legends_are_symbols() {
-        let symbols: Vec<_> = parse_keycaps("⌘").iter().map(Keycap::is_symbol).collect();
+        let symbols: Vec<_> = parse_keycaps("⌘", 1)
+            .iter()
+            .map(Keycap::is_symbol)
+            .collect();
         assert_eq!(symbols, [true]);
-        let symbols: Vec<_> = parse_keycaps("T7␣").iter().map(Keycap::is_symbol).collect();
+        let symbols: Vec<_> = parse_keycaps("T7␣", 3)
+            .iter()
+            .map(Keycap::is_symbol)
+            .collect();
         assert_eq!(symbols, [false, false, false]);
     }
 
     #[test]
     fn a_combo_is_modifiers_plus_one_key() {
-        let keys = parse_keycaps("⌃F5");
+        let keys = parse_keycaps("⌃F5", 1);
         let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
         assert_eq!(labels, ["⌃", "F5"]);
         assert!(keys[0].modifier && !keys[0].fit_legend);
         assert!(!keys[1].modifier && keys[1].fit_legend);
 
-        let keys = parse_keycaps("⌘⇧F12");
+        let keys = parse_keycaps("⌘⇧F12", 1);
         let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
         assert_eq!(labels, ["⌘", "⇧", "F12"]);
     }
 
     #[test]
     fn single_key_combos_keep_their_fixed_width() {
-        let keys = parse_keycaps("⌘⏎");
+        let keys = parse_keycaps("⌘⏎", 1);
         assert_eq!(keys.len(), 2);
         assert!(!keys[1].fit_legend);
         assert!(close(keys[1].width_units, 120.0));
@@ -304,19 +311,38 @@ mod tests {
     #[test]
     fn shift_or_option_prefixed_typing_is_one_key_per_character() {
         let labels = |text: &str| -> Vec<String> {
-            parse_keycaps(text)
+            parse_keycaps(text, text.chars().count())
                 .into_iter()
                 .map(|key| key.label)
                 .collect()
         };
         assert_eq!(labels("⇧Hello"), ["⇧", "H", "e", "l", "l", "o"]);
         assert_eq!(labels("⌥F5"), ["⌥", "F", "5"]);
-        assert!(parse_keycaps("⇧Hello").iter().all(|key| !key.fit_legend));
+        assert!(parse_keycaps("⇧Hello", 6).iter().all(|key| !key.fit_legend));
+    }
+
+    #[test]
+    fn typing_after_a_tapped_command_key_is_one_key_per_character() {
+        let keys = parse_keycaps("⌘notepad", 8);
+        let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
+        assert_eq!(labels, ["⌘", "n", "o", "t", "e", "p", "a", "d"]);
+        assert!(keys.iter().all(|key| !key.fit_legend));
+
+        let keys = parse_keycaps("⌘⇧notepad", 8);
+        assert_eq!(keys.len(), 9);
+        assert!(keys.iter().all(|key| !key.fit_legend));
+    }
+
+    #[test]
+    fn a_segment_without_recorded_keys_still_merges_a_combo() {
+        let keys = parse_keycaps("⌃F5", 0);
+        let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
+        assert_eq!(labels, ["⌃", "F5"]);
     }
 
     #[test]
     fn a_command_or_control_combo_merges_even_after_shift() {
-        let keys = parse_keycaps("⇧⌘F12");
+        let keys = parse_keycaps("⇧⌘F12", 1);
         let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
         assert_eq!(labels, ["⇧", "⌘", "F12"]);
         assert!(keys[2].fit_legend);
@@ -324,19 +350,19 @@ mod tests {
 
     #[test]
     fn typed_text_stays_one_key_per_character() {
-        let keys = parse_keycaps("F5x");
+        let keys = parse_keycaps("F5x", 3);
         assert_eq!(keys.len(), 3);
         assert!(keys.iter().all(|key| !key.fit_legend));
     }
 
     #[test]
     fn whitespace_is_not_a_key() {
-        assert!(parse_keycaps("  \n").is_empty());
+        assert!(parse_keycaps("  \n", 0).is_empty());
     }
 
     #[test]
     fn layout_spaces_keys_by_their_unit_widths() {
-        let keys = parse_keycaps("⌘T");
+        let keys = parse_keycaps("⌘T", 1);
         let layout = layout_keycaps(&keys, KEYCAP_UNIT_HEIGHT, 10_000.0);
         assert!(close(layout.scale, 1.0));
         assert!(close(layout.keys[0].x, 0.0));
@@ -347,7 +373,7 @@ mod tests {
 
     #[test]
     fn layout_shrinks_to_fit_the_available_width() {
-        let keys = parse_keycaps("⌘⇧⌥⌃T");
+        let keys = parse_keycaps("⌘⇧⌥⌃T", 1);
         let layout = layout_keycaps(&keys, KEYCAP_UNIT_HEIGHT, 200.0);
         assert!(layout.scale < 1.0);
         assert!(close(layout.width, 200.0));

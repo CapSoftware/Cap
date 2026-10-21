@@ -302,6 +302,7 @@ const KEYCAP_LEGEND_AXIS: f32 = 0.35;
 struct KeycapRequest<'a> {
     settings: &'a KeyboardSettings,
     text: &'a str,
+    recorded_keys: usize,
     font_size: f32,
     opacity: f32,
     bounce_offset: f32,
@@ -606,6 +607,7 @@ impl KeyboardLayer {
             self.prepare_keycaps(KeycapRequest {
                 settings,
                 text: &visible_text,
+                recorded_keys: active.segment.keys.len(),
                 font_size,
                 opacity: text_alpha,
                 bounce_offset: bounce_offset as f32,
@@ -787,7 +789,7 @@ impl KeyboardLayer {
 
     fn prepare_keycaps(&mut self, request: KeycapRequest<'_>) {
         let (width, height) = request.output_size;
-        let mut keys = parse_keycaps(request.text);
+        let mut keys = parse_keycaps(request.text, request.recorded_keys);
         if keys.is_empty() {
             return;
         }
