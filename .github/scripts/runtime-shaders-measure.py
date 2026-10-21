@@ -17,10 +17,19 @@ line_re = re.compile(r"CAPSHADER (\w+) (.*)")
 
 
 def metal_caches():
-    return [p for p in cache_root.iterdir() if "metal" in p.name.lower()] if cache_root.exists() else []
+    found = []
+    for root in (cache_root, pathlib.Path.home() / "Library/Caches"):
+        if not root.exists():
+            continue
+        for p in list(root.glob("*")) + list(root.glob("*/*")) + list(root.glob("*/*/*")):
+            if p.is_dir() and "metal" in p.name.lower():
+                found.append(p)
+    return found
 
 
 def wipe():
+    if not os.environ.get("CI"):
+        return
     for p in metal_caches():
         shutil.rmtree(p, ignore_errors=True)
 
@@ -36,21 +45,20 @@ def run(binary):
         CAP_GPUI_AUTO_SETTINGS="general",
         RUST_LOG="warn",
     )
+    log_path = pathlib.Path(data) / "stderr.log"
+    log = open(log_path, "w")
     launch = time.time() * 1000
-    proc = subprocess.Popen([binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1)
-    os.set_blocking(proc.stderr.fileno(), False)
+    proc = subprocess.Popen([binary], env=env, stdout=log, stderr=log)
     windows, renderers, done = [], {}, {}
     deadline = time.time() + 25
-    buf = ""
     settings_seq = None
+    consumed = 0
     while time.time() < deadline:
-        try:
-            chunk = proc.stderr.read()
-        except Exception:
-            chunk = None
-        if chunk:
-            buf += chunk
-            *lines, buf = buf.split("\n")
+        text = log_path.read_text(errors="replace")
+        complete = text[: text.rfind("\n") + 1]
+        lines = complete[consumed:].split("\n")
+        consumed = len(complete)
+        if True:
             for line in lines:
                 m = line_re.search(line)
                 if not m:
@@ -78,12 +86,18 @@ def run(binary):
         if settings_seq is not None and done.get(settings_seq):
             time.sleep(1)
             break
-        time.sleep(0.02)
+        time.sleep(0.05)
     proc.terminate()
     try:
         proc.wait(5)
     except subprocess.TimeoutExpired:
         proc.kill()
+    log.close()
+    global first_log
+    if first_log:
+        first_log = False
+        print("---- first run stderr tail ----")
+        print("\n".join(log_path.read_text(errors="replace").splitlines()[-40:]))
     shutil.rmtree(data, ignore_errors=True)
     if 0 in renderers and "gpu_done_epoch" in renderers[0]:
         renderers[0]["launch_to_first_frame_ms"] = renderers[0]["gpu_done_epoch"] - launch
@@ -91,6 +105,7 @@ def run(binary):
 
 
 results = []
+first_log = True
 listing_done = False
 for i in range(iterations):
     order = ["runtime", "precompiled"] if i % 2 == 0 else ["precompiled", "runtime"]
