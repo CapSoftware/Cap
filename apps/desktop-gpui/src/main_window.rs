@@ -1599,12 +1599,12 @@ impl MainWindow {
                     id,
                     image,
                     app_icon,
-                    signature,
+                    entry,
                 } => {
                     let icon = app_icon.map(|bytes| {
                         std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
                     });
-                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon, signature) {
+                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon, entry) {
                         let _ = window.drop_image(old);
                     }
                 }

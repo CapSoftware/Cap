@@ -163,9 +163,26 @@ pub enum WindowEvent {
         image: Option<Arc<RenderImage>>,
         /// Raw PNG bytes from `Window::app_icon()` (`thumbnails/mod.rs:113-122`).
         app_icon: Option<Vec<u8>>,
-        /// [`window_entry_signature`] of the row the image was captured from.
-        signature: String,
+        /// The row the image was captured from, and when.
+        entry: CapturedWindow,
     },
+}
+
+/// What a window thumbnail was captured from: the row's
+/// [`window_entry_signature`] and the capture time.
+#[derive(Clone, Debug)]
+pub struct CapturedWindow {
+    signature: String,
+    at: std::time::Instant,
+}
+
+impl CapturedWindow {
+    pub fn new(window: &WindowOption, at: std::time::Instant) -> Self {
+        Self {
+            signature: window_entry_signature(window),
+            at,
+        }
+    }
 }
 
 /// Per-view thumbnail state.
@@ -185,9 +202,9 @@ pub enum WindowEvent {
 pub struct ThumbnailCache {
     displays: HashMap<String, Arc<RenderImage>>,
     windows: HashMap<String, TargetThumb>,
-    /// [`window_entry_signature`] of each window thumbnail in `windows`, so a
-    /// sweep only re-captures the windows that changed.
-    window_entries: HashMap<String, String>,
+    /// What each window thumbnail in `windows` was captured from, so a sweep
+    /// only re-captures the windows that changed or have gone stale.
+    window_entries: HashMap<String, CapturedWindow>,
     /// Signature of the list the cached display thumbnails were captured from.
     display_signature: Option<String>,
     window_signature: Option<String>,
@@ -229,7 +246,7 @@ impl ThumbnailCache {
         id: &WindowId,
         image: Option<Arc<RenderImage>>,
         app_icon: Option<Arc<gpui::Image>>,
-        signature: String,
+        entry: CapturedWindow,
     ) -> Option<Arc<RenderImage>> {
         let key = id.to_string();
         let slot = self.windows.entry(key.clone()).or_default();
@@ -238,7 +255,7 @@ impl ThumbnailCache {
         // icon, which the Tauri card keeps for the life of the row.
         let replaced = match image {
             Some(image) => {
-                self.window_entries.insert(key, signature);
+                self.window_entries.insert(key, entry);
                 slot.image.replace(image)
             }
             None => None,
@@ -285,9 +302,8 @@ impl ThumbnailCache {
         dropped
     }
 
-    /// What a window sweep can skip: the windows whose thumbnail on screen was
-    /// captured from a row that still looks the same.
-    pub fn captured_windows(&self) -> HashMap<String, String> {
+    /// What a window sweep can skip: see [`window_needs_capture`].
+    pub fn captured_windows(&self) -> HashMap<String, CapturedWindow> {
         self.window_entries.clone()
     }
 
@@ -486,9 +502,20 @@ pub fn window_entry_signature(window: &WindowOption) -> String {
 }
 
 /// Whether a sweep has to capture `window` again: it is new, its last capture
-/// missed, or it moved, resized, or changed since.
-pub fn window_needs_capture(captured: &HashMap<String, String>, window: &WindowOption) -> bool {
-    captured.get(&window.id.to_string()) != Some(&window_entry_signature(window))
+/// missed, it moved, resized, or changed since, or its thumbnail is at least
+/// [`THUMBNAIL_STALE_TIME`] old. A sweep only runs when the list signature
+/// changed, so the age rule keeps the refresh that any list change (a focus
+/// switch reorders it) used to give every window, without re-capturing a
+/// window captured moments ago on every step of a drag.
+pub fn window_needs_capture(
+    captured: &HashMap<String, CapturedWindow>,
+    window: &WindowOption,
+    now: std::time::Instant,
+) -> bool {
+    captured.get(&window.id.to_string()).is_none_or(|entry| {
+        entry.signature != window_entry_signature(window)
+            || now.saturating_duration_since(entry.at) >= THUMBNAIL_STALE_TIME
+    })
 }
 
 /// `createDisplaySignature` (`new-main/index.tsx:400-408`): id, name, refresh
@@ -578,7 +605,10 @@ pub async fn capture_displays(events: flume::Sender<DisplayEvent>) {
 /// also reads `Window::app_icon()` per row, which is what the card's centred
 /// icon-on-scrim overlay paints. Windows whose thumbnail in `current` is still
 /// up to date are listed but not captured again.
-pub async fn capture_windows(events: flume::Sender<WindowEvent>, current: HashMap<String, String>) {
+pub async fn capture_windows(
+    events: flume::Sender<WindowEvent>,
+    current: HashMap<String, CapturedWindow>,
+) {
     run_capture(move || capture_windows_inner(events, current)).await
 }
 
@@ -640,7 +670,7 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
 
 async fn capture_windows_inner(
     events: flume::Sender<WindowEvent>,
-    current: HashMap<String, String>,
+    current: HashMap<String, CapturedWindow>,
 ) {
     let targets = crate::devices::list_window_targets();
     let total = targets.len();
@@ -653,9 +683,10 @@ async fn capture_windows_inner(
     {
         return;
     }
+    let now = std::time::Instant::now();
     let targets: Vec<_> = targets
         .into_iter()
-        .filter(|(option, _)| window_needs_capture(&current, option))
+        .filter(|(option, _)| window_needs_capture(&current, option, now))
         .collect();
     if targets.is_empty() {
         tracing::debug!(total, "window thumbnails all current");
@@ -698,7 +729,7 @@ async fn capture_windows_inner(
         }
         if events
             .send(WindowEvent::Captured {
-                signature: window_entry_signature(&option),
+                entry: CapturedWindow::new(&option, std::time::Instant::now()),
                 id: option.id,
                 image,
                 app_icon,
@@ -1194,6 +1225,7 @@ mod tests {
     use super::*;
     use scap_targets::{DisplayId, WindowId};
     use std::str::FromStr;
+    use std::time::Instant;
 
     fn solid(width: u32, height: u32, colour: [u8; 4]) -> RgbaImage {
         RgbaImage::from_pixel(width, height, image::Rgba(colour))
@@ -1481,7 +1513,12 @@ mod tests {
 
         assert!(
             cache
-                .insert_window(&id, Some(image.clone()), None, String::new())
+                .insert_window(
+                    &id,
+                    Some(image.clone()),
+                    None,
+                    CapturedWindow::new(&window("7", "Cap", "Main"), Instant::now())
+                )
                 .is_none()
         );
         assert!(cache.window(&id).image.is_some());
@@ -1489,7 +1526,12 @@ mod tests {
         // A refresh with no capture and no icon: the slot survives untouched.
         assert!(
             cache
-                .insert_window(&id, None, None, String::new())
+                .insert_window(
+                    &id,
+                    None,
+                    None,
+                    CapturedWindow::new(&window("7", "Cap", "Main"), Instant::now())
+                )
                 .is_none()
         );
         assert!(cache.window(&id).image.is_some());
@@ -1501,7 +1543,12 @@ mod tests {
         ));
         assert!(
             cache
-                .insert_window(&id, None, Some(icon), String::new())
+                .insert_window(
+                    &id,
+                    None,
+                    Some(icon),
+                    CapturedWindow::new(&window("7", "Cap", "Main"), Instant::now())
+                )
                 .is_none()
         );
         let thumb = cache.window(&id);
@@ -1556,33 +1603,39 @@ mod tests {
         assert!(cache.windows_stale(&moved));
     }
 
+    fn insert_captured(cache: &mut ThumbnailCache, window: &WindowOption, at: Instant) {
+        let image = crate::library::rgba_to_render_image(solid(2, 2, [1, 2, 3, 255]));
+        let _ = cache.insert_window(
+            &window.id,
+            Some(image),
+            None,
+            CapturedWindow::new(window, at),
+        );
+    }
+
     #[test]
     fn a_sweep_recaptures_only_the_windows_that_changed() {
+        let now = Instant::now();
         let mut cache = ThumbnailCache::default();
         let list = [
             window("1", "Cap", "Main"),
             window("2", "Finder", "Downloads"),
             window("3", "Safari", "Docs"),
         ];
-        assert!(
-            list.iter()
-                .all(|window| window_needs_capture(&cache.captured_windows(), window))
-        );
+        assert!(list.iter().all(|window| window_needs_capture(
+            &cache.captured_windows(),
+            window,
+            now
+        )));
 
         for window in &list[..2] {
-            let image = crate::library::rgba_to_render_image(solid(2, 2, [1, 2, 3, 255]));
-            let _ = cache.insert_window(
-                &window.id,
-                Some(image),
-                None,
-                window_entry_signature(window),
-            );
+            insert_captured(&mut cache, window, now);
         }
-        let _ = cache.insert_window(&list[2].id, None, None, window_entry_signature(&list[2]));
+        let _ = cache.insert_window(&list[2].id, None, None, CapturedWindow::new(&list[2], now));
         let current = cache.captured_windows();
-        assert!(!window_needs_capture(&current, &list[0]));
-        assert!(!window_needs_capture(&current, &list[1]));
-        assert!(window_needs_capture(&current, &list[2]));
+        assert!(!window_needs_capture(&current, &list[0], now));
+        assert!(!window_needs_capture(&current, &list[1], now));
+        assert!(window_needs_capture(&current, &list[2], now));
 
         let mut moved = list[1].clone();
         moved.position = Some((40., 12.));
@@ -1591,7 +1644,7 @@ mod tests {
         let mut renamed = list[0].clone();
         renamed.label = "Settings".into();
         for changed in [&moved, &resized, &renamed] {
-            assert!(window_needs_capture(&current, changed));
+            assert!(window_needs_capture(&current, changed, now));
         }
 
         cache.set_window_signature(window_signature(&list[..2]));
@@ -1600,13 +1653,52 @@ mod tests {
         assert!(
             reordered
                 .iter()
-                .all(|window| !window_needs_capture(&current, window))
+                .all(|window| !window_needs_capture(&current, window, now))
         );
 
         let dropped = cache.retain_windows(&list[1..]);
         assert_eq!(dropped.len(), 1);
-        assert!(window_needs_capture(&cache.captured_windows(), &list[0]));
-        assert!(!window_needs_capture(&cache.captured_windows(), &list[1]));
+        assert!(window_needs_capture(
+            &cache.captured_windows(),
+            &list[0],
+            now
+        ));
+        assert!(!window_needs_capture(
+            &cache.captured_windows(),
+            &list[1],
+            now
+        ));
+    }
+
+    #[test]
+    fn a_sweep_recaptures_unchanged_windows_once_their_thumbnail_is_stale() {
+        let captured_at = Instant::now();
+        let mut cache = ThumbnailCache::default();
+        let list = [
+            window("1", "Cap", "Main"),
+            window("2", "Finder", "Downloads"),
+        ];
+        insert_captured(&mut cache, &list[0], captured_at);
+        insert_captured(&mut cache, &list[1], captured_at + Duration::from_secs(4));
+        let current = cache.captured_windows();
+
+        let fresh = captured_at + THUMBNAIL_STALE_TIME - Duration::from_millis(1);
+        assert!(!window_needs_capture(&current, &list[0], fresh));
+        assert!(!window_needs_capture(&current, &list[1], fresh));
+
+        let stale = captured_at + THUMBNAIL_STALE_TIME;
+        assert!(window_needs_capture(&current, &list[0], stale));
+        assert!(!window_needs_capture(&current, &list[1], stale));
+
+        let later = captured_at + Duration::from_secs(4) + THUMBNAIL_STALE_TIME;
+        assert!(window_needs_capture(&current, &list[1], later));
+
+        insert_captured(&mut cache, &list[0], stale);
+        assert!(!window_needs_capture(
+            &cache.captured_windows(),
+            &list[0],
+            stale
+        ));
     }
 
     #[test]
