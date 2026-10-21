@@ -1,0 +1,235 @@
+name: camera-blur-loader-ab
+# Scratch A/B for perf/gpui-camera-blur-and-loader. Not for main.
+on:
+  push:
+    branches: [ci/camera-blur-loader-ab]
+  workflow_dispatch:
+
+env:
+  MAIN_SHA: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
+
+jobs:
+  blur:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+          - target: x86_64-pc-windows-msvc
+            runner: blacksmith-8vcpu-windows-2025
+    runs-on: ${{ matrix.settings.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Stage scripts
+        shell: bash
+        run: cp -R scripts/camera-ab "$RUNNER_TEMP/camera-ab"
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Machine
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Format-List Name,AdapterCompatibility,DriverVersion; Get-CimInstance Win32_Processor | Format-List Name,NumberOfLogicalProcessors"
+          else
+            lscpu | head -20
+          fi
+          true
+      - name: Build base and head test binaries
+        shell: bash
+        run: |
+          set +e
+          build() {
+            local variant=$1 ref=$2
+            git checkout -f "$ref" -- apps/desktop-gpui/src crates/camera-effects
+            python3 -I "$RUNNER_TEMP/camera-ab/inject_blur.py" "$GITHUB_WORKSPACE" "$variant"
+            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} \
+              --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
+              --bin cap-gpui --no-run --message-format=json > "$RUNNER_TEMP/build-$variant.json"
+            echo "build $variant exit $?"
+            python3 -I -c 'import json,sys
+          for line in open(sys.argv[1]):
+              try: m = json.loads(line)
+              except ValueError: continue
+              if m.get("reason") == "compiler-message" and m["message"]["level"] == "error":
+                  print(m["message"]["rendered"])' "$RUNNER_TEMP/build-$variant.json"
+            exe=$(python3 -I -c 'import json,sys
+          for line in open(sys.argv[1]):
+              try: m = json.loads(line)
+              except ValueError: continue
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "cap-gpui" and m["profile"]["test"]:
+                  print(m["executable"])' "$RUNNER_TEMP/build-$variant.json" | tail -1)
+            echo "$variant executable: $exe"
+            mkdir -p "$RUNNER_TEMP/bin-$variant"
+            cp "$exe" "$RUNNER_TEMP/bin-$variant/"
+          }
+          build base "$MAIN_SHA"
+          build head HEAD
+          git diff --stat "$MAIN_SHA" HEAD -- apps/desktop-gpui/src crates/camera-effects
+          ls -la "$RUNNER_TEMP"/bin-*
+      - name: Parity tests and A/B
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+            export PATH="$debug_path:$PATH"
+            backends="default"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            backends="gl vulkan"
+          fi
+          run() {
+            if [[ "$RUNNER_OS" == "Linux" ]]; then
+              xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" "$@"
+            else
+              "$@"
+            fi
+          }
+          bin() { ls "$RUNNER_TEMP/bin-$1"/cap_gpui-* | grep -v '\.d$' | grep -v '\.pdb$' | head -1; }
+          for backend in $backends; do
+            if [[ "$backend" == "vulkan" ]]; then
+              sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools > /dev/null
+              (vulkaninfo --summary 2>/dev/null || true) | grep -E "deviceName|driverName|apiVersion"
+            fi
+            echo "## parity on $backend" | tee -a "$RUNNER_TEMP/blur.md"
+            CAP_GPUI_TEST_PORTABLE_BLUR=1 run "$(bin head)" portable_blur_ loading_redraws --nocapture --test-threads 1 2>&1 | tee -a "$RUNNER_TEMP/blur.md"
+            echo "parity exit ${PIPESTATUS[0]}" | tee -a "$RUNNER_TEMP/blur.md"
+            for round in 1 2 3; do
+              for variant in base head; do
+                CAP_AB_VARIANT=$variant CAP_AB_LABEL="$backend-r$round" run "$(bin $variant)" blur_ab_bench --ignored --nocapture --test-threads 1 2>&1 | tee -a "$RUNNER_TEMP/blur.md"
+              done
+            done
+          done
+          { echo "### ${{ matrix.settings.runner }}"; echo '```'; grep -E '^(BLURAB|## |test |parity exit|skipping|portable heavy)' "$RUNNER_TEMP/blur.md"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blur-ab-${{ matrix.settings.runner }}
+          path: ${{ runner.temp }}/blur.md
+
+  loader:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: blacksmith-6vcpu-macos-26
+            target: aarch64-apple-darwin
+            cache-key: v1-rust-meter-ab-macos26
+          - runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+            cache-key: v1-rust-gpui
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Keep the display awake
+        if: runner.os == 'macOS'
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          caffeinate -u -t 2 || true
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          defaults -currentHost write com.apple.screensaver idleTime 0 || true
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Stage scripts
+        run: cp -R scripts/camera-ab "$RUNNER_TEMP/camera-ab"
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+      - name: Install Linux GPU and display
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 xvfb
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: ${{ matrix.cache-key }}
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+      - name: Prepare GPUI dependency
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            cp "$RUNNER_TEMP/camera-ab/zed-probe.patch" apps/desktop-gpui/patches/zed-probe.patch
+            python3 -I -c 'import pathlib; p = pathlib.Path("scripts/prepare-gpui-dependency.sh"); s = p.read_text(); a = "\t\"apps/desktop-gpui/patches/zed-idle-frames.patch\"\n"; assert a in s; p.write_text(s.replace(a, a + "\t\"apps/desktop-gpui/patches/zed-probe.patch\"\n"))'
+          fi
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Build both variants
+        run: |
+          set +e
+          build() {
+            local variant=$1 ref=$2
+            git checkout -f "$ref" -- apps/desktop-gpui/src crates/camera-effects
+            python3 -I "$RUNNER_TEMP/camera-ab/inject_loader.py" "$GITHUB_WORKSPACE"
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} \
+              --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' --bin cap-gpui
+            echo "build $variant exit $?"
+            mkdir -p "$RUNNER_TEMP/bin-$variant/debug"
+            cp apps/desktop-gpui/target/${{ matrix.target }}/debug/cap-gpui "$RUNNER_TEMP/bin-$variant/debug/cap-gpui"
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/bin-$variant/Frameworks"
+            fi
+          }
+          build main "$MAIN_SHA"
+          build fix HEAD
+      - name: Measure
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            Xvfb :99 -screen 0 1920x1080x24 -noreset > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            export DISPLAY=:99
+            sleep 2
+          else
+            sw_vers; system_profiler SPDisplaysDataType | grep -E "Chipset|Resolution|Metal|Refresh" || true
+          fi
+          for round in 1 2 3 4; do
+            for variant in main fix; do
+              "$RUNNER_TEMP/camera-ab/measure_loader.sh" "$RUNNER_TEMP/bin-$variant/debug/cap-gpui" $variant $round
+            done
+          done
+          { echo "### ${{ matrix.target }}"; python3 -I "$RUNNER_TEMP/camera-ab/aggregate.py" "$RUNNER_TEMP/loader-ab-out/summary.txt"; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: loader-ab-${{ matrix.target }}
+          path: ${{ runner.temp }}/loader-ab-out
