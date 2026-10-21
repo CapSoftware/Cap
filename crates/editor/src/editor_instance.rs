@@ -519,7 +519,7 @@ impl EditorInstance {
         let completed_track_identity = completed_audio
             .as_deref()
             .map(crate::preparing_handoff::completed_track_identity);
-        let segments_task = tokio::spawn({
+        let segments_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let recording_meta = recording_meta.clone();
             let studio_meta = (**meta).clone();
             async move {
@@ -532,7 +532,7 @@ impl EditorInstance {
                 )
                 .await
             }
-        });
+        }));
 
         // Open the session's audio output stream now (in the background) so
         // the first play press doesn't wait on the device — Bluetooth outputs
