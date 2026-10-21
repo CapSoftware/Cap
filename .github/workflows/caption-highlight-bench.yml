@@ -1,0 +1,100 @@
+name: Caption highlight bench (scratch)
+
+on:
+  push:
+    branches:
+      - ci-scratch/caption-highlight-bench
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-26
+            target: aarch64-apple-darwin
+          - os: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      BASE: 6eabf5ead0ae45f23119d40308efb57d1fc76f7b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: fast
+
+      - name: Perf build cache
+        if: matrix.os == 'macos'
+        uses: actions/cache/restore@v4
+        with:
+          path: target/perf-verify/
+          key: perf-verify-v1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-none
+          restore-keys: |
+            perf-verify-v1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-
+            perf-verify-v1-
+
+      - name: Build head and base
+        run: |
+          set -euo pipefail
+          P=(--config 'profile.perf-verify.inherits="release"' --config profile.perf-verify.lto=false --config profile.perf-verify.codegen-units=16 --config profile.perf-verify.incremental=false --config profile.perf-verify.debug=0)
+          build() {
+            (
+              cd "$1"
+              cargo "${P[@]}" clean -p cap-rendering --profile perf-verify
+              cargo "${P[@]}" test --locked -p cap-rendering --lib --profile perf-verify --no-run >&2
+              cargo "${P[@]}" test --locked -p cap-rendering --lib --profile perf-verify --no-run --message-format json \
+                | python3 -c 'import json, sys
+          for line in sys.stdin:
+              try:
+                  row = json.loads(line)
+              except ValueError:
+                  continue
+              if row.get("reason") == "compiler-artifact" and row.get("executable") and row["target"]["name"] == "cap_rendering":
+                  print(row["executable"])' | tail -1
+            )
+          }
+          head_bin="$(build "$GITHUB_WORKSPACE")"
+          cp "$head_bin" "$RUNNER_TEMP/head-bin"
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
+          ln -s "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/base/target"
+          mkdir -p "$RUNNER_TEMP/base/.cargo"
+          cp .cargo/config.toml "$RUNNER_TEMP/base/.cargo/config.toml"
+          base_bin="$(build "$RUNNER_TEMP/base")"
+          cp "$base_bin" "$RUNNER_TEMP/base-bin"
+          ls -la "$RUNNER_TEMP/head-bin" "$RUNNER_TEMP/base-bin"
+          cmp "$RUNNER_TEMP/head-bin" "$RUNNER_TEMP/base-bin" && { echo "head and base binaries are identical"; exit 1; } || true
+
+      - name: Caption tests (head)
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/head-bin" captions --test-threads=1
+          "$RUNNER_TEMP/head-bin" captions::gpu_tests --ignored --skip benchmark --test-threads=1
+
+      - name: Benchmark (interleaved base and head)
+        run: |
+          set -euo pipefail
+          for round in 1 2 3; do
+            for side in base head; do
+              "$RUNNER_TEMP/$side-bin" captions::gpu_tests::benchmark_word_highlight_prepare --ignored --exact --nocapture --test-threads=1 \
+                | grep "word highlight prepare" | sed "s/^/$side r$round: /" | tee -a "$RUNNER_TEMP/bench.txt"
+            done
+          done
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/bench.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
