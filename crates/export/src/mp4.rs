@@ -547,6 +547,11 @@ impl Mp4ExportSettings {
                             }
                         };
                         ab_stats::record(ab_started.elapsed(), ab_copied, frame);
+                        if ab_copied == 0 && std::env::var_os("CAP_AB_VERIFY").is_some() {
+                            let mut check = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, input.width, input.height);
+                            fill_nv12_frame_direct(&mut check, nv12_data, input.width, input.height, input.y_stride, input.frame_number as i64);
+                            ab_stats::verify(frame, &check);
+                        }
                         encoder
                             .queue_video_frame_reusable(frame, &mut converted_frame, Duration::MAX)
                             .map_err(|err| err.to_string())?;
@@ -2149,12 +2154,35 @@ pub(crate) mod ab_stats {
         }
     }
 
+    static VERIFIED: AtomicU64 = AtomicU64::new(0);
+    static MISMATCHED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn verify(wrapped: &ffmpeg::frame::Video, copied: &ffmpeg::frame::Video) {
+        let width = wrapped.width() as usize;
+        let mut same = wrapped.pts() == copied.pts()
+            && wrapped.format() == copied.format()
+            && wrapped.width() == copied.width()
+            && wrapped.height() == copied.height();
+        for (plane, rows) in [(0usize, wrapped.height() as usize), (1usize, wrapped.height() as usize / 2)] {
+            let (a, b) = (wrapped.stride(plane), copied.stride(plane));
+            for row in 0..rows {
+                same &= wrapped.data(plane)[row * a..row * a + width] == copied.data(plane)[row * b..row * b + width];
+            }
+        }
+        VERIFIED.fetch_add(1, Ordering::Relaxed);
+        if !same {
+            MISMATCHED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     pub fn reset() -> (std::time::Instant, u64) {
         PREP_NS.store(0, Ordering::Relaxed);
         COPY_BYTES.store(0, Ordering::Relaxed);
         FRAMES.store(0, Ordering::Relaxed);
         WRAPPED.store(0, Ordering::Relaxed);
         HASHES.lock().unwrap().clear();
+        VERIFIED.store(0, Ordering::Relaxed);
+        MISMATCHED.store(0, Ordering::Relaxed);
         cap_rendering::loop_stats::READBACK_COPY_NS.store(0, Ordering::Relaxed);
         cap_rendering::loop_stats::READBACK_COPY_BYTES.store(0, Ordering::Relaxed);
         (std::time::Instant::now(), cpu_time_us())
@@ -2168,12 +2196,14 @@ pub(crate) mod ab_stats {
         let readback_ns = cap_rendering::loop_stats::READBACK_COPY_NS.load(Ordering::Relaxed);
         let readback_bytes = cap_rendering::loop_stats::READBACK_COPY_BYTES.load(Ordering::Relaxed);
         let line = format!(
-            "AB_EXPORT size={width}x{height} frames={frames} wrapped={} wall_ms={wall_ms:.0} cpu_ms={cpu_ms:.0} prep_us_per_frame={:.1} avframe_copy_bytes_per_frame={:.0} readback_copy_us_per_frame={:.1} readback_copy_bytes_per_frame={:.0}",
+            "AB_EXPORT size={width}x{height} frames={frames} wrapped={} wall_ms={wall_ms:.0} cpu_ms={cpu_ms:.0} prep_us_per_frame={:.1} avframe_copy_bytes_per_frame={:.0} readback_copy_us_per_frame={:.1} readback_copy_bytes_per_frame={:.0} verified={} verify_mismatches={}",
             WRAPPED.load(Ordering::Relaxed),
             per(PREP_NS.load(Ordering::Relaxed)) / 1000.0,
             per(COPY_BYTES.load(Ordering::Relaxed)),
             per(readback_ns) / 1000.0,
             per(readback_bytes),
+            VERIFIED.load(Ordering::Relaxed),
+            MISMATCHED.load(Ordering::Relaxed),
         );
         eprintln!("{line}");
         if let Some(path) = std::env::var_os("CAP_AB_REPORT")
