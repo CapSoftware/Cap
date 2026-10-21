@@ -1,6 +1,6 @@
 mod script_outline;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
     Bounds, BoxShadow, ContentMask, Corners, Hsla, IntoElement, Pixels, Styled, Window, canvas,
@@ -19,6 +19,8 @@ const SWEEP_PERIOD_SECONDS: f32 = 1.6;
 const SWEEP_HALF_WIDTH: f32 = 0.26;
 const SCRIPT_REST_ALPHA: f32 = 0.12;
 const SCRIPT_PEAK_ALPHA: f32 = 0.42;
+const MOTION_FPS: f32 = 60.;
+const DRIFT_FPS: f32 = 30.;
 
 struct Cloud {
     lightness: f32,
@@ -116,12 +118,32 @@ pub(crate) fn camera_loading(
                 }
             }
             if animate {
-                window.request_animation_frame();
+                let view = window.current_view();
+                let delay = next_frame_delay(elapsed, opacity, show_script);
+                window
+                    .spawn(cx, async move |cx| {
+                        cx.background_executor().timer(delay).await;
+                        let _ = cx.update(|_, cx| cx.notify(view));
+                    })
+                    .detach();
             }
         },
     )
     .absolute()
     .inset_0()
+}
+
+/// Fades and the script sweep redraw at 60 fps. Between sweeps only the
+/// clouds move, under a pixel per frame at 30 fps. Deadlines sit on a grid
+/// from `elapsed` zero, so repaints for other reasons share the next one.
+fn next_frame_delay(elapsed: f32, opacity: f32, show_script: bool) -> Duration {
+    let fps = if opacity < 1. || (show_script && sweep_center(elapsed).is_some()) {
+        MOTION_FPS
+    } else {
+        DRIFT_FPS
+    };
+    let next = ((elapsed * fps).floor() + 1.) / fps;
+    Duration::from_secs_f32((next - elapsed).max(0.))
 }
 
 fn sweep_center(elapsed: f32) -> Option<f32> {
@@ -316,4 +338,42 @@ fn paint_glass(
             },
         ],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frames_in(start: f32, seconds: f32, opacity: f32, show_script: bool) -> usize {
+        let mut elapsed = start;
+        let mut frames = 0;
+        while elapsed < start + seconds {
+            let delay = next_frame_delay(elapsed, opacity, show_script).as_secs_f32();
+            assert!(delay <= 1. / DRIFT_FPS + 1e-4, "{delay} s at {elapsed} s");
+            elapsed += delay + 0.001;
+            frames += 1;
+        }
+        frames
+    }
+
+    #[test]
+    fn loading_redraws_at_sixty_while_sweeping_and_thirty_between() {
+        let period_start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS;
+        assert!(sweep_center(period_start + 0.01).is_some());
+        assert!(sweep_center(period_start + SWEEP_SECONDS + 0.01).is_none());
+
+        let sweeping = frames_in(period_start, SWEEP_SECONDS, 1., true);
+        assert!((59..=61).contains(&sweeping), "{sweeping}");
+        let resting = frames_in(
+            period_start + SWEEP_SECONDS,
+            SWEEP_PERIOD_SECONDS - SWEEP_SECONDS,
+            1.,
+            true,
+        );
+        assert!((17..=19).contains(&resting), "{resting}");
+        let without_script = frames_in(period_start, SWEEP_PERIOD_SECONDS, 1., false);
+        assert!((47..=49).contains(&without_script), "{without_script}");
+        let fading = frames_in(0., FADE_IN_SECONDS, 0.5, false);
+        assert!((17..=19).contains(&fading), "{fading}");
+    }
 }
