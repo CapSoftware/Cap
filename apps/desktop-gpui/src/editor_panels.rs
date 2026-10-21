@@ -3125,6 +3125,13 @@ impl EditorWindow {
             return 0.;
         };
         match slider {
+            PanelSlider::Image(ImageProperty::Opacity) => {
+                let now = self.preview_or_playhead();
+                timeline
+                    .image_segments
+                    .get(index)
+                    .map_or(0., |segment| (segment.opacity_at(now) * 100.) as f32)
+            }
             PanelSlider::Image(property) => timeline
                 .image_segments
                 .get(index)
@@ -3175,7 +3182,9 @@ impl EditorWindow {
                     PanelSlider::TextFontSize => segment.font_size,
                     PanelSlider::TextLineHeight => segment.line_height,
                     PanelSlider::TextLetterSpacing => segment.letter_spacing,
-                    PanelSlider::TextOpacity => segment.opacity,
+                    PanelSlider::TextOpacity => {
+                        segment.opacity_at(self.preview_or_playhead()) as f32
+                    }
                     PanelSlider::TextShadow => segment.shadow,
                     PanelSlider::TextStroke => segment.stroke_width,
                     PanelSlider::TextGlow => segment.glow,
@@ -3269,6 +3278,15 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         match slider {
+            PanelSlider::Image(ImageProperty::Opacity) => {
+                let now = self.preview_or_playhead();
+                self.edit_image_segment("image-transform", index, window, cx, move |segment| {
+                    if value.is_finite() {
+                        segment.set_opacity_at(now, f64::from(value.clamp(0., 100.) / 100.));
+                    }
+                    true
+                })
+            }
             PanelSlider::Image(property) => {
                 self.edit_image_segment("image-transform", index, window, cx, move |segment| {
                     property.write(segment, value);
@@ -3312,6 +3330,7 @@ impl EditorWindow {
             | PanelSlider::TextShadow
             | PanelSlider::TextStroke
             | PanelSlider::TextGlow => {
+                let now = self.preview_or_playhead();
                 self.edit_text_segment("text-slider", index, window, cx, move |segment| {
                     match slider {
                         PanelSlider::TextLayoutTransition => {
@@ -3337,7 +3356,9 @@ impl EditorWindow {
                         PanelSlider::TextLetterSpacing => {
                             segment.letter_spacing = value.clamp(-2., 20.)
                         }
-                        PanelSlider::TextOpacity => segment.opacity = value.clamp(0., 1.),
+                        PanelSlider::TextOpacity => {
+                            segment.set_opacity_at(now, f64::from(value.clamp(0., 1.)))
+                        }
                         PanelSlider::TextStroke => segment.stroke_width = value.clamp(0., 12.),
                         PanelSlider::TextGlow => segment.glow = value.clamp(0., 1.),
                         _ => segment.shadow = value.clamp(0., 1.),
@@ -5511,7 +5532,178 @@ impl EditorWindow {
                         })),
                 ),
             )
+            .child(self.render_overlay_keyframes(KeyframeTarget::Text(index), cx))
             .into_any_element()
+    }
+
+    /// The Keyframes section of the text and image panels: add a key at the
+    /// playhead, then any move, resize or opacity change at another time adds
+    /// or edits a key there. Each key is a chip: click to jump, × to remove.
+    fn render_overlay_keyframes(
+        &self,
+        target: KeyframeTarget,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let now = self.preview_or_playhead();
+        let Some((start, end, times)) = self.timeline().and_then(|timeline| match target {
+            KeyframeTarget::Text(index) => timeline
+                .text_segments
+                .get(index)
+                .map(|s| (s.start, s.end, s.keyframes.times())),
+            KeyframeTarget::Image(index) => timeline
+                .image_segments
+                .get(index)
+                .map(|s| (s.start, s.end, s.keyframes.times())),
+        }) else {
+            return div().into_any_element();
+        };
+        let inside = now >= start && now <= end;
+        let key = match target {
+            KeyframeTarget::Text(index) => format!("text-{index}"),
+            KeyframeTarget::Image(index) => format!("image-{index}"),
+        };
+        let buttons = div()
+            .flex()
+            .flex_row()
+            .gap(px(6.))
+            .child(
+                ui::Button::plain(
+                    &theme,
+                    SharedString::from(format!("keyframe-add-{key}")),
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Sm,
+                )
+                .label("◆ Add keyframe")
+                .disabled(!inside)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let now = this.preview_or_playhead();
+                    this.keyframe_action(target, KeyframeAction::Add(now), window, cx);
+                })),
+            )
+            .children((!times.is_empty()).then(|| {
+                ui::Button::plain(
+                    &theme,
+                    SharedString::from(format!("keyframe-clear-{key}")),
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Sm,
+                )
+                .label("Clear")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.keyframe_action(target, KeyframeAction::Clear, window, cx);
+                }))
+            }));
+        let body: AnyElement = if times.is_empty() {
+            div()
+                .text_size(px(12.))
+                .text_color(Hsla::from(theme.editor.text_3))
+                .child(
+                    "Add a keyframe, move the playhead, then drag the overlay or change its \
+                     opacity. It animates smoothly between keyframes.",
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(4.))
+                .children(times.into_iter().enumerate().map(|(n, time)| {
+                    let current = (start + time - now).abs() <= 1. / 60.;
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(6.))
+                        .h(px(22.))
+                        .rounded(px(6.))
+                        .text_size(px(11.))
+                        .bg(Hsla::from(if current {
+                            theme.editor.accent
+                        } else {
+                            theme.editor.ctl
+                        }))
+                        .text_color(Hsla::from(if current {
+                            theme.editor.card
+                        } else {
+                            theme.editor.text_1
+                        }))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("keyframe-{key}-{n}")))
+                                .cursor_pointer()
+                                .child(SharedString::from(format!(
+                                    "◆ {}:{:04.1}",
+                                    (time / 60.).floor() as u32,
+                                    time % 60.
+                                )))
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    this.seek_to_time(start + time, cx);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("keyframe-remove-{key}-{n}")))
+                                .cursor_pointer()
+                                .opacity(0.6)
+                                .hover(|x| x.opacity(1.))
+                                .child("×")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.keyframe_action(
+                                        target,
+                                        KeyframeAction::Remove(time),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .into_any_element()
+                }))
+                .into_any_element()
+        };
+        ui::Field::section(&theme, "Keyframes")
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(buttons)
+                    .child(body),
+            )
+            .into_any_element()
+    }
+
+    fn keyframe_action(
+        &mut self,
+        target: KeyframeTarget,
+        action: KeyframeAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            KeyframeTarget::Text(index) => {
+                self.edit_text_segment("text-keyframe", index, window, cx, move |segment| {
+                    match action {
+                        KeyframeAction::Add(time) => segment.add_keyframe_at(time),
+                        KeyframeAction::Remove(time) => segment.keyframes.remove_at(time),
+                        KeyframeAction::Clear => segment.keyframes = Default::default(),
+                    }
+                    true
+                })
+            }
+            KeyframeTarget::Image(index) => {
+                self.edit_image_segment("image-keyframe", index, window, cx, move |segment| {
+                    match action {
+                        KeyframeAction::Add(time) => segment.add_keyframe_at(time),
+                        KeyframeAction::Remove(time) => segment.keyframes.remove_at(time),
+                        KeyframeAction::Clear => segment.keyframes = Default::default(),
+                    }
+                    true
+                })
+            }
+        }
     }
 
     /// `CaptionSegmentConfig` (`:4231-4341`).
@@ -8679,6 +8871,22 @@ pub enum ImageProperty {
     Rounding,
 }
 
+/// Which overlay a Keyframes section edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyframeTarget {
+    Text(usize),
+    Image(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum KeyframeAction {
+    /// Key the overlay's current look at this output time.
+    Add(f64),
+    /// Remove the keys at this segment-relative time.
+    Remove(f64),
+    Clear,
+}
+
 impl ImageProperty {
     fn label(self) -> &'static str {
         match self {
@@ -8853,6 +9061,7 @@ impl EditorWindow {
                 ),
             );
         }
+        panel = panel.child(self.render_overlay_keyframes(KeyframeTarget::Image(index), cx));
         panel.into_any_element()
     }
 
