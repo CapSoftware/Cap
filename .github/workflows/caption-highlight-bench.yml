@@ -67,29 +67,36 @@ jobs:
                   print(row["executable"])' | tail -1
             )
           }
+          mkdir -p "$RUNNER_TEMP/perf/bin"
+          for frameworks in target/perf-verify/Frameworks target/Frameworks target/release/Frameworks; do
+            if [[ -d "$frameworks" ]]; then
+              ln -s "$GITHUB_WORKSPACE/$frameworks" "$RUNNER_TEMP/perf/Frameworks"
+              break
+            fi
+          done
           head_bin="$(build "$GITHUB_WORKSPACE")"
-          cp "$head_bin" "$RUNNER_TEMP/head-bin"
+          cp "$head_bin" "$RUNNER_TEMP/perf/bin/head-bin"
           git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
           ln -s "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/base/target"
           mkdir -p "$RUNNER_TEMP/base/.cargo"
           cp .cargo/config.toml "$RUNNER_TEMP/base/.cargo/config.toml"
           base_bin="$(build "$RUNNER_TEMP/base")"
-          cp "$base_bin" "$RUNNER_TEMP/base-bin"
-          ls -la "$RUNNER_TEMP/head-bin" "$RUNNER_TEMP/base-bin"
-          cmp "$RUNNER_TEMP/head-bin" "$RUNNER_TEMP/base-bin" && { echo "head and base binaries are identical"; exit 1; } || true
+          cp "$base_bin" "$RUNNER_TEMP/perf/bin/base-bin"
+          ls -la "$RUNNER_TEMP/perf" "$RUNNER_TEMP/perf/bin"
+          cmp "$RUNNER_TEMP/perf/bin/head-bin" "$RUNNER_TEMP/perf/bin/base-bin" && { echo "head and base binaries are identical"; exit 1; } || true
 
       - name: Caption tests (head)
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/head-bin" captions --test-threads=1
-          "$RUNNER_TEMP/head-bin" captions::gpu_tests --ignored --skip benchmark --test-threads=1
+          "$RUNNER_TEMP/perf/bin/head-bin" captions --test-threads=1
+          "$RUNNER_TEMP/perf/bin/head-bin" captions::gpu_tests --ignored --skip benchmark --test-threads=1
 
       - name: Benchmark (interleaved base and head)
         run: |
           set -euo pipefail
           for round in 1 2 3; do
             for side in base head; do
-              "$RUNNER_TEMP/$side-bin" captions::gpu_tests::benchmark_word_highlight_prepare --ignored --exact --nocapture --test-threads=1 \
+              "$RUNNER_TEMP/perf/bin/$side-bin" layers::captions::gpu_tests::benchmark_word_highlight_prepare --ignored --exact --nocapture --test-threads=1 \
                 | grep "word highlight prepare" | sed "s/^/$side r$round: /" | tee -a "$RUNNER_TEMP/bench.txt"
             done
           done
