@@ -40,19 +40,24 @@ impl From<QualityArg> for cap_export::mp4::ExportCompression {
 }
 
 #[derive(Args)]
-#[command(long_about = "Render a '.cap' project to a video file.
+#[command(long_about = "Render one or more '.cap' projects to video files.
+
+Pass one project for a single export, or several to export them all in one run. With more than
+one project the output must be a directory (--output, or a trailing directory argument), and
+each project is written as '<project name>.<ext>'. Every positional is read as a project; a
+trailing path that cannot be read as one is taken as the output location (as in
+`cap export project.cap out.mp4`); with --output, every positional is a project.
 
 NOTE: here --format selects the CONTAINER (mp4/gif/mov), NOT the output mode. For machine-readable
 output pass --json (the global flag), which streams NDJSON progress + completion events to stdout.
 The NDJSON uses PascalCase type tags and snake_case fields ({\"type\":\"Progress\",\"rendered_count\":N,
 \"total_frames\":N} then {\"type\":\"Completed\",\"path\":\"...\"}); on failure a final
-{\"type\":\"Error\",\"error\":\"...\"} is emitted.")]
+{\"type\":\"Error\",\"error\":\"...\"} is emitted. Batch runs also emit {\"type\":\"FileStarted\",...} and {\"type\":\"FileFailed\",...} per project plus a closing {\"type\":\"BatchCompleted\",...}.")]
 pub struct Export {
-    /// Path to a '.cap' project directory (as produced by `cap record`)
-    project_path: PathBuf,
-    /// Output file (positional alternative to --output)
-    output_path: Option<PathBuf>,
-    /// Output file to write the export to
+    /// One or more '.cap' project directories (as produced by `cap record`)
+    #[arg(required = true, num_args = 1..)]
+    project_paths: Vec<PathBuf>,
+    /// Output file for a single project, or directory for several
     #[arg(long, short = 'o')]
     output: Option<PathBuf>,
     /// Container to export: mp4 (default), gif, or mov. NOT the output mode — use --json for JSON
@@ -104,7 +109,7 @@ impl ExportFlags {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "format")]
 pub enum CliExportSettings {
     #[serde(alias = "mp4")]
@@ -135,6 +140,14 @@ impl CliExportSettings {
         match self {
             Self::Mov(settings) => settings.cursor_only,
             Self::Mp4(_) | Self::Gif(_) => false,
+        }
+    }
+
+    fn extension(&self) -> &'static str {
+        match self {
+            Self::Mp4(_) => "mp4",
+            Self::Gif(_) => "gif",
+            Self::Mov(_) => "mov",
         }
     }
 }
@@ -229,6 +242,19 @@ enum ExportProgressMessage<'a> {
     Completed {
         path: &'a std::path::Path,
     },
+    FileStarted {
+        path: &'a std::path::Path,
+        index: u32,
+        total: u32,
+    },
+    FileFailed {
+        path: &'a std::path::Path,
+        error: &'a str,
+    },
+    BatchCompleted {
+        succeeded: u32,
+        failed: u32,
+    },
     // Field is named `error` (not `message`) so a single `"error" in obj` predicate detects failure
     // across every JSON-emitting command. The desktop sidecar only parses Progress/Completed, so the
     // PascalCase `type` tag stays for back-compat while this terminal field is free to standardize.
@@ -237,18 +263,73 @@ enum ExportProgressMessage<'a> {
     },
 }
 
-impl Export {
-    fn resolve_output(&self) -> Result<Option<PathBuf>, String> {
-        match (&self.output, &self.output_path) {
-            (Some(_), Some(_)) => Err(
-                "Specify the output path either positionally or with --output, not both"
-                    .to_string(),
-            ),
-            (Some(path), None) | (None, Some(path)) => Ok(Some(path.clone())),
-            (None, None) => Ok(None),
-        }
+/// Distinguishes a project argument from a trailing output path.
+fn looks_like_project(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cap"))
+    {
+        return true;
+    }
+    path.join("recording-meta.json").is_file()
+}
+
+/// Positionals are projects, except that a trailing path that cannot be read as one is the
+/// output location. With --output present every positional is a project, so a mistyped or
+/// missing project still reaches the per-file failure path.
+fn split_projects_and_output(
+    mut paths: Vec<PathBuf>,
+    flag_output: Option<PathBuf>,
+) -> Result<(Vec<PathBuf>, Option<PathBuf>), String> {
+    if let Some(output) = flag_output {
+        return Ok((paths, Some(output)));
     }
 
+    let trailing_output =
+        paths.len() >= 2 && paths.last().is_some_and(|path| !looks_like_project(path));
+    let output = if trailing_output { paths.pop() } else { None };
+    Ok((paths, output))
+}
+
+fn batch_output_name(project: &Path, extension: &str) -> String {
+    let name = project
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("export");
+    let stem = match project.extension() {
+        Some(ext) if ext.eq_ignore_ascii_case("cap") => project
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or(name),
+        _ => name,
+    };
+    format!("{stem}.{extension}")
+}
+
+fn plan_batch_outputs(
+    projects: Vec<PathBuf>,
+    dir: &Path,
+    extension: &str,
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let mut planned = Vec::with_capacity(projects.len());
+    let mut claimed = std::collections::HashMap::new();
+    for project in projects {
+        let name = batch_output_name(&project, extension);
+        if let Some(previous) = claimed.insert(name.to_lowercase(), project.clone()) {
+            return Err(format!(
+                "Two projects would both export to '{name}' ({} and {}); rename one of them or export it separately",
+                previous.display(),
+                project.display()
+            ));
+        }
+        planned.push((project, dir.join(name)));
+    }
+    Ok(planned)
+}
+
+impl Export {
     fn resolve_settings(&self) -> Result<CliExportSettings, String> {
         let flags = ExportFlags {
             format: self.format,
@@ -306,16 +387,128 @@ impl Export {
         completion_json: bool,
         stdout: &Arc<Mutex<std::io::Stdout>>,
     ) -> Result<(), String> {
-        let output = self.resolve_output()?;
         let settings = self.resolve_settings()?;
+        let (projects, output) = split_projects_and_output(self.project_paths, self.output)?;
 
-        ensure_remuxed(self.project_path.clone()).await?;
-        let meta = RecordingMeta::load_for_project(&self.project_path)
+        if projects.len() == 1 {
+            return Self::export_project(
+                &projects[0],
+                output,
+                settings,
+                self.force_ffmpeg_decoder,
+                progress_json,
+                completion_json,
+                stdout,
+            )
+            .await;
+        }
+
+        let dir = output.ok_or_else(|| {
+            format!(
+                "Exporting {} projects needs an output directory: pass --output <DIR>, or a trailing directory",
+                projects.len()
+            )
+        })?;
+        if dir.exists() && !dir.is_dir() {
+            return Err(format!(
+                "--output {} is a file; exporting several projects needs a directory",
+                dir.display()
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|error| {
+            format!(
+                "Failed to create output directory {}: {error}",
+                dir.display()
+            )
+        })?;
+
+        let planned = plan_batch_outputs(projects, &dir, settings.extension())?;
+        let total = planned.len();
+        let mut succeeded = 0u32;
+        let mut failed = 0u32;
+        let mut first_error: Option<String> = None;
+
+        for (index, (project, destination)) in planned.iter().enumerate() {
+            if progress_json || completion_json {
+                emit_export_message(
+                    stdout,
+                    &ExportProgressMessage::FileStarted {
+                        path: project,
+                        index: index as u32 + 1,
+                        total: total as u32,
+                    },
+                )?;
+            } else {
+                println!("Exporting {}/{}: {}", index + 1, total, project.display());
+            }
+
+            match Self::export_project(
+                project,
+                Some(destination.clone()),
+                settings,
+                self.force_ffmpeg_decoder,
+                progress_json,
+                completion_json,
+                stdout,
+            )
+            .await
+            {
+                Ok(()) => succeeded += 1,
+                Err(error) => {
+                    failed += 1;
+                    if progress_json || completion_json {
+                        emit_export_message(
+                            stdout,
+                            &ExportProgressMessage::FileFailed {
+                                path: project,
+                                error: &error,
+                            },
+                        )?;
+                    } else {
+                        eprintln!("Failed to export {}: {error}", project.display());
+                    }
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+
+        if progress_json || completion_json {
+            emit_export_message(
+                stdout,
+                &ExportProgressMessage::BatchCompleted { succeeded, failed },
+            )?;
+        } else if failed > 0 {
+            println!("Exported {succeeded} of {total} projects ({failed} failed).");
+        } else {
+            println!("Exported {succeeded} of {total} projects.");
+        }
+
+        if failed > 0 {
+            return Err(match first_error {
+                Some(first) => format!("{failed} of {total} exports failed; first error: {first}"),
+                None => format!("{failed} of {total} exports failed"),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn export_project(
+        project_path: &Path,
+        output: Option<PathBuf>,
+        settings: CliExportSettings,
+        force_ffmpeg_decoder: bool,
+        progress_json: bool,
+        completion_json: bool,
+        stdout: &Arc<Mutex<std::io::Stdout>>,
+    ) -> Result<(), String> {
+        ensure_remuxed(project_path.to_path_buf()).await?;
+        let meta = RecordingMeta::load_for_project(project_path)
             .map_err(|e| format!("Failed to load recording meta: {e}"))?;
 
         if matches!(&meta.inner, RecordingMetaInner::Instant(_)) {
             return export_instant_project(
-                self.project_path,
+                project_path.to_path_buf(),
                 output,
                 &settings,
                 progress_json,
@@ -325,8 +518,8 @@ impl Export {
             .await;
         }
 
-        let force_ffmpeg_decoder = self.force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
-        let mut builder = ExporterBase::builder(self.project_path.clone())
+        let force_ffmpeg_decoder = force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
+        let mut builder = ExporterBase::builder(project_path.to_path_buf())
             .with_force_ffmpeg_decoder(force_ffmpeg_decoder);
 
         if let Some(output_path) = output {
@@ -1031,5 +1224,101 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn single_project_keeps_output_and_default_forms() {
+        let (projects, output) =
+            split_projects_and_output(vec![PathBuf::from("/tmp/a.cap")], None).unwrap();
+        assert_eq!(projects, vec![PathBuf::from("/tmp/a.cap")]);
+        assert_eq!(output, None);
+
+        let (projects, output) = split_projects_and_output(
+            vec![PathBuf::from("/tmp/a.cap"), PathBuf::from("/tmp/out.mp4")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(projects, vec![PathBuf::from("/tmp/a.cap")]);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out.mp4")));
+    }
+
+    #[test]
+    fn several_projects_are_all_inputs_with_optional_trailing_output() {
+        let (projects, output) = split_projects_and_output(
+            vec![
+                PathBuf::from("/tmp/a.cap"),
+                PathBuf::from("/tmp/b.cap"),
+                PathBuf::from("/tmp/out"),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out")));
+
+        let (projects, output) = split_projects_and_output(
+            vec![PathBuf::from("/tmp/a.cap"), PathBuf::from("/tmp/b.cap")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn output_flag_makes_every_positional_a_project() {
+        let (projects, output) = split_projects_and_output(
+            vec![
+                PathBuf::from("/tmp/a.cap"),
+                PathBuf::from("/tmp/missing-project"),
+            ],
+            Some(PathBuf::from("/tmp/out")),
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out")));
+    }
+
+    #[test]
+    fn batch_plans_one_output_per_project() {
+        let planned = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/Talk.cap"),
+                PathBuf::from("/tmp/two/Demo.cap"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(planned[0].1, PathBuf::from("/tmp/exports/Talk.mp4"));
+        assert_eq!(planned[1].1, PathBuf::from("/tmp/exports/Demo.mp4"));
+    }
+
+    #[test]
+    fn batch_rejects_duplicate_output_names() {
+        let result = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/Talk.cap"),
+                PathBuf::from("/tmp/two/talk.cap"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn batch_keeps_dotted_project_names() {
+        let planned = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/release.v1"),
+                PathBuf::from("/tmp/two/release.v2"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(planned[0].1, PathBuf::from("/tmp/exports/release.v1.mp4"));
+        assert_eq!(planned[1].1, PathBuf::from("/tmp/exports/release.v2.mp4"));
     }
 }

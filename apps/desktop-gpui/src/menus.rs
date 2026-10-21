@@ -194,16 +194,17 @@ pub fn build_menus() -> Vec<Menu> {
 /// update that read the handle -- the `place_overlay_panel` rule, which is also
 /// why gpui's own `Window::minimize_window` is not called here.
 fn with_key_native(cx: &mut App, action: fn(&platform::NativeWindow)) {
-    let Some(handle) = cx.active_window() else {
-        tracing::info!("window command: no key window");
-        return;
-    };
+    let active = cx.active_window();
     // A ⌘-keystroke action arrives *inside* the key window's own dispatch,
     // which holds that window's lease -- `handle.update` on the same window
     // returns Err there (observed: ⌘W resolved no native handle and silently
     // did nothing). Deferred, so the lease is back first. The menu-click path
     // has no lease and rides the same defer unharmed.
     cx.defer(move |cx| {
+        let Some(handle) = active.or_else(|| key_window(cx)) else {
+            tracing::info!("window command: no key window");
+            return;
+        };
         let native = handle
             .update(cx, |_, window, _| platform::native_window(window))
             .ok()
@@ -246,6 +247,10 @@ pub fn close_key_window(cx: &mut App) {
     // is active), so even the visibility probe's `main.update` would silently
     // Err here -- the with_key_native trap, again.
     cx.defer(|cx| {
+        if let Some(handle) = key_window(cx) {
+            close_window_by_handle(handle, cx);
+            return;
+        }
         if !cx.has_global::<app_windows::AppWindows>() {
             return;
         }
@@ -260,6 +265,23 @@ pub fn close_key_window(cx: &mut App) {
             tracing::info!("close window: no key window and no visible main window");
         }
     });
+}
+
+/// The key window, if it has a close button. `active_window` is AppKit's
+/// *main* window, and a `Floating` panel such as the teleprompter becomes key
+/// without becoming main, which left ⌘W hiding the main window behind it.
+/// Panels without a close button (the controls bar, camera bubble and target
+/// overlays can all be key after a click) are skipped, so ⌘W never closes
+/// them. Call it deferred: the key window's lease is held during its own
+/// dispatch.
+fn key_window(cx: &mut App) -> Option<gpui::AnyWindowHandle> {
+    cx.windows().into_iter().find(|handle| {
+        handle
+            .update(cx, |_, window, _| {
+                window.is_window_active() && platform::window_is_closable(window)
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// The ⌘W body, keyed by handle -- split out so the harness can close a

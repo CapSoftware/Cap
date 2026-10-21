@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
@@ -224,6 +224,7 @@ async fn render_preview_frame(
         total_duration,
         layers_cache,
     } = source;
+    let project_config = &Arc::new(project_config.clone());
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -318,8 +319,12 @@ async fn render_preview_frame(
             .find(|clip| clip.index == outgoing.segment.recording_clip)
             .map(|clip| clip.offsets)
             .unwrap_or_default();
-        let outgoing_frames = outgoing_media
-            .decoders
+        let outgoing_decoders = if outgoing.segment.recording_clip == segment.recording_clip {
+            outgoing_media.decoders.transition_side().await
+        } else {
+            outgoing_media.decoders
+        };
+        let outgoing_frames = outgoing_decoders
             .get_frames(
                 outgoing.source_time as f32,
                 project_config.requires_camera() && !settings.cursor_only,
@@ -482,8 +487,6 @@ fn encode_preview_jpeg(frame: &RenderedFrame, quality: u8) -> Result<Vec<u8>, Ex
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     fn frame(width: u32, height: u32, stride: usize, mut state: u64) -> RenderedFrame {

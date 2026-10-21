@@ -26,6 +26,7 @@ use crate::{
     devices::WindowOption,
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     main_window::Mode,
+    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
@@ -659,9 +660,7 @@ pub struct SettingsWindow {
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
     /// its own so the window has something focused when nothing else does.
     pub(crate) focus: FocusHandle,
-    sign_in_pending: bool,
-    sign_in_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    sign_in_task: Option<gpui::Task<()>>,
+    _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
 }
@@ -728,6 +727,26 @@ impl SettingsWindow {
             }),
         ];
 
+        let sign_in = SignIn::global(cx);
+        let sign_in_subscriptions = [
+            cx.observe_in(&sign_in, window, |_, _, window, cx| {
+                cx.notify();
+                window.refresh();
+            }),
+            cx.subscribe_in(&sign_in, window, |this, _, event, window, cx| match event {
+                SignInEvent::Finished {
+                    outcome: SignInOutcome::SignedIn,
+                    ..
+                } => this.refresh_user_profile(window, cx),
+                SignInEvent::AccountRefreshed => {
+                    this.has_cap_pro = store::auth_snapshot().is_upgraded();
+                    cx.notify();
+                    window.refresh();
+                }
+                SignInEvent::Finished { .. } => {}
+            }),
+        ];
+
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
 
@@ -762,9 +781,7 @@ impl SettingsWindow {
             slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
-            sign_in_pending: false,
-            sign_in_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            sign_in_task: None,
+            _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
         }
@@ -807,6 +824,7 @@ impl SettingsWindow {
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        self.shortcuts_cancel(cx);
         self.page = page;
         self.menu = None;
         // The store may have changed under us while the window was in the
@@ -867,7 +885,7 @@ impl SettingsWindow {
     }
 
     /// The `recordings` query: scan the library on the background executor,
-    /// then decode each thumbnail there too.
+    /// then decode the thumbnails there through [`library::spawn_decode_pool`].
     ///
     /// Same two-stage shape as the main window's Recents (`refresh_recents`):
     /// the list lands first so the rows can paint with their grey placeholder,
@@ -893,36 +911,36 @@ impl SettingsWindow {
                 return;
             };
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn({
-                        let path = path.clone();
-                        async move { library::decode_thumbnail(&path) }
-                    })
-                    .await;
-                let Some(image) = image else { continue };
-
+            let (_decodes, results) = library::spawn_decode_pool(
+                cx.background_executor(),
+                thumbnails,
+                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(row) = this
-                            .recordings
-                            .items
-                            .as_mut()
-                            .and_then(|rows| rows.get_mut(index))
-                        else {
-                            return;
-                        };
-                        // A refresh may have landed while this decode was in
-                        // flight, and the row at this index may now be a
-                        // different recording.
-                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
-                            return;
+                        for (index, path, image) in batch {
+                            let Some(row) = this
+                                .recordings
+                                .items
+                                .as_mut()
+                                .and_then(|rows| rows.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            // A refresh may have landed while this decode was in
+                            // flight, and the row at this index may now be a
+                            // different recording.
+                            if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                                continue;
+                            }
+                            if let Some(old) = row.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
+                            row.thumbnail_stale = false;
                         }
-                        if let Some(old) = row.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
-                        }
-                        row.thumbnail_stale = false;
                         cx.notify();
                         // An unfocused window only repaints when asked.
                         window.refresh();
@@ -1081,30 +1099,31 @@ impl SettingsWindow {
                 return;
             };
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn({
-                        let path = path.clone();
-                        async move { library::decode_thumbnail(&path) }
-                    })
-                    .await;
-                let Some(image) = image else { continue };
+            let (_decodes, results) = library::spawn_decode_pool(
+                cx.background_executor(),
+                thumbnails,
+                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(row) = this
-                            .screenshots
-                            .items
-                            .as_mut()
-                            .and_then(|rows| rows.get_mut(index))
-                        else {
-                            return;
-                        };
-                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
-                            return;
-                        }
-                        if let Some(old) = row.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
+                        for (index, path, image) in batch {
+                            let Some(row) = this
+                                .screenshots
+                                .items
+                                .as_mut()
+                                .and_then(|rows| rows.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                                continue;
+                            }
+                            if let Some(old) = row.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
                         }
                         cx.notify();
                         window.refresh();
@@ -1273,7 +1292,12 @@ impl SettingsWindow {
         self.write(key, Value::from(value), cx);
     }
 
-    fn write_enum<T: SettingsEnum>(&mut self, key: &'static str, value: T, cx: &mut Context<Self>) {
+    pub(crate) fn write_enum<T: SettingsEnum>(
+        &mut self,
+        key: &'static str,
+        value: T,
+        cx: &mut Context<Self>,
+    ) {
         self.write(key, Value::String(value.as_json().to_string()), cx);
     }
 
@@ -1563,6 +1587,11 @@ impl Render for SettingsWindow {
                     cx.defer(crate::app_windows::close_settings);
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _window, cx| {
+                    this.shortcuts_modifiers_changed(event.modifiers, cx);
+                },
+            ))
             .size_full()
             .flex()
             .flex_row()
@@ -1880,7 +1909,7 @@ impl SettingsWindow {
             .child(update_links)
             .child({
                 let signed_in = store::auth_snapshot().signed_in();
-                let (variant, label) = if self.sign_in_pending {
+                let (variant, label) = if SignIn::global(cx).read(cx).is_pending() {
                     (ui::ButtonVariant::Gray, "Cancel Sign In")
                 } else if signed_in {
                     (ui::ButtonVariant::Gray, "Sign Out")
@@ -1901,53 +1930,16 @@ impl SettingsWindow {
     }
 
     fn toggle_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use std::sync::atomic::Ordering;
-
-        if self.sign_in_pending {
-            self.sign_in_cancel.store(true, Ordering::Relaxed);
-            self.sign_in_pending = false;
-            cx.notify();
+        let sign_in = SignIn::global(cx);
+        if sign_in.read(cx).is_pending() {
+            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
             return;
         }
         if store::auth_snapshot().signed_in() {
             self.clear_local_auth(window, cx);
             return;
         }
-
-        self.sign_in_cancel.store(false, Ordering::Relaxed);
-        let cancel = self.sign_in_cancel.clone();
-        let session = match crate::auth::begin_sign_in(cancel.clone()) {
-            Ok(session) => session,
-            Err(error) => {
-                tracing::error!("starting sign-in: {error}");
-                return;
-            }
-        };
-        cx.open_url(&session.url);
-        self.sign_in_pending = true;
-        self.sign_in_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let signed_in = cx
-                .background_executor()
-                .spawn(async move { session.complete() })
-                .await;
-            if matches!(signed_in, Ok(true))
-                && let Ok(plan) =
-                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
-                && let Err(error) = plan
-            {
-                tracing::warn!("updating auth plan after sign-in: {error}");
-            }
-            crate::platform::activate_app();
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.sign_in_pending = false;
-                if store::auth_snapshot().signed_in() {
-                    this.refresh_user_profile(window, cx);
-                }
-                cx.notify();
-                window.refresh();
-            });
-        }));
-        cx.notify();
+        sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Settings, cx));
     }
 
     pub(crate) fn refresh_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3230,7 +3222,11 @@ impl SettingsWindow {
 
         self.section(
             "Instant recordings",
-            Some("Uploaded while you record, so the link is ready the moment you stop."),
+            Some(
+                "Uploaded while you record, so the link is ready the moment you stop. For the \
+                 best quality, use Studio mode: it records at the highest quality your screen \
+                 allows, and you can export up to 4K.",
+            ),
             None,
             vec![self.rows(rows).into_any_element()],
         )
@@ -3264,7 +3260,7 @@ impl SettingsWindow {
             })
             .when(!checked, |this| {
                 this.border_1()
-                    .border_color(theme.settings_border())
+                    .border_color(theme.settings_muted().opacity(0.55))
                     .group_hover("studio-quality-option", |style| {
                         style.border_color(theme.settings_muted())
                     })
@@ -3468,16 +3464,11 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
-                    // Deviation: general.tsx puts an "After a Studio
-                    // recording" select here (Open editor / Show in overlay).
-                    // The post-capture recordings overlay does not exist in
-                    // this app -- a product decision, not a gap -- so a
-                    // one-option select would be noise and the row is omitted.
-                    // The stored `postStudioRecordingBehaviour` is left
-                    // exactly as the Tauri app wrote it (this page never
-                    // writes the key), and the stop flow treats a stored
-                    // `showOverlay` as "reshow the main window"
-                    // (`app_windows.rs`).
+                    // "After a Studio recording" lives on the Shortcuts page,
+                    // next to the shortcuts it shapes. There is no
+                    // post-capture overlay in this app, so a stored
+                    // `showOverlay` means "reshow the main window"
+                    // (`app_windows.rs`) and is labelled "Show Cap".
                     self.setting_row(
                         "After deleting a recording",
                         Some("Whether the recording window should reopen."),
@@ -3791,6 +3782,11 @@ impl SettingsWindow {
             ("", "{target_name}", "Monitor name or window title."),
             ("Date & time", "{date}", "the recording's date"),
             ("", "{time}", "the recording's time"),
+            (
+                "Random",
+                "{random}",
+                "10 filename-safe hexadecimal characters; use {random:N} for 1–32.",
+            ),
         ];
 
         let body = div()
