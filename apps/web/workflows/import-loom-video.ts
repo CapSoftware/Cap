@@ -172,16 +172,17 @@ export async function importLoomVideoWorkflow(
 		let metadata: ProcessedVideoMetadata;
 		for (let processingAttempt = 0; ; processingAttempt++) {
 			let capacityRetryCount = 0;
+			let previousSourceUrl =
+				processingAttempt === 0 ? payload.loomDownloadUrl : undefined;
 			while (true) {
 				try {
 					const loomSourceUrl = processingInput.importFromLoom
 						? await fetchFreshLoomDownloadUrl(
 								payload.loomVideoId,
-								processingAttempt === 0 && capacityRetryCount === 0
-									? payload.loomDownloadUrl
-									: undefined,
+								previousSourceUrl,
 							)
 						: undefined;
+					previousSourceUrl = loomSourceUrl;
 					await processVideoOnMediaServer(payload, loomSourceUrl);
 					break;
 				} catch (error) {

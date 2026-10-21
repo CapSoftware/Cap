@@ -62,6 +62,7 @@ vi.mock("@/lib/ai-generation-entitlement", () => ({
 vi.mock("workflow", () => ({
 	sleep: mocks.sleep,
 	FatalError: class FatalError extends Error {},
+	RetryableError: class RetryableError extends Error {},
 }));
 
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
@@ -235,6 +236,52 @@ describe("media processing workflows", () => {
 			"https://cdn.loom.com/original.mp4",
 		);
 	});
+
+	it.each([false, true])(
+		"refreshes a source waiting for worker capacity only when it expires: %s",
+		async (expiresDuringWait) => {
+			const now = Date.now();
+			const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+			const expires = Math.floor(now / 1000) + 7200;
+			const loomDownloadUrl = `https://cdn.loom.com/original.mp4?Expires=${expires}`;
+			let workerAttempts = 0;
+			mocks.rows = [[video], [video], [], [metadata]];
+			mocks.fetch.mockImplementation(async (url: string) => {
+				if (url.startsWith("https://www.loom.com/")) {
+					return Response.json({ url: "https://cdn.loom.com/refreshed.mp4" });
+				}
+				workerAttempts++;
+				return workerAttempts <= 2
+					? Response.json(
+							{ code: "SERVER_BUSY", error: "Server is busy" },
+							{ status: 503 },
+						)
+					: Response.json({ jobId: "job-1" });
+			});
+			mocks.sleep.mockImplementationOnce(async () => {
+				if (expiresDuringWait) clock.mockReturnValue(now + 2 * 60 * 60 * 1000);
+			});
+			try {
+				await importLoomVideoWorkflow({ ...payload, loomDownloadUrl });
+				expect(workerAttempts).toBe(3);
+				expect(
+					mocks.fetch.mock.calls.filter(([url]) =>
+						String(url).startsWith("https://www.loom.com/"),
+					),
+				).toHaveLength(expiresDuringWait ? 1 : 0);
+				expect(
+					JSON.parse(mocks.fetch.mock.calls.at(-1)?.[1].body),
+				).toMatchObject({
+					videoUrl: expiresDuringWait
+						? "https://cdn.loom.com/refreshed.mp4"
+						: loomDownloadUrl,
+					priority: "bulk",
+				});
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
 
 	it("retries a failed Loom worker from its preserved original", async () => {
 		mocks.rows = [
