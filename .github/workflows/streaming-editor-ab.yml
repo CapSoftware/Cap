@@ -78,7 +78,7 @@ jobs:
     name: Editor A/B (Windows hosted, WARP)
     needs: fixture
     if: ${{ !contains(github.event.head_commit.message, 'linux only') }}
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 180
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
