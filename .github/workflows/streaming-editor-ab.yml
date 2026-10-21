@@ -27,9 +27,56 @@ jobs:
           name: streaming-editor-fixture
           path: ${{ runner.temp }}/streaming-editor.cap
 
+  linux-ab:
+    name: Editor A/B (Linux)
+    needs: fixture
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: streaming-editor-fixture
+          path: ${{ runner.temp }}/streaming-editor.cap
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+      - name: Install software GPU drivers and audio
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libegl1 libegl-mesa0 libgl1-mesa-dri libglx-mesa0 pulseaudio
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-gpui
+          workspaces: apps/desktop-gpui -> target
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Build
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target x86_64-unknown-linux-gnu --bin cap-gpui
+      - name: A/B
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          pulseaudio --start --exit-idle-time=-1 || true
+          binary="apps/desktop-gpui/target/x86_64-unknown-linux-gnu/debug/cap-gpui"
+          xvfb=(xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset")
+          python3 .github/scripts/streaming-editor-ab.py "$binary" "$RUNNER_TEMP/streaming-editor.cap" 3 "Linux lavapipe (Vulkan)" "${xvfb[@]}"
+          echo '{"file_format_version":"1.0.0","ICD":{"library_path":"/nonexistent","api_version":"1.0.0"}}' > "$RUNNER_TEMP/no-vulkan.json"
+          VK_ICD_FILENAMES="$RUNNER_TEMP/no-vulkan.json" VK_DRIVER_FILES="$RUNNER_TEMP/no-vulkan.json" \
+            python3 .github/scripts/streaming-editor-ab.py "$binary" "$RUNNER_TEMP/streaming-editor.cap" 3 "Linux llvmpipe (GL)" "${xvfb[@]}"
+
   windows-ab:
     name: Editor A/B (Windows hosted, WARP)
     needs: fixture
+    if: ${{ !contains(github.event.head_commit.message, 'linux only') }}
     runs-on: windows-2025
     timeout-minutes: 180
     env:
