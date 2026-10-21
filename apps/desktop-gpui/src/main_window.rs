@@ -1375,8 +1375,9 @@ impl MainWindow {
                 self.thumbnails.set_window_inflight(true);
 
                 let (events_tx, events) = flume::unbounded();
+                let current = self.thumbnails.captured_windows();
                 let capture = gpui_tokio::Tokio::spawn(cx, async move {
-                    target_thumbnails::capture_windows(events_tx).await;
+                    target_thumbnails::capture_windows(events_tx, current).await;
                 });
 
                 Some(cx.spawn_in(window, async move |this, cx| {
@@ -1598,11 +1599,12 @@ impl MainWindow {
                     id,
                     image,
                     app_icon,
+                    signature,
                 } => {
                     let icon = app_icon.map(|bytes| {
                         std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
                     });
-                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon) {
+                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon, signature) {
                         let _ = window.drop_image(old);
                     }
                 }
