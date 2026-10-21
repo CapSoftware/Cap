@@ -5,7 +5,7 @@ greeting = "Hello, {name}!"
 untranslated = "Only in English"
 
 [common.meta]
-title = { text = "Title", context = "Window heading", max_px = 120 }
+title = { text = "Title", context = "Window heading", max_px = 120, size = 13 }
 
 [editor.selection]
 clips = { one = "One clip", other = "{count} clips" }
