@@ -10,10 +10,6 @@ jobs:
         settings:
           - target: aarch64-apple-darwin
             runner: blacksmith-6vcpu-macos-15
-          - target: x86_64-pc-windows-msvc
-            runner: blacksmith-8vcpu-windows-2025
-          - target: x86_64-unknown-linux-gnu
-            runner: blacksmith-8vcpu-ubuntu-2404
     runs-on: ${{ matrix.settings.runner }}
     timeout-minutes: 150
     env:
@@ -51,34 +47,15 @@ jobs:
         shell: bash
         run: |
           set +e
-          if [[ "$RUNNER_OS" == "macOS" ]]; then sysctl -n machdep.cpu.brand_string; fi
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            sysctl -n machdep.cpu.brand_string
+            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/release/Frameworks"
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          fi
           cargo +1.95.0 bench --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels --bench screenshot_frame_convert | tee "$RUNNER_TEMP/convert.md"
           echo "### ${{ matrix.settings.target }} conversion" >> "$GITHUB_STEP_SUMMARY"
           grep '^|' "$RUNNER_TEMP/convert.md" >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-      - name: Padding drag A/B
-        shell: bash
-        run: |
-          set +e
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
-            export PATH="$debug_path:$PATH"
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/Frameworks"
-            mkdir -p "$frameworks"
-            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
-            system_profiler SPDisplaysDataType | grep -E "Chipset|Metal" || true
-          else
-            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          fi
-          run=(cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui)
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            run=(xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" "${run[@]}")
-          fi
-          "${run[@]}" -- --test-threads 1 the_displayed_frame_matches mask_overlays_from_bgra only_the_newest_queued 2>&1 | tail -20
-          "${run[@]}" benchmark_padding_slider_drag -- --ignored --nocapture --test-threads 1 2>&1 | tee "$RUNNER_TEMP/drag.md"
-          echo "### ${{ matrix.settings.target }} padding drag" >> "$GITHUB_STEP_SUMMARY"
-          grep '^|' "$RUNNER_TEMP/drag.md" >> "$GITHUB_STEP_SUMMARY"
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()
