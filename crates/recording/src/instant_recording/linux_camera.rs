@@ -1117,16 +1117,40 @@ fn crop_camera(
     }
     let crop_x = (source.width() - rect.width) as usize / 2;
     let crop_y = (source.height() - rect.height) as usize / 2;
+    let width = rect.width as usize;
+    let height = rect.height as usize;
     let mut output = ffmpeg::frame::Video::new(Pixel::RGBA, rect.width, rect.height);
     let source_stride = source.stride(0);
     let output_stride = output.stride(0);
     let source_data = source.data(0);
     let output_data = output.data_mut(0);
-    for y in 0..rect.height as usize {
-        for x in 0..rect.width as usize {
+    if mask.is_empty()
+        && rgba_window_is_opaque(source_data, source_stride, crop_x, crop_y, width, height)
+        && rgba_rows_fit(output_data.len(), output_stride, 0, width * 4, 0, height)
+    {
+        copy_cropped_rgba_rows(
+            output_data,
+            source_data,
+            PlaneWindow {
+                source_stride,
+                destination_stride: output_stride,
+                source_x: crop_x,
+                source_y: crop_y,
+                destination_x: 0,
+                destination_y: 0,
+                width,
+                height,
+            },
+            presentation.mirrored,
+        );
+        output.set_pts(source.pts());
+        return Ok(output);
+    }
+    for y in 0..height {
+        for x in 0..width {
             let source_x = crop_x
                 + if presentation.mirrored {
-                    rect.width as usize - 1 - x
+                    width - 1 - x
                 } else {
                     x
                 };
@@ -1139,13 +1163,81 @@ fn crop_camera(
                 .get_mut(output_offset..output_offset + 4)
                 .context("RGBA camera output layout is smaller than dimensions")?;
             destination.copy_from_slice(source_pixel);
-            if let Some(&coverage) = mask.get(y * rect.width as usize + x) {
+            if let Some(&coverage) = mask.get(y * width + x) {
                 destination[3] = (f64::from(destination[3]) * coverage).round() as u8;
             }
         }
     }
     output.set_pts(source.pts());
     Ok(output)
+}
+
+fn rgba_plane_is_opaque(data: &[u8], stride: usize, width: usize, height: usize) -> bool {
+    rgba_window_is_opaque(data, stride, 0, 0, width, height)
+}
+
+fn rgba_window_is_opaque(
+    data: &[u8],
+    stride: usize,
+    origin_x: usize,
+    origin_y: usize,
+    width: usize,
+    height: usize,
+) -> bool {
+    let row_bytes = width * 4;
+    (0..height).all(|row| {
+        let start = (origin_y + row) * stride + origin_x * 4;
+        data.get(start..start + row_bytes)
+            .is_some_and(|pixels| pixels.chunks_exact(4).all(|pixel| pixel[3] == 255))
+    })
+}
+
+fn rgba_rows_fit(
+    len: usize,
+    stride: usize,
+    origin_bytes: usize,
+    row_bytes: usize,
+    origin_y: usize,
+    height: usize,
+) -> bool {
+    (0..height).all(|row| {
+        let start = (origin_y + row) * stride + origin_bytes;
+        start.checked_add(row_bytes).is_some_and(|end| end <= len)
+    })
+}
+
+struct PlaneWindow {
+    source_stride: usize,
+    destination_stride: usize,
+    source_x: usize,
+    source_y: usize,
+    destination_x: usize,
+    destination_y: usize,
+    width: usize,
+    height: usize,
+}
+
+fn copy_cropped_rgba_rows(
+    destination: &mut [u8],
+    source: &[u8],
+    window: PlaneWindow,
+    mirrored: bool,
+) {
+    let row_bytes = window.width * 4;
+    for row in 0..window.height {
+        let src_start = (window.source_y + row) * window.source_stride + window.source_x * 4;
+        let src = &source[src_start..src_start + row_bytes];
+        let dst_start =
+            (window.destination_y + row) * window.destination_stride + window.destination_x * 4;
+        let dst = &mut destination[dst_start..dst_start + row_bytes];
+        if mirrored {
+            for (dst_pixel, src_pixel) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4).rev()) {
+                dst_pixel.copy_from_slice(src_pixel);
+            }
+        } else {
+            dst.copy_from_slice(src);
+        }
+    }
 }
 
 fn blend_rgba(
@@ -1172,6 +1264,23 @@ fn blend_rgba(
     }
     let source_data = source.data(0);
     let destination_data = destination.data_mut(0);
+    if rgba_plane_is_opaque(source_data, source_stride, source_width, source_height) {
+        copy_rgba_rows(
+            destination_data,
+            source_data,
+            PlaneWindow {
+                source_stride,
+                destination_stride,
+                source_x: 0,
+                source_y: 0,
+                destination_x: x,
+                destination_y: y,
+                width: source_width,
+                height: source_height,
+            },
+        );
+        return Ok(());
+    }
     for row in 0..source_height {
         for column in 0..source_width {
             let source_offset = row * source_stride + column * 4;
@@ -1190,6 +1299,17 @@ fn blend_rgba(
         }
     }
     Ok(())
+}
+
+fn copy_rgba_rows(destination: &mut [u8], source: &[u8], window: PlaneWindow) {
+    let row_bytes = window.width * 4;
+    for row in 0..window.height {
+        let src_start = (window.source_y + row) * window.source_stride + window.source_x * 4;
+        let dst_start =
+            (window.destination_y + row) * window.destination_stride + window.destination_x * 4;
+        destination[dst_start..dst_start + row_bytes]
+            .copy_from_slice(&source[src_start..src_start + row_bytes]);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1251,6 +1371,33 @@ fn blend_rgba_into_packed(
     let destination_stride = destination.stride(0);
     let source_data = source.data(0);
     let destination_data = destination.data_mut(0);
+    if rgba_plane_is_opaque(source_data, source_stride, source_width, source_height)
+        && rgba_rows_fit(
+            destination_data.len(),
+            destination_stride,
+            x * bytes_per_pixel,
+            source_width * bytes_per_pixel,
+            y,
+            source_height,
+        )
+    {
+        copy_opaque_rgba_into_packed(
+            destination_data,
+            source_data,
+            PlaneWindow {
+                source_stride,
+                destination_stride,
+                source_x: 0,
+                source_y: 0,
+                destination_x: x,
+                destination_y: y,
+                width: source_width,
+                height: source_height,
+            },
+            layout,
+        );
+        return Ok(());
+    }
     for row in 0..source_height {
         let source_row = &source_data[row * source_stride..][..source_width * 4];
         let destination_row = &mut destination_data
@@ -1277,6 +1424,126 @@ fn blend_rgba_into_packed(
         }
     }
     Ok(())
+}
+
+fn copy_opaque_rgba_into_packed(
+    destination: &mut [u8],
+    source: &[u8],
+    window: PlaneWindow,
+    layout: PackedRgbLayout,
+) {
+    if layout
+        == (PackedRgbLayout {
+            bytes_per_pixel: 4,
+            red: 0,
+            green: 1,
+            blue: 2,
+            opaque: Some(3),
+        })
+    {
+        copy_rgba_rows(destination, source, window);
+        return;
+    }
+    if layout
+        == (PackedRgbLayout {
+            bytes_per_pixel: 4,
+            red: 2,
+            green: 1,
+            blue: 0,
+            opaque: Some(3),
+        })
+    {
+        copy_rgba_rows_to_bgra(destination, source, window);
+        return;
+    }
+    let source_row_bytes = window.width * 4;
+    let destination_row_bytes = window.width * layout.bytes_per_pixel;
+    for row in 0..window.height {
+        let src_start = (window.source_y + row) * window.source_stride + window.source_x * 4;
+        let dst_start = (window.destination_y + row) * window.destination_stride
+            + window.destination_x * layout.bytes_per_pixel;
+        copy_opaque_rgba_pixels(
+            &source[src_start..src_start + source_row_bytes],
+            &mut destination[dst_start..dst_start + destination_row_bytes],
+            layout,
+        );
+    }
+}
+
+fn copy_opaque_rgba_pixels(source: &[u8], destination: &mut [u8], layout: PackedRgbLayout) {
+    for (source_pixel, destination_pixel) in source
+        .chunks_exact(4)
+        .zip(destination.chunks_exact_mut(layout.bytes_per_pixel))
+    {
+        destination_pixel[layout.red] = source_pixel[0];
+        destination_pixel[layout.green] = source_pixel[1];
+        destination_pixel[layout.blue] = source_pixel[2];
+        if let Some(opaque) = layout.opaque {
+            destination_pixel[opaque] = 255;
+        }
+    }
+}
+
+fn copy_rgba_rows_to_bgra(destination: &mut [u8], source: &[u8], window: PlaneWindow) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            unsafe {
+                copy_rgba_rows_to_bgra_avx2(destination, source, window);
+            }
+            return;
+        }
+    }
+    let row_bytes = window.width * 4;
+    for row in 0..window.height {
+        let src_start = (window.source_y + row) * window.source_stride + window.source_x * 4;
+        let dst_start =
+            (window.destination_y + row) * window.destination_stride + window.destination_x * 4;
+        copy_rgba_to_bgra_scalar(
+            &source[src_start..src_start + row_bytes],
+            &mut destination[dst_start..dst_start + row_bytes],
+        );
+    }
+}
+
+fn copy_rgba_to_bgra_scalar(source: &[u8], destination: &mut [u8]) {
+    for (source_pixel, destination_pixel) in
+        source.chunks_exact(4).zip(destination.chunks_exact_mut(4))
+    {
+        destination_pixel[0] = source_pixel[2];
+        destination_pixel[1] = source_pixel[1];
+        destination_pixel[2] = source_pixel[0];
+        destination_pixel[3] = source_pixel[3];
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn copy_rgba_rows_to_bgra_avx2(destination: &mut [u8], source: &[u8], window: PlaneWindow) {
+    use std::arch::x86_64::*;
+
+    let row_bytes = window.width * 4;
+    let shuffle = _mm256_setr_epi8(
+        2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15, 18, 17, 16, 19, 22, 21, 20, 23, 26,
+        25, 24, 27, 30, 29, 28, 31,
+    );
+    for row in 0..window.height {
+        let src_start = (window.source_y + row) * window.source_stride + window.source_x * 4;
+        let dst_start =
+            (window.destination_y + row) * window.destination_stride + window.destination_x * 4;
+        let src = &source[src_start..src_start + row_bytes];
+        let dst = &mut destination[dst_start..dst_start + row_bytes];
+        let mut offset = 0;
+        while offset + 32 <= row_bytes {
+            unsafe {
+                let loaded = _mm256_loadu_si256(src.as_ptr().add(offset).cast());
+                let shuffled = _mm256_shuffle_epi8(loaded, shuffle);
+                _mm256_storeu_si256(dst.as_mut_ptr().add(offset).cast(), shuffled);
+            }
+            offset += 32;
+        }
+        copy_rgba_to_bgra_scalar(&src[offset..], &mut dst[offset..]);
+    }
 }
 
 #[cfg(test)]
@@ -2443,6 +2710,672 @@ mod tests {
             run("converted, new camera every frame", true, 1);
             run("in place, new camera every frame", false, 1);
             run("in place, 30 fps camera / 60 fps", false, 2);
+        }
+    }
+
+    fn paint_rgba(frame: &mut ffmpeg::frame::Video, pixel: impl Fn(usize, usize) -> [u8; 4]) {
+        let stride = frame.stride(0);
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        let data = frame.data_mut(0);
+        for y in 0..height {
+            for x in 0..width {
+                let offset = y * stride + x * 4;
+                data[offset..offset + 4].copy_from_slice(&pixel(x, y));
+            }
+        }
+    }
+
+    fn mark_padding(frame: &mut ffmpeg::frame::Video, bytes_per_pixel: usize) {
+        let stride = frame.stride(0);
+        let row_bytes = frame.width() as usize * bytes_per_pixel;
+        let height = frame.height() as usize;
+        let data = frame.data_mut(0);
+        for y in 0..height {
+            let start = y * stride + row_bytes;
+            let end = y * stride + stride;
+            if row_bytes < stride && end <= data.len() {
+                data[start..end].fill(0xA5);
+            }
+        }
+    }
+
+    fn formula_blend_rgba(
+        destination: &mut ffmpeg::frame::Video,
+        source: &ffmpeg::frame::Video,
+        x: usize,
+        y: usize,
+    ) {
+        let destination_stride = destination.stride(0);
+        let source_stride = source.stride(0);
+        let source_width = source.width() as usize;
+        let source_height = source.height() as usize;
+        let source_data = source.data(0);
+        let destination_data = destination.data_mut(0);
+        for row in 0..source_height {
+            for column in 0..source_width {
+                let source_offset = row * source_stride + column * 4;
+                let destination_offset = (y + row) * destination_stride + (x + column) * 4;
+                let alpha = u16::from(source_data[source_offset + 3]);
+                let inverse_alpha = 255 - alpha;
+                for channel in 0..3 {
+                    destination_data[destination_offset + channel] =
+                        ((u16::from(source_data[source_offset + channel]) * alpha
+                            + u16::from(destination_data[destination_offset + channel])
+                                * inverse_alpha
+                            + 127)
+                            / 255) as u8;
+                }
+                destination_data[destination_offset + 3] = 255;
+            }
+        }
+    }
+
+    fn formula_blend_packed(
+        destination: &mut ffmpeg::frame::Video,
+        layout: PackedRgbLayout,
+        source: &ffmpeg::frame::Video,
+        x: usize,
+        y: usize,
+    ) {
+        let bytes_per_pixel = layout.bytes_per_pixel;
+        let source_stride = source.stride(0);
+        let destination_stride = destination.stride(0);
+        let source_width = source.width() as usize;
+        let source_height = source.height() as usize;
+        let source_data = source.data(0);
+        let destination_data = destination.data_mut(0);
+        for row in 0..source_height {
+            let source_row = &source_data[row * source_stride..][..source_width * 4];
+            let destination_row = &mut destination_data
+                [(y + row) * destination_stride + x * bytes_per_pixel..]
+                [..source_width * bytes_per_pixel];
+            for (source_pixel, destination_pixel) in source_row
+                .chunks_exact(4)
+                .zip(destination_row.chunks_exact_mut(bytes_per_pixel))
+            {
+                let alpha = u16::from(source_pixel[3]);
+                let inverse_alpha = 255 - alpha;
+                for (channel, offset) in [layout.red, layout.green, layout.blue]
+                    .into_iter()
+                    .enumerate()
+                {
+                    destination_pixel[offset] = ((u16::from(source_pixel[channel]) * alpha
+                        + u16::from(destination_pixel[offset]) * inverse_alpha
+                        + 127)
+                        / 255) as u8;
+                }
+                if let Some(opaque) = layout.opaque {
+                    destination_pixel[opaque] = 255;
+                }
+            }
+        }
+    }
+
+    fn formula_crop_camera(
+        source: &ffmpeg::frame::Video,
+        presentation: LinuxCameraPresentation,
+        mask: &[f64],
+    ) -> ffmpeg::frame::Video {
+        let rect = presentation.rect;
+        let crop_x = (source.width() - rect.width) as usize / 2;
+        let crop_y = (source.height() - rect.height) as usize / 2;
+        let mut output = ffmpeg::frame::Video::new(Pixel::RGBA, rect.width, rect.height);
+        let source_stride = source.stride(0);
+        let output_stride = output.stride(0);
+        let source_data = source.data(0);
+        let output_data = output.data_mut(0);
+        for y in 0..rect.height as usize {
+            for x in 0..rect.width as usize {
+                let source_x = crop_x
+                    + if presentation.mirrored {
+                        rect.width as usize - 1 - x
+                    } else {
+                        x
+                    };
+                let source_offset = (crop_y + y) * source_stride + source_x * 4;
+                let output_offset = y * output_stride + x * 4;
+                let source_pixel = &source_data[source_offset..source_offset + 4];
+                let destination = &mut output_data[output_offset..output_offset + 4];
+                destination.copy_from_slice(source_pixel);
+                if let Some(&coverage) = mask.get(y * rect.width as usize + x) {
+                    destination[3] = (f64::from(destination[3]) * coverage).round() as u8;
+                }
+            }
+        }
+        output.set_pts(source.pts());
+        output
+    }
+
+    fn opaque_pixel(x: usize, y: usize) -> [u8; 4] {
+        let mixed = (x.wrapping_mul(17) + y.wrapping_mul(29)) as u8;
+        [mixed, mixed.wrapping_mul(3), mixed.wrapping_add(40), 255]
+    }
+
+    fn assert_planes_equal(actual: &ffmpeg::frame::Video, expected: &ffmpeg::frame::Video) {
+        assert_eq!(actual.format(), expected.format());
+        assert_eq!(actual.width(), expected.width());
+        assert_eq!(actual.height(), expected.height());
+        assert_eq!(actual.stride(0), expected.stride(0));
+        assert_eq!(actual.pts(), expected.pts());
+        let layout = PackedRgbLayout::of(actual.format()).expect("packed layout");
+        let row_bytes = actual.width() as usize * layout.bytes_per_pixel;
+        let height = actual.height() as usize;
+        let actual_data = actual.data(0);
+        let expected_data = expected.data(0);
+        for row in 0..height {
+            let start = row * actual.stride(0);
+            assert_eq!(
+                &actual_data[start..start + row_bytes],
+                &expected_data[start..start + row_bytes],
+                "row {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_copy_blend_rgba_matches_formula() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        for (source_width, source_height, origin_x, origin_y) in [
+            (1, 1, 0, 0),
+            (7, 3, 1, 2),
+            (8, 2, 0, 0),
+            (9, 4, 3, 1),
+            (15, 2, 0, 1),
+            (17, 3, 2, 0),
+            (324, 2, 5, 1),
+        ] {
+            let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, source_width, source_height);
+            source.set_pts(Some(44));
+            paint_rgba(&mut source, opaque_pixel);
+            mark_padding(&mut source, 4);
+            let mut fast = ffmpeg::frame::Video::new(
+                Pixel::RGBA,
+                source_width + origin_x,
+                source_height + origin_y + 2,
+            );
+            paint_rgba(&mut fast, |_, _| [1, 2, 3, 9]);
+            mark_padding(&mut fast, 4);
+            let mut slow = copy_frame(&fast);
+            blend_rgba(&mut fast, &source, origin_x as usize, origin_y as usize)
+                .expect("opaque rgba blend");
+            formula_blend_rgba(&mut slow, &source, origin_x as usize, origin_y as usize);
+            assert_planes_equal(&fast, &slow);
+        }
+    }
+
+    #[test]
+    fn opaque_copy_blend_packed_matches_formula() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let formats = [
+            Pixel::BGRA,
+            Pixel::BGRZ,
+            Pixel::RGBA,
+            Pixel::RGBZ,
+            Pixel::ARGB,
+            Pixel::ABGR,
+            Pixel::RGB24,
+            Pixel::BGR24,
+        ];
+        for format in formats {
+            let layout = PackedRgbLayout::of(format).expect("packed layout");
+            for (source_width, source_height, origin_x, origin_y) in [
+                (1, 1, 0, 0),
+                (7, 3, 1, 1),
+                (9, 2, 0, 0),
+                (17, 2, 4, 0),
+                (324, 1, 1, 0),
+            ] {
+                let mut source =
+                    ffmpeg::frame::Video::new(Pixel::RGBA, source_width, source_height);
+                paint_rgba(&mut source, opaque_pixel);
+                let mut fast = ffmpeg::frame::Video::new(
+                    format,
+                    source_width + origin_x,
+                    source_height + origin_y + 1,
+                );
+                fast.data_mut(0).fill(17);
+                mark_padding(&mut fast, layout.bytes_per_pixel);
+                let mut slow = copy_frame(&fast);
+                blend_rgba_into_packed(
+                    &mut fast,
+                    layout,
+                    &source,
+                    origin_x as usize,
+                    origin_y as usize,
+                )
+                .expect("opaque packed blend");
+                formula_blend_packed(
+                    &mut slow,
+                    layout,
+                    &source,
+                    origin_x as usize,
+                    origin_y as usize,
+                );
+                assert_planes_equal(&fast, &slow);
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_copy_partial_alpha_matches_formula() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, 1, 1);
+        paint_rgba(&mut source, |_, _| [10, 20, 30, 128]);
+        let mut fast = ffmpeg::frame::Video::new(Pixel::RGBA, 1, 1);
+        paint_rgba(&mut fast, |_, _| [1, 2, 3, 4]);
+        let mut slow = copy_frame(&fast);
+        blend_rgba(&mut fast, &source, 0, 0).expect("partial rgba blend");
+        formula_blend_rgba(&mut slow, &source, 0, 0);
+        assert_eq!(&fast.data(0)[..4], &[6, 11, 17, 255]);
+        assert_planes_equal(&fast, &slow);
+
+        let mut bgra = ffmpeg::frame::Video::new(Pixel::BGRA, 1, 1);
+        paint_rgba(&mut bgra, |_, _| [1, 2, 3, 4]);
+        let layout = PackedRgbLayout::of(Pixel::BGRA).expect("bgra layout");
+        let mut bgra_slow = copy_frame(&bgra);
+        blend_rgba_into_packed(&mut bgra, layout, &source, 0, 0).expect("partial bgra blend");
+        formula_blend_packed(&mut bgra_slow, layout, &source, 0, 0);
+        assert_eq!(&bgra.data(0)[..4], &[16, 11, 7, 255]);
+        assert_planes_equal(&bgra, &bgra_slow);
+
+        for (width, height) in [(7, 2), (9, 3), (17, 1), (324, 2)] {
+            let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
+            paint_rgba(&mut source, |x, y| {
+                let alpha = if x + 1 == width as usize && y + 1 == height as usize {
+                    254
+                } else {
+                    ((x * 13 + y * 5) % 255) as u8
+                };
+                [x as u8, y as u8, alpha, alpha]
+            });
+            let mut rgba = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
+            rgba.data_mut(0).fill(9);
+            let mut rgba_slow = copy_frame(&rgba);
+            blend_rgba(&mut rgba, &source, 0, 0).expect("partial rgba plane");
+            formula_blend_rgba(&mut rgba_slow, &source, 0, 0);
+            assert_planes_equal(&rgba, &rgba_slow);
+            assert_ne!(rgba.data(0), source.data(0));
+
+            let mut packed = ffmpeg::frame::Video::new(Pixel::BGRA, width, height);
+            packed.data_mut(0).fill(9);
+            let mut packed_slow = copy_frame(&packed);
+            blend_rgba_into_packed(&mut packed, layout, &source, 0, 0).expect("partial bgra plane");
+            formula_blend_packed(&mut packed_slow, layout, &source, 0, 0);
+            assert_planes_equal(&packed, &packed_slow);
+        }
+    }
+
+    #[test]
+    fn opaque_copy_crop_matches_formula() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        for (source_width, source_height, width, height, mirrored, partial) in [
+            (1, 1, 1, 1, false, false),
+            (7, 3, 7, 3, false, false),
+            (11, 5, 7, 3, true, false),
+            (9, 4, 9, 4, false, false),
+            (20, 6, 17, 5, true, false),
+            (324, 3, 324, 3, false, false),
+            (15, 4, 9, 3, false, true),
+            (16, 4, 15, 3, true, true),
+        ] {
+            let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, source_width, source_height);
+            source.set_pts(Some(18));
+            paint_rgba(&mut source, |x, y| {
+                let mut pixel = opaque_pixel(x, y);
+                if partial {
+                    pixel[3] = ((x * 19 + y * 7) % 251) as u8;
+                }
+                pixel
+            });
+            mark_padding(&mut source, 4);
+            let presentation = LinuxCameraPresentation {
+                rect: LinuxCameraRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+                shape: LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+                mirrored,
+                effect: LinuxCameraEffect::None,
+            };
+            let actual = crop_camera(&source, presentation, &[]).expect("empty mask crop");
+            let expected = formula_crop_camera(&source, presentation, &[]);
+            assert_planes_equal(&actual, &expected);
+            if partial {
+                assert!(actual.data(0).chunks_exact(4).any(|pixel| pixel[3] != 255));
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_copy_nonempty_mask_crop_matches_formula() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        for (width, height, radius, mirrored) in [
+            (8, 8, 3, false),
+            (9, 7, 2, true),
+            (17, 15, 4, false),
+            (15, 15, 7, true),
+        ] {
+            let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, width + 4, height + 2);
+            source.set_pts(Some(3));
+            paint_rgba(&mut source, opaque_pixel);
+            let presentation = LinuxCameraPresentation {
+                rect: LinuxCameraRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+                shape: LinuxCameraShape::RoundedRectangle {
+                    radius_pixels: radius,
+                },
+                mirrored,
+                effect: LinuxCameraEffect::None,
+            };
+            let mask = camera_mask(presentation);
+            assert!(!mask.is_empty());
+            let actual = crop_camera(&source, presentation, &mask).expect("masked crop");
+            let expected = formula_crop_camera(&source, presentation, &mask);
+            assert_planes_equal(&actual, &expected);
+            let unmasked = formula_crop_camera(
+                &source,
+                LinuxCameraPresentation {
+                    shape: LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+                    ..presentation
+                },
+                &[],
+            );
+            assert_ne!(
+                defined_bytes(&actual),
+                defined_bytes(&unmasked),
+                "mask changed no pixels"
+            );
+        }
+
+        let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, 5, 1);
+        paint_rgba(&mut source, |x, _| [x as u8, 4, 5, 200]);
+        let presentation = presentation(5, 1);
+        let mask = [0.0_f64, 0.25, 1.0];
+        let actual = crop_camera(&source, presentation, &mask).expect("short mask crop");
+        let expected = formula_crop_camera(&source, presentation, &mask);
+        assert_planes_equal(&actual, &expected);
+        assert_eq!(actual.data(0)[3], 0);
+        assert_eq!(actual.data(0)[7], 50);
+        assert_eq!(actual.data(0)[11], 200);
+        assert_eq!(actual.data(0)[19], 200);
+    }
+
+    #[test]
+    fn opaque_copy_scalar_bgra_matches_formula() {
+        for width in [1_usize, 7, 8, 9, 15, 17, 324] {
+            let source: Vec<u8> = (0..width * 4)
+                .map(|index| {
+                    if index % 4 == 3 {
+                        255
+                    } else {
+                        (index * 13 + 5) as u8
+                    }
+                })
+                .collect();
+            let mut scalar = vec![9_u8; width * 4];
+            let mut formula = scalar.clone();
+            copy_rgba_to_bgra_scalar(&source, &mut scalar);
+            for (src, dst) in source.chunks_exact(4).zip(formula.chunks_exact_mut(4)) {
+                let alpha = u16::from(src[3]);
+                let inverse_alpha = 255 - alpha;
+                let offsets = [2_usize, 1, 0];
+                for (channel, offset) in offsets.into_iter().enumerate() {
+                    dst[offset] = ((u16::from(src[channel]) * alpha
+                        + u16::from(dst[offset]) * inverse_alpha
+                        + 127)
+                        / 255) as u8;
+                }
+                dst[3] = 255;
+            }
+            assert_eq!(scalar, formula, "scalar width {width}");
+            assert_eq!(scalar[0], source[2]);
+            assert_eq!(scalar[2], source[0]);
+        }
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn opaque_copy_avx2_bgra_matches_scalar_fallback() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        for (width, height, origin_x) in [
+            (1_usize, 1_usize, 0_usize),
+            (7, 2, 1),
+            (8, 2, 0),
+            (9, 3, 3),
+            (17, 2, 1),
+            (324, 2, 5),
+        ] {
+            let row_bytes = width * 4;
+            let source_stride = row_bytes + 12;
+            let destination_stride = (origin_x + width) * 4 + 8;
+            let mut source = vec![0_u8; source_stride * height];
+            for (index, byte) in source.iter_mut().enumerate() {
+                *byte = if index % 4 == 3 {
+                    255
+                } else {
+                    (index * 19 + 3) as u8
+                };
+            }
+            let mut avx = vec![8_u8; destination_stride * (height + 1)];
+            let mut scalar = avx.clone();
+            unsafe {
+                copy_rgba_rows_to_bgra_avx2(
+                    &mut avx,
+                    &source,
+                    PlaneWindow {
+                        source_stride,
+                        destination_stride,
+                        source_x: 0,
+                        source_y: 0,
+                        destination_x: origin_x,
+                        destination_y: 0,
+                        width,
+                        height,
+                    },
+                );
+            }
+            for row in 0..height {
+                copy_rgba_to_bgra_scalar(
+                    &source[row * source_stride..row * source_stride + row_bytes],
+                    &mut scalar[row * destination_stride + origin_x * 4..][..row_bytes],
+                );
+            }
+            assert_eq!(avx, scalar, "avx2 width {width}");
+        }
+    }
+
+    fn median_nanos(samples: &mut [u128]) -> u128 {
+        samples.sort_unstable();
+        samples[samples.len() / 2]
+    }
+
+    fn measure_nanos(warmup: usize, runs: usize, mut body: impl FnMut()) -> (u128, u128, u128) {
+        for _ in 0..warmup {
+            body();
+        }
+        let mut samples = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            let started = Instant::now();
+            body();
+            samples.push(started.elapsed().as_nanos());
+        }
+        let min = samples.iter().copied().min().unwrap_or(0);
+        let max = samples.iter().copied().max().unwrap_or(0);
+        (min, median_nanos(&mut samples), max)
+    }
+
+    #[test]
+    #[ignore = "release timing benchmark; run with --release --ignored --nocapture"]
+    fn opaque_copy_benchmark() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        const WARMUP: usize = 2;
+        const RUNS: usize = 11;
+        let sizes = [(324_u32, 324_u32), (1280, 720), (1920, 1080)];
+        println!("opaque_copy_bench warmup={WARMUP} runs={RUNS} median");
+
+        for (width, height) in sizes {
+            let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
+            paint_rgba(&mut source, opaque_pixel);
+            let mut fast = ffmpeg::frame::Video::new(Pixel::BGRA, width, height);
+            fast.data_mut(0).fill(3);
+            let mut slow = copy_frame(&fast);
+            let layout = PackedRgbLayout::of(Pixel::BGRA).expect("bgra layout");
+            blend_rgba_into_packed(&mut fast, layout, &source, 0, 0).expect("fast bgra");
+            formula_blend_packed(&mut slow, layout, &source, 0, 0);
+            assert_eq!(fast.data(0), slow.data(0));
+            let before = measure_nanos(WARMUP, RUNS, || {
+                formula_blend_packed(
+                    std::hint::black_box(&mut slow),
+                    layout,
+                    std::hint::black_box(&source),
+                    0,
+                    0,
+                );
+                let _ = std::hint::black_box(slow.data(0).len());
+            });
+            let after = measure_nanos(WARMUP, RUNS, || {
+                blend_rgba_into_packed(
+                    std::hint::black_box(&mut fast),
+                    layout,
+                    std::hint::black_box(&source),
+                    0,
+                    0,
+                )
+                .expect("timed bgra blend");
+                let _ = std::hint::black_box(fast.data(0).len());
+            });
+            println!(
+                "packed_bgra {width}x{height} before_ms={:.4} after_ms={:.4} min_before_ms={:.4} max_before_ms={:.4} min_after_ms={:.4} max_after_ms={:.4}",
+                before.1 as f64 / 1_000_000.0,
+                after.1 as f64 / 1_000_000.0,
+                before.0 as f64 / 1_000_000.0,
+                before.2 as f64 / 1_000_000.0,
+                after.0 as f64 / 1_000_000.0,
+                after.2 as f64 / 1_000_000.0,
+            );
+
+            let mut rgba_fast = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
+            rgba_fast.data_mut(0).fill(4);
+            let mut rgba_slow = copy_frame(&rgba_fast);
+            blend_rgba(&mut rgba_fast, &source, 0, 0).expect("fast rgba");
+            formula_blend_rgba(&mut rgba_slow, &source, 0, 0);
+            assert_eq!(rgba_fast.data(0), rgba_slow.data(0));
+            let before = measure_nanos(WARMUP, RUNS, || {
+                formula_blend_rgba(
+                    std::hint::black_box(&mut rgba_slow),
+                    std::hint::black_box(&source),
+                    0,
+                    0,
+                );
+                let _ = std::hint::black_box(rgba_slow.data(0).len());
+            });
+            let after = measure_nanos(WARMUP, RUNS, || {
+                blend_rgba(
+                    std::hint::black_box(&mut rgba_fast),
+                    std::hint::black_box(&source),
+                    0,
+                    0,
+                )
+                .expect("timed rgba blend");
+                let _ = std::hint::black_box(rgba_fast.data(0).len());
+            });
+            println!(
+                "rgba_blend {width}x{height} before_ms={:.4} after_ms={:.4} min_before_ms={:.4} max_before_ms={:.4} min_after_ms={:.4} max_after_ms={:.4}",
+                before.1 as f64 / 1_000_000.0,
+                after.1 as f64 / 1_000_000.0,
+                before.0 as f64 / 1_000_000.0,
+                before.2 as f64 / 1_000_000.0,
+                after.0 as f64 / 1_000_000.0,
+                after.2 as f64 / 1_000_000.0,
+            );
+
+            let presentation = LinuxCameraPresentation {
+                rect: LinuxCameraRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+                shape: LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+                mirrored: false,
+                effect: LinuxCameraEffect::None,
+            };
+            let actual = crop_camera(&source, presentation, &[]).expect("fast crop");
+            let expected = formula_crop_camera(&source, presentation, &[]);
+            assert_planes_equal(&actual, &expected);
+            let before = measure_nanos(WARMUP, RUNS, || {
+                let cropped = formula_crop_camera(
+                    std::hint::black_box(&source),
+                    presentation,
+                    std::hint::black_box(&[][..]),
+                );
+                let _ = std::hint::black_box(cropped.data(0).len());
+            });
+            let after = measure_nanos(WARMUP, RUNS, || {
+                let cropped = crop_camera(
+                    std::hint::black_box(&source),
+                    presentation,
+                    std::hint::black_box(&[][..]),
+                )
+                .expect("timed empty crop");
+                let _ = std::hint::black_box(cropped.data(0).len());
+            });
+            println!(
+                "empty_mask_crop {width}x{height} before_ms={:.4} after_ms={:.4} min_before_ms={:.4} max_before_ms={:.4} min_after_ms={:.4} max_after_ms={:.4}",
+                before.1 as f64 / 1_000_000.0,
+                after.1 as f64 / 1_000_000.0,
+                before.0 as f64 / 1_000_000.0,
+                before.2 as f64 / 1_000_000.0,
+                after.0 as f64 / 1_000_000.0,
+                after.2 as f64 / 1_000_000.0,
+            );
+
+            let masked = LinuxCameraPresentation {
+                shape: LinuxCameraShape::RoundedRectangle {
+                    radius_pixels: (width.min(height) / 5).max(1),
+                },
+                ..presentation
+            };
+            let mask = camera_mask(masked);
+            assert!(!mask.is_empty());
+            let actual = crop_camera(&source, masked, &mask).expect("masked crop");
+            let expected = formula_crop_camera(&source, masked, &mask);
+            assert_planes_equal(&actual, &expected);
+            let before = measure_nanos(WARMUP, RUNS, || {
+                let cropped = formula_crop_camera(
+                    std::hint::black_box(&source),
+                    masked,
+                    std::hint::black_box(mask.as_slice()),
+                );
+                let _ = std::hint::black_box(cropped.data(0).len());
+            });
+            let after = measure_nanos(WARMUP, RUNS, || {
+                let cropped = crop_camera(
+                    std::hint::black_box(&source),
+                    masked,
+                    std::hint::black_box(mask.as_slice()),
+                )
+                .expect("timed masked crop");
+                let _ = std::hint::black_box(cropped.data(0).len());
+            });
+            println!(
+                "masked_crop {width}x{height} before_ms={:.4} after_ms={:.4} min_before_ms={:.4} max_before_ms={:.4} min_after_ms={:.4} max_after_ms={:.4}",
+                before.1 as f64 / 1_000_000.0,
+                after.1 as f64 / 1_000_000.0,
+                before.0 as f64 / 1_000_000.0,
+                before.2 as f64 / 1_000_000.0,
+                after.0 as f64 / 1_000_000.0,
+                after.2 as f64 / 1_000_000.0,
+            );
         }
     }
 }
