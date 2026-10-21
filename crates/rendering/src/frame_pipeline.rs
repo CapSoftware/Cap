@@ -1169,6 +1169,7 @@ impl PendingNv12Readback {
         let data = buffer_slice.get_mapped_range();
         let data_len = data.len();
 
+        let ab_copy_started = Instant::now();
         let nv12_data = if let Some(pool) = buffer_pool {
             let mut buf = pool.acquire(data_len);
             buf.extend_from_slice(&data);
@@ -1176,6 +1177,8 @@ impl PendingNv12Readback {
         } else {
             SharedNv12Buffer::from_vec(data.to_vec())
         };
+        crate::loop_stats::READBACK_COPY_NS.fetch_add(ab_copy_started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        crate::loop_stats::READBACK_COPY_BYTES.fetch_add(data_len as u64, std::sync::atomic::Ordering::Relaxed);
 
         drop(data);
         self.unmap();

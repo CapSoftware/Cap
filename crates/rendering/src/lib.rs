@@ -1297,6 +1297,8 @@ pub mod loop_stats {
     pub static JOIN: AtomicU64 = AtomicU64::new(0);
     pub static SEND: AtomicU64 = AtomicU64::new(0);
     pub static FRAMES: AtomicU64 = AtomicU64::new(0);
+    pub static READBACK_COPY_NS: AtomicU64 = AtomicU64::new(0);
+    pub static READBACK_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
 
     pub fn enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
