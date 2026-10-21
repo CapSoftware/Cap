@@ -44,7 +44,8 @@ vi.mock("@/workflows/import-loom-video", () => ({
 	importLoomVideoWorkflow: vi.fn(),
 }));
 vi.mock("@/lib/loom-import-start", () => ({
-	isLoomImportRunning: mocks.isRunning,
+	getLoomImportRunState: mocks.isRunning,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE: "Confirmation required",
 	restoreLoomImportStartError: mocks.restoreStartError,
 	startLoomImportWorkflow: (payload: unknown) =>
 		mocks.start(Symbol("workflow"), [payload]),
@@ -77,7 +78,7 @@ describe("Loom processing retries", () => {
 		mocks.currentUser.mockResolvedValue({ id: "owner-1" });
 		mocks.set.mockReturnValue({ where: mocks.where });
 		mocks.start.mockResolvedValue({});
-		mocks.isRunning.mockResolvedValue(false);
+		mocks.isRunning.mockResolvedValue("inactive");
 	});
 
 	it.each([true, false])(
@@ -114,11 +115,24 @@ describe("Loom processing retries", () => {
 				{ ...upload, phase: "processing", updatedAt: new Date(0) },
 			])
 			.mockResolvedValueOnce([{ source: "loom", sourceId: "loom-1" }]);
-		mocks.isRunning.mockResolvedValueOnce(true);
+		mocks.isRunning.mockResolvedValueOnce("active");
 		await expect(retryVideoProcessing({ videoId })).resolves.toEqual({
 			success: true,
 			status: "already-processing",
 		});
+		expect(mocks.set).not.toHaveBeenCalled();
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
+	it("reports missing provider confirmation without another retry", async () => {
+		mocks.where
+			.mockResolvedValueOnce([video])
+			.mockResolvedValueOnce([upload])
+			.mockResolvedValueOnce([{ source: "loom", sourceId: "loom-1" }]);
+		mocks.isRunning.mockResolvedValueOnce("unconfirmed");
+		await expect(retryVideoProcessing({ videoId })).rejects.toThrow(
+			"Confirmation required",
+		);
 		expect(mocks.set).not.toHaveBeenCalled();
 		expect(mocks.start).not.toHaveBeenCalled();
 	});

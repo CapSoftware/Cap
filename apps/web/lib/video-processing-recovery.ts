@@ -16,7 +16,8 @@ import {
 } from "drizzle-orm";
 import { start } from "workflow/api";
 import {
-	isLoomImportRunning,
+	getLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
 	LoomImportStartError,
 	startLoomImportWorkflow,
 } from "@/lib/loom-import-start";
@@ -49,6 +50,7 @@ export type FailedVideoProcessingRecoveryStatus =
 	| "already-claimed"
 	| "retry-scheduled"
 	| "missing-source"
+	| "reconciliation-required"
 	| "failed";
 
 export type FailedVideoProcessingRecoverySummary = {
@@ -142,11 +144,38 @@ async function recoverLoomCandidate({
 	bucketId: S3Bucket.S3BucketId | null;
 	loomVideoId: string;
 	rawFileKey: string | null;
-	phase: "uploading" | "error";
+	phase: "uploading" | "processing" | "error";
 	uploadUpdatedAt: Date;
 	receipt: VideoMetadata["loomImportRun"];
 }): Promise<FailedVideoProcessingRecoveryStatus> {
-	if (await isLoomImportRunning(receipt)) return "already-claimed";
+	const runState = await getLoomImportRunState(receipt);
+	const receiptCondition = receipt
+		? sql`EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${videoId} AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomImportRun.runId')) = ${receipt.runId})`
+		: undefined;
+	if (runState === "active") return "already-claimed";
+	if (
+		runState === "pending" ||
+		runState === "unconfirmed" ||
+		phase === "processing"
+	) {
+		const result = await db()
+			.update(videoUploads)
+			.set({
+				processingMessage: LOOM_IMPORT_CONFIRMATION_MESSAGE,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(videoUploads.videoId, videoId),
+					eq(videoUploads.phase, phase),
+					eq(videoUploads.updatedAt, uploadUpdatedAt),
+					receiptCondition,
+				),
+			);
+		return getAffectedRows(result) === 1
+			? "reconciliation-required"
+			: "already-claimed";
+	}
 	const rawFileKey =
 		existingRawFileKey ?? `${userId}/${videoId}/raw-upload.mp4`;
 	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
@@ -165,6 +194,7 @@ async function recoverLoomCandidate({
 				eq(videoUploads.videoId, videoId),
 				eq(videoUploads.phase, phase),
 				eq(videoUploads.updatedAt, uploadUpdatedAt),
+				receiptCondition,
 				...(phase === "error"
 					? [
 							eq(videoUploads.rawFileKey, rawFileKey),
@@ -172,7 +202,13 @@ async function recoverLoomCandidate({
 						]
 					: [
 							isNull(videoUploads.rawFileKey),
-							eq(videoUploads.processingMessage, LOOM_IMPORT_PENDING_MESSAGE),
+							or(
+								eq(videoUploads.processingMessage, LOOM_IMPORT_PENDING_MESSAGE),
+								eq(
+									videoUploads.processingMessage,
+									LOOM_IMPORT_CONFIRMATION_MESSAGE,
+								),
+							),
 						]),
 			),
 		);
@@ -251,37 +287,84 @@ export async function recoverFailedVideoProcessing({
 	const staleLoomBefore = new Date(
 		Date.now() - LOOM_IMPORT_RECOVERY_MIN_AGE_MS,
 	);
-	const pendingLoomCandidates = await db()
-		.select({
-			videoId: videos.id,
-			userId: videos.ownerId,
-			bucketId: videos.bucket,
-			loomVideoId: importedVideos.sourceId,
-			rawFileKey: videoUploads.rawFileKey,
-			uploadUpdatedAt: videoUploads.updatedAt,
-			metadata: videos.metadata,
-		})
-		.from(videos)
-		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.innerJoin(
-			importedVideos,
-			and(
-				eq(videos.id, importedVideos.id),
-				eq(videos.orgId, importedVideos.orgId),
-				eq(importedVideos.source, "loom"),
-			),
+	const selectStaleLoomCandidates = (phase: "uploading" | "processing") =>
+		db()
+			.select({
+				videoId: videos.id,
+				userId: videos.ownerId,
+				bucketId: videos.bucket,
+				loomVideoId: importedVideos.sourceId,
+				rawFileKey: videoUploads.rawFileKey,
+				uploadUpdatedAt: videoUploads.updatedAt,
+				metadata: videos.metadata,
+				phase: videoUploads.phase,
+			})
+			.from(videos)
+			.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+			.innerJoin(
+				importedVideos,
+				and(
+					eq(videos.id, importedVideos.id),
+					eq(videos.orgId, importedVideos.orgId),
+					eq(importedVideos.source, "loom"),
+				),
+			)
+			.where(
+				and(
+					eq(importedVideos.source, "loom"),
+					eq(videoUploads.phase, phase),
+					phase === "uploading"
+						? or(
+								and(
+									isNull(videoUploads.rawFileKey),
+									eq(
+										videoUploads.processingMessage,
+										LOOM_IMPORT_PENDING_MESSAGE,
+									),
+								),
+								and(
+									sql`JSON_EXTRACT(${videos.metadata}, '$.loomImportRun.runId') IS NOT NULL`,
+									eq(
+										videoUploads.processingMessage,
+										LOOM_IMPORT_CONFIRMATION_MESSAGE,
+									),
+								),
+							)
+						: and(
+								sql`JSON_EXTRACT(${videos.metadata}, '$.loomImportRun.runId') IS NOT NULL`,
+								or(
+									eq(
+										videoUploads.processingMessage,
+										LOOM_IMPORT_RECOVERY_MESSAGE,
+									),
+									eq(videoUploads.processingMessage, "Retrying Loom import..."),
+									eq(
+										videoUploads.processingMessage,
+										"Processing Loom video...",
+									),
+									eq(
+										videoUploads.processingMessage,
+										LOOM_IMPORT_CONFIRMATION_MESSAGE,
+									),
+								),
+							),
+					lte(videoUploads.updatedAt, staleLoomBefore),
+				),
+			)
+			.orderBy(asc(videoUploads.updatedAt))
+			.limit(Math.min(limit, LOOM_IMPORT_RECOVERY_BATCH_SIZE));
+	const pendingLoomCandidates = (
+		await Promise.all([
+			selectStaleLoomCandidates("uploading"),
+			selectStaleLoomCandidates("processing"),
+		])
+	)
+		.flat()
+		.sort(
+			(left, right) =>
+				left.uploadUpdatedAt.getTime() - right.uploadUpdatedAt.getTime(),
 		)
-		.where(
-			and(
-				eq(importedVideos.source, "loom"),
-				eq(videoUploads.phase, "uploading"),
-				isNull(videoUploads.rawFileKey),
-				eq(videoUploads.processingMessage, LOOM_IMPORT_PENDING_MESSAGE),
-				lte(videoUploads.updatedAt, staleLoomBefore),
-			),
-		)
-		.orderBy(asc(videoUploads.updatedAt))
-		.limit(Math.min(limit, LOOM_IMPORT_RECOVERY_BATCH_SIZE));
+		.slice(0, Math.min(limit, LOOM_IMPORT_RECOVERY_BATCH_SIZE));
 
 	const failedLoomUploads = await db()
 		.select({
@@ -336,7 +419,10 @@ export async function recoverFailedVideoProcessing({
 	const loomCandidates = [
 		...pendingLoomCandidates.map((candidate) => ({
 			...candidate,
-			phase: "uploading" as const,
+			phase:
+				candidate.phase === "processing"
+					? ("processing" as const)
+					: ("uploading" as const),
 		})),
 		...failedLoomCandidates.map((candidate) => ({
 			...candidate,

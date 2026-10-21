@@ -6,7 +6,8 @@ import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import {
-	isLoomImportRunning,
+	getLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
 	LoomImportStartError,
 	restoreLoomImportStartError,
 	startLoomImportWorkflow,
@@ -81,8 +82,12 @@ export async function retryVideoProcessing({
 		);
 
 	if (importedVideo?.source === "loom") {
+		const runState = await getLoomImportRunState(video.metadata?.loomImportRun);
+		if (runState === "unconfirmed") {
+			throw new Error(LOOM_IMPORT_CONFIRMATION_MESSAGE);
+		}
 		if (
-			(await isLoomImportRunning(video.metadata?.loomImportRun)) ||
+			runState !== "inactive" ||
 			((upload.phase === "processing" ||
 				upload.phase === "generating_thumbnail") &&
 				!shouldForceRetryProcessing(upload))

@@ -49,15 +49,25 @@ export class LoomImportStartError extends Error {
 	}
 }
 
-export async function isLoomImportRunning(receipt?: LoomImportRun) {
-	if (!receipt || receipt.dispatch === "rejected") return false;
+export const LOOM_IMPORT_CONFIRMATION_MESSAGE =
+	"We're confirming whether your Loom import started. Please contact support before retrying.";
+
+export async function getLoomImportRunState(
+	receipt?: LoomImportRun,
+): Promise<"inactive" | "pending" | "active" | "unconfirmed"> {
+	if (!receipt || receipt.dispatch === "rejected") return "inactive";
 	try {
 		const status = await getRun(receipt.runId).status;
-		return (
-			status !== "completed" && status !== "failed" && status !== "cancelled"
-		);
+		if (
+			status === "completed" ||
+			status === "failed" ||
+			status === "cancelled"
+		) {
+			return "inactive";
+		}
+		return status === "pending" ? "pending" : "active";
 	} catch {
-		return true;
+		return "unconfirmed";
 	}
 }
 

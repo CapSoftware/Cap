@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockDb = vi.fn();
 const mockStart = vi.fn();
 const mockSetVideoProcessingError = vi.fn();
-const mockIsLoomImportRunning = vi.fn();
+const mockGetLoomImportRunState = vi.fn();
 const mockStartLoomImportWorkflow = vi.fn();
 
 vi.mock("@cap/database", () => ({
@@ -46,7 +46,10 @@ vi.mock("drizzle-orm", () => ({
 	lte: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	notLike: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	or: vi.fn((...conditions: unknown[]) => conditions),
-	sql: vi.fn(),
+	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+		strings,
+		values,
+	})),
 }));
 
 vi.mock("workflow/api", () => ({
@@ -58,7 +61,8 @@ vi.mock("@/lib/video-processing", () => ({
 }));
 
 vi.mock("@/lib/loom-import-start", () => ({
-	isLoomImportRunning: mockIsLoomImportRunning,
+	getLoomImportRunState: mockGetLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE: "Confirmation required",
 	startLoomImportWorkflow: mockStartLoomImportWorkflow,
 	LoomImportStartError: class extends Error {
 		constructor(
@@ -131,13 +135,52 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	mockStart.mockResolvedValue({ runId: "run-1" });
 	mockSetVideoProcessingError.mockResolvedValue(undefined);
-	mockIsLoomImportRunning.mockResolvedValue(false);
+	mockGetLoomImportRunState.mockResolvedValue("inactive");
 	mockStartLoomImportWorkflow.mockResolvedValue(undefined);
 });
 
 describe("recoverFailedVideoProcessing", () => {
+	it("keeps one recovery budget across indexed startup phases", async () => {
+		const createCandidates = (
+			phase: "uploading" | "processing",
+			offset: number,
+		) =>
+			Array.from({ length: 8 }, (_, index) => ({
+				...candidate,
+				phase,
+				videoId: `video-${index * 2 + offset}`,
+				loomVideoId: `loom-${index * 2 + offset}`,
+				uploadUpdatedAt: new Date(index * 2000 + offset * 1000),
+				metadata: {
+					loomImportRun: {
+						runId: `run-${index * 2 + offset}`,
+						dispatch: "accepted" as const,
+					},
+				},
+			}));
+		mockDb
+			.mockReturnValueOnce(makeSelectChain(createCandidates("uploading", 0)))
+			.mockReturnValueOnce(makeSelectChain(createCandidates("processing", 1)))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]));
+		mockGetLoomImportRunState.mockResolvedValue("active");
+		const { recoverFailedVideoProcessing } = await import(
+			"@/lib/video-processing-recovery"
+		);
+
+		const result = await recoverFailedVideoProcessing();
+
+		expect(result.checked).toBe(8);
+		expect(result.results.map((row) => row.videoId)).toEqual(
+			Array.from({ length: 8 }, (_, index) => `video-${index}`),
+		);
+		expect(mockGetLoomImportRunState).toHaveBeenCalledTimes(8);
+		expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
+	});
+
 	it("atomically claims and restarts an affected upload", async () => {
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([candidate]))
@@ -156,6 +199,7 @@ describe("recoverFailedVideoProcessing", () => {
 		mockDb
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([candidate]))
 			.mockReturnValueOnce(makeUpdateChain(0));
 		const { recoverFailedVideoProcessing } = await import(
@@ -170,6 +214,7 @@ describe("recoverFailedVideoProcessing", () => {
 
 	it("keeps a transient start failure eligible for the next recovery run", async () => {
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([candidate]))
@@ -193,6 +238,7 @@ describe("recoverFailedVideoProcessing", () => {
 
 	it("restarts a Loom import that exhausted its capacity retries", async () => {
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(
 				makeSelectChain([
@@ -225,6 +271,7 @@ describe("recoverFailedVideoProcessing", () => {
 	it("keeps a failed Loom workflow start eligible for Loom-specific recovery", async () => {
 		const restore = makeUpdateChain(1);
 		mockDb
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(
 				makeSelectChain([
@@ -262,6 +309,7 @@ describe("recoverFailedVideoProcessing", () => {
 		async (dispatch) => {
 			const receipt = { runId: "slow-source-run", dispatch };
 			mockDb
+				.mockReturnValueOnce(makeSelectChain([]))
 				.mockReturnValueOnce(
 					makeSelectChain([
 						{
@@ -276,7 +324,7 @@ describe("recoverFailedVideoProcessing", () => {
 				.mockReturnValueOnce(makeSelectChain([]))
 				.mockReturnValueOnce(makeSelectChain([]))
 				.mockReturnValueOnce(makeUpdateChain(1));
-			mockIsLoomImportRunning.mockResolvedValueOnce(true);
+			mockGetLoomImportRunState.mockResolvedValueOnce("active");
 			const { recoverFailedVideoProcessing } = await import(
 				"@/lib/video-processing-recovery"
 			);
@@ -286,8 +334,8 @@ describe("recoverFailedVideoProcessing", () => {
 			expect(mockStart).not.toHaveBeenCalled();
 			expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
 			expect(result.statuses).toEqual({ "already-claimed": 1 });
-			expect(mockDb).toHaveBeenCalledTimes(3);
-			expect(mockIsLoomImportRunning).toHaveBeenCalledWith(receipt);
+			expect(mockDb).toHaveBeenCalledTimes(4);
+			expect(mockGetLoomImportRunState).toHaveBeenCalledWith(receipt);
 		},
 	);
 
@@ -307,6 +355,7 @@ describe("recoverFailedVideoProcessing", () => {
 			)
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(claim);
 		const { recoverFailedVideoProcessing } = await import(
 			"@/lib/video-processing-recovery"
@@ -323,6 +372,136 @@ describe("recoverFailedVideoProcessing", () => {
 		expect(result.statuses).toEqual({ "already-claimed": 1 });
 	});
 
+	it.each([
+		{ phase: "uploading", state: "pending" },
+		{ phase: "uploading", state: "unconfirmed" },
+		{ phase: "processing", state: "pending" },
+		{ phase: "processing", state: "unconfirmed" },
+		{ phase: "processing", state: "inactive" },
+	])(
+		"exposes startup reconciliation without redispatching: %j",
+		async (row) => {
+			const receipt = {
+				runId: "unresolved-run",
+				dispatch: "uncertain" as const,
+			};
+			const selected = makeSelectChain([
+				{
+					...candidate,
+					phase: row.phase,
+					loomVideoId: "loom-video-1",
+					metadata: { loomImportRun: receipt },
+				},
+			]);
+			const update = makeUpdateChain(1);
+			mockDb
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(selected)
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(update);
+			mockGetLoomImportRunState.mockResolvedValueOnce(row.state);
+			const { recoverFailedVideoProcessing } = await import(
+				"@/lib/video-processing-recovery"
+			);
+
+			const result = await recoverFailedVideoProcessing();
+
+			expect(result.statuses).toEqual({ "reconciliation-required": 1 });
+			expect(update.set).toHaveBeenCalledWith({
+				processingMessage: "Confirmation required",
+				updatedAt: expect.any(Date),
+			});
+			expect(update.where).toHaveBeenCalledWith(
+				expect.arrayContaining([
+					{ left: "videoUploads.updatedAt", right: candidate.uploadUpdatedAt },
+					expect.objectContaining({
+						values: expect.arrayContaining(["unresolved-run"]),
+					}),
+				]),
+			);
+			expect(selected.select).toHaveBeenCalledWith(
+				expect.objectContaining({ phase: "videoUploads.phase" }),
+			);
+			expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
+			expect(mockStart).not.toHaveBeenCalled();
+		},
+	);
+
+	it("does not change reconciliation state after the selected claim changed", async () => {
+		const update = makeUpdateChain(0);
+		mockDb
+			.mockReturnValueOnce(
+				makeSelectChain([
+					{
+						...candidate,
+						phase: "processing",
+						loomVideoId: "loom-video-1",
+						metadata: {
+							loomImportRun: { runId: "old-run", dispatch: "pending" },
+						},
+					},
+				]),
+			)
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(update);
+		mockGetLoomImportRunState.mockResolvedValueOnce("unconfirmed");
+		const { recoverFailedVideoProcessing } = await import(
+			"@/lib/video-processing-recovery"
+		);
+
+		expect((await recoverFailedVideoProcessing()).statuses).toEqual({
+			"already-claimed": 1,
+		});
+		expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
+	});
+
+	it("recovers an uploading confirmation hold after its run becomes terminal", async () => {
+		const update = makeUpdateChain(1);
+		mockDb
+			.mockReturnValueOnce(
+				makeSelectChain([
+					{
+						...candidate,
+						phase: "uploading",
+						rawFileKey: null,
+						loomVideoId: "loom-video-1",
+						metadata: {
+							loomImportRun: { runId: "terminal-run", dispatch: "uncertain" },
+						},
+					},
+				]),
+			)
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(update);
+		mockGetLoomImportRunState.mockResolvedValueOnce("inactive");
+		const { recoverFailedVideoProcessing } = await import(
+			"@/lib/video-processing-recovery"
+		);
+
+		expect((await recoverFailedVideoProcessing()).statuses).toEqual({
+			started: 1,
+		});
+		expect(update.where).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				expect.arrayContaining([
+					{
+						left: "videoUploads.processingMessage",
+						right: "Confirmation required",
+					},
+				]),
+				expect.objectContaining({
+					values: expect.arrayContaining(["terminal-run"]),
+				}),
+			]),
+		);
+		expect(mockStartLoomImportWorkflow).toHaveBeenCalledTimes(1);
+	});
+
 	it("retains the recovery claim when dispatch acknowledgement is uncertain", async () => {
 		mockDb
 			.mockReturnValueOnce(
@@ -330,6 +509,7 @@ describe("recoverFailedVideoProcessing", () => {
 					{ ...candidate, rawFileKey: null, loomVideoId: "loom-video-1" },
 				]),
 			)
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeUpdateChain(1));
@@ -343,7 +523,7 @@ describe("recoverFailedVideoProcessing", () => {
 
 		const result = await recoverFailedVideoProcessing();
 
-		expect(mockDb).toHaveBeenCalledTimes(4);
+		expect(mockDb).toHaveBeenCalledTimes(5);
 		expect(mockStart).not.toHaveBeenCalled();
 		expect(result.statuses).toEqual({ "already-claimed": 1 });
 	});
@@ -357,6 +537,7 @@ describe("recoverFailedVideoProcessing", () => {
 					{ ...candidate, rawFileKey: null, loomVideoId: "loom-video-1" },
 				]),
 			)
+			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(makeSelectChain([]))
 			.mockReturnValueOnce(claim)

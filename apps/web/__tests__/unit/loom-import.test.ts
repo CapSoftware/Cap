@@ -12,7 +12,7 @@ const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
 const requireSpaceManagerMock = vi.hoisted(() => vi.fn());
 const requireOrganizationSettingsManagerMock = vi.hoisted(() => vi.fn());
-const isLoomImportRunningMock = vi.hoisted(() => vi.fn());
+const getLoomImportRunStateMock = vi.hoisted(() => vi.fn());
 const restoreLoomImportStartErrorMock = vi.hoisted(() => vi.fn());
 const defaultSharing = vi.hoisted(() => ({
 	getNewVideoPublic: vi.fn(),
@@ -255,7 +255,8 @@ vi.mock("@/lib/org-pro", () => ({
 }));
 
 vi.mock("@/lib/loom-import-start", () => ({
-	isLoomImportRunning: isLoomImportRunningMock,
+	getLoomImportRunState: getLoomImportRunStateMock,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE: "Confirmation required",
 	restoreLoomImportStartError: restoreLoomImportStartErrorMock,
 	startLoomImportWorkflow: (payload: unknown) =>
 		startMock(Symbol("workflow"), [payload]),
@@ -297,7 +298,7 @@ describe("importFromLoom", () => {
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
-		isLoomImportRunningMock.mockResolvedValue(false);
+		getLoomImportRunStateMock.mockResolvedValue("inactive");
 		checkRateLimitMock.mockResolvedValue({ rateLimited: false });
 		getOrganizationAccessMock.mockResolvedValue({
 			id: "org-1",
@@ -404,7 +405,7 @@ describe("importFromLoom", () => {
 				metadata: { loomImportRun: receipt },
 			},
 		]);
-		isLoomImportRunningMock.mockResolvedValueOnce(true);
+		getLoomImportRunStateMock.mockResolvedValueOnce("active");
 		const { importFromLoom } = await import("@/actions/loom");
 		expect(
 			await importFromLoom({
@@ -412,7 +413,31 @@ describe("importFromLoom", () => {
 				orgId: "org-1" as never,
 			}),
 		).toMatchObject({ success: false });
-		expect(isLoomImportRunningMock).toHaveBeenCalledWith(receipt);
+		expect(getLoomImportRunStateMock).toHaveBeenCalledWith(receipt);
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it("reports an unconfirmed dispatch without claiming it again", async () => {
+		whereMock.mockResolvedValueOnce([
+			{
+				videoId: "existing-video",
+				ownerId: "user-123",
+				phase: "error",
+				uploadUpdatedAt: new Date(),
+				metadata: {
+					loomImportRun: { runId: "missing-run", dispatch: "uncertain" },
+				},
+			},
+		]);
+		getLoomImportRunStateMock.mockResolvedValueOnce("unconfirmed");
+		const { importFromLoom } = await import("@/actions/loom");
+		expect(
+			await importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+			}),
+		).toMatchObject({ success: false, error: "Confirmation required" });
 		expect(mockDb.update).not.toHaveBeenCalled();
 		expect(startMock).not.toHaveBeenCalled();
 	});
@@ -1406,7 +1431,7 @@ describe("importFromLoomCsvForConcierge", () => {
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
-		isLoomImportRunningMock.mockResolvedValue(false);
+		getLoomImportRunStateMock.mockResolvedValue("inactive");
 		conciergeMocks.requireMigrationOperator.mockResolvedValue({
 			id: "operator-1",
 		});

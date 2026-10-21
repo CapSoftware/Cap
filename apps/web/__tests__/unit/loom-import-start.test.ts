@@ -39,7 +39,7 @@ vi.mock("@/workflows/import-loom-video", () => ({
 }));
 
 import {
-	isLoomImportRunning,
+	getLoomImportRunState,
 	LoomImportStartError,
 	restoreLoomImportStartError,
 	startLoomImportWorkflow,
@@ -190,8 +190,14 @@ describe("Loom workflow startup receipts", () => {
 		async (status) => {
 			mocks.getRun.mockReturnValue({ status: Promise.resolve(status) });
 			expect(
-				await isLoomImportRunning({ runId: "run-1", dispatch: "uncertain" }),
-			).toBe(status === "pending" || status === "running");
+				await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+			).toBe(
+				status === "pending"
+					? "pending"
+					: status === "running"
+						? "active"
+						: "inactive",
+			);
 		},
 	);
 
@@ -200,15 +206,15 @@ describe("Loom workflow startup receipts", () => {
 			status: Promise.reject(new Error("Not found yet")),
 		});
 		expect(
-			await isLoomImportRunning({ runId: "run-1", dispatch: "uncertain" }),
-		).toBe(true);
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("unconfirmed");
 	});
 
 	it("allows rejected and legacy imports without an active run check", async () => {
 		expect(
-			await isLoomImportRunning({ runId: "run-1", dispatch: "rejected" }),
-		).toBe(false);
-		expect(await isLoomImportRunning()).toBe(false);
+			await getLoomImportRunState({ runId: "run-1", dispatch: "rejected" }),
+		).toBe("inactive");
+		expect(await getLoomImportRunState()).toBe("inactive");
 		expect(mocks.getRun).not.toHaveBeenCalled();
 	});
 

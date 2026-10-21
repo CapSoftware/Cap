@@ -52,7 +52,8 @@ import {
 } from "@/lib/loom-download-url";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
 import {
-	isLoomImportRunning,
+	getLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
 	LoomImportStartError,
 	restoreLoomImportStartError,
 	startLoomImportWorkflow,
@@ -360,7 +361,13 @@ async function importLoomVideoForOwner({
 			existingVideo.ownerId === ownerId &&
 			existingVideo.uploadUpdatedAt
 		) {
-			if (await isLoomImportRunning(existingVideo.metadata?.loomImportRun)) {
+			const runState = await getLoomImportRunState(
+				existingVideo.metadata?.loomImportRun,
+			);
+			if (runState === "unconfirmed") {
+				return { success: false, error: LOOM_IMPORT_CONFIRMATION_MESSAGE };
+			}
+			if (runState !== "inactive") {
 				return {
 					success: false,
 					error: "This Loom import is already restarting.",
