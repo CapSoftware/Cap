@@ -745,6 +745,7 @@ impl RgbaToNv12Converter {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
+        let ab_bind_started = Instant::now();
         let texture_ptr = source_texture as *const wgpu::Texture as usize;
         let needs_rebind =
             self.cached_texture_ptr != texture_ptr || self.cached_bind_groups.is_none();
@@ -782,6 +783,7 @@ impl RgbaToNv12Converter {
         }
 
         let bind_groups = self.cached_bind_groups.as_ref().unwrap();
+        crate::loop_stats::ab_bind(ab_bind_started.elapsed(), if needs_rebind { 2 } else { 0 });
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1715,8 +1717,10 @@ impl PendingReadback {
         };
         let buffer_slice = self.buffer.slice(..active_bytes as u64);
         let data = buffer_slice.get_mapped_range();
+        let ab_started = Instant::now();
         let mut data_vec = Vec::with_capacity(active_bytes + 24);
         data_vec.extend_from_slice(&data);
+        crate::loop_stats::ab_readback(ab_started.elapsed(), active_bytes, data_vec.capacity());
 
         drop(data);
         self.unmap();
