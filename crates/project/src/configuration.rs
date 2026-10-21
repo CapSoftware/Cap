@@ -3554,7 +3554,8 @@ mod tests {
                 "path": "", "name": "Image", "center": { "x": 0.5, "y": 0.5 },
                 "size": { "x": 0.3, "y": 0.3 }, "opacity": 1.0,
                 "rotation": 0.0, "rounding": 0.0, "flipX": false,
-                "flipY": false, "lockAspect": true
+                "flipY": false, "lockAspect": true,
+                "keyframes": { "position": [], "size": [], "opacity": [] }
             })
         );
         assert_eq!(
