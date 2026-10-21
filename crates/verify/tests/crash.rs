@@ -857,8 +857,10 @@ fn check_fragment_spans(case: &mut Case, fragments: &[Vec<(u32, f64)>], handed: 
         let span = next - start;
         worst = worst.max(span);
         if span > GOP_SECS + (next - end) + 1e-6 {
-            case.problem(
+            case.problem_measured(
                 "fragment-span",
+                "secs",
+                (span * 100.0).round() / 100.0,
                 format!(
                     "fragment of frames {}..={} covers {span:.2}s of capture, more than {GOP_SECS}s plus the {:.2}s before the frame that closed it",
                     first.0,

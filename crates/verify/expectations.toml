@@ -381,3 +381,11 @@ class = "missing"
 bound = { count = 1 }
 reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
 link = "https://github.com/CapSoftware/Cap/pull/2641"
+
+[[xfail]]
+case = "crash/recorder-kill/*/static-screen"
+class = "fragment-span"
+platforms = ["macos"]
+bound = { count = [1, 20], secs = [2.3, 20.5] }
+reason = "NEW (bug B1, see loss-time): since 2026-10-20 the macOS runners deliver the static screen at about 28 fps against a 60 fps nominal rate, so the keyframe interval (120 frames) closes each fragment after about 4 s of capture instead of 2 s; the same commit that passed nightly 39365191761 fails this way in run 39513410142. Bound: fragments no longer than B1's 20 s"
+link = "https://github.com/CapSoftware/Cap/actions/runs/39513410142"
