@@ -67,10 +67,7 @@ pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration
     ]
 }
 
-/// Lower bound for [`EditorInstance::set_playback_rate`]. Preview-only, like a
-/// video player's speed control -- never affects project config or exports.
 pub const MIN_PLAYBACK_RATE: f64 = 0.25;
-/// Upper bound for [`EditorInstance::set_playback_rate`].
 pub const MAX_PLAYBACK_RATE: f64 = 4.0;
 
 #[derive(Default)]
@@ -809,12 +806,6 @@ impl EditorInstance {
         &self.meta
     }
 
-    /// Sets the preview-only playback speed (1.0 = normal). Non-finite values
-    /// are ignored; finite values are clamped to
-    /// [`MIN_PLAYBACK_RATE`]..=[`MAX_PLAYBACK_RATE`]. Applies live to a
-    /// running playback without a stop/restart, and persists across
-    /// play/stop. Never touches project config, exports, or the timeline
-    /// coordinate system.
     pub fn set_playback_rate(&self, rate: f64) {
         if !rate.is_finite() {
             warn!(rate, "Ignoring non-finite playback rate");
@@ -824,7 +815,6 @@ impl EditorInstance {
         let _ = self.playback_rate.send(clamped);
     }
 
-    /// Current preview playback speed (1.0 = normal).
     pub fn playback_rate(&self) -> f64 {
         *self.playback_rate_rx.borrow()
     }

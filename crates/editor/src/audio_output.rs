@@ -62,8 +62,6 @@ pub struct PlaySpec {
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
     pub playhead_rx: watch::Receiver<f64>,
-    /// Preview-only playback speed (1.0 = normal), read live by the realtime
-    /// callback. See [`crate::EditorInstance::set_playback_rate`].
     pub playback_rate: watch::Receiver<f64>,
 }
 
@@ -547,10 +545,6 @@ struct ActiveSource<T: FromSampleBytes> {
     refresh_revision: u64,
     buffer: ActiveSourceBuffer<T>,
     playhead_rx: watch::Receiver<f64>,
-    /// Preview playback speed. A fixed `1.0` receiver (sender dropped) for
-    /// the preparing/progressive-handoff path, which always plays at normal
-    /// speed regardless of the editor's rate setting -- see module docs on
-    /// [`crate::audio::TimeStretcher`].
     playback_rate: watch::Receiver<f64>,
     ack: Option<SourceAcknowledgement>,
     preparing_request: Option<Arc<PreparingAudioRequest>>,
@@ -940,6 +934,12 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     match &mut source.buffer {
         ActiveSourceBuffer::Ordinary(audio, stretcher) => {
             let rate = *source.playback_rate.borrow();
+            if rate == 1.0
+                && let Some(playhead) =
+                    stretcher.resume_passthrough(audio.current_audible_playhead(0.0))
+            {
+                audio.set_playhead(playhead);
+            }
             sync_video_playhead(
                 audio,
                 stretcher,
@@ -1153,9 +1153,8 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         return Err("Preparing audio request cancelled".into());
     }
     let (_, playhead_rx) = watch::channel(start_seconds);
-    // The preparing/progressive-handoff path always plays at normal speed:
-    // it hands off to ordinary playback (which does support the rate) well
-    // before a user would reach for a speed control during this phase.
+    // Preparing audio has no stretcher; the playback clock and the editor's
+    // speed menu stay at 1x until ordinary playback takes over.
     let (_, playback_rate) = watch::channel(1.0);
     request.awaiting_callback();
     install_tx

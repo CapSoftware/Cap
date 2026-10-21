@@ -129,8 +129,6 @@ fn precision_sleep_sync(deadline: Instant) {
     }
 }
 
-/// Wall-clock deadline for `frame_offset` frames (relative to `start`) at
-/// `rate`x -- at 2x, half the normal frame duration must elapse per frame.
 fn rate_adjusted_frame_deadline(
     start: Instant,
     frame_duration: Duration,
@@ -140,8 +138,6 @@ fn rate_adjusted_frame_deadline(
     start + frame_duration.mul_f64(frame_offset).div_f64(rate)
 }
 
-/// How many timeline frames `elapsed` wall-clock time covers at `fps` and
-/// `rate`x -- the inverse of [`rate_adjusted_frame_deadline`].
 fn frames_elapsed_at_rate(elapsed: Duration, fps: f64, rate: f64) -> u32 {
     (elapsed.as_secs_f64() * fps * rate).floor() as u32
 }
@@ -172,9 +168,6 @@ pub struct Playback {
     pub segment_medias: Arc<Vec<SegmentMedia>>,
     pub music: crate::audio::MusicTracks,
     pub audio_output: Arc<AudioOutput>,
-    /// Preview-only playback speed (1.0 = normal), live-updatable for the
-    /// duration of this playback session. See
-    /// [`crate::EditorInstance::set_playback_rate`].
     pub playback_rate: watch::Receiver<f64>,
     pub telemetry: Option<PlaybackTelemetry>,
 }
@@ -1390,7 +1383,13 @@ impl Playback {
             diagnostic.stage("playing");
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
-            let mut current_rate = sanitize_playback_rate(*self.playback_rate.borrow_and_update());
+            // Adopted preparing audio has no stretcher, so the clock stays at 1x
+            // until playback hands off to the ordinary audio source.
+            let mut current_rate = if adopted.is_some() {
+                1.0
+            } else {
+                sanitize_playback_rate(*self.playback_rate.borrow_and_update())
+            };
 
             let mut transitioned_audio = None;
             let mut last_adopted_frame = None;
@@ -1444,6 +1443,7 @@ impl Playback {
                     audio_generation = Some(ticket.generation());
                     transitioned_audio = Some(ticket);
                     has_audio = true;
+                    current_rate = sanitize_playback_rate(*self.playback_rate.borrow_and_update());
                     clock_anchor_frame = frame_number;
                     start = Instant::now();
                 }
@@ -1470,18 +1470,13 @@ impl Playback {
                     let next_rate = sanitize_playback_rate(*self.playback_rate.borrow_and_update());
                     if next_rate != current_rate {
                         current_rate = next_rate;
-                        // Re-anchor so the wall-clock schedule has no jump: the
-                        // frame we're on right now becomes the new zero point
-                        // for the (now differently-paced) clock.
                         clock_anchor_frame = frame_number;
                         start = Instant::now();
                     }
                 }
-                // A faster-than-real-time rate makes the renderer missing a
-                // frame's wall-clock deadline the expected case, not
-                // starvation -- reuse the existing starvation-boost runway so
-                // the prefetcher stays far enough ahead instead of thrashing
-                // the smaller steady-state buffer.
+                // Above 1x the renderer is expected to miss deadlines, so keep
+                // the starvation-boost prefetch runway instead of thrashing the
+                // smaller steady-state buffer.
                 if current_rate > 1.0 {
                     boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                 }
