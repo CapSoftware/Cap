@@ -792,6 +792,7 @@ pub struct MainWindow {
     camera_id: Option<recording::DeviceOrModelID>,
     microphone: Option<MicrophoneOption>,
     microphone_level: Entity<ui::MicrophoneLevel>,
+    device_microphone_level: Entity<ui::MicrophoneLevel>,
     pending_device_restore: crate::store::RecordingInputSettings,
     device_restore_suspended: bool,
     device_format_target: Option<DeviceFormatTarget>,
@@ -942,11 +943,20 @@ impl MainWindow {
 
         // Track the app-scoped feeds: the camera bubble's close button
         // deselects the camera there, and this window's selection has to
-        // follow. Repaints are gated to what is actually visible -- the mic
-        // meter notifies at ~20Hz and would otherwise repaint the home view
-        // for a level bar only the microphone picker shows.
+        // follow. Repaints are gated to what is actually visible.
         let feeds = Feeds::global(cx);
-        let microphone_level = cx.new(|cx| ui::MicrophoneLevel::new(&feeds, window, cx));
+        let mic_level = feeds.read(cx).mic_level().clone();
+        let microphone_level = cx.new(|cx| {
+            ui::MicrophoneLevel::new(
+                ui::MicrophoneLevelKind::CaptureButton,
+                &mic_level,
+                window,
+                cx,
+            )
+        });
+        let device_microphone_level = cx.new(|cx| {
+            ui::MicrophoneLevel::new(ui::MicrophoneLevelKind::DeviceRow, &mic_level, window, cx)
+        });
         cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let feeds = feeds.read(cx);
             let camera_id = feeds.camera.as_ref().map(|camera| &camera.id);
@@ -1075,6 +1085,7 @@ impl MainWindow {
             camera_id: None,
             microphone: None,
             microphone_level,
+            device_microphone_level,
             pending_device_restore: crate::store::RecordingInputSettings::load(),
             device_restore_suspended: false,
             device_format_target: None,
@@ -2709,7 +2720,26 @@ impl Render for MainWindow {
             && self.microphone.is_some()
             && self.session.read(cx).phase == Phase::Idle;
         self.microphone_level.update(cx, |meter, cx| {
-            meter.configure(meter_active, theme.blue_9.into(), cx);
+            meter.configure(
+                meter_active,
+                theme.blue_9.into(),
+                gpui::transparent_black(),
+                cx,
+            );
+        });
+        let device_meter_active = self.microphone.is_some()
+            && matches!(self.panel, Some(Panel::Device(DeviceMenu::Microphone)));
+        self.device_microphone_level.update(cx, |meter, cx| {
+            meter.configure(
+                device_meter_active,
+                theme.blue_500.into(),
+                if theme.is_dark() {
+                    gpui::hsla(0., 0., 1., 0.1)
+                } else {
+                    gpui::hsla(0., 0., 0., 0.07)
+                },
+                cx,
+            );
         });
 
         div()
@@ -5158,9 +5188,7 @@ impl MainWindow {
                                             .map(|description| format!("Available: {description}"))
                                     },
                                     selected,
-                                    selected.then(|| {
-                                        feeds::picker_level(Feeds::global(cx).read(cx).mic_level_db)
-                                    }),
+                                    selected.then(|| self.device_microphone_level.clone()),
                                     cx.listener(move |this, _, _window, cx| {
                                         if !this.device_changes_allowed(cx) {
                                             return;
@@ -5874,10 +5902,9 @@ impl MainWindow {
         label: String,
         detail: Option<String>,
         selected: bool,
-        // `MicrophoneListItem`'s live level wash: a white 25% overlay whose
-        // right edge sits at `level * 100%` (1 = silence, the web app's
-        // orientation). Only the selected microphone row gets one.
-        audio_level: Option<f64>,
+        // `MicrophoneListItem`'s live level bar. Only the selected
+        // microphone row gets one.
+        audio_level: Option<Entity<ui::MicrophoneLevel>>,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
@@ -5930,26 +5957,7 @@ impl MainWindow {
                             .child(detail)
                     }))
                     .when_some(audio_level.filter(|_| selected), |this, level| {
-                        this.child(
-                            div()
-                                .mt(px(3.))
-                                .h(px(3.))
-                                .w_full()
-                                .rounded_full()
-                                .overflow_hidden()
-                                .bg(if theme.is_dark() {
-                                    gpui::hsla(0., 0., 1., 0.1)
-                                } else {
-                                    gpui::hsla(0., 0., 0., 0.07)
-                                })
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .rounded_full()
-                                        .bg(accent)
-                                        .w(gpui::relative(1. - level.clamp(0., 1.) as f32)),
-                                ),
-                        )
+                        this.child(level)
                     }),
             )
             .when(selected, |this| {
