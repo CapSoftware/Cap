@@ -62,8 +62,8 @@ use gpui::{
     Animation, AnimationExt as _, AppContext as _, Bounds, Context, Entity, FocusHandle,
     FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, WeakEntity, Window,
-    div, point, prelude::FluentBuilder, px, svg,
+    StatefulInteractiveElement as _, StreamingImage, StyleRefinement, Styled, Subscription,
+    WeakEntity, Window, div, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -582,6 +582,9 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
     Image(Arc<RenderImage>),
+    /// The pump's one streaming image, which every RGBA frame replaces in place
+    /// so each window keeps a single texture for it.
+    Stream(StreamingImage),
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
 }
@@ -592,6 +595,9 @@ impl EditorPreviewFrame {
         match self {
             Self::Image(image) => {
                 let _ = window.paint_image(bounds, corners, Arc::clone(image), 0, false);
+            }
+            Self::Stream(image) => {
+                let _ = window.paint_streaming_image(bounds, corners, image, false);
             }
             #[cfg(target_os = "macos")]
             Self::Surface(surface) => {
@@ -11871,6 +11877,53 @@ pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> Edito
     EditorPreviewFrame::Surface(pixel_buffer)
 }
 
+/// Whether the pump streams RGBA frames into one [`StreamingImage`] instead of
+/// converting each into a [`RenderImage`]. On by default where RGBA is the
+/// preview's only path (Windows and Linux); `CAP_GPUI_STREAMING_IMAGE=0` turns
+/// it off and `=1` turns it on for macOS's RGBA fallback.
+pub(crate) fn streaming_preview_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        streaming_preview_setting(std::env::var_os("CAP_GPUI_STREAMING_IMAGE").as_deref())
+    })
+}
+
+fn streaming_preview_setting(value: Option<&std::ffi::OsStr>) -> bool {
+    match value {
+        Some(value) => value != "0",
+        None => !cfg!(target_os = "macos"),
+    }
+}
+
+/// Makes `frame` the stream's current frame exactly as the renderer produced
+/// it: the stream uploads RGBA rows at the padded stride, so nothing is
+/// un-padded or swapped. Takes the renderer's buffer without copying when the
+/// frame is its only owner. Timed into the same counters as [`frame_image`].
+pub fn stream_frame_timed(
+    stream: &StreamingImage,
+    frame: RenderedFrame,
+    stats: &PumpStats,
+) -> bool {
+    let started = Instant::now();
+    let size = gpui::size(
+        gpui::DevicePixels(frame.width as i32),
+        gpui::DevicePixels(frame.height as i32),
+    );
+    let stride = frame.padded_bytes_per_row as usize;
+    let result = match Arc::try_unwrap(frame.data) {
+        Ok(data) => stream.set_frame(size, stride, data).map(drop),
+        Err(data) => stream.copy_frame(size, stride, &data),
+    };
+    stats
+        .convert_nanos
+        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    stats.convert_samples.fetch_add(1, Ordering::Relaxed);
+    if let Err(error) = &result {
+        tracing::warn!(%error, "a rendered frame could not be streamed to the preview");
+    }
+    result.is_ok()
+}
+
 /// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
 /// a number rather than a hunch.
 pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
@@ -12816,5 +12869,64 @@ mod tests {
         // BGRA out: the red and blue channels are swapped, no 99 anywhere.
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
+    }
+
+    #[test]
+    fn rendered_frames_stream_with_their_padded_rgba_rows() {
+        let width = 3u32;
+        let height = 2u32;
+        let padded = 16u32;
+        let data: Vec<u8> = (0..padded * height).map(|byte| byte as u8).collect();
+        let frame = RenderedFrame {
+            data: Arc::new(data.clone()),
+            width,
+            height,
+            padded_bytes_per_row: padded,
+            frame_number: 0,
+            target_time_ns: 0,
+        };
+        let stream = StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        let stats = PumpStats::default();
+
+        let owned_ptr = frame.data.as_ptr();
+        let shared = frame.clone();
+        assert!(stream_frame_timed(&stream, shared, &stats));
+        let copied = stream.current().expect("shared frame streams");
+        assert_eq!(copied.bytes(), data.as_slice());
+        assert_ne!(copied.bytes().as_ptr(), owned_ptr);
+
+        assert!(stream_frame_timed(&stream, frame, &stats));
+        let moved = stream.current().expect("owned frame streams");
+        assert_eq!(
+            moved.size(),
+            gpui::size(gpui::DevicePixels(3), gpui::DevicePixels(2))
+        );
+        assert_eq!(moved.stride(), padded as usize);
+        assert_eq!(moved.bytes(), data.as_slice());
+        assert_eq!(moved.bytes().as_ptr(), owned_ptr);
+        assert_eq!(stats.convert_samples.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn misshapen_rendered_frames_are_not_streamed() {
+        let frame = RenderedFrame {
+            data: Arc::new(vec![0; 16]),
+            width: 3,
+            height: 2,
+            padded_bytes_per_row: 8,
+            frame_number: 0,
+            target_time_ns: 0,
+        };
+        let stream = StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        assert!(!stream_frame_timed(&stream, frame, &PumpStats::default()));
+        assert!(stream.current().is_none());
+    }
+
+    #[test]
+    fn streaming_preview_follows_the_kill_switch() {
+        use std::ffi::OsStr;
+        assert!(!streaming_preview_setting(Some(OsStr::new("0"))));
+        assert!(streaming_preview_setting(Some(OsStr::new("1"))));
+        assert_eq!(streaming_preview_setting(None), !cfg!(target_os = "macos"));
     }
 }
