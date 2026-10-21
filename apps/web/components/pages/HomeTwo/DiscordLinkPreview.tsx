@@ -15,21 +15,16 @@ export const discordLinkPreview = {
 							"# Cap\nOpen-source screen recording for Mac, Windows, and Linux.",
 					},
 				],
+				accessory: {
+					type: 2,
+					style: 5,
+					label: "Join our Discord",
+					url: DISCORD_URL,
+				},
 			},
 			{
 				type: 12,
 				items: [{ media: { url: homepageOgImageUrl } }],
-			},
-			{
-				type: 1,
-				components: [
-					{
-						type: 2,
-						style: 5,
-						label: "Join our Discord",
-						url: DISCORD_URL,
-					},
-				],
 			},
 		],
 	},

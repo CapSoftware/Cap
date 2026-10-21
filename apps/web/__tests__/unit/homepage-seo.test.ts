@@ -103,5 +103,14 @@ describe("homepage SEO", () => {
 		expect(JSON.stringify(discordLinkPreview)).not.toContain(
 			"apple-touch-icon",
 		);
+		expect(discordLinkPreview.component.components[0]).toMatchObject({
+			type: 9,
+			accessory: {
+				type: 2,
+				style: 5,
+				label: "Join our Discord",
+				url: DISCORD_URL,
+			},
+		});
 	});
 });
