@@ -94,7 +94,7 @@ jobs:
       - name: Benchmark (interleaved base and head)
         run: |
           set -euo pipefail
-          for round in 1 2 3; do
+          for round in 1 2 3 4 5 6; do
             for side in base head; do
               "$RUNNER_TEMP/perf/bin/$side-bin" layers::captions::gpu_tests::benchmark_word_highlight_prepare --ignored --exact --nocapture --test-threads=1 \
                 | grep "word highlight prepare" | sed "s/^/$side r$round: /" | tee -a "$RUNNER_TEMP/bench.txt"
