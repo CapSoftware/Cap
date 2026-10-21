@@ -5305,4 +5305,182 @@ mod tests {
             }
         }
     }
+
+    fn old_frame_buffers(frame: &RenderedFrame) -> Option<(Arc<Vec<u8>>, Arc<RenderImage>)> {
+        let rgba = cap_gpui_kernels::frame::unpad_rows(
+            &frame.data,
+            frame.width as usize * 4,
+            frame.padded_bytes_per_row as usize,
+            frame.height as usize,
+        )?;
+        let mut bgra = rgba.clone();
+        cap_gpui_kernels::frame::swap_red_blue(&mut bgra);
+        let buffer = image::RgbaImage::from_raw(frame.width, frame.height, bgra)?;
+        Some((
+            Arc::new(rgba),
+            Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+                buffer
+            )])),
+        ))
+    }
+
+    struct PaddingDrag {
+        published: usize,
+        rendered: usize,
+        converted: usize,
+        cpu_ms: f64,
+        convert_ms: Vec<f64>,
+        latency_ms: Vec<f64>,
+        written_bytes: usize,
+    }
+
+    async fn drag_padding(width: u32, height: u32, ticks: usize, head: bool) -> PaddingDrag {
+        let source = synthetic_source(width, height);
+        let mut project = source.config.clone();
+        let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
+            revision: 0,
+            config: project.clone(),
+        });
+        let (_export_tx, export_rx) = tokio::sync::mpsc::channel(1);
+        let (frame_tx, frame_rx) = flume::bounded(2);
+        let (setup_tx, setup_rx) = flume::bounded(1);
+        tokio::spawn(run_still_renderer(
+            source, config_rx, export_rx, frame_tx, setup_tx,
+        ));
+        setup_rx.recv_async().await.unwrap().unwrap();
+        let (first, _) = frame_rx.recv_async().await.unwrap();
+        assert!(crate::editor_window::frame_image(&first).is_some());
+
+        let stats = Arc::new(std::sync::Mutex::new((
+            0usize,
+            0usize,
+            Vec::new(),
+            Vec::new(),
+            0usize,
+        )));
+        let sent_at = Arc::new(std::sync::Mutex::new(
+            HashMap::<u64, std::time::Instant>::new(),
+        ));
+        let pump = {
+            let (stats, sent_at) = (stats.clone(), sent_at.clone());
+            tokio::spawn(async move {
+                let mut shown: Option<(Option<Arc<Vec<u8>>>, Arc<RenderImage>)> = None;
+                while let Ok(frame) = frame_rx.recv_async().await {
+                    let queued = frame_rx.len();
+                    let (frame, revision) = if head {
+                        latest_frame(frame, &frame_rx)
+                    } else {
+                        frame
+                    };
+                    let tight = frame.width as usize * frame.height as usize * 4;
+                    let (converted, elapsed) = tokio::task::spawn_blocking(move || {
+                        let start = std::time::Instant::now();
+                        let converted = if head {
+                            crate::editor_window::frame_image(&frame).map(|image| (None, image))
+                        } else {
+                            old_frame_buffers(&frame).map(|(rgba, image)| (Some(rgba), image))
+                        };
+                        (converted, start.elapsed().as_secs_f64() * 1000.0)
+                    })
+                    .await
+                    .unwrap();
+                    shown = Some(converted.unwrap());
+                    let latency = sent_at
+                        .lock()
+                        .unwrap()
+                        .get(&revision)
+                        .map(|sent| sent.elapsed().as_secs_f64() * 1000.0);
+                    let mut stats = stats.lock().unwrap();
+                    stats.0 += 1 + if head { queued } else { 0 };
+                    stats.1 += 1;
+                    stats.2.push(elapsed);
+                    if let Some(latency) = latency {
+                        stats.3.push(latency);
+                    }
+                    stats.4 += if head { tight } else { 3 * tight };
+                }
+                drop(shown);
+            })
+        };
+
+        let mut revision = 0;
+        let cpu_start = cpu_secs();
+        let mut interval = tokio::time::interval(Duration::from_micros(16_667));
+        for tick in 0..ticks {
+            interval.tick().await;
+            let step = (tick % 80) as f64;
+            project.background.padding = if step < 40. { step } else { 80. - step };
+            revision += 1;
+            sent_at
+                .lock()
+                .unwrap()
+                .insert(revision, std::time::Instant::now());
+            config_tx
+                .send(ConfigUpdate {
+                    revision,
+                    config: project.clone(),
+                })
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let cpu_ms = (cpu_secs() - cpu_start) * 1000.0;
+        drop(config_tx);
+        pump.await.unwrap();
+
+        let stats = stats.lock().unwrap();
+        PaddingDrag {
+            published: revision as usize,
+            rendered: stats.0,
+            converted: stats.1,
+            cpu_ms,
+            convert_ms: stats.2.clone(),
+            latency_ms: stats.3.clone(),
+            written_bytes: stats.4,
+        }
+    }
+
+    /// `cargo test --bin cap-gpui benchmark_padding_slider_drag -- --ignored --nocapture`
+    #[test]
+    #[ignore = "GPU benchmark"]
+    fn benchmark_padding_slider_drag() {
+        const TICKS: usize = 120;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        println!(
+            "| still | mode | round | published | rendered | converted | process CPU | CPU / tick | convert median | convert total | MB written | MB / edit | median edit-to-frame |"
+        );
+        println!(
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        );
+        for (width, height) in [(1920, 1080), (3840, 2160), (5120, 2880)] {
+            for round in 0..3 {
+                let order = if round % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                };
+                for head in order {
+                    let mut result = runtime.block_on(drag_padding(width, height, TICKS, head));
+                    let total: f64 = result.convert_ms.iter().sum();
+                    println!(
+                        "| {width}x{height} | {} | {round} | {} | {} | {} | {:.0} ms | {:.2} ms | {:.2} ms | {:.0} ms | {:.0} | {:.1} | {:.1} ms |",
+                        if head { "head" } else { "base" },
+                        result.published,
+                        result.rendered,
+                        result.converted,
+                        result.cpu_ms,
+                        result.cpu_ms / TICKS as f64,
+                        median(&mut result.convert_ms),
+                        total,
+                        result.written_bytes as f64 / 1e6,
+                        result.written_bytes as f64 / 1e6 / result.published as f64,
+                        median(&mut result.latency_ms),
+                    );
+                }
+            }
+        }
+    }
 }
