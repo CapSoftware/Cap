@@ -100,7 +100,7 @@ struct PreviewSource<'a> {
     render_constants: &'a RenderVideoConstants,
     segments: Vec<PreviewSegment<'a>>,
     total_duration: f64,
-    layers_reuse_key: Option<String>,
+    layers_cache: Option<&'a std::sync::Mutex<Option<RendererLayers>>>,
 }
 
 struct PreviewSegment<'a> {
@@ -131,7 +131,7 @@ async fn render_preview_with_base(
             })
             .collect(),
         total_duration,
-        layers_reuse_key: None,
+        layers_cache: None,
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -186,7 +186,7 @@ pub async fn render_preview_with_editor(
             })
             .collect(),
         total_duration,
-        layers_reuse_key: Some(format!("preview:{}", editor.project_path.display())),
+        layers_cache: Some(&editor.preview_layers),
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -222,7 +222,7 @@ async fn render_preview_frame(
         render_constants,
         segments,
         total_duration,
-        layers_reuse_key,
+        layers_cache,
     } = source;
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
@@ -289,9 +289,15 @@ async fn render_preview_frame(
     );
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
-    let mut layers = layers_reuse_key
-        .as_deref()
-        .and_then(|key| cap_rendering::take_reusable_layers(&render_constants.device, key))
+    let mut layers = layers_cache
+        .and_then(|cache| {
+            let mut guard = cache.lock().ok()?;
+            guard.take()
+        })
+        .map(|mut cached| {
+            cached.reset_frame_state();
+            cached
+        })
         .unwrap_or_else(|| {
             RendererLayers::new_with_options(
                 &render_constants.device,
@@ -396,8 +402,10 @@ async fn render_preview_frame(
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
 
-    if let Some(key) = layers_reuse_key {
-        cap_rendering::return_reusable_layers(render_constants.device.clone(), key, layers);
+    if let Some(cache) = layers_cache {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some(layers);
+        }
     }
 
     Ok(ExportPreviewResult {
