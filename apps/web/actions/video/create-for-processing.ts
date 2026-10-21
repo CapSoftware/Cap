@@ -88,9 +88,8 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
-	await db()
-		.insert(videos)
-		.values({
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
 			name: videoTitle,
 			ownerId: user.id,
@@ -102,12 +101,13 @@ export async function createVideoForServerProcessing({
 			...(folderId ? { folderId } : {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		mode: "singlepart",
-		phase: "uploading",
-		processingProgress: 0,
-		rawFileKey,
+		await tx.insert(videoUploads).values({
+			videoId,
+			mode: "singlepart",
+			phase: "uploading",
+			processingProgress: 0,
+			rawFileKey,
+		});
 	});
 
 	revalidatePath("/dashboard/caps");
