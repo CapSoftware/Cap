@@ -2,6 +2,7 @@ use image::{DynamicImage, RgbaImage};
 use std::borrow::Cow;
 
 const PRESCALE_HEADROOM: u32 = 4;
+const MAX_PRESCALE_FACTOR: u32 = (u16::MAX / u8::MAX as u16) as u32;
 
 pub fn fit_centered(image: &RgbaImage, target_width: u32, target_height: u32) -> RgbaImage {
     let width = image.width();
@@ -72,7 +73,9 @@ pub fn fit_centered_capture(
 
 fn prescale_factor(width: u32, height: u32, target_width: u32, target_height: u32) -> u32 {
     let (scaled_width, scaled_height) = fitted_size(width, height, target_width, target_height);
-    (width / (scaled_width * PRESCALE_HEADROOM)).min(height / (scaled_height * PRESCALE_HEADROOM))
+    (width / (scaled_width * PRESCALE_HEADROOM))
+        .min(height / (scaled_height * PRESCALE_HEADROOM))
+        .min(MAX_PRESCALE_FACTOR)
 }
 
 fn fitted_size(width: u32, height: u32, target_width: u32, target_height: u32) -> (u32, u32) {
@@ -129,17 +132,13 @@ fn box_downscale<const CHANNELS: usize>(
     let reduced_width = width.div_ceil(factor);
     let reduced_height = height.div_ceil(factor);
     let mut reduced = RgbaImage::new(reduced_width as u32, reduced_height as u32);
-    let mut columns = vec![0u32; stride];
+    let mut columns = vec![0u16; stride];
     for (output, band) in reduced
         .chunks_exact_mut(reduced_width * 4)
         .zip(pixels[..stride * height].chunks(stride * factor))
     {
         columns.fill(0);
-        for row in band.chunks_exact(stride) {
-            for (sum, &value) in columns.iter_mut().zip(row) {
-                *sum += u32::from(value);
-            }
-        }
+        accumulate_rows(&mut columns, band);
         let band_rows = band.len() / stride;
         for (index, (pixel, block)) in output
             .chunks_exact_mut(4)
@@ -150,7 +149,7 @@ fn box_downscale<const CHANNELS: usize>(
             let mut sums = [0u32; CHANNELS];
             for source in block.chunks_exact(CHANNELS) {
                 for (sum, &value) in sums.iter_mut().zip(source) {
-                    *sum += value;
+                    *sum += u32::from(value);
                 }
             }
             for (channel, sum) in pixel.iter_mut().zip(sums) {
@@ -162,6 +161,30 @@ fn box_downscale<const CHANNELS: usize>(
         }
     }
     reduced
+}
+
+fn accumulate_rows(columns: &mut [u16], band: &[u8]) {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if is_x86_feature_detected!("avx2") {
+        unsafe { accumulate_rows_avx2(columns, band) };
+        return;
+    }
+    accumulate_rows_portable(columns, band);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+fn accumulate_rows_avx2(columns: &mut [u16], band: &[u8]) {
+    accumulate_rows_portable(columns, band);
+}
+
+#[inline(always)]
+fn accumulate_rows_portable(columns: &mut [u16], band: &[u8]) {
+    for row in band.chunks_exact(columns.len()) {
+        for (sum, &value) in columns.iter_mut().zip(row) {
+            *sum += u16::from(value);
+        }
+    }
 }
 
 // Same weights and per-pixel f32 accumulation order as
@@ -643,6 +666,20 @@ mod tests {
             let sum = u32::from(corner[channel]) + u32::from(below[channel]);
             assert_eq!(u32::from(reduced.get_pixel(2, 1)[channel]), (sum + 1) / 2);
         }
+    }
+
+    #[test]
+    fn box_downscale_does_not_overflow_at_the_largest_factor() {
+        let side = MAX_PRESCALE_FACTOR;
+        for value in [255u8, 254, 1] {
+            let pixels = vec![value; (side * side * 3) as usize];
+            let reduced = box_downscale::<3>(&pixels, side, side, side);
+            assert_eq!(reduced.get_pixel(0, 0).0, [value, value, value, 255]);
+        }
+        assert_eq!(
+            prescale_factor(400_000, 225_000, 320, 180),
+            MAX_PRESCALE_FACTOR
+        );
     }
 
     #[test]
