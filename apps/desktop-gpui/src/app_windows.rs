@@ -4883,10 +4883,11 @@ pub(crate) fn prewarm_shared_wgpu_device(cx: &App) {
 const LAUNCH_RENDER_WARMUP_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The first editor open in a process paid for the system font scan, the
-/// shared device and the renderer's first pipeline compiles before its first
-/// frame: 0.7-1.2 s, against ~0.2 s for every later open. This warms all three
-/// a few seconds after launch, off the main thread. The layers are dropped
-/// again; only the driver's compiled pipelines and the font database stay.
+/// shared device and the renderer's first pipeline compiles and draw before
+/// its first frame: 0.7-1.2 s, against ~0.2 s for every later open. This warms
+/// them a few seconds after launch, off the main thread. The layers are
+/// dropped again; only the driver's compiled pipelines, the device and the
+/// font database stay.
 pub(crate) fn schedule_launch_render_warmup(cx: &App) {
     gpui_tokio::Tokio::spawn(cx, async {
         tokio::time::sleep(LAUNCH_RENDER_WARMUP_DELAY).await;
@@ -4911,11 +4912,20 @@ async fn warm_renderer() -> Option<f64> {
     }
     let shared = shared_wgpu_device().await?;
     let started = std::time::Instant::now();
-    tokio::task::spawn_blocking(move || {
-        cap_rendering::prewarm_renderer(&shared.device, &shared.queue, shared.is_software_adapter)
+    let (device, queue, software) = (
+        shared.device.clone(),
+        shared.queue.clone(),
+        shared.is_software_adapter,
+    );
+    let mut layers = tokio::task::spawn_blocking(move || {
+        cap_rendering::RendererLayers::new_with_options(&device, &queue, software)
     })
     .await
     .ok()?;
+    if let Err(error) = cap_rendering::prewarm_first_frame(shared, &mut layers).await {
+        tracing::warn!(%error, "launch render warmup frame failed");
+    }
+    drop(layers);
     Some(started.elapsed().as_secs_f64() * 1000.0)
 }
 

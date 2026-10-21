@@ -215,11 +215,15 @@ async fn main() {
             shared.queue.clone(),
             shared.is_software_adapter,
         );
-        tokio::task::spawn_blocking(move || {
-            cap_rendering::prewarm_renderer(&device, &queue, software)
+        let mut layers = tokio::task::spawn_blocking(move || {
+            cap_rendering::RendererLayers::new_with_options(&device, &queue, software)
         })
         .await
         .expect("Renderer warmup failed");
+        cap_rendering::prewarm_first_frame(clone_shared_device(&shared), &mut layers)
+            .await
+            .expect("Renderer warmup frame failed");
+        drop(layers);
         shared_device = Some(shared);
         println!(
             "Renderer warmup before startup timing: {:.3}ms",
