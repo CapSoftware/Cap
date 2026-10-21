@@ -12,13 +12,14 @@ permissions:
   actions: read
 
 env:
-  ROUNDS: "1"
+  ROUNDS: "2"
   SAMPLE: "sample"
-  BASE_REF: ""
+  BASE_REF: "ci/editor-playback-profile"
   MODES: "profile"
   FIXTURES: "display camera"
   ROUNDS_OVERRIDE: "1"
   RUST_LOG: "warn,cap_gpui=info,cap_probe=info"
+  MODEL_TEST: "1"
 
 jobs:
   fixture:
@@ -133,6 +134,17 @@ jobs:
           sudo -n true && echo "sudo ok"
           python3 -I "$RUNNER_TEMP/editor-playback/run.py" "$RUNNER_TEMP/out" "$ROUNDS" "$SAMPLE" $VARIANTS \
             "fix:display=$RUNNER_TEMP/fixtures/display.cap" "fix:camera=$RUNNER_TEMP/fixtures/camera.cap"
+          true
+
+      - name: Decoder model tests on base and head
+        if: env.MODEL_TEST != ''
+        run: |
+          set +e
+          for ref in FETCH_BASE HEAD_SHA; do
+            if [[ "$ref" == FETCH_BASE ]]; then git fetch -q origin "$BASE_REF"; git checkout -f FETCH_HEAD -- crates; else git checkout -f "$(git rev-parse HEAD)" -- crates; fi
+            git status --short crates | head
+            cargo +1.95.0 test --locked -p cap-rendering --lib decoder::model:: -- --test-threads=1 2>&1 | tail -40 | tee "$RUNNER_TEMP/out/model-$ref.txt"
+          done
           true
 
       - uses: actions/upload-artifact@v4

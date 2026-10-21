@@ -1141,3 +1141,42 @@ fn ffmpeg_preserves_late_pts_across_playback_and_seeks() {
         assert_eq!(outcome.requests, case.requests.len());
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn avassetreader_scrubbing_backwards_seeks_once_per_keyframe_span() {
+    let script = Script {
+        time_base: (1, 30),
+        frames: (0..120)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 30 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let case = Case {
+        name: "backward-scrub".into(),
+        seed_index: 0,
+        seed: 0,
+        decoder: Decoder::Avf,
+        mode: Mode::Playback,
+        fps: 30,
+        max_fallback_distance: 2,
+        script,
+        requests: (0..60)
+            .map(|step| Request {
+                time: (118 - step * 2) as f32 / 30.0,
+                initial: true,
+            })
+            .collect(),
+    };
+    let outcome = run_case(&case, &runtime(), false);
+    assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+    assert_eq!(outcome.requests, case.requests.len());
+    assert!(
+        outcome.starts <= 6,
+        "{} reader starts and seeks for a backward scrub over four keyframe spans",
+        outcome.starts
+    );
+}
