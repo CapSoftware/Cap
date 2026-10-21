@@ -83,6 +83,32 @@ pub fn is_parakeet_model(model: &str) -> bool {
     matches!(model, "best" | "best-max")
 }
 
+/// The 25 languages parakeet-tdt-0.6b-v3 transcribes. It takes no language
+/// hint and its vocabulary has no other scripts, so any other language comes
+/// out as phonetic Latin text.
+const PARAKEET_LANGUAGES: [&str; 25] = [
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+const PARAKEET_UNSUPPORTED_LANGUAGE: &str = "Parakeet cannot transcribe language";
+
+/// The model that transcribes `language`: a Parakeet model hands a language
+/// it cannot write to a downloaded Whisper model, larger first.
+fn transcription_model<'a>(
+    model: &'a str,
+    language: &str,
+    downloaded: impl Fn(&str) -> bool,
+) -> Result<&'a str, String> {
+    if !is_parakeet_model(model) || language == "auto" || PARAKEET_LANGUAGES.contains(&language) {
+        return Ok(model);
+    }
+    ["medium", "small"]
+        .into_iter()
+        .find(|whisper| downloaded(whisper))
+        .ok_or_else(|| format!("{PARAKEET_UNSUPPORTED_LANGUAGE} {language}"))
+}
+
 /// Tauri's `appLocalDataDir()` for the `so.cap.desktop` identifier: on macOS
 /// `~/Library/Application Support`, on Windows `%LOCALAPPDATA%` (deliberately
 /// *not* the roaming dir [`store::app_data_dir`] uses), on Linux
@@ -1738,6 +1764,11 @@ pub fn transcribe_blocking(
     model: &str,
     language: &str,
 ) -> Result<Vec<CaptionSegment>, String> {
+    let requested = model;
+    let model = transcription_model(model, language, model_files_present)?;
+    if model != requested {
+        tracing::info!("{requested} cannot transcribe {language}; using the {model} Whisper model");
+    }
     let model_file = model_path(model);
     if !project_path.exists() {
         return Err(format!(
@@ -2251,6 +2282,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("Failed to load Whisper model") {
         return "Failed to load the caption model. Try downloading it again".to_string();
     }
+    if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
+        return "The Recommended and High Accuracy models only transcribe European languages. Download the Small or Medium model to caption this language".to_string();
+    }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
         return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
             .to_string();
@@ -2264,6 +2298,34 @@ mod verify_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parakeet_keeps_the_languages_it_can_write() {
+        for language in ["auto", "en", "de", "ru", "uk", "pl"] {
+            assert_eq!(transcription_model("best", language, |_| true), Ok("best"));
+            assert_eq!(
+                transcription_model("best-max", language, |_| true),
+                Ok("best-max")
+            );
+        }
+    }
+
+    #[test]
+    fn other_languages_move_to_a_downloaded_whisper_model() {
+        for language in ["zh", "ja", "ko", "ar", "hi", "tr", "he", "fa"] {
+            assert_eq!(
+                transcription_model("best", language, |_| true),
+                Ok("medium")
+            );
+            assert_eq!(
+                transcription_model("best-max", language, |model| model == "small"),
+                Ok("small")
+            );
+            let error = transcription_model("best", language, |_| false).unwrap_err();
+            assert!(caption_generation_error_message(&error).contains("Small or Medium"));
+        }
+        assert_eq!(transcription_model("small", "zh", |_| false), Ok("small"));
+    }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
