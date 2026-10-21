@@ -1737,4 +1737,105 @@ mod gpu_tests {
             );
         }
     }
+
+    fn pixel_digest(digest: u64, pixels: &[u8]) -> u64 {
+        pixels.chunks_exact(8).fold(digest, |hash, chunk| {
+            (hash ^ u64::from_le_bytes(chunk.try_into().unwrap())).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn benchmark_word_highlight_prepare() {
+        const FRAMES: u32 = 600;
+        const PASSES: usize = 5;
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let frames = frames(size);
+        let spaced = spoken_segments(&[
+            "Today I want to walk you through the new export flow",
+            "First pick a preset and the resolution you need",
+            "Then trim the start and end so the video gets to the point",
+            "When you are happy with it press export and share the link",
+        ]);
+        let mut back_to_back = spaced.clone();
+        for segment in &mut back_to_back {
+            let next_starts = segment
+                .words
+                .iter()
+                .skip(1)
+                .map(|word| word.start)
+                .collect::<Vec<_>>();
+            for (word, next_start) in segment.words.iter_mut().zip(next_starts) {
+                word.end = next_start;
+            }
+        }
+        let base = CaptionSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let highlight = CaptionSettings {
+            active_word_highlight: true,
+            ..base.clone()
+        };
+        let cases = [
+            ("plain", base, &spaced),
+            ("color highlight", highlight.clone(), &spaced),
+            (
+                "color highlight gold outline",
+                CaptionSettings {
+                    highlight_color: "#FFD700".to_string(),
+                    outline: true,
+                    ..highlight.clone()
+                },
+                &spaced,
+            ),
+            (
+                "color highlight back-to-back words",
+                highlight,
+                &back_to_back,
+            ),
+        ];
+        for (name, settings, segments) in cases {
+            let mut uniforms = uniforms(&constants, settings, segments, size);
+            let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
+            let mut samples = Vec::new();
+            let mut pass_totals = Vec::new();
+            for pass in 0..PASSES {
+                let mut pass_total = 0.0;
+                for frame in 0..FRAMES {
+                    uniforms.frame_number = frame;
+                    let started = std::time::Instant::now();
+                    layer.prepare(&uniforms, &frames, size, &constants);
+                    let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                    pass_total += elapsed;
+                    if pass > 0 && layer.has_caption {
+                        samples.push(elapsed);
+                    }
+                }
+                if pass > 0 {
+                    pass_totals.push(pass_total / 1e3);
+                }
+                constants.device.poll(wgpu::PollType::Wait).unwrap();
+            }
+            samples.sort_by(f64::total_cmp);
+            pass_totals.sort_by(f64::total_cmp);
+
+            let mut checked = CaptionsLayer::new(&constants.device, &constants.queue);
+            let mut digest = 0xcbf2_9ce4_8422_2325;
+            for frame in 0..FRAMES {
+                uniforms.frame_number = frame;
+                checked.prepare(&uniforms, &frames, size, &constants);
+                digest = pixel_digest(digest, &render_pixels(&constants, &checked, size));
+            }
+
+            println!(
+                "word highlight prepare [{name}] ({FRAMES} frames, {} visible samples): p50 {:.1} us, p95 {:.1} us, {FRAMES}-frame total p50 {:.2} ms, pixels {digest:016x}",
+                samples.len(),
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+                pass_totals[pass_totals.len() / 2],
+            );
+        }
+    }
 }
