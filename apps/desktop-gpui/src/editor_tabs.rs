@@ -24,8 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode,
+    KeyboardData, KeyboardSettings, KeyboardStyle, KeycapTheme, ProjectConfiguration,
+    RecordingMeta, ShadowConfiguration, StereoMode,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -102,6 +102,14 @@ pub const FONT_OPTIONS: [&str; 3] = ["System Sans-Serif", "System Serif", "Syste
 pub const TEXT_WEIGHTS: [(u32, &str); 3] = [(400, "Normal"), (500, "Medium"), (700, "Bold")];
 
 /// `KEYBOARD_POSITION_OPTIONS` (`text-style.tsx:28-35`).
+pub const KEYBOARD_STYLES: [(KeyboardStyle, &str); 2] = [
+    (KeyboardStyle::Text, "Text"),
+    (KeyboardStyle::Apple, "Apple"),
+];
+
+pub const KEYCAP_THEMES: [(KeycapTheme, &str); 2] =
+    [(KeycapTheme::Black, "Black"), (KeycapTheme::White, "White")];
+
 pub const KEYBOARD_POSITIONS: [(&str, &str); 6] = [
     ("top-left", "Top Left"),
     ("top-center", "Top Center"),
@@ -587,6 +595,8 @@ pub enum SidebarMenu {
     KeyboardFont,
     KeyboardPosition,
     KeyboardWeight,
+    KeyboardStyle,
+    KeyboardKeycapTheme,
     /// The segment panels' own selects carry their segment index.
     ///
     /// `TextFontFamily` is `FontPicker` (`FontPicker.tsx`), which is the one
@@ -697,6 +707,14 @@ impl EditorWindow {
             SidebarMenu::KeyboardWeight => TEXT_WEIGHTS
                 .iter()
                 .map(|(weight, label)| ui::MenuItem::new(*label, *weight == keyboard.font_weight))
+                .collect(),
+            SidebarMenu::KeyboardStyle => KEYBOARD_STYLES
+                .iter()
+                .map(|(style, label)| ui::MenuItem::new(*label, *style == keyboard.style))
+                .collect(),
+            SidebarMenu::KeyboardKeycapTheme => KEYCAP_THEMES
+                .iter()
+                .map(|(theme, label)| ui::MenuItem::new(*label, *theme == keyboard.keycap_theme))
                 .collect(),
             SidebarMenu::TextFontFamily(index)
             | SidebarMenu::TextWeight(index)
@@ -944,6 +962,24 @@ impl EditorWindow {
                 let weight = *weight;
                 self.set_keyboard_setting("keyboard-weight", window, cx, move |settings| {
                     settings.font_weight = weight
+                });
+            }
+            SidebarMenu::KeyboardStyle => {
+                let Some((style, _)) = KEYBOARD_STYLES.get(index) else {
+                    return;
+                };
+                let style = *style;
+                self.set_keyboard_setting("keyboard-style", window, cx, move |settings| {
+                    settings.style = style
+                });
+            }
+            SidebarMenu::KeyboardKeycapTheme => {
+                let Some((theme, _)) = KEYCAP_THEMES.get(index) else {
+                    return;
+                };
+                let theme = *theme;
+                self.set_keyboard_setting("keyboard-keycap-theme", window, cx, move |settings| {
+                    settings.keycap_theme = theme
                 });
             }
             SidebarMenu::TextFontFamily(segment)
@@ -2123,6 +2159,15 @@ impl EditorWindow {
             .iter()
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or("Normal", |(_, label)| *label);
+        let style_label = KEYBOARD_STYLES
+            .iter()
+            .find(|(style, _)| *style == settings.style)
+            .map_or("Text", |(_, label)| *label);
+        let keycap_theme_label = KEYCAP_THEMES
+            .iter()
+            .find(|(theme, _)| *theme == settings.keycap_theme)
+            .map_or("Black", |(_, label)| *label);
+        let keycaps = settings.style == KeyboardStyle::Apple;
 
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
@@ -2130,6 +2175,34 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .when(!enabled, |this| this.opacity(0.5))
+            .child(
+                ui::Field::section(&theme, "Keycap Design").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled_inline(
+                            "Style",
+                            self.menu_select(
+                                SidebarMenu::KeyboardStyle,
+                                "keyboard-style",
+                                style_label,
+                                cx,
+                            ),
+                        ))
+                        .when(keycaps, |this| {
+                            this.child(self.labelled_inline(
+                                "Theme",
+                                self.menu_select(
+                                    SidebarMenu::KeyboardKeycapTheme,
+                                    "keyboard-keycap-theme",
+                                    keycap_theme_label,
+                                    cx,
+                                ),
+                            ))
+                        }),
+                ),
+            )
             .child(
                 ui::Field::section(&theme, "Font Settings").child(
                     div()
