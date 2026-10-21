@@ -849,6 +849,23 @@ pub enum TrackKind {
 }
 
 impl TrackKind {
+    /// The track's part of a `ProjectConfiguration::track_names` key.
+    pub fn name_key(self) -> &'static str {
+        match self {
+            Self::Clip => "clip",
+            Self::Style => "style",
+            Self::Image => "image",
+            Self::Caption => "caption",
+            Self::Keyboard => "keyboard",
+            Self::Text => "text",
+            Self::Mask => "mask",
+            Self::Audio => "audio",
+            Self::Zoom => "zoom",
+            Self::ThreeD => "3d",
+            Self::Scene => "scene",
+        }
+    }
+
     /// `trackDefinitions` (`TL/index.tsx:89-144`) and `trackIcons` (`:70-80`).
     pub fn label(self) -> &'static str {
         match self {
@@ -1175,6 +1192,8 @@ impl TrackRow {
 /// Everything the timeline draws, derived once per project-config change.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineModel {
+    /// Lane names the user gave, by `"<track>:<lane>"`.
+    pub track_names: std::collections::BTreeMap<String, SharedString>,
     pub style: Vec<Segment>,
     pub image: Vec<Segment>,
     pub rows: Vec<TrackRow>,
@@ -1411,6 +1430,7 @@ impl TimelineModel {
             })
             .collect();
         let mut model = Self {
+            track_names: Default::default(),
             style,
             image,
             rows: Vec::new(),
@@ -1449,6 +1469,12 @@ impl TimelineModel {
     ) -> Self {
         let mut model = Self::build(config, has_camera, multiple_clips);
         model.rows = build_rows(config, &model, has_camera, lanes);
+        model.track_names = config
+            .track_names
+            .iter()
+            .filter(|(_, name)| !name.trim().is_empty())
+            .map(|(key, name)| (key.clone(), SharedString::from(name.clone())))
+            .collect();
         model
     }
 }
@@ -1765,7 +1791,11 @@ impl SegmentUi<'_> {
 /// The gutter cell: a tinted 22px tile carrying the track's glyph, then the
 /// track's name. The saturated pill the source draws
 /// (`TL/TrackManager.tsx:264-281`) is gone.
-pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
+pub fn track_name_key(row: TrackRow) -> String {
+    format!("{}:{}", row.kind.name_key(), row.lane)
+}
+
+pub fn track_chip(theme: &Theme, kind: TrackKind, name: Option<SharedString>) -> impl IntoElement {
     let color = kind.color();
     div()
         .w_full()
@@ -1800,7 +1830,7 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
                 .text_size(px(11.))
                 .line_height(px(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .child(kind.label()),
+                .child(name.unwrap_or_else(|| SharedString::new_static(kind.label()))),
         )
 }
 
@@ -2097,7 +2127,11 @@ pub fn render_row(
                 .w(px(TRACK_GUTTER))
                 .flex_none()
                 .relative()
-                .child(track_chip(theme, row.kind)),
+                .child(track_chip(
+                    theme,
+                    row.kind,
+                    model.track_names.get(&track_name_key(row)).cloned(),
+                )),
         )
         .child(
             div()
@@ -3713,6 +3747,38 @@ mod tests {
     use super::*;
 
     const AUDIO_SAMPLE_RATE: usize = 48_000;
+
+    #[test]
+    fn lane_names_come_from_the_project_by_track_and_lane() {
+        let mut config = ProjectConfiguration::default();
+        config.track_names.insert("audio:1".into(), "Music".into());
+        config.track_names.insert("text:0".into(), "  ".into());
+        let lanes = TrackLanes {
+            style: 0,
+            image: 0,
+            caption: false,
+            keyboard: false,
+            scene: false,
+            three_d: false,
+            text: 1,
+            mask: 0,
+            audio: 2,
+        };
+        let model = TimelineModel::build_with_lanes(&config, false, false, &lanes);
+        let audio = TrackRow {
+            kind: TrackKind::Audio,
+            lane: 1,
+        };
+        assert_eq!(track_name_key(audio), "audio:1");
+        assert_eq!(
+            model.track_names.get("audio:1").map(|n| n.as_ref()),
+            Some("Music")
+        );
+        assert!(
+            !model.track_names.contains_key("text:0"),
+            "blank names are ignored"
+        );
+    }
 
     // -- The ruler ----------------------------------------------------------
 
