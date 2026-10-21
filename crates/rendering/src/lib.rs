@@ -2910,14 +2910,15 @@ fn camera_shape_crop_bounds(shape: CameraShape, origin: [f32; 2], size: [f32; 2]
 fn camera_fill_crop_bounds(origin: [f32; 2], size: [f32; 2], output_aspect: f32) -> [f32; 4] {
     let [ox, oy] = origin;
     let [rw, rh] = size;
+    // The far edge is `origin + size - offset` rather than `near + visible`,
+    // so with no crop (origin 0, size = frame) this is exactly the
+    // `[offset, 0, frame - offset, frame]` the uncropped path always used.
     if rw / rh > output_aspect {
-        let visible_width = rh * output_aspect;
-        let crop_x = ox + (rw - visible_width) / 2.0;
-        [crop_x, oy, crop_x + visible_width, oy + rh]
+        let offset = (rw - rh * output_aspect) / 2.0;
+        [ox + offset, oy, ox + rw - offset, oy + rh]
     } else {
-        let visible_height = rw / output_aspect;
-        let crop_y = oy + (rh - visible_height) / 2.0;
-        [ox, crop_y, ox + rw, crop_y + visible_height]
+        let offset = (rh - rw / output_aspect) / 2.0;
+        [ox, oy + offset, ox + rw, oy + rh - offset]
     }
 }
 
@@ -5308,6 +5309,38 @@ mod tests {
         assert!(inside(pane));
         assert!((pane[0] - origin[0]).abs() < 1e-3);
         assert!((pane[3] - (origin[1] + size[1])).abs() < 1e-3);
+    }
+
+    #[test]
+    fn uncropped_camera_fill_matches_the_original_arithmetic_exactly() {
+        // The pre-crop camera-only path, verbatim.
+        let original = |frame_size: [f32; 2], output_aspect: f32| {
+            if frame_size[0] / frame_size[1] > output_aspect {
+                let visible_width = frame_size[1] * output_aspect;
+                let crop_x = (frame_size[0] - visible_width) / 2.0;
+                [crop_x, 0.0, frame_size[0] - crop_x, frame_size[1]]
+            } else {
+                let visible_height = frame_size[0] / output_aspect;
+                let crop_y = (frame_size[1] - visible_height) / 2.0;
+                [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
+            }
+        };
+        for frame in [
+            [1920.0, 1080.0],
+            [1280.0, 720.0],
+            [1080.0, 1920.0],
+            [641.0, 479.0],
+        ] {
+            for aspect in [16.0 / 9.0, 9.0 / 16.0, 1.0, 4.0 / 3.0, 21.0 / 9.0, 0.8] {
+                let ours = camera_fill_crop_bounds([0.0, 0.0], frame, aspect);
+                let theirs = original(frame, aspect);
+                assert_eq!(
+                    ours.map(f32::to_bits),
+                    theirs.map(f32::to_bits),
+                    "{frame:?} at {aspect}"
+                );
+            }
+        }
     }
 
     #[test]
