@@ -2437,7 +2437,7 @@ pub struct CaptionsData {
 pub enum KeyboardStyle {
     #[default]
     Text,
-    Apple,
+    Keycaps,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]

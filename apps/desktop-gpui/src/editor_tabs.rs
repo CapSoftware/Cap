@@ -104,7 +104,7 @@ pub const TEXT_WEIGHTS: [(u32, &str); 3] = [(400, "Normal"), (500, "Medium"), (7
 /// `KEYBOARD_POSITION_OPTIONS` (`text-style.tsx:28-35`).
 pub const KEYBOARD_STYLES: [(KeyboardStyle, &str); 2] = [
     (KeyboardStyle::Text, "Text"),
-    (KeyboardStyle::Apple, "Apple"),
+    (KeyboardStyle::Keycaps, "Keycaps"),
 ];
 
 pub const KEYCAP_THEMES: [(KeycapTheme, &str); 2] =
@@ -2167,7 +2167,7 @@ impl EditorWindow {
             .iter()
             .find(|(theme, _)| *theme == settings.keycap_theme)
             .map_or("Black", |(_, label)| *label);
-        let keycaps = settings.style == KeyboardStyle::Apple;
+        let keycaps = settings.style == KeyboardStyle::Keycaps;
 
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
@@ -2227,41 +2227,45 @@ impl EditorWindow {
                             )
                             .into_any_element(),
                         )
-                        .child(self.labelled(
-                            "Text Color",
-                            self.render_hex_field(
-                                crate::editor_panels::FieldKey::KeyboardColor,
-                                &settings.color,
-                                cx,
-                            ),
-                        )),
+                        .when(!keycaps, |this| {
+                            this.child(self.labelled(
+                                "Text Color",
+                                self.render_hex_field(
+                                    crate::editor_panels::FieldKey::KeyboardColor,
+                                    &settings.color,
+                                    cx,
+                                ),
+                            ))
+                        }),
                 ),
             )
-            .child(
-                ui::Field::section(&theme, "Background Settings").child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.))
-                        .child(self.labelled(
-                            "Background Color",
-                            self.render_hex_field(
-                                crate::editor_panels::FieldKey::KeyboardBackground,
-                                &settings.background_color,
-                                cx,
+            .when(!keycaps, |this| {
+                this.child(
+                    ui::Field::section(&theme, "Background Settings").child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.))
+                            .child(self.labelled(
+                                "Background Color",
+                                self.render_hex_field(
+                                    crate::editor_panels::FieldKey::KeyboardBackground,
+                                    &settings.background_color,
+                                    cx,
+                                ),
+                            ))
+                            .child(
+                                self.slider_field(
+                                    "Background Opacity",
+                                    SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
+                                    "",
+                                    cx,
+                                )
+                                .into_any_element(),
                             ),
-                        ))
-                        .child(
-                            self.slider_field(
-                                "Background Opacity",
-                                SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
-                                "",
-                                cx,
-                            )
-                            .into_any_element(),
-                        ),
-                ),
-            )
+                    ),
+                )
+            })
             .child(
                 ui::Field::inline(&theme, "Position").child(self.menu_select(
                     SidebarMenu::KeyboardPosition,

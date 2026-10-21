@@ -11,6 +11,7 @@ pub struct Keycap {
     pub label: String,
     pub width_units: f32,
     pub modifier: bool,
+    pub fit_legend: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,15 +113,45 @@ fn keycap_for(character: char) -> Keycap {
         label,
         width_units,
         modifier,
+        fit_legend: false,
     }
 }
 
+fn is_modifier_glyph(character: char) -> bool {
+    matches!(character, '⌘' | '⌃' | '⌥' | '⇧')
+}
+
 pub fn parse_keycaps(display_text: &str) -> Vec<Keycap> {
-    let keys: Vec<Keycap> = display_text
+    let characters: Vec<char> = display_text
         .chars()
         .filter(|character| !character.is_whitespace())
+        .collect();
+    let leading = characters
+        .iter()
+        .take_while(|character| is_modifier_glyph(**character))
+        .count();
+
+    let mut keys: Vec<Keycap> = characters[..leading]
+        .iter()
+        .copied()
         .map(keycap_for)
         .collect();
+    let rest = &characters[leading..];
+    if leading == 0 {
+        keys.extend(rest.iter().copied().map(keycap_for));
+    } else {
+        match rest {
+            [] => {}
+            [only] => keys.push(keycap_for(*only)),
+            _ => keys.push(Keycap {
+                label: rest.iter().collect(),
+                width_units: KEYCAP_UNIT_HEIGHT,
+                modifier: false,
+                fit_legend: true,
+            }),
+        }
+    }
+
     let skipped = keys.len().saturating_sub(MAX_KEYCAPS);
     keys.into_iter().skip(skipped).collect()
 }
@@ -240,9 +271,38 @@ mod tests {
 
     #[test]
     fn only_non_alphanumeric_legends_are_symbols() {
-        let keys = parse_keycaps("⌘T7␣");
-        let symbols: Vec<_> = keys.iter().map(Keycap::is_symbol).collect();
-        assert_eq!(symbols, [true, false, false, false]);
+        let symbols: Vec<_> = parse_keycaps("⌘").iter().map(Keycap::is_symbol).collect();
+        assert_eq!(symbols, [true]);
+        let symbols: Vec<_> = parse_keycaps("T7␣").iter().map(Keycap::is_symbol).collect();
+        assert_eq!(symbols, [false, false, false]);
+    }
+
+    #[test]
+    fn a_combo_is_modifiers_plus_one_key() {
+        let keys = parse_keycaps("⌃F5");
+        let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
+        assert_eq!(labels, ["⌃", "F5"]);
+        assert!(keys[0].modifier && !keys[0].fit_legend);
+        assert!(!keys[1].modifier && keys[1].fit_legend);
+
+        let keys = parse_keycaps("⌘⇧F12");
+        let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
+        assert_eq!(labels, ["⌘", "⇧", "F12"]);
+    }
+
+    #[test]
+    fn single_key_combos_keep_their_fixed_width() {
+        let keys = parse_keycaps("⌘⏎");
+        assert_eq!(keys.len(), 2);
+        assert!(!keys[1].fit_legend);
+        assert!(close(keys[1].width_units, 120.0));
+    }
+
+    #[test]
+    fn typed_text_stays_one_key_per_character() {
+        let keys = parse_keycaps("F5x");
+        assert_eq!(keys.len(), 3);
+        assert!(keys.iter().all(|key| !key.fit_legend));
     }
 
     #[test]
