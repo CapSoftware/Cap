@@ -5480,6 +5480,21 @@ fn log_timeline_model(model: &editor_timeline::TimelineModel) {
 /// awaits a tokio watch channel, so it runs on the tokio runtime; the peak
 /// extraction itself is a per-sample loop over a whole track, which goes to the
 /// background executor rather than the UI thread.
+fn measure_audio_tracks(
+    tracks: &[Option<Arc<cap_audio::DecodedAudio>>],
+    kernel: fn(&[&[f32]], u16) -> Vec<f32>,
+) -> Vec<Arc<Vec<f32>>> {
+    tracks
+        .iter()
+        .map(|audio| {
+            Arc::new(match audio {
+                Some(audio) => kernel(&audio.sample_slices().collect::<Vec<_>>(), audio.channels()),
+                None => Vec::new(),
+            })
+        })
+        .collect()
+}
+
 fn load_editor_waveforms(
     instance: Arc<cap_editor::EditorInstance>,
     handle: WindowHandle<EditorWindow>,
@@ -5506,32 +5521,33 @@ fn load_editor_waveforms(
         let Ok((mic, system, repairs)) = task.await else {
             return;
         };
-        let (peaks, envelopes) = cx
+        let (mic, system, peaks) = cx
             .background_executor()
             .spawn(async move {
-                let measure =
-                    |tracks: &[Option<Arc<cap_audio::DecodedAudio>>],
-                     kernel: fn(&[&[f32]], u16) -> Vec<f32>| {
-                        tracks
-                            .iter()
-                            .map(|audio| {
-                                Arc::new(match audio {
-                                    Some(audio) => kernel(
-                                        &audio.sample_slices().collect::<Vec<_>>(),
-                                        audio.channels(),
-                                    ),
-                                    None => Vec::new(),
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    };
                 let peaks = (
-                    measure(&mic, editor_timeline::waveform_peaks),
-                    measure(&system, editor_timeline::waveform_peaks),
+                    measure_audio_tracks(&mic, editor_timeline::waveform_peaks),
+                    measure_audio_tracks(&system, editor_timeline::waveform_peaks),
                 );
-                let mic_levels = measure(&mic, crate::clean_up::loudness_db);
-                let system_levels = measure(&system, crate::clean_up::loudness_db);
-                let envelopes = mic_levels
+                (mic, system, peaks)
+            })
+            .await;
+        let shown = handle.update(cx, |view, window, cx| {
+            tracing::info!(
+                mic = peaks.0.iter().filter(|peaks| !peaks.is_empty()).count(),
+                system = peaks.1.iter().filter(|peaks| !peaks.is_empty()).count(),
+                "editor waveforms ready"
+            );
+            view.set_waveforms(peaks.0, peaks.1, window, cx);
+        });
+        if shown.is_err() {
+            return;
+        }
+        let envelopes = cx
+            .background_executor()
+            .spawn(async move {
+                let mic_levels = measure_audio_tracks(&mic, crate::clean_up::loudness_db);
+                let system_levels = measure_audio_tracks(&system, crate::clean_up::loudness_db);
+                mic_levels
                     .into_iter()
                     .zip(system_levels)
                     .zip(repairs)
@@ -5541,17 +5557,10 @@ fn load_editor_waveforms(
                         mic_repair_secs: f64::from(repair.mic_offset_secs),
                         system_repair_secs: f64::from(repair.system_audio_offset_secs),
                     })
-                    .collect::<Vec<_>>();
-                (peaks, envelopes)
+                    .collect::<Vec<_>>()
             })
             .await;
         let _ = handle.update(cx, |view, window, cx| {
-            tracing::info!(
-                mic = peaks.0.iter().filter(|peaks| !peaks.is_empty()).count(),
-                system = peaks.1.iter().filter(|peaks| !peaks.is_empty()).count(),
-                "editor waveforms ready"
-            );
-            view.set_waveforms(peaks.0, peaks.1, window, cx);
             view.set_clean_up_envelopes(envelopes, window, cx);
         });
     })

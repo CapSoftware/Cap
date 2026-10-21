@@ -3087,7 +3087,7 @@ impl EditorWindow {
             self.silence_skip_target = None;
             return;
         }
-        let frame = self.playback_rate.max(1.) / f64::from(EDITOR_PREVIEW_FPS);
+        let frame = self.effective_playback_rate().max(1.) / f64::from(EDITOR_PREVIEW_FPS);
         if let Some(target) = self.silence_skip_target {
             if now < target - frame {
                 return;
@@ -6975,8 +6975,30 @@ impl EditorWindow {
         }
     }
 
+    // The preparing playback path plays audio at 1x only, so the rate stays
+    // locked until the ordinary engine owns playback; otherwise the playhead
+    // and the audio would drift apart.
+    fn playback_rate_locked(&self) -> bool {
+        self.preparing_consumer.is_some()
+            || self
+                .instance
+                .as_ref()
+                .is_some_and(|instance| instance.preparing_adoption().is_some())
+    }
+
+    pub(crate) fn effective_playback_rate(&self) -> f64 {
+        if self.playback_rate_locked() {
+            1.0
+        } else {
+            self.playback_rate
+        }
+    }
+
     fn set_playback_rate(&mut self, rate: f64, cx: &mut Context<Self>) {
-        if !rate.is_finite() || (rate - self.playback_rate).abs() < 1e-6 {
+        if !rate.is_finite()
+            || self.playback_rate_locked()
+            || (rate - self.playback_rate).abs() < 1e-6
+        {
             return;
         }
         self.playback_rate = rate;
@@ -10232,9 +10254,9 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "transport-playback-rate")
                             .text(&theme)
-                            .label(playback_rate_label(self.playback_rate))
+                            .label(playback_rate_label(self.effective_playback_rate()))
                             .tooltip(&theme, "Preview speed")
-                            .disabled(self.transport.is_none())
+                            .disabled(self.transport.is_none() || self.playback_rate_locked())
                             .pressed(
                                 self.toolbar_menu
                                     .as_ref()
@@ -10448,7 +10470,7 @@ impl EditorWindow {
                 self.playing,
                 self.playhead_epoch_live,
                 self.last_playhead_redraw.elapsed().as_secs_f64(),
-            ) * self.playback_rate;
+            ) * self.effective_playback_rate();
             if ahead > 0.0 {
                 view.playhead = (view.playhead + ahead).min(self.total_duration());
             }
