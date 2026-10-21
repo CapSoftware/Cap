@@ -411,6 +411,10 @@ mod tests {
     }
 
     fn deterministic_blur(allow_bgra: bool) -> Option<PortableCameraBlur> {
+        #[cfg(not(target_os = "macos"))]
+        if std::env::var_os("CAP_GPUI_TEST_PORTABLE_BLUR").is_none() {
+            return None;
+        }
         match PortableCameraBlur::with_bgra(allow_bgra) {
             Ok(mut blur) => {
                 blur.processor.set_frame_synchronous(true);

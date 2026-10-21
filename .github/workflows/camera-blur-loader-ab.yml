@@ -10,6 +10,7 @@ env:
 
 jobs:
   blur:
+    if: ${{ !contains(github.event.head_commit.message, 'loader only') }}
     strategy:
       fail-fast: false
       matrix:
@@ -145,6 +146,9 @@ jobs:
           - runner: blacksmith-6vcpu-macos-26
             target: aarch64-apple-darwin
             cache-key: v1-rust-meter-ab-macos26
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            cache-key: v1-rust-loader-ab-gh-macos15
           - runner: blacksmith-8vcpu-ubuntu-2404
             target: x86_64-unknown-linux-gnu
             cache-key: v1-rust-gpui

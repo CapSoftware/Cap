@@ -3,8 +3,8 @@ mod script_outline;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, BoxShadow, ContentMask, Corners, Hsla, IntoElement, Pixels, Styled, Window, canvas,
-    fill, hsla, linear_color_stop, linear_gradient, point, px, size,
+    Bounds, BoxShadow, ContentMask, Corners, EntityId, Hsla, IntoElement, Pixels, Styled, Window,
+    canvas, fill, hsla, linear_color_stop, linear_gradient, point, px, size,
 };
 
 use script_outline::LOADING;
@@ -118,14 +118,8 @@ pub(crate) fn camera_loading(
                 }
             }
             if animate {
-                let view = window.current_view();
-                let delay = next_frame_delay(elapsed, opacity, show_script);
-                window
-                    .spawn(cx, async move |cx| {
-                        cx.background_executor().timer(delay).await;
-                        let _ = cx.update(|_, cx| cx.notify(view));
-                    })
-                    .detach();
+                let due = Instant::now() + frame_gap(elapsed, opacity, show_script);
+                redraw_when_due(window, window.current_view(), due);
             }
         },
     )
@@ -134,16 +128,27 @@ pub(crate) fn camera_loading(
 }
 
 /// Fades and the script sweep redraw at 60 fps. Between sweeps only the
-/// clouds move, under a pixel per frame at 30 fps. Deadlines sit on a grid
-/// from `elapsed` zero, so repaints for other reasons share the next one.
-fn next_frame_delay(elapsed: f32, opacity: f32, show_script: bool) -> Duration {
+/// clouds move, under a pixel per frame at 30 fps. The gap is a fifth short of
+/// the frame time so a display refresh landing just early still counts.
+fn frame_gap(elapsed: f32, opacity: f32, show_script: bool) -> Duration {
     let fps = if opacity < 1. || (show_script && sweep_center(elapsed).is_some()) {
         MOTION_FPS
     } else {
         DRIFT_FPS
     };
-    let next = ((elapsed * fps).floor() + 1.) / fps;
-    Duration::from_secs_f32((next - elapsed).max(0.))
+    Duration::from_secs_f32(0.8 / fps)
+}
+
+/// Checks on each display refresh and only re-renders the view once `due`
+/// has passed, so redraws never outpace the platform's own frames.
+fn redraw_when_due(window: &Window, view: EntityId, due: Instant) {
+    window.on_next_frame(move |window, cx| {
+        if Instant::now() >= due {
+            cx.notify(view);
+        } else {
+            redraw_when_due(window, view, due);
+        }
+    });
 }
 
 fn sweep_center(elapsed: f32) -> Option<f32> {
@@ -344,16 +349,20 @@ fn paint_glass(
 mod tests {
     use super::*;
 
-    fn frames_in(start: f32, seconds: f32, opacity: f32, show_script: bool) -> usize {
-        let mut elapsed = start;
-        let mut frames = 0;
-        while elapsed < start + seconds {
-            let delay = next_frame_delay(elapsed, opacity, show_script).as_secs_f32();
-            assert!(delay <= 1. / DRIFT_FPS + 1e-4, "{delay} s at {elapsed} s");
-            elapsed += delay + 0.001;
-            frames += 1;
+    fn paints_in(start: f32, seconds: f32, refresh_hz: f32, opacity: f32, script: bool) -> usize {
+        let refresh = 1. / refresh_hz;
+        let mut due = 0.;
+        let mut paints = 0;
+        let mut frame = (start / refresh).ceil();
+        while frame * refresh < start + seconds {
+            let now = frame * refresh;
+            if now >= due {
+                paints += 1;
+                due = now + frame_gap(now, opacity, script).as_secs_f32();
+            }
+            frame += 1.;
         }
-        frames
+        paints
     }
 
     #[test]
@@ -361,19 +370,23 @@ mod tests {
         let period_start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS;
         assert!(sweep_center(period_start + 0.01).is_some());
         assert!(sweep_center(period_start + SWEEP_SECONDS + 0.01).is_none());
+        let resting_start = period_start + SWEEP_SECONDS;
+        let resting_seconds = SWEEP_PERIOD_SECONDS - SWEEP_SECONDS;
 
-        let sweeping = frames_in(period_start, SWEEP_SECONDS, 1., true);
-        assert!((59..=61).contains(&sweeping), "{sweeping}");
-        let resting = frames_in(
-            period_start + SWEEP_SECONDS,
-            SWEEP_PERIOD_SECONDS - SWEEP_SECONDS,
-            1.,
-            true,
-        );
-        assert!((17..=19).contains(&resting), "{resting}");
-        let without_script = frames_in(period_start, SWEEP_PERIOD_SECONDS, 1., false);
-        assert!((47..=49).contains(&without_script), "{without_script}");
-        let fading = frames_in(0., FADE_IN_SECONDS, 0.5, false);
-        assert!((17..=19).contains(&fading), "{fading}");
+        for refresh_hz in [60., 120.] {
+            let sweeping = paints_in(period_start, SWEEP_SECONDS, refresh_hz, 1., true);
+            assert!((59..=61).contains(&sweeping), "{refresh_hz} Hz: {sweeping}");
+            let resting = paints_in(resting_start, resting_seconds, refresh_hz, 1., true);
+            assert!((17..=19).contains(&resting), "{refresh_hz} Hz: {resting}");
+            let no_script = paints_in(period_start, SWEEP_PERIOD_SECONDS, refresh_hz, 1., false);
+            assert!(
+                (47..=49).contains(&no_script),
+                "{refresh_hz} Hz: {no_script}"
+            );
+            let fading = paints_in(0., FADE_IN_SECONDS, refresh_hz, 0.5, false);
+            assert!((17..=19).contains(&fading), "{refresh_hz} Hz: {fading}");
+        }
+        let slow_display = paints_in(period_start, SWEEP_SECONDS, 20., 1., true);
+        assert!((19..=21).contains(&slow_display), "{slow_display}");
     }
 }
