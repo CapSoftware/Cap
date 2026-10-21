@@ -616,6 +616,19 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
         .collect()
 }
 
+/// `kCGWindowLevelForKey(kCGFloatingWindowLevelKey)`: the level a regular app
+/// window moves to when it is raised with "Stay on Top" (NSFloatingWindowLevel).
+#[cfg(target_os = "macos")]
+pub const MACOS_FLOATING_WINDOW_LEVEL: i32 = 3;
+
+/// Whether a window at `level` is a regular, pickable app window on macOS:
+/// the normal level or a floating ("Stay on Top") one. Menu bar extras,
+/// overlays and other system levels sit above that.
+#[cfg(target_os = "macos")]
+pub fn is_pickable_macos_window_level(level: Option<i32>) -> bool {
+    matches!(level, Some(level) if (0..=MACOS_FLOATING_WINDOW_LEVEL).contains(&level))
+}
+
 #[cfg(target_os = "macos")]
 fn is_listable_macos_window(
     level: Option<i32>,
@@ -632,12 +645,18 @@ fn is_listable_macos_window(
         return true;
     }
 
-    matches!(level, Some(level) if level > 0)
-        && include_accessory_panels
-        && is_accessory_application
-        && bundle_identifier.is_some_and(|identifier| {
-            !identifier.starts_with("com.apple.") && !identifier.starts_with("so.cap.desktop")
-        })
+    let is_third_party_bundle = bundle_identifier.is_some_and(|identifier| {
+        !identifier.starts_with("com.apple.") && !identifier.starts_with("so.cap.desktop")
+    });
+
+    if is_accessory_application {
+        return matches!(level, Some(level) if level > 0)
+            && include_accessory_panels
+            && is_third_party_bundle;
+    }
+
+    is_pickable_macos_window_level(level)
+        && bundle_identifier.is_some_and(|identifier| !identifier.starts_with("so.cap.desktop"))
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
@@ -663,8 +682,7 @@ fn list_windows_inner(_include_accessory_panels: bool) -> Vec<(CaptureWindow, Wi
                 let owner_name = v.owner_name()?;
                 let level = v.raw_handle().level();
                 let bundle_identifier = v.raw_handle().bundle_identifier();
-                let is_accessory_application = _include_accessory_panels
-                    && matches!(level, Some(level) if level > 0)
+                let is_accessory_application = matches!(level, Some(level) if level > 0)
                     && v.raw_handle().is_accessory_application();
 
                 if !is_listable_macos_window(
@@ -795,7 +813,7 @@ mod tests {
             true,
             true,
         ));
-        assert!(!is_listable_macos_window(
+        assert!(is_listable_macos_window(
             Some(3),
             "Example",
             Some("com.example.app"),
@@ -830,6 +848,68 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_lists_floating_app_windows_in_the_picker() {
+        assert!(is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Simulator",
+            Some("com.apple.iphonesimulator"),
+            false,
+            false,
+        ));
+        assert!(is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Cap",
+            Some("so.cap.desktop.dev"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "cap-gpui",
+            None,
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL + 1),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(25),
+            "Control Centre",
+            Some("com.apple.controlcenter"),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_pickable_levels_are_normal_and_floating_only() {
+        assert!(is_pickable_macos_window_level(Some(0)));
+        assert!(is_pickable_macos_window_level(Some(
+            MACOS_FLOATING_WINDOW_LEVEL
+        )));
+        assert!(!is_pickable_macos_window_level(Some(
+            MACOS_FLOATING_WINDOW_LEVEL + 1
+        )));
+        assert!(!is_pickable_macos_window_level(Some(-1)));
+        assert!(!is_pickable_macos_window_level(Some(25)));
+        assert!(!is_pickable_macos_window_level(None));
     }
 
     #[test]

@@ -762,8 +762,12 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
                 return None;
             }
 
+            // Normal and floating ("Stay on Top") app windows only; menu bar
+            // extras and other system levels are not recordable targets.
             #[cfg(target_os = "macos")]
-            if window.raw_handle().level() != Some(0) {
+            if !cap_recording::sources::screen_capture::is_pickable_macos_window_level(
+                window.raw_handle().level(),
+            ) {
                 return None;
             }
 
