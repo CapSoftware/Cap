@@ -1005,6 +1005,7 @@ impl AVAssetReaderDecoder {
             let frame_limit =
                 request_direction.frame_cache_limit(sequential_access.load(Ordering::Relaxed));
             let mut exit = false;
+            let mut abandoned = false;
             let mut frames_iterated = 0u32;
             let mut last_decoded_position: Option<f32> = None;
             // Newest vended frame below the fallback floor: after a seek the
@@ -1060,6 +1061,33 @@ impl AVAssetReaderDecoder {
                         // at-or-before content the reader will ever vend.
                         if let Some(buf) = frame.image_buf() {
                             hold_candidate = Some((current_frame, buf.retained()));
+                            // A seek decodes from the keyframe before the
+                            // request, and scrubbing backwards asks for these
+                            // frames next; caching them makes those requests
+                            // hits instead of another seek over the same span.
+                            if current_frame >= cache_min {
+                                insert_cached_frame(
+                                    &mut cache,
+                                    &mut cache_bytes,
+                                    current_frame,
+                                    CachedFrame::new(&processor, buf.retained(), current_frame),
+                                    frame_limit,
+                                    requested_frame,
+                                    last_active_frame,
+                                    |frame| {
+                                        Some(frame) == vended_before
+                                            || pinned_frames.contains(&frame)
+                                    },
+                                );
+                            }
+                        }
+                        // Every request in the batch was given up on (a newer
+                        // scrub position, a live seek dropping its prefetches):
+                        // reading on towards their frames only delays the
+                        // request that replaced them.
+                        if pending_requests.iter().all(|r| r.sender.is_closed()) {
+                            abandoned = true;
+                            break;
                         }
                         continue;
                     }
@@ -1082,41 +1110,16 @@ impl AVAssetReaderDecoder {
                     let too_small_for_cache_bounds = current_frame < cache_min;
 
                     if !too_small_for_cache_bounds {
-                        let frame_bytes = cache_frame.byte_len();
-                        if let Some(replaced) = cache.remove(&current_frame) {
-                            cache_bytes = cache_bytes.saturating_sub(replaced.byte_len());
-                        }
-                        while !cache.is_empty()
-                            && frame_cache_needs_eviction(
-                                cache.len(),
-                                cache_bytes,
-                                frame_bytes,
-                                frame_limit,
-                            )
-                        {
-                            if let Some(last_active) = &last_active_frame {
-                                let from_oldest = if requested_frame > *last_active {
-                                    true
-                                } else if requested_frame < *last_active {
-                                    false
-                                } else {
-                                    current_frame > *cache.keys().next_back().unwrap()
-                                };
-                                let victim = cache_eviction_victim(&cache, from_oldest, |frame| {
-                                    Some(frame) == vended_before || pinned_frames.contains(&frame)
-                                });
-                                if let Some(removed) = victim.and_then(|frame| cache.remove(&frame))
-                                {
-                                    cache_bytes = cache_bytes.saturating_sub(removed.byte_len());
-                                }
-                            } else {
-                                cache.clear();
-                                cache_bytes = 0;
-                            }
-                        }
-
-                        cache_bytes = cache_bytes.saturating_add(frame_bytes);
-                        cache.insert(current_frame, cache_frame.clone());
+                        insert_cached_frame(
+                            &mut cache,
+                            &mut cache_bytes,
+                            current_frame,
+                            cache_frame.clone(),
+                            frame_limit,
+                            requested_frame,
+                            last_active_frame,
+                            |frame| Some(frame) == vended_before || pinned_frames.contains(&frame),
+                        );
 
                         let mut remaining_requests = Vec::with_capacity(pending_requests.len());
                         for req in pending_requests.drain(..) {
@@ -1215,9 +1218,17 @@ impl AVAssetReaderDecoder {
                     if pending_requests.is_empty() || exit {
                         break;
                     }
+                    if pending_requests.iter().all(|r| r.sender.is_closed()) {
+                        abandoned = true;
+                        break;
+                    }
                 }
 
                 decoder.is_done = true;
+            }
+
+            if abandoned {
+                pending_requests.clear();
             }
 
             for request in retry_requests.into_iter().rev() {
@@ -1415,6 +1426,45 @@ fn answer_misses_previous_vend(
 
 // Drops from the end the cache is trimmed from, skipping pinned frames unless
 // every frame is pinned.
+#[allow(clippy::too_many_arguments)]
+fn insert_cached_frame(
+    cache: &mut BTreeMap<u32, CachedFrame>,
+    cache_bytes: &mut usize,
+    number: u32,
+    frame: CachedFrame,
+    frame_limit: usize,
+    requested_frame: u32,
+    last_active_frame: Option<u32>,
+    is_pinned: impl Fn(u32) -> bool,
+) {
+    let frame_bytes = frame.byte_len();
+    if let Some(replaced) = cache.remove(&number) {
+        *cache_bytes = cache_bytes.saturating_sub(replaced.byte_len());
+    }
+    while !cache.is_empty()
+        && frame_cache_needs_eviction(cache.len(), *cache_bytes, frame_bytes, frame_limit)
+    {
+        if let Some(last_active) = last_active_frame {
+            let from_oldest = if requested_frame > last_active {
+                true
+            } else if requested_frame < last_active {
+                false
+            } else {
+                number > *cache.keys().next_back().unwrap()
+            };
+            let victim = cache_eviction_victim(cache, from_oldest, &is_pinned);
+            if let Some(removed) = victim.and_then(|frame| cache.remove(&frame)) {
+                *cache_bytes = cache_bytes.saturating_sub(removed.byte_len());
+            }
+        } else {
+            cache.clear();
+            *cache_bytes = 0;
+        }
+    }
+    *cache_bytes = cache_bytes.saturating_add(frame_bytes);
+    cache.insert(number, frame);
+}
+
 fn cache_eviction_victim<V>(
     cache: &BTreeMap<u32, V>,
     from_oldest: bool,
