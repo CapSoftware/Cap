@@ -29,13 +29,13 @@ jobs:
           for mode in ring resize fresh; do
             for format in bgra nv12; do
               for flush in noflush flush; do
-                timeout 300 "$BIN" $mode $format $flush 6000 | tee "$OUT/$mode-$format-$flush.log"
+                perl -e 'alarm shift; exec @ARGV' 300 "$BIN" $mode $format $flush 6000 | tee "$OUT/$mode-$format-$flush.log"
               done
             done
           done
           for mode in ring resize; do
             for flush in noflush flush; do
-              timeout 300 "$BIN" $mode nv12 $flush 3600 paced | tee "$OUT/$mode-nv12-$flush-paced.log"
+              perl -e 'alarm shift; exec @ARGV' 300 "$BIN" $mode nv12 $flush 3600 paced | tee "$OUT/$mode-nv12-$flush-paced.log"
             done
           done
           {
