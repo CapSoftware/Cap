@@ -477,6 +477,9 @@ async fn finalize_studio(
     let pending = PendingStudioThumbnail::new();
     tokio::task::spawn_blocking(move || {
         let _pending = pending;
+        let _writing = STUDIO_THUMBNAIL_WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let thumbnail_started = std::time::Instant::now();
         if let Some(display_path) = studio_display_path(&project_path) {
             write_bundle_thumbnail(&project_path, &display_path);
@@ -1450,6 +1453,25 @@ fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
             .map(|segment| segment.display.path.to_path(project_path))?,
     };
     path.is_file().then_some(path)
+}
+
+static STUDIO_THUMBNAIL_WRITES: Mutex<()> = Mutex::new(());
+
+/// Deleting a recording waits for a Studio stop thumbnail being written, which
+/// checks its bundle still exists under the same lock, so the two can neither
+/// race nor leave a deleted bundle half recreated.
+pub(crate) fn hold_studio_thumbnail_writes() -> Option<std::sync::MutexGuard<'static, ()>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match STUDIO_THUMBNAIL_WRITES.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        }
+    }
 }
 
 static PENDING_STUDIO_THUMBNAILS: std::sync::atomic::AtomicUsize =
@@ -4001,13 +4023,14 @@ mod studio_finalization_tests {
         assert!(finalization.wait().await.is_err());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn studio_stop_writes_its_thumbnail_after_returning() {
+    static THUMBNAIL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn stopped_studio_project(tag: &str) -> studio_recording::CompletedRecording {
         use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
 
         let _ = ffmpeg::init();
         let root = std::env::temp_dir().join(format!(
-            "cap-gpui-stop-thumbnail-{}.cap",
+            "cap-gpui-stop-thumbnail-{tag}-{}.cap",
             crate::store::new_uuid_v4()
         ));
         std::fs::create_dir_all(root.join("content")).unwrap();
@@ -4030,30 +4053,87 @@ mod studio_finalization_tests {
         }
         .save_for_project()
         .unwrap();
-        let written = studio_thumbnail_events();
-        while written.try_recv().is_ok() {}
-
-        let completed = studio_recording::CompletedRecording {
-            project_path: root.clone(),
+        studio_recording::CompletedRecording {
+            project_path: root,
             meta,
             cursor_data: Default::default(),
             clean_stopped: None,
-        };
+        }
+    }
+
+    async fn next_thumbnail_event(written: &flume::Receiver<()>) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), written.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn studio_stop_writes_its_thumbnail_after_returning() {
+        let _serial = THUMBNAIL_TESTS.lock().await;
+        let completed = stopped_studio_project("written");
+        let root = completed.project_path.clone();
+        let written = studio_thumbnail_events();
+        while written.try_recv().is_ok() {}
+
         let project = finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None)
             .await
             .unwrap();
         assert_eq!(project, root);
 
-        tokio::time::timeout(std::time::Duration::from_secs(30), written.recv_async())
-            .await
-            .unwrap()
-            .unwrap();
+        next_thumbnail_event(&written).await;
         assert!(!studio_thumbnails_pending());
         let thumbnail = image::open(crate::library::bundle_thumbnail_path(&root))
             .unwrap()
             .into_rgb8();
         assert_eq!(thumbnail.dimensions(), (320, 240));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn thumbnail_written_after_a_delete_does_not_recreate_the_bundle() {
+        let _serial = THUMBNAIL_TESTS.lock().await;
+        let completed = stopped_studio_project("deleted");
+        let root = completed.project_path.clone();
+        let written = studio_thumbnail_events();
+        while written.try_recv().is_ok() {}
+
+        let deleting = hold_studio_thumbnail_writes().unwrap();
+        finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None)
+            .await
+            .unwrap();
+        assert!(studio_thumbnails_pending());
+        std::fs::remove_dir_all(&root).unwrap();
+        drop(deleting);
+
+        next_thumbnail_event(&written).await;
+        assert!(!root.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_a_recording_waits_for_its_thumbnail_write() {
+        let _serial = THUMBNAIL_TESTS.lock().await;
+        let library = std::env::temp_dir().join(format!(
+            "cap-gpui-stop-thumbnail-library-{}",
+            crate::store::new_uuid_v4()
+        ));
+        let bundle = library.join("Recording.cap");
+        std::fs::create_dir_all(bundle.join("screenshots")).unwrap();
+
+        let writing = hold_studio_thumbnail_writes().unwrap();
+        let delete = std::thread::spawn({
+            let library = library.clone();
+            let bundle = bundle.clone();
+            move || crate::library::delete_recording_directory_in(&[library], &bundle)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!delete.is_finished());
+        assert!(bundle.exists());
+        drop(writing);
+
+        assert_eq!(delete.join().unwrap(), Ok(()));
+        assert!(!bundle.exists());
+        std::fs::remove_dir_all(library).unwrap();
     }
 
     #[test]
