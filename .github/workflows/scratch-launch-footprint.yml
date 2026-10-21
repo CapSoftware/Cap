@@ -1,0 +1,57 @@
+name: Scratch launch footprint A/B
+on:
+  push:
+    branches: [ci/launch-footprint-ab]
+jobs:
+  ab:
+    runs-on: blacksmith-6vcpu-macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - name: Build head and base
+        run: |
+          set -euo pipefail
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+          build() {
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --release --target aarch64-apple-darwin --bin cap-gpui
+            mkdir -p "$RUNNER_TEMP/$1"
+            cp apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui "$RUNNER_TEMP/$1/cap-gpui"
+          }
+          build head
+          git checkout -q "$(git merge-base HEAD origin/main)" -- apps/desktop-gpui/src crates/rendering/src
+          build base
+          git checkout -q HEAD -- apps/desktop-gpui/src crates/rendering/src
+          for side in head base; do
+            mkdir -p "$RUNNER_TEMP/$side/Frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$RUNNER_TEMP/$side/Frameworks/Spacedrive.framework" || true
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/Frameworks" || true
+          done
+      - name: Measure
+        run: |
+          set -uo pipefail
+          for i in 1 2 3; do
+            for side in base head; do
+              data="$RUNNER_TEMP/data-$side-$i"; rm -rf "$data"; mkdir -p "$data"
+              CAP_GPUI_APP_DATA_DIR="$data" CAP_GPUI_NO_MENUS=1 CAP_GPUI_MUTE_AUDIO=1 RUST_LOG=info "$RUNNER_TEMP/$side/cap-gpui" > "$data/stdout.log" 2>&1 &
+              pid=$!
+              sleep 20
+              fp=$(footprint -p $pid 2>/dev/null | grep -E "phys_footprint:" | head -1)
+              cpu=$(ps -o time= -p $pid)
+              top -l 2 -s 5 -pid $pid -stats pid,cpu,mem | tail -1 > "$data/top.txt"
+              echo "$side run $i: $fp cputime=$cpu idle=$(cat $data/top.txt)" | tee -a "$RUNNER_TEMP/results.txt"
+              grep -h "launch render warmup finished" "$data/stdout.log" "$data"/**/*.log 2>/dev/null | head -1
+              kill $pid; sleep 2; kill -9 $pid 2>/dev/null || true
+            done
+          done
+          cat "$RUNNER_TEMP/results.txt" >> "$GITHUB_STEP_SUMMARY"
