@@ -26,7 +26,14 @@ pub fn cover_dimensions(source: (usize, usize), target: (usize, usize)) -> (usiz
     // it (camera_preview_scale_benchmark, Windows and Linux CI).
     let even =
         |extent: usize| ((extent as f64 * scale / 2.0).round() as usize * 2).clamp(2, extent);
-    (even(width), even(height))
+    let scaled = (even(width), even(height));
+    // A scaled conversion leaves the converters' unscaled fast paths, so a
+    // frame that keeps most of its pixels costs more to shrink than it saves
+    // (1080p to 1706x960 measured slower in swscale and VideoToolbox alike).
+    if scaled.0 * scaled.1 * 2 > width * height {
+        return source;
+    }
+    scaled
 }
 
 #[cfg(test)]
@@ -61,7 +68,9 @@ mod tests {
     fn cover_dimensions_fill_the_target_and_keep_the_source_aspect() {
         assert_eq!(cover_dimensions((1920, 1080), (480, 480)), (854, 480));
         assert_eq!(cover_dimensions((3840, 2160), (480, 480)), (854, 480));
-        assert_eq!(cover_dimensions((1920, 1080), (960, 960)), (1706, 960));
+        assert_eq!(cover_dimensions((1920, 1080), (960, 960)), (1920, 1080));
+        assert_eq!(cover_dimensions((3840, 2160), (960, 960)), (1706, 960));
+        assert_eq!(cover_dimensions((3840, 2160), (2160, 1440)), (2560, 1440));
         assert_eq!(cover_dimensions((1920, 1080), (960, 540)), (960, 540));
         assert_eq!(cover_dimensions((1440, 1080), (960, 540)), (960, 720));
         assert_eq!(cover_dimensions((1080, 1920), (480, 480)), (480, 854));
