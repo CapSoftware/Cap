@@ -77,9 +77,16 @@ jobs:
         run: |
           set -euo pipefail
           dir=apps/desktop-gpui/target/aarch64-apple-darwin/release
+          ls "$GITHUB_WORKSPACE/target/Frameworks"
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" apps/desktop-gpui/target/aarch64-apple-darwin/Frameworks
+          otool -L "$dir/cap-gpui-runtime" | grep -i framework | head -3
           python3 -I .github/scripts/runtime-shaders-measure.py "$PWD/$dir/cap-gpui-runtime" "$PWD/$dir/cap-gpui-precompiled" 7 "$RUNNER_TEMP/results.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: runtime-shaders-${{ matrix.runner }}
-          path: ${{ runner.temp }}/results.json
+          path: |
+            ${{ runner.temp }}/results.json
+            apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui-runtime
+            apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui-precompiled
+          retention-days: 3
