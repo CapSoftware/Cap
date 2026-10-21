@@ -4,9 +4,12 @@ from collections import defaultdict
 
 rows = defaultdict(list)
 for line in open(sys.argv[1]):
-    if not line.startswith("RESULT "):
+    if "RESULT " not in line:
         continue
+    line = line[line.index("RESULT "):]
     fields = dict(part.split("=", 1) for part in line.split()[1:])
+    if fields["mode"] != "cpu":
+        continue
     key = (fields["res"], fields["preview"], fields["encode"], fields["variant"])
     rows[key].append(fields)
 

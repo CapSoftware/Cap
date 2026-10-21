@@ -110,21 +110,25 @@ jobs:
           export CAP_AB_OUT="$(cygpath -w "$out")"
           status=0
           bench() {
-            "$RUNNER_TEMP/bin-$1/bench.exe" mjpeg_ab_bench --ignored --nocapture --test-threads=1 2>&1 | tee -a "$out/log.txt" | grep -E "^(RESULT|VERIFY)" | tee -a "$out/results.txt"
+            "$RUNNER_TEMP/bin-$1/bench.exe" mjpeg_ab_bench --ignored --nocapture --test-threads=1 2>&1 | tee -a "$out/log.txt" | grep -oE "(RESULT|VERIFY) .*" | tee -a "$out/results.txt"
             [ "${PIPESTATUS[0]}" = 0 ] || status=1
           }
-          for round in 1 2 3 4 5; do
+          for round in 1 2 3 4 5 6 7 8 9 10; do
+            if [ $((round % 2)) = 0 ]; then order="fix main"; else order="main fix"; fi
             for res in 1280x720 1920x1080; do
               for preview in 1 0; do
-                for variant in main fix; do
+                for variant in $order; do
                   CAP_AB_VARIANT=$variant CAP_AB_MODE=cpu CAP_AB_RES=$res CAP_AB_PREVIEW=$preview CAP_AB_ENCODE=0 CAP_AB_FRAMES=600 bench $variant
                 done
               done
             done
           done
-          for round in 1 2 3; do
-            for variant in main fix; do
-              CAP_AB_VARIANT=$variant CAP_AB_MODE=cpu CAP_AB_RES=1920x1080 CAP_AB_PREVIEW=1 CAP_AB_ENCODE=1 CAP_AB_FRAMES=600 bench $variant
+          for round in 1 2 3 4; do
+            if [ $((round % 2)) = 0 ]; then order="fix main"; else order="main fix"; fi
+            for res in 1280x720 1920x1080; do
+              for variant in $order; do
+                CAP_AB_VARIANT=$variant CAP_AB_MODE=cpu CAP_AB_RES=$res CAP_AB_PREVIEW=1 CAP_AB_ENCODE=1 CAP_AB_FRAMES=600 bench $variant
+              done
             done
           done
           for res in 1280x720 1920x1080; do
