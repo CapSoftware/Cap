@@ -2032,6 +2032,53 @@ pub fn clip_trim_end(
     )
 }
 
+/// A roll edit on the cut between clips `edge` and `edge + 1`: the left
+/// clip's out point and the right clip's in point move together, so the
+/// timeline keeps its length. Returns the allowed range of the move in output
+/// seconds as `(min, max)`, or `None` when there is no cut there.
+pub fn clip_roll_bounds(
+    timeline: &TimelineConfiguration,
+    edge: usize,
+    secs_per_pixel: f64,
+    clip_display_durations: &[f64],
+) -> Option<(f64, f64)> {
+    let left = timeline.segments.get(edge)?;
+    let right = timeline.segments.get(edge + 1)?;
+    if left.timescale <= 0. || right.timescale <= 0. {
+        return None;
+    }
+    let left_max = clip_display_durations
+        .get(left.recording_clip as usize)
+        .copied()
+        .unwrap_or(left.end);
+    let left_min = clip_min_recorded_duration(timeline, edge, secs_per_pixel);
+    let right_min = clip_min_recorded_duration(timeline, edge + 1, secs_per_pixel);
+    let max = ((left_max - left.end) / left.timescale)
+        .min((right.end - right_min - right.start) / right.timescale);
+    let min =
+        ((left.start + left_min - left.end) / left.timescale).max(-right.start / right.timescale);
+    Some((min.min(0.), max.max(0.)))
+}
+
+/// Applies a roll of `delta` output seconds to the cut after clip `edge`,
+/// measured from the edges the drag started on.
+pub fn apply_clip_roll(
+    timeline: &mut TimelineConfiguration,
+    edge: usize,
+    left_end: f64,
+    right_start: f64,
+    delta: f64,
+) -> bool {
+    if edge + 1 >= timeline.segments.len() {
+        return false;
+    }
+    let left_scale = timeline.segments[edge].timescale;
+    let right_scale = timeline.segments[edge + 1].timescale;
+    timeline.segments[edge].end = left_end + delta * left_scale;
+    timeline.segments[edge + 1].start = right_start + delta * right_scale;
+    true
+}
+
 // ---------------------------------------------------------------------------
 // Auto zoom
 // ---------------------------------------------------------------------------
@@ -2822,6 +2869,50 @@ mod tests {
             TrackKind::Mask => model.mask.clone(),
             _ => Vec::new(),
         }
+    }
+
+    // -- Roll edit ----------------------------------------------------------
+
+    fn two_clips() -> ProjectConfiguration {
+        config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 20.0, "end": 40.0 }
+                ],
+                "zoomSegments": []
+            }
+        }))
+    }
+
+    #[test]
+    fn roll_moves_both_sides_of_the_cut_and_keeps_the_length() {
+        let mut project = two_clips();
+        let timeline = project.timeline.as_mut().unwrap();
+        let length = |t: &TimelineConfiguration| {
+            t.segments
+                .iter()
+                .map(|s| (s.end - s.start) / s.timescale)
+                .sum::<f64>()
+        };
+        let before = length(timeline);
+        assert!(apply_clip_roll(timeline, 0, 10.0, 20.0, 2.0));
+        assert_eq!(timeline.segments[0].end, 12.0);
+        assert_eq!(timeline.segments[1].start, 24.0);
+        assert!((length(timeline) - before).abs() < 1e-9);
+        assert!(!apply_clip_roll(timeline, 1, 0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn roll_bounds_stop_at_source_edges_and_minimum_lengths() {
+        let project = two_clips();
+        let timeline = project.timeline.as_ref().unwrap();
+        let (min, max) = clip_roll_bounds(timeline, 0, 0.001, &[50.0]).unwrap();
+        // Left clip can grow to the 50s recording; right clip keeps 0.1s
+        assert!((max - 9.95).abs() < 1e-9, "max {max}");
+        // Right clip can open back to 0s (10 output secs at 2x); left keeps 0.1s
+        assert!((min + 9.9).abs() < 1e-9, "min {min}");
+        assert!(clip_roll_bounds(timeline, 1, 0.001, &[50.0]).is_none());
     }
 
     // -- Selection ----------------------------------------------------------

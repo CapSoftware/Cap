@@ -1255,6 +1255,17 @@ enum DragKind {
     ClipTrimEnd {
         end: f64,
     },
+    /// An Alt-drag on a clip handle: rolls the cut between clips `edge` and
+    /// `edge + 1`, moving both sides together so the length is unchanged.
+    ClipRoll {
+        edge: usize,
+        left_end: f64,
+        right_start: f64,
+        min: f64,
+        max: f64,
+        /// The cut's output time when the drag started.
+        cut_time: f64,
+    },
     /// `TL/ZoomTrack.tsx:188-295`: a press on bare zoom track, which becomes a
     /// segment either on the first move (dragged to length) or on release
     /// (the default one-`minDuration` box).
@@ -4221,7 +4232,35 @@ impl EditorWindow {
         } else {
             None
         };
+        // Alt on a clip handle rolls the cut it sits on instead of trimming.
+        let roll_edge = match (kind, hit) {
+            (TrackKind::Clip, Hit::Handle { start: true, .. }) if event.modifiers.alt => {
+                index.checked_sub(1)
+            }
+            (TrackKind::Clip, Hit::Handle { start: false, .. }) if event.modifiers.alt => {
+                Some(index)
+            }
+            _ => None,
+        };
+        let roll = roll_edge.and_then(|edge| {
+            let timeline = self.project.timeline.as_ref()?;
+            let (min, max) = edits::clip_roll_bounds(
+                timeline,
+                edge,
+                secs_per_pixel,
+                &self.clip_display_durations,
+            )?;
+            Some(DragKind::ClipRoll {
+                edge,
+                left_end: timeline.segments[edge].end,
+                right_start: timeline.segments[edge + 1].start,
+                min,
+                max,
+                cut_time: self.timeline.clips.get(edge).map_or(0., |clip| clip.end),
+            })
+        });
         let kind_of_drag = match (kind, hit) {
+            _ if roll.is_some() => roll,
             // The clip's handles: recording-domain, no promotion threshold, no
             // selection on release.
             (TrackKind::Clip, Hit::Handle { start: true, .. }) => {
@@ -4264,7 +4303,11 @@ impl EditorWindow {
 
         let clip_handle = matches!(
             kind_of_drag,
-            Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
+            Some(
+                DragKind::ClipTrimStart { .. }
+                    | DragKind::ClipTrimEnd { .. }
+                    | DragKind::ClipRoll { .. }
+            )
         );
         let Some(drag_kind) = kind_of_drag else {
             // A clip body press: select on release, nothing else.
@@ -4832,6 +4875,22 @@ impl EditorWindow {
                     window,
                     cx,
                 );
+            }
+            DragKind::ClipRoll {
+                edge,
+                left_end,
+                right_start,
+                min,
+                max,
+                cut_time,
+            } => {
+                let delta = delta.clamp(min, max);
+                if self.edit_live(
+                    |timeline| edits::apply_clip_roll(timeline, edge, left_end, right_start, delta),
+                    cx,
+                ) {
+                    self.set_preview_time(cut_time + delta);
+                }
             }
             DragKind::CreateZoom {
                 base_start,
@@ -5851,7 +5910,9 @@ impl EditorWindow {
 
         if matches!(
             drag.kind,
-            DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. }
+            DragKind::ClipTrimStart { .. }
+                | DragKind::ClipTrimEnd { .. }
+                | DragKind::ClipRoll { .. }
         ) {
             self.on_handle_released(cx);
         }
@@ -11269,7 +11330,8 @@ impl Render for EditorWindow {
                 DragKind::TrimStart { .. }
                 | DragKind::TrimEnd { .. }
                 | DragKind::ClipTrimStart { .. }
-                | DragKind::ClipTrimEnd { .. } => gpui::CursorStyle::ResizeLeftRight,
+                | DragKind::ClipTrimEnd { .. }
+                | DragKind::ClipRoll { .. } => gpui::CursorStyle::ResizeLeftRight,
                 DragKind::CreateZoom { .. } => gpui::CursorStyle::Arrow,
             })
             .or(self
