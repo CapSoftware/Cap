@@ -5184,7 +5184,8 @@ fn load_editor_project_candidate(
                 #[cfg(target_os = "macos")]
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
-                let frame_format = cap_editor::EditorFrameFormat::Bgra;
+                let frame_format =
+                    editor_window::cpu_preview_frame_format(shared_wgpu_device().await.as_ref());
                 if let Some(previous) = previous {
                     return previous
                         .recreate_preparing_candidate(state_cb, frame_cb, frame_format)

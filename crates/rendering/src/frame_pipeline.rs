@@ -1790,6 +1790,13 @@ struct BgraReadbackTarget {
 pub struct PendingBgraReadback(PendingReadback);
 
 impl RgbaToBgraReadback {
+    pub fn supported(adapter: &wgpu::Adapter) -> bool {
+        adapter
+            .get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm)
+            .allowed_usages
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC)
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("RGBA to BGRA Readback Blit"),

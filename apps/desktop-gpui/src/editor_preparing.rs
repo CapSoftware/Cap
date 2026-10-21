@@ -525,9 +525,10 @@ impl PreparingRunner {
         let discard = self.frame_discard.clone();
         #[cfg(target_os = "macos")]
         let frame_format = EditorFrameFormat::BgraSurface;
-        #[cfg(not(target_os = "macos"))]
-        let frame_format = EditorFrameFormat::Bgra;
         let shared_device = crate::app_windows::shared_wgpu_device().await;
+        #[cfg(not(target_os = "macos"))]
+        let frame_format: EditorFrameFormat =
+            crate::editor_window::cpu_preview_frame_format(shared_device.as_ref());
         self.control.accepts_frames.store(true, Ordering::Release);
         let playback = PreparingPlaybackSession::spawn_with_expected_metadata(
             input,

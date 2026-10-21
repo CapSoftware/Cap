@@ -6,7 +6,8 @@ use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
 use cap_rendering::SurfaceFrame;
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
-    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, RgbaToBgraReadback,
+    TransitionRenderInput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -66,6 +67,20 @@ pub enum EditorFrameFormat {
     Bgra,
     #[cfg(target_os = "macos")]
     BgraSurface,
+}
+
+/// `Bgra` needs the adapter to render to and copy from a `Bgra8Unorm`
+/// texture; where it cannot, the preview falls back to `Rgba` frames, which
+/// every consumer of `Bgra` also accepts.
+pub(crate) fn supported_frame_format(
+    format: EditorFrameFormat,
+    constants: &RenderVideoConstants,
+) -> EditorFrameFormat {
+    if format == EditorFrameFormat::Bgra && !RgbaToBgraReadback::supported(&constants._adapter) {
+        tracing::warn!("adapter cannot render BGRA readbacks; preview frames stay RGBA");
+        return EditorFrameFormat::Rgba;
+    }
+    format
 }
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
@@ -206,6 +221,7 @@ impl Renderer {
             output_format,
         } = self;
 
+        let output_format = supported_frame_format(output_format, &render_constants);
         let mut frame_renderer = FrameRenderer::new(&render_constants);
 
         let mut layers = match layers_rx.await {

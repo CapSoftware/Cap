@@ -596,6 +596,22 @@ pub fn bgra_frame_image(frame: RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
+/// The Windows/Linux preview format. Hardware adapters convert to BGRA on the
+/// GPU (`EditorFrameFormat::Bgra`). Software adapters (WARP, llvmpipe)
+/// rasterize that blit on the CPU, which made frames slower than the CPU
+/// swizzle it replaces in the CI A/B (PR #2807), so they keep `Rgba`, as does
+/// a renderer that has to create its own device.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn cpu_preview_frame_format(
+    shared_device: Option<&cap_rendering::SharedWgpuDevice>,
+) -> cap_editor::EditorFrameFormat {
+    if shared_device.is_some_and(|device| !device.is_software_adapter) {
+        cap_editor::EditorFrameFormat::Bgra
+    } else {
+        cap_editor::EditorFrameFormat::Rgba
+    }
+}
+
 /// What the frame pump hands the window.
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
@@ -12950,6 +12966,10 @@ mod tests {
             "bgra readback parity on {} ({:?}, {:?}, software={})",
             info.name, info.backend, info.device_type, shared.is_software_adapter
         );
+        if !cap_rendering::RgbaToBgraReadback::supported(&shared.adapter) {
+            eprintln!("skipping: the adapter cannot render Bgra8Unorm, so the preview stays RGBA");
+            return;
+        }
         let (device, queue) = (&shared.device, &shared.queue);
         let mut readback = cap_rendering::RgbaToBgraReadback::new(device);
 
