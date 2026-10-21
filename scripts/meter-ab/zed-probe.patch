@@ -1,0 +1,47 @@
+diff --git a/crates/gpui_macos/src/metal_atlas.rs b/crates/gpui_macos/src/metal_atlas.rs
+index d007abb..f591afd 100644
+--- a/crates/gpui_macos/src/metal_atlas.rs
++++ b/crates/gpui_macos/src/metal_atlas.rs
+@@ -179,6 +179,9 @@ impl MetalAtlasState {
+             metal::MTLStorageMode::Managed
+         });
+         let metal_texture = self.device.new_texture(&texture_descriptor);
++        if std::env::var_os("CAP_PROBE_GPU").is_some() {
++            eprintln!("GPUPROBE atlas_texture {:?} kind={:?}", size, kind);
++        }
+ 
+         let texture_list = match kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+index 1d35af1..741967c 100644
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -550,6 +550,28 @@ impl MetalRenderer {
+             }
+         };
+         let viewport_size = layer.drawable_size();
++        if std::env::var_os("CAP_PROBE_GPU").is_some() {
++            use std::sync::atomic::{AtomicU64, Ordering};
++            static DRAWS: AtomicU64 = AtomicU64::new(0);
++            static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
++            let draws = DRAWS.fetch_add(1, Ordering::Relaxed) + 1;
++            let mut last = LAST.lock().unwrap();
++            let now = std::time::Instant::now();
++            if last.is_none_or(|t| now.duration_since(t).as_secs_f64() >= 1.0) {
++                *last = Some(now);
++                DRAWS.store(0, Ordering::Relaxed);
++                eprintln!(
++                    "GPUPROBE draws={} drawable={}x{} max_drawables={} device_alloc_mb={:.1} paths={} instance_buf={}",
++                    draws,
++                    viewport_size.width,
++                    viewport_size.height,
++                    layer.maximum_drawable_count(),
++                    self.device.current_allocated_size() as f64 / 1048576.0,
++                    scene.paths.len(),
++                    self.instance_buffer_pool.lock().buffer_size,
++                );
++            }
++        }
+         let viewport_size: Size<DevicePixels> = size(
+             (viewport_size.width.ceil() as i32).into(),
+             (viewport_size.height.ceil() as i32).into(),

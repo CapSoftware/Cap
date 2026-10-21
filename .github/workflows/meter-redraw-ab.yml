@@ -1,0 +1,122 @@
+name: meter-redraw-ab
+
+# Scratch A/B: idle cost of the live mic meter, main vs perf/gpui-mic-meter-redraws. Not for main.
+
+on:
+  push:
+    branches: [ci/meter-redraw-ab]
+  workflow_dispatch:
+
+env:
+  MAIN_SHA: 4cacde7a70bfbb11844faf23486518c6532b5a6b
+  FIX_REF: perf/gpui-mic-meter-redraws
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: blacksmith-6vcpu-macos-26
+            target: aarch64-apple-darwin
+          - runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Keep the display awake
+        if: runner.os == 'macOS'
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          caffeinate -u -t 2 || true
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          defaults -currentHost write com.apple.screensaver idleTime 0 || true
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage probe and check out main
+        run: |
+          cp -R scripts/meter-ab "$RUNNER_TEMP/meter-ab"
+          git checkout -f "$MAIN_SHA"
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install Linux GPU and display
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 xvfb
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+
+      - name: Prepare GPUI dependency
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            cp "$RUNNER_TEMP/meter-ab/zed-probe.patch" apps/desktop-gpui/patches/zed-probe.patch
+            python3 -I -c 'import pathlib; p = pathlib.Path("scripts/prepare-gpui-dependency.sh"); s = p.read_text(); a = "\t\"apps/desktop-gpui/patches/zed-idle-frames.patch\"\n"; assert a in s; p.write_text(s.replace(a, a + "\t\"apps/desktop-gpui/patches/zed-probe.patch\"\n"))'
+            grep -n "zed-probe" scripts/prepare-gpui-dependency.sh
+          fi
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build both variants
+        run: |
+          build() {
+            local variant=$1
+            node scripts/sync-desktop-versions.mjs
+            python3 -I "$RUNNER_TEMP/meter-ab/inject.py" "$GITHUB_WORKSPACE"
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} --bin cap-gpui
+            mkdir -p "$RUNNER_TEMP/bin-$variant/debug"
+            cp apps/desktop-gpui/target/${{ matrix.target }}/debug/cap-gpui "$RUNNER_TEMP/bin-$variant/debug/cap-gpui"
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/bin-$variant/Frameworks"
+            fi
+          }
+          build main
+          git fetch origin "$FIX_REF"
+          git diff --stat "$MAIN_SHA" FETCH_HEAD
+          git checkout -f FETCH_HEAD -- apps/desktop-gpui/src
+          build fix
+
+      - name: Measure
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            Xvfb :99 -screen 0 1920x1080x24 -noreset > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            export DISPLAY=:99
+            sleep 2
+          else
+            sw_vers; system_profiler SPDisplaysDataType | grep -E "Chipset|Resolution|Metal" || true
+          fi
+          for round in 1 2 3 4; do
+            for profile in none hiss room speech; do
+              for variant in main fix; do
+                "$RUNNER_TEMP/meter-ab/measure.sh" "$RUNNER_TEMP/bin-$variant/debug/cap-gpui" $variant $profile $round
+              done
+            done
+          done
+          python3 -I "$RUNNER_TEMP/meter-ab/aggregate.py" "$RUNNER_TEMP/meter-ab-out/summary.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: meter-ab-${{ matrix.target }}
+          path: ${{ runner.temp }}/meter-ab-out
