@@ -571,6 +571,7 @@ async fn main() {
                 data.len() + metadata_bytes
             }
             EditorFrameOutput::Rgba(frame) => frame.data.len() + 24,
+            EditorFrameOutput::Bgra(frame) => frame.data.len(),
             #[cfg(target_os = "macos")]
             EditorFrameOutput::Surface(_) => return,
         };

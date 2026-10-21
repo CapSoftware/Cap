@@ -526,7 +526,7 @@ impl PreparingRunner {
         #[cfg(target_os = "macos")]
         let frame_format = EditorFrameFormat::BgraSurface;
         #[cfg(not(target_os = "macos"))]
-        let frame_format = EditorFrameFormat::Rgba;
+        let frame_format = EditorFrameFormat::Bgra;
         let shared_device = crate::app_windows::shared_wgpu_device().await;
         self.control.accepts_frames.store(true, Ordering::Release);
         let playback = PreparingPlaybackSession::spawn_with_expected_metadata(

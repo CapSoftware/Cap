@@ -306,6 +306,7 @@ async fn main() {
                 let _ = frame_tx.send(bytes);
                 ws_frame
             }
+            EditorFrameOutput::Bgra(_) => return,
             #[cfg(target_os = "macos")]
             EditorFrameOutput::Surface(_) => return,
         };

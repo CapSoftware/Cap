@@ -1671,6 +1671,18 @@ impl PendingReadback {
     }
 
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
+        let active_bytes = self.map(device).await?;
+        let buffer_slice = self.buffer.slice(..active_bytes as u64);
+        let data = buffer_slice.get_mapped_range();
+        let mut data_vec = Vec::with_capacity(active_bytes + 24);
+        data_vec.extend_from_slice(&data);
+
+        drop(data);
+        let padded_bytes_per_row = self.padded_bytes_per_row;
+        Ok(self.into_frame(data_vec, padded_bytes_per_row))
+    }
+
+    async fn map(&mut self, device: &wgpu::Device) -> Result<usize, RenderingError> {
         let start_time = Instant::now();
         let completed = wait_for_submission(
             device,
@@ -1713,12 +1725,10 @@ impl PendingReadback {
             self.unmap();
             return Err(RenderingError::BufferMapWaitingFailed);
         };
-        let buffer_slice = self.buffer.slice(..active_bytes as u64);
-        let data = buffer_slice.get_mapped_range();
-        let mut data_vec = Vec::with_capacity(active_bytes + 24);
-        data_vec.extend_from_slice(&data);
+        Ok(active_bytes)
+    }
 
-        drop(data);
+    fn into_frame(mut self, data: Vec<u8>, padded_bytes_per_row: u32) -> RenderedFrame {
         self.unmap();
 
         let target_time_ns =
@@ -1727,20 +1737,298 @@ impl PendingReadback {
         if let Some(phase) = self.readiness_phase.take() {
             phase.finish("frame_ready");
         }
-        Ok(RenderedFrame {
-            data: Arc::new(data_vec),
-            padded_bytes_per_row: self.padded_bytes_per_row,
+        RenderedFrame {
+            data: Arc::new(data),
+            padded_bytes_per_row,
             width: self.width,
             height: self.height,
             frame_number: self.frame_number,
             target_time_ns,
-        })
+        }
     }
 }
 
 impl Drop for PendingReadback {
     fn drop(&mut self) {
         self.unmap();
+    }
+}
+
+fn tight_rows(data: &[u8], row_bytes: usize, stride: usize) -> Option<Vec<u8>> {
+    if row_bytes == stride {
+        return Some(data.to_vec());
+    }
+    if stride == 0 || !data.len().is_multiple_of(stride) {
+        return None;
+    }
+    let mut tight = Vec::with_capacity(row_bytes.checked_mul(data.len() / stride)?);
+    for row in data.chunks_exact(stride) {
+        tight.extend_from_slice(row.get(..row_bytes)?);
+    }
+    Some(tight)
+}
+
+/// Converts the rendered RGBA frame to BGRA on the GPU before reading it back,
+/// so a CPU consumer that wants BGRA (gpui's sprite atlas) gets display-ready,
+/// tightly packed bytes from a single copy out of the mapped buffer.
+pub struct RgbaToBgraReadback {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    target: Option<BgraReadbackTarget>,
+    source_bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
+}
+
+struct BgraReadbackTarget {
+    width: u32,
+    height: u32,
+    view: wgpu::TextureView,
+    texture: wgpu::Texture,
+    buffer: Arc<wgpu::Buffer>,
+    padded_bytes_per_row: u32,
+}
+
+pub struct PendingBgraReadback(PendingReadback);
+
+impl RgbaToBgraReadback {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("RGBA to BGRA Readback Blit"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shaders/blit_bgra_surface.wgsl"
+            ))),
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("RGBA to BGRA Readback Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("RGBA to BGRA Readback Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("RGBA to BGRA Readback Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            bind_group_layout,
+            target: None,
+            source_bind_groups: Vec::new(),
+        }
+    }
+
+    fn source_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        source_texture: &wgpu::Texture,
+    ) -> wgpu::BindGroup {
+        if let Some((_, bind_group)) = self
+            .source_bind_groups
+            .iter()
+            .find(|(texture, _)| texture == source_texture)
+        {
+            return bind_group.clone();
+        }
+        let source_view = source_texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to BGRA Readback Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source_view),
+            }],
+        });
+        if self.source_bind_groups.len() >= 2 {
+            self.source_bind_groups.remove(0);
+        }
+        self.source_bind_groups
+            .push((source_texture.clone(), bind_group.clone()));
+        bind_group
+    }
+
+    fn ensure_target(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self
+            .target
+            .as_ref()
+            .is_some_and(|target| target.width == width && target.height == height)
+        {
+            return;
+        }
+        let padded_bytes_per_row = padded_bytes_per_row((width, height));
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("BGRA Readback Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("BGRA Readback Buffer"),
+            size: u64::from(padded_bytes_per_row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }));
+        self.target = Some(BgraReadbackTarget {
+            width,
+            height,
+            view: texture.create_view(&Default::default()),
+            texture,
+            buffer,
+            padded_bytes_per_row,
+        });
+    }
+
+    pub fn submit(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut encoder: wgpu::CommandEncoder,
+        source: &wgpu::Texture,
+        frame_number: u32,
+        frame_rate: u32,
+    ) -> Result<PendingBgraReadback, RenderingError> {
+        let (width, height) = (source.width(), source.height());
+        if width == 0 || height == 0 {
+            return Err(RenderingError::BufferMapWaitingFailed);
+        }
+        let bind_group = self.source_bind_group(device, source);
+        self.ensure_target(device, width, height);
+        let target = self
+            .target
+            .as_ref()
+            .expect("BGRA readback target initialized");
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("RGBA to BGRA Readback Blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &target.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+
+        let (tx, rx) = oneshot::channel();
+        target
+            .buffer
+            .slice(..u64::from(target.padded_bytes_per_row) * u64::from(height))
+            .map_async(wgpu::MapMode::Read, move |result| {
+                if let Err(e) = tx.send(result) {
+                    tracing::error!("Failed to send map_async result: {:?}", e);
+                }
+            });
+
+        Ok(PendingBgraReadback(PendingReadback {
+            readiness_phase: None,
+            rx,
+            submission,
+            mapped: true,
+            buffer: target.buffer.clone(),
+            padded_bytes_per_row: target.padded_bytes_per_row,
+            width,
+            height,
+            frame_number,
+            frame_rate,
+            export_deadlines: false,
+        }))
+    }
+}
+
+impl PendingBgraReadback {
+    /// The frame as tightly packed BGRA: `padded_bytes_per_row` is always
+    /// `width * 4`, so the bytes can back an image without un-padding.
+    pub async fn wait(self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
+        let mut pending = self.0;
+        let active_bytes = pending.map(device).await?;
+        let row_bytes = pending.width * 4;
+        let data = pending
+            .buffer
+            .slice(..active_bytes as u64)
+            .get_mapped_range();
+        let tight = tight_rows(
+            &data,
+            row_bytes as usize,
+            pending.padded_bytes_per_row as usize,
+        );
+        drop(data);
+        let Some(tight) = tight else {
+            pending.unmap();
+            return Err(RenderingError::BufferMapWaitingFailed);
+        };
+        Ok(pending.into_frame(tight, row_bytes))
     }
 }
 
@@ -2299,6 +2587,31 @@ pub async fn finish_encoder_bgra_surface(
     result
 }
 
+pub async fn finish_encoder_bgra_readback(
+    session: &mut RenderSession,
+    readback: &mut RgbaToBgraReadback,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    uniforms: &ProjectUniforms,
+    encoder: wgpu::CommandEncoder,
+) -> Result<RenderedFrame, RenderingError> {
+    let pending = readback.submit(
+        device,
+        queue,
+        encoder,
+        session.current_texture(),
+        uniforms.frame_number,
+        uniforms.frame_rate,
+    )?;
+    match pending.wait(device).await {
+        Ok(frame) => Ok(frame),
+        Err(error) => {
+            drain_submitted_work(device, queue).await;
+            Err(error)
+        }
+    }
+}
+
 pub async fn flush_pending_readback(
     session: &mut RenderSession,
     device: &wgpu::Device,
@@ -2313,7 +2626,38 @@ pub async fn flush_pending_readback(
 
 #[cfg(test)]
 mod readback_output_tests {
-    use super::active_readback_byte_len;
+    use super::{active_readback_byte_len, tight_rows};
+
+    #[test]
+    fn aligned_bgra_rows_are_copied_whole() {
+        let data: Vec<u8> = (0..=255).cycle().take(7_680 * 3).collect();
+        assert_eq!(tight_rows(&data, 7_680, 7_680), Some(data));
+    }
+
+    #[test]
+    fn padded_bgra_rows_drop_only_the_padding() {
+        let stride = 256;
+        let row_bytes = 3 * 4;
+        let mut data = vec![0xAA; stride * 2];
+        for (index, byte) in data[..row_bytes].iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        for (index, byte) in data[stride..stride + row_bytes].iter_mut().enumerate() {
+            *byte = 100 + index as u8;
+        }
+        let tight = tight_rows(&data, row_bytes, stride).expect("rows fit");
+        assert_eq!(tight.len(), row_bytes * 2);
+        assert_eq!(&tight[..row_bytes], &data[..row_bytes]);
+        assert_eq!(&tight[row_bytes..], &data[stride..stride + row_bytes]);
+        assert!(!tight.contains(&0xAA));
+    }
+
+    #[test]
+    fn malformed_bgra_rows_are_rejected() {
+        assert_eq!(tight_rows(&[0; 300], 12, 256), None);
+        assert_eq!(tight_rows(&[0; 512], 260, 256), None);
+        assert_eq!(tight_rows(&[0; 16], 4, 0), None);
+    }
 
     #[test]
     fn oversized_readback_buffers_only_include_active_rows() {

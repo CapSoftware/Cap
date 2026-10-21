@@ -690,6 +690,16 @@ async fn run_preview(
                     .render_immediate(frames, uniforms, &cursor, true, &mut layers)
                     .await
                     .map(EditorFrameOutput::Rgba),
+                EditorFrameFormat::Bgra => renderer
+                    .render_immediate_bgra_with_timings(
+                        frames,
+                        uniforms,
+                        &cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|(frame, _)| EditorFrameOutput::Bgra(frame)),
                 #[cfg(target_os = "macos")]
                 EditorFrameFormat::BgraSurface => renderer
                     .render_immediate_bgra_surface(frames, uniforms, &cursor, true, &mut layers)
@@ -802,7 +812,9 @@ fn validate_output(
     layout: FrameLayout,
 ) -> Result<(), PreparingPreviewError> {
     let (number, width, height) = match output {
-        EditorFrameOutput::Rgba(frame) => (frame.frame_number, frame.width, frame.height),
+        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => {
+            (frame.frame_number, frame.width, frame.height)
+        }
         EditorFrameOutput::Nv12(frame) => (frame.frame_number, frame.width, frame.height),
         #[cfg(target_os = "macos")]
         EditorFrameOutput::Surface(frame) => (frame.frame_number, frame.width, frame.height),
