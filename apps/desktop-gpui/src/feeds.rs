@@ -417,6 +417,22 @@ struct CameraPreviewWorkerConfig {
     mirrored: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     blur: Arc<AtomicU8>,
+    target: Arc<AtomicU64>,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pack_preview_target(target: Option<(usize, usize)>) -> u64 {
+    target.map_or(0, |(width, height)| ((width as u64) << 32) | height as u64)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn unpack_preview_target(packed: u64) -> Option<(usize, usize)> {
+    (packed != 0).then(|| {
+        (
+            (packed >> 32) as usize,
+            (packed & u64::from(u32::MAX)) as usize,
+        )
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -428,6 +444,7 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
         mirrored,
         active,
         blur,
+        target,
     } = config;
     let mut scaler = None;
     let mut processor = None;
@@ -550,9 +567,27 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
                 .publisher
                 .fail("Requested camera blur is unavailable".to_string());
         }
-        let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
+        let source_dims = (frame.inner.width() as usize, frame.inner.height() as usize);
+        let preview_target = unpack_preview_target(target.load(Ordering::Relaxed));
+        // A processed recording lease records these frames; only the preview
+        // alone may be shrunk to the bubble.
+        #[cfg(target_os = "linux")]
+        let preview_target = preview_target.filter(|_| recording.is_none());
+        let output = match blur_mode {
+            Some(_) => crate::camera_blur_portable::fitted_dimensions(
+                frame.inner.width(),
+                frame.inner.height(),
+                crate::camera_blur_portable::MAX_DIMS,
+            ),
+            None => preview_target.map(|visible| {
+                let (width, height) =
+                    cap_gpui_kernels::camera_preview::cover_dimensions(source_dims, visible);
+                (width as u32, height as u32)
+            }),
+        };
+        let layout_dims = blur_mode.is_none().then_some(source_dims);
         let Some((mut image, dims)) =
-            camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
+            camera_preview_image_at(&frame.inner, &mut scaler, requested_mirror, output)
         else {
             #[cfg(target_os = "linux")]
             if let Some(recording) = &recording {
@@ -651,7 +686,7 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
         if active.load(Ordering::Acquire) {
             match preview_tx.try_send(crate::camera_window::CameraPreviewFrame {
                 image,
-                dims,
+                dims: layout_dims.unwrap_or(dims),
                 timestamp: frame.timestamp,
             }) {
                 Ok(()) | Err(flume::TrySendError::Full(_)) => {}
@@ -703,6 +738,8 @@ pub struct Feeds {
     camera_preview_active: Arc<AtomicBool>,
     #[cfg(not(target_os = "macos"))]
     camera_preview_blur: Arc<AtomicU8>,
+    #[cfg(not(target_os = "macos"))]
+    camera_preview_target: Arc<AtomicU64>,
     #[cfg(not(target_os = "macos"))]
     camera_preview_reset: Option<flume::Sender<CameraWorkerCommand>>,
     camera_input_epoch: Arc<AtomicU64>,
@@ -766,6 +803,8 @@ impl Feeds {
             camera_preview_active: Arc::new(AtomicBool::new(true)),
             #[cfg(not(target_os = "macos"))]
             camera_preview_blur: Arc::new(AtomicU8::new(0)),
+            #[cfg(not(target_os = "macos"))]
+            camera_preview_target: Arc::new(AtomicU64::new(0)),
             #[cfg(not(target_os = "macos"))]
             camera_preview_reset: None,
             camera_input_epoch: Arc::new(AtomicU64::new(0)),
@@ -863,6 +902,12 @@ impl Feeds {
             },
             Ordering::Relaxed,
         );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn set_camera_preview_target(&self, target: Option<(usize, usize)>) {
+        self.camera_preview_target
+            .store(pack_preview_target(target), Ordering::Relaxed);
     }
 
     /// Select (or deselect) the camera. Opens/closes the preview window and
@@ -1268,8 +1313,9 @@ impl Feeds {
         });
 
         // The preview channel: bounded(4) so a stalled UI drops frames instead
-        // of ballooning; the pump drains on the main thread and hands each
-        // frame straight to the camera window.
+        // of ballooning; the pump drains on the main thread and hands only the
+        // newest frame to the camera window, releasing the stale capture
+        // buffers rather than converting them.
         #[cfg(target_os = "macos")]
         let pump = {
             let (frame_tx, frame_rx) = flume::bounded::<cap_recording::NativeCameraFrame>(4);
@@ -1277,6 +1323,7 @@ impl Feeds {
 
             cx.spawn(async move |_this, cx| {
                 while let Ok(frame) = frame_rx.recv_async().await {
+                    let frame = frame_rx.drain().last().unwrap_or(frame);
                     cx.update(|cx| app_windows::deliver_camera_frame(frame, cx));
                 }
             })
@@ -1292,6 +1339,7 @@ impl Feeds {
             let mirrored = self.camera_preview_mirrored.clone();
             let active = self.camera_preview_active.clone();
             let blur = self.camera_preview_blur.clone();
+            let target = self.camera_preview_target.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-preview".into())
                 .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
@@ -1303,6 +1351,7 @@ impl Feeds {
                         mirrored,
                         active,
                         blur,
+                        target,
                     });
                 })
             {
@@ -1393,19 +1442,35 @@ impl Feeds {
     }
 }
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(test)]
 pub(crate) fn camera_preview_image(
     frame: &ffmpeg::frame::Video,
     scaler: &mut Option<ffmpeg::software::scaling::Context>,
     mirrored: bool,
     max_dims: Option<(u32, u32)>,
 ) -> Option<(Arc<gpui::RenderImage>, (usize, usize))> {
+    let output = match max_dims {
+        Some(max) => Some(crate::camera_blur_portable::fitted_dimensions(
+            frame.width(),
+            frame.height(),
+            max,
+        )?),
+        None => None,
+    };
+    camera_preview_image_at(frame, scaler, mirrored, output)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+pub(crate) fn camera_preview_image_at(
+    frame: &ffmpeg::frame::Video,
+    scaler: &mut Option<ffmpeg::software::scaling::Context>,
+    mirrored: bool,
+    output: Option<(u32, u32)>,
+) -> Option<(Arc<gpui::RenderImage>, (usize, usize))> {
     let source_width = frame.width();
     let source_height = frame.height();
-    let (width, height) = match max_dims {
-        Some(max) => {
-            crate::camera_blur_portable::fitted_dimensions(source_width, source_height, max)?
-        }
+    let (width, height) = match output {
+        Some(output) => output,
         None if source_width > 0 && source_height > 0 => (source_width, source_height),
         None => return None,
     };
@@ -2151,6 +2216,97 @@ mod tests {
         let (_, recapped) =
             camera_preview_image(&frame, &mut scaler, false, Some((16, 16))).unwrap();
         assert_eq!(recapped, (16, 8));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn camera_preview_target_round_trips_through_its_atomic() {
+        for target in [None, Some((270, 270)), Some((2160, 1440)), Some((854, 480))] {
+            assert_eq!(unpack_preview_target(pack_preview_target(target)), target);
+        }
+    }
+
+    fn synthetic_camera_frame(
+        format: ffmpeg::format::Pixel,
+        width: u32,
+        height: u32,
+        seed: usize,
+    ) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, width, height);
+        for plane in 0..frame.planes() {
+            for (index, byte) in frame.data_mut(plane).iter_mut().enumerate() {
+                *byte = (16 + (index * 7 + seed * 31) % 220) as u8;
+            }
+        }
+        frame
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --bin cap-gpui camera_preview_scale_benchmark -- --ignored --nocapture"]
+    fn camera_preview_scale_benchmark() {
+        const WARMUP: usize = 10;
+        const ITERATIONS: usize = 90;
+        let bubbles = [
+            ("small 230pt round", (460.0f32, 460.0f32)),
+            ("medium 400pt round", (800.0, 800.0)),
+            ("large 600pt full", (600.0 * 16.0 / 9.0 * 2.0, 1200.0)),
+        ];
+        println!(
+            "| format | source | mirrored | path | bubble | output | mean ms | p50 ms | p95 ms | MB/frame |"
+        );
+        println!("|---|---|---|---|---|---|---|---|---|---|");
+        for format in [ffmpeg::format::Pixel::NV12, ffmpeg::format::Pixel::YUYV422] {
+            for (width, height) in [(1280u32, 720u32), (1920, 1080), (3840, 2160)] {
+                let frames = (0..4)
+                    .map(|seed| synthetic_camera_frame(format, width, height, seed))
+                    .collect::<Vec<_>>();
+                let source = (width as usize, height as usize);
+                let mut cases = vec![("main (full size)", "any", None)];
+                for (label, physical) in bubbles {
+                    let target = cap_gpui_kernels::camera_preview::quantized_target(physical).map(
+                        |target| {
+                            let (width, height) =
+                                cap_gpui_kernels::camera_preview::cover_dimensions(source, target);
+                            (width as u32, height as u32)
+                        },
+                    );
+                    cases.push(("branch (bubble)", label, target));
+                }
+                for mirrored in [false, true] {
+                    for (path, bubble, max_dims) in &cases {
+                        let mut scaler = None;
+                        let mut samples = Vec::with_capacity(ITERATIONS);
+                        let mut dims = (0, 0);
+                        for iteration in 0..WARMUP + ITERATIONS {
+                            let started = Instant::now();
+                            let (image, output) = camera_preview_image_at(
+                                &frames[iteration % frames.len()],
+                                &mut scaler,
+                                mirrored,
+                                *max_dims,
+                            )
+                            .expect("synthetic frame converts");
+                            let elapsed = started.elapsed().as_secs_f64() * 1e3;
+                            drop(image);
+                            dims = output;
+                            if iteration >= WARMUP {
+                                samples.push(elapsed);
+                            }
+                        }
+                        samples.sort_by(f64::total_cmp);
+                        let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+                        let p50 = samples[samples.len() / 2];
+                        let p95 = samples[samples.len() * 95 / 100];
+                        println!(
+                            "| {format:?} | {width}x{height} | {mirrored} | {path} | {bubble} | {}x{} | {mean:.2} | {p50:.2} | {p95:.2} | {:.2} |",
+                            dims.0,
+                            dims.1,
+                            (dims.0 * dims.1 * 4) as f64 / 1_048_576.0,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
