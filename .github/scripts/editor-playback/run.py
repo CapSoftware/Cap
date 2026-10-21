@@ -15,6 +15,8 @@ variants = [spec.split("=", 1) for spec in specs if spec.startswith("bin:")]
 fixtures = [spec.split("=", 1) for spec in specs if spec.startswith("fix:")]
 variants = [(name[4:], path) for name, path in variants]
 fixtures = [(name[4:], path) for name, path in fixtures]
+if only := os.environ.get("FIXTURES"):
+    fixtures = [item for item in fixtures if item[0] in only.split()]
 os.makedirs(out_dir, exist_ok=True)
 
 draw = re.compile(r"timeline-bench: (\S+) ([\d.]+) mean / ([\d.]+) p50 / ([\d.]+) p95")
@@ -74,7 +76,7 @@ for round_index in range(rounds):
     order = variants if round_index % 2 == 0 else list(reversed(variants))
     for fixture_name, fixture in fixtures:
         for variant, binary in order:
-            for mode in ["bench", "profile"]:
+            for mode in os.environ.get("MODES", "bench profile").split():
                 label = f"{variant}-{fixture_name}-{mode}-r{round_index + 1}"
                 code, lines = launch(binary, fixture, mode, label)
                 print(f"{label}: exit={code}")

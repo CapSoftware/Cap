@@ -41,6 +41,7 @@ pub fn preview() {
 }
 
 pub fn seek(frame: u32) {
+    tracing::info!(target: "cap_probe", frame, "ui seek");
     COUNTERS[7].fetch_add(1, Ordering::Relaxed);
     let mut state = SEEK.lock().unwrap();
     if state.pending.is_none_or(|(pending, _)| pending != frame) {
@@ -49,6 +50,7 @@ pub fn seek(frame: u32) {
 }
 
 pub fn presented(frame: u32) {
+    tracing::info!(target: "cap_probe", frame, "ui presented");
     COUNTERS[8].fetch_add(1, Ordering::Relaxed);
     let mut state = SEEK.lock().unwrap();
     if let Some((pending, at)) = state.pending

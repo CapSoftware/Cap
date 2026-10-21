@@ -771,6 +771,7 @@ impl AVAssetReaderDecoder {
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         crate::probe::add(crate::probe::DEC_IDLE_TEARDOWN, 1);
+                        tracing::info!(target: "cap_probe", "decoder idle teardown");
                         cache.clear();
                         cache_bytes = 0;
                         *last_sent_frame.borrow_mut() = None;
@@ -1026,6 +1027,10 @@ impl AVAssetReaderDecoder {
 
             crate::probe::add(crate::probe::DEC_DECODE_LOOPS, 1);
             crate::probe::add(crate::probe::DEC_REQUESTS, pending_requests.len() as u64);
+            let probe_loop_started = std::time::Instant::now();
+            let probe_min = min_requested_frame;
+            let probe_max = max_requested_frame;
+            let probe_pending = pending_requests.len();
             {
                 let decoder = &mut this.decoders[decoder_idx];
                 let mut frames = decoder.inner.frames();
@@ -1238,6 +1243,18 @@ impl AVAssetReaderDecoder {
                 decoder.is_done = true;
             }
 
+            tracing::info!(
+                target: "cap_probe",
+                path = %path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                min = probe_min,
+                max = probe_max,
+                pending = probe_pending,
+                was_reset,
+                frames_iterated,
+                left = pending_requests.len(),
+                ms = probe_loop_started.elapsed().as_secs_f64() * 1000.0,
+                "decode loop"
+            );
             for request in retry_requests.into_iter().rev() {
                 deferred_requests.push_front(request);
             }

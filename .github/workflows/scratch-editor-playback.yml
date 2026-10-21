@@ -12,9 +12,13 @@ permissions:
   actions: read
 
 env:
-  ROUNDS: "2"
+  ROUNDS: "1"
   SAMPLE: "sample"
   BASE_REF: ""
+  MODES: "profile"
+  FIXTURES: "display camera"
+  ROUNDS_OVERRIDE: "1"
+  RUST_LOG: "warn,cap_gpui=info,cap_probe=info"
 
 jobs:
   fixture:

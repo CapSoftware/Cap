@@ -1130,11 +1130,14 @@ impl EditorInstance {
 
                     let new_cancel_token = CancellationToken::new();
                     prefetch_cancel_token = Some(new_cancel_token.clone());
+                    let probe_started = Instant::now();
+                    tracing::info!(target: "cap_probe", frame_number, "preview request");
 
                     tokio::select! {
                         biased;
 
                         _ = preview_superseded_while_fresh(preview_rx.clone(), last_presented) => {
+                            tracing::info!(target: "cap_probe", frame_number, ms = probe_started.elapsed().as_secs_f64() * 1000.0, "preview superseded during decode");
                             continue;
                         }
 
@@ -1144,7 +1147,9 @@ impl EditorInstance {
                             true,
                             clip_offsets,
                         ) => {
+                            tracing::info!(target: "cap_probe", frame_number, ms = probe_started.elapsed().as_secs_f64() * 1000.0, some = segment_frames_opt.is_some(), "preview decoded");
                             if preview_superseded(&preview_rx, last_presented) {
+                                tracing::info!(target: "cap_probe", frame_number, "preview superseded after decode");
                                 continue;
                             }
 
@@ -1358,6 +1363,7 @@ impl EditorInstance {
                                         )
                                         .await
                                 };
+                                tracing::info!(target: "cap_probe", frame_number, attempt, render_confirmed, ms = probe_started.elapsed().as_secs_f64() * 1000.0, "preview rendered");
                                 if render_confirmed {
                                     rendered = true;
                                     last_presented = Some(Instant::now());
