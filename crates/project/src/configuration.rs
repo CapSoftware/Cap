@@ -3094,6 +3094,10 @@ pub struct ProjectConfiguration {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub markers: Vec<TimelineMarker>,
+    /// Names the user gave timeline lanes, keyed `"<track>:<lane>"` (for
+    /// example `"audio:1"`). Lanes without one show the track's own label.
+    #[serde(default)]
+    pub track_names: std::collections::BTreeMap<String, String>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -3147,6 +3151,7 @@ impl Default for ProjectConfiguration {
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             markers: Vec::new(),
+            track_names: Default::default(),
         }
     }
 }
