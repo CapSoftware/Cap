@@ -324,6 +324,7 @@ mod macos {
     struct Case {
         dims: (usize, usize),
         stats: (f64, f64, f64),
+        cpu_us: f64,
         buffer_bytes: usize,
         output: Vec<u8>,
     }
@@ -340,6 +341,13 @@ mod macos {
             .collect()
     }
 
+    fn process_cpu_us() -> f64 {
+        let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        let micros = |time: libc::timeval| time.tv_sec as f64 * 1e6 + time.tv_usec as f64;
+        micros(usage.ru_utime) + micros(usage.ru_stime)
+    }
+
     fn run_case(
         sources: &[arc::R<cv::PixelBuf>],
         quality_source: &cv::PixelBuf,
@@ -353,7 +361,11 @@ mod macos {
         let scratch = flip.as_ref().map(|_| bgra_ring(1, dims).remove(0));
         let mut stats = Stats::new();
         let mut next = 0;
+        let mut cpu_started = 0.0;
         for iteration in 0..(WARMUP + ITERATIONS) {
+            if iteration == WARMUP {
+                cpu_started = process_cpu_us();
+            }
             let source = &sources[iteration % sources.len()];
             let out = &mut ring[next];
             let started = Instant::now();
@@ -370,6 +382,7 @@ mod macos {
                 stats.push(elapsed);
             }
         }
+        let cpu_us = (process_cpu_us() - cpu_started) / ITERATIONS as f64;
         session
             .transfer(quality_source, &ring[0])
             .expect("quality transfer");
@@ -381,6 +394,7 @@ mod macos {
         Case {
             dims,
             stats: stats.report(),
+            cpu_us,
             buffer_bytes,
             output,
         }
@@ -491,9 +505,9 @@ mod macos {
             ("large 600pt full", (600.0 * 16.0 / 9.0 * 2.0, 1200.0)),
         ];
         println!(
-            "| source | bubble | mirrored | path | output | mean us | p50 us | p95 us | MB written/frame | ring MB | PSNR at bubble size dB |"
+            "| source | bubble | mirrored | path | output | mean us | p50 us | p95 us | process CPU us | MB written/frame | ring MB | PSNR at bubble size dB |"
         );
-        println!("|---|---|---|---|---|---|---|---|---|---|---|");
+        println!("|---|---|---|---|---|---|---|---|---|---|---|---|");
         for (width, height) in [(1280usize, 720usize), (1920, 1080), (3840, 2160)] {
             let sources: Vec<_> = (0..SOURCE_RING)
                 .map(|seed| make_420v_source(width, height, seed as u8))
@@ -524,9 +538,10 @@ mod macos {
                         let (mean, p50, p95) = case.stats;
                         let shown = linear_sample(&case.output, case.dims, displayed);
                         println!(
-                            "| {width}x{height} | {label} | {mirrored} | {path} | {}x{} | {mean:.1} | {p50:.1} | {p95:.1} | {:.2} | {:.1} | {:.2} |",
+                            "| {width}x{height} | {label} | {mirrored} | {path} | {}x{} | {mean:.1} | {p50:.1} | {p95:.1} | {:.1} | {:.2} | {:.1} | {:.2} |",
                             case.dims.0,
                             case.dims.1,
+                            case.cpu_us,
                             mb(case.buffer_bytes * passes),
                             mb(case.buffer_bytes * (slots + scratch)),
                             psnr(&reference, &shown),
