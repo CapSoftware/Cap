@@ -217,9 +217,7 @@ pub struct RgbaToNv12Converter {
     cached_width: u32,
     cached_height: u32,
     cached_stride: u32,
-    cached_bind_groups: Option<[wgpu::BindGroup; 2]>,
-    cached_texture_view: Option<wgpu::TextureView>,
-    cached_texture_ptr: usize,
+    source_bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
     surface_output: bool,
     #[cfg(target_os = "macos")]
     surface_ring: Option<Nv12SurfaceRing>,
@@ -568,9 +566,7 @@ impl RgbaToNv12Converter {
             cached_width: 0,
             cached_height: 0,
             cached_stride: 0,
-            cached_bind_groups: None,
-            cached_texture_view: None,
-            cached_texture_ptr: 0,
+            source_bind_groups: Vec::new(),
             surface_output: false,
             #[cfg(target_os = "macos")]
             surface_ring: None,
@@ -704,9 +700,47 @@ impl RgbaToNv12Converter {
         self.cached_width = width;
         self.cached_height = height;
         self.cached_stride = stride;
-        self.cached_bind_groups = None;
-        self.cached_texture_view = None;
-        self.cached_texture_ptr = 0;
+        self.source_bind_groups.clear();
+    }
+
+    fn source_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        source_texture: &wgpu::Texture,
+    ) -> Option<wgpu::BindGroup> {
+        if let Some((_, bind_group)) = self
+            .source_bind_groups
+            .iter()
+            .find(|(texture, _)| texture == source_texture)
+        {
+            return Some(bind_group.clone());
+        }
+        let nv12_buffer = self.nv12_buffer.as_ref()?;
+        let source_view = source_texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to NV12 Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: nv12_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        if self.source_bind_groups.len() >= 2 {
+            self.source_bind_groups.remove(0);
+        }
+        self.source_bind_groups
+            .push((source_texture.clone(), bind_group.clone()));
+        Some(bind_group)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -727,6 +761,9 @@ impl RgbaToNv12Converter {
 
         self.ensure_buffers(device, width, height);
 
+        let Some(bind_group) = self.source_bind_group(device, source_texture) else {
+            return Ok(false);
+        };
         let Some(nv12_buffer) = self.nv12_buffer.as_ref() else {
             return Ok(false);
         };
@@ -745,51 +782,13 @@ impl RgbaToNv12Converter {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        let texture_ptr = source_texture as *const wgpu::Texture as usize;
-        let needs_rebind =
-            self.cached_texture_ptr != texture_ptr || self.cached_bind_groups.is_none();
-
-        if needs_rebind {
-            let source_view = source_texture.create_view(&Default::default());
-
-            let make_bind_group = |view: &wgpu::TextureView| {
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("RGBA to NV12 Bind Group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: nv12_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: self.params_buffer.as_entire_binding(),
-                        },
-                    ],
-                })
-            };
-
-            let bg0 = make_bind_group(&source_view);
-            let bg1 = make_bind_group(&source_view);
-
-            self.cached_texture_view = Some(source_view);
-            self.cached_bind_groups = Some([bg0, bg1]);
-            self.cached_texture_ptr = texture_ptr;
-        }
-
-        let bind_groups = self.cached_bind_groups.as_ref().unwrap();
-
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("RGBA to NV12 Conversion"),
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_groups[readback_idx], &[]);
+            pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
         }
 
@@ -1670,7 +1669,11 @@ impl PendingReadback {
         RenderingError::BufferMapWaitingFailed
     }
 
-    pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
+    async fn wait(
+        mut self,
+        device: &wgpu::Device,
+        recycled: &mut RecycledReadbackFrames,
+    ) -> Result<RenderedFrame, RenderingError> {
         let start_time = Instant::now();
         let completed = wait_for_submission(
             device,
@@ -1715,7 +1718,12 @@ impl PendingReadback {
         };
         let buffer_slice = self.buffer.slice(..active_bytes as u64);
         let data = buffer_slice.get_mapped_range();
-        let mut data_vec = Vec::with_capacity(active_bytes + 24);
+        let mut data_vec = if self.export_deadlines {
+            recycled.take().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        data_vec.reserve_exact(active_bytes + 24);
         data_vec.extend_from_slice(&data);
 
         drop(data);
@@ -1727,8 +1735,12 @@ impl PendingReadback {
         if let Some(phase) = self.readiness_phase.take() {
             phase.finish("frame_ready");
         }
+        let data = Arc::new(data_vec);
+        if self.export_deadlines {
+            recycled.keep(&data);
+        }
         Ok(RenderedFrame {
-            data: Arc::new(data_vec),
+            data,
             padded_bytes_per_row: self.padded_bytes_per_row,
             width: self.width,
             height: self.height,
@@ -1744,8 +1756,34 @@ impl Drop for PendingReadback {
     }
 }
 
+const MAX_RECYCLED_READBACK_FRAMES: usize = 8;
+
+/// Export readbacks are handed downstream as `Arc<Vec<u8>>`; keeping a clone
+/// lets the next readback reuse a frame once every consumer has dropped it.
+#[derive(Default)]
+struct RecycledReadbackFrames(Vec<Arc<Vec<u8>>>);
+
+impl RecycledReadbackFrames {
+    fn take(&mut self) -> Option<Vec<u8>> {
+        let index = self
+            .0
+            .iter()
+            .position(|data| Arc::strong_count(data) == 1)?;
+        let mut data = Arc::try_unwrap(self.0.swap_remove(index)).ok()?;
+        data.clear();
+        Some(data)
+    }
+
+    fn keep(&mut self, data: &Arc<Vec<u8>>) {
+        if self.0.len() < MAX_RECYCLED_READBACK_FRAMES {
+            self.0.push(Arc::clone(data));
+        }
+    }
+}
+
 pub struct PipelinedGpuReadback {
     buffers: [Arc<wgpu::Buffer>; 3],
+    recycled_frames: RecycledReadbackFrames,
     buffer_size: u64,
     current_index: usize,
     pending: Option<PendingReadback>,
@@ -1768,6 +1806,7 @@ impl PipelinedGpuReadback {
 
         Self {
             buffers: [make_buffer(), make_buffer(), make_buffer()],
+            recycled_frames: RecycledReadbackFrames::default(),
             buffer_size: initial_size,
             current_index: 0,
             pending: None,
@@ -2171,7 +2210,7 @@ pub async fn finish_encoder_timed(
 
     let wait_start = Instant::now();
     let previous_frame = if let Some(prev) = previous {
-        match prev.wait(device).await {
+        match prev.wait(device, &mut readback.recycled_frames).await {
             Ok(frame) => Some(frame),
             Err(error) => {
                 drain_submitted_work(device, queue).await;
@@ -2305,7 +2344,7 @@ pub async fn flush_pending_readback(
 ) -> Option<Result<RenderedFrame, RenderingError>> {
     let readback = session.pipelined_readback.as_mut()?;
     if let Some(pending) = readback.take_pending() {
-        Some(pending.wait(device).await)
+        Some(pending.wait(device, &mut readback.recycled_frames).await)
     } else {
         None
     }
@@ -2359,6 +2398,40 @@ mod readback_output_tests {
     fn empty_readback_dimensions_do_not_access_the_buffer() {
         assert_eq!(active_readback_byte_len(2_048, 0, 3_594_240), None);
         assert_eq!(active_readback_byte_len(0, 270, 3_594_240), None);
+    }
+}
+
+#[cfg(test)]
+mod recycled_readback_tests {
+    use super::*;
+
+    #[test]
+    fn readback_frames_are_reused_only_after_every_consumer_drops_them() {
+        let mut recycled = RecycledReadbackFrames::default();
+        let frame = Arc::new(vec![7u8; 64]);
+        let address = frame.as_ptr();
+        recycled.keep(&frame);
+        let held = frame.clone();
+        drop(frame);
+        assert!(recycled.take().is_none());
+        drop(held);
+        let reused = recycled.take().expect("released frame is reused");
+        assert!(reused.is_empty());
+        assert!(reused.capacity() >= 64);
+        assert_eq!(reused.as_ptr(), address);
+        assert!(recycled.take().is_none());
+    }
+
+    #[test]
+    fn recycled_readback_frames_are_bounded() {
+        let mut recycled = RecycledReadbackFrames::default();
+        let frames: Vec<_> = (0..MAX_RECYCLED_READBACK_FRAMES + 2)
+            .map(|_| Arc::new(vec![0u8; 4]))
+            .collect();
+        for frame in &frames {
+            recycled.keep(frame);
+        }
+        assert_eq!(recycled.0.len(), MAX_RECYCLED_READBACK_FRAMES);
     }
 }
 
@@ -2527,6 +2600,51 @@ mod surface_output_tests {
     /// the readback path maps, so every pixel must match byte-for-byte. Both
     /// strides differ (4-aligned vs 256-aligned vs the IOSurface's own), which
     /// is exactly what this guards.
+    #[tokio::test]
+    async fn alternating_sources_reuse_their_bind_groups() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (width, height) = (64, 32);
+        let first = gradient_texture(&device, &queue, width, height);
+        let second = gradient_texture(&device, &queue, width, height);
+        queue.write_texture(
+            second.as_image_copy(),
+            &[200u8, 40, 90, 255].repeat((width * height) as usize),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let mut expected = Vec::new();
+        for source in [&first, &second] {
+            let mut converter = RgbaToNv12Converter::new(&device);
+            expected.push(convert(&device, &queue, &mut converter, source, width, height).await);
+        }
+        assert_ne!(expected[0].data.as_ref(), expected[1].data.as_ref());
+
+        let mut converter = RgbaToNv12Converter::new(&device);
+        let mut cached = Vec::new();
+        for round in 0..3 {
+            for (source, expected) in [&first, &second].into_iter().zip(&expected) {
+                let frame = convert(&device, &queue, &mut converter, source, width, height).await;
+                assert_eq!(frame.data.as_ref(), expected.data.as_ref());
+            }
+            if round == 0 {
+                cached = converter.source_bind_groups.clone();
+            }
+            assert_eq!(converter.source_bind_groups.len(), 2);
+            assert!(converter.source_bind_groups == cached);
+        }
+    }
+
     #[tokio::test]
     async fn the_surface_output_matches_the_readback_output() {
         let Some((device, queue)) = device() else {
@@ -2703,7 +2821,7 @@ mod surface_output_tests {
         .await;
         assert!(surface_a.surface.is_some());
         assert!(resized_converter.surface_ring.is_some());
-        assert!(resized_converter.cached_bind_groups.is_some());
+        assert!(!resized_converter.source_bind_groups.is_empty());
         assert!(resized_converter.nv12_buffer.is_some());
         assert!(
             resized_converter
