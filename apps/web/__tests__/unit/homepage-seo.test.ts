@@ -103,6 +103,9 @@ describe("homepage SEO", () => {
 		expect(JSON.stringify(discordLinkPreview)).not.toContain(
 			"apple-touch-icon",
 		);
+		expect(
+			discordLinkPreview.component.components[0].components[0].content,
+		).toBe(`# Cap\n${homepageSeo.description}`);
 		expect(discordLinkPreview.component.components[0]).toMatchObject({
 			type: 9,
 			accessory: {

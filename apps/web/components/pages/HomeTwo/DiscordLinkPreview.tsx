@@ -1,5 +1,6 @@
 import { DISCORD_URL } from "@/components/pages/about/content";
 import { homepageOgImageUrl } from "@/components/pages/HomeTwo/metadata";
+import { homepageSeo } from "@/components/pages/HomeTwo/seo";
 
 export const discordLinkPreview = {
 	component: {
@@ -11,8 +12,7 @@ export const discordLinkPreview = {
 				components: [
 					{
 						type: 10,
-						content:
-							"# Cap\nOpen-source screen recording for Mac, Windows, and Linux.",
+						content: `# Cap\n${homepageSeo.description}`,
 					},
 				],
 				accessory: {
