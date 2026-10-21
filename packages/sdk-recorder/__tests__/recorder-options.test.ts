@@ -123,7 +123,12 @@ test.each([
 	const fetch = mock(async (input: string) => {
 		requests.push(input);
 		if (input.endsWith("/videos/create"))
-			return Response.json({ videoId: "test-video" });
+			return Response.json({
+				videoId: "test-video",
+				s3Key: "test-key",
+				shareUrl: "https://cap.so/s/test-video",
+				embedUrl: "https://cap.so/embed/test-video",
+			});
 		if (input.endsWith("/initiate"))
 			return Response.json({ uploadId: "test-upload" });
 		if (input.endsWith("/presign-part"))
