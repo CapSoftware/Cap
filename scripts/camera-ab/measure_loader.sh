@@ -6,7 +6,7 @@ OUT="$RUNNER_TEMP/loader-ab-out"; mkdir -p "$OUT"
 LABEL="$VARIANT-r$ROUND"
 D=$(mktemp -d); mkdir -p "$D/data" "$D/rec"
 LOG="$OUT/$LABEL.log"
-env CAP_GPUI_APP_DATA_DIR="$D/data" CAP_GPUI_RECORDINGS_DIR="$D/rec" CAP_PERF_SKIP_ONBOARDING=1 CAP_PROBE_GPU=1 CAP_PROBE_CAMERA_LOADING=1 RUST_LOG=warn "$BIN" > "$LOG" 2>&1 &
+env CAP_GPUI_APP_DATA_DIR="$D/data" CAP_GPUI_RECORDINGS_DIR="$D/rec" CAP_PERF_SKIP_ONBOARDING=1 CAP_PROBE_GPU=1 CAP_PROBE_CAMERA_LOADING=1 RUST_LOG=warn,gpui_linux=info "$BIN" > "$LOG" 2>&1 &
 PID=$!
 sleep 15
 if ! kill -0 $PID 2>/dev/null; then echo "$LABEL: app exited"; tail -30 "$LOG"; exit 0; fi
@@ -25,6 +25,7 @@ END=$(wc -l < "$LOG")
 WIN=$(sed -n "$((START+1)),${END}p" "$LOG")
 PAINTS=$(echo "$WIN" | grep -o 'LOADERPROBE paints=[0-9]*' | awk -F= -v s=$SECS '{t+=$2} END {printf "%.1f", t/s}')
 GPU=$(echo "$WIN" | grep -o 'GPUPROBE draws=[0-9]*' | awk -F= -v s=$SECS '{t+=$2} END {printf "%.1f", t/s}')
-echo "variant=$VARIANT round=$ROUND cpu=$CPU loading_paints_per_s=$PAINTS gpu_draws_per_s=$GPU" | tee -a "$OUT/summary.txt"
+REFRESH=$(grep -o "Refreshing every [0-9]*ms" "$LOG" | tail -1 | tr " " _)
+echo "variant=$VARIANT round=$ROUND cpu=$CPU loading_paints_per_s=$PAINTS gpu_draws_per_s=$GPU refresh=$REFRESH" | tee -a "$OUT/summary.txt"
 kill $PID; sleep 2; kill -9 $PID 2>/dev/null
 true

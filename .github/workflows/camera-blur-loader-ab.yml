@@ -226,9 +226,23 @@ jobs:
           else
             sw_vers; system_profiler SPDisplaysDataType | grep -E "Chipset|Resolution|Metal|Refresh" || true
           fi
-          for round in 1 2 3 4; do
-            for variant in main fix; do
-              "$RUNNER_TEMP/camera-ab/measure_loader.sh" "$RUNNER_TEMP/bin-$variant/debug/cap-gpui" $variant $round
+          rates="native"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get install -y --no-install-recommends x11-xserver-utils > /dev/null
+            xrandr --newmode m60 148.50 1920 2008 2052 2200 1080 1084 1089 1125 +hsync +vsync
+            xrandr --newmode m120 297.00 1920 2008 2052 2200 1080 1084 1089 1125 +hsync +vsync
+            xrandr --addmode screen m60; xrandr --addmode screen m120
+            rates="native m60 m120"
+          fi
+          for rate in $rates; do
+            if [[ "$rate" != native ]]; then
+              xrandr --output screen --mode $rate
+              xrandr --verbose | grep -E "MHz|current" | head -6
+            fi
+            for round in 1 2 3; do
+              for variant in main fix; do
+                "$RUNNER_TEMP/camera-ab/measure_loader.sh" "$RUNNER_TEMP/bin-$variant/debug/cap-gpui" "$variant@$rate" $round
+              done
             done
           done
           { echo "### ${{ matrix.target }}"; python3 -I "$RUNNER_TEMP/camera-ab/aggregate.py" "$RUNNER_TEMP/loader-ab-out/summary.txt"; } | tee -a "$GITHUB_STEP_SUMMARY"
