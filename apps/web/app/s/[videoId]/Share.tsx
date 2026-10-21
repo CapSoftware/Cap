@@ -504,19 +504,13 @@ export const Share = ({
 			seekOnce(time);
 			return;
 		}
-		let timeoutId: ReturnType<typeof setTimeout> | null = null;
 		const handleReady = () => {
 			seekOnce(time);
 			v.removeEventListener("canplay", handleReady);
 			v.removeEventListener("loadedmetadata", handleReady);
-			if (timeoutId) clearTimeout(timeoutId);
 		};
 		v.addEventListener("canplay", handleReady, { once: true });
 		v.addEventListener("loadedmetadata", handleReady, { once: true });
-		timeoutId = setTimeout(() => {
-			v.removeEventListener("canplay", handleReady);
-			v.removeEventListener("loadedmetadata", handleReady);
-		}, 3000);
 	}, []);
 
 	useEffect(() => {
