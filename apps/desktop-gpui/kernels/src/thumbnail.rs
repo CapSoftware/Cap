@@ -2,7 +2,7 @@ use image::{DynamicImage, RgbaImage};
 use std::borrow::Cow;
 
 const PRESCALE_HEADROOM: u32 = 4;
-const MAX_PRESCALE_FACTOR: u32 = (u16::MAX / u8::MAX as u16) as u32;
+const MAX_PRESCALE_FACTOR: u32 = u8::MAX as u32;
 
 pub fn fit_centered(image: &RgbaImage, target_width: u32, target_height: u32) -> RgbaImage {
     let width = image.width();
@@ -140,12 +140,18 @@ fn box_downscale<const CHANNELS: usize>(
         columns.fill(0);
         accumulate_rows(&mut columns, band);
         let band_rows = band.len() / stride;
+        let full = BlockDivisor::new((band_rows * factor) as u32);
+        let last = BlockDivisor::new((band_rows * (width - (reduced_width - 1) * factor)) as u32);
         for (index, (pixel, block)) in output
             .chunks_exact_mut(4)
             .zip(columns.chunks(factor * CHANNELS))
             .enumerate()
         {
-            let count = (band_rows * factor.min(width - index * factor)) as u32;
+            let divisor = if index + 1 == reduced_width {
+                &last
+            } else {
+                &full
+            };
             let mut sums = [0u32; CHANNELS];
             for source in block.chunks_exact(CHANNELS) {
                 for (sum, &value) in sums.iter_mut().zip(source) {
@@ -153,7 +159,7 @@ fn box_downscale<const CHANNELS: usize>(
                 }
             }
             for (channel, sum) in pixel.iter_mut().zip(sums) {
-                *channel = ((sum + count / 2) / count) as u8;
+                *channel = divisor.rounded(sum);
             }
             if CHANNELS == 3 {
                 pixel[3] = u8::MAX;
@@ -161,6 +167,26 @@ fn box_downscale<const CHANNELS: usize>(
         }
     }
     reduced
+}
+
+/// `(sum + count / 2) / count` by a reciprocal multiply. Exact while
+/// `256 * count^2 < 2^40`, which `MAX_PRESCALE_FACTOR` keeps.
+struct BlockDivisor {
+    half: u32,
+    multiplier: u64,
+}
+
+impl BlockDivisor {
+    fn new(count: u32) -> Self {
+        Self {
+            half: count / 2,
+            multiplier: (1u64 << 40) / u64::from(count) + 1,
+        }
+    }
+
+    fn rounded(&self, sum: u32) -> u8 {
+        ((u64::from(sum + self.half) * self.multiplier) >> 40) as u8
+    }
 }
 
 fn accumulate_rows(columns: &mut [u16], band: &[u8]) {
@@ -665,6 +691,33 @@ mod tests {
         for channel in 0..4 {
             let sum = u32::from(corner[channel]) + u32::from(below[channel]);
             assert_eq!(u32::from(reduced.get_pixel(2, 1)[channel]), (sum + 1) / 2);
+        }
+    }
+
+    #[test]
+    fn block_divisor_rounds_like_integer_division() {
+        let check = |count: u32, sum: u32| {
+            assert_eq!(
+                u32::from(BlockDivisor::new(count).rounded(sum)),
+                (sum + count / 2) / count,
+                "{sum} / {count}"
+            );
+        };
+        for count in 1..=64 {
+            for sum in 0..=255 * count {
+                check(count, sum);
+            }
+        }
+        let max = MAX_PRESCALE_FACTOR * MAX_PRESCALE_FACTOR;
+        for count in (65..=max).step_by(97).chain([max - 1, max]) {
+            for quotient in [0, 1, 127, 128, 254, 255] {
+                for offset in [0, 1, count / 2 - 1, count / 2, count / 2 + 1, count - 1] {
+                    let sum = quotient * count + offset;
+                    if sum <= 255 * count {
+                        check(count, sum);
+                    }
+                }
+            }
         }
     }
 
