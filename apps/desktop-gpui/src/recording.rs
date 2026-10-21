@@ -478,14 +478,13 @@ async fn finalize_studio(
         let thumbnail_started = std::time::Instant::now();
         if let Some(display_path) = studio_display_path(&project_path) {
             write_bundle_thumbnail(&project_path, &display_path);
+            let _ = studio_thumbnail_channel().0.send(());
         }
         tracing::info!(
             elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
             "Studio stop thumbnail complete"
         );
-    })
-    .await
-    .context("studio post-finalize task")?;
+    });
 
     Ok(completed.project_path)
 }
@@ -1450,6 +1449,18 @@ fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
             .map(|segment| segment.display.path.to_path(project_path))?,
     };
     path.is_file().then_some(path)
+}
+
+/// A Studio stop returns before its thumbnail is written, so the library views
+/// that scanned on the way to idle rescan once it lands.
+fn studio_thumbnail_channel() -> &'static (flume::Sender<()>, flume::Receiver<()>) {
+    static CHANNEL: std::sync::OnceLock<(flume::Sender<()>, flume::Receiver<()>)> =
+        std::sync::OnceLock::new();
+    CHANNEL.get_or_init(flume::unbounded)
+}
+
+pub(crate) fn studio_thumbnail_events() -> flume::Receiver<()> {
+    studio_thumbnail_channel().1.clone()
 }
 
 /// Write `<bundle>/screenshots/display.jpg` -- the file both apps' Recents
@@ -3963,6 +3974,60 @@ mod studio_finalization_tests {
         drop(publisher);
         assert!(finalization.wait_for_preparing().await.is_none());
         assert!(finalization.wait().await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn studio_stop_writes_its_thumbnail_after_returning() {
+        use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+
+        let _ = ffmpeg::init();
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-stop-thumbnail-{}.cap",
+            crate::store::new_uuid_v4()
+        ));
+        std::fs::create_dir_all(root.join("content")).unwrap();
+        std::fs::write(
+            root.join("content/display.mp4"),
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        let meta: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "display": { "path": "content/display.mp4", "fps": 30 }
+        }))
+        .unwrap();
+        RecordingMeta {
+            platform: None,
+            project_path: root.clone(),
+            pretty_name: "Stop".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(meta.clone())),
+            upload: None,
+        }
+        .save_for_project()
+        .unwrap();
+        let written = studio_thumbnail_events();
+        while written.try_recv().is_ok() {}
+
+        let completed = studio_recording::CompletedRecording {
+            project_path: root.clone(),
+            meta,
+            cursor_data: Default::default(),
+            clean_stopped: None,
+        };
+        let project = finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None)
+            .await
+            .unwrap();
+        assert_eq!(project, root);
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), written.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        let thumbnail = image::open(crate::library::bundle_thumbnail_path(&root))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(thumbnail.dimensions(), (320, 240));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
