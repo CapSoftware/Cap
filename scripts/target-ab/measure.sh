@@ -27,6 +27,16 @@ if [[ "$SCENARIO" == "move" ]]; then
     done
   ) &
   MOVER=$!
+elif [[ "$SCENARIO" == "focus" ]]; then
+  (
+    i=0
+    while true; do
+      sleep 15
+      i=$((i % 4 + 1))
+      xdotool search --name "^probe-$i$" windowraise 2>/dev/null || true
+    done
+  ) &
+  MOVER=$!
 fi
 START=$(wc -l < "$LOG")
 if [[ "$(uname)" == "Darwin" ]]; then
