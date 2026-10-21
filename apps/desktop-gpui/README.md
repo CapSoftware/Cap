@@ -21,9 +21,12 @@ cargo run
 (the binary), not `cap_desktop_gpui` (the package).
 
 On dual-GPU Macs the renderer and every `cap-rendering` wgpu device follow the
-system's GPU choice by default. `CAP_GPU_PREFERENCE=high` (or
-`performance`/`discrete`) forces the high-performance GPU, and `low` (or
-`integrated`/`battery`) forces the integrated GPU.
+system's GPU choice by default; wgpu matches `MTLCreateSystemDefaultDevice()`
+rather than taking its first Metal adapter. Windows and Linux keep each call
+site's previous preference unless the variable below names a GPU.
+`CAP_GPU_PREFERENCE=high` (or `performance`/`discrete`) forces the
+high-performance GPU, and `low` (or `integrated`/`battery`) forces the integrated
+GPU.
 
 The first build takes about 11 minutes and 6.4 GB of `target/`: gpui pulls its
 own revisions of the wgpu and font stacks. After that, an edit rebuilds only
@@ -804,7 +807,8 @@ ever mirrors the recorded camera track).
 Background blur runs live on preview frames through `src/camera_blur.rs`: a
 dedicated `camera-blur` thread owns its own wgpu device (requested through
 `cap_rendering::gpu_power_preference` like every other renderer and encoder —
-system GPU by default, downlevel limits) and runs the exact
+system GPU by default on macOS, `LowPower` elsewhere, downlevel limits) and runs
+the exact
 `cap_camera_effects::BlurProcessor` the recording's project config points the
 editor at, with the Tauri preview's 640×360 input cap and 150ms inference
 interval. The converter downscales to the cap inside the same hardware

@@ -64,7 +64,9 @@ impl PortableCameraBlur {
             let instance = cap_rendering::create_wgpu_instance_sync();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: cap_rendering::gpu_power_preference(),
+                    power_preference: cap_rendering::gpu_power_preference(
+                        wgpu::PowerPreference::LowPower,
+                    ),
                     force_fallback_adapter: cap_rendering::force_software_wgpu_adapter(),
                     compatible_surface: None,
                 })

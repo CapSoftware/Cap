@@ -218,19 +218,76 @@ pub fn force_software_wgpu_adapter() -> bool {
         })
 }
 
-fn parse_gpu_power_preference(value: &str) -> wgpu::PowerPreference {
-    match value.to_ascii_lowercase().as_str() {
-        "low" | "integrated" | "battery" => wgpu::PowerPreference::LowPower,
-        "high" | "performance" | "discrete" => wgpu::PowerPreference::HighPerformance,
-        _ => wgpu::PowerPreference::None,
+fn parse_gpu_power_preference(value: &str) -> Option<wgpu::PowerPreference> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "low" | "integrated" | "battery" => Some(wgpu::PowerPreference::LowPower),
+        "high" | "performance" | "discrete" => Some(wgpu::PowerPreference::HighPerformance),
+        _ => None,
+    }
+}
+
+fn configured_gpu_power_preference() -> Option<wgpu::PowerPreference> {
+    let value = std::env::var("CAP_GPU_PREFERENCE").ok()?;
+    parse_gpu_power_preference(&value)
+}
+
+fn resolve_gpu_power_preference(
+    configured: Option<wgpu::PowerPreference>,
+    default: wgpu::PowerPreference,
+) -> wgpu::PowerPreference {
+    match configured {
+        Some(preference) => preference,
+        None if cfg!(target_os = "macos") => wgpu::PowerPreference::None,
+        None => default,
     }
 }
 
 /// `CAP_GPU_PREFERENCE` selects the physical GPU when more than one is present.
-/// `low` picks the integrated GPU, `high` picks the high-performance (usually
-/// discrete) GPU, and the default (`system`/`auto`) lets the platform choose.
-pub fn gpu_power_preference() -> wgpu::PowerPreference {
-    parse_gpu_power_preference(&std::env::var("CAP_GPU_PREFERENCE").unwrap_or_default())
+/// `low` picks the integrated GPU and `high` picks the high-performance (usually
+/// discrete) GPU. When it is unset (or `system`/`auto`), macOS follows the
+/// system GPU and every other platform keeps the `default` its call site used
+/// before this override existed.
+pub fn gpu_power_preference(default: wgpu::PowerPreference) -> wgpu::PowerPreference {
+    resolve_gpu_power_preference(configured_gpu_power_preference(), default)
+}
+
+#[cfg(target_os = "macos")]
+fn system_metal_adapter(instance: &wgpu::Instance) -> Option<wgpu::Adapter> {
+    let name = metal::Device::system_default()?.name().to_string();
+    let adapter = instance
+        .enumerate_adapters(wgpu::Backends::METAL)
+        .into_iter()
+        .find(|adapter| adapter.get_info().name == name);
+    if adapter.is_some() {
+        tracing::info!(adapter_name = %name, "Following the system Metal device");
+    } else {
+        tracing::warn!(adapter_name = %name, "System Metal device is not available through wgpu");
+    }
+    adapter
+}
+
+/// wgpu's Metal backend puts low-power devices first, so `PowerPreference::None`
+/// would pick the integrated GPU even when macOS is driving the display from
+/// the discrete one. Match `MTLCreateSystemDefaultDevice()` by name instead.
+async fn request_hardware_adapter(
+    instance: &wgpu::Instance,
+    default: wgpu::PowerPreference,
+) -> Option<wgpu::Adapter> {
+    #[cfg(target_os = "macos")]
+    if configured_gpu_power_preference().is_none()
+        && let Some(adapter) = system_metal_adapter(instance)
+    {
+        return Some(adapter);
+    }
+
+    instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: gpu_power_preference(default),
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .ok()
 }
 
 pub fn create_wgpu_instance_sync() -> wgpu::Instance {
@@ -300,14 +357,7 @@ pub async fn probe_software_adapter() -> Option<(bool, String)> {
     let hardware_adapter = if force_software_adapter {
         None
     } else {
-        instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: gpu_power_preference(),
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .ok()
+        request_hardware_adapter(&instance, wgpu::PowerPreference::HighPerformance).await
     };
 
     let adapter = match hardware_adapter {
@@ -2512,14 +2562,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let hardware_adapter = if force_software_adapter {
         None
     } else {
-        instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: gpu_power_preference(),
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .ok()
+        request_hardware_adapter(&instance, wgpu::PowerPreference::HighPerformance).await
     };
 
     let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
@@ -5223,28 +5266,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gpu_power_preference_defaults_to_system() {
-        for value in ["", "system", "auto", "System"] {
+    fn gpu_power_preference_defaults_follow_the_platform() {
+        let high_performance = wgpu::PowerPreference::HighPerformance;
+        let low_power = wgpu::PowerPreference::LowPower;
+        let expected = |default| {
+            if cfg!(target_os = "macos") {
+                wgpu::PowerPreference::None
+            } else {
+                default
+            }
+        };
+        for value in [None, Some(""), Some("system"), Some("auto"), Some("System")] {
+            let configured = value.and_then(parse_gpu_power_preference);
             assert_eq!(
-                parse_gpu_power_preference(value),
-                wgpu::PowerPreference::None,
-                "{value}"
+                resolve_gpu_power_preference(configured, high_performance),
+                expected(high_performance),
+                "{value:?}"
+            );
+            assert_eq!(
+                resolve_gpu_power_preference(configured, low_power),
+                expected(low_power),
+                "{value:?}"
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_metal_adapter_matches_the_system_default_device() {
+        let instance = create_wgpu_instance_sync();
+        let system = metal::Device::system_default().expect("system Metal device");
+        let adapter = system_metal_adapter(&instance).expect("system Metal adapter");
+        assert_eq!(adapter.get_info().name, system.name());
     }
 
     #[test]
     fn gpu_power_preference_honors_overrides() {
         for value in ["low", "integrated", "battery", "LOW"] {
             assert_eq!(
-                parse_gpu_power_preference(value),
+                resolve_gpu_power_preference(
+                    parse_gpu_power_preference(value),
+                    wgpu::PowerPreference::HighPerformance
+                ),
                 wgpu::PowerPreference::LowPower,
                 "{value}"
             );
         }
         for value in ["high", "performance", "discrete", "HIGH"] {
             assert_eq!(
-                parse_gpu_power_preference(value),
+                resolve_gpu_power_preference(
+                    parse_gpu_power_preference(value),
+                    wgpu::PowerPreference::LowPower
+                ),
                 wgpu::PowerPreference::HighPerformance,
                 "{value}"
             );
