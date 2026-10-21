@@ -573,8 +573,12 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
         // alone may be shrunk to the bubble.
         #[cfg(target_os = "linux")]
         let preview_target = preview_target.filter(|_| recording.is_none());
-        let max_dims = match blur_mode {
-            Some(_) => Some(crate::camera_blur_portable::MAX_DIMS),
+        let output = match blur_mode {
+            Some(_) => crate::camera_blur_portable::fitted_dimensions(
+                frame.inner.width(),
+                frame.inner.height(),
+                crate::camera_blur_portable::MAX_DIMS,
+            ),
             None => preview_target.map(|visible| {
                 let (width, height) =
                     cap_gpui_kernels::camera_preview::cover_dimensions(source_dims, visible);
@@ -583,7 +587,7 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
         };
         let layout_dims = blur_mode.is_none().then_some(source_dims);
         let Some((mut image, dims)) =
-            camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
+            camera_preview_image_at(&frame.inner, &mut scaler, requested_mirror, output)
         else {
             #[cfg(target_os = "linux")]
             if let Some(recording) = &recording {
@@ -1438,19 +1442,35 @@ impl Feeds {
     }
 }
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(test)]
 pub(crate) fn camera_preview_image(
     frame: &ffmpeg::frame::Video,
     scaler: &mut Option<ffmpeg::software::scaling::Context>,
     mirrored: bool,
     max_dims: Option<(u32, u32)>,
 ) -> Option<(Arc<gpui::RenderImage>, (usize, usize))> {
+    let output = match max_dims {
+        Some(max) => Some(crate::camera_blur_portable::fitted_dimensions(
+            frame.width(),
+            frame.height(),
+            max,
+        )?),
+        None => None,
+    };
+    camera_preview_image_at(frame, scaler, mirrored, output)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+pub(crate) fn camera_preview_image_at(
+    frame: &ffmpeg::frame::Video,
+    scaler: &mut Option<ffmpeg::software::scaling::Context>,
+    mirrored: bool,
+    output: Option<(u32, u32)>,
+) -> Option<(Arc<gpui::RenderImage>, (usize, usize))> {
     let source_width = frame.width();
     let source_height = frame.height();
-    let (width, height) = match max_dims {
-        Some(max) => {
-            crate::camera_blur_portable::fitted_dimensions(source_width, source_height, max)?
-        }
+    let (width, height) = match output {
+        Some(output) => output,
         None if source_width > 0 && source_height > 0 => (source_width, source_height),
         None => return None,
     };
@@ -2259,7 +2279,7 @@ mod tests {
                         let mut dims = (0, 0);
                         for iteration in 0..WARMUP + ITERATIONS {
                             let started = Instant::now();
-                            let (image, output) = camera_preview_image(
+                            let (image, output) = camera_preview_image_at(
                                 &frames[iteration % frames.len()],
                                 &mut scaler,
                                 mirrored,

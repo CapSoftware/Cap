@@ -21,10 +21,12 @@ pub fn cover_dimensions(source: (usize, usize), target: (usize, usize)) -> (usiz
     if scale >= 1.0 {
         return source;
     }
-    (
-        ((width as f64 * scale).round() as usize).clamp(1, width),
-        ((height as f64 * scale).round() as usize).clamp(1, height),
-    )
+    // Even sizes: swscale forces full-resolution chroma interpolation for an
+    // odd output width, which measured 2-4x slower than the even width beside
+    // it (camera_preview_scale_benchmark, Windows and Linux CI).
+    let even =
+        |extent: usize| ((extent as f64 * scale / 2.0).round() as usize * 2).clamp(2, extent);
+    (even(width), even(height))
 }
 
 #[cfg(test)]
@@ -57,11 +59,12 @@ mod tests {
 
     #[test]
     fn cover_dimensions_fill_the_target_and_keep_the_source_aspect() {
-        assert_eq!(cover_dimensions((1920, 1080), (480, 480)), (853, 480));
-        assert_eq!(cover_dimensions((3840, 2160), (480, 480)), (853, 480));
+        assert_eq!(cover_dimensions((1920, 1080), (480, 480)), (854, 480));
+        assert_eq!(cover_dimensions((3840, 2160), (480, 480)), (854, 480));
+        assert_eq!(cover_dimensions((1920, 1080), (960, 960)), (1706, 960));
         assert_eq!(cover_dimensions((1920, 1080), (960, 540)), (960, 540));
         assert_eq!(cover_dimensions((1440, 1080), (960, 540)), (960, 720));
-        assert_eq!(cover_dimensions((1080, 1920), (480, 480)), (480, 853));
+        assert_eq!(cover_dimensions((1080, 1920), (480, 480)), (480, 854));
         for source in [
             (1280, 720),
             (1920, 1080),
@@ -71,6 +74,9 @@ mod tests {
         ] {
             for target in [(270, 270), (480, 480), (960, 540), (1080, 1080)] {
                 let (width, height) = cover_dimensions(source, target);
+                if (width, height) != source {
+                    assert_eq!((width % 2, height % 2), (0, 0));
+                }
                 assert!(width >= target.0.min(source.0));
                 assert!(height >= target.1.min(source.1));
                 let aspect = source.0 as f64 / source.1 as f64;
