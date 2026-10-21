@@ -458,6 +458,13 @@ fn language_picker_english() {
 }
 
 #[test]
+fn the_picker_shows_in_debug_builds() {
+    if cfg!(debug_assertions) {
+        assert!(picker_enabled());
+    }
+}
+
+#[test]
 fn system_tags_resolve_to_catalogs() {
     for (tag, expected) in [
         ("en-US", Some(Locale::En)),

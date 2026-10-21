@@ -2981,9 +2981,12 @@ impl SettingsWindow {
     // -- The General page --------------------------------------------------
 
     fn render_general(&self, window: &Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        vec![
-            self.render_appearance(cx).into_any_element(),
-            self.render_language(cx).into_any_element(),
+        let mut sections = Vec::with_capacity(10);
+        sections.push(self.render_appearance(cx).into_any_element());
+        if i18n::picker_enabled() {
+            sections.push(self.render_language(cx).into_any_element());
+        }
+        sections.extend([
             self.render_app_section(cx).into_any_element(),
             self.render_recording(cx).into_any_element(),
             self.render_storage(cx).into_any_element(),
@@ -2992,7 +2995,8 @@ impl SettingsWindow {
             self.render_updates(cx).into_any_element(),
             self.render_self_host(window, cx).into_any_element(),
             self.render_privacy(cx).into_any_element(),
-        ]
+        ]);
+        sections
     }
 
     /// `AppearanceSection` -- `theme`.

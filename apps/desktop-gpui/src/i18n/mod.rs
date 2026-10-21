@@ -13,6 +13,10 @@ pub const SETTING_KEY: &str = "uiLanguage";
 /// `CAP_GPUI_LOCALE=ja` (or `pseudo` in a debug build).
 pub const LOCALE_ENV: &str = "CAP_GPUI_LOCALE";
 const SYSTEM_SETTING: &str = "system";
+/// Shows the language picker in a release build. Release builds hide it until
+/// the main surfaces are translated; `uiLanguage` and [`LOCALE_ENV`] work
+/// either way.
+pub const PICKER_ENV: &str = "CAP_GPUI_LANGUAGE_PICKER";
 
 static CURRENT: AtomicU8 = AtomicU8::new(Locale::En as u8);
 
@@ -52,6 +56,14 @@ impl Preference {
     pub fn options() -> impl Iterator<Item = Self> {
         std::iter::once(Self::System).chain(Locale::ALL.into_iter().map(Self::Fixed))
     }
+}
+
+/// Read once: the General page asks on every render.
+pub fn picker_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        cfg!(debug_assertions) || std::env::var(PICKER_ENV).is_ok_and(|value| value == "1")
+    })
 }
 
 /// Before the first lookup: `main` calls this ahead of the theme, menus and
