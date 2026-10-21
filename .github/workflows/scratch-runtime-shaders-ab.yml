@@ -3,7 +3,30 @@ on:
   push:
     branches: [ci/runtime-shaders-ab]
 jobs:
+  toolchain:
+    if: ${{ contains(github.event.head_commit.message, 'toolchain') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Metal toolchain probe
+        run: |
+          set +e
+          sw_vers; uname -m
+          xcode-select -p
+          xcodebuild -version
+          ls /Applications | grep -i xcode
+          printf '#include <metal_stdlib>\nusing namespace metal;\nvertex float4 v(uint i [[vertex_id]]) { return float4(0); }\n' > "$RUNNER_TEMP/probe.metal"
+          xcrun -sdk macosx metal -mmacosx-version-min=10.15.7 -c "$RUNNER_TEMP/probe.metal" -o "$RUNNER_TEMP/probe.air"
+          echo "metal_exit=$?"
+          xcrun -sdk macosx metallib "$RUNNER_TEMP/probe.air" -o "$RUNNER_TEMP/probe.metallib"
+          echo "metallib_exit=$?"
+          ls -l "$RUNNER_TEMP"/probe.*
+          true
   ab:
+    if: ${{ !contains(github.event.head_commit.message, 'toolchain') }}
     strategy:
       fail-fast: false
       matrix:
