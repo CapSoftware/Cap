@@ -15,6 +15,7 @@ env:
   ROUNDS: "2"
   SAMPLE: "sample"
   BASE_REF: ""
+  APP_OPT: "1"
 
 jobs:
   fixture:
@@ -84,10 +85,11 @@ jobs:
             local variant=$1 ref=$2
             git checkout -f "$ref" -- apps crates
             git status --short | head -20
-            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target aarch64-apple-darwin --bin cap-gpui \
-              --config 'profile.dev.package.cap-desktop-gpui.opt-level=3' \
-              --config 'profile.dev.package.cap-desktop-gpui.incremental=false' \
-              --config 'profile.dev.package.cap-desktop-gpui.debug="line-tables-only"' || return 1
+            local opts=()
+            if [[ "$APP_OPT" != "0" ]]; then
+              opts=(--config "profile.dev.package.cap-desktop-gpui.opt-level=$APP_OPT" --config 'profile.dev.package.cap-desktop-gpui.incremental=false')
+            fi
+            /usr/bin/time -l cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target aarch64-apple-darwin --bin cap-gpui "${opts[@]}" || return 1
             mkdir -p "$RUNNER_TEMP/bin-$variant/debug"
             cp apps/desktop-gpui/target/aarch64-apple-darwin/debug/cap-gpui "$RUNNER_TEMP/bin-$variant/debug/cap-gpui"
             ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/bin-$variant/Frameworks"
