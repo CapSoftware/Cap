@@ -9,5 +9,6 @@ publish = false
 [dependencies]
 block = "0.1"
 core-foundation = "0.10"
+foreign-types = "0.5"
 core-video = { version = "0.5.2", features = ["metal"] }
 metal = "0.33"

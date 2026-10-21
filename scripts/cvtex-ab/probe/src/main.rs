@@ -13,6 +13,7 @@ use core_video::pixel_buffer::{
     CVPixelBuffer, CVPixelBufferKeys, kCVPixelFormatType_32BGRA,
     kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
 };
+use foreign_types::ForeignTypeRef;
 use metal::{MTLOrigin, MTLPixelFormat, MTLSize, TextureDescriptor};
 
 unsafe extern "C" {
