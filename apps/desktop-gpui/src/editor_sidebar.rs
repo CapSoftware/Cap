@@ -596,6 +596,36 @@ fn noise_texture(width: u32, height: u32, base_frequency: f32) -> Arc<RenderImag
     )]))
 }
 
+#[derive(Default)]
+struct NoiseCache {
+    current: Option<(i32, Arc<RenderImage>)>,
+    retired: Vec<Arc<RenderImage>>,
+}
+
+impl NoiseCache {
+    fn image(&mut self, scale: f32) -> Arc<RenderImage> {
+        let key = scale.round() as i32;
+        if let Some((cached, image)) = &self.current
+            && *cached == key
+        {
+            return image.clone();
+        }
+        let image = noise_texture(
+            GRADIENT_PREVIEW_WIDTH as u32,
+            GRADIENT_PREVIEW_HEIGHT as u32,
+            noise_base_frequency(scale),
+        );
+        if let Some((_, previous)) = self.current.replace((key, image.clone())) {
+            self.retired.push(previous);
+        }
+        image
+    }
+
+    fn take_retired(&mut self) -> Vec<Arc<RenderImage>> {
+        std::mem::take(&mut self.retired)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -787,7 +817,7 @@ pub struct SidebarState {
     /// The gradient preview's grain, cached by the grain-scale step it was
     /// generated for -- regenerating 42k pixels of noise on every frame of a
     /// slider drag would be the one expensive thing in this panel.
-    noise: std::cell::RefCell<Option<(i32, Arc<RenderImage>)>>,
+    noise: std::cell::RefCell<NoiseCache>,
 
     /// The open `KSelect`'s menu, if any -- one slot for every select in the
     /// sidebar, the settings window's `Menu.popup()` stand-in.
@@ -876,7 +906,7 @@ impl SidebarState {
             cursor_previews: std::cell::RefCell::new(BTreeMap::new()),
             cursor_scale: 2.,
             panel_sections: std::cell::RefCell::new(HashMap::new()),
-            noise: std::cell::RefCell::new(None),
+            noise: std::cell::RefCell::default(),
             menu: None,
             caption_model: "best",
             caption_language: "auto",
@@ -905,19 +935,16 @@ impl SidebarState {
 
     /// The grain texture for a grain-scale value, generated once per step.
     fn noise_image(&self, scale: f32) -> Arc<RenderImage> {
-        let key = scale.round() as i32;
-        if let Some((cached, image)) = self.noise.borrow().as_ref()
-            && *cached == key
-        {
-            return image.clone();
+        self.noise.borrow_mut().image(scale)
+    }
+
+    /// Evicts the grain textures earlier steps of a slider drag left in the
+    /// window's atlas. The panel is built without a `&mut Window`, so they
+    /// are queued there and released from `render` on the next frame.
+    pub(crate) fn release_retired_images(&self, window: &mut Window) {
+        for image in self.noise.borrow_mut().take_retired() {
+            let _ = window.drop_image(image);
         }
-        let image = noise_texture(
-            GRADIENT_PREVIEW_WIDTH as u32,
-            GRADIENT_PREVIEW_HEIGHT as u32,
-            noise_base_frequency(scale),
-        );
-        *self.noise.borrow_mut() = Some((key, image.clone()));
-        image
     }
 
     /// The stored track rect, without creating one -- the pointer maths reads
@@ -2137,7 +2164,9 @@ impl EditorWindow {
     /// selected path.
     fn ensure_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.preview_path() else {
-            self.sidebar.preview = None;
+            if let Some((_, previous)) = self.sidebar.preview.take() {
+                let _ = window.drop_image(previous);
+            }
             return;
         };
         if self
@@ -2157,8 +2186,10 @@ impl EditorWindow {
                     .await
             };
             let Some(image) = decoded else { return };
-            this.update(cx, |this, cx| {
-                this.sidebar.preview = Some((target, image));
+            this.update_in(cx, |this, window, cx| {
+                if let Some((_, previous)) = this.sidebar.preview.replace((target, image)) {
+                    let _ = window.drop_image(previous);
+                }
                 cx.notify();
             })
             .ok();
@@ -4069,6 +4100,24 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_grain_step_retires_the_old_texture_for_atlas_eviction() {
+        let mut noise = NoiseCache::default();
+        let first = noise.image(20.);
+        assert!(Arc::ptr_eq(&noise.image(20.2), &first));
+        assert!(noise.take_retired().is_empty());
+
+        let second = noise.image(35.);
+        let third = noise.image(50.);
+        assert!(!Arc::ptr_eq(&second, &first));
+        let retired = noise.take_retired();
+        assert_eq!(retired.len(), 2);
+        assert!(Arc::ptr_eq(&retired[0], &first));
+        assert!(Arc::ptr_eq(&retired[1], &second));
+        assert!(noise.take_retired().is_empty());
+        assert!(Arc::ptr_eq(&noise.image(50.), &third));
+    }
 
     #[test]
     fn the_catalogue_matches_the_source() {

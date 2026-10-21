@@ -1107,7 +1107,7 @@ impl ScreenshotEditorWindow {
         if self.bg_tab == BgTab::Wallpaper {
             self.ensure_wallpapers(cx);
         }
-        self.ensure_background_image(cx);
+        self.ensure_background_image(window, cx);
         if let Ok(dest) = std::env::var("CAP_GPUI_AUTO_SCREENSHOT_EXPORT")
             && !dest.trim().is_empty()
         {
@@ -1271,7 +1271,7 @@ impl ScreenshotEditorWindow {
         {
             self.selected_annotation = None;
         }
-        self.ensure_background_image(cx);
+        self.ensure_background_image(window, cx);
         self.publish();
         self.schedule_save(window, cx);
         self.refresh_mask_overlays(window, cx);
@@ -1505,9 +1505,11 @@ impl ScreenshotEditorWindow {
 
     /// The Image tab's `h-48` preview. Decoded off-thread and cached by path,
     /// so switching tabs does not re-read the file.
-    fn ensure_background_image(&mut self, cx: &mut Context<Self>) {
+    fn ensure_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let BackgroundSource::Image { path: Some(path) } = &self.project.background.source else {
-            self.bg_image = None;
+            if let Some((_, previous)) = self.bg_image.take() {
+                let _ = window.drop_image(previous);
+            }
             return;
         };
         if self
@@ -1518,7 +1520,7 @@ impl ScreenshotEditorWindow {
             return;
         }
         let path = path.clone();
-        self.bg_image_task = Some(cx.spawn(async move |this, cx| {
+        self.bg_image_task = Some(cx.spawn_in(window, async move |this, cx| {
             let decoded = cx
                 .background_executor()
                 .spawn({
@@ -1526,8 +1528,11 @@ impl ScreenshotEditorWindow {
                     async move { decode_preview_image(Path::new(&path)) }
                 })
                 .await;
-            this.update(cx, |this, cx| {
-                this.bg_image = decoded.map(|image| (path, image));
+            this.update_in(cx, |this, window, cx| {
+                let next = decoded.map(|image| (path, image));
+                if let Some((_, previous)) = std::mem::replace(&mut this.bg_image, next) {
+                    let _ = window.drop_image(previous);
+                }
                 cx.notify();
             })
             .ok();
@@ -1550,7 +1555,7 @@ impl ScreenshotEditorWindow {
                     window,
                     cx,
                 );
-                this.ensure_background_image(cx);
+                this.ensure_background_image(window, cx);
             })
             .ok();
         })
@@ -3284,7 +3289,7 @@ impl ScreenshotEditorWindow {
             window,
             cx,
         );
-        self.ensure_background_image(cx);
+        self.ensure_background_image(window, cx);
     }
 
     fn render_wallpaper_tab(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -3484,7 +3489,7 @@ impl ScreenshotEditorWindow {
                             window,
                             cx,
                         );
-                        this.ensure_background_image(cx);
+                        this.ensure_background_image(window, cx);
                     })),
             )
             .into_any_element()
