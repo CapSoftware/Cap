@@ -39,6 +39,10 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libegl1 libegl-mesa0 libgl1-mesa-dri
 
+      - name: Allow long paths in Zed's git dependencies
+        if: ${{ runner.os == 'Windows' }}
+        run: git config --global core.longpaths true
+
       - uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Prepare GPUI dependency
