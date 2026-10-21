@@ -10,8 +10,8 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          - target: x86_64-unknown-linux-gnu
-            runner: blacksmith-8vcpu-ubuntu-2404
+          - target: x86_64-pc-windows-msvc
+            runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
     runs-on: ${{ matrix.settings.runner }}
@@ -20,6 +20,7 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
+      RUST_BACKTRACE: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -135,7 +136,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: identity-${{ matrix.settings.target }}
+          name: identity-${{ matrix.settings.runner }}
           path: ${{ runner.temp }}/ab/*.log
       - name: Export benchmark, base vs head
         shell: bash
