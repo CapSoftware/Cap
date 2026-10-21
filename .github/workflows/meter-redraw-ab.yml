@@ -19,8 +19,10 @@ jobs:
         include:
           - runner: blacksmith-6vcpu-macos-26
             target: aarch64-apple-darwin
+            cache-key: v1-rust-meter-ab-macos26
           - runner: blacksmith-8vcpu-ubuntu-2404
             target: x86_64-unknown-linux-gnu
+            cache-key: v1-rust-gpui
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     env:
@@ -58,8 +60,8 @@ jobs:
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.target }}
-          prefix-key: v1-rust-gpui
-          save-cache: false
+          prefix-key: ${{ matrix.cache-key }}
+          save-cache: ${{ runner.os == 'macOS' }}
           workspaces: apps/desktop-gpui -> target
 
       - name: Setup
