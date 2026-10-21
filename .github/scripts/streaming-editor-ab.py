@@ -4,13 +4,15 @@ import statistics
 import subprocess
 import sys
 
+sys.stdout.reconfigure(encoding="utf-8")
+
 binary, fixture, rounds, label = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 prefix = sys.argv[5:]
 
 draw = re.compile(r"timeline-bench: (\S+) [\d.]+ mean / ([\d.]+) p50 / ([\d.]+) p95")
 extra = re.compile(
     r"timeline-bench-ab: (\S+) presented=(\d+) rendered=(\d+) convert_avg_us=([\d.]+) "
-    r"cpu_s=([\d.]+) wall_s=([\d.]+) cpu_pct=([\d.]+)"
+    r"cpu_s=([\d.]+) wall_s=([\d.]+) cpu_pct=([\d.]+) main_cpu_pct=([\d.]+)"
 )
 
 results = {"0": [], "1": []}
@@ -49,10 +51,12 @@ for round_index in range(rounds):
                 rendered=int(match[3]),
                 convert=float(match[4]),
                 cpu_pct=float(match[7]),
+                main_cpu_pct=float(match[8]),
             )
         print(f"round {round_index + 1} STREAMING_IMAGE={mode} exit={code}")
         print("\n".join(line for line in out.splitlines() if "timeline-bench" in line))
         if not scenarios:
+            print("stdout tail:\n" + "\n".join(out.splitlines()[-60:]))
             print("stderr tail:\n" + "\n".join(err.splitlines()[-40:]))
         results[mode].append(scenarios)
         sys.stdout.flush()
@@ -64,8 +68,8 @@ def median(mode, scenario, key):
 lines = [
     f"### {label}",
     "",
-    "| scenario | draw p50 µs (off → on) | draw p95 µs | convert avg µs | process CPU % | frames presented | runs |",
-    "|---|---|---|---|---|---|---|",
+    "| scenario | draw p50 µs (off → on) | draw p95 µs | convert avg µs | process CPU % | main-thread CPU % | frames presented | runs |",
+    "|---|---|---|---|---|---|---|---|",
 ]
 scenario_names = []
 for runs in results.values():
@@ -76,7 +80,7 @@ for runs in results.values():
 fmt = lambda value, digits=0: "n/a" if value is None else f"{value:.{digits}f}"
 for name in scenario_names:
     cells = []
-    for key, digits in [("p50", 0), ("p95", 0), ("convert", 1), ("cpu_pct", 1), ("presented", 0)]:
+    for key, digits in [("p50", 0), ("p95", 0), ("convert", 1), ("cpu_pct", 1), ("main_cpu_pct", 1), ("presented", 0)]:
         off, on = median("0", name, key), median("1", name, key)
         delta = ""
         if off and on is not None and key != "presented":
@@ -91,5 +95,5 @@ table = "\n".join(lines) + "\n"
 print(table)
 summary = os.environ.get("GITHUB_STEP_SUMMARY")
 if summary:
-    with open(summary, "a") as handle:
+    with open(summary, "a", encoding="utf-8") as handle:
         handle.write(table + "\n")

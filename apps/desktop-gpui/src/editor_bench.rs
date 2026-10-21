@@ -139,6 +139,12 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         std::process::exit(1);
     };
     println!("{header}");
+    if let Ok(Some(specs)) = handle.update(cx, |_, window, _| window.gpu_specs()) {
+        println!(
+            "timeline-bench-gpu: {} / {} / {} software={}",
+            specs.device_name, specs.driver_name, specs.driver_info, specs.is_software_emulated
+        );
+    }
 
     for scenario in [
         Scenario::Tick,
@@ -168,6 +174,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
                 measured_from = Some((
                     Instant::now(),
                     process_cpu_seconds(),
+                    main_thread_cpu_seconds(),
                     stats.as_ref().map(|stats| stats.snapshot()),
                 ));
             }
@@ -207,15 +214,16 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             std::process::exit(1);
         }
         draw_bench::report("timeline-bench", scenario.label(), &mut draw_us);
-        if let Some((started, cpu_before, before)) = measured_from {
+        if let Some((started, cpu_before, main_before, before)) = measured_from {
             let wall = started.elapsed().as_secs_f64();
             let cpu = process_cpu_seconds() - cpu_before;
+            let main_cpu = main_thread_cpu_seconds() - main_before;
             let delta = match (stats.as_ref(), before) {
                 (Some(stats), Some(before)) => Some(stats.snapshot().since(before)),
                 _ => None,
             };
             println!(
-                "timeline-bench-ab: {} presented={} rendered={} convert_avg_us={:.1} cpu_s={:.3} wall_s={:.3} cpu_pct={:.1}",
+                "timeline-bench-ab: {} presented={} rendered={} convert_avg_us={:.1} cpu_s={:.3} wall_s={:.3} cpu_pct={:.1} main_cpu_pct={:.1}",
                 scenario.label(),
                 delta.map_or(0, |delta| delta.presented),
                 delta.map_or(0, |delta| delta.rendered),
@@ -223,6 +231,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
                 cpu,
                 wall,
                 cpu / wall.max(0.001) * 100.0,
+                main_cpu / wall.max(0.001) * 100.0,
             );
         }
         println!(
@@ -256,6 +265,38 @@ fn process_cpu_seconds() -> f64 {
     unsafe {
         GetProcessTimes(
             GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    let seconds = |time: FILETIME| {
+        ((time.dwHighDateTime as u64) << 32 | time.dwLowDateTime as u64) as f64 / 1e7
+    };
+    seconds(kernel) + seconds(user)
+}
+
+#[cfg(unix)]
+fn main_thread_cpu_seconds() -> f64 {
+    let mut time = unsafe { std::mem::zeroed::<libc::timespec>() };
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    time.tv_sec as f64 + time.tv_nsec as f64 / 1e9
+}
+
+#[cfg(windows)]
+fn main_thread_cpu_seconds() -> f64 {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::Threading::{GetCurrentThread, GetThreadTimes},
+    };
+    let mut creation = unsafe { std::mem::zeroed::<FILETIME>() };
+    let mut exit = unsafe { std::mem::zeroed::<FILETIME>() };
+    let mut kernel = unsafe { std::mem::zeroed::<FILETIME>() };
+    let mut user = unsafe { std::mem::zeroed::<FILETIME>() };
+    unsafe {
+        GetThreadTimes(
+            GetCurrentThread(),
             &mut creation,
             &mut exit,
             &mut kernel,
