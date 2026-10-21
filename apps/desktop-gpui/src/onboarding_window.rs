@@ -1421,7 +1421,7 @@ impl OnboardingWindow {
                                     18.,
                                 ))
                                 .child(
-                                    copy(*feature, 13., paper.ink).font_weight(FontWeight::NORMAL),
+                                    copy(feature(), 13., paper.ink).font_weight(FontWeight::NORMAL),
                                 )
                         }),
                     )),
