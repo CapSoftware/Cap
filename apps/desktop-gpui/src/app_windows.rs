@@ -553,6 +553,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             cx.update(|cx| {
                 crate::tray::refresh_previous(cx);
                 refresh_library_after_delete(cx);
+                crate::menus::recheck_pending_quit(cx);
             });
         }
     })

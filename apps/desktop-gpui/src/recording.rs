@@ -474,11 +474,12 @@ async fn finalize_studio(
     }
 
     let project_path = completed.project_path.clone();
+    let pending = PendingStudioThumbnail::new();
     tokio::task::spawn_blocking(move || {
+        let _pending = pending;
         let thumbnail_started = std::time::Instant::now();
         if let Some(display_path) = studio_display_path(&project_path) {
             write_bundle_thumbnail(&project_path, &display_path);
-            let _ = studio_thumbnail_channel().0.send(());
         }
         tracing::info!(
             elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
@@ -1451,8 +1452,28 @@ fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// A Studio stop returns before its thumbnail is written, so the library views
-/// that scanned on the way to idle rescan once it lands.
+static PENDING_STUDIO_THUMBNAILS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// A Studio stop returns before its thumbnail is written: quit waits while one
+/// is pending, and the library views that scanned on the way to idle rescan
+/// once it lands.
+struct PendingStudioThumbnail;
+
+impl PendingStudioThumbnail {
+    fn new() -> Self {
+        PENDING_STUDIO_THUMBNAILS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for PendingStudioThumbnail {
+    fn drop(&mut self) {
+        PENDING_STUDIO_THUMBNAILS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        let _ = studio_thumbnail_channel().0.send(());
+    }
+}
+
 fn studio_thumbnail_channel() -> &'static (flume::Sender<()>, flume::Receiver<()>) {
     static CHANNEL: std::sync::OnceLock<(flume::Sender<()>, flume::Receiver<()>)> =
         std::sync::OnceLock::new();
@@ -1461,6 +1482,10 @@ fn studio_thumbnail_channel() -> &'static (flume::Sender<()>, flume::Receiver<()
 
 pub(crate) fn studio_thumbnail_events() -> flume::Receiver<()> {
     studio_thumbnail_channel().1.clone()
+}
+
+pub(crate) fn studio_thumbnails_pending() -> bool {
+    PENDING_STUDIO_THUMBNAILS.load(std::sync::atomic::Ordering::Acquire) > 0
 }
 
 /// Write `<bundle>/screenshots/display.jpg` -- the file both apps' Recents
@@ -4023,6 +4048,7 @@ mod studio_finalization_tests {
             .await
             .unwrap()
             .unwrap();
+        assert!(!studio_thumbnails_pending());
         let thumbnail = image::open(crate::library::bundle_thumbnail_path(&root))
             .unwrap()
             .into_rgb8();
