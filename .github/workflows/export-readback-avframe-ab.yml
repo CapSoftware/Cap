@@ -107,7 +107,7 @@ jobs:
               CAP_AB_HASH_FILE="$ab/$variant-$res.input" CAP_AB_REPORT="$ab/identity.txt" RUST_LOG=warn \
                 "$exe" "$proj" mp4 "{\"fps\":30,\"resolution_base\":{\"x\":$w,\"y\":$h},\"compression\":\"Maximum\",\"custom_bpp\":null}" > "$ab/$variant-$res.log" 2>&1
               echo "$variant $res exit $?"
-              tail -3 "$ab/$variant-$res.log"
+              tr '\r' '\n' < "$ab/$variant-$res.log" | grep -v "^Exporting frame" | tail -40
               cp "$proj/output/result.mp4" "$ab/$variant-$res.mp4"
               ffmpeg -hide_banner -loglevel error -i "$ab/$variant-$res.mp4" -map 0:v:0 -c copy -f md5 - > "$ab/$variant-$res.stream"
               ffmpeg -hide_banner -loglevel error -i "$ab/$variant-$res.mp4" -map 0:v:0 -f framemd5 - | grep -v '^#' > "$ab/$variant-$res.frames"
@@ -132,6 +132,11 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ "$ok" != 1 ]]; then echo "::error::base and head outputs differ"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: identity-${{ matrix.settings.target }}
+          path: ${{ runner.temp }}/ab/*.log
       - name: Export benchmark, base vs head
         shell: bash
         run: |
@@ -150,6 +155,7 @@ jobs:
               CAP_AB_REPORT="$ab/bench-$variant.txt" RUST_LOG="cap_export=info,cap_enc_ffmpeg=info" \
                 "$bin/$variant/export-benchmark-runner" quick --duration 10 > "$ab/bench-$variant-$round.log" 2>&1
               echo "exit $?"
+              grep -iE -B2 -A8 "panicked|error" "$ab/bench-$variant-$round.log" | head -60
               grep -E "Completed in|NV12 export loop stats|AB_EXPORT|Selected hardware|SOFTWARE|Status:" "$ab/bench-$variant-$round.log"
             done
           done
