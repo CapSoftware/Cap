@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { importedVideos, videos, videoUploads } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import {
 	and,
@@ -14,9 +15,13 @@ import {
 	sql,
 } from "drizzle-orm";
 import { start } from "workflow/api";
+import {
+	isLoomImportRunning,
+	LoomImportStartError,
+	startLoomImportWorkflow,
+} from "@/lib/loom-import-start";
 import { setVideoProcessingError } from "@/lib/video-processing";
 import { WORKFLOW_UPGRADE_ERROR_FRAGMENT } from "@/lib/workflow-recovery";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 export const VIDEO_PROCESSING_RECOVERY_BATCH_SIZE = 20;
@@ -129,6 +134,8 @@ async function recoverLoomCandidate({
 	loomVideoId,
 	rawFileKey: existingRawFileKey,
 	phase,
+	uploadUpdatedAt,
+	receipt,
 }: {
 	videoId: Video.VideoId;
 	userId: string;
@@ -136,9 +143,13 @@ async function recoverLoomCandidate({
 	loomVideoId: string;
 	rawFileKey: string | null;
 	phase: "uploading" | "error";
+	uploadUpdatedAt: Date;
+	receipt: VideoMetadata["loomImportRun"];
 }): Promise<FailedVideoProcessingRecoveryStatus> {
+	if (await isLoomImportRunning(receipt)) return "already-claimed";
 	const rawFileKey =
 		existingRawFileKey ?? `${userId}/${videoId}/raw-upload.mp4`;
+	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	const claimResult = await db()
 		.update(videoUploads)
 		.set({
@@ -147,12 +158,13 @@ async function recoverLoomCandidate({
 			processingMessage: LOOM_IMPORT_RECOVERY_MESSAGE,
 			processingError: null,
 			rawFileKey,
-			updatedAt: new Date(),
+			updatedAt: claimedAt,
 		})
 		.where(
 			and(
 				eq(videoUploads.videoId, videoId),
 				eq(videoUploads.phase, phase),
+				eq(videoUploads.updatedAt, uploadUpdatedAt),
 				...(phase === "error"
 					? [
 							eq(videoUploads.rawFileKey, rawFileKey),
@@ -170,19 +182,20 @@ async function recoverLoomCandidate({
 	}
 
 	try {
-		await start(importLoomVideoWorkflow, [
-			{
-				videoId,
-				userId,
-				rawFileKey,
-				bucketId,
-				loomDownloadUrl: "",
-				loomVideoId,
-				reuseExistingRawUpload: phase === "error",
-			},
-		]);
+		await startLoomImportWorkflow({
+			videoId,
+			userId,
+			rawFileKey,
+			bucketId,
+			loomDownloadUrl: "",
+			loomVideoId,
+			reuseExistingRawUpload: phase === "error",
+		});
 		return "started";
 	} catch (error) {
+		if (!(error instanceof LoomImportStartError) || !error.canRetry) {
+			return "already-claimed";
+		}
 		const message = error instanceof Error ? error.message : String(error);
 		if (phase === "error") {
 			await db()
@@ -199,6 +212,7 @@ async function recoverLoomCandidate({
 					and(
 						eq(videoUploads.videoId, videoId),
 						eq(videoUploads.phase, "processing"),
+						eq(videoUploads.updatedAt, claimedAt),
 						eq(videoUploads.rawFileKey, rawFileKey),
 						eq(videoUploads.processingMessage, LOOM_IMPORT_RECOVERY_MESSAGE),
 					),
@@ -220,6 +234,7 @@ async function recoverLoomCandidate({
 				and(
 					eq(videoUploads.videoId, videoId),
 					eq(videoUploads.phase, "processing"),
+					eq(videoUploads.updatedAt, claimedAt),
 					eq(videoUploads.rawFileKey, rawFileKey),
 					eq(videoUploads.processingMessage, LOOM_IMPORT_RECOVERY_MESSAGE),
 				),
@@ -243,6 +258,8 @@ export async function recoverFailedVideoProcessing({
 			bucketId: videos.bucket,
 			loomVideoId: importedVideos.sourceId,
 			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
+			metadata: videos.metadata,
 		})
 		.from(videos)
 		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
@@ -273,6 +290,8 @@ export async function recoverFailedVideoProcessing({
 			orgId: videos.orgId,
 			bucketId: videos.bucket,
 			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
+			metadata: videos.metadata,
 		})
 		.from(videos)
 		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
@@ -374,6 +393,8 @@ export async function recoverFailedVideoProcessing({
 					loomVideoId: candidate.loomVideoId,
 					rawFileKey: candidate.rawFileKey,
 					phase: candidate.phase,
+					uploadUpdatedAt: candidate.uploadUpdatedAt,
+					receipt: candidate.metadata?.loomImportRun,
 				});
 			} catch (error) {
 				status = "failed";
