@@ -558,10 +558,37 @@ fn clipboard_file_path(path: &std::path::Path) -> Result<std::path::PathBuf, Str
     Ok(path)
 }
 
+// Prepares finish in completion order, not click order, so only the newest
+// request may write: an older copy finishing late must not replace a newer one.
+struct ClipboardWrites {
+    latest: std::sync::atomic::AtomicU64,
+}
+
+impl ClipboardWrites {
+    const fn new() -> Self {
+        Self {
+            latest: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn request(&self) -> u64 {
+        self.latest
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+    }
+
+    fn is_current(&self, id: u64) -> bool {
+        self.latest.load(std::sync::atomic::Ordering::SeqCst) == id
+    }
+}
+
+static CLIPBOARD_WRITES: ClipboardWrites = ClipboardWrites::new();
+
 pub fn copy_image_to_clipboard(
     path: std::path::PathBuf,
     cx: &gpui::App,
 ) -> gpui::Task<Result<(), String>> {
+    let id = CLIPBOARD_WRITES.request();
     cx.spawn(async move |cx| {
         let image = cx
             .background_executor()
@@ -571,7 +598,13 @@ pub fn copy_image_to_clipboard(
                 prepare_clipboard_image(bytes)
             })
             .await?;
-        cx.update(|cx| write_clipboard_image(image, cx))
+        cx.update(|cx| {
+            if !CLIPBOARD_WRITES.is_current(id) {
+                tracing::debug!("skipping a superseded clipboard image write");
+                return Ok(());
+            }
+            write_clipboard_image(image, cx)
+        })
     })
 }
 
@@ -2957,6 +2990,52 @@ mod tests {
         let (requests, receiver) = super::NativeQuitRequests::new();
         drop(receiver);
         assert!(!requests.request());
+    }
+
+    #[test]
+    fn newest_clipboard_request_wins() {
+        let writes = super::ClipboardWrites::new();
+        let a = writes.request();
+        let b = writes.request();
+        assert!(!writes.is_current(a));
+        assert!(writes.is_current(b));
+    }
+
+    #[test]
+    fn completed_clipboard_write_does_not_invalidate_a_later_request() {
+        let writes = super::ClipboardWrites::new();
+        let a = writes.request();
+        assert!(writes.is_current(a));
+        let b = writes.request();
+        assert!(writes.is_current(b));
+        assert!(!writes.is_current(a));
+    }
+
+    #[test]
+    fn concurrent_clipboard_requests_get_distinct_ids_and_only_the_newest_is_current() {
+        let writes = std::sync::Arc::new(super::ClipboardWrites::new());
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let writes = writes.clone();
+                std::thread::spawn(move || writes.request())
+            })
+            .collect();
+        let mut ids: Vec<u64> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids, (1..=8).collect::<Vec<_>>());
+        let current: Vec<_> = ids.iter().filter(|id| writes.is_current(**id)).collect();
+        assert_eq!(current, [&8]);
+    }
+
+    #[test]
+    fn clipboard_request_ids_increase_from_one() {
+        let writes = super::ClipboardWrites::new();
+        let ids: Vec<_> = (0..4).map(|_| writes.request()).collect();
+        assert_eq!(ids, [1, 2, 3, 4]);
     }
 
     #[test]
