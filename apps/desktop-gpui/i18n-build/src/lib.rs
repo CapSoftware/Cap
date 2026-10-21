@@ -180,6 +180,7 @@ pub const LOCALES: &[LocaleSpec] = &[
     },
 ];
 
+#[derive(Debug)]
 pub struct Output {
     pub code: String,
     pub warnings: Vec<String>,
