@@ -384,8 +384,19 @@ mod frame {
     pub struct Converted {
         pub buffer: arc::R<cv::PixelBuf>,
         pub dims: (usize, usize),
+        /// What the window lays itself out for: the camera's own size when
+        /// the frame was only shrunk to the bubble, so the rounding of a
+        /// cover target never nudges the window's aspect.
+        pub layout_dims: (usize, usize),
         pub generation: u64,
         pub mirrored: bool,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Target {
+        Source,
+        Fit((usize, usize)),
+        Cover((usize, usize)),
     }
 
     // Handed from the conversion thread to the main thread once written; the
@@ -518,21 +529,32 @@ mod frame {
         }
 
         /// The frame as a BGRA IOSurface-backed pixel buffer, downscaled to
-        /// fit `max_dims` when given and horizontally flipped when
-        /// `mirrored`. Recreates the rings when the camera's frame size, the
-        /// target size or the mirror toggle changes, or when `force_rebuild`
-        /// asks for a fresh rotation session (keeping the generation count
-        /// rising so no earlier ring can alias a new one).
+        /// fit inside a maximum size or to just cover the bubble per
+        /// `target`, and horizontally flipped when `mirrored`. Recreates the
+        /// rings when the camera's frame size, the target size or the mirror
+        /// toggle changes, or when `force_rebuild` asks for a fresh rotation
+        /// session (keeping the generation count rising so no earlier ring
+        /// can alias a new one).
         pub fn convert(
             this: &mut Option<Self>,
             frame: &cap_recording::NativeCameraFrame,
-            max_dims: Option<(usize, usize)>,
+            target: Target,
             mirrored: bool,
             force_rebuild: bool,
         ) -> Option<Converted> {
             let src = frame.sample_buf.image_buf()?;
             let src_dims = (src.width(), src.height());
-            let dst_dims = max_dims.map_or(src_dims, |max| fit_within(src_dims, max));
+            let dst_dims = match target {
+                Target::Source => src_dims,
+                Target::Fit(max) => fit_within(src_dims, max),
+                Target::Cover(visible) => {
+                    cap_gpui_kernels::camera_preview::cover_dimensions(src_dims, visible)
+                }
+            };
+            let layout_dims = match target {
+                Target::Cover(_) => src_dims,
+                Target::Source | Target::Fit(_) => dst_dims,
+            };
             if force_rebuild
                 || this.as_ref().is_none_or(|converter| {
                     converter.src_dims != src_dims
@@ -566,6 +588,7 @@ mod frame {
             Some(Converted {
                 buffer: out,
                 dims: converter.dst_dims,
+                layout_dims,
                 generation: converter.generation,
                 mirrored: converter.flip_session.is_some(),
             })
@@ -1460,8 +1483,20 @@ struct ConvertJob {
 struct ConvertSettings {
     epoch: u64,
     blur_mode: Option<cap_camera_effects::BlurMode>,
+    preview_target: Option<(usize, usize)>,
     mirrored: bool,
     rebuilds: u64,
+}
+
+#[cfg(target_os = "macos")]
+impl ConvertSettings {
+    fn target(&self) -> frame::Target {
+        match (self.blur_mode, self.preview_target) {
+            (Some(_), _) => frame::Target::Fit(camera_blur::BLUR_MAX_DIMS),
+            (None, Some(visible)) => frame::Target::Cover(visible),
+            (None, None) => frame::Target::Source,
+        }
+    }
 }
 
 /// The `camera-preview-convert` thread. The VideoToolbox transfer (and the
@@ -1470,6 +1505,10 @@ struct ConvertSettings {
 #[cfg(target_os = "macos")]
 struct ConvertBridge {
     tx: flume::Sender<ConvertJob>,
+    /// The thread's own queue, so a newer frame can evict one still waiting
+    /// there. `None` when the thread could not be spawned: holding a receiver
+    /// would keep the channel connected and hide the inline fallback.
+    queued: Option<flume::Receiver<ConvertJob>>,
     _pump: gpui::Task<()>,
 }
 
@@ -1488,11 +1527,10 @@ fn run_preview_conversion(
         let settings = job.settings;
         let force_rebuild = rebuilds.is_some_and(|rebuilds| rebuilds != settings.rebuilds);
         rebuilds = Some(settings.rebuilds);
-        let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
         let result = frame::FrameConverter::convert(
             &mut converter,
             &job.frame,
-            max_dims,
+            settings.target(),
             settings.mirrored,
             force_rebuild,
         );
@@ -1852,34 +1890,18 @@ impl CameraWindow {
             if failures_before != self.effect_failures {
                 self.sync_effect_feedback(cx);
             }
-            let job = ConvertJob {
-                frame,
-                settings: self.convert_settings(epoch),
-            };
-            match self.ensure_convert_bridge(window, cx).tx.try_send(job) {
-                // A full queue means the thread is mid-conversion; it picks up
-                // the next frame.
-                Ok(()) | Err(flume::TrySendError::Full(_)) => {}
-                Err(flume::TrySendError::Disconnected(job)) => {
-                    let settings = job.settings;
-                    let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
-                    let force_rebuild = self
-                        .fallback_rebuilds
-                        .is_some_and(|rebuilds| rebuilds != settings.rebuilds);
-                    self.fallback_rebuilds = Some(settings.rebuilds);
-                    let converted = frame::FrameConverter::convert(
-                        &mut self.fallback_converter,
-                        &job.frame,
-                        max_dims,
-                        settings.mirrored,
-                        force_rebuild,
-                    );
-                    self.converted_arrived(converted, settings, window, cx);
-                }
+            // The same occlusion test gpui's display link runs on: a window
+            // failing it presents nothing, so converting (or blurring) for it
+            // is wasted. The next frame after it is shown converts again.
+            if self.inline || platform::window_is_presenting(window) {
+                self.queue_conversion(frame, epoch, window, cx);
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            Feeds::global(cx)
+                .read(cx)
+                .set_camera_preview_target(self.preview_target(window));
             let first_frame = self.frame_dims.is_none();
             let dims_changed = self.frame_dims != Some(frame.dims);
             self.frame_dims = Some(frame.dims);
@@ -1945,10 +1967,57 @@ impl CameraWindow {
     }
 
     #[cfg(target_os = "macos")]
-    fn convert_settings(&self, epoch: u64) -> ConvertSettings {
+    fn queue_conversion(
+        &mut self,
+        frame: cap_recording::NativeCameraFrame,
+        epoch: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let job = ConvertJob {
+            frame,
+            settings: self.convert_settings(epoch, window),
+        };
+        let bridge = self.ensure_convert_bridge(window, cx);
+        let sent = match bridge.tx.try_send(job) {
+            Err(flume::TrySendError::Full(job)) => {
+                if let Some(queued) = &bridge.queued {
+                    let _ = queued.try_recv();
+                }
+                bridge.tx.try_send(job)
+            }
+            sent => sent,
+        };
+        match sent {
+            Ok(()) | Err(flume::TrySendError::Full(_)) => {}
+            Err(flume::TrySendError::Disconnected(job)) => {
+                let settings = job.settings;
+                let force_rebuild = self
+                    .fallback_rebuilds
+                    .is_some_and(|rebuilds| rebuilds != settings.rebuilds);
+                self.fallback_rebuilds = Some(settings.rebuilds);
+                let converted = frame::FrameConverter::convert(
+                    &mut self.fallback_converter,
+                    &job.frame,
+                    settings.target(),
+                    settings.mirrored,
+                    force_rebuild,
+                );
+                self.converted_arrived(converted, settings, window, cx);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn convert_settings(&self, epoch: u64, window: &Window) -> ConvertSettings {
+        let blur_mode = self.active_blur_mode();
         ConvertSettings {
             epoch,
-            blur_mode: self.active_blur_mode(),
+            blur_mode,
+            preview_target: blur_mode
+                .is_none()
+                .then(|| self.preview_target(window))
+                .flatten(),
             mirrored: self.state.mirrored,
             rebuilds: self.convert_rebuilds,
         }
@@ -1965,7 +2034,7 @@ impl CameraWindow {
         let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
             return;
         };
-        if settings != self.convert_settings(epoch) {
+        if settings != self.convert_settings(epoch, window) {
             return;
         }
         let blur_mode = settings.blur_mode;
@@ -1977,8 +2046,8 @@ impl CameraWindow {
             self.effect_failures.mirror = self.state.mirrored && !converted.mirrored;
             let first_frame = self.frame_dims.is_none();
             let dims = converted.dims;
-            let dims_changed = self.frame_dims != Some(dims);
-            self.frame_dims = Some(dims);
+            let dims_changed = self.frame_dims != Some(converted.layout_dims);
+            self.frame_dims = Some(converted.layout_dims);
 
             let mut paint_raw = blur_mode.is_none();
             if let Some(mode) = blur_mode {
@@ -2036,16 +2105,21 @@ impl CameraWindow {
     fn ensure_convert_bridge(&mut self, window: &Window, cx: &mut Context<Self>) -> &ConvertBridge {
         if self.convert.is_none() {
             let (job_tx, job_rx) = flume::bounded::<ConvertJob>(1);
+            let queued = job_rx.clone();
             let (out_tx, out_rx) = flume::bounded(1);
-            if let Err(error) = std::thread::Builder::new()
+            let queued = match std::thread::Builder::new()
                 .name("camera-preview-convert".into())
                 .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || run_preview_conversion(job_rx, out_tx))
             {
-                // job_rx is gone; the caller's try_send sees Disconnected and
-                // converts inline.
-                tracing::warn!("camera preview conversion thread failed to spawn: {error}");
-            }
+                Ok(_) => Some(queued),
+                Err(error) => {
+                    // job_rx is gone; the caller's try_send sees Disconnected
+                    // and converts inline.
+                    tracing::warn!("camera preview conversion thread failed to spawn: {error}");
+                    None
+                }
+            };
             let pump = cx.spawn_in(window, async move |this, cx| {
                 while let Ok((converted, settings)) = out_rx.recv_async().await {
                     if this
@@ -2060,6 +2134,7 @@ impl CameraWindow {
             });
             self.convert = Some(ConvertBridge {
                 tx: job_tx,
+                queued,
                 _pump: pump,
             });
         }
@@ -2154,6 +2229,27 @@ impl CameraWindow {
             preview.cutout_frame = output.cutout;
         });
         first
+    }
+
+    /// The bubble in physical pixels, rounded up to a fixed step so resizing
+    /// rebuilds the conversion rings only at step boundaries: the size camera
+    /// frames are shrunk to cover. The larger of the requested and the
+    /// current window size, so a frame converted mid-resize still covers
+    /// either. `None` (full size) while the target overlays draw the preview
+    /// inline, possibly on displays of another scale.
+    fn preview_target(&self, window: &Window) -> Option<(usize, usize)> {
+        if self.inline {
+            return None;
+        }
+        let (width, height) = self
+            .picker_size
+            .unwrap_or_else(|| window_size(&self.state, self.frame_aspect()));
+        let viewport = window.viewport_size();
+        let scale = window.scale_factor().max(1.);
+        cap_gpui_kernels::camera_preview::quantized_target((
+            width.max(f32::from(viewport.width)) * scale,
+            (height.max(f32::from(viewport.height)) - CAMERA_TOOLBAR_HEIGHT) * scale,
+        ))
     }
 
     fn frame_aspect(&self) -> Option<f32> {

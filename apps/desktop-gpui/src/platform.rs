@@ -643,7 +643,7 @@ mod mac {
     use gpui::Window;
     use objc2::rc::Id;
     use objc2::runtime::{AnyObject, Sel};
-    use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
+    use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior, NSWindowOcclusionState};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{ForcedAppearance, MaterialKind, PanelBehavior};
@@ -990,6 +990,17 @@ mod mac {
         if let Some(ns_window) = ns_window(window) {
             rerun_occlusion_handler(&ns_window);
         }
+    }
+
+    /// Whether AppKit reports the window visible: the `occlusionState` test
+    /// gpui's display link starts and stops on (with the shim above), so a
+    /// window failing it draws nothing until it passes again.
+    pub fn window_is_presenting(window: &Window) -> bool {
+        ns_window(window).is_none_or(|ns_window| {
+            ns_window
+                .occlusionState()
+                .contains(NSWindowOcclusionState::Visible)
+        })
     }
 
     fn rerun_occlusion_handler(ns_window: &NSWindow) {
