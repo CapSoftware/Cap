@@ -1,1 +1,0 @@
-ALTER TABLE `loops_sync_jobs` ADD `teammateJoinedAt` datetime;

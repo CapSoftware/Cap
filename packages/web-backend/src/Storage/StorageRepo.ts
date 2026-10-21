@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { decrypt, encrypt } from "@cap/database/crypto";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows as getAffectedRows, nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import {
 	type Organisation,
@@ -10,7 +10,6 @@ import {
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
-
 import { Database } from "../Database.ts";
 
 export const getObjectKeyHash = (key: string) =>
@@ -64,16 +63,6 @@ export type StorageObjectUpdate = Omit<
 	StorageObjectInput,
 	"integrationId" | "ownerId" | "videoId" | "objectKey"
 >;
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 	effect: Effect.gen(function* () {
@@ -337,7 +326,11 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 						db
 							.insert(Db.storageObjects)
 							.values(value)
-							.onDuplicateKeyUpdate({
+							.onConflictDoUpdate({
+								target: [
+									Db.storageObjects.integrationId,
+									Db.storageObjects.objectKeyHash,
+								],
 								set: {
 									providerObjectId: value.providerObjectId,
 									uploadSessionUrl: value.uploadSessionUrl,
@@ -433,11 +426,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 								contentLength: input.contentLength ?? null,
 								metadata: input.metadata ?? null,
 							})
-							.onDuplicateKeyUpdate({
-								set: {
-									id: Dz.sql`${Db.storageObjects.id}`,
-								},
-							}),
+							.onConflictDoNothing(),
 					);
 
 					const object = yield* getObjectByKey(
@@ -502,7 +491,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 						db
 							.update(Db.storageObjects)
 							.set({
-								metadata: Dz.sql`JSON_SET(COALESCE(${Db.storageObjects.metadata}, JSON_OBJECT()), '$.fileName', ${fileName})`,
+								metadata: Dz.sql`jsonb_set(COALESCE(${Db.storageObjects.metadata}, '{}'::jsonb), '{fileName}', to_jsonb(${fileName}::text))`,
 								updatedAt: new Date(),
 							})
 							.where(
@@ -542,21 +531,15 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 						.where(
 							Dz.and(
 								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								// The collation-aware LIKE is a superset of the BINARY match and is
-								// what lets MySQL range-scan integration_object_key_prefix_idx;
-								// the BINARY LIKE keeps the result case-sensitive.
 								prefixPattern
 									? Dz.like(Db.storageObjects.objectKey, prefixPattern)
 									: undefined,
-								prefixPattern
-									? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${prefixPattern}`
-									: undefined,
 								continuationToken
-									? Dz.sql`BINARY ${Db.storageObjects.objectKey} > BINARY ${continuationToken}`
+									? Dz.sql`${Db.storageObjects.objectKey} COLLATE "C" > ${continuationToken}`
 									: undefined,
 							),
 						)
-						.orderBy(Dz.sql`BINARY ${Db.storageObjects.objectKey}`)
+						.orderBy(Dz.sql`${Db.storageObjects.objectKey} COLLATE "C"`)
 						.limit(pageSize + 1);
 					const page = objects.slice(0, pageSize);
 					return {

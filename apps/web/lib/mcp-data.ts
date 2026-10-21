@@ -54,7 +54,7 @@ export const listMcpCaps = async (
 				eq(videos.ownerId, userId),
 				isNull(organizations.tombstoneAt),
 				search
-					? sql`${videos.name} LIKE ${`%${escapeAgentLikePattern(search)}%`} ESCAPE '!'`
+					? sql`${videos.name} ILIKE ${`%${escapeAgentLikePattern(search)}%`} ESCAPE '!'`
 					: undefined,
 				cursor
 					? or(

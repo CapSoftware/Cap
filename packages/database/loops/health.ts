@@ -1,4 +1,5 @@
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import type pg from "pg";
+import { connectCapDatabase } from "./connection";
 
 export type LoopsHealth = {
 	healthy: boolean;
@@ -16,14 +17,14 @@ const expectedHolds = [
 ];
 
 export async function readQueueHealth(
-	database: Connection,
+	database: pg.ClientBase,
 ): Promise<LoopsHealth> {
-	const [rows] = await database.query<RowDataPacket[]>(
-		{
-			sql: "SELECT COUNT(*) AS totalJobs,COALESCE(SUM(nextAttemptAt<DATE_SUB(UTC_TIMESTAMP(),INTERVAL 5 MINUTE) AND COALESCE(lastError,'') NOT IN (?)),0) AS overdueJobs,COALESCE(SUM(failures>=3 AND COALESCE(lastError,'') NOT IN (?)),0) AS failingJobs FROM loops_sync_jobs",
-			timeout: 10_000,
-		},
-		[expectedHolds, expectedHolds],
+	const { rows } = await database.query(
+		`SELECT COUNT(*) AS "totalJobs",
+			COALESCE(SUM(CASE WHEN "nextAttemptAt" < timezone('utc', now()) - interval '5 minutes' AND COALESCE("lastError", '') <> ALL($1::text[]) THEN 1 ELSE 0 END), 0) AS "overdueJobs",
+			COALESCE(SUM(CASE WHEN failures >= 3 AND COALESCE("lastError", '') <> ALL($1::text[]) THEN 1 ELSE 0 END), 0) AS "failingJobs"
+		FROM loops_sync_jobs`,
+		[expectedHolds],
 	);
 	const totalJobs = Number(rows[0]?.totalJobs);
 	const overdueJobs = Number(rows[0]?.overdueJobs);
@@ -57,11 +58,7 @@ export async function readLoopsHealth(): Promise<LoopsHealth> {
 			failingJobs: 0,
 		};
 	if (!process.env.DATABASE_URL) throw new Error("missing_database_url");
-	const database = await mysql.createConnection({
-		uri: process.env.DATABASE_URL,
-		timezone: "Z",
-		connectTimeout: 10_000,
-	});
+	const database = await connectCapDatabase(process.env.DATABASE_URL);
 	try {
 		return await readQueueHealth(database);
 	} finally {

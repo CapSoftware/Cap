@@ -10,7 +10,7 @@ services:
     image: ghcr.io/capsoftware/cap-web:latest
     restart: unless-stopped
     environment:
-      DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
+      DATABASE_URL: 'postgres://postgres:postgres@postgres:5432/cap'
       WEB_URL: http://localhost:3000
       NEXTAUTH_URL: http://localhost:3000
       # CHANGE THESE TO YOUR OWN VALUES
@@ -30,24 +30,20 @@ services:
     ports:
       - 3000:3000
 
-  ps-mysql:
+  postgres:
     container_name: cap-primary-db
-    image: mysql:8.0
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      # CHANGE THESE TO YOUR OWN VALUES - BE SURE TO SET A PASSWORD FOR THE ROOT USER
-      MYSQL_DATABASE: planetscale
-      MYSQL_ROOT_HOST: "%"
-      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
-    command:
-      [
-        "--max_connections=1000",
-        "--default-authentication-plugin=mysql_native_password",
-      ]
+      # CHANGE THESE TO YOUR OWN VALUES AND KEEP DATABASE_URL ABOVE IN SYNC
+      POSTGRES_DB: cap
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: ["postgres", "-c", "max_connections=200"]
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - ps-mysql:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
 
   cap-media-server:
     container_name: cap-media-server
@@ -85,7 +81,7 @@ services:
       - minio-data:/bitnami/minio/data
       - minio-certs:/certs
 volumes:
-  ps-mysql:
+  postgres-data:
   # REMOVE THESE IF YOU ARE NOT USING MINIO VIA THIS DOCKER COMPOSE FILE
   minio-data:
   minio-certs:

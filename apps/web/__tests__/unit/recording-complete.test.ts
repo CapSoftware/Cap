@@ -1,4 +1,4 @@
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { Context, Next } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -237,7 +237,7 @@ describe("recording completion acknowledgement", () => {
 		expect(response.status).toBe(404);
 		const [condition] = mocks.where.mock.calls[0] ?? [];
 		if (!condition) throw new Error("Missing owned-video query");
-		expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
+		expect(new PgDialect().sqlToQuery(condition).params).toEqual([
 			"id",
 			"recording",
 			"ownerId",

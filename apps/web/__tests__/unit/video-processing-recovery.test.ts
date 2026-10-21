@@ -36,10 +36,12 @@ vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...conditions: unknown[]) => conditions),
 	asc: vi.fn((value: unknown) => value),
 	eq: vi.fn((left: unknown, right: unknown) => ({ left, right })),
+	ilike: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	isNotNull: vi.fn((value: unknown) => value),
 	isNull: vi.fn((value: unknown) => value),
 	like: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	lte: vi.fn((left: unknown, right: unknown) => ({ left, right })),
+	notIlike: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	notLike: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	or: vi.fn((...conditions: unknown[]) => conditions),
 	sql: vi.fn(),
@@ -96,7 +98,7 @@ function makeUpdateChain(affectedRows: number) {
 	};
 	chain.update.mockReturnValue(chain);
 	chain.set.mockReturnValue(chain);
-	chain.where.mockResolvedValue([{ affectedRows }]);
+	chain.where.mockResolvedValue({ rowCount: affectedRows });
 	return chain;
 }
 

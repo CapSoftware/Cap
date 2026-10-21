@@ -215,11 +215,11 @@ AUTHENTICATION:
 
 SELF-HOSTING:
 - Cap can be fully self-hosted on your own infrastructure
-- Docker Compose setup with: Cap Web (Next.js), MySQL 8.0, MinIO (S3-compatible storage), Media Server (FFmpeg processing)
+- Docker Compose setup with: Cap Web (Next.js), PostgreSQL 16, MinIO (S3-compatible storage), Media Server (FFmpeg processing)
 - Deployment options: Docker Compose on any VPS, Railway (one-click), Coolify
 - Docs at https://cap.so/self-hosting
 - Desktop app can point to a self-hosted server via Settings > General > Self Host
-- Required: WEB_URL, DATABASE_ENCRYPTION_KEY, NEXTAUTH_SECRET, MYSQL_PASSWORD, S3 configuration
+- Required: WEB_URL, DATABASE_ENCRYPTION_KEY, NEXTAUTH_SECRET, POSTGRES_PASSWORD, S3 configuration
 - Optional: email sending (Resend), AI features (AssemblyAI, Groq/OpenAI), Google OAuth, SSO
 
 REFERRAL PROGRAM:

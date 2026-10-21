@@ -80,7 +80,10 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 					await tx
 						.insert(Db.videoProcessingJobs)
 						.values({ videoId: id, ownerId, createdAt: now, ...retired })
-						.onDuplicateKeyUpdate({ set: retired });
+						.onConflictDoUpdate({
+							target: Db.videoProcessingJobs.videoId,
+							set: retired,
+						});
 					const [video] = await tx
 						.select({ ownerId: Db.videos.ownerId })
 						.from(Db.videos)

@@ -1,10 +1,10 @@
 import type { User } from "@cap/web-domain";
 import { sql } from "drizzle-orm";
-import type { MySql2Database } from "drizzle-orm/mysql2";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { loopsSyncJobs } from "../schema";
 
 export async function enqueueLoopsSync(
-	database: Pick<MySql2Database, "insert">,
+	database: Pick<NodePgDatabase, "insert">,
 	userId: User.UserId,
 	teammateJoined = false,
 ) {
@@ -13,16 +13,21 @@ export async function enqueueLoopsSync(
 		.insert(loopsSyncJobs)
 		.values({
 			userId,
-			nextAttemptAt: sql`UTC_TIMESTAMP()`,
-			...(teammateJoined ? { teammateJoinedAt: sql`UTC_TIMESTAMP()` } : {}),
+			nextAttemptAt: sql`timezone('utc', now())`,
+			...(teammateJoined
+				? { teammateJoinedAt: sql`timezone('utc', now())` }
+				: {}),
 		})
-		.onDuplicateKeyUpdate({
+		.onConflictDoUpdate({
+			target: loopsSyncJobs.userId,
 			set: {
 				revision: sql`${loopsSyncJobs.revision} + 1`,
-				nextAttemptAt: sql`UTC_TIMESTAMP()`,
+				nextAttemptAt: sql`timezone('utc', now())`,
 				failures: 0,
 				lastError: null,
-				...(teammateJoined ? { teammateJoinedAt: sql`UTC_TIMESTAMP()` } : {}),
+				...(teammateJoined
+					? { teammateJoinedAt: sql`timezone('utc', now())` }
+					: {}),
 			},
 		});
 }

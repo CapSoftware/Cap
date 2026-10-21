@@ -78,6 +78,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						folders.color,
 						folders.spaceId,
 						videos.folderId,
+						videoUploads.videoId,
 					)
 					.orderBy(desc(videos.effectiveCreatedAt))
 			: await db()
@@ -111,6 +112,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						folders.color,
 						folders.spaceId,
 						videos.folderId,
+						videoUploads.videoId,
 					)
 					.orderBy(desc(videos.effectiveCreatedAt));
 

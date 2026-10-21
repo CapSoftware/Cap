@@ -1,11 +1,11 @@
 import { isProSubscription, stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
-import type { MySql2Database } from "drizzle-orm/mysql2";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type Stripe from "stripe";
 import { users } from "../schema";
 
 export async function provisionStripeCustomer(
-	db: MySql2Database,
+	db: NodePgDatabase,
 	row: typeof users.$inferSelect,
 ) {
 	const existingCustomers = await stripe().customers.list({

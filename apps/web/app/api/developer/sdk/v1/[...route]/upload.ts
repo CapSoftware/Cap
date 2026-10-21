@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows, nanoId } from "@cap/database/helpers";
 import {
 	developerCreditAccounts,
 	developerCreditTransactions,
@@ -214,7 +214,7 @@ app.post(
 
 					if (!account) return null;
 
-					const [result] = await tx
+					const result = await tx
 						.update(developerCreditAccounts)
 						.set({
 							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToDebit}`,
@@ -226,9 +226,7 @@ app.post(
 							),
 						);
 
-					const affectedRows =
-						(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
-					if (affectedRows === 0) {
+					if (affectedRows(result) === 0) {
 						return false;
 					}
 

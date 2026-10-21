@@ -82,7 +82,7 @@ export default $config({
 
 		const vercelVariables = [
 			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
-			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
+			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_POSTGRES.value },
 		];
 
 		new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
@@ -225,7 +225,7 @@ export default $config({
 
 function Secrets() {
 	return {
-		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
+		DATABASE_URL_POSTGRES: new sst.Secret("DATABASE_URL_POSTGRES"),
 	};
 }
 

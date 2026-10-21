@@ -2,6 +2,8 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
+import { jsonbGet, jsonbObject, jsonbText } from "@cap/database/json";
 import { users } from "@cap/database/schema";
 import { sql } from "drizzle-orm";
 
@@ -18,16 +20,6 @@ type UserPreferences = {
 		user_signed_up?: boolean;
 	};
 } | null;
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 const getCreatedAtTime = (value: unknown) => {
 	if (value instanceof Date) {
@@ -70,10 +62,10 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 		const result = await db()
 			.update(users)
 			.set({
-				preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.trackedEvents.user_signed_up', true)`,
+				preferences: sql`jsonb_set(${jsonbObject(users.preferences)}, '{trackedEvents}', COALESCE(${jsonbGet(users.preferences, ["trackedEvents"])}, '{}'::jsonb) || '{"user_signed_up": true}'::jsonb)`,
 			})
 			.where(
-				sql`(${users.id} = ${currentUser.id}) AND JSON_CONTAINS(COALESCE(${users.preferences}, JSON_OBJECT()), CAST(true AS JSON), '$.trackedEvents.user_signed_up') = 0`,
+				sql`(${users.id} = ${currentUser.id}) AND COALESCE(${jsonbText(users.preferences, ["trackedEvents", "user_signed_up"])}, 'false') <> 'true'`,
 			);
 
 		return { shouldTrack: getAffectedRows(result) > 0 };

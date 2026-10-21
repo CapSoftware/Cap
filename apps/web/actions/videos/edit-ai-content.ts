@@ -2,9 +2,10 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { jsonbMerge, jsonbObject } from "@cap/database/json";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, type SQL, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
@@ -110,12 +111,18 @@ export async function editAiContent(
 			};
 			const validationError = validateAiContent(next, video.duration);
 			if (validationError) return { success: false, message: validationError };
-			let updatedMetadata = sql`COALESCE(${videos.metadata}, JSON_OBJECT())`;
+			let updatedMetadata: SQL = jsonbObject(videos.metadata);
 			if (summaryChanged) {
-				updatedMetadata = sql`JSON_SET(${updatedMetadata}, '$.summary', ${next.summary}, '$.summaryManuallyEdited', CAST('true' AS JSON))`;
+				updatedMetadata = jsonbMerge(updatedMetadata, {
+					summary: next.summary,
+					summaryManuallyEdited: true,
+				});
 			}
 			if (chaptersChanged) {
-				updatedMetadata = sql`JSON_SET(${updatedMetadata}, '$.chapters', CAST(${JSON.stringify(next.chapters)} AS JSON), '$.chaptersManuallyEdited', CAST('true' AS JSON))`;
+				updatedMetadata = jsonbMerge(updatedMetadata, {
+					chapters: next.chapters,
+					chaptersManuallyEdited: true,
+				});
 			}
 			if (summaryChanged || chaptersChanged) {
 				await tx

@@ -15,12 +15,8 @@ import {
 import * as Db from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
 import { getTableName, is, type SQL } from "drizzle-orm";
-import {
-	type AnyMySqlColumn,
-	MySqlDialect,
-	MySqlTable,
-} from "drizzle-orm/mysql-core";
-import type { MySql2Database } from "drizzle-orm/mysql2";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { type AnyPgColumn, PgDialect, PgTable } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DrizzleAdapter } from "../../../../packages/database/auth/drizzle-adapter";
 
@@ -52,11 +48,11 @@ vi.mock("@cap/utils", async (importOriginal) => ({
 
 type Row = Record<string, unknown>;
 type RowScope = Record<string, Row>;
-type Selection = Record<string, MySqlTable | AnyMySqlColumn>;
+type Selection = Record<string, PgTable | AnyPgColumn>;
 
 function matchesRow(condition: SQL | undefined, scope: RowScope) {
 	if (!condition) return true;
-	const query = new MySqlDialect().sqlToQuery(condition);
+	const query = new PgDialect().sqlToQuery(condition);
 	let parameterIndex = 0;
 	return query.sql
 		.replaceAll("(", "")
@@ -64,7 +60,7 @@ function matchesRow(condition: SQL | undefined, scope: RowScope) {
 		.split(" and ")
 		.every((clause) => {
 			const match =
-				/^`([^`]+)`\.`([^`]+)` (is null|= \?|= `([^`]+)`\.`([^`]+)`)$/.exec(
+				/^"([^"]+)"\."([^"]+)" (is null|= \$\d+|= "([^"]+)"\."([^"]+)")$/.exec(
 					clause,
 				);
 			if (!match?.[1] || !match[2]) {
@@ -72,37 +68,38 @@ function matchesRow(condition: SQL | undefined, scope: RowScope) {
 			}
 			const value = scope[match[1]]?.[match[2]];
 			if (match[3] === "is null") return value == null;
-			if (match[3] === "= ?") return value === query.params[parameterIndex++];
+			if (match[3]?.startsWith("= $"))
+				return value === query.params[parameterIndex++];
 			if (!match[4] || !match[5]) throw new Error("Invalid joined predicate");
 			return value === scope[match[4]]?.[match[5]];
 		});
 }
 
-function createDatabase(seed: Map<MySqlTable, Row[]>) {
+function createDatabase(seed: Map<PgTable, Row[]>) {
 	const tables = new Map(seed);
-	const hooks: { beforeUpdate?: (table: MySqlTable) => void } = {};
-	const rows = (table: MySqlTable) => {
+	const hooks: { beforeUpdate?: (table: PgTable) => void } = {};
+	const rows = (table: PgTable) => {
 		const result = tables.get(table);
 		if (!result) throw new Error("Unexpected table");
 		return result;
 	};
 	class SelectQuery {
-		private table: MySqlTable | undefined;
+		private table: PgTable | undefined;
 		private condition: SQL | undefined;
 		private rowLimit = Number.POSITIVE_INFINITY;
-		private joins: { table: MySqlTable; condition: SQL | undefined }[] = [];
+		private joins: { table: PgTable; condition: SQL | undefined }[] = [];
 
 		constructor(
 			private selection?: Selection,
 			private distinct = false,
 		) {}
 
-		from(table: MySqlTable) {
+		from(table: PgTable) {
 			this.table = table;
 			return this;
 		}
 
-		innerJoin(table: MySqlTable, condition: SQL | undefined) {
+		innerJoin(table: PgTable, condition: SQL | undefined) {
 			this.joins.push({ table, condition });
 			return this;
 		}
@@ -140,7 +137,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 						? Object.fromEntries(
 								Object.entries(this.selection).map(([key, field]) => [
 									key,
-									is(field, MySqlTable)
+									is(field, PgTable)
 										? { ...scope[getTableName(field)] }
 										: scope[getTableName(field.table)]?.[field.name],
 								]),
@@ -163,7 +160,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 		selectDistinct: vi.fn(
 			(selection?: Selection) => new SelectQuery(selection, true),
 		),
-		insert: vi.fn((table: MySqlTable) => ({
+		insert: vi.fn((table: PgTable) => ({
 			values: (value: Row) => {
 				const insert = (update?: Row) => {
 					const existing = rows(table).find(
@@ -187,14 +184,14 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 				let update: Row | undefined;
 				const pending = Promise.resolve().then(() => insert(update));
 				return Object.assign(pending, {
-					onDuplicateKeyUpdate: ({ set }: { set: Row }) => {
+					onConflictDoUpdate: ({ set }: { set: Row }) => {
 						update = set;
 						return pending;
 					},
 				});
 			},
 		})),
-		update: vi.fn((table: MySqlTable) => ({
+		update: vi.fn((table: PgTable) => ({
 			set: (patch: Row) => ({
 				where: async (condition: SQL | undefined) => {
 					hooks.beforeUpdate?.(table);
@@ -207,7 +204,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 			}),
 		})),
 		transaction: vi.fn(
-			async (callback: (database: MySql2Database) => Promise<unknown>) => {
+			async (callback: (database: NodePgDatabase) => Promise<unknown>) => {
 				const snapshot = new Map(
 					[...tables].map(([table, records]) => [
 						table,
@@ -215,7 +212,7 @@ function createDatabase(seed: Map<MySqlTable, Row[]>) {
 					]),
 				);
 				try {
-					return await callback(client as unknown as MySql2Database);
+					return await callback(client as unknown as NodePgDatabase);
 				} catch (error) {
 					for (const [table, records] of snapshot) tables.set(table, records);
 					throw error;
@@ -260,7 +257,7 @@ function actorContext(actorId: string): SsoAuthContext {
 
 function makeFixture() {
 	const database = createDatabase(
-		new Map<MySqlTable, Row[]>([
+		new Map<PgTable, Row[]>([
 			[
 				Db.users,
 				[
@@ -354,7 +351,7 @@ function makeFixture() {
 	mocks.db.mockReturnValue(database.client);
 	mocks.getOrganization.mockResolvedValue(workosOrganization);
 	mocks.getConnection.mockResolvedValue(connection);
-	const row = (table: MySqlTable, id: string, column = "id") => {
+	const row = (table: PgTable, id: string, column = "id") => {
 		const record = database.rows(table).find((record) => record[column] === id);
 		if (!record) throw new Error("Fixture row was not found");
 		return record;
@@ -853,7 +850,7 @@ describe("SSO adapter provisioning", () => {
 		fixture.rows(Db.organizationInvites).splice(0);
 		const identity = await validateSsoSignIn(PROFILE, PROFILE.id, CONTEXT);
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{
 				getSsoIdentity: () => identity,
 			},
@@ -902,7 +899,7 @@ describe("SSO adapter provisioning", () => {
 	it("refuses to create a different email from the validated SSO identity", async () => {
 		const fixture = makeFixture();
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{ getSsoIdentity: () => IDENTITY },
 		);
 		if (!adapter.createUser) throw new Error("Missing createUser");
@@ -917,7 +914,7 @@ describe("SSO adapter provisioning", () => {
 
 	it("requires validated context to link a WorkOS account", async () => {
 		const fixture = makeFixture();
-		const adapter = DrizzleAdapter(fixture.client as unknown as MySql2Database);
+		const adapter = DrizzleAdapter(fixture.client as unknown as NodePgDatabase);
 		if (!adapter.linkAccount) throw new Error("Missing linkAccount");
 		await expect(
 			adapter.linkAccount({
@@ -933,7 +930,7 @@ describe("SSO adapter provisioning", () => {
 	it("does not link the validated identity to a user with a different stored email", async () => {
 		const fixture = makeFixture();
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{ getSsoIdentity: () => IDENTITY },
 		);
 		if (!adapter.linkAccount) throw new Error("Missing linkAccount");
@@ -953,7 +950,7 @@ describe("SSO adapter provisioning", () => {
 	it("does not link a different WorkOS profile after validation", async () => {
 		const fixture = makeFixture();
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{ getSsoIdentity: () => IDENTITY },
 		);
 		if (!adapter.linkAccount) throw new Error("Missing linkAccount");
@@ -978,7 +975,7 @@ describe("SSO adapter provisioning", () => {
 		fixture.link();
 		fixture.link(OTHER_USER_ID);
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{ getSsoIdentity: () => identity },
 		);
 		if (!adapter.linkAccount) throw new Error("Missing linkAccount");
@@ -1006,7 +1003,7 @@ describe("SSO adapter provisioning", () => {
 		fixture.link();
 		const identity = await validateSsoSignIn(PROFILE, PROFILE.id, CONTEXT);
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{ getSsoIdentity: () => identity },
 		);
 		if (!adapter.linkAccount) throw new Error("Missing linkAccount");
@@ -1038,7 +1035,7 @@ describe("SSO adapter provisioning", () => {
 		const fixture = makeFixture();
 		const identity = await validateSsoSignIn(PROFILE, PROFILE.id, CONTEXT);
 		const adapter = DrizzleAdapter(
-			fixture.client as unknown as MySql2Database,
+			fixture.client as unknown as NodePgDatabase,
 			{ getSsoIdentity: () => identity },
 		);
 		if (!adapter.createUser) throw new Error("Missing createUser");

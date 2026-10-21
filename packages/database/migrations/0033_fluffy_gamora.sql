@@ -1,1 +1,0 @@
-ALTER TABLE `auth_api_keys` ADD `source` varchar(32);

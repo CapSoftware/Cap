@@ -1,40 +1,39 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import type pg from "pg";
+import { connectCapDatabase } from "../../packages/database/loops/connection";
 import { profileUserQuery } from "../../packages/database/loops/sources";
 
 const url = process.env.LOOPS_ACTIVATION_READONLY_TEST_URL;
 
 describe.skipIf(!url)("profile source SQL preserves the previous reads", () => {
-	let database: Connection;
+	let database: pg.Client;
 	beforeAll(async () => {
 		if (!url) throw new Error("Missing read-only test connection");
-		database = await mysql.createConnection({
-			uri: url,
-			dateStrings: true,
-			timezone: "Z",
-		});
+		database = await connectCapDatabase(url);
 	});
 	afterAll(async () => {
 		await database?.end();
 	});
 
 	const userQuery =
-		"SELECT id,email,name,lastName,emailVerified,stripeCustomerId,stripeSubscriptionStatus,thirdPartyStripeSubscriptionId,inviteQuota,created_at,defaultOrgId,marketingOrigin FROM users WHERE id=?";
+		'SELECT id,email,name,"lastName","emailVerified","stripeCustomerId","stripeSubscriptionStatus","thirdPartyStripeSubscriptionId","inviteQuota",created_at,"defaultOrgId","marketingOrigin" FROM users WHERE id=$1';
 
-	function fixtureRows(columns: string[], values: (string | null)[][]) {
+	function fixtureRows(
+		columns: string[],
+		values: (string | null)[][],
+		firstParam: number,
+	) {
+		let param = firstParam;
 		return values.length
 			? values
 					.map(
 						() =>
 							`SELECT ${columns
-								.map(
-									(column) =>
-										`CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS ${column}`,
-								)
+								.map((column) => `$${param++}::text AS "${column}"`)
 								.join(",")}`,
 					)
 					.join(" UNION ALL ")
-			: `SELECT ${columns.map((column) => `NULL AS ${column}`).join(",")} WHERE FALSE`;
+			: `SELECT ${columns.map((column) => `NULL::text AS "${column}"`).join(",")} WHERE FALSE`;
 	}
 
 	for (const [name, accounts, invites] of [
@@ -90,42 +89,42 @@ describe.skipIf(!url)("profile source SQL preserves the previous reads", () => {
 					"organization",
 					"independent",
 				];
+				const userColumns = [
+					"id",
+					"email",
+					"name",
+					"lastName",
+					"emailVerified",
+					"stripeCustomerId",
+					"stripeSubscriptionStatus",
+					"thirdPartyStripeSubscriptionId",
+					"inviteQuota",
+					"created_at",
+					"defaultOrgId",
+					"marketingOrigin",
+				];
+				const accountsStart = 2 + user.length;
+				const invitesStart = accountsStart + accounts.flat().length;
 				const cte = `WITH
-					users AS (${fixtureRows(
-						[
-							"id",
-							"email",
-							"name",
-							"lastName",
-							"emailVerified",
-							"stripeCustomerId",
-							"stripeSubscriptionStatus",
-							"thirdPartyStripeSubscriptionId",
-							"inviteQuota",
-							"created_at",
-							"defaultOrgId",
-							"marketingOrigin",
-						],
-						[user],
-					)}),
-					accounts AS (${fixtureRows(["userId", "provider"], accounts)}),
-					organization_invites AS (${fixtureRows(["invitedEmail", "status"], invites)})`;
+					users AS (${fixtureRows(userColumns, [user], 2)}),
+					accounts AS (${fixtureRows(["userId", "provider"], accounts, accountsStart)}),
+					organization_invites AS (${fixtureRows(["invitedEmail", "status"], invites, invitesStart)})`;
 				const values = [...user, ...accounts.flat(), ...invites.flat()];
-				const [previousUsers] = await database.query<RowDataPacket[]>(
+				const { rows: previousUsers } = await database.query(
 					`${cte} ${userQuery}`,
-					[...values, "owner"],
+					["owner", ...values],
 				);
-				const [previousAccounts] = await database.query<RowDataPacket[]>(
-					`${cte} SELECT provider FROM accounts WHERE userId=?`,
-					[...values, "owner"],
+				const { rows: previousAccounts } = await database.query(
+					`${cte} SELECT provider FROM accounts WHERE "userId"=$1`,
+					["owner", ...values],
 				);
-				const [previousInvites] = await database.query<RowDataPacket[]>(
-					`${cte} SELECT status FROM organization_invites WHERE invitedEmail=? AND status IN ('pending','accepted')`,
-					[...values, "person@example.com"],
+				const { rows: previousInvites } = await database.query(
+					`${cte} SELECT status FROM organization_invites WHERE lower("invitedEmail")=lower($1) AND status IN ('pending','accepted')`,
+					["person@example.com", ...values],
 				);
-				const [combined] = await database.query<RowDataPacket[]>(
+				const { rows: combined } = await database.query(
 					`${cte} ${profileUserQuery}`,
-					[...values, "owner"],
+					["owner", ...values],
 				);
 				const {
 					hasAccount,
@@ -145,9 +144,9 @@ describe.skipIf(!url)("profile source SQL preserves the previous reads", () => {
 				expect(Boolean(hasPendingInvite)).toBe(
 					previousInvites.some((invite) => invite.status === "pending"),
 				);
-				const [missing] = await database.query<RowDataPacket[]>(
+				const { rows: missing } = await database.query(
 					`${cte} ${profileUserQuery}`,
-					[...values, "missing"],
+					["missing", ...values],
 				);
 				expect(missing).toEqual([]);
 			});

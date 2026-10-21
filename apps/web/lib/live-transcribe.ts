@@ -1,20 +1,12 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
+import { jsonbGet, jsonbRemove, jsonbSet } from "@cap/database/json";
 import { organizations, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { start } from "workflow/api";
 import { liveTranscribeWorkflow } from "@/workflows/live-transcribe";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export type LiveTranscriptionStart = "started" | "skipped";
 
@@ -49,14 +41,17 @@ export async function maybeStartLiveTranscription({
 		const claim = await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript', JSON_OBJECT('status', 'active', 'updatedAt', ${new Date().toISOString()}))`,
+				metadata: jsonbSet(videos.metadata, ["liveTranscript"], {
+					status: "active",
+					updatedAt: new Date().toISOString(),
+				}),
 				updatedAt: sql`${videos.updatedAt}`,
 			})
 			.where(
 				and(
 					eq(videos.id, videoId),
 					eq(videos.ownerId, ownerId),
-					sql`JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript') IS NULL`,
+					sql`${jsonbGet(videos.metadata, ["liveTranscript"])} IS NULL`,
 				),
 			);
 
@@ -71,7 +66,7 @@ export async function maybeStartLiveTranscription({
 			await db()
 				.update(videos)
 				.set({
-					metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+					metadata: jsonbRemove(videos.metadata, ["liveTranscript"]),
 					updatedAt: sql`${videos.updatedAt}`,
 				})
 				.where(eq(videos.id, videoId));

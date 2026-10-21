@@ -200,16 +200,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 						iconUrl: ImageUpload.ImageUrlOrKey | null;
 					}[]
 				>`
-        COALESCE(
-          JSON_ARRAYAGG(
-            JSON_OBJECT(
-              'id', ${organizations.id},
-              'name', ${organizations.name},
-              'iconUrl', ${organizations.iconUrl}
-            )
-          ),
-          JSON_ARRAY()
-        )
+        COALESCE(jsonb_agg(jsonb_build_object('id', ${organizations.id}, 'name', ${organizations.name}, 'iconUrl', ${organizations.iconUrl})), '[]'::jsonb)
       `,
 
 				ownerName: users.name,
@@ -257,6 +248,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.orgId,
 				videos.password,
 				users.name,
+				videoUploads.videoId,
 			)
 			.orderBy(desc(videos.effectiveCreatedAt)),
 	);

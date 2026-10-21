@@ -1,3 +1,4 @@
+import { jsonbMergePatch } from "@cap/database/json";
 import * as Db from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import {
@@ -11,7 +12,6 @@ import {
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
-
 import { Database } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
 import { FoldersRepo } from "./FoldersRepo.ts";
@@ -246,9 +246,9 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 							// overwrite each other's keys.
 							settings:
 								data.publicPage !== undefined
-									? Dz.sql`JSON_MERGE_PATCH(COALESCE(${Db.folders.settings}, '{}'), CAST(${JSON.stringify(
-											{ publicPage: data.publicPage },
-										)} AS JSON))`
+									? jsonbMergePatch(Db.folders.settings, {
+											publicPage: data.publicPage,
+										})
 									: undefined,
 							parentId: data.parentId
 								? Option.getOrNull(data.parentId)

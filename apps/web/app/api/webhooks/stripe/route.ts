@@ -207,7 +207,7 @@ async function syncSignedBaaStatus(
 			.update(signedBaas)
 			.set({
 				stripeSubscriptionId: subscription.id,
-				updatedAt: sql`CASE WHEN ${signedBaas.status} = 'processing' THEN ${signedBaas.updatedAt} ELSE CURRENT_TIMESTAMP END`,
+				updatedAt: sql`CASE WHEN ${signedBaas.status} = 'processing' THEN ${signedBaas.updatedAt} ELSE timezone('utc', now()) END`,
 			})
 			.where(
 				and(
@@ -268,7 +268,7 @@ async function syncSignedBaaStatus(
 				END`
 				: "canceled",
 			stripeSubscriptionId: subscription.id,
-			updatedAt: sql`CASE WHEN ${signedBaas.status} = 'processing' AND ${entitled} THEN ${signedBaas.updatedAt} ELSE CURRENT_TIMESTAMP END`,
+			updatedAt: sql`CASE WHEN ${signedBaas.status} = 'processing' AND ${entitled} THEN ${signedBaas.updatedAt} ELSE timezone('utc', now()) END`,
 		})
 		.where(
 			and(
@@ -346,7 +346,7 @@ async function findUserWithRetry(
 				const userByEmail = await db()
 					.select()
 					.from(users)
-					.where(eq(users.email, email))
+					.where(eq(users.email, email.toLowerCase()))
 					.limit(1)
 					.then((rows) => rows[0] ?? null);
 
@@ -904,7 +904,7 @@ export const POST = async (req: Request) => {
 						const userByEmail = await db()
 							.select()
 							.from(users)
-							.where(eq(users.email, customer.email))
+							.where(eq(users.email, customer.email.toLowerCase()))
 							.limit(1);
 
 						if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {

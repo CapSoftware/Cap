@@ -117,7 +117,7 @@ function makeUpdateChain(affectedRows: number) {
 	};
 	chain.update.mockReturnValue(chain);
 	chain.set.mockReturnValue(chain);
-	chain.where.mockResolvedValue([{ affectedRows }]);
+	chain.where.mockResolvedValue({ rowCount: affectedRows });
 	return chain;
 }
 

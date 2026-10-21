@@ -1,15 +1,17 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
+import { jsonbText } from "@cap/database/json";
 import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import {
 	and,
 	asc,
 	eq,
+	ilike,
 	isNotNull,
 	isNull,
-	like,
 	lte,
-	notLike,
+	notIlike,
 	or,
 	sql,
 } from "drizzle-orm";
@@ -28,10 +30,10 @@ const LOOM_IMPORT_RECOVERY_MESSAGE = "Restarting Loom import...";
 
 const recoverableProcessingError = () =>
 	or(
-		like(videoUploads.processingError, `%${WORKFLOW_UPGRADE_ERROR_FRAGMENT}%`),
-		like(videoUploads.processingError, "%Server is busy%"),
-		like(videoUploads.processingError, "%SERVER_BUSY%"),
-		like(
+		ilike(videoUploads.processingError, `%${WORKFLOW_UPGRADE_ERROR_FRAGMENT}%`),
+		ilike(videoUploads.processingError, "%Server is busy%"),
+		ilike(videoUploads.processingError, "%SERVER_BUSY%"),
+		ilike(
 			videoUploads.processingError,
 			"%processVideoOnMediaServer%exceeded max retries%",
 		),
@@ -54,16 +56,6 @@ export type FailedVideoProcessingRecoverySummary = {
 		kind: FailedVideoProcessingRecoveryKind;
 		status: FailedVideoProcessingRecoveryStatus;
 	}>;
-};
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
 async function recoverWebCandidate({
@@ -280,7 +272,7 @@ export async function recoverFailedVideoProcessing({
 			and(
 				eq(videoUploads.phase, "error"),
 				isNotNull(videoUploads.rawFileKey),
-				like(videoUploads.processingError, "%import-loom-video%"),
+				ilike(videoUploads.processingError, "%import-loom-video%"),
 				recoverableProcessingError(),
 			),
 		)
@@ -336,10 +328,10 @@ export async function recoverFailedVideoProcessing({
 		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.where(
 			and(
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'webMP4'`,
+				sql`${jsonbText(videos.source, ["type"])} = 'webMP4'`,
 				eq(videoUploads.phase, "error"),
 				isNotNull(videoUploads.rawFileKey),
-				notLike(videoUploads.processingError, "%import-loom-video%"),
+				notIlike(videoUploads.processingError, "%import-loom-video%"),
 				recoverableProcessingError(),
 			),
 		)

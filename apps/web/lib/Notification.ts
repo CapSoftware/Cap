@@ -2,7 +2,8 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstView } from "@cap/database/emails/first-view";
 import { NewComment } from "@cap/database/emails/new-comment";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows, nanoId } from "@cap/database/helpers";
+import { jsonbText } from "@cap/database/json";
 import { comments, notifications, users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
@@ -39,21 +40,22 @@ const ANON_NOTIF_WINDOW_MS = 5 * 60 * 1000;
 const ANON_NOTIF_MAX_PER_VIDEO = 50;
 
 const isDuplicateEntryError = (error: unknown) => {
-	if (!error || typeof error !== "object") return false;
-	const duplicateEntryError = error as {
-		code?: string;
-		errno?: number;
-		message?: string;
-		sqlMessage?: string;
-	};
-	if (
-		duplicateEntryError.code !== "ER_DUP_ENTRY" &&
-		duplicateEntryError.errno !== 1062
-	)
-		return false;
-	const message =
-		`${duplicateEntryError.sqlMessage ?? ""} ${duplicateEntryError.message ?? ""}`.trim();
-	return message.includes("dedup_key_idx");
+	let current: unknown = error;
+	for (
+		let depth = 0;
+		depth < 4 && current && typeof current === "object";
+		depth++
+	) {
+		const candidate = current as {
+			code?: string;
+			constraint?: string;
+			cause?: unknown;
+		};
+		if (candidate.code === "23505" && candidate.constraint === "dedup_key_idx")
+			return true;
+		current = candidate.cause;
+	}
+	return false;
 };
 
 export async function createNotification(
@@ -138,7 +140,7 @@ export async function createNotification(
 					and(
 						eq(notifications.type, "reply"),
 						eq(notifications.recipientId, recipientId),
-						sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notification.comment.id}`,
+						sql`${jsonbText(notifications.data, ["comment", "id"])} = ${notification.comment.id}`,
 					),
 				)
 				.limit(1);
@@ -187,7 +189,7 @@ export async function createNotification(
 						eq(notifications.type, "view"),
 						eq(notifications.recipientId, videoResult.ownerId),
 						eq(notifications.videoId, notification.videoId),
-						sql`JSON_EXTRACT(${notifications.data}, '$.authorId') = ${notification.authorId}`,
+						sql`${jsonbText(notifications.data, ["authorId"])} = ${notification.authorId}`,
 					),
 				)
 				.limit(1);
@@ -201,7 +203,7 @@ export async function createNotification(
 					and(
 						eq(notifications.type, type),
 						eq(notifications.recipientId, videoResult.ownerId),
-						sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notification.comment.id}`,
+						sql`${jsonbText(notifications.data, ["comment", "id"])} = ${notification.comment.id}`,
 					),
 				)
 				.limit(1);
@@ -440,7 +442,7 @@ export async function sendFirstViewEmail(
 			if (preferences?.notifications?.pauseViews) return;
 		}
 
-		const [result] = await database
+		const result = await database
 			.update(videos)
 			.set({ firstViewEmailSentAt: new Date() })
 			.where(
@@ -450,7 +452,7 @@ export async function sendFirstViewEmail(
 				),
 			);
 
-		if (result.affectedRows === 0) return;
+		if (affectedRows(result) === 0) return;
 
 		let viewerName: string;
 		if (params.isAnonymous) {

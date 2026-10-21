@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { STRIPE_AVAILABLE } from "@cap/utils";
 import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import mysql from "mysql2/promise";
+import type pg from "pg";
 import { provisionStripeCustomer } from "../auth/stripe-customer";
 import { db } from "../index";
 import { users } from "../schema";
@@ -11,6 +12,7 @@ import {
 	type LoopsClient,
 	LoopsRequestError,
 } from "./client";
+import { connectCapDatabase } from "./connection";
 import { activationSignalsAfter, inFreeExperiment } from "./experiment";
 import {
 	activationFollowUps,
@@ -25,7 +27,7 @@ import { type CustomerCopy, classifyProfile, normalizeEmail } from "./profile";
 import { type LoopsProfileSource, readLoopsProfile } from "./sources";
 import { profileFingerprint } from "./sync-policy";
 
-type Job = RowDataPacket & {
+type Job = {
 	userId: string;
 	revision: number;
 	failures: number;
@@ -105,60 +107,52 @@ async function holdRemovedIdentity(
 }
 
 export async function claimJob(
-	database: Connection,
+	database: pg.ClientBase,
 	token: string,
 	allowedUserIds: string[] | null,
 ) {
-	await database.beginTransaction();
+	await database.query("BEGIN");
 	try {
-		const [jobs] = await database.query<Job[]>(
-			`SELECT * FROM loops_sync_jobs WHERE nextAttemptAt<=UTC_TIMESTAMP() AND (leaseUntil IS NULL OR leaseUntil<UTC_TIMESTAMP()) ${allowedUserIds ? "AND userId IN (?)" : ""} ORDER BY nextAttemptAt LIMIT 1 FOR UPDATE SKIP LOCKED`,
+		const { rows: jobs } = await database.query<Job>(
+			`SELECT * FROM loops_sync_jobs WHERE "nextAttemptAt"<=timezone('utc', now()) AND ("leaseUntil" IS NULL OR "leaseUntil"<timezone('utc', now())) ${allowedUserIds ? 'AND "userId" = ANY($1::text[])' : ""} ORDER BY "nextAttemptAt" LIMIT 1 FOR UPDATE SKIP LOCKED`,
 			allowedUserIds ? [allowedUserIds] : [],
 		);
 		const job = jobs[0];
 		if (job)
-			await database.execute(
-				"UPDATE loops_sync_jobs SET leaseToken=?,leaseUntil=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 MINUTE) WHERE userId=?",
+			await database.query(
+				`UPDATE loops_sync_jobs SET "leaseToken"=$1,"leaseUntil"=timezone('utc', now()) + interval '2 minutes' WHERE "userId"=$2`,
 				[token, job.userId],
 			);
-		await database.commit();
+		await database.query("COMMIT");
 		return job;
 	} catch (error) {
-		await database.rollback();
+		await database.query("ROLLBACK");
 		throw error;
 	}
 }
 
 export async function deferJob(
-	database: Connection,
+	database: pg.ClientBase,
 	job: Pick<Job, "userId" | "revision">,
 	token: string,
 	reason: string,
 	nextAttemptAt: Date,
 ) {
-	await database.execute(
-		"UPDATE loops_sync_jobs SET failures=CASE WHEN revision=? THEN failures+1 ELSE 0 END,lastError=CASE WHEN revision=? THEN ? ELSE NULL END,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-		[
-			job.revision,
-			job.revision,
-			reason,
-			job.revision,
-			nextAttemptAt,
-			job.userId,
-			token,
-		],
+	await database.query(
+		`UPDATE loops_sync_jobs SET failures=CASE WHEN revision=$1 THEN failures+1 ELSE 0 END,"lastError"=CASE WHEN revision=$1 THEN $2::text ELSE NULL END,"nextAttemptAt"=CASE WHEN revision=$1 THEN $3::timestamp ELSE timezone('utc', now()) END,"leaseToken"=NULL,"leaseUntil"=NULL WHERE "userId"=$4 AND "leaseToken"=$5`,
+		[job.revision, reason, nextAttemptAt.toISOString(), job.userId, token],
 	);
 }
 
 export async function completeUnchangedJob(
-	database: Connection,
+	database: pg.ClientBase,
 	job: Pick<Job, "userId" | "revision">,
 	token: string,
 	nextAttemptAt: Date,
 ) {
-	await database.execute(
-		"UPDATE loops_sync_jobs SET failures=0,lastError=NULL,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-		[job.revision, nextAttemptAt, job.userId, token],
+	await database.query(
+		`UPDATE loops_sync_jobs SET failures=0,"lastError"=NULL,"nextAttemptAt"=CASE WHEN revision=$1 THEN $2::timestamp ELSE timezone('utc', now()) END,"leaseToken"=NULL,"leaseUntil"=NULL WHERE "userId"=$3 AND "leaseToken"=$4`,
+		[job.revision, nextAttemptAt.toISOString(), job.userId, token],
 	);
 }
 
@@ -212,11 +206,7 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 	);
 	if (!identity.success || identity.teamName !== "Cap Software, Inc.")
 		throw new Error("Wrong Loops team");
-	const cap = await mysql.createConnection({
-		uri: capUrl,
-		dateStrings: true,
-		timezone: "Z",
-	});
+	const cap = await connectCapDatabase(capUrl);
 	let processed = 0;
 	let failed = 0;
 	try {
@@ -228,8 +218,8 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 		try {
 			let allowedUserIds: string[] | null = null;
 			if (config.allowedEmails) {
-				const [owned] = await cap.query<(RowDataPacket & { id: string })[]>(
-					"SELECT id FROM users WHERE email IN (?)",
+				const { rows: owned } = await cap.query<{ id: string }>(
+					"SELECT id FROM users WHERE lower(email) = ANY($1::text[])",
 					[[...config.allowedEmails]],
 				);
 				allowedUserIds = owned.map((user) => user.id);
@@ -319,14 +309,21 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 						customerCopy,
 					);
 					if (update.capTeammate)
-						await cap.execute(
-							"UPDATE users SET marketingOrigin='teammate' WHERE id=? AND marketingOrigin<>'teammate'",
+						await cap.query(
+							`UPDATE users SET "marketingOrigin"='teammate' WHERE id=$1 AND "marketingOrigin"<>'teammate'`,
 							[job.userId],
 						);
 					const next = nextProfileCheck(update, new Date());
-					await cap.execute(
-						"UPDATE loops_sync_jobs SET syncedEmail=?,profileHash=?,lastSyncedAt=UTC_TIMESTAMP(),failures=0,lastError=NULL,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-						[update.email, hash, job.revision, next, job.userId, token],
+					await cap.query(
+						`UPDATE loops_sync_jobs SET "syncedEmail"=$1,"profileHash"=$2,"lastSyncedAt"=timezone('utc', now()),failures=0,"lastError"=NULL,"nextAttemptAt"=CASE WHEN revision=$3 THEN $4::timestamp ELSE timezone('utc', now()) END,"leaseToken"=NULL,"leaseUntil"=NULL WHERE "userId"=$5 AND "leaseToken"=$6`,
+						[
+							update.email,
+							hash,
+							job.revision,
+							next.toISOString(),
+							job.userId,
+							token,
+						],
 					);
 					processed++;
 				} catch (error) {

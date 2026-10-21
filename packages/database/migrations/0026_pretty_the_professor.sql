@@ -1,1 +1,0 @@
-ALTER TABLE `users` ADD `authSessionVersion` int DEFAULT 0 NOT NULL;

@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { affectedRows } from "@cap/database/helpers";
 import { organizationInvites, organizations } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
@@ -30,7 +31,7 @@ export async function removeOrganizationInvite(
 
 	await requireOrganizationSettingsManager(user.id, organizationId);
 
-	const [result] = await db()
+	const result = await db()
 		.delete(organizationInvites)
 		.where(
 			and(
@@ -39,7 +40,7 @@ export async function removeOrganizationInvite(
 			),
 		);
 
-	if (result.affectedRows === 0) throw new Error("Invite not found");
+	if (affectedRows(result) === 0) throw new Error("Invite not found");
 
 	revalidatePath("/dashboard/settings/organization");
 

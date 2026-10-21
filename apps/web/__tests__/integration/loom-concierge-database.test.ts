@@ -17,7 +17,7 @@ import {
 	Video,
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { createConnection } from "mysql2/promise";
+import pg from "pg";
 import {
 	afterAll,
 	beforeAll,
@@ -879,24 +879,25 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 		const { ownerId, organizationId } = await makeOrganization();
 		const requestId = await requestMigration(organizationId, ownerId);
 		if (!databaseUrl) throw new Error("Missing test database");
-		const connection = await createConnection(databaseUrl);
+		const connection = new pg.Client({ connectionString: databaseUrl });
+		await connection.connect();
 		const videoId = id();
 		try {
-			await connection.beginTransaction();
+			await connection.query("BEGIN");
 			await connection.query(
-				"SELECT id FROM loom_migration_requests WHERE id = ? FOR UPDATE",
+				"SELECT id FROM loom_migration_requests WHERE id = $1 FOR UPDATE",
 				[requestId],
 			);
 			await connection.query(
-				"INSERT INTO videos (id, ownerId, orgId, name, source, createdAt, updatedAt) VALUES (?, ?, ?, 'In flight', ?, NOW(), NOW())",
+				`INSERT INTO videos (id, "ownerId", "orgId", name, source, "createdAt", "updatedAt") VALUES ($1, $2, $3, 'In flight', $4, timezone('utc', now()), timezone('utc', now()))`,
 				[videoId, ownerId, organizationId, JSON.stringify({ type: "webMP4" })],
 			);
 			await connection.query(
-				"INSERT INTO video_uploads (video_id, phase, mode) VALUES (?, 'uploading', 'singlepart')",
+				"INSERT INTO video_uploads (video_id, phase, mode) VALUES ($1, 'uploading', 'singlepart')",
 				[videoId],
 			);
 			await connection.query(
-				"INSERT INTO loom_migration_imports (videoId, requestId, createdAt) VALUES (?, ?, NOW())",
+				`INSERT INTO loom_migration_imports ("videoId", "requestId", "createdAt") VALUES ($1, $2, timezone('utc', now()))`,
 				[videoId, requestId],
 			);
 
@@ -914,7 +915,7 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 				(error: Error) => error.message,
 			);
 			await new Promise((resolve) => setTimeout(resolve, 300));
-			await connection.commit();
+			await connection.query("COMMIT");
 
 			expect(await settled).toContain("still processing");
 			expect((await getRequest(requestId)).status).toBe("pending");

@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { jsonbRemove, jsonbSet, jsonbText } from "@cap/database/json";
 import { videoEdits, videos } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
@@ -210,7 +211,7 @@ async function claimEditTranscriptBackfill(
 		await tx
 			.update(videos)
 			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill', CAST(${JSON.stringify(status)} AS JSON))`,
+				metadata: jsonbSet(videos.metadata, ["editTranscriptBackfill"], status),
 				updatedAt: video.updatedAt,
 			})
 			.where(eq(videos.id, videoId));
@@ -226,13 +227,17 @@ async function setEditTranscriptBackfillError(
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill.status', 'error')`,
+			metadata: jsonbSet(
+				videos.metadata,
+				["editTranscriptBackfill", "status"],
+				"error",
+			),
 			updatedAt: sql`${videos.updatedAt}`,
 		})
 		.where(
 			and(
 				eq(videos.id, videoId),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editTranscriptBackfill.requestId')) = ${requestId}`,
+				sql`${jsonbText(videos.metadata, ["editTranscriptBackfill", "requestId"])} = ${requestId}`,
 			),
 		);
 }
@@ -244,13 +249,13 @@ async function clearEditTranscriptBackfill(
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill')`,
+			metadata: jsonbRemove(videos.metadata, ["editTranscriptBackfill"]),
 			updatedAt: sql`${videos.updatedAt}`,
 		})
 		.where(
 			and(
 				eq(videos.id, videoId),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editTranscriptBackfill.requestId')) = ${requestId}`,
+				sql`${jsonbText(videos.metadata, ["editTranscriptBackfill", "requestId"])} = ${requestId}`,
 			),
 		);
 }

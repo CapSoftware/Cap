@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
 import { videoUploads } from "@cap/database/schema";
 import type { S3Bucket, Video } from "@cap/web-domain";
 import { and, eq, ne } from "drizzle-orm";
@@ -9,16 +10,6 @@ export type VideoProcessingStartStatus =
 	| "started"
 	| "already-processing"
 	| "already-complete";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export async function setVideoProcessingError(
 	videoId: Video.VideoId,

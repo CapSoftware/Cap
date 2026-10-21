@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
+import { affectedRows } from "@cap/database/helpers";
 import {
 	videoProcessingJobs,
 	videos,
@@ -247,11 +248,10 @@ export async function ensureSegmentProcessingJob({
 }): Promise<{ job: DesktopRecordingJob; created: boolean }> {
 	const candidate = newJob({ videoId, userId, verification, now });
 	return db().transaction(async (tx) => {
-		// Locking a missing job before inserting it deadlocks concurrent completion requests under InnoDB gap locking.
 		await tx
 			.insert(videoProcessingJobs)
 			.values(candidate)
-			.onDuplicateKeyUpdate({ set: { videoId } });
+			.onConflictDoNothing();
 		const [stored] = await tx
 			.select()
 			.from(videoProcessingJobs)
@@ -323,7 +323,7 @@ export async function ensureSegmentProcessingJob({
 			await tx
 				.insert(videoUploads)
 				.values({ videoId, ...upload })
-				.onDuplicateKeyUpdate({ set: upload });
+				.onConflictDoUpdate({ target: videoUploads.videoId, set: upload });
 			return { job, created: true };
 		}
 		if (job.ownerId !== userId) throw new Error("Recording owner changed");
@@ -489,7 +489,7 @@ export async function claimProcessingAttempt({
 		await tx
 			.insert(videoUploads)
 			.values({ videoId, ...upload })
-			.onDuplicateKeyUpdate({ set: upload });
+			.onConflictDoUpdate({ target: videoUploads.videoId, set: upload });
 		return attempt;
 	});
 }
@@ -501,12 +501,6 @@ function attemptCondition(fence: DesktopRecordingAttemptFence) {
 		eq(videoProcessingJobs.attemptId, fence.attemptId),
 		inArray(videoProcessingJobs.state, ["committing", "queued", "processing"]),
 	);
-}
-
-function affectedRows(result: unknown) {
-	const item = Array.isArray(result) ? result[0] : result;
-	if (!item || typeof item !== "object" || !("affectedRows" in item)) return 0;
-	return typeof item.affectedRows === "number" ? item.affectedRows : 0;
 }
 
 export async function initializeSourceCommitCheckpoint(
@@ -956,7 +950,7 @@ export async function retireDesktopRecordingJobForOutputReplacement(
 	await tx
 		.insert(videoProcessingJobs)
 		.values({ ...newJob({ videoId, userId, now }), ...retired })
-		.onDuplicateKeyUpdate({ set: retired });
+		.onConflictDoUpdate({ target: videoProcessingJobs.videoId, set: retired });
 }
 
 export async function listRecoverableSegmentJobs({

@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { jsonbText } from "@cap/database/json";
 import { comments, notifications } from "@cap/database/schema";
 import { Storage, VideosRepo } from "@cap/web-backend";
 import type { Comment, Video } from "@cap/web-domain";
@@ -76,7 +77,7 @@ export async function deleteComment({
 					.where(
 						and(
 							eq(notifications.type, "reply"),
-							sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${commentId}`,
+							sql`${jsonbText(notifications.data, ["comment", "id"])} = ${commentId}`,
 						),
 					);
 			} else {
@@ -85,7 +86,7 @@ export async function deleteComment({
 					.where(
 						and(
 							eq(notifications.type, "comment"),
-							sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${commentId}`,
+							sql`${jsonbText(notifications.data, ["comment", "id"])} = ${commentId}`,
 						),
 					);
 
@@ -94,7 +95,7 @@ export async function deleteComment({
 					.where(
 						and(
 							eq(notifications.type, "reply"),
-							sql`JSON_EXTRACT(${notifications.data}, '$.comment.parentCommentId') = ${commentId}`,
+							sql`${jsonbText(notifications.data, ["comment", "parentCommentId"])} = ${commentId}`,
 						),
 					);
 			}

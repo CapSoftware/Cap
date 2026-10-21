@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { db } from "@cap/database";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows, nanoId } from "@cap/database/helpers";
 import {
 	developerApps,
 	developerCreditAccounts,
@@ -123,7 +123,7 @@ export async function GET(request: Request) {
 				if (!account) return false;
 
 				await db().transaction(async (tx) => {
-					const [result] = await tx
+					const result = await tx
 						.update(developerCreditAccounts)
 						.set({
 							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${microCreditsToCharge}`,
@@ -135,9 +135,7 @@ export async function GET(request: Request) {
 							),
 						);
 
-					const affectedRows =
-						(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
-					if (affectedRows === 0) {
+					if (affectedRows(result) === 0) {
 						return;
 					}
 

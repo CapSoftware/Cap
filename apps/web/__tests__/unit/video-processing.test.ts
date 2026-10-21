@@ -37,7 +37,7 @@ describe("video processing starts", () => {
 	});
 
 	it("does not start a duplicate workflow when processing is already running", async () => {
-		updateWhereMock.mockResolvedValueOnce({ affectedRows: 0 });
+		updateWhereMock.mockResolvedValueOnce({ rowCount: 0 });
 		selectWhereMock.mockResolvedValueOnce([
 			{
 				videoId: "video-123",
@@ -65,7 +65,7 @@ describe("video processing starts", () => {
 	});
 
 	it("starts the workflow after claiming the upload row", async () => {
-		updateWhereMock.mockResolvedValueOnce({ affectedRows: 1 });
+		updateWhereMock.mockResolvedValueOnce({ rowCount: 1 });
 		startMock.mockResolvedValueOnce(undefined);
 
 		const { startVideoProcessingWorkflow } = await import(
@@ -87,8 +87,8 @@ describe("video processing starts", () => {
 		expect(startMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("starts the workflow when mysql returns affectedRows in the first tuple slot", async () => {
-		updateWhereMock.mockResolvedValueOnce([{ affectedRows: 1 }]);
+	it("starts the workflow when the update reports a single claimed row", async () => {
+		updateWhereMock.mockResolvedValueOnce({ rowCount: 1 });
 		startMock.mockResolvedValueOnce(undefined);
 
 		const { startVideoProcessingWorkflow } = await import(
@@ -111,7 +111,7 @@ describe("video processing starts", () => {
 	});
 
 	it("force restarts a stale processing row", async () => {
-		updateWhereMock.mockResolvedValueOnce({ affectedRows: 1 });
+		updateWhereMock.mockResolvedValueOnce({ rowCount: 1 });
 		startMock.mockResolvedValueOnce(undefined);
 
 		const { startVideoProcessingWorkflow } = await import(
@@ -135,8 +135,8 @@ describe("video processing starts", () => {
 
 	it("marks the upload as errored when workflow start fails", async () => {
 		updateWhereMock
-			.mockResolvedValueOnce({ affectedRows: 1 })
-			.mockResolvedValueOnce({ affectedRows: 1 });
+			.mockResolvedValueOnce({ rowCount: 1 })
+			.mockResolvedValueOnce({ rowCount: 1 });
 		startMock.mockRejectedValueOnce(new Error("temporary failure"));
 
 		const { startVideoProcessingWorkflow } = await import(

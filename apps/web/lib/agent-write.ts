@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows as getAffectedRows, nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { Database, type DbClient } from "@cap/web-backend";
 import {
@@ -33,15 +33,6 @@ type IdempotencyInput = {
 	expiresAt: Date;
 };
 
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
-
 const hash = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
 
@@ -67,9 +58,7 @@ const acquireIdempotency = async (tx: Transaction, input: IdempotencyInput) => {
 			requestHash: input.requestHash,
 			expiresAt: input.expiresAt,
 		})
-		.onDuplicateKeyUpdate({
-			set: { keyHash: sql`${Db.agentApiIdempotency.keyHash}` },
-		});
+		.onConflictDoNothing();
 	const [record] = await tx
 		.select()
 		.from(Db.agentApiIdempotency)

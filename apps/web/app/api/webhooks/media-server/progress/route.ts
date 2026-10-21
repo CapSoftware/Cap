@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "@cap/database";
+import { jsonbSet } from "@cap/database/json";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
@@ -235,7 +236,20 @@ export async function POST(request: NextRequest) {
 						source: { type: "desktopMP4" as const },
 						...(receipt
 							? {
-									metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'requiredAudioVerified', JSON_EXTRACT(${JSON.stringify(receipt.requiredAudioVerified)}, '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
+									metadata: jsonbSet(
+										videos.metadata,
+										["desktopRecordingUpload"],
+										{
+											version: receipt.version,
+											artifact: receipt.artifact,
+											fileSize: receipt.fileSize,
+											duration: receipt.duration,
+											hasAudio: receipt.hasAudio,
+											fullDecode: true,
+											requiredAudioVerified: receipt.requiredAudioVerified,
+											objectIdentity: receipt.objectIdentity,
+										},
+									),
 								}
 							: {}),
 					})

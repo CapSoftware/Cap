@@ -1,23 +1,20 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import type pg from "pg";
 import {
 	activationQuery,
 	legacyActivationQuery,
 } from "../../packages/database/loops/activation";
+import { connectCapDatabase } from "../../packages/database/loops/connection";
 
 const url = process.env.LOOPS_ACTIVATION_READONLY_TEST_URL;
 
 describe.skipIf(!url)(
 	"activation SQL against synthetic rows without database writes",
 	() => {
-		let database: Connection;
+		let database: pg.Client;
 		beforeAll(async () => {
 			if (!url) throw new Error("Missing read-only test connection");
-			database = await mysql.createConnection({
-				uri: url,
-				dateStrings: true,
-				timezone: "Z",
-			});
+			database = await connectCapDatabase(url);
 		});
 		afterAll(async () => {
 			await database?.end();
@@ -36,26 +33,26 @@ describe.skipIf(!url)(
 			} = {},
 		) {
 			const query = `WITH
-			videos AS (SELECT 'video' AS id, ? AS ownerId, ? AS isScreenshot,
-				? AS duration, JSON_OBJECT('type', 'desktopMP4', 'outputKey', ?) AS source,
-				? AS jobStatus, CAST('2026-09-12 01:00:00' AS DATETIME) AS createdAt,
-				CAST(? AS DATETIME) AS firstViewEmailSentAt),
-			video_uploads AS (SELECT 'video' AS video_id WHERE ?),
-			video_processing_jobs AS (SELECT 'video' AS video_id, ? AS state WHERE ?)
+			videos AS (SELECT 'video'::text AS id, $2::text AS "ownerId", $3::boolean AS "isScreenshot",
+				$4::real AS duration, jsonb_build_object('type', 'desktopMP4', 'outputKey', $5::text) AS source,
+				$6::text AS "jobStatus", timestamp '2026-09-12 01:00:00' AS "createdAt",
+				$7::timestamp AS "firstViewEmailSentAt"),
+			video_uploads AS (SELECT 'video'::text AS video_id WHERE $8::boolean),
+			video_processing_jobs AS (SELECT 'video'::text AS video_id, $9::text AS state WHERE $10::boolean)
 			${activationQuery}`;
-			const [rows] = await database.query<RowDataPacket[]>(query, [
+			const { rows } = await database.query(query, [
+				"owner",
 				options.otherOwner ? "other" : "owner",
-				options.screenshot ? 1 : 0,
+				options.screenshot ?? false,
 				options.duration ?? 30,
 				options.output === undefined
 					? "owner/video/result.mp4"
 					: options.output,
 				options.legacyStatus ?? null,
 				options.viewed ? "2026-09-12 02:00:00" : null,
-				options.upload ? 1 : 0,
+				options.upload ?? false,
 				options.state ?? null,
-				options.state ? 1 : 0,
-				"owner",
+				Boolean(options.state),
 			]);
 			return rows[0];
 		}
@@ -91,38 +88,41 @@ describe.skipIf(!url)(
 
 		for (const [name, videos] of [
 			["no videos", []],
-			["private video", [{ ownerId: "owner", public: 0 }]],
-			["public video", [{ ownerId: "owner", public: 1 }]],
-			["another owner's public video", [{ ownerId: "other", public: 1 }]],
+			["private video", [{ ownerId: "owner", public: false }]],
+			["public video", [{ ownerId: "owner", public: true }]],
+			["another owner's public video", [{ ownerId: "other", public: true }]],
 			["null visibility", [{ ownerId: "owner", public: null }]],
 			[
 				"mixed ownership and visibility",
 				[
-					{ ownerId: "other", public: 1 },
-					{ ownerId: "owner", public: 0 },
-					{ ownerId: "owner", public: 1 },
+					{ ownerId: "other", public: true },
+					{ ownerId: "owner", public: false },
+					{ ownerId: "owner", public: true },
 				],
 			],
 		] as const) {
 			test(`legacy activation preserves both previous reads for ${name}`, async () => {
 				const fixture = videos.length
 					? videos
-							.map(() => "SELECT 'video' AS id, ? AS ownerId, ? AS public")
+							.map(
+								(_, index) =>
+									`SELECT 'video'::text AS id, $${index * 2 + 2}::text AS "ownerId", $${index * 2 + 3}::boolean AS public`,
+							)
 							.join(" UNION ALL ")
-					: "SELECT NULL AS id, NULL AS ownerId, NULL AS public WHERE FALSE";
+					: `SELECT NULL::text AS id, NULL::text AS "ownerId", NULL::boolean AS public WHERE FALSE`;
 				const cte = `WITH videos AS (${fixture})`;
 				const values = videos.flatMap((video) => [video.ownerId, video.public]);
-				const [previousVideo] = await database.query<RowDataPacket[]>(
-					`${cte} SELECT id FROM videos WHERE ownerId = ? LIMIT 1`,
-					[...values, "owner"],
+				const { rows: previousVideo } = await database.query(
+					`${cte} SELECT id FROM videos WHERE "ownerId" = $1 LIMIT 1`,
+					["owner", ...values],
 				);
-				const [previousShared] = await database.query<RowDataPacket[]>(
-					`${cte} SELECT id FROM videos WHERE ownerId = ? AND public = 1 LIMIT 1`,
-					[...values, "owner"],
+				const { rows: previousShared } = await database.query(
+					`${cte} SELECT id FROM videos WHERE "ownerId" = $1 AND public = true LIMIT 1`,
+					["owner", ...values],
 				);
-				const [combined] = await database.query<RowDataPacket[]>(
+				const { rows: combined } = await database.query(
 					`${cte} ${legacyActivationQuery}`,
-					[...values, "owner", "owner"],
+					["owner", ...values],
 				);
 				expect(Boolean(combined[0].hasVideo)).toBe(previousVideo.length > 0);
 				expect(Boolean(combined[0].hasSharedVideo)).toBe(

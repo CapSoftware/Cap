@@ -1,6 +1,6 @@
 import { S3Bucket, User, Video } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -157,7 +157,7 @@ describe("desktop reupload completion", () => {
 	let rejectCommit: boolean;
 	let provider: "s3" | "googleDrive";
 	let uploadState: Record<string, unknown>;
-	const dialect = new MySqlDialect();
+	const dialect = new PgDialect();
 	const mintToken = () => {
 		outputKey = createDesktopReuploadKey(video);
 		token = createDesktopReuploadToken(video, {
@@ -233,7 +233,7 @@ describe("desktop reupload completion", () => {
 			},
 			insert: () => ({
 				values: (values: { rawFileKey?: string | null }) => ({
-					onDuplicateKeyUpdate: async ({
+					onConflictDoUpdate: async ({
 						set,
 					}: {
 						set: Record<string, unknown>;

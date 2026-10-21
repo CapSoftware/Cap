@@ -52,6 +52,8 @@ vi.mock("@cap/database/emails/signed-baa", () => ({
 
 vi.mock("@cap/database/helpers", () => ({
 	nanoId: vi.fn(() => "baa-record-1"),
+	affectedRows: (result: { rowCount?: number | null } | undefined) =>
+		result?.rowCount ?? 0,
 }));
 
 vi.mock("@cap/database/schema", () => ({
@@ -117,7 +119,7 @@ function resetMockDb() {
 	mockDb.insert.mockReturnValue(mockDb);
 	mockDb.update.mockReturnValue(mockDb);
 	mockDb.from.mockReturnValue(mockDb);
-	mockDb.where.mockReturnValue({ ...mockDb, affectedRows: 1 });
+	mockDb.where.mockReturnValue({ ...mockDb, rowCount: 1 });
 	mockDb.set.mockReturnValue(mockDb);
 	mockDb.values.mockResolvedValue(undefined);
 	mockDb.limit.mockResolvedValue([]);
@@ -454,7 +456,7 @@ describe("Signed BAA Stripe recovery", () => {
 		mockDb.where
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce(mockDb)
-			.mockReturnValueOnce({ affectedRows: 1 });
+			.mockReturnValueOnce({ rowCount: 1 });
 		vi.mocked(generateSignedBaaPdf).mockResolvedValue(new Uint8Array([1]));
 		vi.mocked(sendEmail).mockResolvedValue({
 			data: { id: "email-1" },
@@ -565,7 +567,7 @@ describe("Signed BAA Stripe recovery", () => {
 		mockDb.where
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce(mockDb)
-			.mockReturnValueOnce({ affectedRows: 0 });
+			.mockReturnValueOnce({ rowCount: 0 });
 		mockDb.limit.mockResolvedValueOnce([
 			{ status: "paid", stripeSubscriptionId: "sub_payment_link" },
 		]);
@@ -953,9 +955,9 @@ describe("Paid BAA signing", () => {
 		mockDb.where
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce(mockDb)
-			.mockReturnValueOnce({ affectedRows: 1 })
-			.mockReturnValueOnce({ affectedRows: 1 })
-			.mockReturnValueOnce({ affectedRows: 0 });
+			.mockReturnValueOnce({ rowCount: 1 })
+			.mockReturnValueOnce({ rowCount: 1 })
+			.mockReturnValueOnce({ rowCount: 0 });
 		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
 			failedWith("changed while signing"),
 		);
@@ -983,7 +985,7 @@ describe("Paid BAA signing", () => {
 		mockDb.where
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce(mockDb)
-			.mockReturnValueOnce({ affectedRows: 0 });
+			.mockReturnValueOnce({ rowCount: 0 });
 		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
 			failedWith("already in progress"),
 		);

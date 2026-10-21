@@ -1,4 +1,6 @@
 import { db } from "@cap/database";
+import { affectedRows } from "@cap/database/helpers";
+import { jsonbRemove, jsonbSet, jsonbText } from "@cap/database/json";
 import { organizations, users, videoEdits, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
@@ -550,13 +552,17 @@ async function touchLiveClaim(videoId: string): Promise<void> {
 		await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript.updatedAt', ${new Date().toISOString()})`,
+				metadata: jsonbSet(
+					videos.metadata,
+					["liveTranscript", "updatedAt"],
+					new Date().toISOString(),
+				),
 				updatedAt: sql`${videos.updatedAt}`,
 			})
 			.where(
 				and(
 					eq(videos.id, videoId as Video.VideoId),
-					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.liveTranscript.status')) = 'active'`,
+					sql`${jsonbText(videos.metadata, ["liveTranscript", "status"])} = 'active'`,
 				),
 			);
 	} catch (error) {
@@ -646,10 +652,7 @@ async function promoteLiveTranscript(
 					isNull(videos.transcriptionStatus),
 				),
 			);
-		const affectedRows = Array.isArray(claim)
-			? ((claim[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
-			: ((claim as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
-		if (affectedRows === 0) {
+		if (affectedRows(claim) === 0) {
 			return { promoted: false, reason: "canonical claim held elsewhere" };
 		}
 
@@ -727,7 +730,7 @@ async function promoteLiveTranscript(
 			await db()
 				.update(videos)
 				.set({
-					metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+					metadata: jsonbRemove(videos.metadata, ["liveTranscript"]),
 					updatedAt: sql`${videos.updatedAt}`,
 				})
 				.where(eq(videos.id, videoId as Video.VideoId));
@@ -809,7 +812,11 @@ async function finishLiveTranscription(
 		await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript.status', ${state}, '$.liveTranscript.updatedAt', ${new Date().toISOString()})`,
+				metadata: jsonbSet(
+					jsonbSet(videos.metadata, ["liveTranscript", "status"], state),
+					["liveTranscript", "updatedAt"],
+					new Date().toISOString(),
+				),
 				updatedAt: sql`${videos.updatedAt}`,
 			})
 			.where(eq(videos.id, videoId as Video.VideoId));

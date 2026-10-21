@@ -867,7 +867,8 @@ export async function saveEditResultAndComplete(
 					editSpec,
 					updatedAt: new Date(),
 				})
-				.onDuplicateKeyUpdate({
+				.onConflictDoUpdate({
+					target: videoEdits.videoId,
 					set: {
 						sourceKey,
 						editSpec,

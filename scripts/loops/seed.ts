@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import mysql, { type RowDataPacket } from "mysql2/promise";
+import { connectCapDatabase } from "../../packages/database/loops/connection";
 import { loopsRuntimeConfig } from "../../packages/database/loops/worker";
 
 const { values } = parseArgs({
@@ -9,11 +9,11 @@ const config = loopsRuntimeConfig(process.env);
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 if (values.apply && process.env.LOOPS_SYNC_ENABLED !== "true")
 	throw new Error("LOOPS_SYNC_ENABLED=true is required");
-const database = await mysql.createConnection(process.env.DATABASE_URL);
+const database = await connectCapDatabase(process.env.DATABASE_URL);
 try {
-	const eligibility = `(u.emailVerified IS NOT NULL OR EXISTS (SELECT 1 FROM accounts a WHERE a.userId=u.id)) ${config.allowedEmails ? "AND u.email IN (?)" : ""}`;
+	const eligibility = `(u."emailVerified" IS NOT NULL OR EXISTS (SELECT 1 FROM accounts a WHERE a."userId"=u.id)) ${config.allowedEmails ? "AND lower(u.email) = ANY($1::text[])" : ""}`;
 	const params = config.allowedEmails ? [[...config.allowedEmails]] : [];
-	const [counts] = await database.query<(RowDataPacket & { total: number })[]>(
+	const { rows: counts } = await database.query<{ total: number }>(
 		`SELECT COUNT(*) AS total FROM users u WHERE ${eligibility}`,
 		params,
 	);
@@ -26,7 +26,7 @@ try {
 	);
 	if (values.apply)
 		await database.query(
-			`INSERT INTO loops_sync_jobs (userId,nextAttemptAt) SELECT u.id,UTC_TIMESTAMP() FROM users u WHERE ${eligibility} ON DUPLICATE KEY UPDATE revision=revision+1,nextAttemptAt=UTC_TIMESTAMP()`,
+			`INSERT INTO loops_sync_jobs ("userId","nextAttemptAt") SELECT u.id,timezone('utc', now()) FROM users u WHERE ${eligibility} ON CONFLICT ("userId") DO UPDATE SET revision=loops_sync_jobs.revision+1,"nextAttemptAt"=timezone('utc', now())`,
 			params,
 		);
 } finally {

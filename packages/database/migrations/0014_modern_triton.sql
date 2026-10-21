@@ -1,1 +1,0 @@
-CREATE INDEX `type_recipient_created_idx` ON `notifications` (`type`,`recipientId`,`createdAt`);

@@ -667,7 +667,7 @@ async function getOrganizationMemberByEmail(
 		.where(
 			and(
 				eq(organizationMembers.organizationId, orgId),
-				eq(users.email, email),
+				eq(users.email, email.toLowerCase()),
 			),
 		)
 		.limit(1);

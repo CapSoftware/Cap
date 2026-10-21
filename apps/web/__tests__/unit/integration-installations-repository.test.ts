@@ -5,10 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const databaseMocks = vi.hoisted(() => {
 	const state = { rows: [] as unknown[] };
-	const onDuplicateKeyUpdate = vi.fn(
-		async (_input: { set: Record<string, unknown> }) => undefined,
-	);
-	const values = vi.fn(() => ({ onDuplicateKeyUpdate }));
+	const onConflictDoNothing = vi.fn(async () => undefined);
+	const values = vi.fn(() => ({ onConflictDoNothing }));
 	const insert = vi.fn(() => ({ values }));
 	const orderBy = vi.fn(async () => state.rows);
 	const limit = vi.fn(async () => state.rows);
@@ -33,7 +31,7 @@ const databaseMocks = vi.hoisted(() => {
 
 	return {
 		state,
-		onDuplicateKeyUpdate,
+		onConflictDoNothing,
 		values,
 		insert,
 		orderBy,
@@ -126,12 +124,7 @@ describe("integration installation repository", () => {
 			metadata: { scopes: ["links:read"] },
 		});
 
-		expect(databaseMocks.onDuplicateKeyUpdate).toHaveBeenCalledOnce();
-		const [upsert] = databaseMocks.onDuplicateKeyUpdate.mock.calls[0] ?? [];
-		expect(upsert?.set).toEqual({
-			externalId: expect.anything(),
-		});
-		expect(upsert?.set).not.toHaveProperty("organizationId");
+		expect(databaseMocks.onConflictDoNothing).toHaveBeenCalledOnce();
 		expect(databaseMocks.forUpdate).toHaveBeenCalledWith("update");
 		expect(databaseMocks.set).toHaveBeenCalledWith({
 			displayName: "Cap",
@@ -171,17 +164,17 @@ describe("integration installation repository", () => {
 		const migration = readFileSync(
 			join(
 				process.cwd(),
-				"../../packages/database/migrations/0037_integration_installations.sql",
+				"../../packages/database/migrations/0000_postgres_baseline.sql",
 			),
 			"utf8",
 		);
 
-		expect(migration).toContain("CREATE TABLE `integration_installations`");
+		expect(migration).toContain('CREATE TABLE "integration_installations"');
 		expect(migration).toContain(
-			"CONSTRAINT `provider_external_id_idx` UNIQUE(`provider`,`externalId`)",
+			'CREATE UNIQUE INDEX "provider_external_id_idx" ON "integration_installations" USING btree ("provider","externalId")',
 		);
 		expect(migration).toContain(
-			"CREATE INDEX `organization_provider_display_name_idx` ON `integration_installations` (`organizationId`,`provider`,`displayName`)",
+			'CREATE INDEX "organization_provider_display_name_idx" ON "integration_installations" USING btree ("organizationId","provider","displayName")',
 		);
 		expect(migration).not.toContain("slack_installations");
 		expect(migration).not.toContain("encryptedBotToken");

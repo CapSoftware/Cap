@@ -45,11 +45,7 @@ export const saveIntegrationInstallation = async ({
 				encryptedCredentials,
 				metadata,
 			})
-			.onDuplicateKeyUpdate({
-				set: {
-					externalId: sql`${integrationInstallations.externalId}`,
-				},
-			});
+			.onConflictDoNothing();
 
 		const [installation] = await tx
 			.select({

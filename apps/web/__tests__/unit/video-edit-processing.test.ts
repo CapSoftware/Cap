@@ -51,7 +51,7 @@ const database = vi.hoisted(() => {
 	const remove = vi.fn(() => ({
 		where: vi.fn(async () => {
 			state.upload = null;
-			return [{ affectedRows: 1 }];
+			return { rowCount: 1 };
 		}),
 	}));
 	return { state, select, remove, insert: vi.fn(), update: vi.fn() };

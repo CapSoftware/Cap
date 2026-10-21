@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "@cap/database";
+import { affectedRows } from "@cap/database/helpers";
+import { jsonbGet, jsonbRemove, jsonbSet, jsonbText } from "@cap/database/json";
 import {
 	organizations,
 	videoEdits,
@@ -368,13 +370,13 @@ async function clearLiveTranscriptFlag(videoId: string): Promise<void> {
 		await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+				metadata: jsonbRemove(videos.metadata, ["liveTranscript"]),
 				updatedAt: sql`${videos.updatedAt}`,
 			})
 			.where(
 				and(
 					eq(videos.id, videoId as Video.VideoId),
-					sql`JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript') IS NOT NULL`,
+					sql`${jsonbGet(videos.metadata, ["liveTranscript"])} IS NOT NULL`,
 				),
 			);
 	} catch (error) {
@@ -471,10 +473,7 @@ async function requeueAfterEarlyDefer(
 				isNull(videos.transcriptionStatus),
 			),
 		);
-	const affectedRows = Array.isArray(claim)
-		? ((claim[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
-		: ((claim as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
-	if (affectedRows === 0) return;
+	if (affectedRows(claim) === 0) return;
 
 	try {
 		await start(transcribeVideoWorkflow, [
@@ -972,13 +971,17 @@ async function saveEditTranscriptBackfillError(
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill.status', 'error')`,
+			metadata: jsonbSet(
+				videos.metadata,
+				["editTranscriptBackfill", "status"],
+				"error",
+			),
 			updatedAt: sql`${videos.updatedAt}`,
 		})
 		.where(
 			and(
 				eq(videos.id, videoId as Video.VideoId),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editTranscriptBackfill.requestId')) = ${requestId}`,
+				sql`${jsonbText(videos.metadata, ["editTranscriptBackfill", "requestId"])} = ${requestId}`,
 			),
 		);
 }
@@ -1019,13 +1022,13 @@ async function clearEditTranscriptBackfill(videoId: string, requestId: string) {
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill')`,
+			metadata: jsonbRemove(videos.metadata, ["editTranscriptBackfill"]),
 			updatedAt: sql`${videos.updatedAt}`,
 		})
 		.where(
 			and(
 				eq(videos.id, videoId as Video.VideoId),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editTranscriptBackfill.requestId')) = ${requestId}`,
+				sql`${jsonbText(videos.metadata, ["editTranscriptBackfill", "requestId"])} = ${requestId}`,
 			),
 		);
 }

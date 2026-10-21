@@ -40,7 +40,7 @@ Best for VPS, home servers, or any Docker-capable host.
 **What's included:**
 - Cap Web application
 - Media server (FFmpeg processing)
-- MySQL database
+- PostgreSQL database
 - MinIO (S3-compatible storage)
 
 **Steps:**
@@ -66,7 +66,7 @@ CAP_PORT=3000
 MINIO_PORT=9000
 
 # Optional: Custom passwords (auto-generated if not set)
-MYSQL_PASSWORD=your-secure-password
+POSTGRES_PASSWORD=your-secure-password
 MINIO_ROOT_PASSWORD=your-minio-password
 ```
 
@@ -210,13 +210,13 @@ Run this command three times to generate values for:
 
 **Full production checklist:**
 
-- [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
+- [ ] Set secure passwords: `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`
 - [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`
 - [ ] Set `CAP_URL` to your public URL
 - [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
 - [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL
 - [ ] Set up email with Resend
-- [ ] Configure backups for MySQL and MinIO volumes
+- [ ] Configure backups for PostgreSQL and MinIO volumes
 
 ## Architecture
 
@@ -229,10 +229,14 @@ Run this command three times to generate values for:
                     ┌────────────┼────────────┐
                     ▼            ▼            ▼
              ┌──────────┐ ┌──────────┐ ┌──────────┐
-             │  MySQL   │ │  MinIO   │ │  Media   │
-             │ (3306)   │ │ (9000)   │ │  Server  │
+             │ Postgres │ │  MinIO   │ │  Media   │
+             │ (5432)   │ │ (9000)   │ │  Server  │
              └──────────┘ └──────────┘ └──────────┘
 ```
+
+## Upgrading from the MySQL release
+
+Earlier releases stored data in MySQL. Cap now uses PostgreSQL, and the schema is created from a fresh baseline migration, so an existing MySQL database cannot be upgraded in place. Follow the [MySQL to PostgreSQL migration guide](https://github.com/CapSoftware/Cap/blob/main/docs/mysql-to-postgres.md) to copy your data across before starting the new containers.
 
 ## Environment Variables Reference
 

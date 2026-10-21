@@ -1,6 +1,6 @@
 import { Folder, Organisation, Space, Video } from "@cap/web-domain";
 import { getTableName, type SQL } from "drizzle-orm";
-import { MySqlDialect, type MySqlTable } from "drizzle-orm/mysql-core";
+import { PgDialect, type PgTable } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -30,7 +30,7 @@ import {
 	placeOwnedVideos,
 } from "@/actions/folders/move-items";
 
-const dialect = new MySqlDialect();
+const dialect = new PgDialect();
 const filters: { table: string; sql: string; params: unknown[] }[] = [];
 const locks: string[] = [];
 let results: unknown[][];
@@ -61,7 +61,7 @@ beforeEach(() => {
 	mocks.select.mockImplementation(() => {
 		let table: string;
 		const query = Object.assign(Promise.resolve(results.shift() ?? []), {
-			from(value: MySqlTable) {
+			from(value: PgTable) {
 				table = getTableName(value);
 				return query;
 			},
@@ -85,12 +85,12 @@ beforeEach(() => {
 		});
 		return query;
 	});
-	mocks.insert.mockImplementation((table: MySqlTable) => ({
+	mocks.insert.mockImplementation((table: PgTable) => ({
 		values: async (values: unknown) => {
 			writes.push({ table: getTableName(table), values });
 		},
 	}));
-	mocks.update.mockImplementation((table: MySqlTable) => ({
+	mocks.update.mockImplementation((table: PgTable) => ({
 		set: (values: unknown) => ({
 			where: async (filter: SQL) => {
 				writes.push({ table: getTableName(table), values, filter });
@@ -114,8 +114,8 @@ describe("placing owned Caps in team folders", () => {
 			}),
 		).resolves.toEqual({ moved: 2 });
 		expect(locks).toEqual(["update", "update"]);
-		expect(filters[0]?.sql).toContain("`videos`.`ownerId` = ?");
-		expect(filters[0]?.sql).toContain("`videos`.`orgId` = ?");
+		expect(filters[0]?.sql).toContain('"videos"."ownerId" = $');
+		expect(filters[0]?.sql).toContain('"videos"."orgId" = $');
 		expect(filters[0]?.params).toEqual([...ids, "owner", "org"]);
 		expect(filters[1]?.params).toEqual([folderId, "org", "org"]);
 		expect(writes).toHaveLength(2);
@@ -378,7 +378,7 @@ describe("placing owned Caps in team folders", () => {
 			location: { type: "personal" },
 		});
 		expect(filters[1]?.params).toEqual([folderId, "org", "owner"]);
-		expect(filters[1]?.sql).toContain("`folders`.`spaceId` is null");
+		expect(filters[1]?.sql).toContain('"folders"."spaceId" is null');
 		expect(writes.map((write) => write.table)).toEqual(["videos"]);
 	});
 });

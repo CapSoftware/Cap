@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { SignedBaa } from "@cap/database/emails/signed-baa";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows as getAffectedRows, nanoId } from "@cap/database/helpers";
 import { organizations, signedBaas } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
@@ -54,15 +54,6 @@ function ownerCanPurchaseSignedBaa(user: {
 			CAP_PRO_STATUSES.has(user.stripeSubscriptionStatus),
 	);
 }
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export type SignedBaaInput = {
 	entityName: string;

@@ -1,6 +1,6 @@
 import { Space } from "@cap/web-domain";
 import { getTableName } from "drizzle-orm";
-import type { MySqlTable } from "drizzle-orm/mysql-core";
+import type { PgTable } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -11,14 +11,14 @@ const mocks = vi.hoisted(() => ({
 	events: [] as string[],
 }));
 
-function table(value: MySqlTable) {
+function table(value: PgTable) {
 	return getTableName(value);
 }
 
 function selectQuery(prefix: string, rows: () => unknown[]) {
 	return () => {
 		const query = Object.assign(Promise.resolve(rows()), {
-			from(value: MySqlTable) {
+			from(value: PgTable) {
 				mocks.events.push(`${prefix}select:${table(value)}`);
 				return query;
 			},
@@ -38,7 +38,7 @@ function selectQuery(prefix: string, rows: () => unknown[]) {
 }
 
 function deleteQuery(prefix: string) {
-	return (value: MySqlTable) => ({
+	return (value: PgTable) => ({
 		where: async () => {
 			mocks.events.push(`${prefix}delete:${table(value)}`);
 		},

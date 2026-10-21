@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { db } from "@cap/database";
+import { deleteBatch } from "@cap/database/batch";
+import { affectedRows } from "@cap/database/helpers";
 import { mediaProcessingBudgets } from "@cap/database/schema";
 import { asc, inArray, lt, sql } from "drizzle-orm";
 
@@ -53,9 +55,9 @@ export async function reserveMediaProcessingBudget(input: {
 		await tx
 			.insert(mediaProcessingBudgets)
 			.values(limits.map((limit) => ({ ...limit, expiresAt })))
-			.onDuplicateKeyUpdate({
+			.onConflictDoUpdate({
+				target: mediaProcessingBudgets.id,
 				set: {
-					id: sql`${mediaProcessingBudgets.id}`,
 					expiresAt: sql`GREATEST(${mediaProcessingBudgets.expiresAt}, ${expiresAt})`,
 				},
 			});
@@ -102,9 +104,12 @@ export async function reserveMediaProcessingBudget(input: {
 }
 
 export async function cleanupExpiredMediaProcessingBudgets(now = new Date()) {
-	const result = await db()
-		.delete(mediaProcessingBudgets)
-		.where(lt(mediaProcessingBudgets.expiresAt, now))
-		.limit(1_000);
-	return result[0].affectedRows;
+	const result = await deleteBatch(
+		db(),
+		mediaProcessingBudgets,
+		mediaProcessingBudgets.id,
+		lt(mediaProcessingBudgets.expiresAt, now),
+		1_000,
+	);
+	return affectedRows(result);
 }

@@ -4,13 +4,13 @@ services:
     image: 'ghcr.io/capsoftware/cap-web:latest'
     restart: unless-stopped
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
     environment:
       SERVICE_URL_CAP_WEB_3000: ''
-      DATABASE_URL: 'mysql://cap:${SERVICE_PASSWORD_MYSQL}@mysql:3306/cap'
+      DATABASE_URL: 'postgres://cap:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/cap'
       WEB_URL: '${SERVICE_URL_CAP_WEB}'
       NEXTAUTH_URL: '${SERVICE_URL_CAP_WEB}'
       DATABASE_ENCRYPTION_KEY: '${SERVICE_HEX_32_DATABASEENCRYPTIONKEY}'
@@ -59,30 +59,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-  mysql:
-    image: 'mysql:8.0'
+  postgres:
+    image: 'postgres:16-alpine'
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: cap
-      MYSQL_USER: cap
-      MYSQL_PASSWORD: '${SERVICE_PASSWORD_MYSQL}'
-      MYSQL_ROOT_PASSWORD: '${SERVICE_PASSWORD_64_MYSQL}'
+      POSTGRES_DB: cap
+      POSTGRES_USER: cap
+      POSTGRES_PASSWORD: '${SERVICE_PASSWORD_POSTGRES}'
     command:
-      - '--max_connections=1000'
-      - '--character-set-server=utf8mb4'
-      - '--collation-server=utf8mb4_unicode_ci'
+      - postgres
+      - '-c'
+      - max_connections=200
     volumes:
-      - 'cap-mysql-data:/var/lib/mysql'
+      - 'cap-postgres-data:/var/lib/postgresql/data'
     healthcheck:
       test:
-        - CMD
-        - mysqladmin
-        - ping
-        - '-h'
-        - localhost
-        - '-u'
-        - cap
-        - '-p${SERVICE_PASSWORD_MYSQL}'
+        - CMD-SHELL
+        - 'pg_isready -U cap -d cap'
       interval: 10s
       timeout: 5s
       retries: 10
@@ -120,5 +113,5 @@ services:
       MINIO_ROOT_PASSWORD: '${SERVICE_PASSWORD_MINIO}'
       S3_BUCKET: cap
 volumes:
-  cap-mysql-data: null
+  cap-postgres-data: null
   cap-minio-data: null

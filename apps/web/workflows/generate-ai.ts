@@ -1,4 +1,12 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
+import {
+	jsonbGet,
+	jsonbObject,
+	jsonbRemove,
+	jsonbSet,
+	jsonbText,
+} from "@cap/database/json";
 import { organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { Storage } from "@cap/web-backend/src/Storage/index";
@@ -10,7 +18,7 @@ import {
 	type Video,
 } from "@cap/web-domain";
 import { generateText } from "ai";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, type SQL, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { isAiConfigured } from "@/lib/ai/provider";
@@ -46,16 +54,6 @@ interface AiResult {
 	summary?: string;
 	chapters?: { title: string; start: number }[];
 }
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 const MAX_CHARS_PER_CHUNK = 24000;
 const LEGACY_AI_TITLE_FALLBACK = "Generated Title";
@@ -159,12 +157,20 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 		throw new FatalError("AI metadata already generated");
 	}
 
-	let processingMetadata = sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'PROCESSING')`;
-	for (const [metadataPath, fallback] of [
-		["$.aiTitle", LEGACY_AI_TITLE_FALLBACK],
-		["$.summary", LEGACY_AI_SUMMARY_FALLBACK],
+	let processingMetadata: SQL = jsonbSet(
+		videos.metadata,
+		["aiGenerationStatus"],
+		"PROCESSING",
+	);
+	for (const [metadataKey, fallback] of [
+		["aiTitle", LEGACY_AI_TITLE_FALLBACK],
+		["summary", LEGACY_AI_SUMMARY_FALLBACK],
 	] as const) {
-		processingMetadata = sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, ${metadataPath})) = ${fallback} AND (${metadataPath} <> '$.summary' OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.summaryManuallyEdited')), 'false') <> 'true'), JSON_REMOVE(${processingMetadata}, ${metadataPath}), ${processingMetadata})`;
+		const notManuallyEdited =
+			metadataKey === "summary"
+				? sql`COALESCE(${jsonbText(videos.metadata, ["summaryManuallyEdited"])}, 'false') <> 'true'`
+				: sql`true`;
+		processingMetadata = sql`CASE WHEN ${jsonbText(videos.metadata, [metadataKey])} = ${fallback} AND ${notManuallyEdited} THEN ${jsonbRemove(processingMetadata, [metadataKey])} ELSE ${processingMetadata} END`;
 	}
 
 	await db()
@@ -220,15 +226,15 @@ async function markError(videoId: string): Promise<void> {
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'ERROR')`,
+			metadata: jsonbSet(videos.metadata, ["aiGenerationStatus"], "ERROR"),
 		})
 		.where(
 			and(
 				eq(videos.id, videoId as Video.VideoId),
 				sql`NOT (
-					COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')), '') = 'COMPLETE'
-					AND JSON_EXTRACT(${videos.metadata}, '$.summary') IS NOT NULL
-					AND JSON_EXTRACT(${videos.metadata}, '$.chapters') IS NOT NULL
+					COALESCE(${jsonbText(videos.metadata, ["aiGenerationStatus"])}, '') = 'COMPLETE'
+					AND ${jsonbGet(videos.metadata, ["summary"])} IS NOT NULL
+					AND ${jsonbGet(videos.metadata, ["chapters"])} IS NOT NULL
 				)`,
 			),
 		);
@@ -240,7 +246,7 @@ async function markSkipped(videoId: string): Promise<void> {
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'SKIPPED')`,
+			metadata: jsonbSet(videos.metadata, ["aiGenerationStatus"], "SKIPPED"),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
@@ -372,9 +378,9 @@ async function saveResults(
 		: metadata;
 	const currentTitle = currentVideo?.name ?? video.name;
 
-	let metadataUpdate = sql`COALESCE(${videos.metadata}, JSON_OBJECT())`;
+	let metadataUpdate: SQL = jsonbObject(videos.metadata);
 	if (generatedTitle) {
-		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.aiTitle', ${generatedTitle})`;
+		metadataUpdate = jsonbSet(metadataUpdate, ["aiTitle"], generatedTitle);
 	}
 	if (result.summary) {
 		metadataUpdate = setGeneratedAiContent(
@@ -390,7 +396,7 @@ async function saveResults(
 			result.chapters,
 		);
 	}
-	metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.aiGenerationStatus', 'COMPLETE')`;
+	metadataUpdate = jsonbSet(metadataUpdate, ["aiGenerationStatus"], "COMPLETE");
 
 	await db()
 		.update(videos)
@@ -414,7 +420,7 @@ async function saveResults(
 				and(
 					eq(videos.id, videoId as Video.VideoId),
 					eq(videos.name, currentTitle),
-					sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.titleManuallyEdited')), 'false') <> 'true'`,
+					sql`COALESCE(${jsonbText(videos.metadata, ["titleManuallyEdited"])}, 'false') <> 'true'`,
 				),
 			);
 		if (getAffectedRows(titleUpdate) > 0) {

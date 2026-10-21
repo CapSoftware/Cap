@@ -2,23 +2,19 @@
 name: cap-so-dev
 
 services:
-  ps-mysql:
-    container_name: mysql-primary-db
-    image: mysql:8.0
+  postgres:
+    container_name: postgres-primary-db
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: planetscale
-      MYSQL_ROOT_HOST: "%"
-      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
-    command:
-      [
-        "--max_connections=1000",
-        "--default-authentication-plugin=mysql_native_password",
-      ]
+      POSTGRES_DB: cap
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: ["postgres", "-c", "max_connections=200"]
     ports:
-      - 3306:3306
+      - 5432:5432
     volumes:
-      - ps-mysql:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
 
   cap-media-server:
     container_name: cap-media-server-dev
@@ -61,6 +57,6 @@ services:
       exit 0;
       "
 volumes:
-  ps-mysql:
+  postgres-data:
   minio-data:
   minio-certs:

@@ -154,7 +154,7 @@ describe("agent upload entitlement", () => {
 		expect(completionSource).toContain("uploadVideo.metadata?.agentUpload");
 		expect(completionSource).toContain("const [createUploadRecord]");
 		expect(completionSource).toContain("const [completedUploadRecord]");
-		expect(completionSource).toContain("'$.rawFileKey'");
+		expect(completionSource).toContain('["rawFileKey"]');
 		expect(completionSource).toContain("legacyRawFileKey");
 		expect(completionSource).toMatch(
 			/`\$\{bucket\.bucketName\}\/\$\{payload\.rawFileKey\}`/,

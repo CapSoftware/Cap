@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { affectedRows } from "@cap/database/helpers";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -96,7 +97,7 @@ export async function removeOrganizationMember(
 				),
 			);
 
-		const [result] = await tx
+		const result = await tx
 			.delete(organizationMembers)
 			.where(
 				and(
@@ -105,7 +106,7 @@ export async function removeOrganizationMember(
 				),
 			);
 
-		if (result.affectedRows === 0) throw new Error("Member not found");
+		if (affectedRows(result) === 0) throw new Error("Member not found");
 	});
 
 	revalidatePath("/dashboard/settings/organization");

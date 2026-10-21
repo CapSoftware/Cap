@@ -158,7 +158,10 @@ app.post(
 						db
 							.insert(Db.videoUploads)
 							.values({ videoId, ...state })
-							.onDuplicateKeyUpdate({ set: state }),
+							.onConflictDoUpdate({
+								target: Db.videoUploads.videoId,
+								set: state,
+							}),
 					);
 					return token;
 				}).pipe(
@@ -195,7 +198,8 @@ app.post(
 						videoId: video.value[0].id,
 						mode: "multipart",
 					})
-					.onDuplicateKeyUpdate({
+					.onConflictDoUpdate({
+						target: Db.videoUploads.videoId,
 						set: {
 							mode: "multipart",
 							rawFileKey: null,

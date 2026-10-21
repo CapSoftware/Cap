@@ -53,7 +53,7 @@ vi.mock("@cap/database", () => ({
 			}),
 			insert: () => ({
 				values: (value: unknown) => ({
-					onDuplicateKeyUpdate: async () => fixtures.inserted(value),
+					onConflictDoUpdate: async () => fixtures.inserted(value),
 				}),
 			}),
 			update: () => ({

@@ -8,7 +8,8 @@ import {
 } from "@cap/database/crypto";
 import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
-import { nanoId, nanoIdLong } from "@cap/database/helpers";
+import { affectedRows, nanoId, nanoIdLong } from "@cap/database/helpers";
+import { jsonbMergePatch, jsonbText } from "@cap/database/json";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -61,7 +62,7 @@ import {
 	or,
 	sql,
 } from "drizzle-orm";
-import { union } from "drizzle-orm/mysql-core";
+import { union } from "drizzle-orm/pg-core";
 import { Effect, Layer, Option, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
@@ -196,11 +197,6 @@ const deterministicAgentId = (namespace: string, ...parts: string[]) =>
 		.update([namespace, ...parts].join("\0"), "utf8")
 		.digest("base64url")
 		.slice(0, 15);
-
-const affectedRows = (result: unknown) =>
-	Array.isArray(result)
-		? ((result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
-		: ((result as { affectedRows?: number }).affectedRows ?? 0);
 
 const defaultProOrganizationSettings = {
 	disableSummary: false,
@@ -775,7 +771,7 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 				: undefined,
 			isNull(Db.organizations.tombstoneAt),
 			search
-				? sql`${Db.videos.name} LIKE ${`%${escapeAgentLikePattern(search)}%`} ESCAPE '!'`
+				? sql`${Db.videos.name} ILIKE ${`%${escapeAgentLikePattern(search)}%`} ESCAPE '!'`
 				: undefined,
 			updatedAfter ? gt(Db.videos.updatedAt, updatedAfter) : undefined,
 			cursorFilter,
@@ -1805,23 +1801,23 @@ const updateAgentImage = Effect.fn("Agent.updateImage")(function* (input: {
 						),
 						keyPrefix: `organizations/${organizationId}/collections/${targetId}/logo`,
 						update: (db, urlOrKey) => {
-							const patch = JSON.stringify({
+							const patch = {
 								publicPage: {
 									logoUrl: urlOrKey ?? null,
 									logoMode: urlOrKey ? "custom" : "cap",
 								},
-							});
+							};
 							return target.type === "folder"
 								? db
 										.update(Db.folders)
 										.set({
-											settings: sql`JSON_MERGE_PATCH(COALESCE(${Db.folders.settings}, '{}'), CAST(${patch} AS JSON))`,
+											settings: jsonbMergePatch(Db.folders.settings, patch),
 										})
 										.where(eq(Db.folders.id, target.folderId))
 								: db
 										.update(Db.spaces)
 										.set({
-											settings: sql`JSON_MERGE_PATCH(COALESCE(${Db.spaces.settings}, '{}'), CAST(${patch} AS JSON))`,
+											settings: jsonbMergePatch(Db.spaces.settings, patch),
 										})
 										.where(eq(Db.spaces.id, target.spaceId));
 						},
@@ -1917,9 +1913,7 @@ const updateAgentCollectionPublicPage = Effect.fn(
 		execute: async (tx) => {
 			const now = new Date();
 			const settingsPatch =
-				Object.keys(publicPage).length > 0
-					? JSON.stringify({ publicPage })
-					: null;
+				Object.keys(publicPage).length > 0 ? { publicPage } : null;
 			const result =
 				input.target.type === "folder"
 					? await tx
@@ -1927,7 +1921,7 @@ const updateAgentCollectionPublicPage = Effect.fn(
 							.set({
 								public: publicValue,
 								settings: settingsPatch
-									? sql`JSON_MERGE_PATCH(COALESCE(${Db.folders.settings}, '{}'), CAST(${settingsPatch} AS JSON))`
+									? jsonbMergePatch(Db.folders.settings, settingsPatch)
 									: undefined,
 								updatedAt: now,
 							})
@@ -1937,7 +1931,7 @@ const updateAgentCollectionPublicPage = Effect.fn(
 							.set({
 								public: publicValue,
 								settings: settingsPatch
-									? sql`JSON_MERGE_PATCH(COALESCE(${Db.spaces.settings}, '{}'), CAST(${settingsPatch} AS JSON))`
+									? jsonbMergePatch(Db.spaces.settings, settingsPatch)
 									: undefined,
 								updatedAt: now,
 							})
@@ -2449,9 +2443,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 												userId,
 												role,
 											})
-											.onDuplicateKeyUpdate({
-												set: { role: sql`${Db.spaceMembers.role}` },
-											});
+											.onConflictDoNothing();
 									}
 									await tx.insert(Db.spaceVideos).values({
 										id: deterministicAgentId(
@@ -3914,9 +3906,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								await tx
 									.insert(Db.developerAppDomains)
 									.values({ id, appId: path.appId, domain })
-									.onDuplicateKeyUpdate({
-										set: { domain: sql`${Db.developerAppDomains.domain}` },
-									});
+									.onConflictDoNothing();
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -5693,9 +5683,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										ownerId: principal.id,
 										name,
 									})
-									.onDuplicateKeyUpdate({
-										set: { id: sql`${Db.organizations.id}` },
-									});
+									.onConflictDoNothing();
 								const [organization] = await tx
 									.select({
 										ownerId: Db.organizations.ownerId,
@@ -5726,9 +5714,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										organizationId,
 										role: "owner",
 									})
-									.onDuplicateKeyUpdate({
-										set: { id: sql`${Db.organizationMembers.id}` },
-									});
+									.onConflictDoNothing();
 								await tx
 									.update(Db.users)
 									.set({ activeOrganizationId: organizationId })
@@ -6348,7 +6334,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 														active: drive.active,
 														encryptedConfig,
 													})
-													.onDuplicateKeyUpdate({
+													.onConflictDoUpdate({
+														target: Db.storageIntegrations.id,
 														set: {
 															displayName,
 															status: "active",
@@ -6701,8 +6688,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										eq(Db.agentApiIdempotency.userId, principal.id),
 										eq(Db.agentApiIdempotency.operation, "complete_upload"),
 										eq(Db.agentApiIdempotency.state, "complete"),
-										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.id')) = ${path.id}`,
-										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.rawFileKey')) = ${payload.rawFileKey}`,
+										sql`${jsonbText(Db.agentApiIdempotency.response, ["id"])} = ${path.id}`,
+										sql`${jsonbText(Db.agentApiIdempotency.response, ["rawFileKey"])} = ${payload.rawFileKey}`,
 									),
 								)
 								.limit(1),
@@ -6716,8 +6703,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									and(
 										eq(Db.agentApiIdempotency.userId, principal.id),
 										eq(Db.agentApiIdempotency.operation, "create_upload"),
-										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.id')) = ${path.id}`,
-										sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.rawFileKey')) = ${payload.rawFileKey}`,
+										sql`${jsonbText(Db.agentApiIdempotency.response, ["id"])} = ${path.id}`,
+										sql`${jsonbText(Db.agentApiIdempotency.response, ["rawFileKey"])} = ${payload.rawFileKey}`,
 									),
 								)
 								.limit(1),
@@ -6854,7 +6841,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												and(
 													eq(Db.agentApiIdempotency.userId, principal.id),
 													eq(Db.agentApiIdempotency.operation, "create_upload"),
-													sql`JSON_UNQUOTE(JSON_EXTRACT(${Db.agentApiIdempotency.response}, '$.id')) = ${path.id}`,
+													sql`${jsonbText(Db.agentApiIdempotency.response, ["id"])} = ${path.id}`,
 												),
 											);
 									}),

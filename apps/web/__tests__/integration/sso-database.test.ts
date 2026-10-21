@@ -9,9 +9,9 @@ import {
 } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
-import { createPool, type Pool } from "mysql2/promise";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Adapter, AdapterUser } from "next-auth/adapters";
+import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DrizzleAdapter } from "../../../../packages/database/auth/drizzle-adapter";
 import {
@@ -20,7 +20,7 @@ import {
 } from "../../../../packages/database/auth/sso";
 
 const fixture = vi.hoisted(() => ({
-	database: undefined as MySql2Database | undefined,
+	database: undefined as NodePgDatabase | undefined,
 	stripe: vi.fn(() => {
 		throw new Error("Database integration tests must not call Stripe.");
 	}),
@@ -123,22 +123,22 @@ async function linkAccount(
 }
 
 describe.runIf(Boolean(databaseUrl))(
-	"SSO with an isolated MySQL database",
+	"SSO with an isolated PostgreSQL database",
 	() => {
-		let pool: Pool | undefined;
+		let pool: pg.Pool | undefined;
 
 		beforeAll(async () => {
 			if (!databaseUrl) throw new Error("Missing isolated test database URL.");
 			const url = new URL(databaseUrl);
 			if (
-				url.protocol !== "mysql:" ||
+				!["postgres:", "postgresql:"].includes(url.protocol) ||
 				!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
 				!/^\/cap_sso_[a-z0-9_]+$/.test(url.pathname)
 			) {
 				throw new Error("SSO tests require a session-scoped local database.");
 			}
-			pool = createPool(databaseUrl);
-			fixture.database = drizzle(pool);
+			pool = new pg.Pool({ connectionString: databaseUrl });
+			fixture.database = drizzle({ client: pool });
 			await database().select().from(organizationSso).limit(1);
 		});
 

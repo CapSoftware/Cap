@@ -34,7 +34,7 @@ vi.mock("@cap/database", () => ({
 					set: () => ({
 						where: async () => {
 							databaseState.updated += 1;
-							return [{ affectedRows: 1 }];
+							return { rowCount: 1 };
 						},
 					}),
 				}),
@@ -42,7 +42,7 @@ vi.mock("@cap/database", () => ({
 					values: (row: Record<string, unknown>) => {
 						if ("clientId" in row || "codeHash" in row || "accessHash" in row)
 							databaseState.inserted.push(row);
-						return { onDuplicateKeyUpdate: async () => undefined };
+						return { onConflictDoNothing: async () => undefined };
 					},
 				}),
 			}),
@@ -80,7 +80,7 @@ describe("MCP OAuth authorization", () => {
 			WEB_URL: "https://cap.so",
 			NEXTAUTH_URL: "https://cap.so",
 			NEXTAUTH_SECRET: "synthetic-test-secret-that-is-long-enough",
-			DATABASE_URL: "mysql://unused:unused@127.0.0.1:3306/unused",
+			DATABASE_URL: "postgres://unused:unused@127.0.0.1:5432/unused",
 			CAP_AWS_BUCKET: "synthetic",
 			CAP_AWS_REGION: "us-east-1",
 		});

@@ -1,7 +1,7 @@
 /**
  * Local end-to-end verification of the provider-agnostic AI layer against
  * REAL providers (Groq / OpenAI / Anthropic / AssemblyAI LLM Gateway) and the
- * REAL local dev stack (MySQL + MinIO + media server). No AI mocks: workflows
+ * REAL local dev stack (PostgreSQL + MinIO + media server). No AI mocks: workflows
  * are invoked directly as plain async functions, which executes the exact
  * step code the workflow engine runs.
  *

@@ -5,12 +5,16 @@ import {
 	PutObjectCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type {
 	ContentTransferPayload,
 	ContentTransferProgress,
 } from "@/lib/content-transfer";
+import {
+	createTestConnection,
+	type RowDataPacket,
+	type TestConnection,
+} from "../fixtures/pg-connection";
 
 const enabled = process.env.CAP_CONTENT_TRANSFER_E2E === "1";
 const contentTransferE2e = enabled ? describe.sequential : describe.skip;
@@ -45,7 +49,7 @@ const retryDestinationKey = `${targetUserId}/${retryVideoId}/result.mp4`;
 const retryDestinationPreviewKey = `${targetUserId}/${retryVideoId}/screenshot.png`;
 const retryDestinationTranscriptKey = `${targetUserId}/${retryVideoId}/transcription.vtt`;
 const driveObjectPrefix = `${sourceOwnerId}/${driveVideoId}/`;
-let connection: Connection;
+let connection: TestConnection;
 let s3: S3Client;
 
 function requireRow(rows: RowDataPacket[], label: string) {
@@ -61,7 +65,7 @@ function requireIsolatedDatabase() {
 	const parsed = new URL(databaseUrl);
 	if (
 		parsed.hostname !== "127.0.0.1" ||
-		parsed.port !== "3306" ||
+		parsed.port !== (process.env.CAP_E2E_DATABASE_PORT ?? "5432") ||
 		parsed.pathname !== `/${databaseName}`
 	) {
 		throw new Error(
@@ -160,8 +164,8 @@ async function seedDatabase() {
 	const preferences = JSON.stringify({ notifications: {} });
 	await connection.execute(
 		`INSERT INTO users
-			(id, name, lastName, email, activeOrganizationId, defaultOrgId, inviteQuota, preferences)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, name, "lastName", email, "activeOrganizationId", "defaultOrgId", "inviteQuota", preferences)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16), ($17, $18, $19, $20, $21, $22, $23, $24)`,
 		[
 			actorId,
 			"Transfer",
@@ -190,7 +194,7 @@ async function seedDatabase() {
 		],
 	);
 	await connection.execute(
-		"INSERT INTO organizations (id, name, ownerId, settings) VALUES (?, ?, ?, ?)",
+		`INSERT INTO organizations (id, name, "ownerId", settings) VALUES ($1, $2, $3, $4)`,
 		[
 			organizationId,
 			"Content Transfer E2E",
@@ -199,8 +203,8 @@ async function seedDatabase() {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO organization_members (id, userId, organizationId, role, hasProSeat)
-		 VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+		`INSERT INTO organization_members (id, "userId", "organizationId", role, "hasProSeat")
+		 VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10), ($11, $12, $13, $14, $15)`,
 		[
 			"mem_xfer_admin",
 			actorId,
@@ -225,8 +229,8 @@ async function seedDatabase() {
 	);
 	await connection.execute(
 		`INSERT INTO storage_integrations
-			(id, ownerId, organizationId, provider, displayName, status, active, encryptedConfig)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, "ownerId", "organizationId", provider, "displayName", status, active, "encryptedConfig")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		[
 			driveIntegrationId,
 			actorId,
@@ -252,8 +256,13 @@ async function seedDatabase() {
 		const chunk = driveObjects.slice(index, index + 250);
 		await connection.execute(
 			`INSERT INTO storage_objects
-				(id, integrationId, ownerId, videoId, objectKey, objectKeyHash, providerObjectId, uploadStatus, contentType, contentLength)
-			 VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+				(id, "integrationId", "ownerId", "videoId", "objectKey", "objectKeyHash", "providerObjectId", "uploadStatus", "contentType", "contentLength")
+			 VALUES ${chunk
+					.map(
+						(_, row) =>
+							`(${Array.from({ length: 10 }, (_, column) => `$${row * 10 + column + 1}`).join(", ")})`,
+					)
+					.join(", ")}`,
 			chunk.flatMap((object) => [
 				object.id,
 				driveIntegrationId,
@@ -270,8 +279,8 @@ async function seedDatabase() {
 	}
 	await connection.execute(
 		`INSERT INTO folders
-			(id, name, color, public, organizationId, createdById, parentId, spaceId)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, name, color, public, "organizationId", "createdById", "parentId", "spaceId")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16)`,
 		[
 			sourceRootFolderId,
 			"Owner backup",
@@ -293,8 +302,8 @@ async function seedDatabase() {
 	);
 	await connection.execute(
 		`INSERT INTO videos
-			(id, ownerId, orgId, name, metadata, public, settings, transcriptionStatus, source, folderId)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, "ownerId", "orgId", name, metadata, public, settings, "transcriptionStatus", source, "folderId")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		[
 			videoId,
 			sourceOwnerId,
@@ -310,8 +319,8 @@ async function seedDatabase() {
 	);
 	await connection.execute(
 		`INSERT INTO folders
-			(id, name, color, public, organizationId, createdById, parentId, spaceId)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, name, color, public, "organizationId", "createdById", "parentId", "spaceId")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16)`,
 		[
 			retrySourceFolderId,
 			"Retry folder",
@@ -333,8 +342,8 @@ async function seedDatabase() {
 	);
 	await connection.execute(
 		`INSERT INTO videos
-			(id, ownerId, orgId, name, metadata, public, settings, transcriptionStatus, source, folderId)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, "ownerId", "orgId", name, metadata, public, settings, "transcriptionStatus", source, "folderId")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		[
 			retryVideoId,
 			targetUserId,
@@ -350,20 +359,20 @@ async function seedDatabase() {
 	);
 	await connection.execute(
 		`INSERT INTO shared_videos
-			(id, videoId, folderId, organizationId, sharedByUserId)
-		 VALUES (?, ?, ?, ?, ?)`,
+			(id, "videoId", "folderId", "organizationId", "sharedByUserId")
+		 VALUES ($1, $2, $3, $4, $5)`,
 		[sourceMembershipId, videoId, sourceChildFolderId, organizationId, actorId],
 	);
 	await connection.execute(
 		`INSERT INTO video_uploads
 			(video_id, uploaded, total, mode, phase, processing_progress, raw_file_key)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[videoId, 1024, 1024, "singlepart", "complete", 100, sourceResultKey],
 	);
 	await connection.execute(
 		`INSERT INTO video_uploads
 			(video_id, uploaded, total, mode, phase, processing_progress, raw_file_key)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[
 			retryVideoId,
 			128,
@@ -375,13 +384,13 @@ async function seedDatabase() {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO video_edits (videoId, sourceKey, editSpec)
-		 VALUES (?, ?, ?)`,
+		`INSERT INTO video_edits ("videoId", "sourceKey", "editSpec")
+		 VALUES ($1, $2, $3)`,
 		[videoId, sourceResultKey, JSON.stringify({ segments: [] })],
 	);
 	await connection.execute(
-		`INSERT INTO comments (id, type, content, timestamp, authorId, videoId)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO comments (id, type, content, timestamp, "authorId", "videoId")
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		["cmt_xfer_one", "text", "Preserve this comment", 0.5, actorId, videoId],
 	);
 	const progress: ContentTransferProgress = {
@@ -397,8 +406,8 @@ async function seedDatabase() {
 	};
 	await connection.execute(
 		`INSERT INTO agent_api_operations
-			(id, userId, kind, resourceId, state, payload, result)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, "userId", kind, "resourceId", state, payload, result)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[
 			operationId,
 			actorId,
@@ -411,8 +420,8 @@ async function seedDatabase() {
 	);
 	await connection.execute(
 		`INSERT INTO agent_api_operations
-			(id, userId, kind, resourceId, state, payload, result)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, "userId", kind, "resourceId", state, payload, result)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[
 			retryOperationId,
 			actorId,
@@ -428,7 +437,7 @@ async function seedDatabase() {
 contentTransferE2e("organization content transfer local Docker E2E", () => {
 	beforeAll(async () => {
 		Object.assign(process.env, {
-			DATABASE_URL: `mysql://root@127.0.0.1:3306/${databaseName}`,
+			DATABASE_URL: `postgres://postgres:postgres@127.0.0.1:${process.env.CAP_E2E_DATABASE_PORT ?? "5432"}/${databaseName}`,
 			DATABASE_ENCRYPTION_KEY: "22".repeat(32),
 			NEXTAUTH_SECRET: "synthetic-content-transfer-secret",
 			NEXTAUTH_URL: "http://127.0.0.1",
@@ -444,12 +453,9 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 			CAP_AWS_BUCKET_URL: "http://127.0.0.1:9000/capso",
 			S3_PATH_STYLE: "true",
 		});
-		connection = await mysql.createConnection({
-			host: "127.0.0.1",
-			port: 3306,
-			user: "root",
-			database: databaseName,
-		});
+		connection = await createTestConnection(
+			`postgres://postgres:postgres@127.0.0.1:${process.env.CAP_E2E_DATABASE_PORT ?? "5432"}/${databaseName}`,
+		);
 		s3 = new S3Client({
 			endpoint: "http://127.0.0.1:9000",
 			region: "us-east-1",
@@ -621,7 +627,7 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 		await transferOrganizationContentWorkflow({ operationId });
 
 		const [videoRows] = await connection.query<RowDataPacket[]>(
-			"SELECT id, ownerId, folderId, name, public, metadata, settings, source FROM videos WHERE id = ?",
+			`SELECT id, "ownerId", "folderId", name, public, metadata, settings, source FROM videos WHERE id = $1`,
 			[videoId],
 		);
 		const video = requireRow(videoRows, "Transferred Cap");
@@ -630,7 +636,7 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 			ownerId: targetUserId,
 			folderId: destinationChildFolderId,
 			name: "Synthetic ownership transfer",
-			public: 1,
+			public: true,
 		});
 		expect(video.metadata).toEqual({
 			customCreatedAt: "2025-05-04T12:00:00.000Z",
@@ -639,7 +645,7 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 		expect(video.source).toEqual({ type: "MediaConvert" });
 
 		const [destinationFolders] = await connection.query<RowDataPacket[]>(
-			"SELECT id, parentId, createdById, spaceId, public FROM folders WHERE id IN (?, ?) ORDER BY id",
+			`SELECT id, "parentId", "createdById", "spaceId", public FROM folders WHERE id IN ($1, $2) ORDER BY id`,
 			[destinationRootFolderId, destinationChildFolderId],
 		);
 		expect(destinationFolders).toEqual([
@@ -648,14 +654,14 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 				parentId: destinationRootFolderId,
 				createdById: targetUserId,
 				spaceId: null,
-				public: 0,
+				public: false,
 			}),
 			expect.objectContaining({
 				id: destinationRootFolderId,
 				parentId: null,
 				createdById: targetUserId,
 				spaceId: null,
-				public: 0,
+				public: false,
 			}),
 		]);
 
@@ -667,23 +673,23 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 			editResult,
 		] = await Promise.all([
 			connection.query<RowDataPacket[]>(
-				"SELECT COUNT(*) AS count FROM shared_videos WHERE id = ?",
+				"SELECT COUNT(*) AS count FROM shared_videos WHERE id = $1",
 				[sourceMembershipId],
 			),
 			connection.query<RowDataPacket[]>(
-				"SELECT COUNT(*) AS count FROM folders WHERE id IN (?, ?)",
+				"SELECT COUNT(*) AS count FROM folders WHERE id IN ($1, $2)",
 				[sourceRootFolderId, sourceChildFolderId],
 			),
 			connection.query<RowDataPacket[]>(
-				"SELECT COUNT(*) AS count FROM comments WHERE videoId = ?",
+				`SELECT COUNT(*) AS count FROM comments WHERE "videoId" = $1`,
 				[videoId],
 			),
 			connection.query<RowDataPacket[]>(
-				"SELECT raw_file_key AS rawFileKey FROM video_uploads WHERE video_id = ?",
+				`SELECT raw_file_key AS "rawFileKey" FROM video_uploads WHERE video_id = $1`,
 				[videoId],
 			),
 			connection.query<RowDataPacket[]>(
-				"SELECT sourceKey FROM video_edits WHERE videoId = ?",
+				`SELECT "sourceKey" FROM video_edits WHERE "videoId" = $1`,
 				[videoId],
 			),
 		]);
@@ -716,7 +722,7 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 		).rejects.toBeDefined();
 
 		const [operationRows] = await connection.query<RowDataPacket[]>(
-			"SELECT state, result, errorMessage FROM agent_api_operations WHERE id = ?",
+			`SELECT state, result, "errorMessage" FROM agent_api_operations WHERE id = $1`,
 			[operationId],
 		);
 		const operation = requireRow(operationRows, "Transfer operation");
@@ -740,7 +746,7 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 		});
 
 		const [videoRows] = await connection.query<RowDataPacket[]>(
-			"SELECT ownerId, folderId FROM videos WHERE id = ?",
+			`SELECT "ownerId", "folderId" FROM videos WHERE id = $1`,
 			[retryVideoId],
 		);
 		expect(requireRow(videoRows, "Replay Cap")).toMatchObject({
@@ -748,12 +754,12 @@ contentTransferE2e("organization content transfer local Docker E2E", () => {
 			folderId: retryDestinationFolderId,
 		});
 		const [sourceFolderRows] = await connection.query<RowDataPacket[]>(
-			"SELECT COUNT(*) AS count FROM folders WHERE id = ?",
+			"SELECT COUNT(*) AS count FROM folders WHERE id = $1",
 			[retrySourceFolderId],
 		);
 		expect(requireRow(sourceFolderRows, "Replay source count").count).toBe(0);
 		const [operationRows] = await connection.query<RowDataPacket[]>(
-			"SELECT state, result FROM agent_api_operations WHERE id = ?",
+			"SELECT state, result FROM agent_api_operations WHERE id = $1",
 			[retryOperationId],
 		);
 		const operation = requireRow(operationRows, "Replay operation");

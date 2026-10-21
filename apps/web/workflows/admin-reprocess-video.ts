@@ -342,7 +342,8 @@ async function processExistingResultOnMediaServer(
 			rawFileKey: resultKey,
 			updatedAt: new Date(),
 		})
-		.onDuplicateKeyUpdate({
+		.onConflictDoUpdate({
+			target: videoUploads.videoId,
 			set: {
 				uploaded: 0,
 				total: 0,

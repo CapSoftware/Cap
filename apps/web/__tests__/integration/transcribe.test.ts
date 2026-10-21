@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@cap/env", () => ({
 	serverEnv: vi.fn(() => ({
 		ASSEMBLY_API_KEY: "test-assembly-api-key",
-		DATABASE_URL: "mysql://test@localhost/test",
+		DATABASE_URL: "postgres://test@localhost/test",
 	})),
 }));
 
@@ -29,7 +29,7 @@ vi.mock("@/workflows/transcribe", () => ({
 
 let mockQueryResult: unknown[] = [];
 let mockUploadQueryResult: unknown[] = [];
-let mockUpdateResult: unknown = [{ affectedRows: 1 }];
+let mockUpdateResult: unknown = { rowCount: 1 };
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -82,7 +82,7 @@ describe("transcribeVideo", () => {
 		vi.clearAllMocks();
 		mockQueryResult = [];
 		mockUploadQueryResult = [];
-		mockUpdateResult = [{ affectedRows: 1 }];
+		mockUpdateResult = { rowCount: 1 };
 	});
 
 	describe("input validation", () => {
@@ -399,7 +399,7 @@ describe("transcribeVideo", () => {
 		});
 
 		it("does not trigger workflow when another request claimed transcription first", async () => {
-			mockUpdateResult = [{ affectedRows: 0 }];
+			mockUpdateResult = { rowCount: 0 };
 
 			const result = await transcribeVideo(
 				"video-123" as Video.VideoId,

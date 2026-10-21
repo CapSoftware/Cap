@@ -8,8 +8,12 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { parse } from "dotenv";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	createTestConnection,
+	type RowDataPacket,
+	type TestConnection,
+} from "../fixtures/pg-connection";
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -25,7 +29,9 @@ const enabled = process.env.CAP_AGENT_E2E === "1";
 const agentE2e = enabled ? describe.sequential : describe.skip;
 const databaseName =
 	process.env.CAP_AGENT_E2E_DATABASE ?? "cap_agent_e2e_d6e480cf";
-const databaseUrl = `mysql://root@127.0.0.1:3306/${databaseName}`;
+const databaseUrl =
+	process.env.CAP_E2E_DATABASE_URL ??
+	`postgres://postgres:postgres@127.0.0.1:5432/${databaseName}`;
 if (enabled) process.env.DATABASE_URL = databaseUrl;
 const token = `cap_cli_${"A".repeat(43)}`;
 const memberToken = `cap_cli_${"B".repeat(43)}`;
@@ -76,7 +82,7 @@ type ApiResult = {
 	text: string;
 };
 
-let connection: Connection;
+let connection: TestConnection;
 let server: Server;
 let serverUrl: string;
 let idempotencySequence = 0;
@@ -177,25 +183,11 @@ const runCli = async (
 };
 
 const seedDatabase = async () => {
-	const [tables] = await connection.query<RowDataPacket[]>("SHOW TABLES");
-	await connection.query("SET FOREIGN_KEY_CHECKS = 0");
-	for (const row of tables) {
-		const tableName = String(Object.values(row)[0]);
-		await connection.query(`TRUNCATE TABLE \`${tableName}\``);
-	}
-	for (const tableName of [
-		"agent_api_authorization_codes",
-		"agent_api_idempotency",
-		"agent_api_keys",
-		"agent_api_operations",
-	]) {
-		await connection.query(`DELETE FROM \`${tableName}\``);
-	}
-	await connection.query("SET FOREIGN_KEY_CHECKS = 1");
+	await connection.truncateAll();
 	await connection.execute(
 		`INSERT INTO users
-			(id, name, lastName, email, stripeSubscriptionId, stripeSubscriptionStatus, activeOrganizationId, defaultOrgId, inviteQuota, preferences)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, name, "lastName", email, "stripeSubscriptionId", "stripeSubscriptionStatus", "activeOrganizationId", "defaultOrgId", "inviteQuota", preferences)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10), ($11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		[
 			userId,
 			"Agent",
@@ -236,7 +228,7 @@ const seedDatabase = async () => {
 		],
 	);
 	await connection.execute(
-		"INSERT INTO organizations (id, name, ownerId, settings) VALUES (?, ?, ?, ?)",
+		`INSERT INTO organizations (id, name, "ownerId", settings) VALUES ($1, $2, $3, $4)`,
 		[
 			organizationId,
 			"Agent E2E Organization",
@@ -245,8 +237,8 @@ const seedDatabase = async () => {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO organization_members (id, userId, organizationId, role, hasProSeat)
-		 VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+		`INSERT INTO organization_members (id, "userId", "organizationId", role, "hasProSeat")
+		 VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10)`,
 		[
 			"mem_e2e_owner",
 			userId,
@@ -262,8 +254,8 @@ const seedDatabase = async () => {
 	);
 	await connection.execute(
 		`INSERT INTO videos
-			(id, ownerId, orgId, name, duration, width, height, fps, metadata, public, settings, transcriptionStatus, source, createdAt, updatedAt)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+			(id, "ownerId", "orgId", name, duration, width, height, fps, metadata, public, settings, "transcriptionStatus", source, "createdAt", "updatedAt")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, timezone('utc', now()), timezone('utc', now()))`,
 		[
 			videoId,
 			userId,
@@ -288,7 +280,7 @@ const seedDatabase = async () => {
 	await connection.execute(
 		`INSERT INTO video_uploads
 			(video_id, uploaded, total, mode, phase, processing_progress, processing_message, raw_file_key)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		[
 			videoId,
 			1024,
@@ -301,8 +293,8 @@ const seedDatabase = async () => {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO comments (id, type, content, timestamp, authorId, videoId)
-		 VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO comments (id, type, content, timestamp, "authorId", "videoId")
+		 VALUES ($1, $2, $3, $4, $5, $6), ($7, $8, $9, $10, $11, $12)`,
 		[
 			"cmt_e2e_text",
 			"text",
@@ -319,8 +311,8 @@ const seedDatabase = async () => {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO notifications (id, orgId, recipientId, type, data, videoId, dedupKey)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO notifications (id, "orgId", "recipientId", type, data, "videoId", "dedupKey")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[
 			"ntf_e2e_item",
 			organizationId,
@@ -332,9 +324,9 @@ const seedDatabase = async () => {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO agent_api_keys (id, userId, tokenHash, name, scopes, expiresAt)
-		 VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY)),
-			(?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+		`INSERT INTO agent_api_keys (id, "userId", "tokenHash", name, scopes, "expiresAt")
+		 VALUES ($1, $2, $3, $4, $5, (timezone('utc', now()) + interval '1 day')),
+			($6, $7, $8, $9, $10, (timezone('utc', now()) + interval '1 day'))`,
 		[
 			"key_e2e_agent",
 			userId,
@@ -349,19 +341,19 @@ const seedDatabase = async () => {
 		],
 	);
 	await connection.execute(
-		`INSERT INTO developer_apps (id, ownerId, name, environment)
-		 VALUES (?, ?, ?, ?)`,
+		`INSERT INTO developer_apps (id, "ownerId", name, environment)
+		 VALUES ($1, $2, $3, $4)`,
 		[developerAppId, userId, "Seeded Developer App", "development"],
 	);
 	await connection.execute(
 		`INSERT INTO developer_credit_accounts
-			(id, appId, ownerId, balanceMicroCredits, autoTopUpEnabled, autoTopUpThresholdMicroCredits, autoTopUpAmountCents)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, "appId", "ownerId", "balanceMicroCredits", "autoTopUpEnabled", "autoTopUpThresholdMicroCredits", "autoTopUpAmountCents")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		["dca_e2e_main", developerAppId, userId, 500_000, false, 0, 0],
 	);
 	await connection.execute(
-		`INSERT INTO developer_videos (id, appId, externalUserId, name, duration, width, height, fps)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO developer_videos (id, "appId", "externalUserId", name, duration, width, height, fps)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		[
 			"dvid_e2e_item",
 			developerAppId,
@@ -375,8 +367,8 @@ const seedDatabase = async () => {
 	);
 	await connection.execute(
 		`INSERT INTO developer_credit_transactions
-			(id, accountId, type, amountMicroCredits, balanceAfterMicroCredits, referenceId, referenceType)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, "accountId", type, "amountMicroCredits", "balanceAfterMicroCredits", "referenceId", "referenceType")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		[
 			"dtx_e2e_item",
 			"dca_e2e_main",
@@ -389,8 +381,8 @@ const seedDatabase = async () => {
 	);
 	await connection.execute(
 		`INSERT INTO agent_api_operations
-			(id, userId, kind, resourceId, resultResourceId, state, payload, result, completedAt)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+			(id, "userId", kind, "resourceId", "resultResourceId", state, payload, result, "completedAt")
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, timezone('utc', now()))`,
 		[
 			operationId,
 			userId,
@@ -494,12 +486,7 @@ agentE2e("Cap agent local Docker E2E", () => {
 				workspaceEnvironment.MEDIA_SERVER_WEBHOOK_SECRET ??
 				"local-media-server-secret",
 		});
-		connection = await mysql.createConnection({
-			host: "127.0.0.1",
-			port: 3306,
-			user: "root",
-			database: databaseName,
-		});
+		connection = await createTestConnection(databaseUrl);
 		await seedDatabase();
 		const s3 = new S3Client({
 			endpoint: "http://127.0.0.1:9000",
@@ -832,7 +819,7 @@ agentE2e("Cap agent local Docker E2E", () => {
 		expect(uploaded.link).toBe(`${serverUrl}/s/${uploadedVideoId}`);
 
 		const [uploads] = await connection.execute<RowDataPacket[]>(
-			"SELECT raw_file_key AS rawFileKey, phase FROM video_uploads WHERE video_id = ?",
+			`SELECT raw_file_key AS "rawFileKey", phase FROM video_uploads WHERE video_id = $1`,
 			[uploadedVideoId],
 		);
 		expect(uploads[0]?.phase).toBe("processing");
@@ -1472,8 +1459,8 @@ agentE2e("Cap agent local Docker E2E", () => {
 		const redirectUri = "http://127.0.0.1:45678/callback";
 		await connection.execute(
 			`INSERT INTO agent_api_authorization_codes
-				(id, userId, codeHash, codeChallenge, redirectUri, scopes, expiresAt)
-			 VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+				(id, "userId", "codeHash", "codeChallenge", "redirectUri", scopes, "expiresAt")
+			 VALUES ($1, $2, $3, $4, $5, $6, (timezone('utc', now()) + interval '10 minute'))`,
 			[
 				"cod_e2e_login",
 				userId,
@@ -1623,7 +1610,7 @@ agentE2e("Cap agent local Docker E2E", () => {
 
 	it("verifies database state and that reads do not start work", async () => {
 		const [videoRows] = await connection.execute<RowDataPacket[]>(
-			"SELECT name, transcriptionStatus, metadata FROM videos WHERE id = ?",
+			`SELECT name, "transcriptionStatus", metadata FROM videos WHERE id = $1`,
 			[videoId],
 		);
 		expect(videoRows[0]?.name).toBe("Updated through MCP");
@@ -1634,7 +1621,7 @@ agentE2e("Cap agent local Docker E2E", () => {
 				: videoRows[0]?.metadata;
 		expect(metadata.aiGenerationStatus).toBe("COMPLETE");
 		const [comments] = await connection.execute<RowDataPacket[]>(
-			"SELECT COUNT(*) AS count FROM comments WHERE videoId = ? AND content = ?",
+			`SELECT COUNT(*) AS count FROM comments WHERE "videoId" = $1 AND content = $2`,
 			[videoId, "Agent E2E comment"],
 		);
 		expect(Number(comments[0]?.count)).toBe(1);
@@ -1647,10 +1634,10 @@ agentE2e("Cap agent local Docker E2E", () => {
 	it("deletes only expired agent records in bounded cleanup batches", async () => {
 		await connection.execute(
 			`INSERT INTO agent_api_authorization_codes
-				(id, userId, codeHash, codeChallenge, redirectUri, scopes, expiresAt)
+				(id, "userId", "codeHash", "codeChallenge", "redirectUri", scopes, "expiresAt")
 			 VALUES
-				('cod_e2e_expired', ?, ?, ?, 'http://127.0.0.1:45678/callback', ?, DATE_SUB(NOW(), INTERVAL 1 DAY)),
-				('cod_e2e_live', ?, ?, ?, 'http://127.0.0.1:45678/callback', ?, DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+				('cod_e2e_expired', $1, $2, $3, 'http://127.0.0.1:45678/callback', $4, (timezone('utc', now()) - interval '1 day')),
+				('cod_e2e_live', $5, $6, $7, 'http://127.0.0.1:45678/callback', $8, (timezone('utc', now()) + interval '1 day'))`,
 			[
 				userId,
 				"c".repeat(64),
@@ -1664,10 +1651,10 @@ agentE2e("Cap agent local Docker E2E", () => {
 		);
 		await connection.execute(
 			`INSERT INTO agent_api_idempotency
-				(id, userId, operation, keyHash, requestHash, state, expiresAt)
+				(id, "userId", operation, "keyHash", "requestHash", state, "expiresAt")
 			 VALUES
-				('ide_e2e_expired', ?, 'cleanup_test', ?, ?, 'complete', DATE_SUB(NOW(), INTERVAL 1 DAY)),
-				('ide_e2e_live', ?, 'cleanup_test', ?, ?, 'complete', DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+				('ide_e2e_expired', $1, 'cleanup_test', $2, $3, 'complete', (timezone('utc', now()) - interval '1 day')),
+				('ide_e2e_live', $4, 'cleanup_test', $5, $6, 'complete', (timezone('utc', now()) + interval '1 day'))`,
 			[
 				userId,
 				"1".repeat(64),
@@ -1679,10 +1666,10 @@ agentE2e("Cap agent local Docker E2E", () => {
 		);
 		await connection.execute(
 			`INSERT INTO agent_api_operations
-				(id, userId, kind, resourceId, state, payload, updatedAt, completedAt)
+				(id, "userId", kind, "resourceId", state, payload, "updatedAt", "completedAt")
 			 VALUES
-				('op_e2e_old', ?, 'duplicate_cap', ?, 'succeeded', ?, DATE_SUB(NOW(), INTERVAL 31 DAY), DATE_SUB(NOW(), INTERVAL 31 DAY)),
-				('op_e2e_run', ?, 'duplicate_cap', ?, 'running', ?, DATE_SUB(NOW(), INTERVAL 31 DAY), NULL)`,
+				('op_e2e_old', $1, 'duplicate_cap', $2, 'succeeded', $3, (timezone('utc', now()) - interval '31 day'), (timezone('utc', now()) - interval '31 day')),
+				('op_e2e_run', $4, 'duplicate_cap', $5, 'running', $6, (timezone('utc', now()) - interval '31 day'), NULL)`,
 			[
 				userId,
 				videoId,
@@ -1694,12 +1681,12 @@ agentE2e("Cap agent local Docker E2E", () => {
 		);
 		await connection.execute(
 			`INSERT INTO agent_api_keys
-				(id, userId, tokenHash, name, scopes, expiresAt, revokedAt)
+				(id, "userId", "tokenHash", name, scopes, "expiresAt", "revokedAt")
 			 VALUES
-				('key_e2e_old', ?, ?, 'Expired cleanup key', ?, DATE_SUB(NOW(), INTERVAL 31 DAY), NULL),
-				('key_e2e_live2', ?, ?, 'Live cleanup key', ?, DATE_ADD(NOW(), INTERVAL 1 DAY), NULL),
-				('key_e2e_rvold', ?, ?, 'Old revoked cleanup key', ?, DATE_ADD(NOW(), INTERVAL 1 DAY), DATE_SUB(NOW(), INTERVAL 31 DAY)),
-				('key_e2e_rvnew', ?, ?, 'Recent revoked cleanup key', ?, DATE_ADD(NOW(), INTERVAL 1 DAY), NOW())`,
+				('key_e2e_old', $1, $2, 'Expired cleanup key', $3, (timezone('utc', now()) - interval '31 day'), NULL),
+				('key_e2e_live2', $4, $5, 'Live cleanup key', $6, (timezone('utc', now()) + interval '1 day'), NULL),
+				('key_e2e_rvold', $7, $8, 'Old revoked cleanup key', $9, (timezone('utc', now()) + interval '1 day'), (timezone('utc', now()) - interval '31 day')),
+				('key_e2e_rvnew', $10, $11, 'Recent revoked cleanup key', $12, (timezone('utc', now()) + interval '1 day'), timezone('utc', now()))`,
 			[
 				userId,
 				"5".repeat(64),
@@ -1740,17 +1727,17 @@ agentE2e("Cap agent local Docker E2E", () => {
 		expect(Number(deleted.accessTokens)).toBeGreaterThanOrEqual(2);
 		const [remaining] = await connection.execute<RowDataPacket[]>(
 			`SELECT
-				(SELECT COUNT(*) FROM agent_api_authorization_codes WHERE id = 'cod_e2e_live') AS liveCodes,
-				(SELECT COUNT(*) FROM agent_api_idempotency WHERE id = 'ide_e2e_live') AS liveIdempotency,
-				(SELECT COUNT(*) FROM agent_api_operations WHERE id = 'op_e2e_ready') AS recentOperations,
-				(SELECT COUNT(*) FROM agent_api_operations WHERE id = 'op_e2e_run') AS runningOperations,
-				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_live2') AS liveKeys,
-				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_rvnew') AS recentRevokedKeys,
-				(SELECT COUNT(*) FROM agent_api_authorization_codes WHERE id = 'cod_e2e_expired') AS expiredCodes,
-				(SELECT COUNT(*) FROM agent_api_idempotency WHERE id = 'ide_e2e_expired') AS expiredIdempotency,
-				(SELECT COUNT(*) FROM agent_api_operations WHERE id = 'op_e2e_old') AS oldOperations,
-				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_old') AS expiredKeys,
-				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_rvold') AS oldRevokedKeys`,
+				(SELECT COUNT(*) FROM agent_api_authorization_codes WHERE id = 'cod_e2e_live') AS "liveCodes",
+				(SELECT COUNT(*) FROM agent_api_idempotency WHERE id = 'ide_e2e_live') AS "liveIdempotency",
+				(SELECT COUNT(*) FROM agent_api_operations WHERE id = 'op_e2e_ready') AS "recentOperations",
+				(SELECT COUNT(*) FROM agent_api_operations WHERE id = 'op_e2e_run') AS "runningOperations",
+				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_live2') AS "liveKeys",
+				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_rvnew') AS "recentRevokedKeys",
+				(SELECT COUNT(*) FROM agent_api_authorization_codes WHERE id = 'cod_e2e_expired') AS "expiredCodes",
+				(SELECT COUNT(*) FROM agent_api_idempotency WHERE id = 'ide_e2e_expired') AS "expiredIdempotency",
+				(SELECT COUNT(*) FROM agent_api_operations WHERE id = 'op_e2e_old') AS "oldOperations",
+				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_old') AS "expiredKeys",
+				(SELECT COUNT(*) FROM agent_api_keys WHERE id = 'key_e2e_rvold') AS "oldRevokedKeys"`,
 		);
 		expect(Number(remaining[0]?.liveCodes)).toBe(1);
 		expect(Number(remaining[0]?.liveIdempotency)).toBe(1);

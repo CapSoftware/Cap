@@ -4,7 +4,8 @@ import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
 import { hashPassword } from "@cap/database/crypto";
 import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows as getAffectedRows, nanoId } from "@cap/database/helpers";
+import { jsonbSet } from "@cap/database/json";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
@@ -136,16 +137,6 @@ const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
 const getMobileEmailVerificationIdentifier = (email: string) =>
 	`mobile:${crypto.createHash("sha256").update(email).digest("hex")}`;
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 const hashEmailCode = (code: string) =>
 	crypto
@@ -417,7 +408,7 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 			db
 				.select({ id: Db.users.id })
 				.from(Db.users)
-				.where(eq(Db.users.email, email))
+				.where(eq(Db.users.email, email.toLowerCase()))
 				.limit(1),
 		);
 
@@ -677,7 +668,11 @@ const blockMobileUser = Effect.fn("Mobile.blockUser")(function* (
 				await tx
 					.update(Db.users)
 					.set({
-						preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
+						preferences: jsonbSet(
+							Db.users.preferences,
+							["blockedUserIds"],
+							blockedUserIds,
+						),
 					})
 					.where(eq(Db.users.id, user.id));
 			}
@@ -2942,7 +2937,11 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										.update(Db.videos)
 										.set({
 											name: title,
-											metadata: sql`JSON_SET(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), '$.titleManuallyEdited', true)`,
+											metadata: jsonbSet(
+												Db.videos.metadata,
+												["titleManuallyEdited"],
+												true,
+											),
 										})
 										.where(
 											and(

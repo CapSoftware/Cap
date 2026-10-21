@@ -101,7 +101,11 @@ const getLifetimeRangeStart = async (
 			: eq(videos.orgId, orgId);
 
 	const rows = await db()
-		.select({ minCreatedAt: sql<Date>`MIN(${videos.createdAt})` })
+		.select({
+			minCreatedAt: sql<Date>`MIN(${videos.createdAt})`.mapWith(
+				videos.createdAt,
+			),
+		})
 		.from(videos)
 		.where(whereClause)
 		.limit(1);
@@ -535,8 +539,8 @@ const queryVideoSeries = async (
 ): Promise<CountSeriesRow[]> => {
 	const bucketExpr =
 		bucket === "hour"
-			? sql<string>`DATE_FORMAT(${videos.createdAt}, '%Y-%m-%dT%H:00:00Z')`
-			: sql<string>`DATE_FORMAT(${videos.createdAt}, '%Y-%m-%dT00:00:00Z')`;
+			? sql<string>`to_char(${videos.createdAt}, 'YYYY-MM-DD"T"HH24:00:00"Z"')`
+			: sql<string>`to_char(${videos.createdAt}, 'YYYY-MM-DD"T"00:00:00"Z"')`;
 
 	const conditions = [
 		eq(videos.orgId, orgId),
@@ -572,8 +576,8 @@ const queryCommentsSeries = async (
 	const column = comments.createdAt;
 	const bucketExpr =
 		bucket === "hour"
-			? sql<string>`DATE_FORMAT(${column}, '%Y-%m-%dT%H:00:00Z')`
-			: sql<string>`DATE_FORMAT(${column}, '%Y-%m-%dT00:00:00Z')`;
+			? sql<string>`to_char(${column}, 'YYYY-MM-DD"T"HH24:00:00"Z"')`
+			: sql<string>`to_char(${column}, 'YYYY-MM-DD"T"00:00:00"Z"')`;
 
 	const conditions = [
 		eq(videos.orgId, orgId),

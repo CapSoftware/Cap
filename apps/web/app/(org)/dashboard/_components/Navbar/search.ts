@@ -102,7 +102,7 @@ export async function searchDashboardVideos(
 					eq(organizations.ownerId, user.id),
 					inArray(organizations.id, organizationMembershipIds),
 				),
-				sql`${videos.name} LIKE ${containsPattern} ESCAPE '!'`,
+				sql`${videos.name} ILIKE ${containsPattern} ESCAPE '!'`,
 				or(
 					eq(videos.ownerId, user.id),
 					inArray(videos.id, sharedVideoIds),
@@ -111,7 +111,7 @@ export async function searchDashboardVideos(
 			),
 		)
 		.orderBy(
-			sql`CASE WHEN ${videos.name} LIKE ${startsWithPattern} ESCAPE '!' THEN 0 ELSE 1 END`,
+			sql`CASE WHEN ${videos.name} ILIKE ${startsWithPattern} ESCAPE '!' THEN 0 ELSE 1 END`,
 			desc(videos.effectiveCreatedAt),
 		)
 		.limit(MAX_VIDEO_RESULTS);

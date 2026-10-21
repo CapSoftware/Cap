@@ -1,6 +1,6 @@
 import "server-only";
 
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows as getAffectedRows, nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { Database } from "@cap/web-backend";
 import { Agent } from "@cap/web-domain";
@@ -13,15 +13,6 @@ import {
 	isAgentLoopbackRedirectUri,
 	verifyAgentCodeChallenge,
 } from "./agent-auth";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 const commonError = (requestId: string, message: string) => ({
 	message,

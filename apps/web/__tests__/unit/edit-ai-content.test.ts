@@ -1,4 +1,4 @@
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -46,21 +46,19 @@ beforeEach(() => {
 	mocks.lockedRead.mockImplementation(async () => [
 		{ metadata, duration: 120 },
 	]);
-	mocks.write.mockResolvedValue([{ affectedRows: 1 }]);
-	const dialect = new MySqlDialect();
+	mocks.write.mockResolvedValue({ rowCount: 1 });
+	const dialect = new PgDialect();
 	const tx = {
 		select: () => ({
 			from: () => ({
-				where: (condition: Parameters<MySqlDialect["sqlToQuery"]>[0]) => {
+				where: (condition: Parameters<PgDialect["sqlToQuery"]>[0]) => {
 					readSql = JSON.stringify(dialect.sqlToQuery(condition));
 					return { for: mocks.lockedRead };
 				},
 			}),
 		}),
 		update: () => ({
-			set: (values: {
-				metadata: Parameters<MySqlDialect["sqlToQuery"]>[0];
-			}) => {
+			set: (values: { metadata: Parameters<PgDialect["sqlToQuery"]>[0] }) => {
 				const query = dialect.sqlToQuery(values.metadata);
 				writeSql = query.sql;
 				writeParams = query.params;
@@ -145,10 +143,10 @@ describe("editing AI content", () => {
 			success: true,
 			data: { summary: "**Edited**", chapters: metadata.chapters },
 		});
-		expect(writeSql).toContain("JSON_SET");
-		expect(writeSql).toContain("summaryManuallyEdited");
-		expect(writeSql).not.toContain("chaptersManuallyEdited");
-		expect(writeParams).toContain("**Edited**");
+		expect(writeParams).toContain(
+			JSON.stringify({ summary: "**Edited**", summaryManuallyEdited: true }),
+		);
+		expect(JSON.stringify(writeParams)).not.toContain("chaptersManuallyEdited");
 		expect(mocks.revalidatePath).toHaveBeenCalledWith("/s/video-id");
 	});
 	it("updates chapters as JSON and preserves a concurrent summary edit", async () => {
@@ -164,9 +162,13 @@ describe("editing AI content", () => {
 				chapters: [{ title: "Changed", start: 20 }],
 			},
 		});
-		expect(writeSql).toContain("CAST(? AS JSON)");
-		expect(writeSql).not.toContain("summaryManuallyEdited");
-		expect(writeParams).toContain('[{"title":"Changed","start":20}]');
+		expect(writeParams).toContain(
+			JSON.stringify({
+				chapters: [{ title: "Changed", start: 20 }],
+				chaptersManuallyEdited: true,
+			}),
+		);
+		expect(JSON.stringify(writeParams)).not.toContain("summaryManuallyEdited");
 	});
 	it("rejects stale edits without writing", async () => {
 		metadata.summary = "Newer saved summary";
@@ -224,8 +226,8 @@ describe("editing AI content", () => {
 				value: { summary: "", chapters: [] },
 			}),
 		).toEqual({ success: true, data: { summary: "", chapters: [] } });
-		expect(writeSql).toContain("summaryManuallyEdited");
-		expect(writeSql).toContain("chaptersManuallyEdited");
+		expect(JSON.stringify(writeParams)).toContain("summaryManuallyEdited");
+		expect(JSON.stringify(writeParams)).toContain("chaptersManuallyEdited");
 	});
 	it("reports storage failures without pretending the draft was saved", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
@@ -246,18 +248,18 @@ describe("generation preserves manual content", () => {
 	it.each(["summary", "chapters"] as const)(
 		"guards %s using the current row and permits regeneration after content removal",
 		(field) => {
-			const query = new MySqlDialect().sqlToQuery(
+			const query = new PgDialect().sqlToQuery(
 				setGeneratedAiContent(
-					sql`JSON_OBJECT()`,
+					sql`'{}'::jsonb`,
 					field,
 					field === "summary" ? "Generated" : [],
 				),
 			);
-			expect(query.sql).toContain("JSON_CONTAINS_PATH");
-			expect(query.sql).toContain("IF(");
-			expect(query.params).toContain(`$.${field}ManuallyEdited`);
-			expect(query.params).toContain(`$.${field}`);
-			expect(query.sql).toContain("CAST('false' AS JSON)");
+			expect(query.sql).toContain("CASE");
+			expect(query.sql).toContain("IS NOT NULL");
+			expect(query.params).toContain(`{${field}ManuallyEdited}`);
+			expect(query.params).toContain(`{${field}}`);
+			expect(query.params).toContain("false");
 		},
 	);
 });

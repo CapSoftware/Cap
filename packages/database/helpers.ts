@@ -22,3 +22,6 @@ export type VideoMetadata = {
 	resolution: string;
 	framerate: string;
 };
+
+export const affectedRows = (result: unknown): number =>
+	(result as { rowCount?: number | null } | undefined)?.rowCount ?? 0;

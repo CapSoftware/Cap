@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { affectedRows } from "@cap/database/helpers";
 import {
 	loomMigrationRequests,
 	organizations,
@@ -131,15 +132,6 @@ export async function requireMigrationOperator() {
 	return user;
 }
 
-function affectedRows(result: unknown) {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-}
-
 export async function reserveConciergeImport(
 	requestId: string,
 	operatorId: User.UserId,
@@ -198,7 +190,7 @@ export async function renewConciergeImport(requestId: string, token: string) {
 	const result = await db()
 		.update(loomMigrationRequests)
 		.set({
-			activeImportLeaseUntil: sql`DATE_ADD(GREATEST(${loomMigrationRequests.activeImportLeaseUntil}, ${deadline}), INTERVAL 1 SECOND)`,
+			activeImportLeaseUntil: sql`GREATEST(${loomMigrationRequests.activeImportLeaseUntil}, ${deadline}) + interval '1 second'`,
 			updatedAt: now,
 		})
 		.where(

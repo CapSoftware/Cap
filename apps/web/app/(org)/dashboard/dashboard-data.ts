@@ -190,16 +190,16 @@ function loadSpaces(
 						settings: spaces.settings,
 						currentUserSpaceRole: sql<string | null>`(
           SELECT space_members.role FROM space_members
-          WHERE space_members.spaceId = spaces.id
-          AND space_members.userId = ${user.id}
+          WHERE space_members."spaceId" = spaces.id
+          AND space_members."userId" = ${user.id}
           LIMIT 1
         )`,
 						hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
 						memberCount: sql<number>`(
-          SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
+          SELECT COUNT(*) FROM space_members WHERE space_members."spaceId" = spaces.id
         )`,
 						videoCount: sql<number>`(
-          SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
+          SELECT COUNT(*) FROM space_videos WHERE space_videos."spaceId" = spaces.id
         )`,
 					})
 					.from(spaces)
@@ -211,8 +211,8 @@ function loadSpaces(
 								eq(spaces.privacy, "Public"),
 								sql`EXISTS (
           SELECT 1 FROM space_members 
-          WHERE space_members.spaceId = spaces.id 
-          AND space_members.userId = ${user.id}
+          WHERE space_members."spaceId" = spaces.id 
+          AND space_members."userId" = ${user.id}
         )`,
 							),
 						),

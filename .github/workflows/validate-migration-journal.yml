@@ -18,18 +18,25 @@ jobs:
         run: |
           JOURNAL_PATH="packages/database/migrations/meta/_journal.json"
 
-          # Get the journal from previous commit
-          git fetch origin
+          # Compare against the journal on the branch this PR targets
+          git fetch origin "${{ github.base_ref }}"
+          BASE_REF="origin/${{ github.base_ref }}"
 
-          # Check if journal exists in previous commit
-          if git show 34cd664a1215:$JOURNAL_PATH > /dev/null 2>&1; then
-            git show 34cd664a1215:$JOURNAL_PATH > base.json
+          if git show "$BASE_REF:$JOURNAL_PATH" > /dev/null 2>&1; then
+            git show "$BASE_REF:$JOURNAL_PATH" > base.json
           else
-            echo '{"version":"5","dialect":"mysql","entries":[]}' > base.json
+            echo '{"version":"7","dialect":"postgresql","entries":[]}' > base.json
           fi
 
           # Get current journal
           cp $JOURNAL_PATH current.json
+
+          BASE_DIALECT=$(jq -r '.dialect' base.json)
+          CURRENT_DIALECT=$(jq -r '.dialect' current.json)
+          if [ "$BASE_DIALECT" = "mysql" ] && [ "$CURRENT_DIALECT" = "postgresql" ]; then
+            echo "::notice file=$JOURNAL_PATH,title=Database Rebaseline::Migrations were rebaselined from MySQL to PostgreSQL; skipping the append-only comparison."
+            exit 0
+          fi
 
           # Check version and dialect haven't changed
           BASE_VERSION=$(jq -r '.version' base.json)
@@ -39,8 +46,6 @@ jobs:
             exit 1
           fi
 
-          BASE_DIALECT=$(jq -r '.dialect' base.json)
-          CURRENT_DIALECT=$(jq -r '.dialect' current.json)
           if [ "$BASE_DIALECT" != "$CURRENT_DIALECT" ]; then
             echo "::error file=$JOURNAL_PATH,line=3,title=Dialect Changed::Migration journal dialect cannot be changed (was: $BASE_DIALECT, now: $CURRENT_DIALECT)"
             exit 1

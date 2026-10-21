@@ -35,11 +35,11 @@ jobs:
           docker compose up -d
           echo "Waiting for services to initialize..."
 
-      - name: Wait for MySQL to be healthy
+      - name: Wait for PostgreSQL to be healthy
         run: |
-          echo "Waiting for MySQL..."
-          timeout 120 bash -c 'until docker inspect cap-mysql --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
-          echo "MySQL is healthy"
+          echo "Waiting for PostgreSQL..."
+          timeout 120 bash -c 'until docker inspect cap-postgres --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          echo "PostgreSQL is healthy"
 
       - name: Wait for MinIO to be healthy
         run: |
@@ -98,7 +98,7 @@ jobs:
       - name: Test database has tables
         run: |
           echo "Testing database..."
-          tables=$(docker exec cap-mysql mysql -ucap -pcap-local-pwd-123 cap -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='cap';" -s -N 2>/dev/null)
+          tables=$(docker exec cap-postgres psql -U cap -d cap -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null)
           if [ "$tables" -gt 0 ]; then
             echo "✓ Database has $tables tables (migrations ran successfully)"
           else

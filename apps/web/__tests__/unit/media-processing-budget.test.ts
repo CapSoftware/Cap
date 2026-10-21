@@ -29,7 +29,7 @@ vi.mock("@cap/database", () => ({
 			run({
 				insert: () => ({
 					values: (rows: Array<{ id: string; limitBytes: number }>) => ({
-						onDuplicateKeyUpdate: async () => {
+						onConflictDoUpdate: async () => {
 							for (const row of rows)
 								if (!state.rows.has(row.id))
 									state.rows.set(row.id, { ...row, reservedBytes: 0 });

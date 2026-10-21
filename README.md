@@ -112,14 +112,14 @@ See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, 
 
 ## Local Development
 
-Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, MySQL, Tailwind CSS, and shared media crates.
+Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, PostgreSQL, Tailwind CSS, and shared media crates.
 
 Requirements:
 
 - Node.js 20 or newer
 - Bun 1.4.0
 - Rust 1.88 or newer
-- Docker for MySQL, MinIO, and local services
+- Docker for PostgreSQL, MinIO, and local services
 
 Install and set up the repo:
 

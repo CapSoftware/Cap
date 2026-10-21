@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { jsonbMergePatch } from "@cap/database/json";
 import { folders, spaces } from "@cap/database/schema";
 import { ImageUploads } from "@cap/web-backend";
 import {
@@ -128,14 +129,12 @@ async function setSpaceLogo(
 					.set({
 						// Atomic merge (a JSON null deletes the key per RFC 7396) so
 						// concurrent settings patches can't overwrite the logo write.
-						settings: sql`JSON_MERGE_PATCH(COALESCE(${spaces.settings}, '{}'), CAST(${JSON.stringify(
-							{
-								publicPage: {
-									logoUrl: key ?? null,
-									logoMode: key ? "custom" : "cap",
-								},
+						settings: jsonbMergePatch(spaces.settings, {
+							publicPage: {
+								logoUrl: key ?? null,
+								logoMode: key ? "custom" : "cap",
 							},
-						)} AS JSON))`,
+						}),
 					})
 					.where(eq(spaces.id, id)),
 		});
@@ -200,14 +199,12 @@ async function setFolderLogo(
 					.set({
 						// Atomic merge (a JSON null deletes the key per RFC 7396) so
 						// concurrent settings patches can't overwrite the logo write.
-						settings: sql`JSON_MERGE_PATCH(COALESCE(${folders.settings}, '{}'), CAST(${JSON.stringify(
-							{
-								publicPage: {
-									logoUrl: key ?? null,
-									logoMode: key ? "custom" : "cap",
-								},
+						settings: jsonbMergePatch(folders.settings, {
+							publicPage: {
+								logoUrl: key ?? null,
+								logoMode: key ? "custom" : "cap",
 							},
-						)} AS JSON))`,
+						}),
 					})
 					.where(eq(folders.id, id)),
 		});

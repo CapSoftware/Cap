@@ -254,7 +254,7 @@ export async function placeOwnedVideos({
 					),
 				)
 				.limit(1)
-				.for("update");
+				.for("update", { of: spaces });
 			if (
 				!space ||
 				(!canManageOrganizationSettings(organizationAccess.role) &&

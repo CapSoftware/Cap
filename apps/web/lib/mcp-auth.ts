@@ -3,7 +3,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { db } from "@cap/database";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows, nanoId } from "@cap/database/helpers";
 import {
 	mcpOAuthClients,
 	mcpOAuthCodes,
@@ -102,11 +102,7 @@ export const registerMcpClient = async (input: {
 				registrations: 0,
 				expiresAt: new Date(now.getTime() + 3 * 24 * 60 * 60_000),
 			})
-			.onDuplicateKeyUpdate({
-				set: {
-					windowId: sql`${mcpOAuthRegistrationQuotas.windowId}`,
-				},
-			});
+			.onConflictDoNothing();
 		const [quota] = await tx
 			.select({ registrations: mcpOAuthRegistrationQuotas.registrations })
 			.from(mcpOAuthRegistrationQuotas)
@@ -174,11 +170,6 @@ export const createMcpAuthorizationCode = async (
 		});
 	});
 	return code;
-};
-
-const affectedRows = (result: unknown) => {
-	const value = Array.isArray(result) ? result[0] : result;
-	return (value as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
 const mintMcpTokens = async (

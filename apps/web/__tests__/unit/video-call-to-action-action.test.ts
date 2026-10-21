@@ -45,6 +45,8 @@ const sqlText = (value: unknown): string => {
 	return chunks
 		.map((chunk) => {
 			if (typeof chunk === "string") return chunk;
+			if (chunk && typeof chunk === "object" && "queryChunks" in chunk)
+				return sqlText(chunk);
 			if (chunk && typeof chunk === "object" && "value" in chunk) {
 				const inner = (chunk as { value: unknown }).value;
 				return Array.isArray(inner) ? inner.join("") : String(inner);
@@ -140,7 +142,7 @@ describe("updateVideoCallToAction", () => {
 		const settings = sqlText(
 			(mocks.updates[0] as { settings: unknown }).settings,
 		);
-		expect(settings).toContain("JSON_MERGE_PATCH(");
+		expect(settings).toContain("jsonb_merge_patch(");
 		expect(settings).toContain('"callToAction":null');
 		expect(settings).toContain('"url":"https://cal.com/demo"');
 	});
@@ -151,7 +153,7 @@ describe("updateVideoCallToAction", () => {
 		const settings = sqlText(
 			(mocks.updates[0] as { settings: unknown }).settings,
 		);
-		expect(settings).toContain("JSON_MERGE_PATCH(");
+		expect(settings).toContain("jsonb_merge_patch(");
 		expect(settings).toContain('{"callToAction":null}');
 		expect(settings).not.toContain('"url"');
 	});

@@ -162,7 +162,7 @@ function createClient() {
 								);
 							}
 						}
-						return [{ affectedRows: 1 }];
+						return { rowCount: 1 };
 					},
 				}),
 			};
@@ -170,7 +170,8 @@ function createClient() {
 		insert() {
 			return {
 				values: () => ({
-					onDuplicateKeyUpdate: async () => [{ affectedRows: 1 }],
+					onConflictDoUpdate: async () => ({ rowCount: 1 }),
+					onConflictDoNothing: async () => ({ rowCount: 1 }),
 				}),
 			};
 		},
@@ -178,7 +179,7 @@ function createClient() {
 			return {
 				where: async () => {
 					events.push(`delete-${table.table}`);
-					return [{ affectedRows: 1 }];
+					return { rowCount: 1 };
 				},
 			};
 		},

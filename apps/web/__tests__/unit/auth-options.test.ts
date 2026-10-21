@@ -8,7 +8,7 @@ import type {
 } from "@cap/database/auth/sso";
 import { Organisation } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { Account, NextAuthOptions } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,8 +130,8 @@ describe("authOptions", () => {
 		}));
 		mocks.where.mockReset().mockImplementation((condition: SQL) => ({
 			limit: async () => {
-				const query = new MySqlDialect().sqlToQuery(condition);
-				const match = /^`users`\.`(id|email)` = \?$/.exec(query.sql);
+				const query = new PgDialect().sqlToQuery(condition);
+				const match = /^"users"\."(id|email)" = \$1$/.exec(query.sql);
 				if (!match?.[1]) throw new Error("Unexpected auth-user predicate");
 				const column = match[1] as "id" | "email";
 				return mocks.users.filter((user) => user[column] === query.params[0]);

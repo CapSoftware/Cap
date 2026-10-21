@@ -13,7 +13,7 @@ function createServerEnv() {
 	return createEnv({
 		server: {
 			/// General configuration
-			DATABASE_URL: z.string().describe("MySQL database URL"),
+			DATABASE_URL: z.string().describe("PostgreSQL database URL"),
 			WEB_URL: z
 				.string()
 				.describe("Public URL of the server eg. https://cap.so"),

@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { jsonbMergePatch } from "@cap/database/json";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
@@ -61,7 +62,7 @@ export async function updateVideoSettings(
 	await db()
 		.update(videos)
 		.set({
-			settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST(${JSON.stringify(settingsToSave)} AS JSON))`,
+			settings: jsonbMergePatch(videos.settings, settingsToSave),
 		})
 		.where(eq(videos.id, videoId));
 

@@ -1,4 +1,4 @@
-import mysql from "mysql2/promise";
+import pg from "pg";
 import { createTinybirdClient, resolveTinybirdAuth } from "./shared.js";
 
 const TB_DATASOURCE = "analytics_events";
@@ -115,22 +115,10 @@ async function tinybirdIngest({ host, token, datasource, ndjson }) {
 
 function parseDatabaseUrl(url) {
 	if (!url) throw new Error("DATABASE_URL not found");
-	if (!url.startsWith("mysql://"))
-		throw new Error("DATABASE_URL is not a MySQL URL");
+	if (!url.startsWith("postgres://") && !url.startsWith("postgresql://"))
+		throw new Error("DATABASE_URL is not a PostgreSQL URL");
 
-	const parsed = new URL(url);
-	const config = {
-		host: parsed.hostname,
-		port: parsed.port ? parseInt(parsed.port, 10) : 3306,
-		user: parsed.username,
-		password: parsed.password,
-		database: parsed.pathname.slice(1),
-		ssl: {
-			rejectUnauthorized: false,
-		},
-	};
-
-	return config;
+	return { connectionString: url };
 }
 
 async function getVideoIds() {
@@ -140,11 +128,12 @@ async function getVideoIds() {
 	}
 
 	const config = parseDatabaseUrl(dbUrl);
-	const connection = await mysql.createConnection(config);
+	const connection = new pg.Client(config);
+	await connection.connect();
 
 	try {
-		const [rows] = await connection.execute(
-			"SELECT id, orgId FROM videos LIMIT 1000",
+		const { rows } = await connection.query(
+			'SELECT id, "orgId" FROM videos LIMIT 1000',
 		);
 
 		const videoIds = rows.map((r) => r.id);

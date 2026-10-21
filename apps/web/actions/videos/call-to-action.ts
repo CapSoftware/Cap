@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { jsonbMergePatch } from "@cap/database/json";
 import { videos } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
@@ -43,7 +44,7 @@ export async function updateVideoCallToAction(
 		await db()
 			.update(videos)
 			.set({
-				settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON))`,
+				settings: jsonbMergePatch(videos.settings, { callToAction: null }),
 			})
 			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 		return { success: true, callToAction: null };
@@ -55,7 +56,10 @@ export async function updateVideoCallToAction(
 	await db()
 		.update(videos)
 		.set({
-			settings: sql`JSON_MERGE_PATCH(JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON)), CAST(${JSON.stringify({ callToAction: toStoredCallToAction(result.value) })} AS JSON))`,
+			settings: jsonbMergePatch(
+				jsonbMergePatch(videos.settings, { callToAction: null }),
+				{ callToAction: toStoredCallToAction(result.value) },
+			),
 		})
 		.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 

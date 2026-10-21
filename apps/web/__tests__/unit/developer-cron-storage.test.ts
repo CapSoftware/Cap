@@ -27,6 +27,8 @@ vi.mock("@cap/database", () => ({
 
 vi.mock("@cap/database/helpers", () => ({
 	nanoId: vi.fn(() => "test-nano-id"),
+	affectedRows: (result: { rowCount?: number | null } | undefined) =>
+		result?.rowCount ?? 0,
 }));
 
 vi.mock("@cap/database/schema", () => ({
@@ -98,7 +100,7 @@ function makeChain(
 				from: vi.fn(() => txChain),
 				where: vi.fn(() => {
 					if (currentOperation === "update") {
-						return Promise.resolve([{ affectedRows: 1 }]);
+						return Promise.resolve({ rowCount: 1 });
 					}
 					return txChain;
 				}),

@@ -1,5 +1,5 @@
 import type { HttpApi } from "@effect/platform";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -114,7 +114,7 @@ describe("optional recording preparation API", () => {
 		mocks.rows = [[]];
 		expect((await request()).status).toBe(404);
 		const [condition] = mocks.where.mock.calls[0] ?? [];
-		const query = new MySqlDialect().sqlToQuery(condition);
+		const query = new PgDialect().sqlToQuery(condition);
 		expect(query.params).toEqual(["recording", "owner"]);
 		expect(mocks.prepare).not.toHaveBeenCalled();
 	});
@@ -182,7 +182,7 @@ describe("optional recording preparation API", () => {
 			prepared: segments,
 		});
 		for (const [condition] of mocks.where.mock.calls) {
-			expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
+			expect(new PgDialect().sqlToQuery(condition).params).toEqual([
 				"recording",
 				"owner",
 			]);

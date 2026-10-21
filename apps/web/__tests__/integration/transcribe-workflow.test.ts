@@ -80,7 +80,7 @@ vi.mock("@cap/database", () => ({
 		update: () => ({
 			set: (values: Record<string, unknown>) => {
 				mocks.updates.push(values);
-				return { where: async () => [{ affectedRows: 1 }] };
+				return { where: async () => ({ rowCount: 1 }) };
 			},
 		}),
 	}),

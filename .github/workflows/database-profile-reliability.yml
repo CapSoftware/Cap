@@ -31,16 +31,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
-      mysql:
-        image: mysql:8.4
+      postgres:
+        image: postgres:16
         env:
-          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
-          MYSQL_ROOT_HOST: "%"
-          MYSQL_DATABASE: loops_profile_tests
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: loops_profile_tests
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root"
+          --health-cmd="pg_isready --host=127.0.0.1 --username=postgres"
           --health-interval=5s
           --health-timeout=3s
           --health-retries=30
@@ -49,7 +48,7 @@ jobs:
       - uses: ./.github/actions/setup-js
       - name: Verify profile queries and lifecycle decisions without database writes
         env:
-          LOOPS_ACTIVATION_READONLY_TEST_URL: mysql://root@127.0.0.1:3306/loops_profile_tests
+          LOOPS_ACTIVATION_READONLY_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/loops_profile_tests
         run: >-
           bun test
           scripts/loops/activation.test.ts

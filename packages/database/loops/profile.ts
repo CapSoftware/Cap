@@ -75,9 +75,10 @@ export const emailHash = (email: string) =>
 	createHash("sha256").update(normalizeEmail(email)).digest("hex");
 
 export function isoDate(value: string) {
-	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}( UTC)?$/.test(value)
-		? `${value.replace(" UTC", "").replace(" ", "T")}Z`
-		: value;
+	const normalized =
+		/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?( UTC)?$/.test(value)
+			? `${value.replace(" UTC", "").replace(" ", "T")}Z`
+			: value;
 	const date = new Date(normalized);
 	if (!Number.isFinite(date.getTime()))
 		throw new Error("Source contains an invalid date");

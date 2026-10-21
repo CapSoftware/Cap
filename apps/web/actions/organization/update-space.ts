@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { hashPassword } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
+import { jsonbMergePatch } from "@cap/database/json";
 import { spaceMembers, spaces } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
@@ -96,9 +97,7 @@ export async function updateSpace(formData: FormData) {
 		password?: string | null;
 	} = {
 		name,
-		settings: sql`JSON_MERGE_PATCH(COALESCE(${spaces.settings}, '{}'), CAST(${JSON.stringify(
-			viewerSettings,
-		)} AS JSON))`,
+		settings: jsonbMergePatch(spaces.settings, viewerSettings),
 	};
 	if (publicField !== null) spaceUpdate.public = publicEnabled;
 

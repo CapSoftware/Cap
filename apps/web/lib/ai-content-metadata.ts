@@ -1,3 +1,4 @@
+import { jsonbGet, jsonbSet, jsonbText } from "@cap/database/json";
 import { videos } from "@cap/database/schema";
 import { type SQL, sql } from "drizzle-orm";
 
@@ -6,14 +7,13 @@ export function setGeneratedAiContent(
 	field: "summary" | "chapters",
 	value: string | { title: string; start: number }[],
 ) {
-	const path = `$.${field}`;
-	const editedPath = `$.${field}ManuallyEdited`;
+	const editedField = `${field}ManuallyEdited`;
 	// Empty values are deliberate removals. clearAiMetadata in edit-video.ts
 	// deletes the keys on media replacement, allowing regeneration despite old flags.
-	return sql`IF(
-		JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, ${editedPath})) = 'true'
-		AND JSON_CONTAINS_PATH(${videos.metadata}, 'one', ${path}),
-		${metadata},
-		JSON_SET(${metadata}, ${path}, CAST(${JSON.stringify(value)} AS JSON), ${editedPath}, CAST('false' AS JSON))
-	)`;
+	return sql`CASE
+		WHEN ${jsonbText(videos.metadata, [editedField])} = 'true'
+		AND ${jsonbGet(videos.metadata, [field])} IS NOT NULL
+		THEN ${metadata}
+		ELSE ${jsonbSet(jsonbSet(metadata, [field], value), [editedField], false)}
+	END`;
 }

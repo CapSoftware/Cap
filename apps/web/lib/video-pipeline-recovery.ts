@@ -1,4 +1,6 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
+import { jsonbGet, jsonbText } from "@cap/database/json";
 import {
 	importedVideos,
 	users,
@@ -63,16 +65,6 @@ export type StalledVideoPipelineRecoverySummary = {
 	media: PipelineRecoveryGroup;
 	transcription: PipelineRecoveryGroup;
 	ai: PipelineRecoveryGroup;
-};
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
 const summarize = (
@@ -263,7 +255,7 @@ async function recoverAiCandidate(
 				and(
 					eq(videos.id, candidate.videoId),
 					eq(videos.updatedAt, candidate.updatedAt),
-					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) = ${status}`,
+					sql`${jsonbText(videos.metadata, ["aiGenerationStatus"])} = ${status}`,
 				),
 			);
 
@@ -324,7 +316,7 @@ export async function recoverStalledVideoPipeline({
 				isNotNull(videoUploads.rawFileKey),
 				lte(videoUploads.updatedAt, staleBefore),
 				gte(videoUploads.startedAt, recentBefore),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'webMP4'`,
+				sql`${jsonbText(videos.source, ["type"])} = 'webMP4'`,
 			),
 		)
 		.orderBy(asc(videoUploads.updatedAt))
@@ -379,15 +371,13 @@ export async function recoverStalledVideoPipeline({
 					gte(videos.createdAt, recentBefore),
 					lte(videos.updatedAt, staleBefore),
 					or(
-						isNull(
-							sql`JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')`,
-						),
+						isNull(sql`${jsonbGet(videos.metadata, ["aiGenerationStatus"])}`),
 						inArray(
-							sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus'))`,
+							sql<string>`${jsonbText(videos.metadata, ["aiGenerationStatus"])}`,
 							["QUEUED", "PROCESSING"],
 						),
 					),
-					sql`(${videos.metadata} IS NULL OR JSON_EXTRACT(${videos.metadata}, '$.summary') IS NULL OR JSON_EXTRACT(${videos.metadata}, '$.chapters') IS NULL)`,
+					sql`(${videos.metadata} IS NULL OR ${jsonbGet(videos.metadata, ["summary"])} IS NULL OR ${jsonbGet(videos.metadata, ["chapters"])} IS NULL)`,
 				),
 			)
 			.orderBy(asc(videos.updatedAt))

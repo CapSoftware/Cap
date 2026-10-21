@@ -170,16 +170,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 					iconUrl: ImageUpload.ImageUrlOrKey | null;
 				}[]
 			>`
-        COALESCE(
-          JSON_ARRAYAGG(
-            JSON_OBJECT(
-              'id', ${organizations.id},
-              'name', ${organizations.name},
-              'iconUrl', ${organizations.iconUrl}
-            )
-          ),
-          JSON_ARRAY()
-        )
+        COALESCE(jsonb_agg(jsonb_build_object('id', ${organizations.id}, 'name', ${organizations.name}, 'iconUrl', ${organizations.iconUrl})), '[]'::jsonb)
       `,
 			ownerName: users.name,
 			effectiveDate: videos.effectiveCreatedAt,
@@ -217,6 +208,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.settings,
 			videos.orgId,
 			users.name,
+			videoUploads.videoId,
 		)
 		.orderBy(desc(videos.effectiveCreatedAt))
 		.limit(limit)
@@ -231,7 +223,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			parentId: folders.parentId,
 			createdAt: folders.createdAt,
 			videoCount: sql<number>`(
-        SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+        SELECT COUNT(*) FROM videos WHERE videos."folderId" = folders.id
       )`,
 		})
 		.from(folders)

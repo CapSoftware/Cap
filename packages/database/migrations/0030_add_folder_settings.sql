@@ -1,1 +1,0 @@
-ALTER TABLE `folders` ADD `settings` json;

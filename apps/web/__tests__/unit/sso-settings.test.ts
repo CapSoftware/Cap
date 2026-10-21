@@ -2,7 +2,7 @@ import { verifySsoLoginIntent } from "@cap/database/auth/sso-state";
 import { organizations } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
-import { type AnyMySqlColumn, MySqlDialect } from "drizzle-orm/mysql-core";
+import { type AnyPgColumn, PgDialect } from "drizzle-orm/pg-core";
 import { redirect } from "next/navigation";
 import { type ComponentProps, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -126,7 +126,7 @@ const OWNER_ID = User.UserId.make("owner");
 const WORKOS_ORGANIZATION_ID = "org_company";
 const CONNECTION_ID = "conn_company";
 const SETTINGS_PATH = "/dashboard/settings/organization/security";
-const dialect = new MySqlDialect();
+const dialect = new PgDialect();
 
 type Row = Record<string, unknown>;
 type CapOrganization = typeof organizations.$inferSelect;
@@ -140,15 +140,15 @@ function matchesRow(condition: SQL | undefined, row: Row) {
 		.replaceAll(")", "")
 		.split(" and ")
 		.map((clause) => {
-			const match = /^`[^`]+`\.`([^`]+)`( = \?| is null| in [?, ]+)$/.exec(
+			const match = /^"[^"]+"\."([^"]+)"( = \$\d+| is null| in [$\d, ]+)$/.exec(
 				clause,
 			);
 			if (!match?.[1]) throw new Error(`Unsupported predicate: ${clause}`);
 			if (match[2] === " is null") return row[match[1]] == null;
-			if (match[2] === " = ?") {
+			if (match[2]?.startsWith(" = $")) {
 				return row[match[1]] === query.params[parameterIndex++];
 			}
-			const count = clause.match(/\?/g)?.length ?? 0;
+			const count = clause.match(/\$\d+/g)?.length ?? 0;
 			const values = query.params.slice(parameterIndex, parameterIndex + count);
 			parameterIndex += count;
 			return values.includes(row[match[1]]);
@@ -221,7 +221,7 @@ function makeFixture({
 		: null;
 	const hooks: { beforeUpdate?: () => void } = {};
 	const database = {
-		select: vi.fn((columns?: Record<string, AnyMySqlColumn>) => {
+		select: vi.fn((columns?: Record<string, AnyPgColumn>) => {
 			let joined = false;
 			let condition: SQL | undefined;
 			const selection = {

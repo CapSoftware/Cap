@@ -130,7 +130,7 @@ function createDatabase(
 			return transactionUpdate;
 		},
 	);
-	transactionUpdate.where.mockResolvedValue([{ affectedRows: 1 }]);
+	transactionUpdate.where.mockResolvedValue({ rowCount: 1 });
 
 	const select = vi.fn(() => ({
 		from: vi.fn((table: unknown) => ({
@@ -143,7 +143,7 @@ function createDatabase(
 	}));
 	const update = vi.fn(() => ({
 		set: vi.fn(() => ({
-			where: vi.fn().mockResolvedValue([{ affectedRows: 1 }]),
+			where: vi.fn().mockResolvedValue({ rowCount: 1 }),
 		})),
 	}));
 

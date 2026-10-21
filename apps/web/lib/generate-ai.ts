@@ -1,4 +1,6 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
+import { jsonbSet, jsonbText } from "@cap/database/json";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
@@ -14,16 +16,6 @@ type GenerateAiResult = {
 
 const LEGACY_AI_SUMMARY_FALLBACK =
 	"The AI was unable to generate a proper summary for this content.";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export async function startAiGeneration(
 	videoId: Video.VideoId,
@@ -89,7 +81,7 @@ export async function startAiGeneration(
 		const transitionResult = await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'QUEUED')`,
+				metadata: jsonbSet(videos.metadata, ["aiGenerationStatus"], "QUEUED"),
 			})
 			.where(
 				and(
@@ -116,12 +108,12 @@ export async function startAiGeneration(
 		await db()
 			.update(videos)
 			.set({
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'ERROR')`,
+				metadata: jsonbSet(videos.metadata, ["aiGenerationStatus"], "ERROR"),
 			})
 			.where(
 				and(
 					eq(videos.id, videoId),
-					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) = 'QUEUED'`,
+					sql`${jsonbText(videos.metadata, ["aiGenerationStatus"])} = 'QUEUED'`,
 				),
 			);
 

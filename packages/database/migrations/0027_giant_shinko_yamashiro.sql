@@ -1,1 +1,0 @@
-CREATE INDEX `phase_updated_at_video_id_idx` ON `video_uploads` (`phase`,`updated_at`,`video_id`);

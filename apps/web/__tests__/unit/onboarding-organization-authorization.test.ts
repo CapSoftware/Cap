@@ -7,11 +7,7 @@ import {
 	User,
 } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
-import {
-	type AnyMySqlColumn,
-	MySqlDialect,
-	type MySqlTable,
-} from "drizzle-orm/mysql-core";
+import { type AnyPgColumn, PgDialect, type PgTable } from "drizzle-orm/pg-core";
 import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -37,14 +33,14 @@ type Row = Record<string, unknown>;
 
 function matchesRow(condition: SQL | undefined, row: Row) {
 	if (!condition) return true;
-	const query = new MySqlDialect().sqlToQuery(condition);
+	const query = new PgDialect().sqlToQuery(condition);
 	let parameterIndex = 0;
 	return query.sql
 		.replaceAll("(", "")
 		.replaceAll(")", "")
 		.split(" and ")
 		.every((clause) => {
-			const match = /^`[^`]+`\.`([^`]+)`( = \?| is null)$/.exec(clause);
+			const match = /^"[^"]+"\."([^"]+)"( = \$\d+| is null)$/.exec(clause);
 			if (!match?.[1]) throw new Error(`Unsupported predicate: ${clause}`);
 			return match[2] === " is null"
 				? row[match[1]] == null
@@ -90,7 +86,7 @@ function makeFixture(
 	const organizations =
 		options.organizationExists === false ? [] : [organization];
 	const memberships: Row[] = [];
-	const tables = new Map<MySqlTable, Row[]>([
+	const tables = new Map<PgTable, Row[]>([
 		[Db.users, [user]],
 		[Db.organizations, organizations],
 		[Db.organizationMembers, memberships],
@@ -100,14 +96,14 @@ function makeFixture(
 		beforeIconUpdate?: () => void;
 	} = {};
 	const uploadedPrefixes: string[] = [];
-	const rowsFor = (table: MySqlTable) => {
+	const rowsFor = (table: PgTable) => {
 		const rows = tables.get(table);
 		if (!rows) throw new Error("Unexpected table");
 		return rows;
 	};
 	const database = {
-		select: (columns?: Record<string, AnyMySqlColumn>) => ({
-			from: (table: MySqlTable) => ({
+		select: (columns?: Record<string, AnyPgColumn>) => ({
+			from: (table: PgTable) => ({
 				where: async (condition: SQL | undefined) =>
 					rowsFor(table)
 						.filter((row) => matchesRow(condition, row))
@@ -123,7 +119,7 @@ function makeFixture(
 						),
 			}),
 		}),
-		update: (table: MySqlTable) => ({
+		update: (table: PgTable) => ({
 			set: (patch: Row) => ({
 				where: async (condition: SQL | undefined) => {
 					if (table === Db.organizations)
@@ -134,7 +130,7 @@ function makeFixture(
 				},
 			}),
 		}),
-		insert: (table: MySqlTable) => ({
+		insert: (table: PgTable) => ({
 			values: async (row: Row) => {
 				rowsFor(table).push({ tombstoneAt: null, ...row });
 			},

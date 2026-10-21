@@ -1,1 +1,0 @@
-ALTER TABLE `videos` MODIFY COLUMN `orgId` varchar(15) NOT NULL;

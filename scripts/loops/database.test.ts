@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
-import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import { drizzle } from "drizzle-orm/node-postgres";
+import type pg from "pg";
+import { connectCapDatabase } from "../../packages/database/loops/connection";
 import { readQueueHealth } from "../../packages/database/loops/health";
 import { enqueueLoopsSync } from "../../packages/database/loops/queue";
 import {
@@ -19,38 +20,31 @@ const ids = Array.from({ length: 7 }, () =>
 );
 
 describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
-	let database: Connection;
-	let other: Connection;
+	let database: pg.Client;
+	let other: pg.Client;
 	const previousEnabled = process.env.LOOPS_SYNC_ENABLED;
 	beforeAll(async () => {
 		if (!url || process.env.LOOPS_TEST_BRANCH !== "loops-reliability-20260911")
 			throw new Error("Pass the isolated Loops test branch explicitly");
-		database = await mysql.createConnection({
-			uri: url,
-			timezone: "Z",
-			dateStrings: true,
-		});
-		other = await mysql.createConnection({
-			uri: url,
-			timezone: "Z",
-			dateStrings: true,
-		});
+		database = await connectCapDatabase(url);
+		other = await connectCapDatabase(url);
 		process.env.LOOPS_SYNC_ENABLED = "true";
 	});
 	afterAll(async () => {
 		if (previousEnabled === undefined) delete process.env.LOOPS_SYNC_ENABLED;
 		else process.env.LOOPS_SYNC_ENABLED = previousEnabled;
 		if (database) {
-			await database.query("DELETE FROM loops_sync_jobs WHERE userId IN (?)", [
-				ids,
-			]);
+			await database.query(
+				'DELETE FROM loops_sync_jobs WHERE "userId" = ANY($1::text[])',
+				[ids],
+			);
 			await database.end();
 		}
 		if (other) await other.end();
 	});
 
 	test("rolling back a signup rolls back its queued update", async () => {
-		const orm = drizzle(database);
+		const orm = drizzle({ client: database });
 		await expect(
 			orm.transaction(async (tx) => {
 				await enqueueLoopsSync(tx, ids[0]);
@@ -66,8 +60,8 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("overlapping runners cannot claim the same update", async () => {
-		await enqueueLoopsSync(drizzle(database), ids[1]);
-		await enqueueLoopsSync(drizzle(database), ids[1]);
+		await enqueueLoopsSync(drizzle({ client: database }), ids[1]);
+		await enqueueLoopsSync(drizzle({ client: database }), ids[1]);
 		const [first, second] = await Promise.all([
 			claimJob(database, "runner-one", [ids[1]]),
 			claimJob(other, "runner-two", [ids[1]]),
@@ -77,8 +71,8 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("an interrupted worker's expired lease becomes claimable", async () => {
-		await database.execute(
-			"UPDATE loops_sync_jobs SET leaseUntil=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 SECOND) WHERE userId=?",
+		await database.query(
+			`UPDATE loops_sync_jobs SET "leaseUntil"=timezone('utc', now()) - interval '1 second' WHERE "userId"=$1`,
 			[ids[1]],
 		);
 		const claimed = await claimJob(other, "replacement-runner", [ids[1]]);
@@ -86,12 +80,12 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("an invite queued during a sync remains due after the older update completes", async () => {
-		await enqueueLoopsSync(drizzle(database), ids[2]);
+		await enqueueLoopsSync(drizzle({ client: database }), ids[2]);
 		const old = await claimJob(database, "in-flight", [ids[2]]);
 		if (!old) throw new Error("Test job was not claimed");
-		await enqueueLoopsSync(drizzle(other), ids[2]);
-		await database.execute(
-			"UPDATE loops_sync_jobs SET nextAttemptAt=CASE WHEN revision=? THEN DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY) ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
+		await enqueueLoopsSync(drizzle({ client: other }), ids[2]);
+		await database.query(
+			`UPDATE loops_sync_jobs SET "nextAttemptAt"=CASE WHEN revision=$1 THEN timezone('utc', now()) + interval '1 day' ELSE timezone('utc', now()) END,"leaseToken"=NULL,"leaseUntil"=NULL WHERE "userId"=$2 AND "leaseToken"=$3`,
 			[old.revision, ids[2], "in-flight"],
 		);
 		const next = await claimJob(other, "newer-update", [ids[2]]);
@@ -99,20 +93,21 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("the due query uses the due-time index", async () => {
-		const [plan] = await database.query<RowDataPacket[]>(
-			"EXPLAIN SELECT * FROM loops_sync_jobs WHERE nextAttemptAt<=UTC_TIMESTAMP() AND (leaseUntil IS NULL OR leaseUntil<UTC_TIMESTAMP()) ORDER BY nextAttemptAt LIMIT 1",
-		);
-		expect(
-			plan.some((row) =>
-				String(row.possible_keys).includes("loops_sync_due_idx"),
-			),
-		).toBe(true);
+		await database.query("SET enable_seqscan = off");
+		try {
+			const { rows } = await database.query(
+				`EXPLAIN (FORMAT JSON) SELECT * FROM loops_sync_jobs WHERE "nextAttemptAt"<=timezone('utc', now()) AND ("leaseUntil" IS NULL OR "leaseUntil"<timezone('utc', now())) ORDER BY "nextAttemptAt" LIMIT 1`,
+			);
+			expect(JSON.stringify(rows[0])).toContain("loops_sync_due_idx");
+		} finally {
+			await database.query("RESET enable_seqscan");
+		}
 	});
 
 	test("health detects an overdue queue and repeated failures without flagging held signups", async () => {
-		await enqueueLoopsSync(drizzle(database), ids[5]);
-		await database.execute(
-			"UPDATE loops_sync_jobs SET nextAttemptAt=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 6 MINUTE),failures=3,lastError='loops_http_429' WHERE userId=?",
+		await enqueueLoopsSync(drizzle({ client: database }), ids[5]);
+		await database.query(
+			`UPDATE loops_sync_jobs SET "nextAttemptAt"=timezone('utc', now()) - interval '6 minutes',failures=3,"lastError"='loops_http_429' WHERE "userId"=$1`,
 			[ids[5]],
 		);
 		expect(await readQueueHealth(database)).toMatchObject({
@@ -120,14 +115,14 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 			overdueJobs: 1,
 			failingJobs: 1,
 		});
-		await database.execute(
-			"UPDATE loops_sync_jobs SET lastError='signup_not_complete' WHERE userId=?",
+		await database.query(
+			`UPDATE loops_sync_jobs SET "lastError"='signup_not_complete' WHERE "userId"=$1`,
 			[ids[5]],
 		);
 		expect((await readQueueHealth(database)).healthy).toBe(true);
-		await enqueueLoopsSync(drizzle(other), ids[5]);
-		const [rows] = await database.execute<RowDataPacket[]>(
-			"SELECT failures,lastError FROM loops_sync_jobs WHERE userId=?",
+		await enqueueLoopsSync(drizzle({ client: other }), ids[5]);
+		const { rows } = await database.query(
+			'SELECT failures,"lastError" FROM loops_sync_jobs WHERE "userId"=$1',
 			[ids[5]],
 		);
 		expect(rows[0].failures).toBe(0);
@@ -135,9 +130,9 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("a successful unchanged profile clears a recovered failure", async () => {
-		await enqueueLoopsSync(drizzle(database), ids[6]);
-		await database.execute(
-			"UPDATE loops_sync_jobs SET failures=3,lastError='sync_failed' WHERE userId=?",
+		await enqueueLoopsSync(drizzle({ client: database }), ids[6]);
+		await database.query(
+			`UPDATE loops_sync_jobs SET failures=3,"lastError"='sync_failed' WHERE "userId"=$1`,
 			[ids[6]],
 		);
 		const job = await claimJob(database, "recovered-worker", [ids[6]]);
@@ -152,10 +147,10 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("new invite work stays immediately due when an older attempt fails", async () => {
-		await enqueueLoopsSync(drizzle(database), ids[3]);
+		await enqueueLoopsSync(drizzle({ client: database }), ids[3]);
 		const old = await claimJob(database, "failing-attempt", [ids[3]]);
 		if (!old) throw new Error("Test job was not claimed");
-		await enqueueLoopsSync(drizzle(other), ids[3], true);
+		await enqueueLoopsSync(drizzle({ client: other }), ids[3], true);
 		await deferJob(
 			database,
 			old,
@@ -170,7 +165,7 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 	});
 
 	test("unchanged failed work backs off and an expired lease cannot overwrite its replacement", async () => {
-		await enqueueLoopsSync(drizzle(database), ids[4]);
+		await enqueueLoopsSync(drizzle({ client: database }), ids[4]);
 		const old = await claimJob(database, "original-attempt", [ids[4]]);
 		if (!old) throw new Error("Test job was not claimed");
 		await deferJob(
@@ -181,7 +176,7 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 			new Date(Date.now() + 60 * 60_000),
 		);
 		expect(await claimJob(other, "too-early", [ids[4]])).toBeUndefined();
-		await enqueueLoopsSync(drizzle(other), ids[4]);
+		await enqueueLoopsSync(drizzle({ client: other }), ids[4]);
 		const replacement = await claimJob(other, "replacement-attempt", [ids[4]]);
 		if (!replacement) throw new Error("Replacement was not claimed");
 		await deferJob(
@@ -191,8 +186,8 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 			"sync_failed",
 			new Date(),
 		);
-		const [rows] = await database.execute<RowDataPacket[]>(
-			"SELECT leaseToken,revision FROM loops_sync_jobs WHERE userId=?",
+		const { rows } = await database.query(
+			'SELECT "leaseToken",revision FROM loops_sync_jobs WHERE "userId"=$1',
 			[ids[4]],
 		);
 		expect(rows[0].leaseToken).toBe("replacement-attempt");

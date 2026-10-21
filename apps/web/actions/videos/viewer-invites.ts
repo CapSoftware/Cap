@@ -79,7 +79,8 @@ export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 			email: normalizedEmail,
 			invitedByUserId: user.id,
 		})
-		.onDuplicateKeyUpdate({
+		.onConflictDoUpdate({
+			target: [videoViewerGrants.videoId, videoViewerGrants.email],
 			set: { revokedAt: null, invitedByUserId: user.id },
 		});
 

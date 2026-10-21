@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { jsonbText } from "@cap/database/json";
 import {
 	videoProcessingJobs,
 	videos,
@@ -277,7 +278,7 @@ export async function recoverStaleDesktopSegments({
 						`${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED}:%`,
 					),
 				),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
+				sql`${jsonbText(videos.source, ["type"])} = 'desktopSegments'`,
 			),
 		)
 		.orderBy(asc(videoUploads.updatedAt), asc(videoUploads.videoId))

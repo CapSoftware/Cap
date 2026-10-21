@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { STRIPE_AVAILABLE } from "@cap/utils";
 import { type ImageUpload, Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import type { MySql2Database } from "drizzle-orm/mysql2";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Adapter } from "next-auth/adapters";
 import { nanoId } from "../helpers.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
@@ -33,7 +33,7 @@ function getProvisionedUserName(email: string) {
 }
 
 async function hasPendingProvisionedInvite(
-	db: MySql2Database,
+	db: NodePgDatabase,
 	userId: User.UserId,
 	email: string,
 ) {
@@ -61,7 +61,7 @@ async function hasPendingProvisionedInvite(
 	return !!pendingInviteMember;
 }
 
-async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
+async function hasLinkedAccount(db: NodePgDatabase, userId: User.UserId) {
 	const [linkedAccount] = await db
 		.select({ id: accounts.id })
 		.from(accounts)
@@ -72,7 +72,7 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 }
 
 export function DrizzleAdapter(
-	db: MySql2Database,
+	db: NodePgDatabase,
 	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
 ): Adapter {
 	return {
@@ -145,7 +145,8 @@ export function DrizzleAdapter(
 						pendingInvite || ssoIdentity ? "teammate" : "independent",
 				});
 				if (ssoIdentity) {
-					await insertUser.onDuplicateKeyUpdate({
+					await insertUser.onConflictDoUpdate({
+						target: users.email,
 						set: { email: normalizedEmail },
 					});
 					const [createdUser] = await tx

@@ -6,7 +6,7 @@ import {
 	LoomMigrationRequestEmail,
 	LoomMigrationStatusEmail,
 } from "@cap/database/emails/loom-migration";
-import { nanoId } from "@cap/database/helpers";
+import { affectedRows, nanoId } from "@cap/database/helpers";
 import {
 	loomMigrationImports,
 	loomMigrationRequests,
@@ -36,15 +36,6 @@ import {
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 
 const SUPPORT_EMAIL = "hello@cap.so";
-
-function affectedRows(result: unknown) {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-}
 
 function refreshMigrationPages() {
 	revalidatePath("/dashboard/import/loom");

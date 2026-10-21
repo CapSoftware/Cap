@@ -260,14 +260,14 @@ function databaseFixture(initial: DesktopRecordingJob) {
 				set: (values: Record<string, unknown>) => ({
 					where: async () => {
 						pending.push({ operation: "update", table, values });
-						return [{ affectedRows: 1 }];
+						return { rowCount: 1 };
 					},
 				}),
 			}),
 			delete: (table: unknown) => ({
 				where: async () => {
 					pending.push({ operation: "delete", table });
-					return [{ affectedRows: 1 }];
+					return { rowCount: 1 };
 				},
 			}),
 		};

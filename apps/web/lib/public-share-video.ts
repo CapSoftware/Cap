@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { jsonbText } from "@cap/database/json";
 import {
 	organizations,
 	spaces,
@@ -80,7 +81,7 @@ export async function getPublicShareVideo(
 				),
 			sourceType: sql<
 				PublicShareVideoCandidate["sourceType"]
-			>`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type'))`,
+			>`${jsonbText(videos.source, ["type"])}`,
 			jobStatus: videos.jobStatus,
 			skipProcessing: videos.skipProcessing,
 			width: videos.width,

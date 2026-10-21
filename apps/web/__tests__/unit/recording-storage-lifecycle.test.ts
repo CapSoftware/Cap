@@ -10,7 +10,7 @@ import {
 	Video,
 } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { Cause, Effect, Exit, Logger, Option, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -162,7 +162,7 @@ function databaseFixture(video = recording()) {
 	let beforePrepareDelete: (() => Promise<void>) | undefined;
 	let loseNextCreateResponse = false;
 	const idFrom = (condition: SQL) => {
-		const id = new MySqlDialect().sqlToQuery(condition).params[0];
+		const id = new PgDialect().sqlToQuery(condition).params[0];
 		if (typeof id !== "string") throw new Error("Missing database video id");
 		return id;
 	};
@@ -197,7 +197,7 @@ function databaseFixture(video = recording()) {
 						events.push("dependent-delete");
 					}
 					pending.push({ operation: "delete", table, id });
-					return [{ affectedRows: 1 }];
+					return { rowCount: 1 };
 				},
 			}),
 			insert: (table: unknown) => ({
@@ -208,10 +208,10 @@ function databaseFixture(video = recording()) {
 						for (const value of values) {
 							pending.push({ operation: "insert", table, values: value });
 						}
-						return Promise.resolve([{ affectedRows: 1 }]);
+						return Promise.resolve({ rowCount: 1 });
 					}
 					return {
-						onDuplicateKeyUpdate: async ({
+						onConflictDoUpdate: async ({
 							set,
 						}: {
 							set: Record<string, unknown>;
@@ -226,7 +226,7 @@ function databaseFixture(video = recording()) {
 								table,
 								values: jobs.has(id) ? { ...jobs.get(id), ...set } : values,
 							});
-							return [{ affectedRows: 1 }];
+							return { rowCount: 1 };
 						},
 					};
 				},
@@ -294,7 +294,7 @@ function databaseFixture(video = recording()) {
 				if (table !== Db.storageObjects)
 					throw new Error("Unexpected direct delete");
 				objectDeleteConditions.push(condition);
-				return [{ affectedRows: 1 }];
+				return { rowCount: 1 };
 			},
 		}),
 		transaction,
@@ -1720,7 +1720,7 @@ describe("recording storage lifecycle", () => {
 			expect(drive.deleteConditions).toHaveLength(1);
 			const [condition] = drive.deleteConditions;
 			if (!condition) throw new Error("Missing Drive index delete condition");
-			expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
+			expect(new PgDialect().sqlToQuery(condition).params).toEqual([
 				drive.integrationId,
 				expect.stringMatching(/^[a-f0-9]{64}$/),
 				"original-file",

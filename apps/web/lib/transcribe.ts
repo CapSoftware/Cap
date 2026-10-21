@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { affectedRows as getAffectedRows } from "@cap/database/helpers";
 import { organizations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
@@ -29,16 +30,6 @@ const TRANSCRIPTION_ALREADY_HANDLED_MESSAGE =
  * to it. Chunks stamp every ~10s; 3 minutes tolerates long retries without
  * letting a dead workflow block transcription forever. */
 const LIVE_CLAIM_FRESHNESS_MS = 3 * 60 * 1000;
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 export async function transcribeVideo(
 	videoId: Video.VideoId,

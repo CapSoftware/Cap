@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { db } from "@cap/database";
+import { jsonbSet } from "@cap/database/json";
 import {
 	videoProcessingJobs,
 	videos,
@@ -536,7 +537,11 @@ export async function applyDesktopRecordingProgress(input: unknown): Promise<{
 			.update(videos)
 			.set({
 				source: { type: "desktopMP4", outputKey, ...assets },
-				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_EXTRACT(${JSON.stringify(receipt)}, '$'))`,
+				metadata: jsonbSet(
+					videos.metadata,
+					["desktopRecordingUpload"],
+					receipt,
+				),
 				duration: completion.metadata.duration,
 				width: completion.metadata.width,
 				height: completion.metadata.height,

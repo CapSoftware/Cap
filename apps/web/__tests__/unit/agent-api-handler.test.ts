@@ -24,7 +24,7 @@ describe("agent API handler", () => {
 		Object.assign(process.env, {
 			NEXT_PUBLIC_WEB_URL: "http://localhost",
 			WEB_URL: "http://localhost",
-			DATABASE_URL: "mysql://unused:unused@127.0.0.1:3306/unused",
+			DATABASE_URL: "postgres://unused:unused@127.0.0.1:5432/unused",
 			NEXTAUTH_SECRET: "synthetic-test-secret-that-is-long-enough",
 			NEXTAUTH_URL: "http://localhost",
 			CAP_AWS_BUCKET: "synthetic",

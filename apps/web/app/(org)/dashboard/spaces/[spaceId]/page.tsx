@@ -366,6 +366,7 @@ export default async function SharedCapsPage(props: {
 						videos.settings,
 						videos.password,
 						users.name,
+						videoUploads.videoId,
 					)
 					.orderBy(desc(videos.effectiveCreatedAt))
 					.limit(limit)
@@ -495,6 +496,7 @@ export default async function SharedCapsPage(props: {
 						videos.public,
 						videos.settings,
 						videos.password,
+						videoUploads.videoId,
 					)
 					.orderBy(desc(videos.effectiveCreatedAt))
 					.limit(limit)

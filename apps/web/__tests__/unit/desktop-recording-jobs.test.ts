@@ -167,7 +167,7 @@ function createClient() {
 								matches(row, condition),
 							);
 							for (const row of matching) Object.assign(row, values);
-							return [{ affectedRows: matching.length }];
+							return { rowCount: matching.length };
 						},
 					};
 				},
@@ -176,26 +176,34 @@ function createClient() {
 		insert(table: Table) {
 			return {
 				values(values: Row) {
-					const run = async (update?: Row) => {
+					const run = async (update?: Row, ignoreConflict = false) => {
 						lockingOperations.push(
-							`${update ? "upsert" : "insert"}:${table.table}`,
+							`${update || ignoreConflict ? "upsert" : "insert"}:${table.table}`,
 						);
 						const stored = (rows[table.table] ?? []).find(
 							(row) => row.videoId === values.videoId,
 						);
 						if (stored) {
+							if (ignoreConflict) return { rowCount: 0 };
 							if (!update) throw new Error("Duplicate row");
 							Object.assign(stored, update);
 						} else {
 							rows[table.table]?.push({ ...values });
 						}
-						return [{ affectedRows: 1 }];
+						return { rowCount: 1 };
 					};
 					let updates: Row | undefined;
-					const pending = Promise.resolve().then(() => run(updates));
+					let ignoreConflict = false;
+					const pending = Promise.resolve().then(() =>
+						run(updates, ignoreConflict),
+					);
 					return Object.assign(pending, {
-						onDuplicateKeyUpdate: ({ set }: { set: Row }) => {
+						onConflictDoUpdate: ({ set }: { set: Row }) => {
 							updates = set;
+							return pending;
+						},
+						onConflictDoNothing: () => {
+							ignoreConflict = true;
 							return pending;
 						},
 					});

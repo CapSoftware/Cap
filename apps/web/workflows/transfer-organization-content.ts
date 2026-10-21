@@ -671,6 +671,19 @@ async function transferOneVideo(
 					isNull(Db.organizations.tombstoneAt),
 				),
 			)
+			.for("share", { of: Db.organizations });
+		await tx
+			.select({ id: Db.organizationMembers.id })
+			.from(Db.organizationMembers)
+			.where(
+				and(
+					eq(Db.organizationMembers.organizationId, organizationId),
+					inArray(Db.organizationMembers.userId, [
+						User.UserId.make(payload.requestedByUserId),
+						targetUserId,
+					]),
+				),
+			)
 			.for("share");
 		const organization = accessRows[0];
 		const actorMembership = accessRows.find(
@@ -695,14 +708,19 @@ async function transferOneVideo(
 				ownerId: Db.videos.ownerId,
 				bucketId: Db.videos.bucket,
 				storageIntegrationId: Db.videos.storageIntegrationId,
-				uploadPhase: Db.videoUploads.phase,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
 			.where(eq(Db.videos.id, videoId))
 			.limit(1)
 			.for("update");
 		if (!lockedVideo) throw new FatalError(`Cap ${item.name} no longer exists`);
+		const [lockedUpload] = await tx
+			.select({ phase: Db.videoUploads.phase })
+			.from(Db.videoUploads)
+			.where(eq(Db.videoUploads.videoId, videoId))
+			.limit(1)
+			.for("update");
+		const uploadPhase = lockedUpload?.phase ?? null;
 		if (
 			lockedVideo.ownerId !== item.sourceOwnerId &&
 			lockedVideo.ownerId !== payload.targetUserId
@@ -712,7 +730,7 @@ async function transferOneVideo(
 		if (
 			lockedVideo.bucketId !== item.bucketId ||
 			lockedVideo.storageIntegrationId !== item.storageIntegrationId ||
-			lockedVideo.uploadPhase !== item.sourceUploadPhase
+			uploadPhase !== item.sourceUploadPhase
 		) {
 			throw new FatalError(`Storage changed for ${item.name}`);
 		}

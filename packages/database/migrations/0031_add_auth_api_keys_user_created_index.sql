@@ -1,1 +1,0 @@
-CREATE INDEX `user_id_created_at_idx` ON `auth_api_keys` (`userId`,`createdAt`);

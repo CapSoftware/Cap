@@ -62,7 +62,7 @@ function makeUpdateChain(affectedRows: number) {
 	};
 	chain.update.mockReturnValue(chain);
 	chain.set.mockReturnValue(chain);
-	chain.where.mockResolvedValue([{ affectedRows }]);
+	chain.where.mockResolvedValue({ rowCount: affectedRows });
 	return chain;
 }
 
@@ -88,11 +88,12 @@ describe("startAiGeneration", () => {
 		const { startAiGeneration } = await import("@/lib/generate-ai");
 		await startAiGeneration("video-1" as never, "user-1");
 		const value = update.set.mock.calls[0]?.[0];
-		expect(value.metadata.strings.join("")).toContain("JSON_SET(COALESCE(");
-		expect(value.metadata.strings.join("")).toContain(
-			"'$.aiGenerationStatus', 'QUEUED'",
-		);
-		expect(value.metadata.values).toEqual(["videos.metadata"]);
+		expect(value.metadata.strings.join("")).toContain("jsonb_set(");
+		const [source, path, json] = value.metadata.values;
+		expect(source.strings.join("")).toContain("COALESCE(");
+		expect(source.values).toEqual(["videos.metadata"]);
+		expect(path).toBe("{aiGenerationStatus}");
+		expect(json).toBe('"QUEUED"');
 	});
 	it("fails fast when no AI provider is configured", async () => {
 		serverEnvMock.mockReturnValue({});

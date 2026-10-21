@@ -1,1 +1,0 @@
-ALTER TABLE `videos` ADD `orgId` varchar(15);

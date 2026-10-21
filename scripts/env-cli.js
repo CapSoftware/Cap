@@ -22,7 +22,7 @@ const DOCKER_S3_ENVS = {
 };
 
 const DOCKER_DB_ENVS = {
-	url: "mysql://root:@localhost:3306/planetscale",
+	url: "postgres://postgres:postgres@localhost:5432/cap",
 };
 
 async function main() {
@@ -76,7 +76,7 @@ async function main() {
 		envs.DATABASE_ENCRYPTION_KEY = allEnvs.DATABASE_ENCRYPTION_KEY;
 
 		usingDockerEnvironment = await confirm({
-			message: "Will you be running S3 and MySQL via Docker?",
+			message: "Will you be running S3 and PostgreSQL via Docker?",
 		});
 
 		if (isCancel(usingDockerEnvironment)) return;
@@ -86,14 +86,13 @@ async function main() {
 			const dbValues = await group({
 				DATABASE_URL: () =>
 					text({
-						message:
-							"DATABASE_URL - Can be plain mysql:// or a PlanetScale https:// URL",
+						message: "DATABASE_URL - A postgres:// connection URL",
 						placeholder:
 							allEnvs.DATABASE_URL ??
-							"mysql://root:@localhost:3306/planetscale",
+							"postgres://postgres:postgres@localhost:5432/cap",
 						defaultValue:
 							allEnvs.DATABASE_URL ??
-							"mysql://root:@localhost:3306/planetscale",
+							"postgres://postgres:postgres@localhost:5432/cap",
 					}),
 			});
 

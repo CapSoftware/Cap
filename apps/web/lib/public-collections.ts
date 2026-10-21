@@ -113,8 +113,8 @@ function videoPasswordPredicate(
 ) {
 	const noPassword = sql`(${videoPassword} IS NULL AND NOT EXISTS (
 		SELECT 1 FROM space_videos sv_password
-		INNER JOIN spaces s_password ON sv_password.spaceId = s_password.id
-		WHERE sv_password.videoId = ${videoId}
+		INNER JOIN spaces s_password ON sv_password."spaceId" = s_password.id
+		WHERE sv_password."videoId" = ${videoId}
 			AND s_password.password IS NOT NULL
 	))`;
 
@@ -129,8 +129,8 @@ function videoPasswordPredicate(
 		OR ${videoPassword} IN (${verifiedHashes})
 		OR EXISTS (
 			SELECT 1 FROM space_videos sv_password
-			INNER JOIN spaces s_password ON sv_password.spaceId = s_password.id
-			WHERE sv_password.videoId = ${videoId}
+			INNER JOIN spaces s_password ON sv_password."spaceId" = s_password.id
+			WHERE sv_password."videoId" = ${videoId}
 				AND s_password.password IN (${verifiedHashes})
 		)
 	)`;
@@ -139,8 +139,8 @@ function videoPasswordPredicate(
 function hasPasswordExpression(videoId: SQL, videoPassword: SQL) {
 	return sql`${videoPassword} IS NOT NULL OR EXISTS (
 		SELECT 1 FROM space_videos sv_password
-		INNER JOIN spaces s_password ON sv_password.spaceId = s_password.id
-		WHERE sv_password.videoId = ${videoId}
+		INNER JOIN spaces s_password ON sv_password."spaceId" = s_password.id
+		WHERE sv_password."videoId" = ${videoId}
 			AND s_password.password IS NOT NULL
 	)`;
 }
@@ -428,7 +428,7 @@ const videoSelect = {
 		sql`${videos.password}`,
 	).mapWith(Boolean),
 	hasActiveUpload:
-		sql`MAX(${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false)`.mapWith(
+		sql`bool_or(${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false)`.mapWith(
 			Boolean,
 		),
 };
