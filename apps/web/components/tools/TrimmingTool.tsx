@@ -715,14 +715,30 @@ export const TrimmingTool = () => {
 		window.addEventListener("drop", preventDefaults);
 
 		return () => {
-			cleanupResources();
-			if (processingState.outputUrl) {
-				URL.revokeObjectURL(processingState.outputUrl);
-			}
 			window.removeEventListener("dragover", preventDefaults);
 			window.removeEventListener("drop", preventDefaults);
 		};
-	}, [cleanupResources, processingState.outputUrl]);
+	}, []);
+
+	const latestVideoSrcRef = useRef<string | null>(null);
+	latestVideoSrcRef.current = fileState.videoSrc;
+
+	useEffect(() => {
+		return () => {
+			if (latestVideoSrcRef.current) {
+				URL.revokeObjectURL(latestVideoSrcRef.current);
+			}
+		};
+	}, []);
+
+	useEffect(() => {
+		const outputUrl = processingState.outputUrl;
+		return () => {
+			if (outputUrl) {
+				URL.revokeObjectURL(outputUrl);
+			}
+		};
+	}, [processingState.outputUrl]);
 
 	return (
 		<div className="w-full">

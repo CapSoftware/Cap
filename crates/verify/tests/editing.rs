@@ -31,6 +31,10 @@ use edits::{Mapping, Op, OpMix, TimeModel};
 const TOLERANCE: f64 = 1e-9;
 const EDGE_EPSILON: f64 = 1e-6;
 
+// At 320x180, lossy compression can turn a camera crossfade's tiny marker
+// cells into a different valid index. Keep this timing oracle's signal readable.
+const MARKER_EXPORT_BPP: f32 = 1.0;
+
 /// Output times to probe: a 1/60 s grid, random times and both sides of
 /// every edge.
 fn probe_times(model: &TimeModel, rng: &mut Rng) -> Vec<f64> {
@@ -348,6 +352,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
         let model = project.model(&config);
         let dir = common::scratch_dir(&id);
         let run = ExportRun {
+            custom_bpp: Some(MARKER_EXPORT_BPP),
             fps,
             resolution: (320, 180),
             format: Format::Mp4,
@@ -412,6 +417,7 @@ fn same_clip_transition_export() {
             let mut case = Case::new(&id);
             let dir = common::scratch_dir(&id);
             let run = ExportRun {
+                custom_bpp: Some(MARKER_EXPORT_BPP),
                 fps,
                 resolution: (320, 180),
                 format: Format::Mp4,
@@ -456,6 +462,7 @@ fn hold_past_end_export() {
     let mut case = Case::new(id);
     let dir = common::scratch_dir(id);
     let run = ExportRun {
+        custom_bpp: Some(MARKER_EXPORT_BPP),
         fps,
         resolution: (320, 180),
         format: Format::Mp4,

@@ -3,6 +3,15 @@ use std::{hint::black_box, time::Instant};
 
 type Blit = fn(&mut [u8], (u32, u32), &[u8], (u32, u32), (i64, i64));
 
+// The export canvas is cleared to zero for a transparent background and
+// filled with white otherwise, so those two are the shipping backdrops.
+#[derive(Clone, Copy)]
+enum Backdrop {
+    Varying,
+    Transparent,
+    OpaqueWhite,
+}
+
 #[derive(Clone, Copy)]
 enum Alpha {
     Solid(u8),
@@ -13,20 +22,57 @@ enum Alpha {
 
 fn main() {
     use Alpha::{Edge, Mixed, Solid, Sparse};
+    use Backdrop::{OpaqueWhite, Transparent, Varying};
 
-    println!("workload,sample,before_ns,after_ns");
-    for (name, size, offset, alpha) in [
-        ("opaque-1080p", (1920u32, 1080u32), (0, 0), Solid(255)),
-        ("opaque-4k", (3840, 2160), (0, 0), Solid(255)),
-        ("opaque-portrait", (2160, 3840), (0, 0), Solid(255)),
-        ("opaque-expanded", (3840, 2160), (100, 80), Solid(255)),
-        ("opaque-clipped", (3840, 2160), (-2000, -1200), Solid(255)),
-        ("translucent-4k", (3840, 2160), (0, 0), Solid(128)),
-        ("edge-alpha-4k", (3840, 2160), (0, 0), Edge),
-        ("sparse-alpha-4k", (3840, 2160), (0, 0), Sparse),
-        ("mixed-4k", (3840, 2160), (0, 0), Mixed),
-        ("transparent-4k", (3840, 2160), (0, 0), Solid(0)),
-        ("outside-4k", (3840, 2160), (4000, 0), Solid(255)),
+    println!("workload,backdrop,sample,before_ns,after_ns");
+    for (name, size, offset, alpha, backdrop) in [
+        (
+            "opaque-1080p",
+            (1920u32, 1080u32),
+            (0, 0),
+            Solid(255),
+            Varying,
+        ),
+        ("opaque-4k", (3840, 2160), (0, 0), Solid(255), Varying),
+        ("opaque-portrait", (2160, 3840), (0, 0), Solid(255), Varying),
+        (
+            "opaque-expanded",
+            (3840, 2160),
+            (100, 80),
+            Solid(255),
+            Varying,
+        ),
+        (
+            "opaque-clipped",
+            (3840, 2160),
+            (-2000, -1200),
+            Solid(255),
+            Varying,
+        ),
+        ("translucent-4k", (3840, 2160), (0, 0), Solid(128), Varying),
+        ("edge-alpha-4k", (3840, 2160), (0, 0), Edge, Varying),
+        ("sparse-alpha-4k", (3840, 2160), (0, 0), Sparse, Varying),
+        ("mixed-4k", (3840, 2160), (0, 0), Mixed, Varying),
+        ("transparent-4k", (3840, 2160), (0, 0), Solid(0), Varying),
+        ("outside-4k", (3840, 2160), (4000, 0), Solid(255), Varying),
+        (
+            "translucent-4k",
+            (3840, 2160),
+            (0, 0),
+            Solid(128),
+            Transparent,
+        ),
+        (
+            "translucent-4k",
+            (3840, 2160),
+            (0, 0),
+            Solid(128),
+            OpaqueWhite,
+        ),
+        ("mixed-4k", (3840, 2160), (0, 0), Mixed, Transparent),
+        ("mixed-4k", (3840, 2160), (0, 0), Mixed, OpaqueWhite),
+        ("sparse-alpha-4k", (3840, 2160), (0, 0), Sparse, OpaqueWhite),
+        ("edge-alpha-4k", (3840, 2160), (0, 0), Edge, OpaqueWhite),
     ] {
         let dst_size = if name == "opaque-expanded" {
             (size.0 + 200, size.1 + 160)
@@ -50,7 +96,11 @@ fn main() {
             })
             .collect();
         let initial: Vec<u8> = (0..dst_size.0 * dst_size.1)
-            .flat_map(|i| [53, 71, 89, (i % 256) as u8])
+            .flat_map(|i| match backdrop {
+                Varying => [53, 71, 89, (i % 256) as u8],
+                Transparent => [0, 0, 0, 0],
+                OpaqueWhite => [255, 255, 255, 255],
+            })
             .collect();
         let mut before = initial.clone();
         let mut after = initial.clone();
@@ -80,7 +130,12 @@ fn main() {
             };
             black_box((&before, &after));
             if sample >= 5 {
-                println!("{name},{},{old},{new}", sample - 5);
+                let backdrop = match backdrop {
+                    Varying => "varying",
+                    Transparent => "transparent",
+                    OpaqueWhite => "opaque-white",
+                };
+                println!("{name},{backdrop},{},{old},{new}", sample - 5);
             }
         }
     }

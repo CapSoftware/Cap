@@ -1417,6 +1417,7 @@ pub fn open_onboarding(cx: &mut App) {
 }
 
 pub fn onboarding_finished(cx: &mut App) {
+    crate::permission_guide::stop(cx);
     if let Some(handle) = cx.global_mut::<AppWindows>().onboarding.take() {
         handle
             .update(cx, |_, window, _| window.remove_window())
@@ -1436,6 +1437,7 @@ pub fn close_onboarding(cx: &mut App) {
 }
 
 pub fn onboarding_closed(cx: &mut App) {
+    crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
     if !crate::store::should_show_onboarding() {
@@ -1854,6 +1856,14 @@ fn pinned_window_resolution_matches(
     requested.is_none_or(|requested| resolved.is_some_and(|resolved| requested == resolved))
 }
 
+/// An area screenshot never inherits a selection: re-arming one over an open
+/// Area picker (the Screenshot Area hotkey or tray item while a recording-mode
+/// area is drawn) reopens the overlays empty instead of keeping that crop.
+/// https://github.com/CapSoftware/Cap/issues/2432
+fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, recording_mode: Mode) -> bool {
+    armed != Some(mode) || (mode == TargetType::Area && recording_mode == Mode::Screenshot)
+}
+
 pub(crate) fn reject_unavailable_window(cx: &mut App) {
     dismiss_target_overlays(cx);
     RecordingSession::global(cx).update(cx, |session, cx| {
@@ -1970,8 +1980,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     }
 
     let select = TargetSelect::global(cx);
-    let mode_changed = select.read(cx).mode != Some(request.mode);
-    if mode_changed {
+    if reopens_overlays(select.read(cx).mode, request.mode, request.recording_mode) {
         close_overlay_windows(cx);
     }
 
@@ -2289,6 +2298,17 @@ fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
         })
         .filter_map(|number| number.to_string().parse().ok())
         .collect()
+}
+
+/// The overlay's "Sign In To Use": close the picker and put the sign-in
+/// prompt on the main window, brought forward even when the picker was opened
+/// from the tray with the main window closed.
+pub fn show_instant_sign_in(kind: crate::main_window::TargetType, cx: &mut App) {
+    dismiss_target_overlays(cx);
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| view.show_sign_in_prompt(kind, cx))
+        .ok();
+    show_main_window(cx);
 }
 
 pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
@@ -5372,7 +5392,9 @@ fn load_editor_project_candidate(
 
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
+        crate::editor_bench::run(handle, cx).await;
         drive_auto_export(handle, cx).await;
+        crate::editor_hover_bench::run(handle, cx).await;
     })
     .detach();
 }
@@ -6106,6 +6128,11 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
         let index = editors.iter().position(|(path, _)| path == &key);
         index.map(|index| editors.remove(index).1)
     };
+    let transform = handle.and_then(|handle| {
+        handle
+            .update(cx, |view, _window, _cx| view.timeline_transform())
+            .ok()
+    });
 
     if let Some(handle) = handle {
         if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
@@ -6124,7 +6151,16 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
     }
 
     tracing::info!(path = %key.display(), "reloading editor after import");
-    open_editor(key, cx);
+    open_editor(key.clone(), cx);
+    if let Some(transform) = transform
+        && let Some(handle) = editor_window_handle(&key, cx)
+    {
+        handle
+            .update(cx, |view, _window, _cx| {
+                view.restore_timeline_transform(transform)
+            })
+            .ok();
+    }
 }
 
 /// `editor_window_for_path` (`src-tauri/src/windows.rs:3699-3706`): the live
@@ -6320,12 +6356,16 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
-/// Repaint the bar between its own 250ms ticks -- the mic meter updates at
-/// ~20Hz and the bar is never the active window.
+/// Repaint the bar between its once-a-second ticks -- the mic meter updates at
+/// up to ~20Hz and the bar is never the active window.
 pub fn refresh_controls_window(cx: &mut App) {
+    let level_db = crate::feeds::Feeds::global(cx).read(cx).mic_level_db;
     if let Some(handle) = cx.global::<AppWindows>().controls {
         handle
-            .update(cx, |_, window, cx| {
+            .update(cx, |controls, window, cx| {
+                if !controls.level_bar_moves(level_db, window.scale_factor()) {
+                    return;
+                }
                 cx.notify();
                 window.refresh();
             })
@@ -7018,6 +7058,7 @@ mod tests {
                 excluded_windows: Vec::new(),
                 camera_feed: None,
                 mic_feed: None,
+                mic_meter: None,
                 linux_instant_camera: None,
                 start_gate: None,
             }),
@@ -7678,6 +7719,42 @@ mod tests {
         assert!(!pinned_window_resolution_matches(
             Some(&selected),
             Some(&other)
+        ));
+    }
+
+    #[test]
+    fn area_screenshots_reopen_the_overlays_instead_of_inheriting_a_selection() {
+        assert!(reopens_overlays(None, TargetType::Area, Mode::Screenshot));
+        assert!(reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Screenshot
+        ));
+
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Instant
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Display,
+            Mode::Screenshot
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Window),
+            TargetType::Window,
+            Mode::Screenshot
         ));
     }
 

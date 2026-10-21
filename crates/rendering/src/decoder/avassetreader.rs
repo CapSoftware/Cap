@@ -667,6 +667,9 @@ impl AVAssetReaderDecoder {
             if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
                 return Ok((width, height, YuvMatrix::default()));
             }
+            if let Some(dimensions) = crate::project_recordings::header_video_metadata(&path) {
+                return Ok(dimensions);
+            }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
                 .streams()
@@ -778,7 +781,7 @@ impl AVAssetReaderDecoder {
                         max_fallback_distance,
                         sender,
                     ) => {
-                        let frame = (requested_time * fps as f32).floor() as u32;
+                        let frame = super::request_frame(requested_time, fps);
                         if !sender.is_closed() {
                             pending_requests.push(PendingRequest {
                                 frame,
@@ -797,7 +800,7 @@ impl AVAssetReaderDecoder {
                             max_fallback_distance,
                             sender,
                         ) => {
-                            let frame = (requested_time * fps as f32).floor() as u32;
+                            let frame = super::request_frame(requested_time, fps);
                             if !sender.is_closed() {
                                 pending_requests.push(PendingRequest {
                                     frame,
@@ -969,9 +972,9 @@ impl AVAssetReaderDecoder {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2)
             };
             let cache_max = if is_scrubbing {
-                max_requested_frame + FRAME_CACHE_SIZE as u32 / 4
+                max_requested_frame.saturating_add(FRAME_CACHE_SIZE as u32 / 4)
             } else {
-                max_requested_frame + FRAME_CACHE_SIZE as u32
+                max_requested_frame.saturating_add(FRAME_CACHE_SIZE as u32)
             };
 
             // The last frame each other pooled reader vended is the answer for a

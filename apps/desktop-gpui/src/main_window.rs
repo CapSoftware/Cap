@@ -19,9 +19,12 @@ use crate::{
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     feeds::{self, Feeds},
     library::{self, RecordingItem, ScreenshotItem},
+    media_access::MediaAccess,
+    permissions::OSPermission,
     recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
+    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     target_thumbnails,
     theme::Theme,
     ui,
@@ -592,6 +595,13 @@ fn save_device_format(target: &DeviceFormatTarget, format: DeviceFormat) -> bool
 }
 
 impl DeviceMenu {
+    fn permission(self) -> OSPermission {
+        match self {
+            Self::Camera => OSPermission::Camera,
+            Self::Microphone => OSPermission::Microphone,
+        }
+    }
+
     fn title(self) -> &'static str {
         match self {
             Self::Camera => "Camera",
@@ -755,6 +765,14 @@ impl RecordingStartPermit {
     }
 }
 
+/// Instant Mode's sign-in gate, shown here when the overlay's "Sign In To
+/// Use" is pressed: the overlays close so the browser is reachable, and they
+/// re-open for `kind` once the account is signed in.
+struct SignInPrompt {
+    kind: TargetType,
+    error: Option<String>,
+}
+
 struct MicrophoneWarning {
     config: recording::StartConfig,
     permit: RecordingStartPermit,
@@ -804,6 +822,8 @@ pub struct MainWindow {
     checking_storage: bool,
     deep_link_start: Option<RecordingStartPermit>,
     microphone_warning: Option<MicrophoneWarning>,
+    sign_in_prompt: Option<SignInPrompt>,
+    copied_error: Option<String>,
     /// Header recordings / screenshots panel. Scanned only while that panel
     /// is open so a large library is not walked on every home paint.
     library: Option<LibraryItems>,
@@ -872,6 +892,8 @@ impl MainWindow {
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.clear_mode_hover();
+            } else {
+                MediaAccess::global(cx).update(cx, |access, cx| access.refresh(cx));
             }
             #[cfg(target_os = "windows")]
             if window.is_window_active() && !this.devices.displays.is_empty() {
@@ -981,6 +1003,62 @@ impl MainWindow {
         let search_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let search_events = cx.subscribe(&search_input, Self::on_search_event);
 
+        let media = MediaAccess::global(cx);
+        let mut media_allowed = (
+            media.read(cx).allowed(OSPermission::Camera),
+            media.read(cx).allowed(OSPermission::Microphone),
+        );
+        cx.observe(&media, move |this: &mut Self, media, cx| {
+            let allowed = (
+                media.read(cx).allowed(OSPermission::Camera),
+                media.read(cx).allowed(OSPermission::Microphone),
+            );
+            // A grant that lands after a device was picked (the prompt
+            // answered, or the switch flipped in System Settings) retries
+            // that device instead of leaving its failed start behind.
+            if allowed.0 && !media_allowed.0 && this.camera.is_some() {
+                let (camera, id) = (this.camera.clone(), this.camera_id.clone());
+                this.apply_camera_selection(camera, id, cx);
+            }
+            if allowed.1 && !media_allowed.1 && this.microphone.is_some() {
+                let microphone = this.microphone.clone();
+                this.apply_microphone_selection(microphone, cx);
+            }
+            media_allowed = allowed;
+            cx.notify();
+        })
+        .detach();
+
+        let sign_in = SignIn::global(cx);
+        cx.observe(&sign_in, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&sign_in, |this, _, event, cx| {
+            let SignInEvent::Finished { origin, outcome } = event else {
+                return;
+            };
+            let Some(prompt) = this.sign_in_prompt.as_mut() else {
+                return;
+            };
+            match outcome {
+                SignInOutcome::SignedIn => {
+                    let kind = prompt.kind;
+                    this.sign_in_prompt = None;
+                    let session = this.session.read(cx);
+                    if session.phase == Phase::Idle && session.editor_recording_target().is_none() {
+                        this.arm_overlay(kind, cx);
+                    }
+                }
+                SignInOutcome::Failed(error) if matches!(origin, SignInOrigin::Overlay(_)) => {
+                    prompt.error = Some(error.clone());
+                }
+                SignInOutcome::TimedOut if matches!(origin, SignInOrigin::Overlay(_)) => {
+                    prompt.error = Some("Sign in timed out. Try again.".into());
+                }
+                _ => {}
+            }
+            cx.notify();
+        })
+        .detach();
+
         Self {
             theme,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
@@ -1017,6 +1095,8 @@ impl MainWindow {
             checking_storage: false,
             deep_link_start: None,
             microphone_warning: None,
+            sign_in_prompt: None,
+            copied_error: None,
             library: None,
             library_task: None,
             incomplete_recording: None,
@@ -1224,6 +1304,9 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<()>> {
+        if target_thumbnails::captures_paused() {
+            return None;
+        }
         match kind {
             TargetType::Display => {
                 if self.thumbnails.display_inflight() {
@@ -1266,9 +1349,13 @@ impl MainWindow {
                     // `setDisplayThumbnailsSignature` runs
                     // (`new-main/index.tsx:2617-2620`). Committing the
                     // signature at `Listed` time instead would mark a sweep
-                    // that never landed as up to date.
+                    // that never landed as up to date. Likewise a sweep that a
+                    // capture hang cut short: it stays stale so the picker
+                    // retries it once the pause lifts.
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_display_signature(signature);
                         }
                         this.thumbnails.set_display_inflight(false);
@@ -1313,7 +1400,9 @@ impl MainWindow {
                         }
                     }
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_window_signature(signature);
                         }
                         this.thumbnails.set_window_inflight(false);
@@ -2095,6 +2184,17 @@ impl MainWindow {
                 None => return,
             }
         };
+        if mode == recording::RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
+            let kind = match &target {
+                ScreenCaptureTarget::Display { .. } => TargetType::Display,
+                ScreenCaptureTarget::Window { .. } => TargetType::Window,
+                ScreenCaptureTarget::Area { .. } => TargetType::Area,
+                ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
+            };
+            self.show_sign_in_prompt(kind, cx);
+            cx.defer(app_windows::show_main_window);
+            return;
+        }
         if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
             self.session.update(cx, |session, cx| {
                 session.error = Some("Camera-only recording requires a selected camera.".into());
@@ -2108,13 +2208,14 @@ impl MainWindow {
             return;
         }
 
-        let (camera_feed, mic_feed, input_readiness, device_settings) = {
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
             let feeds = Feeds::global(cx);
             feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
             let feeds = feeds.read(cx);
             (
                 feeds.camera_actor(),
                 feeds.mic_actor(),
+                feeds.mic_meter(),
                 feeds.input_readiness(),
                 feeds.requested_device_settings(),
             )
@@ -2130,6 +2231,7 @@ impl MainWindow {
             excluded_windows,
             camera_feed,
             mic_feed,
+            mic_meter,
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
             start_gate: None,
@@ -2494,6 +2596,28 @@ impl MainWindow {
     /// Select (or clear) the camera -- the same wiring as the camera panel's
     /// rows: this window's state plus the app-scoped feed, which opens or
     /// closes the preview bubble.
+    fn access_pill(&self, permission: OSPermission, cx: &gpui::App) -> Option<PillState> {
+        let access = MediaAccess::global(cx);
+        let access = access.read(cx);
+        if access.allowed(permission) {
+            return None;
+        }
+        Some(PillState::Access(if access.requesting(permission) {
+            "Asking…"
+        } else if access.status(permission) == crate::permissions::OSPermissionStatus::Denied {
+            "Allow in Settings"
+        } else {
+            "Allow"
+        }))
+    }
+
+    fn ensure_media_access(&mut self, permission: OSPermission, cx: &mut Context<Self>) {
+        let access = MediaAccess::global(cx);
+        if !access.read(cx).allowed(permission) {
+            access.update(cx, |access, cx| access.request(permission, cx));
+        }
+    }
+
     pub fn set_camera_selection(&mut self, camera: Option<CameraOption>, cx: &mut Context<Self>) {
         let id = camera.as_ref().map(|camera| {
             camera
@@ -2634,6 +2758,14 @@ impl Render for MainWindow {
             .when(self.microphone_warning.is_some(), |this| {
                 this.child(self.render_microphone_warning(cx))
             })
+            .when(self.sign_in_prompt.is_some(), |this| {
+                this.child(self.render_sign_in_prompt(cx))
+            })
+            // A failed start has nowhere else to surface: the overlays are
+            // gone by then and the bar closed itself.
+            .when_some(self.idle_error(cx), |this, error| {
+                this.child(self.render_idle_error(error, cx))
+            })
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.dismiss_main(cx) {
                     cx.stop_propagation();
@@ -2732,6 +2864,281 @@ impl MainWindow {
                             ),
                     ),
             )
+    }
+
+    pub fn show_sign_in_prompt(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        self.clear_mode_hover();
+        self.sign_in_prompt = Some(SignInPrompt { kind, error: None });
+        cx.notify();
+    }
+
+    fn dismiss_sign_in_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.sign_in_prompt.take().is_none() {
+            return;
+        }
+        // Only the attempt this prompt started; one from Settings or an
+        // editor keeps running.
+        let sign_in = SignIn::global(cx);
+        if matches!(
+            sign_in.read(cx).pending_origin(),
+            Some(SignInOrigin::Overlay(_))
+        ) {
+            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
+        }
+        cx.notify();
+    }
+
+    /// The dialog frame the sign-in prompt and the error card share: a dimmed
+    /// backdrop over the home view (clicking it dismisses), and a raised card
+    /// with an icon badge, a title and a close button.
+    fn render_modal(
+        &self,
+        id: &'static str,
+        badge: (&'static str, gpui::Rgba, gpui::Rgba),
+        title: &'static str,
+        on_dismiss: fn(&mut Self, &mut Context<Self>),
+        body: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let (icon, badge_bg, badge_fg) = badge;
+        div()
+            .id(id)
+            .absolute()
+            .inset_0()
+            .when(cfg!(target_os = "windows"), |overlay| {
+                overlay.top(px(HEADER_HEIGHT))
+            })
+            .when(!cfg!(target_os = "windows"), |overlay| {
+                overlay.rounded(px(16.))
+            })
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(14.))
+            .bg(gpui::hsla(
+                0.,
+                0.,
+                0.,
+                if theme.is_dark() { 0.55 } else { 0.32 },
+            ))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| on_dismiss(this, cx)))
+            .child(
+                div()
+                    .id("modal-card")
+                    .relative()
+                    .w_full()
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(theme.body_border(6))
+                    .bg(theme.gray_1)
+                    .shadow_lg()
+                    .p(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .pr(px(24.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(36.))
+                                    .rounded_full()
+                                    .bg(badge_bg)
+                                    .child(svg().path(icon).size(px(18.)).text_color(badge_fg)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .line_height(px(20.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.gray_12)
+                                    .child(title),
+                            ),
+                    )
+                    .child(body)
+                    .child(
+                        div()
+                            .id("modal-close")
+                            .absolute()
+                            .top(px(10.))
+                            .right(px(10.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(24.))
+                            .rounded_full()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.gray_3))
+                            .tooltip(move |_, cx| ui::Tooltip::new(&theme, "Close").view(cx))
+                            .child(
+                                svg()
+                                    .path("icons/x.svg")
+                                    .size(px(12.))
+                                    .text_color(theme.gray_10),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                on_dismiss(this, cx);
+                            })),
+                    ),
+            )
+    }
+
+    fn render_sign_in_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let pending = SignIn::global(cx).read(cx).is_pending();
+        let error = self
+            .sign_in_prompt
+            .as_ref()
+            .and_then(|prompt| prompt.error.clone())
+            .filter(|_| !pending);
+
+        let message = if pending {
+            "Finish signing in to Cap in your browser. Cap comes back here and opens the recorder when you're done."
+        } else {
+            "Instant Mode uploads while you record, so your shareable link is ready the moment you stop."
+        };
+        let primary = if pending {
+            ui::Button::plain(
+                &theme,
+                "sign-in-prompt-reopen",
+                ui::ButtonVariant::Blue,
+                ui::ButtonSize::Lg,
+            )
+            .label("Open browser again")
+            .full_width()
+            .on_click(cx.listener(|_, _, _, cx| {
+                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.reopen(cx));
+            }))
+        } else {
+            ui::Button::plain(
+                &theme,
+                "sign-in-prompt-sign-in",
+                ui::ButtonVariant::Blue,
+                ui::ButtonSize::Lg,
+            )
+            .icon("icons/user-round.svg")
+            .label("Sign In")
+            .full_width()
+            .on_click(cx.listener(|this, _, _, cx| {
+                let Some(prompt) = this.sign_in_prompt.as_mut() else {
+                    return;
+                };
+                prompt.error = None;
+                let origin = SignInOrigin::Overlay(prompt.kind);
+                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.start(origin, cx));
+                cx.notify();
+            }))
+        };
+        let secondary = if pending {
+            div().child(
+                ui::Button::plain(
+                    &theme,
+                    "sign-in-prompt-cancel",
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Lg,
+                )
+                .label("Cancel")
+                .full_width()
+                .on_click(cx.listener(|_, _, _, cx| {
+                    SignIn::global(cx).update(cx, |sign_in, cx| sign_in.cancel(cx));
+                })),
+            )
+        } else {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    div().flex_1().child(
+                        ui::Button::plain(
+                            &theme,
+                            "sign-in-prompt-studio",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Lg,
+                        )
+                        .label("Use Studio")
+                        .full_width()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let Some(prompt) = this.sign_in_prompt.take() else {
+                                return;
+                            };
+                            this.set_mode(Mode::Studio, cx);
+                            this.arm_overlay(prompt.kind, cx);
+                        })),
+                    ),
+                )
+                .child(
+                    div().flex_1().child(
+                        ui::Button::plain(
+                            &theme,
+                            "sign-in-prompt-dismiss",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Lg,
+                        )
+                        .label("Not now")
+                        .full_width()
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_sign_in_prompt(cx))),
+                    ),
+                )
+        };
+
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .line_height(px(19.))
+                    .text_color(theme.gray_11)
+                    .child(message),
+            )
+            .when_some(error, |this, error| {
+                this.child(
+                    div()
+                        .rounded(px(8.))
+                        .bg(theme.red_3)
+                        .px(px(10.))
+                        .py(px(7.))
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(theme.red_11)
+                        .child(error),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(primary)
+                    .child(secondary),
+            )
+            .into_any_element();
+
+        self.render_modal(
+            "sign-in-prompt",
+            ("icons/instant.svg", theme.blue_3, theme.blue_9),
+            if pending {
+                "Waiting for your browser"
+            } else {
+                "Sign in to use Instant Mode"
+            },
+            Self::dismiss_sign_in_prompt,
+            body,
+            cx,
+        )
     }
 
     fn render_clean_capture_preflight(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3185,61 +3592,99 @@ impl MainWindow {
         actions
     }
 
-    fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {
-        let copy_error = error.clone();
-        let shown_error = error.clone();
+    fn idle_error(&self, cx: &gpui::App) -> Option<String> {
+        let session = self.session.read(cx);
+        session
+            .error
+            .clone()
+            .filter(|_| session.phase == Phase::Idle)
+    }
 
-        div()
-            .id("recording-error-panel")
+    fn dismiss_idle_error(&mut self, cx: &mut Context<Self>) {
+        let Some(shown) = self.idle_error(cx) else {
+            return;
+        };
+        self.copied_error = None;
+        self.session.update(cx, |session, cx| {
+            if clear_shown_idle_error(session.phase, &mut session.error, &shown) {
+                cx.notify();
+            }
+        });
+    }
+
+    fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let copied = self.copied_error.as_deref() == Some(error.as_str());
+        let copy_error = error.clone();
+
+        let body = div()
             .flex()
             .flex_col()
-            .flex_shrink_0()
-            .min_w_0()
-            .max_h(px(72.))
-            .gap(px(4.))
-            .overflow_hidden()
-            .child(recording_error_text(error).text_color(self.theme.red_9))
+            .gap(px(14.))
+            .child(
+                recording_error_text(error)
+                    .rounded(px(8.))
+                    .bg(theme.gray_3)
+                    .px(px(10.))
+                    .py(px(8.))
+                    .text_size(px(12.5))
+                    .line_height(px(18.))
+                    .text_color(theme.gray_12),
+            )
             .child(
                 div()
                     .flex()
-                    .flex_shrink_0()
-                    .justify_end()
-                    .gap(px(6.))
+                    .gap(px(8.))
                     .child(
-                        ui::Button::body(
-                            &self.theme,
-                            "copy-recording-error",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Xs,
-                        )
-                        .label("Copy error")
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                copy_error.clone(),
-                            ));
-                        })),
+                        div().flex_1().child(
+                            ui::Button::plain(
+                                &theme,
+                                "copy-recording-error",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Lg,
+                            )
+                            .icon(if copied {
+                                "icons/check.svg"
+                            } else {
+                                "icons/copy.svg"
+                            })
+                            .label(if copied { "Copied" } else { "Copy error" })
+                            .full_width()
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        copy_error.clone(),
+                                    ));
+                                    this.copied_error = Some(copy_error.clone());
+                                    cx.notify();
+                                },
+                            )),
+                        ),
                     )
                     .child(
-                        ui::Button::body(
-                            &self.theme,
-                            "dismiss-recording-error",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Xs,
-                        )
-                        .label("Dismiss")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.session.update(cx, |session, cx| {
-                                if clear_shown_idle_error(
-                                    session.phase,
-                                    &mut session.error,
-                                    &shown_error,
-                                ) {
-                                    cx.notify();
-                                }
-                            });
-                        })),
+                        div().flex_1().child(
+                            ui::Button::plain(
+                                &theme,
+                                "dismiss-recording-error",
+                                ui::ButtonVariant::Blue,
+                                ui::ButtonSize::Lg,
+                            )
+                            .label("Dismiss")
+                            .full_width()
+                            .on_click(cx.listener(|this, _, _, cx| this.dismiss_idle_error(cx))),
+                        ),
                     ),
             )
+            .into_any_element();
+
+        self.render_modal(
+            "recording-error-panel",
+            ("icons/triangle-alert.svg", theme.red_3, theme.red_9),
+            "Something went wrong",
+            Self::dismiss_idle_error,
+            body,
+            cx,
+        )
     }
 
     /// Page root: `px-[13px] gap-2 pb-[8px]`.
@@ -3260,32 +3705,20 @@ impl MainWindow {
         // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
         match self.panel {
             Some(panel) => root.child(self.render_panel(panel, cx)),
-            None => root
-                .child(self.render_logo_row(cx))
-                .child(
-                    div()
-                        .id("home-scroll")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
-                        .pb(px(4.))
-                        .gap(px(8.))
-                        .overflow_y_scroll()
-                        .child(self.render_targets(cx))
-                        .child(self.render_base_controls(cx)),
-                )
-                // A failed start has nowhere else to surface: the overlays are
-                // gone by then and the bar closed itself.
-                .when_some(
-                    self.session
-                        .read(cx)
-                        .error
-                        .clone()
-                        .filter(|_| self.session.read(cx).phase == Phase::Idle),
-                    |this, error| this.child(self.render_idle_error(error, cx)),
-                ),
+            None => root.child(self.render_logo_row(cx)).child(
+                div()
+                    .id("home-scroll")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .pb(px(4.))
+                    .gap(px(8.))
+                    .overflow_y_scroll()
+                    .child(self.render_targets(cx))
+                    .child(self.render_base_controls(cx)),
+            ),
         }
     }
 
@@ -3578,6 +4011,10 @@ impl MainWindow {
     fn dismiss_main(&mut self, cx: &mut Context<Self>) -> bool {
         if self.microphone_warning.is_some() {
             self.dismiss_microphone_warning(cx);
+        } else if self.sign_in_prompt.is_some() {
+            self.dismiss_sign_in_prompt(cx);
+        } else if self.idle_error(cx).is_some() {
+            self.dismiss_idle_error(cx);
         } else if self.mode_hover.visible.is_some() {
             self.clear_mode_hover();
             cx.notify();
@@ -4590,6 +5027,8 @@ impl MainWindow {
             );
         }
 
+        let list = list.children(self.render_access_banner(menu, cx));
+
         // The "none" row is always offered and is never filtered out -- it is
         // how you turn the device off, not a search result.
         let mut rows = vec![
@@ -4665,6 +5104,7 @@ impl MainWindow {
                                         if !this.device_changes_allowed(cx) {
                                             return;
                                         }
+                                        this.ensure_media_access(OSPermission::Camera, cx);
                                         this.set_camera_selection(Some(chosen.clone()), cx);
                                         this.close_panel(cx);
                                     }),
@@ -4725,6 +5165,7 @@ impl MainWindow {
                                         if !this.device_changes_allowed(cx) {
                                             return;
                                         }
+                                        this.ensure_media_access(OSPermission::Microphone, cx);
                                         this.set_microphone_selection(Some(chosen.clone()), cx);
                                         this.close_panel(cx);
                                     }),
@@ -5333,6 +5774,78 @@ impl MainWindow {
                         this.close_panel(cx);
                     }))
             }),
+        )
+    }
+
+    fn render_access_banner(
+        &self,
+        menu: DeviceMenu,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let permission = menu.permission();
+        let access = MediaAccess::global(cx);
+        let access = access.read(cx);
+        if access.allowed(permission) {
+            return None;
+        }
+        let theme = self.theme;
+        let denied = access.status(permission) == crate::permissions::OSPermissionStatus::Denied;
+        let requesting = access.requesting(permission);
+        let noun = match menu {
+            DeviceMenu::Camera => "camera",
+            DeviceMenu::Microphone => "microphone",
+        };
+        let message = if denied {
+            format!("Cap can't use your {noun}. Turn it on in System Settings.")
+        } else if requesting {
+            "Choose Allow in the macOS prompt.".to_string()
+        } else {
+            format!("Cap needs your OK to use your {noun}.")
+        };
+        let label = if denied {
+            "Open System Settings"
+        } else if requesting {
+            "Asking…"
+        } else {
+            crate::media_access::action_label(access.status(permission))
+        };
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .w_full()
+                .px(px(10.))
+                .py(px(8.))
+                .mb(px(4.))
+                .rounded(px(10.))
+                .bg(theme.amber_3)
+                .border_1()
+                .border_color(theme.amber_6)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(theme.amber_11)
+                        .child(message),
+                )
+                .child(
+                    ui::Button::body(
+                        &theme,
+                        SharedString::from(format!("{noun}-access")),
+                        ui::ButtonVariant::Primary,
+                        ui::ButtonSize::Xs,
+                    )
+                    .label(label)
+                    .disabled(requesting)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ensure_media_access(permission, cx);
+                    })),
+                )
+                .into_any_element(),
         )
     }
 
@@ -5950,7 +6463,11 @@ impl MainWindow {
                             .as_ref()
                             .map(|camera| camera.label.clone())
                             .unwrap_or_else(|| "No Camera".into()),
-                        if self.camera.is_some() {
+                        if self.camera.is_some()
+                            && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
+                        {
+                            pill
+                        } else if self.camera.is_some() {
                             if self.devices.cameras.iter().any(|camera| {
                                 Some(&camera.device_id)
                                     == self.camera.as_ref().map(|selected| &selected.device_id)
@@ -5985,7 +6502,11 @@ impl MainWindow {
                             .as_ref()
                             .map(|mic| mic.name.clone())
                             .unwrap_or_else(|| "No Microphone".into()),
-                        if self.microphone.is_some() {
+                        if self.microphone.is_some()
+                            && let Some(pill) = self.access_pill(OSPermission::Microphone, cx)
+                        {
+                            pill
+                        } else if self.microphone.is_some() {
                             if self.devices.microphones.iter().any(|microphone| {
                                 Some(&microphone.name)
                                     == self.microphone.as_ref().map(|selected| &selected.name)
@@ -6119,6 +6640,16 @@ impl MainWindow {
                             cx.stop_propagation();
                             return;
                         }
+                        let permission = menu.permission();
+                        let selected = match menu {
+                            DeviceMenu::Camera => this.camera.is_some(),
+                            DeviceMenu::Microphone => this.microphone.is_some(),
+                        };
+                        if selected && !MediaAccess::global(cx).read(cx).allowed(permission) {
+                            cx.stop_propagation();
+                            this.ensure_media_access(permission, cx);
+                            return;
+                        }
                         match menu {
                             DeviceMenu::Camera if this.camera.is_some() => {
                                 cx.stop_propagation();
@@ -6180,6 +6711,9 @@ enum PillState {
     On,
     Off,
     Disconnected,
+    /// The device is picked but macOS has not given Cap access: the pill is
+    /// the button that asks (or opens System Settings).
+    Access(&'static str),
 }
 
 impl PillState {
@@ -6192,6 +6726,7 @@ impl PillState {
                 Hsla::from(theme.gray_11),
                 "Not connected",
             ),
+            Self::Access(label) => (Hsla::from(theme.amber_3), Hsla::from(theme.amber_11), label),
         };
 
         div()
@@ -6211,13 +6746,15 @@ impl PillState {
     }
 }
 
+const ERROR_TEXT_MAX_HEIGHT: f32 = 132.;
+
 fn recording_error_text(error: String) -> impl IntoElement + Styled {
     div()
         .id("recording-error-text")
         .w_full()
         .min_w_0()
         .min_h_0()
-        .max_h(px(48.))
+        .max_h(px(ERROR_TEXT_MAX_HEIGHT))
         .text_size(px(12.))
         .line_height(px(16.))
         .whitespace_normal()
@@ -6598,7 +7135,10 @@ mod recording_error_panel_tests {
     fn long_error_keeps_bounded_scrollable_text() {
         let mut element = recording_error_text("Requested microphone unavailable. ".repeat(200));
         let style = element.style();
-        assert_eq!(style.max_size.height, Some(px(48.).into()));
+        assert_eq!(
+            style.max_size.height,
+            Some(px(ERROR_TEXT_MAX_HEIGHT).into())
+        );
         assert_eq!(style.min_size.height, Some(px(0.).into()));
         assert_eq!(style.overflow.x, Some(gpui::Overflow::Scroll));
         assert_eq!(style.overflow.y, Some(gpui::Overflow::Scroll));
@@ -6608,7 +7148,10 @@ mod recording_error_panel_tests {
     fn unbroken_error_keeps_both_scroll_axes() {
         let mut element = recording_error_text("x".repeat(8192));
         let style = element.style();
-        assert_eq!(style.max_size.height, Some(px(48.).into()));
+        assert_eq!(
+            style.max_size.height,
+            Some(px(ERROR_TEXT_MAX_HEIGHT).into())
+        );
         assert_eq!(style.overflow.x, Some(gpui::Overflow::Scroll));
         assert_eq!(style.overflow.y, Some(gpui::Overflow::Scroll));
     }

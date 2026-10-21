@@ -25,6 +25,7 @@ use gpui::{
 };
 
 use crate::editor_window::EditorWindow;
+use crate::sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome};
 use crate::store::{self, ExportPrefs};
 use crate::ui;
 use crate::{library, platform};
@@ -208,8 +209,11 @@ pub struct ExportUi {
     pub error: Option<String>,
     pub cancel: Arc<AtomicBool>,
     pub export_task: Option<gpui::Task<()>>,
-    pub sign_in_pending: bool,
-    pub sign_in_cancel: Arc<AtomicBool>,
+    /// The server answered the last share with 401: the stored credential is
+    /// dead even though one exists, so the CTA offers sign-in again instead of
+    /// another upload that would fail the same way.
+    auth_rejected: bool,
+    sign_in_subscriptions: Option<[gpui::Subscription; 2]>,
     pub organization_id: Option<String>,
     pub share_link: Option<String>,
     pub reuploading: bool,
@@ -230,6 +234,21 @@ const BPP_MAX: f32 = 0.5;
 const BPP_STEP: f32 = 0.01;
 
 impl ExportUi {
+    fn pick_default_organization(&mut self) {
+        let organizations = store::auth_snapshot().organizations;
+        if self
+            .organization_id
+            .as_ref()
+            .is_some_and(|id| organizations.iter().any(|org| &org.id == id))
+        {
+            return;
+        }
+        if let Some(org) = organizations.first() {
+            self.organization_id = Some(org.id.clone());
+            self.persist();
+        }
+    }
+
     pub fn load() -> Self {
         let prefs = store::load().export.unwrap_or(ExportPrefs {
             format: "Mp4".into(),
@@ -280,8 +299,8 @@ impl ExportUi {
             error: None,
             cancel: Arc::new(AtomicBool::new(false)),
             export_task: None,
-            sign_in_pending: false,
-            sign_in_cancel: Arc::new(AtomicBool::new(false)),
+            auth_rejected: false,
+            sign_in_subscriptions: None,
             organization_id: prefs.organization_id,
             share_link: None,
             reuploading: false,
@@ -404,6 +423,23 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
+fn export_file_name(pretty_name: &str, extension: &str) -> String {
+    let mut name = sanitize_filename::sanitize_with_options(
+        pretty_name,
+        sanitize_filename::Options {
+            windows: true,
+            ..Default::default()
+        },
+    );
+    while name.len() > 255 - extension.len() - 1 {
+        let _ = name.pop();
+    }
+    if name.trim().is_empty() {
+        name = "Cap Recording".into();
+    }
+    format!("{name}.{extension}")
+}
+
 fn format_estimate_range(range: [f64; 2], time: bool) -> String {
     if range[1] < 1.0 {
         return if time { "< 1s" } else { "< 1 MB" }.into();
@@ -499,6 +535,7 @@ impl EditorWindow {
         }
         self.normalize_export_fps(&mut ui);
         self.export = Some(ui);
+        self.subscribe_export_to_sign_in(window, cx);
         self.refresh_export_preview(window, cx);
         cx.notify();
     }
@@ -511,7 +548,6 @@ impl EditorWindow {
                 cx.notify();
                 return;
             }
-            ui.sign_in_cancel.store(true, Ordering::Relaxed);
             if let Some(image) = ui.preview.take() {
                 let _ = window.drop_image(image);
             }
@@ -741,14 +777,13 @@ impl EditorWindow {
             return;
         }
         if ui.destination == ExportDestination::Link {
-            if ui.sign_in_pending {
-                ui.sign_in_cancel.store(true, Ordering::Relaxed);
-                ui.sign_in_pending = false;
-                cx.notify();
+            let sign_in = SignIn::global(cx);
+            if sign_in.read(cx).is_pending() {
+                sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
                 return;
             }
-            if !store::auth_snapshot().signed_in() {
-                self.start_share_sign_in(window, cx);
+            if ui.auth_rejected || !store::auth_snapshot().signed_in() {
+                sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Editor, cx));
                 return;
             }
             self.start_link_export(window, cx);
@@ -799,7 +834,7 @@ impl EditorWindow {
                 } else {
                     "mp4"
                 };
-                let default = format!("{pretty_name}.{ext}");
+                let default = export_file_name(&pretty_name, ext);
                 let chosen: Result<Option<PathBuf>, String> = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
                     Some(path) => Ok(Some(PathBuf::from(path))),
                     None => {
@@ -989,76 +1024,39 @@ impl EditorWindow {
         self.finish_requested_export_close(window, cx);
     }
 
-    fn start_share_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ui) = self.export.as_mut() else {
-            return;
-        };
-        ui.sign_in_cancel.store(false, Ordering::Relaxed);
-        let cancel = ui.sign_in_cancel.clone();
-        ui.sign_in_pending = true;
-        cx.notify();
-
-        let session = match crate::auth::begin_sign_in(cancel.clone()) {
-            Ok(session) => session,
-            Err(error) => {
-                ui.sign_in_pending = false;
-                ui.error = Some(error);
+    fn subscribe_export_to_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sign_in = SignIn::global(cx);
+        let subscriptions = [
+            cx.observe(&sign_in, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&sign_in, window, |this, _, event, _, cx| {
+                let Some(ui) = this.export.as_mut() else {
+                    return;
+                };
+                match event {
+                    SignInEvent::Finished {
+                        outcome: SignInOutcome::SignedIn,
+                        ..
+                    } => {
+                        ui.auth_rejected = false;
+                        if ui.phase == ExportPhase::Failed {
+                            ui.phase = ExportPhase::Idle;
+                        }
+                        ui.error = None;
+                        ui.pick_default_organization();
+                    }
+                    SignInEvent::Finished {
+                        origin: SignInOrigin::Editor,
+                        outcome: SignInOutcome::Failed(error),
+                    } => ui.error = Some(error.clone()),
+                    SignInEvent::Finished { .. } => {}
+                    SignInEvent::AccountRefreshed => ui.pick_default_organization(),
+                }
                 cx.notify();
-                return;
-            }
-        };
-        cx.open_url(&session.url);
-
-        ui.export_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let signed_in = cx
-                .background_executor()
-                .spawn(async move { session.complete() })
-                .await;
-            match signed_in {
-                Ok(true) => {
-                    if let Ok(Err(error)) =
-                        gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
-                    {
-                        tracing::warn!("updating auth plan after sign-in: {error}");
-                    }
-                    platform::activate_app();
-                    let _ = this.update(cx, |this, cx| {
-                        if let Some(ui) = this.export.as_mut() {
-                            ui.sign_in_pending = false;
-                            ui.error = None;
-                            if ui.organization_id.is_none() {
-                                ui.organization_id = store::auth_snapshot()
-                                    .organizations
-                                    .first()
-                                    .map(|org| org.id.clone());
-                            }
-                            ui.persist();
-                        }
-                        cx.notify();
-                    });
-                }
-                Ok(false) => {
-                    let _ = this.update(cx, |this, cx| {
-                        if let Some(ui) = this.export.as_mut() {
-                            ui.sign_in_pending = false;
-                        }
-                        cx.notify();
-                    });
-                }
-                Err(error) => {
-                    let _ = this.update(cx, |this, cx| {
-                        if let Some(ui) = this.export.as_mut() {
-                            ui.sign_in_pending = false;
-                            ui.error = Some(error.clone());
-                        }
-                        cx.notify();
-                    });
-                    if !cancel.load(Ordering::Relaxed) {
-                        platform::alert_dialog("Sign in failed", &error);
-                    }
-                }
-            }
-        }));
+            }),
+        ];
+        if let Some(ui) = self.export.as_mut() {
+            ui.sign_in_subscriptions = Some(subscriptions);
+        }
     }
 
     fn start_link_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1257,6 +1255,11 @@ impl EditorWindow {
                             });
                         }
                         Ok(Ok(crate::upload::UploadResult::NotAuthenticated)) => {
+                            let _ = this.update(cx, |this, _| {
+                                if let Some(ui) = this.export.as_mut() {
+                                    ui.auth_rejected = true;
+                                }
+                            });
                             show_upload_failure(
                                 &this,
                                 cx,
@@ -1692,11 +1695,12 @@ impl EditorWindow {
     fn export_cta(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let signed_in = store::auth_snapshot().signed_in();
+        let signed_in = !ui.auth_rejected && store::auth_snapshot().signed_in();
+        let sign_in_pending = SignIn::global(cx).read(cx).is_pending();
         let (label, icon, primary) = match ui.destination {
             ExportDestination::File => ("Export to File", Some("icons/folder.svg"), true),
             ExportDestination::Clipboard => ("Export to Clipboard", Some("icons/copy.svg"), true),
-            ExportDestination::Link if ui.sign_in_pending => ("Cancel Sign In", None, false),
+            ExportDestination::Link if sign_in_pending => ("Cancel Sign In", None, false),
             ExportDestination::Link if !signed_in => {
                 ("Sign in to share", Some("icons/link.svg"), true)
             }
@@ -2863,26 +2867,6 @@ fn matches_compression(current: ExportCompression, expected: ExportCompression) 
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
 
-// The NV12 readback wait sleeps in 1 ms steps (`frame_pipeline.rs`), which the
-// default 15.6 ms Windows timer resolution stretches to most of a frame each.
-#[cfg(windows)]
-struct TimerResolution;
-
-#[cfg(windows)]
-impl TimerResolution {
-    fn hold_one_millisecond() -> Self {
-        unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
-        Self
-    }
-}
-
-#[cfg(windows)]
-impl Drop for TimerResolution {
-    fn drop(&mut self) {
-        unsafe { windows_sys::Win32::Media::timeEndPeriod(1) };
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_export(
     project_path: PathBuf,
@@ -2903,9 +2887,6 @@ async fn run_export(
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
-    #[cfg(windows)]
-    let _timer_resolution = TimerResolution::hold_one_millisecond();
-
     let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
     if cursor_only {
         builder = builder.with_config(make_cursor_only_project(project));
@@ -2928,7 +2909,10 @@ async fn run_export(
         let total = base.total_frames(fps);
         (PreparedBase::Mp4(base), total)
     } else {
-        let base = builder.build().await.map_err(|error| error.to_string())?;
+        let base = builder
+            .build_video_only()
+            .await
+            .map_err(|error| error.to_string())?;
         let total = base.total_frames(fps);
         (PreparedBase::Other(base), total)
     };
@@ -2984,7 +2968,9 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportDestination, ExportPhase, ExportUi, cancel_matching_export};
+    use super::{
+        ExportDestination, ExportPhase, ExportUi, cancel_matching_export, export_file_name,
+    };
     use crate::store::ExportPrefs;
     use std::path::PathBuf;
     use std::sync::{
@@ -3006,6 +2992,42 @@ mod tests {
             advanced_open: false,
             organization_id: None,
         })
+    }
+
+    #[test]
+    fn export_names_sanitize_titles_and_preserve_the_format_extension() {
+        for extension in ["mp4", "gif", "mov"] {
+            for (title, expected) in [
+                ("Sprint 1/2", "Sprint 12"),
+                (r#"a/b\c:d*e?f"g<h>i|j"#, "abcdefghij"),
+                ("\0\n", "Cap Recording"),
+                ("/\\:*?\"<>|", "Cap Recording"),
+                ("...", "Cap Recording"),
+                ("   ", "Cap Recording"),
+                ("CON", "Cap Recording"),
+                ("Clip final. ", "Clip final"),
+                ("My Clip 2026", "My Clip 2026"),
+                ("你好 🎬", "你好 🎬"),
+            ] {
+                let filename = export_file_name(title, extension);
+                assert_eq!(filename, format!("{expected}.{extension}"), "{title:?}");
+                assert_eq!(PathBuf::from(&filename).components().count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn long_export_names_leave_room_for_the_format_extension() {
+        for title in ["a".repeat(300), "🎬".repeat(100)] {
+            for extension in ["mp4", "gif", "mov"] {
+                let filename = export_file_name(&title, extension);
+                assert!(filename.len() <= 255, "{} bytes", filename.len());
+                assert!(filename.ends_with(&format!(".{extension}")));
+                assert!(
+                    title.starts_with(filename.strip_suffix(&format!(".{extension}")).unwrap())
+                );
+            }
+        }
     }
 
     #[test]

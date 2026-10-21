@@ -319,7 +319,7 @@ async fn render_still(
 
     let uniforms = ProjectUniforms::new(
         constants,
-        config,
+        &Arc::new(config.clone()),
         0,
         30,
         resolution_base,
@@ -918,6 +918,7 @@ pub struct ScreenshotEditorWindow {
     /// back to blur/pixelate mask regions (`:537-687`); the mask overlay
     /// resamples this instead of the atlas image.
     pub(crate) frame_rgba: Option<Arc<Vec<u8>>>,
+    pub(crate) mask_frame_revision: u64,
     pub(crate) frame_size: (f32, f32),
     /// `originalImageSize` -- the source PNG's dimensions, which the crop
     /// button gates on and the frame-space transform needs.
@@ -1003,6 +1004,7 @@ impl ScreenshotEditorWindow {
             export_status: ExportStatus::Idle,
             frame: None,
             frame_rgba: None,
+            mask_frame_revision: 0,
             frame_size: (1., 1.),
             image_size: None,
             previous_transform: None,
@@ -1133,6 +1135,10 @@ impl ScreenshotEditorWindow {
         self.rescale_annotations_for(next);
         self.frame_size = next;
         self.frame_rgba = Some(rgba);
+        self.mask_frame_revision = self
+            .mask_frame_revision
+            .checked_add(1)
+            .expect("frame revision");
         self.ready = true;
         if let Some(previous) = self.frame.replace(image) {
             let _ = window.drop_image(previous);
@@ -2275,10 +2281,13 @@ impl ScreenshotEditorWindow {
                     this.update_in(cx, |this, window, cx| {
                         this.finish_share_error(
                             toast,
-                            "You need to sign in to create shareable links".into(),
+                            "Sign in to Cap in your browser, then share again".into(),
                             window,
                             cx,
-                        )
+                        );
+                        crate::sign_in::SignIn::global(cx).update(cx, |sign_in, cx| {
+                            sign_in.start(crate::sign_in::SignInOrigin::ScreenshotEditor, cx)
+                        });
                     })
                     .ok();
                     return;

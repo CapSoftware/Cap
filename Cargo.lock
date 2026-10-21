@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "cap"
-version = "0.1.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "cap-automation",
@@ -1276,6 +1276,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-recording",
+ "cap-rendering",
  "cap-timestamp",
  "cap-utils",
  "chrono",
@@ -1701,6 +1702,7 @@ dependencies = [
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
  "sysinfo 0.32.1",
@@ -1874,6 +1876,7 @@ dependencies = [
  "cap-muxer-protocol",
  "ffmpeg-next",
  "libc",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
@@ -2163,16 +2166,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cap-audio",
+ "cap-camera-ffmpeg",
+ "cap-camera-windows",
  "cap-editor",
  "cap-enc-avfoundation",
  "cap-export",
  "cap-media-info",
+ "cap-mediafoundation-utils",
  "cap-project",
  "cap-recording",
  "cap-rendering",
  "cap-timestamp",
  "cap-verify-expect",
  "cidre",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "flume",
  "futures",
@@ -2184,6 +2191,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing-subscriber",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -2209,6 +2217,7 @@ dependencies = [
  "scap-screencapturekit",
  "serde_json",
  "softbuffer",
+ "windows 0.60.0",
  "winit",
  "workspace-hack",
 ]
@@ -11770,6 +11779,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

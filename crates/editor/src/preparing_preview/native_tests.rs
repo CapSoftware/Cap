@@ -382,7 +382,7 @@ async fn ordinary_composed_frames(
         let uniforms = match timeline {
             Some(timeline) => ProjectUniforms::new_with_precomputed_cursor(
                 &constants,
-                &fixture.project,
+                &Arc::new(fixture.project.clone()),
                 frame_number,
                 30,
                 XY::new(320, 240),
@@ -394,7 +394,7 @@ async fn ordinary_composed_frames(
             ),
             None => ProjectUniforms::new(
                 &constants,
-                &fixture.project,
+                &Arc::new(fixture.project.clone()),
                 frame_number,
                 30,
                 XY::new(320, 240),
