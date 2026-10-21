@@ -1759,7 +1759,7 @@ index 1d35af1..57afb61 100644
 +    }
 +}
 diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
-index 3cf71ac..413add7 100644
+index 3cf71ac..dc71046 100644
 --- a/crates/gpui_wgpu/src/wgpu_atlas.rs
 +++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
 @@ -3,7 +3,7 @@ use collections::FxHashMap;
@@ -1786,7 +1786,7 @@ index 3cf71ac..413add7 100644
  struct PendingUpload {
      id: AtlasTextureId,
      bounds: Bounds<DevicePixels>,
-@@ -37,6 +45,22 @@ struct WgpuAtlasState {
+@@ -37,6 +45,25 @@ struct WgpuAtlasState {
      storage: WgpuAtlasStorage,
      tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
      pending_uploads: Vec<PendingUpload>,
@@ -1794,8 +1794,10 @@ index 3cf71ac..413add7 100644
 +    next_stream_index: u32,
 +}
 +
-+/// A streaming image's texture. Frames are written straight into it while
-+/// painting; wgpu orders those writes after earlier submissions that sample it.
++/// A streaming image's texture. The newest painted frame is held, not copied,
++/// and written straight from its buffer in [`WgpuAtlas::before_frame`], where
++/// atlas uploads happen; wgpu orders that write after earlier submissions that
++/// sample the texture.
 +struct WgpuAtlasStream {
 +    id: StreamingImageId,
 +    index: u32,
@@ -1803,13 +1805,14 @@ index 3cf71ac..413add7 100644
 +    format: wgpu::TextureFormat,
 +    swizzle: bool,
 +    generation: u64,
++    pending: Option<StreamFrame>,
 +    texture: wgpu::Texture,
 +    view: wgpu::TextureView,
 +    scratch: Vec<u8>,
  }
  
  pub struct WgpuTextureInfo {
-@@ -58,6 +82,8 @@ impl WgpuAtlas {
+@@ -58,6 +85,8 @@ impl WgpuAtlas {
              storage: WgpuAtlasStorage::default(),
              tiles_by_key: Default::default(),
              pending_uploads: Vec::new(),
@@ -1818,7 +1821,7 @@ index 3cf71ac..413add7 100644
          }))
      }
  
-@@ -82,6 +108,19 @@ impl WgpuAtlas {
+@@ -82,6 +111,19 @@ impl WgpuAtlas {
          }
      }
  
@@ -1838,7 +1841,7 @@ index 3cf71ac..413add7 100644
      /// Clears all cached textures and tiles, forcing them to be recreated.
      /// Use this for incremental recovery when the device is still valid.
      pub fn clear(&self) {
-@@ -89,6 +128,7 @@ impl WgpuAtlas {
+@@ -89,6 +131,7 @@ impl WgpuAtlas {
          lock.storage = WgpuAtlasStorage::default();
          lock.tiles_by_key.clear();
          lock.pending_uploads.clear();
@@ -1846,7 +1849,7 @@ index 3cf71ac..413add7 100644
      }
  
      /// Handles device lost by clearing all textures and cached tiles.
-@@ -101,6 +141,7 @@ impl WgpuAtlas {
+@@ -101,6 +144,7 @@ impl WgpuAtlas {
          lock.storage = WgpuAtlasStorage::default();
          lock.tiles_by_key.clear();
          lock.pending_uploads.clear();
@@ -1854,7 +1857,7 @@ index 3cf71ac..413add7 100644
      }
  }
  
-@@ -153,9 +194,106 @@ impl PlatformAtlas for WgpuAtlas {
+@@ -153,9 +197,108 @@ impl PlatformAtlas for WgpuAtlas {
              }
          }
      }
@@ -1917,7 +1920,8 @@ index 3cf71ac..413add7 100644
 +        };
 +        let stream = &mut self.streams[position];
 +        if stream.generation != frame.generation() {
-+            stream.write(&self.queue, frame);
++            stream.generation = frame.generation();
++            stream.pending = Some(frame.clone());
 +        }
 +        Ok(AtlasTile::for_stream(stream.index, size))
 +    }
@@ -1952,6 +1956,7 @@ index 3cf71ac..413add7 100644
 +            format,
 +            swizzle,
 +            generation: 0,
++            pending: None,
 +            texture,
 +            view,
 +            scratch: Vec::new(),
@@ -1961,7 +1966,7 @@ index 3cf71ac..413add7 100644
      fn allocate(
          &mut self,
          size: Size<DevicePixels>,
-@@ -196,6 +334,7 @@ impl WgpuAtlasState {
+@@ -196,6 +339,7 @@ impl WgpuAtlasState {
          let format = match kind {
              AtlasTextureKind::Monochrome => wgpu::TextureFormat::R8Unorm,
              AtlasTextureKind::Subpixel | AtlasTextureKind::Polychrome => self.color_texture_format,
@@ -1969,7 +1974,19 @@ index 3cf71ac..413add7 100644
          };
  
          let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-@@ -306,6 +445,7 @@ impl ops::Index<AtlasTextureKind> for WgpuAtlasStorage {
+@@ -289,6 +433,11 @@ impl WgpuAtlasState {
+                 },
+             );
+         }
++        for stream in &mut self.streams {
++            if let Some(frame) = stream.pending.take() {
++                stream.write(&self.queue, &frame);
++            }
++        }
+     }
+ }
+ 
+@@ -306,6 +455,7 @@ impl ops::Index<AtlasTextureKind> for WgpuAtlasStorage {
              AtlasTextureKind::Monochrome => &self.monochrome_textures,
              AtlasTextureKind::Subpixel => &self.subpixel_textures,
              AtlasTextureKind::Polychrome => &self.polychrome_textures,
@@ -1977,7 +1994,7 @@ index 3cf71ac..413add7 100644
          }
      }
  }
-@@ -316,6 +456,7 @@ impl ops::IndexMut<AtlasTextureKind> for WgpuAtlasStorage {
+@@ -316,6 +466,7 @@ impl ops::IndexMut<AtlasTextureKind> for WgpuAtlasStorage {
              AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
              AtlasTextureKind::Subpixel => &mut self.subpixel_textures,
              AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
@@ -1985,7 +2002,7 @@ index 3cf71ac..413add7 100644
          }
      }
  }
-@@ -336,6 +477,7 @@ impl ops::Index<AtlasTextureId> for WgpuAtlasStorage {
+@@ -336,6 +487,7 @@ impl ops::Index<AtlasTextureId> for WgpuAtlasStorage {
              AtlasTextureKind::Monochrome => &self.monochrome_textures,
              AtlasTextureKind::Subpixel => &self.subpixel_textures,
              AtlasTextureKind::Polychrome => &self.polychrome_textures,
@@ -1993,7 +2010,7 @@ index 3cf71ac..413add7 100644
          };
          textures[id.index as usize]
              .as_ref()
-@@ -343,6 +485,47 @@ impl ops::Index<AtlasTextureId> for WgpuAtlasStorage {
+@@ -343,6 +495,46 @@ impl ops::Index<AtlasTextureId> for WgpuAtlasStorage {
      }
  }
  
@@ -2034,14 +2051,13 @@ index 3cf71ac..413add7 100644
 +                depth_or_array_layers: 1,
 +            },
 +        );
-+        self.generation = frame.generation();
 +    }
 +}
 +
  struct WgpuAtlasTexture {
      id: AtlasTextureId,
      allocator: BucketedAtlasAllocator,
-@@ -402,13 +585,13 @@ fn swizzle_upload_data(bytes: &[u8], format: wgpu::TextureFormat) -> Vec<u8> {
+@@ -402,13 +594,13 @@ fn swizzle_upload_data(bytes: &[u8], format: wgpu::TextureFormat) -> Vec<u8> {
  mod tests {
      use super::*;
      use gpui::block_on;
@@ -2057,7 +2073,7 @@ index 3cf71ac..413add7 100644
                  flags: wgpu::InstanceFlags::default(),
                  backend_options: wgpu::BackendOptions::default(),
                  memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-@@ -422,6 +605,11 @@ mod tests {
+@@ -422,6 +614,11 @@ mod tests {
                  })
                  .await
                  .map_err(|error| anyhow::anyhow!("failed to request adapter: {error}"))?;
@@ -2069,7 +2085,7 @@ index 3cf71ac..413add7 100644
              let (device, queue) = adapter
                  .request_device(&wgpu::DeviceDescriptor {
                      label: Some("wgpu_atlas_test_device"),
-@@ -507,6 +695,396 @@ mod tests {
+@@ -507,6 +704,428 @@ mod tests {
          Ok(())
      }
  
@@ -2116,10 +2132,12 @@ index 3cf71ac..413add7 100644
 +    }
 +
 +    fn update(atlas: &WgpuAtlas, image: &StreamingImage, frame: &StreamFrame) -> AtlasTile {
-+        atlas
++        let tile = atlas
 +            .get_or_update_stream(image.id(), frame)
 +            .expect("stream upload should succeed")
-+            .expect("stream upload returns a tile")
++            .expect("stream upload returns a tile");
++        atlas.before_frame();
++        tile
 +    }
 +
 +    fn stream_texture(atlas: &WgpuAtlas, image: &StreamingImage) -> wgpu::Texture {
@@ -2422,6 +2440,36 @@ index 3cf71ac..413add7 100644
 +
 +        assert_eq!(read_buffer(&test, &first, size), pixels(size, 1));
 +        assert_eq!(read_buffer(&test, &second, size), pixels(size, 2));
++    }
++
++    #[test]
++    fn stream_writes_wait_for_before_frame_and_keep_only_the_newest_frame() {
++        let Some(test) = stream_test(wgpu::TextureFormat::Bgra8Unorm) else {
++            return;
++        };
++        let image = StreamingImage::new(StreamingImageFormat::Bgra8);
++        let size = stream_size(64, 16);
++        let bounds = Bounds {
++            origin: Point::default(),
++            size,
++        };
++        update(
++            &test.atlas,
++            &image,
++            &set_frame(&image, size, pixels(size, 1)),
++        );
++        let texture = stream_texture(&test.atlas, &image);
++        for seed in 2..5 {
++            test.atlas
++                .get_or_update_stream(image.id(), &set_frame(&image, size, pixels(size, seed)))
++                .unwrap();
++        }
++        let before = copy_to_buffer(&test, &texture, bounds);
++        test.atlas.before_frame();
++        let after = copy_to_buffer(&test, &texture, bounds);
++
++        assert_eq!(read_buffer(&test, &before, size), pixels(size, 1));
++        assert_eq!(read_buffer(&test, &after, size), pixels(size, 4));
 +    }
 +
 +    #[test]
