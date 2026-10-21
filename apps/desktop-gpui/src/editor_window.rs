@@ -3186,6 +3186,37 @@ impl EditorWindow {
 
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
+    pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.preparing_transport_active() {
+            if self.preparing_controls_ready() {
+                let seek = self.is_at_end().then_some(0.0);
+                self.preparing_command(seek, Some(!self.playing));
+            }
+            return;
+        }
+        if self.ordinary_handoff_frame.is_some() {
+            let at_end = self.is_at_end();
+            let target = self
+                .preparing_presentation
+                .as_mut()
+                .and_then(|presentation| presentation.toggle_handoff_playback(at_end));
+            if let Some(target) = target {
+                self.seek_to_time(target, cx);
+            }
+            cx.notify();
+            return;
+        }
+        if self.is_at_end() {
+            self.stop_playback(cx);
+            self.start_playback(0.0, cx);
+        } else if self.playing {
+            self.stop_playback(cx);
+        } else {
+            let from = self.playhead;
+            self.start_playback(from, cx);
+        }
+    }
+
     /// Shift+Mod+C on a selected scene: remember its look (layout, framing
     /// and transitions) without its timing.
     fn copy_scene_settings(&mut self) -> bool {
@@ -3239,37 +3270,6 @@ impl EditorWindow {
             window,
             cx,
         )
-    }
-
-    pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.preparing_transport_active() {
-            if self.preparing_controls_ready() {
-                let seek = self.is_at_end().then_some(0.0);
-                self.preparing_command(seek, Some(!self.playing));
-            }
-            return;
-        }
-        if self.ordinary_handoff_frame.is_some() {
-            let at_end = self.is_at_end();
-            let target = self
-                .preparing_presentation
-                .as_mut()
-                .and_then(|presentation| presentation.toggle_handoff_playback(at_end));
-            if let Some(target) = target {
-                self.seek_to_time(target, cx);
-            }
-            cx.notify();
-            return;
-        }
-        if self.is_at_end() {
-            self.stop_playback(cx);
-            self.start_playback(0.0, cx);
-        } else if self.playing {
-            self.stop_playback(cx);
-        } else {
-            let from = self.playhead;
-            self.start_playback(from, cx);
-        }
     }
 
     /// `seekPlayheadTo` (`Timeline/index.tsx:829-853`), minus the source's
@@ -3607,6 +3607,7 @@ impl EditorWindow {
                 }
                 "c" if keystroke.modifiers.shift => {
                     if self.copy_scene_settings() {
+                        self.show_notice("Scene settings copied", window, cx);
                         cx.stop_propagation();
                     }
                     return;
