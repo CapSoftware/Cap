@@ -1,0 +1,220 @@
+name: target-thumbs-ab
+
+# Scratch A/B: target picker poll repaints and Windows/Linux thumbnail capture cost. Not for main.
+
+on:
+  push:
+    branches: [ci/target-thumbs-ab]
+  workflow_dispatch:
+
+env:
+  MAIN_SHA: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
+  POLL_REF: perf/gpui-target-poll-notify
+  THUMBS_REF: perf/gpui-target-thumbnails-capture
+
+jobs:
+  app:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: blacksmith-6vcpu-macos-26
+            target: aarch64-apple-darwin
+            cache-key: v1-rust-meter-ab-macos26
+            variants: main poll
+            scenarios: idle
+          - runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+            cache-key: v1-rust-gpui
+            variants: main poll thumbs
+            scenarios: idle display move
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Keep the display awake
+        if: runner.os == 'macOS'
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          caffeinate -u -t 2 || true
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          defaults -currentHost write com.apple.screensaver idleTime 0 || true
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage probe and check out main
+        run: |
+          cp -R scripts/target-ab "$RUNNER_TEMP/target-ab"
+          git checkout -f "$MAIN_SHA"
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install Linux GPU and display
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 xvfb x11-apps xdotool
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: ${{ matrix.cache-key }}
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build variants
+        run: |
+          set +e
+          git fetch origin "$POLL_REF" "$THUMBS_REF"
+          for variant in ${{ matrix.variants }}; do
+            case $variant in
+              main) ref="$MAIN_SHA" ;;
+              poll) ref="origin/$POLL_REF" ;;
+              thumbs) ref="origin/$THUMBS_REF" ;;
+            esac
+            git checkout -f "$ref" -- apps/desktop-gpui/src apps/desktop-gpui/kernels
+            git diff --stat "$MAIN_SHA" -- apps/desktop-gpui/src apps/desktop-gpui/kernels
+            node scripts/sync-desktop-versions.mjs
+            python3 -I "$RUNNER_TEMP/target-ab/inject.py" "$GITHUB_WORKSPACE" || exit 1
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} --bin cap-gpui || exit 1
+            mkdir -p "$RUNNER_TEMP/bin-$variant/debug"
+            cp apps/desktop-gpui/target/${{ matrix.target }}/debug/cap-gpui "$RUNNER_TEMP/bin-$variant/debug/cap-gpui"
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/bin-$variant/Frameworks"
+            fi
+          done
+
+      - name: Measure
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            Xvfb :99 -screen 0 3840x2160x24 -noreset > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            export DISPLAY=:99
+            sleep 2
+            for n in 1 2 3 4; do
+              xlogo -geometry 480x320+$((n * 500))+600 -title "probe-$n" > /dev/null 2>&1 &
+            done
+            sleep 2
+            xdotool search --name "^probe-" | wc -l
+          else
+            sw_vers; system_profiler SPDisplaysDataType | grep -E "Chipset|Resolution|Metal" || true
+          fi
+          for round in 1 2 3; do
+            for scenario in ${{ matrix.scenarios }}; do
+              for variant in ${{ matrix.variants }}; do
+                "$RUNNER_TEMP/target-ab/measure.sh" "$RUNNER_TEMP/bin-$variant/debug/cap-gpui" $variant $scenario $round
+              done
+            done
+          done
+          python3 -I "$RUNNER_TEMP/target-ab/aggregate.py" "$RUNNER_TEMP/target-ab-out/summary.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: target-ab-${{ matrix.target }}
+          path: ${{ runner.temp }}/target-ab-out
+
+  kernel:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out the thumbnails branch
+        shell: bash
+        run: |
+          git fetch origin "$THUMBS_REF"
+          git checkout -f "origin/$THUMBS_REF"
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Bench and quality report
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$(cygpath "$GITHUB_WORKSPACE/target/release"):$PATH"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          mkdir -p "$RUNNER_TEMP/kernel-out"
+          cargo +1.95.0 bench --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} -p cap-gpui-kernels --bench thumbnail_capture | tee "$RUNNER_TEMP/kernel-out/bench.csv"
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} -p cap-gpui-kernels thumbnail -- --nocapture --test-threads=1 2>&1 | tee "$RUNNER_TEMP/kernel-out/quality.txt"
+          PYTHON=$(command -v python3 || command -v python)
+          "$PYTHON" - "$RUNNER_TEMP/kernel-out/bench.csv" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import collections, statistics, sys
+          rows = collections.defaultdict(lambda: ([], []))
+          for line in open(sys.argv[1]):
+              parts = line.strip().split(",")
+              if len(parts) != 6 or not parts[4].isdigit():
+                  continue
+              rows[(parts[0], parts[1], parts[2])][0].append(int(parts[4]))
+              rows[(parts[0], parts[1], parts[2])][1].append(int(parts[5]))
+          print("| Workload | Size | Before ms (median) | After ms (median) | Speedup |")
+          print("|---|---|---|---|---|")
+          for (name, w, h), (b, a) in rows.items():
+              mb, ma = statistics.median(b) / 1e6, statistics.median(a) / 1e6
+              print(f"| {name} | {w}x{h} | {mb:.2f} | {ma:.2f} | {mb / ma:.1f}x |")
+          PY
+          grep -E "psnr|test result" "$RUNNER_TEMP/kernel-out/quality.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel-${{ matrix.target }}
+          path: ${{ runner.temp }}/kernel-out
