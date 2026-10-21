@@ -2270,6 +2270,7 @@ pub async fn finish_encoder_bgra_surface(
     } else {
         &session.textures.1
     };
+    let probe_started = std::time::Instant::now();
     let pending = converter
         .encode(
             device,
@@ -2281,14 +2282,19 @@ pub async fn finish_encoder_bgra_surface(
             uniforms.frame_rate,
         )
         .await?;
+    crate::probe::add_since(crate::probe::ENCODE_NS, probe_started);
     if let Some(phase) = &phase {
         phase.mark("submit_start");
     }
+    let probe_started = std::time::Instant::now();
     let submission = queue.submit(std::iter::once(encoder.finish()));
+    crate::probe::add_since(crate::probe::SUBMIT_NS, probe_started);
     if let Some(phase) = &phase {
         phase.mark("submit_returned");
     }
+    let probe_started = std::time::Instant::now();
     let result = pending.wait(device, submission).await;
+    crate::probe::add_since(crate::probe::WAIT_NS, probe_started);
     if let Some(phase) = phase {
         phase.finish(if result.is_ok() {
             "frame_ready"

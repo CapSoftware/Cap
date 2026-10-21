@@ -24,6 +24,7 @@ enum Scenario {
     TickZoomedOut,
     Hover,
     Follow,
+    Scrub,
     Clean,
 }
 
@@ -34,6 +35,7 @@ impl Scenario {
             Self::TickZoomedOut => "tick-zoomed-out",
             Self::Hover => "hover",
             Self::Follow => "follow",
+            Self::Scrub => "scrub",
             Self::Clean => "clean",
         }
     }
@@ -66,7 +68,15 @@ impl Scenario {
                 view.seek_fraction(FOLLOW_START_FRACTION, window, cx);
                 view.toggle_play(window, cx);
             }
+            Self::Scrub => {
+                if view.playing {
+                    view.stop_for_measurement(cx);
+                }
+                view.bench_zoom_to(view.total_duration(), cx);
+                view.bench_scrub_begin(0.1, window, cx);
+            }
             Self::Clean => {
+                view.bench_scrub_end(cx);
                 if view.playing {
                     view.stop_for_measurement(cx);
                 }
@@ -92,6 +102,10 @@ impl Scenario {
                 let x = editor_timeline::content_left()
                     + editor_timeline::content_width(viewport_width) * fraction;
                 view.timeline_hover(x, window, cx);
+            }
+            Self::Scrub => {
+                let fraction = iteration as f64 / (WARMUP_FRAMES + MEASURED_FRAMES) as f64;
+                view.bench_scrub_to(0.1 + 0.8 * fraction, window, cx);
             }
             Self::Clean => {}
         }
@@ -140,11 +154,17 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
     };
     println!("{header}");
 
+    if std::env::var("CAP_GPUI_AUTO_PROFILE").is_ok_and(|value| value == "1") {
+        crate::editor_profile::run(handle, cx).await;
+        std::process::exit(0);
+    }
+
     for scenario in [
         Scenario::Tick,
         Scenario::TickZoomedOut,
         Scenario::Hover,
         Scenario::Follow,
+        Scenario::Scrub,
         Scenario::Clean,
     ] {
         if handle

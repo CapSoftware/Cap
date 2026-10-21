@@ -651,6 +651,7 @@ impl PreviewFrameView {
 
 impl Render for PreviewFrameView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        crate::playback_probe::preview();
         let Some(frame) = self.frame.clone() else {
             return div().size_full().into_any_element();
         };
@@ -733,6 +734,7 @@ impl EditorSectionView {
 
 impl Render for EditorSectionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::playback_probe::section(self.section as usize);
         let Some(editor) = self.editor.upgrade() else {
             return div().into_any_element();
         };
@@ -3218,6 +3220,7 @@ impl EditorWindow {
                 presentation.playback.playhead_seconds = time;
             }
         }
+        crate::playback_probe::seek(frame);
         if self.playing {
             // A live seek re-anchors the engine's clock at the target, and
             // the drawn line re-anchors with it: the engine's immediate
@@ -3298,6 +3301,36 @@ impl EditorWindow {
 
     pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
         self.timeline.waveform_paths.stats()
+    }
+
+    pub(crate) fn bench_scrub_begin(&mut self, fraction: f64, window: &mut Window, cx: &mut Context<Self>) {
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let x = timeline::content_left()
+            + timeline::content_width(viewport_width) * fraction.clamp(0.0, 1.0) as f32;
+        let event = MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(x), px(0.)),
+            click_count: 1,
+            ..Default::default()
+        };
+        self.timeline_mouse_down(&event, true, window, cx);
+    }
+
+    pub(crate) fn bench_scrub_to(&mut self, fraction: f64, window: &mut Window, cx: &mut Context<Self>) {
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let x = timeline::content_left()
+            + timeline::content_width(viewport_width) * fraction.clamp(0.0, 1.0) as f32;
+        self.timeline_hover(x, window, cx);
+        let event = MouseMoveEvent {
+            position: point(px(x), px(0.)),
+            pressed_button: Some(MouseButton::Left),
+            ..Default::default()
+        };
+        self.timeline_mouse_move(&event, window, cx);
+    }
+
+    pub(crate) fn bench_scrub_end(&mut self, cx: &mut Context<Self>) {
+        self.window_mouse_up(cx);
     }
 
     pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
@@ -6379,6 +6412,7 @@ impl EditorWindow {
             );
         }
         tracing::debug!(number = frame.number, "editor frame");
+        crate::playback_probe::presented(frame.number);
         self.frame_layout = Some(frame.layout);
         // `createEffect(on(latestFrameLayout, () => { if (!dragging)
         // setDragRects(null) }))` (`CanvasElementsOverlay.tsx:214-222`): the
@@ -11217,6 +11251,7 @@ impl Render for EditorWindow {
             this.sync_picker_hex(window, cx);
         });
         self.prepare_frame_fields(window, cx);
+        crate::playback_probe::root();
         self.sync_crop_container(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and

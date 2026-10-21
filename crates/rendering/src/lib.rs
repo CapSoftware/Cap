@@ -53,6 +53,7 @@ mod managed_segment;
 mod mask;
 pub mod notch_shape;
 mod overlay_layers;
+pub mod probe;
 mod project_recordings;
 mod readiness;
 mod recorded_cursor_assets;
@@ -7418,6 +7419,7 @@ impl<'a> FrameRenderer<'a> {
                 }),
             );
 
+            let probe_started = std::time::Instant::now();
             if let Err(error) = layers
                 .prepare_with_encoder(
                     self.constants,
@@ -7432,6 +7434,8 @@ impl<'a> FrameRenderer<'a> {
                 last_error = Some(error);
                 continue;
             }
+            crate::probe::add_since(crate::probe::PREPARE_NS, probe_started);
+            let probe_started = std::time::Instant::now();
             layers.render(
                 &self.constants.device,
                 &self.constants.queue,
@@ -7440,6 +7444,8 @@ impl<'a> FrameRenderer<'a> {
                 &uniforms,
                 render_display,
             )?;
+            crate::probe::add_since(crate::probe::LAYERS_RENDER_NS, probe_started);
+            crate::probe::add(crate::probe::BGRA_FRAMES, 1);
             let converter = self
                 .bgra_surface_converter
                 .as_mut()

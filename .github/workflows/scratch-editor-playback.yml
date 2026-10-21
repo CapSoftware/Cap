@@ -1,0 +1,138 @@
+name: Scratch editor playback profile
+
+on:
+  push:
+    branches:
+      - ci/editor-playback-profile
+      - ci/editor-playback-ab-*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  ROUNDS: "2"
+  SAMPLE: "sample"
+  BASE_REF: ""
+
+jobs:
+  fixture:
+    name: Editor playback fixture
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: fast
+      - name: Fixture
+        run: cargo run --profile ci-verify -p cap-verify --example editor-playback-fixture -- "$RUNNER_TEMP/fixtures"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-playback-fixtures
+          path: ${{ runner.temp }}/fixtures
+
+  macos:
+    name: Editor playback (macOS 26)
+    runs-on: blacksmith-6vcpu-macos-26
+    timeout-minutes: 200
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Keep the display awake
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          caffeinate -u -t 2 || true
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          defaults -currentHost write com.apple.screensaver idleTime 0 || true
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-playback-profile-macos26
+          save-cache: "true"
+          cache-on-failure: "true"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build
+        run: |
+          set +e
+          cp -R .github/scripts/editor-playback "$RUNNER_TEMP/editor-playback"
+          head_sha=$(git rev-parse HEAD)
+          build() {
+            local variant=$1 ref=$2
+            git checkout -f "$ref" -- apps crates
+            git status --short | head -20
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target aarch64-apple-darwin --bin cap-gpui \
+              --config 'profile.dev.package.cap-desktop-gpui.opt-level=3' \
+              --config 'profile.dev.package.cap-desktop-gpui.incremental=false' \
+              --config 'profile.dev.package.cap-desktop-gpui.debug="line-tables-only"' || return 1
+            mkdir -p "$RUNNER_TEMP/bin-$variant/debug"
+            cp apps/desktop-gpui/target/aarch64-apple-darwin/debug/cap-gpui "$RUNNER_TEMP/bin-$variant/debug/cap-gpui"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/bin-$variant/Frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" "$RUNNER_TEMP/bin-$variant/debug/Frameworks"
+          }
+          variants=()
+          if [[ -n "$BASE_REF" ]]; then
+            git fetch origin "$BASE_REF"
+            build base FETCH_HEAD || exit 1
+            variants+=("bin:base=$RUNNER_TEMP/bin-base/debug/cap-gpui")
+            build head "$head_sha" || exit 1
+            variants+=("bin:head=$RUNNER_TEMP/bin-head/debug/cap-gpui")
+          else
+            build main "$head_sha" || exit 1
+            variants+=("bin:main=$RUNNER_TEMP/bin-main/debug/cap-gpui")
+          fi
+          echo "VARIANTS=${variants[*]}" >> "$GITHUB_ENV"
+
+      - name: Wait for the fixture
+        run: |
+          for attempt in $(seq 1 120); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].name' | grep -qx editor-playback-fixtures; then
+              exit 0
+            fi
+            sleep 15
+          done
+          exit 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-playback-fixtures
+          path: ${{ runner.temp }}/fixtures
+
+      - name: Measure
+        run: |
+          set +e
+          sw_vers
+          system_profiler SPDisplaysDataType | grep -E "Chipset|Resolution|Metal" || true
+          sudo -n true && echo "sudo ok"
+          python3 -I "$RUNNER_TEMP/editor-playback/run.py" "$RUNNER_TEMP/out" "$ROUNDS" "$SAMPLE" $VARIANTS \
+            "fix:display=$RUNNER_TEMP/fixtures/display.cap" "fix:camera=$RUNNER_TEMP/fixtures/camera.cap"
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editor-playback-out
+          path: ${{ runner.temp }}/out

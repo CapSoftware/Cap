@@ -418,7 +418,11 @@ impl DecoderInstance {
     }
 
     fn reset(&mut self, requested_time: f32) {
-        match self.inner.reset(requested_time) {
+        crate::probe::add(crate::probe::DEC_RESET, 1);
+        let probe_started = std::time::Instant::now();
+        let reset = self.inner.reset(requested_time);
+        crate::probe::add_since(crate::probe::DEC_RESET_NS, probe_started);
+        match reset {
             Ok(()) => {
                 self.is_done = false;
                 self.frames_iter_valid = true;
@@ -766,6 +770,7 @@ impl AVAssetReaderDecoder {
                     Ok(message) => message,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        crate::probe::add(crate::probe::DEC_IDLE_TEARDOWN, 1);
                         cache.clear();
                         cache_bytes = 0;
                         *last_sent_frame.borrow_mut() = None;
@@ -931,13 +936,19 @@ impl AVAssetReaderDecoder {
                         .ok()
                         .map(Arc::new);
                 }
-                match Self::new(
+                let probe_started = std::time::Instant::now();
+                let created = Self::new(
                     path.clone(),
                     tokio_handle.clone(),
                     keyframe_index.clone(),
                     requested_time,
-                ) {
-                    Ok(decoder) => this = Some(decoder),
+                );
+                crate::probe::add_since(crate::probe::DEC_READER_NEW_NS, probe_started);
+                match created {
+                    Ok(decoder) => {
+                        crate::probe::add(crate::probe::DEC_READER_NEW, 1);
+                        this = Some(decoder)
+                    }
                     Err(error) => {
                         tracing::warn!(%error, "Failed to initialize video reader on demand");
                         continue;
@@ -1013,6 +1024,8 @@ impl AVAssetReaderDecoder {
             let mut hold_candidate: Option<(u32, R<cv::ImageBuf>)> = None;
             let mut retry_requests = Vec::new();
 
+            crate::probe::add(crate::probe::DEC_DECODE_LOOPS, 1);
+            crate::probe::add(crate::probe::DEC_REQUESTS, pending_requests.len() as u64);
             {
                 let decoder = &mut this.decoders[decoder_idx];
                 let mut frames = decoder.inner.frames();
@@ -1035,6 +1048,10 @@ impl AVAssetReaderDecoder {
                         }
                     };
                     frames_iterated += 1;
+                    crate::probe::add(crate::probe::DEC_FRAMES_ITERATED, 1);
+                    if pending_requests.iter().all(|r| r.sender.is_closed()) {
+                        crate::probe::add(crate::probe::DEC_STALE_AFTER_LOOP, 1);
+                    }
 
                     let current_frame =
                         pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
@@ -1055,6 +1072,7 @@ impl AVAssetReaderDecoder {
                     decoder.is_done = false;
 
                     if current_frame < minimum_fallback_frame {
+                        crate::probe::add(crate::probe::DEC_BELOW_FLOOR, 1);
                         // Keep a handle to it instead of discarding it: if the
                         // requests land inside a pts hole this is the only
                         // at-or-before content the reader will ever vend.

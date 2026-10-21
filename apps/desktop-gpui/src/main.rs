@@ -35,6 +35,7 @@ mod editor_hover_bench;
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
+mod editor_profile;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
@@ -59,6 +60,7 @@ mod picker_benchmark;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
+mod playback_probe;
 mod presets;
 mod project_save;
 mod recording;
@@ -346,7 +348,7 @@ fn main() {
         // store read rather than the gate's TCC queries -- so the main window
         // starts hidden instead of flashing up before onboarding replaces it.
         // Linux keeps the gate: its main window tracks retained visibility.
-        let first_run = cfg!(not(target_os = "linux"))
+        let first_run = std::env::var_os("CAP_PERF_SKIP_ONBOARDING").is_none() && cfg!(not(target_os = "linux"))
             && (!crate::store::has_completed_startup()
                 || !crate::store::has_completed_onboarding());
         let window_handle = cx
