@@ -39,7 +39,7 @@ jobs:
           done
       - name: Measure
         run: |
-          set -uo pipefail
+          set +e
           for i in 1 2 3; do
             for side in base head; do
               data="$RUNNER_TEMP/data-$side-$i"; rm -rf "$data"; mkdir -p "$data"
@@ -50,7 +50,7 @@ jobs:
               cpu=$(ps -o time= -p $pid)
               top -l 2 -s 5 -pid $pid -stats pid,cpu,mem | tail -1 > "$data/top.txt"
               echo "$side run $i: $fp cputime=$cpu idle=$(cat $data/top.txt)" | tee -a "$RUNNER_TEMP/results.txt"
-              grep -h "launch render warmup finished" "$data/stdout.log" "$data"/**/*.log 2>/dev/null | head -1
+              grep -rh "launch render warmup finished" "$data/stdout.log" "$HOME/Library/Logs/so.cap.desktop" 2>/dev/null | tail -1
               kill $pid; sleep 2; kill -9 $pid 2>/dev/null || true
             done
           done
