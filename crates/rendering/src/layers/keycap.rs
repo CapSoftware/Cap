@@ -130,27 +130,30 @@ pub fn parse_keycaps(display_text: &str) -> Vec<Keycap> {
         .iter()
         .take_while(|character| is_modifier_glyph(**character))
         .count();
-
-    let mut keys: Vec<Keycap> = characters[..leading]
+    let merges_rest = characters[..leading]
         .iter()
-        .copied()
-        .map(keycap_for)
-        .collect();
-    let rest = &characters[leading..];
-    if leading == 0 {
-        keys.extend(rest.iter().copied().map(keycap_for));
-    } else {
-        match rest {
+        .any(|character| matches!(character, '⌘' | '⌃'));
+
+    let keys: Vec<Keycap> = if merges_rest {
+        let mut keys: Vec<Keycap> = characters[..leading]
+            .iter()
+            .copied()
+            .map(keycap_for)
+            .collect();
+        match &characters[leading..] {
             [] => {}
             [only] => keys.push(keycap_for(*only)),
-            _ => keys.push(Keycap {
+            rest => keys.push(Keycap {
                 label: rest.iter().collect(),
                 width_units: KEYCAP_UNIT_HEIGHT,
                 modifier: false,
                 fit_legend: true,
             }),
         }
-    }
+        keys
+    } else {
+        characters.iter().copied().map(keycap_for).collect()
+    };
 
     let skipped = keys.len().saturating_sub(MAX_KEYCAPS);
     keys.into_iter().skip(skipped).collect()
@@ -296,6 +299,27 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(!keys[1].fit_legend);
         assert!(close(keys[1].width_units, 120.0));
+    }
+
+    #[test]
+    fn shift_or_option_prefixed_typing_is_one_key_per_character() {
+        let labels = |text: &str| -> Vec<String> {
+            parse_keycaps(text)
+                .into_iter()
+                .map(|key| key.label)
+                .collect()
+        };
+        assert_eq!(labels("⇧Hello"), ["⇧", "H", "e", "l", "l", "o"]);
+        assert_eq!(labels("⌥F5"), ["⌥", "F", "5"]);
+        assert!(parse_keycaps("⇧Hello").iter().all(|key| !key.fit_legend));
+    }
+
+    #[test]
+    fn a_command_or_control_combo_merges_even_after_shift() {
+        let keys = parse_keycaps("⇧⌘F12");
+        let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
+        assert_eq!(labels, ["⇧", "⌘", "F12"]);
+        assert!(keys[2].fit_legend);
     }
 
     #[test]

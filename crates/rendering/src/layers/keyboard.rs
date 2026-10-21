@@ -792,7 +792,13 @@ impl KeyboardLayer {
             return;
         }
         for key in keys.iter_mut().filter(|key| key.fit_legend) {
-            let legend_width = self.measure_legend(&key.label, request.family, request.weight);
+            let boost = if key.is_symbol() {
+                KEYCAP_SYMBOL_BOOST
+            } else {
+                1.0
+            };
+            let legend_width =
+                self.measure_legend(&key.label, request.family, request.weight) * boost;
             key.width_units = key
                 .width_units
                 .max(legend_width + KEYCAP_LEGEND_PADDING_UNITS * 2.0);
