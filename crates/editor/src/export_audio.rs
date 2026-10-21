@@ -326,7 +326,8 @@ impl ExportAudioRenderer {
         }
         // Studio Sound re-reads up to VOICE_PREROLL_SAMPLES before each cut to warm up the
         // enhancer. The streaming reader only moves forward, so a cut shorter than that
-        // within one clip has to use the in-memory export path instead.
+        // within one clip has to use the in-memory export path instead. An exact split
+        // (nothing removed) keeps the enhancer contiguous and still streams.
         let studio_sound =
             project.audio.improve && !project.audio.mute && project.audio.mic_volume_db > -30.0;
         let min_gap = if studio_sound {
@@ -354,7 +355,11 @@ impl ExportAudioRenderer {
                 return false;
             }
             if let Some(previous_end) = ends.insert(segment.recording_clip, segment.end)
-                && (!timeline.transitions.is_empty() || segment.start < previous_end + min_gap)
+                && (!timeline.transitions.is_empty()
+                    || segment.start < previous_end
+                    || (min_gap > 0.0
+                        && segment.start > previous_end
+                        && segment.start < previous_end + min_gap))
             {
                 return false;
             }
@@ -1515,6 +1520,16 @@ mod tests {
             .segments
             .push(segment(0, 1.0, 1.5));
         assert!(ExportAudioRenderer::eligible_sources(&long_cut, 3));
+
+        let mut exact_split = project();
+        exact_split.audio.improve = true;
+        exact_split
+            .timeline
+            .as_mut()
+            .unwrap()
+            .segments
+            .push(segment(0, 0.33, 0.9));
+        assert!(ExportAudioRenderer::eligible_sources(&exact_split, 3));
     }
 
     #[test]
