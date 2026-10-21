@@ -514,7 +514,7 @@ pub trait TrackSegmentOps: Clone {
     /// time, end: segment.end}`.
     fn split_tail(&self, at: f64) -> Self {
         let mut tail = self.clone();
-        tail.set_start(self.start() + at);
+        tail.trim_start_to(self.start() + at);
         tail
     }
 
@@ -586,7 +586,39 @@ pub fn fit_camera3d_motion(segment: &mut Camera3DSegment) {
         }
     }
 }
-impl_track_segment!(MaskSegment, lane: track);
+
+impl TrackSegmentOps for MaskSegment {
+    fn start(&self) -> f64 {
+        self.start
+    }
+    fn end(&self) -> f64 {
+        self.end
+    }
+    fn set_start(&mut self, value: f64) {
+        self.start = value;
+    }
+    fn set_end(&mut self, value: f64) {
+        self.end = value;
+    }
+    fn trim_start_to(&mut self, value: f64) {
+        let shift = self.start - value;
+        // Off-segment keys still anchor interpolation at the trimmed edges.
+        for time in self
+            .keyframes
+            .position
+            .iter_mut()
+            .chain(&mut self.keyframes.size)
+            .map(|key| &mut key.time)
+            .chain(self.keyframes.intensity.iter_mut().map(|key| &mut key.time))
+        {
+            *time += shift;
+        }
+        self.start = value;
+    }
+    fn lane(&self) -> u32 {
+        self.track
+    }
+}
 impl_track_segment!(TextSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
 impl_track_segment!(cap_project::ImageSegment, lane: track);
@@ -1291,6 +1323,14 @@ fn ripple_delete_mask_track(
     shift: f64,
 ) {
     segments.retain_mut(|segment| {
+        if segment.end <= cut_start {
+            return true;
+        }
+        if segment.start >= cut_end {
+            segment.start -= shift;
+            segment.end -= shift;
+            return true;
+        }
         let old_start = segment.start;
         let Some((new_start, new_end)) =
             ripple_deleted_bounds(old_start, segment.end, cut_start, cut_end, shift)
@@ -3748,6 +3788,112 @@ mod tests {
         assert_eq!(tail.trim_start, 5.0, "the source offset moves with the cut");
         assert_eq!(tail.fade_in, 0.0);
         assert_eq!(tail.fade_out, 0.6);
+    }
+
+    fn animated_mask() -> MaskSegment {
+        let mut mask = default_mask_segment(2.0, 10.0, 1);
+        mask.keyframes = serde_json::from_value(serde_json::json!({
+            "position": [
+                { "time": 0.0, "x": 0.2, "y": 0.3 },
+                { "time": 4.0, "x": 0.5, "y": 0.6 },
+                { "time": 8.0, "x": 0.8, "y": 0.9 }
+            ],
+            "size": [
+                { "time": 0.0, "x": 0.2, "y": 0.3 },
+                { "time": 4.0, "x": 0.4, "y": 0.5 },
+                { "time": 8.0, "x": 0.6, "y": 0.7 }
+            ],
+            "intensity": [
+                { "time": 0.0, "value": 0.2 },
+                { "time": 4.0, "value": 0.5 },
+                { "time": 8.0, "value": 0.8 }
+            ]
+        }))
+        .unwrap();
+        mask
+    }
+
+    fn mask_keyframe_times(mask: &MaskSegment) -> Vec<f64> {
+        mask.keyframes
+            .position
+            .iter()
+            .chain(&mask.keyframes.size)
+            .map(|key| key.time)
+            .chain(mask.keyframes.intensity.iter().map(|key| key.time))
+            .collect()
+    }
+
+    #[test]
+    fn mask_keyframes_keep_their_absolute_times_after_a_split() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        let original = animated_mask();
+        timeline.mask_segments.push(original.clone());
+
+        assert!(split_segment(timeline, TrackKind::Mask, 0, 3.0));
+
+        let head = &timeline.mask_segments[0];
+        let tail = &timeline.mask_segments[1];
+        assert_eq!((head.start, head.end), (2.0, 5.0));
+        assert_eq!((tail.start, tail.end), (5.0, 10.0));
+        assert_eq!(head.track, 1);
+        assert_eq!(tail.track, 1);
+        assert_eq!(
+            serde_json::to_value(&head.keyframes).unwrap(),
+            serde_json::to_value(&original.keyframes).unwrap()
+        );
+        assert_eq!(mask_keyframe_times(tail), [-3.0, 1.0, 5.0].repeat(3));
+    }
+
+    #[test]
+    fn mask_keyframes_keep_their_absolute_times_when_trimming_the_start() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.mask_segments.push(animated_mask());
+
+        for start in [5.0, 7.0, 1.0, 2.0] {
+            assert!(set_segment_start(timeline, TrackKind::Mask, 0, start));
+            let mask = &timeline.mask_segments[0];
+            let absolute_times = mask_keyframe_times(mask)
+                .into_iter()
+                .map(|time| mask.start + time)
+                .collect::<Vec<_>>();
+            assert_eq!(absolute_times, [2.0, 6.0, 10.0].repeat(3));
+        }
+        assert!(!set_segment_start(timeline, TrackKind::Mask, 0, 2.0));
+        assert!(move_segment(timeline, TrackKind::Mask, 0, 4.0, 12.0));
+        assert!(set_segment_end(timeline, TrackKind::Mask, 0, 11.0));
+        assert_eq!(
+            serde_json::to_value(&timeline.mask_segments[0].keyframes).unwrap(),
+            serde_json::to_value(&animated_mask().keyframes).unwrap()
+        );
+    }
+
+    #[test]
+    fn mask_keyframes_outside_the_segment_survive_an_unrelated_ripple_delete() {
+        for (cut_start, cut_end, expected_bounds) in
+            [(0.0, 3.0, (2.0, 6.0)), (12.0, 14.0, (5.0, 9.0))]
+        {
+            let mut mask = animated_mask();
+            mask.start = 5.0;
+            mask.end = 9.0;
+            mask.keyframes.position[0].time = -3.0;
+            mask.keyframes.size[0].time = -3.0;
+            mask.keyframes.intensity[0].time = -3.0;
+            let original = serde_json::to_value(&mask.keyframes).unwrap();
+            let mut project = zoom_fixture();
+            let timeline = project.timeline.as_mut().unwrap();
+            timeline.mask_segments.push(mask);
+
+            ripple_delete_output_tracks(timeline, cut_start, cut_end, cut_end - cut_start);
+
+            assert_eq!(
+                serde_json::to_value(&timeline.mask_segments[0].keyframes).unwrap(),
+                original
+            );
+            let mask = &timeline.mask_segments[0];
+            assert_eq!((mask.start, mask.end), expected_bounds);
+        }
     }
 
     // -- Split snapping -----------------------------------------------------
