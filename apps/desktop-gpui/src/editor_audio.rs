@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use cap_enc_ffmpeg::remux::get_media_duration;
 use cap_project::{ProjectConfiguration, TimelineConfiguration};
 use gpui::{
-    AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, svg,
+    AnyElement, AppContext, Context, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px, svg,
 };
 
 use crate::{editor_window::EditorWindow, theme::Theme, ui};
@@ -225,15 +226,48 @@ impl EditorWindow {
                         this.import_audio_from_picker(window, cx);
                     })),
             )
-            .child(
-                div().flex().flex_col().gap(px(6.)).children(
-                    AUDIO_LIBRARY
-                        .iter()
-                        .copied()
-                        .map(|(id, name)| render_library_row(&theme, id, name, importing, cx)),
-                ),
-            )
+            .child(div().flex().flex_col().gap(px(6.)).children(
+                AUDIO_LIBRARY.iter().copied().map(|(id, name)| {
+                    render_library_row(&theme, id, name, importing, is_replace, cx)
+                }),
+            ))
             .into_any_element()
+    }
+}
+
+/// A library track being dragged toward the timeline.
+#[derive(Debug, Clone, Copy)]
+pub struct LibraryDrag {
+    pub id: &'static str,
+    pub name: &'static str,
+}
+
+/// The chip that follows the pointer during a [`LibraryDrag`].
+struct LibraryDragPreview {
+    theme: Theme,
+    name: &'static str,
+}
+
+impl Render for LibraryDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(Hsla::from(self.theme.gray_12))
+            .text_color(Hsla::from(self.theme.gray_1))
+            .text_size(px(12.))
+            .child(
+                svg()
+                    .path("icons/music.svg")
+                    .size(px(12.))
+                    .text_color(Hsla::from(self.theme.gray_1)),
+            )
+            .child(self.name)
     }
 }
 
@@ -242,6 +276,7 @@ fn render_library_row(
     id: &'static str,
     name: &'static str,
     importing: bool,
+    replacing: bool,
     cx: &mut Context<EditorWindow>,
 ) -> AnyElement {
     div()
@@ -263,6 +298,16 @@ fn render_library_row(
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.add_library_track(id, name, window, cx);
                 }))
+        })
+        // Drag the row onto a timeline lane to add the track where it lands.
+        .when(!importing && !replacing, |row| {
+            let preview_theme = *theme;
+            row.on_drag(LibraryDrag { id, name }, move |drag, _, _, cx| {
+                cx.new(|_| LibraryDragPreview {
+                    theme: preview_theme,
+                    name: drag.name,
+                })
+            })
         })
         .child(
             div()
