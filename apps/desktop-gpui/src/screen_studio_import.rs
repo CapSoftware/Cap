@@ -74,7 +74,23 @@ fn bundle_file(dir: &Path, name: &str) -> Result<PathBuf, String> {
             "This Screen Studio project references a file outside the project: {name}"
         ));
     }
-    Ok(dir.join(relative))
+    let path = dir.join(relative);
+    reject_symlink(dir)?;
+    reject_symlink(&path)?;
+    Ok(path)
+}
+
+/// A symlink inside the bundle could point anywhere on disk, so the import
+/// would read or copy a file from outside the project; refuse it. A path
+/// that doesn't exist is left to the caller's own missing-file handling.
+fn reject_symlink(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(format!(
+            "This Screen Studio project contains a link to a file outside the project: {}",
+            path.display()
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -381,7 +397,7 @@ impl Drop for PartialProject {
 
 pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, String> {
     let recording_dir = source.join("recording");
-    let metadata = read_json(&recording_dir.join("metadata.json"))?;
+    let metadata = read_json(&bundle_file(&recording_dir, "metadata.json")?)?;
     let sessions = sessions_by_type(&metadata)?;
     let display = sessions
         .get("display")
@@ -402,7 +418,9 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
         .ok_or("The screen size is missing from metadata.json")?;
     let origin_ms = display.start_ms;
 
-    let project = read_json(&source.join("project.json")).unwrap_or(Value::Null);
+    let project = bundle_file(source, "project.json")
+        .and_then(|path| read_json(&path))
+        .unwrap_or(Value::Null);
     let pretty_name = project["json"]["name"]
         .as_str()
         .map(str::to_string)
@@ -496,7 +514,9 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
         })
         .unwrap_or((None, None, None));
 
-    let cursor_infos: HashMap<String, Value> = read_events(&recording_dir.join("cursors.json"))
+    let cursor_infos: HashMap<String, Value> = bundle_file(&recording_dir, "cursors.json")
+        .map(|path| read_events(&path))
+        .unwrap_or_default()
         .into_iter()
         .filter_map(|info| Some((info["id"].as_str()?.to_string(), info)))
         .collect();
@@ -669,6 +689,24 @@ mod tests {
         assert!(bundle_file(dir, "../../secret.txt").is_err());
         assert!(bundle_file(dir, "/etc/hosts").is_err());
         assert!(bundle_file(dir, "").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_inside_the_bundle_are_rejected() {
+        let bundle = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.mp4");
+        std::fs::write(&secret, b"not yours").unwrap();
+        std::os::unix::fs::symlink(&secret, bundle.path().join("display.mp4")).unwrap();
+        std::fs::write(bundle.path().join("plain.mp4"), b"ok").unwrap();
+        assert!(bundle_file(bundle.path(), "display.mp4").is_err());
+        assert!(bundle_file(bundle.path(), "plain.mp4").is_ok());
+
+        // A linked directory is refused too.
+        let linked_dir = bundle.path().join("recording");
+        std::os::unix::fs::symlink(outside.path(), &linked_dir).unwrap();
+        assert!(bundle_file(&linked_dir, "secret.mp4").is_err());
     }
 
     #[test]
