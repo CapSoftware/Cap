@@ -446,7 +446,9 @@ pub fn trim_end_bounds(
 ) -> DragBounds {
     let (_, next_start) = neighbours(segments, lane, index, total);
     let max = next_start.max(segments[index].end);
-    let min = (segments[index].start + min_duration).min(max);
+    let min = (segments[index].start + min_duration)
+        .min(segments[index].end)
+        .min(max);
     DragBounds { min, max }
 }
 
@@ -3160,9 +3162,11 @@ mod tests {
         let floor = min_segment_duration(TrackKind::Zoom, 0.2);
         let bounds = trim_end_bounds(&zoom, 0, 0, floor, 30.);
 
-        assert_eq!(bounds, DragBounds { min: 6., max: 6. });
+        assert_eq!(bounds, DragBounds { min: 5., max: 6. });
         let timeline = project.timeline.as_mut().unwrap();
-        for requested_end in [4., 5.5, 12.] {
+        set_segment_end(timeline, TrackKind::Zoom, 0, bounds.clamp(4.));
+        assert_eq!(timeline.zoom_segments[0].end, 5.);
+        for requested_end in [5.5, 12.] {
             set_segment_end(timeline, TrackKind::Zoom, 0, bounds.clamp(requested_end));
             assert!(timeline.zoom_segments[0].end <= timeline.zoom_segments[1].start);
         }
@@ -3176,7 +3180,7 @@ mod tests {
         let floor = min_segment_duration(TrackKind::Zoom, 0.5);
         let bounds = trim_end_bounds(&zoom, 0, 1, floor, 30.);
 
-        assert_eq!(bounds, DragBounds { min: 30., max: 30. });
+        assert_eq!(bounds, DragBounds { min: 24., max: 30. });
         let timeline = project.timeline.as_mut().unwrap();
         for requested_end in [23., 28., 40.] {
             set_segment_end(timeline, TrackKind::Zoom, 1, bounds.clamp(requested_end));
