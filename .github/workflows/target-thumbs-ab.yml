@@ -14,6 +14,7 @@ env:
 
 jobs:
   app:
+    if: ${{ !contains(github.event.head_commit.message, 'kernel only') }}
     strategy:
       fail-fast: false
       matrix:
@@ -189,6 +190,11 @@ jobs:
           set +e
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$(cygpath "$GITHUB_WORKSPACE/target/release"):$PATH"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            for profile in debug release; do
+              mkdir -p "apps/desktop-gpui/target/${{ matrix.target }}/$profile/Frameworks"
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "apps/desktop-gpui/target/${{ matrix.target }}/$profile/Frameworks/Spacedrive.framework"
+            done
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           fi
