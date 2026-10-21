@@ -184,6 +184,12 @@ struct Hub {
 }
 
 impl Hub {
+    fn downloading(&self, model: &str) -> bool {
+        self.download.as_ref().is_some_and(|download| {
+            download.model == model && download.state == DownloadState::Downloading
+        })
+    }
+
     fn work_in_flight(&self) -> bool {
         self.download
             .as_ref()
@@ -1765,7 +1771,11 @@ pub fn transcribe_blocking(
     language: &str,
 ) -> Result<Vec<CaptionSegment>, String> {
     let requested = model;
-    let model = transcription_model(model, language, model_files_present)?;
+    // A download writes straight to the model's final path, so a model still
+    // downloading looks present but cannot load yet.
+    let model = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
     if model != requested {
         tracing::info!("{requested} cannot transcribe {language}; using the {model} Whisper model");
     }
@@ -2283,7 +2293,7 @@ pub fn caption_generation_error_message(message: &str) -> String {
         return "Failed to load the caption model. Try downloading it again".to_string();
     }
     if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
-        return "The Recommended and High Accuracy models only transcribe European languages. Download the Small or Medium model to caption this language".to_string();
+        return "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language".to_string();
     }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
         return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
@@ -2319,6 +2329,10 @@ mod tests {
             );
             assert_eq!(
                 transcription_model("best-max", language, |model| model == "small"),
+                Ok("small")
+            );
+            assert_eq!(
+                transcription_model("best", language, |model| model != "medium"),
                 Ok("small")
             );
             let error = transcription_model("best", language, |_| false).unwrap_err();
@@ -2546,6 +2560,22 @@ mod tests {
         assert_eq!(model_path("best-max"), base.join("parakeet-best-max"));
         assert_eq!(model_path("small"), base.join("small.bin"));
         assert_eq!(model_path("medium"), base.join("medium.bin"));
+    }
+
+    #[test]
+    fn only_the_model_being_downloaded_counts_as_downloading() {
+        let mut state = Hub::default();
+        assert!(!state.downloading("medium"));
+        state.download = Some(ModelDownload {
+            model: "medium".to_string(),
+            state: DownloadState::Downloading,
+            progress: 40.0,
+            message: "Downloading".to_string(),
+        });
+        assert!(state.downloading("medium"));
+        assert!(!state.downloading("small"));
+        state.download.as_mut().unwrap().state = DownloadState::Completed;
+        assert!(!state.downloading("medium"));
     }
 
     #[test]
