@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = [".", "kernels"]
+members = [".", "kernels", "i18n-build"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -165,6 +165,7 @@ dirs = "6"
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cap-i18n-build = { path = "i18n-build" }
 cc = "1.4"
 tauri-winres = "0.3.5"
 

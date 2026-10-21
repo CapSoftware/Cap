@@ -41,6 +41,7 @@ mod editor_timeline;
 mod editor_window;
 mod feeds;
 mod hotkeys;
+mod i18n;
 mod import;
 mod installer;
 mod library;
