@@ -24,12 +24,8 @@ adapters = {
     mode: cap_camera_effects::BlurMode,
     at: Instant,
 ) -> Option<Instant> {
-    blur.process(image, dims, mode, cap_timestamp::Timestamp::Instant(at))
-        .expect("blur")
-        .map(|(_, timestamp)| match timestamp {
-            cap_timestamp::Timestamp::Instant(instant) => instant,
-            _ => unreachable!(),
-        })
+    blur.process(image, dims, mode).expect("blur");
+    Some(at)
 }
 """,
 }

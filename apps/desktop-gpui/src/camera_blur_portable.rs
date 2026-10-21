@@ -49,17 +49,10 @@ pub struct PortableCameraBlur {
     processor: cap_camera_effects::BlurProcessor,
     format: wgpu::TextureFormat,
     source: Option<wgpu::Texture>,
-    readbacks: Vec<wgpu::Buffer>,
-    pending: Option<(PendingReadback, cap_timestamp::Timestamp)>,
+    readback: Option<wgpu::Buffer>,
     dimensions: Option<(u32, u32)>,
     padded_bytes_per_row: u32,
     rgba: Vec<u8>,
-}
-
-struct PendingReadback {
-    slot: usize,
-    submission: wgpu::SubmissionIndex,
-    mapped: flume::Receiver<Result<(), wgpu::BufferAsyncError>>,
 }
 
 /// The source and output stay `Bgra8Unorm` where the adapter can sample,
@@ -125,57 +118,29 @@ impl PortableCameraBlur {
             processor,
             format,
             source: None,
-            readbacks: Vec::new(),
-            pending: None,
+            readback: None,
             dimensions: None,
             padded_bytes_per_row: 0,
             rgba: Vec::new(),
         })
     }
 
-    /// Submits `image` and returns the previous frame's output with its
-    /// timestamp, so the GPU works while the caller waits for the next camera
-    /// frame. Returns `None` for the first frame.
     pub fn process(
         &mut self,
         image: &gpui::RenderImage,
         dimensions: (usize, usize),
         mode: cap_camera_effects::BlurMode,
-        timestamp: cap_timestamp::Timestamp,
-    ) -> anyhow::Result<Option<(Arc<gpui::RenderImage>, cap_timestamp::Timestamp)>> {
-        let submitted = self.submit(image, dimensions, mode)?;
-        let Some((previous, previous_timestamp)) = self.pending.replace((submitted, timestamp))
-        else {
-            return Ok(None);
-        };
-        self.finish(previous)
-            .map(|image| Some((image, previous_timestamp)))
+    ) -> anyhow::Result<Arc<gpui::RenderImage>> {
+        self.process_with_status(image, dimensions, mode)
+            .map(|(image, _)| image)
     }
 
-    /// Blurs `image` and waits for its own output.
     pub fn process_with_status(
         &mut self,
         image: &gpui::RenderImage,
         dimensions: (usize, usize),
         mode: cap_camera_effects::BlurMode,
     ) -> anyhow::Result<(Arc<gpui::RenderImage>, cap_camera_effects::BlurOutputStatus)> {
-        if let Some((pending, _)) = self.pending.take() {
-            self.readbacks[pending.slot].unmap();
-        }
-        let submitted = self.submit(image, dimensions, mode)?;
-        let status = self
-            .processor
-            .output_status()
-            .context("camera blur output status missing")?;
-        Ok((self.finish(submitted)?, status))
-    }
-
-    fn submit(
-        &mut self,
-        image: &gpui::RenderImage,
-        dimensions: (usize, usize),
-        mode: cap_camera_effects::BlurMode,
-    ) -> anyhow::Result<PendingReadback> {
         let width = u32::try_from(dimensions.0).context("camera frame width")?;
         let height = u32::try_from(dimensions.1).context("camera frame height")?;
         let row_bytes = width.checked_mul(4).context("camera frame row size")?;
@@ -230,13 +195,9 @@ impl PortableCameraBlur {
             .processor
             .process_returning_output()
             .context("camera blur output missing")?;
-        let slot = self
-            .pending
-            .as_ref()
-            .map_or(0, |(pending, _)| 1 - pending.slot);
         let readback = self
-            .readbacks
-            .get(slot)
+            .readback
+            .as_ref()
             .context("camera blur readback missing")?;
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -259,41 +220,22 @@ impl PortableCameraBlur {
                 depth_or_array_layers: 1,
             },
         );
-        let submission = self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit(std::iter::once(encoder.finish()));
 
-        let (sender, mapped) = flume::bounded(1);
+        let (sender, receiver) = flume::bounded(1);
         readback
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result);
             });
-        Ok(PendingReadback {
-            slot,
-            submission,
-            mapped,
-        })
-    }
-
-    fn finish(&self, pending: PendingReadback) -> anyhow::Result<Arc<gpui::RenderImage>> {
-        let (width, height) = self.dimensions.context("camera blur dimensions missing")?;
         self.device
-            .poll(wgpu::PollType::Poll)
+            .poll(wgpu::PollType::Wait)
             .map_err(|error| anyhow!("camera blur GPU polling: {error}"))?;
-        let mapped = match pending.mapped.try_recv() {
-            Ok(mapped) => mapped,
-            Err(_) => {
-                self.device
-                    .poll(wgpu::PollType::WaitForSubmissionIndex(pending.submission))
-                    .map_err(|error| anyhow!("camera blur GPU polling: {error}"))?;
-                pending
-                    .mapped
-                    .recv()
-                    .context("camera blur GPU readback channel")?
-            }
-        };
-        mapped.map_err(|error| anyhow!("camera blur GPU readback: {error}"))?;
+        receiver
+            .recv()
+            .context("camera blur GPU readback channel")?
+            .map_err(|error| anyhow!("camera blur GPU readback: {error}"))?;
 
-        let readback = &self.readbacks[pending.slot];
         let pixels = {
             let mapped = readback.slice(..).get_mapped_range();
             if self.format == wgpu::TextureFormat::Bgra8Unorm {
@@ -317,9 +259,16 @@ impl PortableCameraBlur {
 
         let image = image::RgbaImage::from_raw(width, height, pixels)
             .context("camera blur output image")?;
-        Ok(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
-            image::Frame::new(image)
-        ])))
+        let status = self
+            .processor
+            .output_status()
+            .context("camera blur output status missing")?;
+        Ok((
+            Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+                image::Frame::new(image)
+            ])),
+            status,
+        ))
     }
 
     fn ensure_resources(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
@@ -337,7 +286,6 @@ impl PortableCameraBlur {
         let readback_size = u64::from(padded_bytes_per_row)
             .checked_mul(u64::from(height))
             .context("camera blur readback size")?;
-        self.pending = None;
         self.source = Some(self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Camera Preview Blur Source"),
             size: wgpu::Extent3d {
@@ -352,16 +300,12 @@ impl PortableCameraBlur {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         }));
-        self.readbacks = (0..2)
-            .map(|_| {
-                self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Camera Preview Blur Readback"),
-                    size: readback_size,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                })
-            })
-            .collect();
+        self.readback = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Camera Preview Blur Readback"),
+            size: readback_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }));
         self.dimensions = Some((width, height));
         self.padded_bytes_per_row = padded_bytes_per_row;
         Ok(())
@@ -401,13 +345,6 @@ mod tests {
             ])
         });
         gpui::RenderImage::new(smallvec::smallvec![image::Frame::new(image)])
-    }
-
-    fn timestamp_instant(timestamp: cap_timestamp::Timestamp) -> std::time::Instant {
-        match timestamp {
-            cap_timestamp::Timestamp::Instant(instant) => instant,
-            other => panic!("unexpected timestamp {other:?}"),
-        }
     }
 
     fn deterministic_blur(allow_bgra: bool) -> Option<PortableCameraBlur> {
@@ -462,45 +399,30 @@ mod tests {
         );
 
         let staging = processor.rgba.as_ptr();
-        let now = cap_timestamp::Timestamp::Instant(std::time::Instant::now());
-        for _ in 0..2 {
-            processor
-                .process(&input, (64, 32), cap_camera_effects::BlurMode::Light, now)
-                .expect("portable camera blur reuses GPU resources");
-        }
+        processor
+            .process(&input, (64, 32), cap_camera_effects::BlurMode::Light)
+            .expect("portable camera blur reuses GPU resources");
         assert_eq!(processor.rgba.as_ptr(), staging);
         assert_eq!(processor.dimensions, Some((64, 32)));
 
         let image = image::RgbaImage::from_pixel(640, 360, image::Rgba([32, 96, 160, 255]));
         let preview = gpui::RenderImage::new(smallvec::smallvec![image::Frame::new(image)]);
         let started = std::time::Instant::now();
-        let mut outputs = 0;
         for _ in 0..12 {
-            if let Some((output, _)) = processor
-                .process(
-                    &preview,
-                    (640, 360),
-                    cap_camera_effects::BlurMode::Heavy,
-                    now,
-                )
-                .expect("portable camera blur processed a full-size preview frame")
-            {
-                assert_eq!(output.as_bytes(0).unwrap().len(), 640 * 360 * 4);
-                outputs += 1;
-            }
+            let output = processor
+                .process(&preview, (640, 360), cap_camera_effects::BlurMode::Heavy)
+                .expect("portable camera blur processed a full-size preview frame");
+            assert_eq!(output.as_bytes(0).unwrap().len(), 640 * 360 * 4);
         }
-        assert_eq!(outputs, 11);
 
         eprintln!(
-            "portable heavy-blur preview: {:.1} frames/s, format={:?}, staging={} bytes, readback={} bytes",
+            "portable heavy-blur preview: {:.1} frames/s, staging={} bytes, readback={} bytes",
             12.0 / started.elapsed().as_secs_f64(),
-            processor.format,
             processor.rgba.capacity(),
-            processor.readbacks[0].size()
+            processor.readback.as_ref().unwrap().size()
         );
         assert_eq!(processor.dimensions, Some((640, 360)));
-        assert_eq!(processor.readbacks.len(), 2);
-        assert_eq!(processor.readbacks[0].size(), 640 * 360 * 4);
+        assert_eq!(processor.readback.as_ref().unwrap().size(), 640 * 360 * 4);
     }
 
     #[test]
@@ -541,76 +463,6 @@ mod tests {
             }
         }
         assert!(bgra.rgba.is_empty());
-    }
-
-    #[test]
-    fn portable_blur_pipelined_output_matches_waiting_for_each_frame() {
-        let Some(mut waiting) = deterministic_blur(true) else {
-            return;
-        };
-        let Some(mut pipelined) = deterministic_blur(true) else {
-            return;
-        };
-        let dimensions = (640, 360);
-        let mode = cap_camera_effects::BlurMode::Heavy;
-        let started = std::time::Instant::now();
-        let frames: Vec<_> = (0..6)
-            .map(|seed| {
-                (
-                    test_frame(dimensions.0 as u32, dimensions.1 as u32, seed),
-                    started + Duration::from_millis(33 * u64::from(seed)),
-                )
-            })
-            .collect();
-        let expected: Vec<_> = frames
-            .iter()
-            .map(|(frame, _)| {
-                waiting
-                    .process_with_status(frame, dimensions, mode)
-                    .expect("waiting path blurred a frame")
-                    .0
-            })
-            .collect();
-
-        for (index, (frame, at)) in frames.iter().enumerate() {
-            let output = pipelined
-                .process(
-                    frame,
-                    dimensions,
-                    mode,
-                    cap_timestamp::Timestamp::Instant(*at),
-                )
-                .expect("pipelined path blurred a frame");
-            let Some((image, timestamp)) = output else {
-                assert_eq!(index, 0, "only the first frame has no earlier output");
-                continue;
-            };
-            assert_eq!(timestamp_instant(timestamp), frames[index - 1].1);
-            assert!(
-                image.as_bytes(0) == expected[index - 1].as_bytes(0),
-                "pipelined output for frame {} differs",
-                index - 1
-            );
-        }
-
-        let resized = test_frame(320, 180, 9);
-        assert!(
-            pipelined
-                .process(
-                    &resized,
-                    (320, 180),
-                    mode,
-                    cap_timestamp::Timestamp::Instant(started)
-                )
-                .expect("pipelined path took a resized frame")
-                .is_none(),
-            "a resize drops the frame still in flight at the old size"
-        );
-        let (image, _) = pipelined
-            .process_with_status(&resized, (320, 180), mode)
-            .expect("waiting after a pipelined frame");
-        assert_eq!(image.as_bytes(0).unwrap().len(), 320 * 180 * 4);
-        assert!(pipelined.pending.is_none());
     }
 
     #[cfg(target_os = "macos")]
@@ -664,8 +516,8 @@ mod tests {
                 .expect("camera preview converted");
                 assert!(dimensions.0 <= MAX_DIMS.0 as usize);
                 assert!(dimensions.1 <= MAX_DIMS.1 as usize);
-                let (blurred, _) = processor
-                    .process_with_status(&preview, dimensions, cap_camera_effects::BlurMode::Heavy)
+                let blurred = processor
+                    .process(&preview, dimensions, cap_camera_effects::BlurMode::Heavy)
                     .expect("real camera frame blurred");
                 assert_eq!(blurred.as_bytes(0).unwrap().len(), dimensions.0 * dimensions.1 * 4);
                 frames += 1;
