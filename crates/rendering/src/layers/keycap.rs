@@ -12,6 +12,7 @@ pub struct Keycap {
     pub width_units: f32,
     pub modifier: bool,
     pub fit_legend: bool,
+    pub legend_scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,9 +89,26 @@ impl KeycapUniform {
     }
 }
 
-impl Keycap {
-    pub fn is_symbol(&self) -> bool {
-        !self.label.is_empty() && !self.label.chars().all(char::is_alphanumeric)
+const SYMBOL_LEGEND_SCALE: f32 = 1.35;
+const WORD_LEGEND_SCALE: f32 = 0.6;
+
+fn symbol_scale(label: &str) -> f32 {
+    if !label.is_empty() && !label.chars().all(char::is_alphanumeric) {
+        SYMBOL_LEGEND_SCALE
+    } else {
+        1.0
+    }
+}
+
+fn word_legend(character: char) -> Option<&'static str> {
+    match character {
+        '⌃' => Some("ctrl"),
+        '⎋' => Some("esc"),
+        '⇱' => Some("home"),
+        '⇲' => Some("end"),
+        '⇞' => Some("pg up"),
+        '⇟' => Some("pg dn"),
+        _ => None,
     }
 }
 
@@ -104,16 +122,21 @@ fn keycap_for(character: char) -> Keycap {
         '⇥' | '⌫' | '⌦' | '⎋' => (110.0, false),
         _ => (KEYCAP_UNIT_HEIGHT, false),
     };
-    let label = if character == '␣' {
-        String::new()
-    } else {
-        character.to_string()
+    let (label, legend_scale) = match (word_legend(character), character) {
+        (Some(word), _) => (word.to_string(), WORD_LEGEND_SCALE),
+        (None, '␣') => (String::new(), 1.0),
+        (None, _) => {
+            let label = character.to_string();
+            let scale = symbol_scale(&label);
+            (label, scale)
+        }
     };
     Keycap {
         label,
         width_units,
         modifier,
         fit_legend: false,
+        legend_scale,
     }
 }
 
@@ -144,12 +167,17 @@ pub fn parse_keycaps(display_text: &str, recorded_keys: usize) -> Vec<Keycap> {
         match &characters[leading..] {
             [] => {}
             [only] => keys.push(keycap_for(*only)),
-            rest => keys.push(Keycap {
-                label: rest.iter().collect(),
-                width_units: KEYCAP_UNIT_HEIGHT,
-                modifier: false,
-                fit_legend: true,
-            }),
+            rest => {
+                let label: String = rest.iter().collect();
+                let legend_scale = symbol_scale(&label);
+                keys.push(Keycap {
+                    label,
+                    width_units: KEYCAP_UNIT_HEIGHT,
+                    modifier: false,
+                    fit_legend: true,
+                    legend_scale,
+                });
+            }
         }
         keys
     } else {
@@ -274,24 +302,36 @@ mod tests {
     }
 
     #[test]
-    fn only_non_alphanumeric_legends_are_symbols() {
-        let symbols: Vec<_> = parse_keycaps("⌘", 1)
-            .iter()
-            .map(Keycap::is_symbol)
-            .collect();
-        assert_eq!(symbols, [true]);
-        let symbols: Vec<_> = parse_keycaps("T7␣", 3)
-            .iter()
-            .map(Keycap::is_symbol)
-            .collect();
-        assert_eq!(symbols, [false, false, false]);
+    fn legend_scale_follows_the_kind_of_legend() {
+        let scales = |text: &str, recorded: usize| -> Vec<f32> {
+            parse_keycaps(text, recorded)
+                .iter()
+                .map(|key| key.legend_scale)
+                .collect()
+        };
+        assert_eq!(scales("⌘", 1), [SYMBOL_LEGEND_SCALE]);
+        assert_eq!(scales("T7␣", 3), [1.0, 1.0, 1.0]);
+        assert_eq!(scales("⌃", 1), [WORD_LEGEND_SCALE]);
+    }
+
+    #[test]
+    fn keys_without_a_clear_glyph_use_short_words() {
+        let labels = |text: &str| -> Vec<String> {
+            parse_keycaps(text, text.chars().count())
+                .into_iter()
+                .map(|key| key.label)
+                .collect()
+        };
+        assert_eq!(labels("⎋"), ["esc"]);
+        assert_eq!(labels("⇱⇲⇞⇟"), ["home", "end", "pg up", "pg dn"]);
+        assert_eq!(labels("⌃"), ["ctrl"]);
     }
 
     #[test]
     fn a_combo_is_modifiers_plus_one_key() {
         let keys = parse_keycaps("⌃F5", 1);
         let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
-        assert_eq!(labels, ["⌃", "F5"]);
+        assert_eq!(labels, ["ctrl", "F5"]);
         assert!(keys[0].modifier && !keys[0].fit_legend);
         assert!(!keys[1].modifier && keys[1].fit_legend);
 
@@ -337,7 +377,7 @@ mod tests {
     fn a_segment_without_recorded_keys_still_merges_a_combo() {
         let keys = parse_keycaps("⌃F5", 0);
         let labels: Vec<_> = keys.iter().map(|key| key.label.as_str()).collect();
-        assert_eq!(labels, ["⌃", "F5"]);
+        assert_eq!(labels, ["ctrl", "F5"]);
     }
 
     #[test]

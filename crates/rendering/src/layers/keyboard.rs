@@ -296,7 +296,6 @@ struct KeycapDraw {
 const KEYCAP_LEGEND_UNITS: f32 = 26.0;
 const KEYCAP_BLEED_UNITS: f32 = 10.0;
 const KEYCAP_LEGEND_PADDING_UNITS: f32 = 14.0;
-const KEYCAP_SYMBOL_BOOST: f32 = 1.35;
 const KEYCAP_LEGEND_AXIS: f32 = 0.35;
 
 struct KeycapRequest<'a> {
@@ -794,13 +793,8 @@ impl KeyboardLayer {
             return;
         }
         for key in keys.iter_mut().filter(|key| key.fit_legend) {
-            let boost = if key.is_symbol() {
-                KEYCAP_SYMBOL_BOOST
-            } else {
-                1.0
-            };
             let legend_width =
-                self.measure_legend(&key.label, request.family, request.weight) * boost;
+                self.measure_legend(&key.label, request.family, request.weight) * key.legend_scale;
             key.width_units = key
                 .width_units
                 .max(legend_width + KEYCAP_LEGEND_PADDING_UNITS * 2.0);
@@ -825,14 +819,7 @@ impl KeyboardLayer {
         let queue = &request.constants.queue;
         let legend_sizes: Vec<f32> = keys
             .iter()
-            .map(|key| {
-                let boost = if key.is_symbol() {
-                    KEYCAP_SYMBOL_BOOST
-                } else {
-                    1.0
-                };
-                (layout.scale * KEYCAP_LEGEND_UNITS * boost).max(1.0)
-            })
+            .map(|key| (layout.scale * KEYCAP_LEGEND_UNITS * key.legend_scale).max(1.0))
             .collect();
 
         let shaped = ShapedKeycapLegends {
