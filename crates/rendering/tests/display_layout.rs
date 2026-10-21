@@ -167,7 +167,8 @@ fn uniforms_for(
     let cursor = CursorEvents::default();
     let zoom =
         ZoomTransformTimeline::from_project(project, &cursor, 1.0, constants.options.screen_size);
+    let shared = std::sync::Arc::new(project.clone());
     ProjectUniforms::new(
-        constants, project, 0, 30, resolution, &cursor, frames, 1.0, &zoom,
+        constants, &shared, 0, 30, resolution, &cursor, frames, 1.0, &zoom,
     )
 }
