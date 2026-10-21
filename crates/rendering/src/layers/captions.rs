@@ -1105,14 +1105,10 @@ fn find_active_caption_segment<'a>(
     for segment in segments {
         let effective_end = caption_segment_effective_end(segment);
 
-        // Active captions take priority over exit animations, even when an
-        // earlier segment is already fading out.
         if time >= segment.start && time < effective_end {
             return Some(ActiveCaptionSegment { segment });
         }
 
-        // Keep the first matching exit animation in input order. Continue the
-        // scan because a later segment may be active and must take priority.
         if first_fading.is_none() && time >= effective_end {
             let fade = segment
                 .fade_duration_override
@@ -1323,13 +1319,19 @@ mod tests {
 
         for tick in -100..1_200 {
             let time = tick as f64 / 100.0;
-            let expected = baseline_lookup(time, &segments, 0.35).map(|segment| segment.id.as_str());
-            let actual = optimized_lookup(time, &segments, 0.35).map(|segment| segment.id.as_str());
+            let expected = baseline_lookup(time, &segments, 0.35)
+                .map(|segment| segment.id.as_str());
+            let actual = optimized_lookup(time, &segments, 0.35)
+                .map(|segment| segment.id.as_str());
             assert_eq!(actual, expected, "caption selection differs at t={time}");
         }
     }
 
-    fn measure_lookup(lookup: CaptionLookup, segments: &[CaptionTrackSegment], time: f64) -> f64 {
+    fn measure_lookup(
+        lookup: CaptionLookup,
+        segments: &[CaptionTrackSegment],
+        time: f64,
+    ) -> f64 {
         use std::{hint::black_box, time::Instant};
 
         const WARMUP_ITERATIONS: usize = 250;
@@ -1389,7 +1391,6 @@ mod tests {
             let mut baseline = Vec::with_capacity(REPETITIONS);
             let mut optimized = Vec::with_capacity(REPETITIONS);
 
-            // Interleave the order to reduce bias from thermal and clock changes.
             for repetition in 0..REPETITIONS {
                 if repetition % 2 == 0 {
                     baseline.push(measure_lookup(baseline_lookup, &segments, time));
