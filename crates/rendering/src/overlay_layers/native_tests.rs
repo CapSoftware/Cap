@@ -102,7 +102,7 @@ fn uniforms_for(
         ZoomTransformTimeline::from_project(project, &cursor, 3.0, constants.options.screen_size);
     ProjectUniforms::new(
         constants,
-        project,
+        &std::sync::Arc::new(project.clone()),
         frame,
         30,
         resolution,
@@ -328,7 +328,7 @@ async fn restricted_late_uniforms_fail_before_prepare_or_direct_render_work() {
     let late_project = uniforms(&constants, &with_overlay("image", "must-not-open.png"), 30);
     let mut late_text = uniforms(&constants, &with_overlay("text", ""), 30);
     assert!(!late_text.texts.is_empty());
-    late_text.project = project;
+    late_text.project = std::sync::Arc::new(project);
     let mut session =
         RenderSession::new(&constants.device, clean.output_size.0, clean.output_size.1);
     let mut encoder = constants.device.create_command_encoder(&Default::default());
