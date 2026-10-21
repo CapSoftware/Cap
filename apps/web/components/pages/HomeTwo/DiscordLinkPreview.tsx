@@ -15,10 +15,6 @@ export const discordLinkPreview = {
 							"# Cap\nOpen-source screen recording for Mac, Windows, and Linux.",
 					},
 				],
-				accessory: {
-					type: 11,
-					media: { url: "https://cap.so/apple-touch-icon.png" },
-				},
 			},
 			{
 				type: 12,

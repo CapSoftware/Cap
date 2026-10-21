@@ -100,5 +100,8 @@ describe("homepage SEO", () => {
 		expect(JSON.stringify(discordLinkPreview)).toContain("Join our Discord");
 		expect(JSON.stringify(discordLinkPreview)).toContain(DISCORD_URL);
 		expect(JSON.stringify(discordLinkPreview)).toContain(homepageOgImageUrl);
+		expect(JSON.stringify(discordLinkPreview)).not.toContain(
+			"apple-touch-icon",
+		);
 	});
 });
