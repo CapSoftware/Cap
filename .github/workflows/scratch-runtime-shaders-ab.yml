@@ -1,0 +1,85 @@
+name: Scratch runtime_shaders A/B
+on:
+  push:
+    branches: [ci/runtime-shaders-ab]
+jobs:
+  ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-6vcpu-macos-26, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain report
+        run: |
+          set +e
+          sw_vers
+          xcode-select -p
+          xcodebuild -version
+          ls /Applications | grep -i xcode
+          echo "--- metal compiler"
+          xcrun -sdk macosx -f metal
+          xcrun -sdk macosx metal --version
+          echo "metal_exit=$?"
+          xcrun -sdk macosx metallib --version
+          echo "metallib_exit=$?"
+          xcodebuild -showComponent MetalToolchain
+          system_profiler SPDisplaysDataType | head -20
+          true
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - name: Prepare and instrument gpui
+        run: |
+          set -euo pipefail
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+          python3 -I .github/scripts/runtime-shaders-instrument.py "$GITHUB_WORKSPACE/../zed-cap" apps/desktop-gpui/src/main.rs
+      - name: Build runtime_shaders (current)
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --release --target aarch64-apple-darwin --bin cap-gpui
+          echo "runtime build: $(( $(date +%s) - start ))s"
+          cp apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui-runtime
+      - name: Ensure Metal toolchain
+        run: |
+          set +e
+          if xcrun -sdk macosx metal --version; then
+            echo "metal toolchain already present"
+          else
+            start=$(date +%s)
+            xcodebuild -downloadComponent MetalToolchain
+            echo "download exit=$? took $(( $(date +%s) - start ))s"
+            xcrun -sdk macosx metal --version
+          fi
+          true
+      - name: Build precompiled metallib
+        run: |
+          set -euo pipefail
+          sed -i '' '/^    "runtime_shaders",$/d' apps/desktop-gpui/Cargo.toml
+          grep -n -A5 '^gpui_platform' apps/desktop-gpui/Cargo.toml
+          start=$(date +%s)
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --release --target aarch64-apple-darwin --bin cap-gpui
+          echo "precompiled rebuild: $(( $(date +%s) - start ))s"
+          cp apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui-precompiled
+          find apps/desktop-gpui/target/aarch64-apple-darwin/release/build -name 'shaders.metallib' -exec ls -l {} \;
+          ls -l apps/desktop-gpui/target/aarch64-apple-darwin/release/cap-gpui-*
+      - name: Measure
+        run: |
+          set -euo pipefail
+          dir=apps/desktop-gpui/target/aarch64-apple-darwin/release
+          python3 -I .github/scripts/runtime-shaders-measure.py "$PWD/$dir/cap-gpui-runtime" "$PWD/$dir/cap-gpui-precompiled" 7 "$RUNNER_TEMP/results.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-shaders-${{ matrix.runner }}
+          path: ${{ runner.temp }}/results.json
