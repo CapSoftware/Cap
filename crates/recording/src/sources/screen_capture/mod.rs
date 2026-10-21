@@ -436,8 +436,8 @@ fn logical_axis_to_physical(
     let start = position.clamp(0.0, logical_extent);
     let end = (position + size).clamp(0.0, logical_extent);
     let scale = physical_extent / logical_extent;
-    let physical_start = start.min(end) * scale;
-    let physical_end = start.max(end) * scale;
+    let physical_start = (start.min(end) * scale).round();
+    let physical_end = (start.max(end) * scale).round();
     let min_size = 2.0_f64.min(physical_extent);
     let size = (physical_end - physical_start).clamp(min_size, physical_extent);
     let position = physical_start.min(physical_extent - size).max(0.0);
@@ -925,6 +925,38 @@ mod tests {
                 physical.height(),
                 "full selection must span full physical height (logical {logical:?})"
             );
+        }
+    }
+
+    #[test]
+    fn fractional_area_edges_round_to_pixels_and_stay_inside_the_display() {
+        for (position, size, expected) in [
+            (100.2, 800.4, (150.0, 1201.0)),
+            (-0.2, 100.4, (0.0, 150.0)),
+            (1279.8, 10.0, (1918.0, 2.0)),
+        ] {
+            assert_eq!(
+                logical_axis_to_physical(position, size, 1280.0, 1920.0),
+                Some(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn full_overlay_selection_keeps_native_resolution_at_fractional_scales() {
+        for scale in [1.25, 1.5, 1.75] {
+            let physical = PhysicalSize::new(1920.0, 1080.0);
+            let logical = LogicalSize::new(physical.width() / scale, physical.height() / scale);
+            let overlay_size = LogicalSize::new(
+                f64::from(logical.width() as f32),
+                f64::from(logical.height() as f32),
+            );
+            let selection = LogicalBounds::new(LogicalPosition::new(0.0, 0.0), overlay_size);
+            let crop = logical_area_to_physical_bounds(selection, logical, physical).unwrap();
+            let output = constrain_capture_size(crop.size(), None);
+
+            assert_eq!(output.width(), physical.width(), "scale {scale}");
+            assert_eq!(output.height(), physical.height(), "scale {scale}");
         }
     }
 
