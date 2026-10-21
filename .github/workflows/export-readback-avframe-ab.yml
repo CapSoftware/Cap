@@ -1,0 +1,172 @@
+name: export-readback-avframe-ab
+# Scratch A/B for perf/export-readback-into-avframe. Not for main.
+on:
+  push:
+    branches: [ci/export-readback-avframe-ab]
+  workflow_dispatch:
+jobs:
+  ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+    runs-on: ${{ matrix.settings.runner }}
+    timeout-minutes: 180
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-export-readback-ab
+          save-cache: "true"
+          cache-on-failure: "true"
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+      - name: Build head and base
+        shell: bash
+        run: |
+          set +e
+          bin="$RUNNER_TEMP/abbin"
+          mkdir -p "$bin/head" "$bin/base"
+          ext=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
+          build() {
+            cargo +1.95.0 build --locked --release -p cap-export --example export-benchmark-runner --example export-cli
+            cp "target/release/examples/export-benchmark-runner$ext" "target/release/examples/export-cli$ext" "$bin/$1/"
+          }
+          build head
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$PATH" cargo +1.95.0 test --locked --release -p cap-export --lib nv12 -- --nocapture
+          else
+            LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib" cargo +1.95.0 test --locked --release -p cap-export --lib nv12 -- --nocapture
+          fi
+          echo "head unit tests exit $?"
+          git fetch origin ci/export-readback-avframe-base
+          git diff --stat HEAD FETCH_HEAD
+          git checkout FETCH_HEAD -- crates
+          build base
+          git checkout HEAD -- crates
+          ls -la "$bin/head" "$bin/base"
+      - name: Machine and tools
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Format-List Name,AdapterCompatibility,DriverVersion; Get-CimInstance Win32_Processor | Format-List Name,NumberOfLogicalProcessors"
+          else
+            sudo apt-get install -y --no-install-recommends ffmpeg mesa-vulkan-drivers vulkan-tools
+            lscpu | head -20
+            (vulkaninfo --summary 2>/dev/null || true) | grep -E "deviceName|driverName" || true
+          fi
+      - name: Frame identity, base vs head
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$(cygpath "$GITHUB_WORKSPACE/target/ffmpeg/bin"):$PATH"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          ab="$RUNNER_TEMP/ab"
+          bin="$RUNNER_TEMP/abbin"
+          proj="$ab/project"
+          mkdir -p "$proj/content"
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=duration=6:size=1920x1080:rate=30" -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p "$proj/content/display.mp4"
+          cat > "$proj/recording-meta.json" <<'JSON'
+          {"pretty_name":"Export AB","sharing":null,"display":{"path":"content/display.mp4","fps":30},"camera":null,"audio":null,"cursor":null}
+          JSON
+          cat > "$proj/project-config.json" <<'JSON'
+          {"aspectRatio":null,"background":{"source":{"type":"color","value":[30,30,46]},"blur":0.0,"padding":8.0,"rounding":20.0,"inset":0,"shadow":50.0},"camera":{"hide":true,"mirror":false,"position":{},"rounding":100.0,"shadow":40.0,"size":30.0},"audio":{"mute":true},"cursor":{"hideWhenIdle":false,"size":100,"type":"pointer","tension":170.0,"mass":1.0,"friction":18.0,"raw":false},"hotkeys":{"show":true},"timeline":{"segments":[{"recordingSegment":0,"timescale":1.0,"start":0.0,"end":6.0}],"zoomSegments":[]}}
+          JSON
+          ok=1
+          for res in 1920x1080 1280x720 1366x768; do
+            w="${res%x*}"; h="${res#*x}"
+            for variant in base head base2; do
+              exe="$bin/${variant%2}/export-cli"
+              rm -rf "$proj/output"
+              CAP_AB_HASH_FILE="$ab/$variant-$res.input" CAP_AB_REPORT="$ab/identity.txt" RUST_LOG=warn \
+                "$exe" "$proj" mp4 "{\"fps\":30,\"resolution_base\":{\"x\":$w,\"y\":$h},\"compression\":\"Maximum\",\"custom_bpp\":null}" > "$ab/$variant-$res.log" 2>&1
+              echo "$variant $res exit $?"
+              tail -3 "$ab/$variant-$res.log"
+              cp "$proj/output/result.mp4" "$ab/$variant-$res.mp4"
+              ffmpeg -hide_banner -loglevel error -i "$ab/$variant-$res.mp4" -map 0:v:0 -c copy -f md5 - > "$ab/$variant-$res.stream"
+              ffmpeg -hide_banner -loglevel error -i "$ab/$variant-$res.mp4" -map 0:v:0 -f framemd5 - | grep -v '^#' > "$ab/$variant-$res.frames"
+            done
+            for kind in input stream frames; do
+              lines=$(wc -l < "$ab/head-$res.$kind")
+              if cmp -s "$ab/base-$res.$kind" "$ab/head-$res.$kind"; then r=identical; else r=DIFFERENT; ok=0; fi
+              if cmp -s "$ab/base-$res.$kind" "$ab/base2-$res.$kind"; then r2=identical; else r2=different; fi
+              echo "| $res | $kind | $lines | base vs head: $r | base vs base: $r2 |" | tee -a "$ab/identity.md"
+            done
+          done
+          cat "$ab/identity.txt"
+          {
+            echo "### ${{ matrix.settings.target }} identity"
+            echo "| output | compared | lines | head | control |"
+            echo "|---|---|---|---|---|"
+            cat "$ab/identity.md"
+            echo
+            echo '```'
+            cat "$ab/identity.txt"
+            cat "$ab"/base-1920x1080.stream "$ab"/head-1920x1080.stream
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$ok" != 1 ]]; then echo "::error::base and head outputs differ"; fi
+      - name: Export benchmark, base vs head
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$(cygpath "$GITHUB_WORKSPACE/target/ffmpeg/bin"):$PATH"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          ab="$RUNNER_TEMP/ab"
+          bin="$RUNNER_TEMP/abbin"
+          export CAP_RENDER_LOOP_STATS=1
+          for round in 1 2 3; do
+            for variant in base head; do
+              echo "## round $round $variant"
+              CAP_AB_REPORT="$ab/bench-$variant.txt" RUST_LOG="cap_export=info,cap_enc_ffmpeg=info" \
+                "$bin/$variant/export-benchmark-runner" quick --duration 10 > "$ab/bench-$variant-$round.log" 2>&1
+              echo "exit $?"
+              grep -E "Completed in|NV12 export loop stats|AB_EXPORT|Selected hardware|SOFTWARE|Status:" "$ab/bench-$variant-$round.log"
+            done
+          done
+          cat > "$ab/summarize.py" <<'PY'
+          import re, sys, statistics
+          rows = {}
+          for variant in ("base", "head"):
+              for line in open(sys.argv[1] + f"/bench-{variant}.txt"):
+                  fields = dict(kv.split("=", 1) for kv in line.split()[1:])
+                  rows.setdefault((fields["size"], variant), []).append(fields)
+          keys = ["wall_ms", "cpu_ms", "prep_us_per_frame", "avframe_copy_bytes_per_frame", "readback_copy_us_per_frame", "readback_copy_bytes_per_frame"]
+          print("| size | variant | runs | frames | wrapped | " + " | ".join(keys) + " |")
+          print("|---|---|---|---|---|" + "---|" * len(keys))
+          for (size, variant), runs in sorted(rows.items()):
+              med = [statistics.median(float(r[k]) for r in runs) for k in keys]
+              print(f"| {size} | {variant} | {len(runs)} | {runs[0]['frames']} | {runs[0]['wrapped']} | " + " | ".join(f"{v:.1f}" for v in med) + " |")
+          PY
+          py=python3; command -v python3 >/dev/null || py=python
+          { echo "### ${{ matrix.settings.target }} quick benchmark (median of 3)"; $py "$ab/summarize.py" "$ab"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          cat "$ab/bench-base.txt" "$ab/bench-head.txt"
