@@ -105,7 +105,7 @@ describe("homepage SEO", () => {
 		);
 		expect(
 			discordLinkPreview.component.components[0].components[0].content,
-		).toBe(`# Cap\n${homepageSeo.description}`);
+		).toBe(`# [Cap](${homepageSeo.url})\n${homepageSeo.description}`);
 		expect(discordLinkPreview.component.components[0]).toMatchObject({
 			type: 9,
 			accessory: {
