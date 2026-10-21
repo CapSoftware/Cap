@@ -1,0 +1,78 @@
+name: gpui-atlas-settings-probe
+
+# Scratch: atlas memory across screenshot crop dialog cycles, and settings store read cost. Not for main.
+
+on:
+  push:
+    branches: [scratch/gpui-atlas-settings-probe]
+
+jobs:
+  probe:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Keep the display awake
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          caffeinate -u -t 2 || true
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          defaults -currentHost write com.apple.screensaver idleTime 0 || true
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build
+        run: |
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target aarch64-apple-darwin --bin cap-gpui
+          frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/aarch64-apple-darwin/Frameworks"
+          mkdir -p "$frameworks"
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+
+      - name: Fixture
+        run: python3 scripts/probe/make_screenshot_fixture.py "$RUNNER_TEMP/fixture/Probe.cap" 5120 2880
+
+      - name: Measure crop dialog cycles
+        run: |
+          BIN=apps/desktop-gpui/target/aarch64-apple-darwin/debug/cap-gpui
+          sw_vers; system_profiler SPDisplaysDataType | grep -E "Chipset|Resolution|Metal" || true
+          for round in 1 2; do
+            scripts/probe/crop_probe.sh $BIN "no-release-r$round" 10 CAP_PROBE_NO_RELEASE=1
+            scripts/probe/crop_probe.sh $BIN "release-r$round" 10
+          done
+          cat "$RUNNER_TEMP/probe-summary.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Settings store read benchmark
+        run: |
+          frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/aarch64-apple-darwin/debug/Frameworks"
+          mkdir -p "$frameworks"
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target aarch64-apple-darwin --bin cap-gpui store::tests:: -- --include-ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/probe-store.log" | grep -E "store_bytes=|test result|FAILED|panicked" || true
+          grep -E "store_bytes=" "$RUNNER_TEMP/probe-store.log" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-logs
+          path: ${{ runner.temp }}/probe-*

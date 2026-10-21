@@ -1120,6 +1120,38 @@ impl ScreenshotEditorWindow {
         if std::env::var("CAP_GPUI_AUTO_SCREENSHOT_CROP").is_ok_and(|value| value == "1") {
             self.open_crop_dialog(window, cx);
         }
+        if let Some(cycles) = std::env::var("CAP_PROBE_CROP_CYCLES")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+        {
+            cx.spawn_in(window, async move |this, cx| {
+                let executor = cx.background_executor().clone();
+                let pause = |ms: u64| executor.timer(Duration::from_millis(ms));
+                pause(5000).await;
+                eprintln!("PROBE start");
+                for cycle in 0..cycles {
+                    this.update_in(cx, |this, window, cx| this.open_crop_dialog(window, cx))
+                        .ok();
+                    for _ in 0..8 {
+                        pause(500).await;
+                        this.update_in(cx, |_, window, _| window.refresh()).ok();
+                    }
+                    this.update_in(cx, |this, window, cx| {
+                        this.cancel_crop_dialog("probe", window, cx);
+                        window.refresh();
+                    })
+                    .ok();
+                    pause(500).await;
+                    eprintln!("PROBE cycle {cycle} done");
+                }
+                for _ in 0..30 {
+                    pause(500).await;
+                    this.update_in(cx, |_, window, _| window.refresh()).ok();
+                }
+                eprintln!("PROBE complete");
+            })
+            .detach();
+        }
         cx.notify();
     }
 

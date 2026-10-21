@@ -92,6 +92,11 @@ impl ScreenshotCropDialog {
     /// each closed dialog would otherwise stay resident until the editor
     /// window closes.
     fn release_image(&mut self, window: &mut Window) {
+        eprintln!("PROBE release had_image={}", self.image.is_some());
+        if std::env::var_os("CAP_PROBE_NO_RELEASE").is_some() {
+            self.image = None;
+            return;
+        }
         if let Some(image) = self.image.take() {
             let _ = window.drop_image(image);
         }
