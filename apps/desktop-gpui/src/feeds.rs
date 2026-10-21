@@ -313,7 +313,7 @@ impl CameraProcessingFactory {
 impl RecordingCameraWorker {
     fn publish(
         &self,
-        image: &gpui::RenderImage,
+        image: &Arc<gpui::RenderImage>,
         dims: (usize, usize),
         timestamp: cap_timestamp::Timestamp,
         mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
@@ -334,14 +334,16 @@ impl RecordingCameraWorker {
                 return;
             }
         }
-        let Some(bytes) = image.as_bytes(0) else {
+        if image.as_bytes(0).is_none() {
             self.publisher
                 .fail("Processed camera pixels unavailable".to_string());
             return;
-        };
+        }
         self.publisher.publish(
             cap_recording::instant_recording::LinuxProcessedCameraFrame {
-                bgra: Arc::from(bytes),
+                bgra: cap_recording::instant_recording::LinuxCameraPixels::new(
+                    RenderImagePixels(image.clone()),
+                ),
                 dimensions: (dims.0 as u32, dims.1 as u32),
                 stride: dims.0 * 4,
                 timestamp,
@@ -350,6 +352,16 @@ impl RecordingCameraWorker {
                 mask,
             },
         );
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct RenderImagePixels(Arc<gpui::RenderImage>);
+
+#[cfg(target_os = "linux")]
+impl AsRef<[u8]> for RenderImagePixels {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes(0).unwrap_or_default()
     }
 }
 
@@ -2133,6 +2145,22 @@ mod tests {
             &[30, 20, 10, 255, 60, 50, 40, 128]
         );
         assert!(scaler.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recording_camera_pixels_share_the_preview_image() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 2, 1);
+        frame.data_mut(0)[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let (image, dims) = camera_preview_image(&frame, &mut None, false, None).unwrap();
+
+        let shared = RenderImagePixels(image.clone());
+        let pixels = cap_recording::instant_recording::LinuxCameraPixels::new(shared);
+
+        let preview = image.as_bytes(0).unwrap();
+        assert_eq!(pixels.as_ptr(), preview.as_ptr());
+        assert_eq!(&*pixels, preview);
+        assert_eq!(pixels.len(), dims.0 * dims.1 * 4);
     }
 
     #[test]
