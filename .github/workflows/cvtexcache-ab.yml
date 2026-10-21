@@ -1,0 +1,57 @@
+name: cvtexcache-ab
+
+# Scratch probe: does gpui's never-flushed CVMetalTextureCache grow? Not for main.
+
+on:
+  push:
+    branches: [ci/cvtexcache-ab]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-6vcpu-macos-26, blacksmith-6vcpu-macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Build probe
+        run: cargo +1.95.0 build --release --manifest-path scripts/cvtex-ab/probe/Cargo.toml
+      - name: Run probe
+        run: |
+          set +e
+          sw_vers; system_profiler SPDisplaysDataType | grep -E "Chipset|Metal" || true
+          BIN=scripts/cvtex-ab/probe/target/release/cvtex-probe
+          OUT="$RUNNER_TEMP/cvtex-out"; mkdir -p "$OUT"
+          for mode in ring resize fresh; do
+            for format in bgra nv12; do
+              for flush in noflush flush; do
+                timeout 300 "$BIN" $mode $format $flush 6000 | tee "$OUT/$mode-$format-$flush.log"
+              done
+            done
+          done
+          for mode in ring resize; do
+            for flush in noflush flush; do
+              timeout 300 "$BIN" $mode nv12 $flush 3600 paced | tee "$OUT/$mode-nv12-$flush-paced.log"
+            done
+          done
+          {
+            echo "| run | start MB | end MB | end GPU MB | after final flush MB |"
+            echo "|---|---|---|---|---|"
+            for f in "$OUT"/*.log; do
+              s=$(grep -o 'frame=0 footprint_mb=[0-9.]*' "$f" | sed 's/.*=//')
+              e=$(grep ' done ' "$f" | grep -o 'footprint_mb=[0-9.]*' | sed 's/.*=//')
+              g=$(grep ' done ' "$f" | grep -o 'device_mb=[0-9.]*' | sed 's/.*=//')
+              a=$(grep 'after_final_flush' "$f" | grep -o 'footprint_mb=[0-9.]*' | sed 's/.*=//')
+              echo "| $(basename "$f" .log) | $s | $e | $g | $a |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cvtex-${{ matrix.runner }}
+          path: ${{ runner.temp }}/cvtex-out
