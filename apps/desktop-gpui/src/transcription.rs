@@ -1395,6 +1395,36 @@ fn is_special_token(token_text: &str) -> bool {
         || trimmed.contains("<|")
 }
 
+/// whisper.cpp defaults to 4 threads on every machine. It splits each op
+/// evenly across its threads, so on Apple Silicon only the performance cores
+/// count, and past 8 the per-token decoder ops are too small to gain.
+fn whisper_threads() -> usize {
+    performance_cores()
+        .unwrap_or_else(num_cpus::get_physical)
+        .clamp(1, 8)
+}
+
+#[cfg(target_os = "macos")]
+fn performance_cores() -> Option<usize> {
+    let mut cores: libc::c_int = 0;
+    let mut len = std::mem::size_of_val(&cores);
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"hw.perflevel0.physicalcpu".as_ptr(),
+            (&mut cores as *mut libc::c_int).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (result == 0 && cores > 0).then_some(cores as usize)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn performance_cores() -> Option<usize> {
+    None
+}
+
 /// `process_with_whisper` (`captions.rs:917-1179`).
 fn process_with_whisper(
     audio_path: &Path,
@@ -1407,6 +1437,7 @@ fn process_with_whisper(
         patience: 1.0,
     });
 
+    params.set_n_threads(whisper_threads() as i32);
     params.set_translate(false);
     params.set_print_special(false);
     params.set_print_progress(false);
@@ -2322,6 +2353,39 @@ mod tests {
                 }
             }
             Err(error) => panic!("parakeet_seconds={seconds:.2} error={error}"),
+        }
+    }
+
+    #[test]
+    #[ignore = "needs CAP_WHISPER_BENCH_MODEL and CAP_WHISPER_BENCH_WAV"]
+    fn benchmark_whisper_transcription() {
+        let model = std::env::var("CAP_WHISPER_BENCH_MODEL").expect("CAP_WHISPER_BENCH_MODEL");
+        let wav =
+            PathBuf::from(std::env::var("CAP_WHISPER_BENCH_WAV").expect("CAP_WHISPER_BENCH_WAV"));
+        let context = Arc::new(
+            WhisperContext::new_with_params(&model, WhisperContextParameters::default())
+                .expect("load Whisper model"),
+        );
+        let started = std::time::Instant::now();
+        let result = process_with_whisper(&wav, context, "en", &[]);
+        let seconds = started.elapsed().as_secs_f64();
+        match result {
+            Ok(segments) => {
+                let words: Vec<&CaptionWord> = segments.iter().flat_map(|s| &s.words).collect();
+                println!(
+                    "whisper_seconds={seconds:.2} threads={} words={}",
+                    whisper_threads(),
+                    words.len()
+                );
+                if let Ok(path) = std::env::var("CAP_WHISPER_BENCH_WORDS") {
+                    let dump: String = words
+                        .iter()
+                        .map(|w| format!("{}\t{:.2}\t{:.2}\n", w.text, w.start, w.end))
+                        .collect();
+                    std::fs::write(path, dump).expect("write words");
+                }
+            }
+            Err(error) => panic!("whisper_seconds={seconds:.2} error={error}"),
         }
     }
 
