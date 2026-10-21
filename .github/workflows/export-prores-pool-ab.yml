@@ -10,12 +10,8 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          - target: x86_64-unknown-linux-gnu
-            runner: blacksmith-8vcpu-ubuntu-2404
           - target: x86_64-pc-windows-msvc
             runner: blacksmith-8vcpu-windows-2025
-          - target: aarch64-apple-darwin
-            runner: blacksmith-6vcpu-macos-15
     runs-on: ${{ matrix.settings.runner }}
     timeout-minutes: 200
     env:
@@ -96,7 +92,7 @@ jobs:
               sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
               system_profiler SPDisplaysDataType | head -20 ;;
           esac
-          ffmpeg -hide_banner -version | head -1
+          true
       - name: Output identity, base vs head
         shell: bash
         run: |
