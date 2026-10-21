@@ -5553,7 +5553,16 @@ impl EditorWindow {
     ) {
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let imported = match crate::platform::open_audio_panel() {
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(
+                &[("Audio", AUDIO_IMPORT_EXTENSIONS)],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::platform::open_audio_panel();
+            let imported = match source {
                 Some(source)
                     if this
                         .update_in(cx, |this, _, _| {
@@ -11717,6 +11726,8 @@ impl Render for EditorWindow {
     }
 }
 
+const AUDIO_IMPORT_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
+
 struct ImportedAudio {
     path: String,
     name: String,
@@ -11732,8 +11743,7 @@ fn import_audio_file(
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .ok_or_else(|| "Audio file has no extension".to_string())?;
-    const EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
-    if !EXTENSIONS.contains(&extension.as_str()) {
+    if !AUDIO_IMPORT_EXTENSIONS.contains(&extension.as_str()) {
         return Err(format!("Unsupported audio format: .{extension}"));
     }
     if !source.exists() {
