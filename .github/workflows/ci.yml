@@ -377,7 +377,8 @@ jobs:
   # Cap only builds gpui's crates as dependencies, so their own tests never run
   # in the app jobs above. Run the ones covering Cap's patches against real
   # devices: Metal on macOS, WARP on Windows, and Mesa's lavapipe (Vulkan) and
-  # llvmpipe (GL) on Linux. Zed's lockfile predates the patches' dependency
+  # llvmpipe (GL) on Linux. Windows renders with D3D11 and its runners expose
+  # no wgpu adapter, so wgpu's tests run on macOS and Linux only. Zed's lockfile predates the patches' dependency
   # changes, so these builds cannot use --locked.
   gpui-patch-tests:
     name: GPUI patch tests (${{ matrix.settings.name }})
@@ -428,12 +429,10 @@ jobs:
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
-          else
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
             cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
-          fi
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
             cargo +1.95.0 test -p gpui_macos --lib -- metal_atlas metal_renderer
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+          else
             cargo +1.95.0 test -p gpui_windows --lib directx_atlas
           fi
 
