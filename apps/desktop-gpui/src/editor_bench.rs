@@ -153,6 +153,17 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         std::process::exit(1);
     };
     println!("{header}");
+    let _ = handle.update(cx, |_, window, cx| {
+        cx.activate(true);
+        window.activate_window();
+    });
+    cx.background_executor()
+        .timer(Duration::from_millis(500))
+        .await;
+    let active = handle
+        .update(cx, |_, window, _| window.is_window_active())
+        .unwrap_or(false);
+    println!("timeline-bench: window active {active}");
 
     if std::env::var("CAP_GPUI_AUTO_PROFILE").is_ok_and(|value| value == "1") {
         crate::editor_profile::run(handle, cx).await;
