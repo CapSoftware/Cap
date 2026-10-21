@@ -57,6 +57,7 @@ use gpui::{
 };
 use serde_json::Value;
 
+use crate::theme::LocaleFont as _;
 use crate::{
     camera_loading,
     feeds::Feeds,
@@ -2590,6 +2591,7 @@ impl Render for CameraWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and

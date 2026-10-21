@@ -38,6 +38,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::view::title(), "View".into()),
         (tr::menu::window::close_window(), "Close Window".into()),
         (tr::menu::window::minimize(), "Minimize".into()),
+        (tr::menu::window::title(), "Window".into()),
         (tr::menu::window::zoom(), "Zoom".into()),
         (tr::menu::help::title(), "Help".into()),
         (tr::tray::import_media(), "Import Media...".into()),
@@ -422,11 +423,233 @@ fn english_matches_the_literals_it_replaced() {
     for (translated, literal) in pairs {
         assert_eq!(*translated, literal.as_str());
     }
-    let plain_keys = KEYS.len() - 3;
+    let plain_keys = KEYS
+        .iter()
+        .filter(|key| !key.starts_with(NEW_IN_THE_LANGUAGE_PICKER))
+        .count()
+        - 3;
     assert_eq!(
         pairs.len(),
         plain_keys,
         "every plain key has a literal above"
+    );
+}
+
+const NEW_IN_THE_LANGUAGE_PICKER: &str = "settings.general.language.";
+
+#[test]
+fn language_picker_english() {
+    assert_eq!(tr::settings::general::language::title(), "Language");
+    assert_eq!(
+        tr::settings::general::language::description(),
+        "Choose the language Cap is shown in."
+    );
+    assert_eq!(tr::settings::general::language::label(), "App language");
+    assert_eq!(
+        tr::settings::general::language::system_default("Deutsch"),
+        "System default (Deutsch)"
+    );
+    assert_eq!(
+        KEYS.iter()
+            .filter(|key| key.starts_with(NEW_IN_THE_LANGUAGE_PICKER))
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn system_tags_resolve_to_catalogs() {
+    for (tag, expected) in [
+        ("en-US", Some(Locale::En)),
+        ("en_GB.UTF-8", Some(Locale::En)),
+        ("fr-CA", Some(Locale::Fr)),
+        ("de_DE@euro", Some(Locale::De)),
+        ("es-419", Some(Locale::Es)),
+        ("hi-IN", Some(Locale::Hi)),
+        ("ja-JP", Some(Locale::Ja)),
+        ("JA", Some(Locale::Ja)),
+        ("zh", Some(Locale::ZhCn)),
+        ("zh-CN", Some(Locale::ZhCn)),
+        ("zh-SG", Some(Locale::ZhCn)),
+        ("zh-Hans", Some(Locale::ZhCn)),
+        ("zh-Hans-HK", Some(Locale::ZhCn)),
+        ("zh_CN.UTF-8", Some(Locale::ZhCn)),
+        ("zh-Hant", None),
+        ("zh-Hant-CN", None),
+        ("zh-TW", None),
+        ("zh-HK", None),
+        ("pt-BR", None),
+        ("C", None),
+        ("", None),
+    ] {
+        assert_eq!(match_tag(tag), expected, "{tag:?}");
+    }
+}
+
+#[test]
+fn traditional_chinese_falls_through_to_the_next_language() {
+    let tags = |tags: &[&str]| tags.iter().map(|tag| tag.to_string()).collect::<Vec<_>>();
+    assert_eq!(first_supported(tags(&["zh-Hant-TW", "ja-JP"])), Locale::Ja);
+    assert_eq!(first_supported(tags(&["zh-Hant-TW"])), Locale::En);
+    assert_eq!(first_supported(tags(&["pt-BR", "de-AT", "fr"])), Locale::De);
+    assert_eq!(first_supported(Vec::new()), Locale::En);
+}
+
+#[test]
+fn stored_preferences_round_trip_and_unknown_values_follow_the_system() {
+    assert_eq!(Preference::from_setting(None), Preference::System);
+    assert_eq!(Preference::from_setting(Some("system")), Preference::System);
+    assert_eq!(Preference::from_setting(Some("pt-BR")), Preference::System);
+    assert_eq!(Preference::System.setting(), "system");
+    for locale in Locale::ALL {
+        let preference = Preference::Fixed(locale);
+        assert_eq!(
+            Preference::from_setting(Some(preference.setting())),
+            preference
+        );
+    }
+    let options: Vec<Preference> = Preference::options().collect();
+    assert_eq!(options.len(), Locale::ALL.len() + 1);
+    assert_eq!(options[0], Preference::System);
+    assert_eq!(options[1], Preference::Fixed(Locale::En));
+}
+
+#[test]
+fn picker_lists_endonyms_and_pseudo_only_in_debug_builds() {
+    let endonyms: Vec<&str> = Locale::ALL.iter().map(|locale| locale.endonym()).collect();
+    let mut expected = vec![
+        "English",
+        "简体中文",
+        "日本語",
+        "Français",
+        "Español",
+        "Deutsch",
+        "हिन्दी",
+    ];
+    if cfg!(debug_assertions) {
+        expected.push("Pseudo");
+    }
+    assert_eq!(endonyms, expected);
+    assert_eq!(
+        Locale::from_code("pseudo").is_some(),
+        cfg!(debug_assertions)
+    );
+}
+
+#[test]
+fn only_cjk_and_devanagari_catalogs_change_the_font_cascade() {
+    let first = |locale| {
+        crate::theme::locale_font_fallbacks(locale)
+            .map(|fallbacks| fallbacks.fallback_list().to_vec())
+    };
+    for locale in [Locale::En, Locale::Fr, Locale::Es, Locale::De] {
+        assert_eq!(first(locale), None, "{locale:?}");
+    }
+    assert_eq!(
+        first(Locale::Ja).unwrap(),
+        ["Hiragino Sans", "Yu Gothic UI", "Noto Sans CJK JP"]
+    );
+    assert_eq!(
+        first(Locale::ZhCn).unwrap(),
+        ["PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC"]
+    );
+    assert_eq!(
+        first(Locale::Hi).unwrap(),
+        ["Kohinoor Devanagari", "Nirmala UI", "Noto Sans Devanagari"]
+    );
+}
+
+/// Geist has no CJK or Devanagari glyphs, so those clusters are sized the way
+/// the system faces set them: ideographs and kana are one em, Devanagari
+/// letters a little over half, vowel signs a third or nothing.
+fn missing_glyph_width(cluster: &str, size: f32) -> f32 {
+    cluster
+        .chars()
+        .map(|c| match c {
+            '\u{0900}'..='\u{0902}'
+            | '\u{093A}'
+            | '\u{093C}'
+            | '\u{0941}'..='\u{0948}'
+            | '\u{094D}'
+            | '\u{0951}'..='\u{0957}'
+            | '\u{0962}'..='\u{0963}' => 0.,
+            '\u{0903}'
+            | '\u{093B}'
+            | '\u{093E}'..='\u{0940}'
+            | '\u{0949}'..='\u{094C}'
+            | '\u{094E}'..='\u{094F}' => 0.34,
+            '\u{0900}'..='\u{097F}' => 0.62,
+            _ => 1.,
+        })
+        .sum::<f32>()
+        * size
+}
+
+/// Every string with a `max_px` budget, in every catalog, measured with the
+/// bundled Geist Medium (the widest weight these labels use). Over 92% of the
+/// budget fails: the system UI font differs from Geist by a few percent.
+#[test]
+fn translations_fit_their_width_budgets() {
+    use cosmic_text::{
+        Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontdb::Database,
+    };
+
+    let fonts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+    let mut database = Database::new();
+    for name in ["Geist.ttf", "Geist-Medium.ttf"] {
+        database.load_font_data(std::fs::read(fonts.join(name)).unwrap());
+    }
+    let mut system = FontSystem::new_with_locale_and_db("en-US".into(), database);
+    let attrs = Attrs::new()
+        .family(Family::Name("Geist"))
+        .weight(Weight::MEDIUM);
+
+    let mut measured = 0;
+    let mut failures = Vec::new();
+    for fit in &FITS {
+        for (locale, text) in Locale::ALL.iter().zip(fit.text) {
+            if locale.code() == "pseudo" {
+                continue;
+            }
+            let mut buffer = Buffer::new(&mut system, Metrics::new(fit.size, fit.size * 1.25));
+            buffer.set_size(&mut system, None, None);
+            buffer.set_text(&mut system, text, &attrs, Shaping::Advanced);
+            buffer.shape_until_scroll(&mut system, false);
+            let width = buffer
+                .layout_runs()
+                .map(|run| {
+                    let mut width = 0.;
+                    let mut missing_cluster = None;
+                    for glyph in run.glyphs {
+                        if glyph.glyph_id != 0 {
+                            width += glyph.w;
+                        } else if missing_cluster != Some((glyph.start, glyph.end)) {
+                            // A shaped syllable can be several .notdef glyphs
+                            // that all point at the same cluster.
+                            missing_cluster = Some((glyph.start, glyph.end));
+                            width +=
+                                missing_glyph_width(&run.text[glyph.start..glyph.end], fit.size);
+                        }
+                    }
+                    width
+                })
+                .fold(0., f32::max);
+            measured += 1;
+            if width > fit.max_px * 0.92 {
+                failures.push(format!(
+                    "{} `{}` {text:?}: {width:.1}px of {}px",
+                    locale.code(),
+                    fit.key,
+                    fit.max_px
+                ));
+            }
+        }
+    }
+    assert!(measured > 0);
+    assert!(
+        failures.is_empty(),
+        "over 92% of the width budget:\n{}",
+        failures.join("\n")
     );
 }
 

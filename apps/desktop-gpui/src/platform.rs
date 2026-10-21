@@ -2527,6 +2527,41 @@ mod mac {
         }
     }
 
+    /// `NSApp.windowsMenu` and `NSApp.helpMenu`, looked up by the titles the
+    /// menu bar was just built with. `None` clears the Help menu.
+    pub fn register_system_menus(window_title: &str, help_title: Option<&str>) {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe fn submenu(bar: *mut AnyObject, title: &str) -> *mut AnyObject {
+            unsafe {
+                let item: *mut AnyObject =
+                    msg_send![bar, itemWithTitle: &*NSString::from_str(title)];
+                if item.is_null() {
+                    return std::ptr::null_mut();
+                }
+                msg_send![item, submenu]
+            }
+        }
+
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return;
+            }
+            let bar: *mut AnyObject = msg_send![app, mainMenu];
+            if bar.is_null() {
+                return;
+            }
+            let windows = submenu(bar, window_title);
+            if !windows.is_null() {
+                let _: () = msg_send![app, setWindowsMenu: windows];
+            }
+            let help = help_title.map_or(std::ptr::null_mut(), |title| submenu(bar, title));
+            let _: () = msg_send![app, setHelpMenu: help];
+        }
+    }
+
     /// One-line diagnostic of everything AppKit weighs into occlusion
     /// visibility -- how the macOS 26 display-link failure was diagnosed; keep
     /// it for the next platform mystery.

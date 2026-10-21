@@ -19,6 +19,8 @@
 //! `TextInput` key context, so ⌘Z is a menu key equivalent only while a field
 //! is focused and falls through to the editor's own project-undo otherwise.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui::{
     AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, Subscription,
     SystemMenuType, actions,
@@ -112,6 +114,34 @@ pub fn init(cx: &mut App) {
     });
 
     cx.set_menus(build_menus());
+    MENUS_INSTALLED.store(true, Ordering::Relaxed);
+    #[cfg(target_os = "macos")]
+    if crate::i18n::current() != crate::i18n::Locale::En {
+        register_system_menus();
+    }
+}
+
+static MENUS_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Rebuild the menu bar in the current language, if [`init`] installed one.
+pub fn refresh(cx: &mut App) {
+    if !MENUS_INSTALLED.load(Ordering::Relaxed) {
+        return;
+    }
+    cx.set_menus(build_menus());
+    #[cfg(target_os = "macos")]
+    register_system_menus();
+}
+
+/// gpui only registers a Window menu titled "Window" and never registers Help.
+/// English keeps exactly what gpui sets up; a translated bar gets both.
+#[cfg(target_os = "macos")]
+fn register_system_menus() {
+    let translated = crate::i18n::current() != crate::i18n::Locale::En;
+    platform::register_system_menus(
+        tr::menu::window::title(),
+        translated.then(tr::menu::help::title),
+    );
 }
 
 /// The menu bar model.
@@ -180,9 +210,9 @@ pub fn build_menus() -> Vec<Menu> {
         },
         Menu {
             // gpui_macos hands this menu to `setWindowsMenu:` only when its
-            // title is exactly "Window" (platform.rs:274), so it stays English
-            // until the menu is registered by hand.
-            name: "Window".into(),
+            // title is exactly "Window" (platform.rs:274); [`refresh`]
+            // registers a translated one.
+            name: tr::menu::window::title().into(),
             disabled: false,
             items: vec![
                 MenuItem::action(tr::menu::window::minimize(), Minimize),

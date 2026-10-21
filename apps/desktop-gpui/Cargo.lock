@@ -1599,6 +1599,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
+ "sys-locale",
  "tauri-winres",
  "tempfile",
  "tiny-skia",

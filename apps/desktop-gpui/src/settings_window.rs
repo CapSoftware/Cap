@@ -22,9 +22,10 @@ use gpui::{
 };
 use serde_json::Value;
 
+use crate::theme::LocaleFont as _;
 use crate::{
     devices::WindowOption,
-    i18n::tr,
+    i18n::{self, tr},
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     main_window::Mode,
     sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
@@ -190,6 +191,7 @@ pub(crate) enum MenuKind {
     MainWindowStart,
     PostDeletion,
     MaxFps,
+    Language,
     /// The excluded-windows card's Add button, whose menu is the live window
     /// list rather than a fixed option set.
     AddWindow,
@@ -1401,6 +1403,12 @@ impl SettingsWindow {
                 .iter()
                 .map(|(value, label)| ui::MenuItem::new(label(), *value == self.settings.max_fps))
                 .collect(),
+            MenuKind::Language => {
+                let current = self.language_preference();
+                i18n::Preference::options()
+                    .map(|option| ui::MenuItem::new(language_label(option), option == current))
+                    .collect()
+            }
             MenuKind::MainWindowStart => {
                 enum_items(self.settings.main_window_recording_start_behaviour)
             }
@@ -1433,6 +1441,14 @@ impl SettingsWindow {
                 if let Some((value, _)) = MAX_FPS_OPTIONS.get(index) {
                     self.settings.max_fps = *value;
                     self.write_u32("maxFps", *value, cx);
+                }
+            }
+            MenuKind::Language => {
+                if let Some(option) = i18n::Preference::options().nth(index) {
+                    self.settings.ui_language = Some(option.setting().to_string());
+                    self.write(i18n::SETTING_KEY, Value::from(option.setting()), cx);
+                    let preference = self.language_preference();
+                    cx.defer(move |cx: &mut gpui::App| i18n::apply(preference, cx));
                 }
             }
             MenuKind::MainWindowStart => {
@@ -1495,6 +1511,17 @@ impl SettingsWindow {
                     .any(|entry| covers_default_exclusion(entry, default))
             })
             .collect()
+    }
+}
+
+/// Each catalog under its own name; System default names the language it
+/// resolves to, in that language.
+fn language_label(option: i18n::Preference) -> SharedString {
+    match option {
+        i18n::Preference::System => {
+            tr::settings::general::language::system_default(i18n::system().endonym()).into()
+        }
+        i18n::Preference::Fixed(locale) => SharedString::new_static(locale.endonym()),
     }
 }
 
@@ -1603,6 +1630,7 @@ impl Render for SettingsWindow {
                 .settings_window_radius()
                 .min(SETTINGS_MATERIAL_RADIUS as f32)))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .font_weight(FontWeight::NORMAL)
             .text_color(theme.settings_text());
 
@@ -2955,6 +2983,7 @@ impl SettingsWindow {
     fn render_general(&self, window: &Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         vec![
             self.render_appearance(cx).into_any_element(),
+            self.render_language(cx).into_any_element(),
             self.render_app_section(cx).into_any_element(),
             self.render_recording(cx).into_any_element(),
             self.render_storage(cx).into_any_element(),
@@ -3037,6 +3066,31 @@ impl SettingsWindow {
             Some(tr::settings::general::appearance::description()),
             None,
             vec![self.card(true).child(tiles).into_any_element()],
+        )
+    }
+
+    fn language_preference(&self) -> i18n::Preference {
+        i18n::Preference::from_setting(self.settings.ui_language.as_deref())
+    }
+
+    /// `uiLanguage`, a GPUI-only setting.
+    fn render_language(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let label = language_label(self.language_preference());
+        self.section(
+            tr::settings::general::language::title(),
+            Some(tr::settings::general::language::description()),
+            None,
+            vec![
+                self.rows(vec![
+                    self.setting_row(
+                        tr::settings::general::language::label(),
+                        None,
+                        self.select("ui-language", label, MenuKind::Language, cx)
+                            .into_any_element(),
+                    ),
+                ])
+                .into_any_element(),
+            ],
         )
     }
 

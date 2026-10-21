@@ -25,6 +25,7 @@ use crate::doodle;
 use crate::onboarding_doodles as art;
 use crate::permissions::OSPermission;
 use crate::platform;
+use crate::theme::LocaleFont as _;
 use crate::theme::Theme;
 
 const PANEL_W: f32 = 404.;
@@ -330,6 +331,7 @@ impl Render for PermissionGuide {
             .size_full()
             .p(px(SHADOW_INSET))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .child(
                 div()
                     .size_full()

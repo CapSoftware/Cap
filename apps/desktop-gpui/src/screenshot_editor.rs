@@ -47,6 +47,7 @@ use crate::editor_sidebar::{
     DEFAULT_GRADIENT_TO, GRADIENT_PRESETS, color_to_hsla, hex_to_rgb,
 };
 use crate::screenshot_annotations::{self as annotations, AnnotationState, Tool};
+use crate::theme::LocaleFont as _;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -4442,6 +4443,7 @@ impl Render for ScreenshotEditorWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .font_weight(FontWeight::MEDIUM)
             .bg(if theme.is_dark() {
                 theme.gray_1

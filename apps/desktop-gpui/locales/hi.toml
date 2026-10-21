@@ -1,0 +1,225 @@
+[common]
+add = "जोड़ें"
+cancel = "रद्द करें"
+ok = "ठीक है"
+reset = "रीसेट करें"
+reset_to_default = "डिफ़ॉल्ट पर रीसेट करें"
+save = "सहेजें"
+
+[menu.app]
+about = "Cap के बारे में"
+hide = "Cap छिपाएँ"
+hide_others = "अन्य छिपाएँ"
+quit = "Cap से बाहर निकलें"
+services = "सेवाएँ"
+
+[menu.file]
+close_window = "विंडो बंद करें"
+title = "फ़ाइल"
+
+[menu.edit]
+copy = "कॉपी करें"
+cut = "कट करें"
+paste = "पेस्ट करें"
+redo = "फिर से करें"
+select_all = "सभी चुनें"
+title = "संपादित करें"
+undo = "पहले जैसा करें"
+
+[menu.view]
+enter_full_screen = "पूर्ण स्क्रीन में जाएँ"
+title = "देखें"
+
+[menu.window]
+close_window = "विंडो बंद करें"
+minimize = "छोटा करें"
+title = "विंडो"
+zoom = "ज़ूम करें"
+
+[menu.help]
+title = "सहायता"
+
+[tray]
+import_media = "मीडिया इम्पोर्ट करें..."
+no_recent_items = "कोई हालिया आइटम नहीं"
+open_main_window = "मुख्य विंडो खोलें"
+previous = "हाल के आइटम"
+quit = "Cap से बाहर निकलें"
+record_area = "क्षेत्र रिकॉर्ड करें"
+record_display = "डिस्प्ले रिकॉर्ड करें"
+record_window = "विंडो रिकॉर्ड करें"
+request_permissions = "अनुमतियाँ माँगें"
+screenshot_area = "क्षेत्र का स्क्रीनशॉट"
+screenshot_display = "डिस्प्ले का स्क्रीनशॉट"
+screenshot_window = "विंडो का स्क्रीनशॉट"
+select_mode = "मोड चुनें"
+settings = "सेटिंग्स"
+take_screenshot = "स्क्रीनशॉट लें"
+tooltip_recording = "Cap - रिकॉर्डिंग रोकें"
+upload_logs = "लॉग अपलोड करें"
+version = "Cap v{version}"
+view_all_recordings = "सभी रिकॉर्डिंग देखें"
+view_all_screenshots = "सभी स्क्रीनशॉट देखें"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "स्क्रीनशॉट"
+studio = "Studio"
+
+[settings.nav]
+automations = "ऑटोमेशन"
+changelog = "बदलावों की सूची"
+cli = "CLI"
+experimental = "प्रायोगिक"
+feedback = "फ़ीडबैक"
+general = "सामान्य"
+integrations = "इंटीग्रेशन"
+license = "प्लान और लाइसेंस"
+quality = "रिकॉर्डिंग क्वालिटी"
+recordings = "रिकॉर्डिंग"
+screenshots = "स्क्रीनशॉट"
+shortcuts = "शॉर्टकट"
+transcription = "ट्रांसक्रिप्शन"
+
+[settings.general.language]
+description = "वह भाषा चुनें जिसमें Cap दिखाई दे।"
+label = "ऐप की भाषा"
+system_default = "सिस्टम डिफ़ॉल्ट ({language})"
+title = "भाषा"
+
+[settings.general.appearance]
+description = "Cap को अपने सिस्टम की थीम के अनुसार रखें या एक तय रूप चुनें।"
+title = "रूप"
+
+[settings.general.app]
+description = "चुनें कि Cap आपके सिस्टम पर कैसे दिखे।"
+title = "ऐप"
+
+[settings.general.app.dock_icon]
+description = "कोई विंडो खुली न होने पर भी Cap को Dock में रखें।"
+label = "Dock आइकन हमेशा दिखाएँ"
+
+[settings.general.app.notifications]
+description = "क्लिपबोर्ड पर कॉपी करने, फ़ाइलें सहेजने और अन्य कामों के लिए सूचनाएँ दिखाएँ। आपको अपने सिस्टम की सूचना सेटिंग्स में Cap को अनुमति देनी पड़ सकती है।"
+label = "सिस्टम सूचनाएँ"
+
+[settings.general.recording]
+description = "रिकॉर्ड करते समय और रोकने के बाद का व्यवहार।"
+title = "रिकॉर्डिंग"
+
+[settings.general.recording.countdown]
+description = "रिकॉर्डिंग शुरू होने से पहले रुकें।"
+label = "काउंटडाउन"
+off = "बंद"
+seconds_10 = "10 सेकंड"
+seconds_3 = "3 सेकंड"
+seconds_5 = "5 सेकंड"
+
+[settings.general.recording.confirm_without_mic]
+description = "जब कोई माइक्रोफ़ोन चुना न हो या चुना गया माइक्रोफ़ोन उपलब्ध न हो, तब पुष्टि माँगें।"
+label = "बिना माइक्रोफ़ोन रिकॉर्ड करने से पहले पुष्टि करें"
+
+[settings.general.recording.studio_sound]
+description = "माइक्रोफ़ोन ऑडियो को अपने-आप साफ़ करें। आप एडिटर में किसी भी रिकॉर्डिंग के लिए इसे बंद कर सकते हैं।"
+label = "नई रिकॉर्डिंग में Studio Sound"
+
+[settings.general.recording.main_window_start]
+description = "रिकॉर्डिंग शुरू होने पर मुख्य विंडो के साथ क्या होता है।"
+label = "रिकॉर्डिंग शुरू होने पर मुख्य विंडो"
+
+[settings.general.recording.post_deletion]
+description = "क्या रिकॉर्डिंग विंडो फिर से खुलनी चाहिए।"
+label = "रिकॉर्डिंग हटाने के बाद"
+
+[settings.general.recording.delete_after_upload]
+description = "सफलतापूर्वक अपलोड होने के बाद Cap लोकल फ़ाइल हटा देता है।"
+label = "अपलोड के बाद Instant रिकॉर्डिंग हटाएँ"
+
+[settings.general.recording.crash_recovery]
+description = "ऐसे हिस्सों में रिकॉर्ड करें जिन्हें क्रैश या बिजली जाने के बाद वापस पाया जा सके। कैप्चर के दौरान फ़ाइलें थोड़ी बड़ी होती हैं।"
+label = "क्रैश के बाद वापस पाई जा सकने वाली रिकॉर्डिंग"
+
+[settings.general.recording.custom_cursor]
+description = "कर्सर की स्थिति अलग से कैप्चर करें, ताकि आप एडिटर में उसका आकार और स्मूदिंग बदल सकें।"
+label = "कर्सर को अलग से कैप्चर करें (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Studio रिकॉर्डिंग में माउस क्लिक के आसपास अपने-आप ज़ूम सेगमेंट जोड़ें।"
+label = "क्लिक पर ऑटो ज़ूम"
+
+[settings.general.recording.default_zoom]
+description = "नए बनाए गए और अपने-आप बने ज़ूम सेगमेंट का ज़ूम स्तर।"
+label = "डिफ़ॉल्ट ज़ूम स्तर"
+
+[settings.general.recording.capture_keyboard]
+description = "की प्रेस रिकॉर्ड करें, ताकि आप एडिटर में कीबोर्ड ओवरले जोड़ सकें।"
+label = "कीबोर्ड प्रेस कैप्चर करें"
+
+[settings.general.recording.notch_overlay]
+description = "जब चुने गए क्षेत्र में पूरा नॉच शामिल हो, तो नई स्क्रीन और क्षेत्र रिकॉर्डिंग में नॉच अपने-आप वापस जोड़ें। बाहरी डिस्प्ले, आंशिक क्षेत्र और विंडो रिकॉर्डिंग पर इसका असर नहीं पड़ता। हर रिकॉर्डिंग एडिटर में इसे बदल सकती है।"
+label = "स्क्रीन रिकॉर्डिंग पर MacBook का नॉच दिखाएँ"
+
+[settings.general.recording.max_fps]
+description = "स्क्रीन कैप्चर का अधिकतम फ़्रेम रेट।"
+description_high = "स्क्रीन कैप्चर का अधिकतम फ़्रेम रेट। ज़्यादा मान रखने पर कुछ सिस्टम पर फ़्रेम छूट सकते हैं या CPU का उपयोग बढ़ सकता है।"
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (सुझाया गया)"
+label = "अधिकतम कैप्चर फ़्रेम रेट"
+
+[settings.general.storage]
+choose_folder = "फ़ोल्डर चुनें"
+default_location = "डिफ़ॉल्ट (Application Support)"
+description = "Cap आपकी रिकॉर्डिंग कहाँ सहेजता है।"
+title = "स्टोरेज"
+
+[settings.general.project_name]
+available_placeholders = "उपलब्ध प्लेसहोल्डर"
+description = "नई रिकॉर्डिंग और एक्सपोर्ट की गई फ़ाइलों के लिए टेम्पलेट।"
+title = "डिफ़ॉल्ट प्रोजेक्ट नाम"
+
+[settings.general.project_name.placeholders]
+date_time = "तारीख और समय"
+date_values = "रिकॉर्डिंग की तारीख"
+mode_values = "\"studio\", \"instant\" या \"screenshot\""
+recording_mode = "रिकॉर्डिंग मोड"
+recording_mode_values = "\"Studio\", \"Instant\" या \"Screenshot\""
+target = "लक्ष्य"
+target_kind_values = "\"Display\", \"Window\" या \"Area\""
+target_name_values = "मॉनिटर का नाम या विंडो का शीर्षक।"
+time_values = "रिकॉर्डिंग का समय"
+
+[settings.general.excluded_windows]
+description = "रिकॉर्डिंग में विंडो छिपाएँ।"
+empty = "अभी कोई विंडो बाहर नहीं रखी गई है।"
+missing_body = "कैमरा, सेटिंग्स या रिकॉर्डिंग विंडो स्क्रीन रिकॉर्डिंग में काले बॉक्स के रूप में दिख सकती हैं। छूटी हुई: {names}।"
+missing_title = "सुझाई गई Cap विंडो बाहर नहीं रखी गई हैं"
+restore = "वापस लाएँ"
+title = "बाहर रखी गई विंडो"
+
+[settings.general.updates]
+description = "चुनें कि आपको Cap के कौन-से बिल्ड मिलें।"
+nightly_description = "सबसे नए बिल्ड, जो रिकॉर्डिंग या एक्सपोर्ट न करते समय बैकग्राउंड में अपने-आप अपडेट होते हैं। ये अस्थिर हो सकते हैं।"
+nightly_switch_back = "Stable पर वापस जाने से आपको नवीनतम स्थिर वर्ज़न मिलेगा, जो आपके मौजूदा बिल्ड से पुराना हो सकता है।"
+stable_description = "वर्ज़न वाली रिलीज़ (सुझाई गई)"
+title = "अपडेट"
+
+[settings.general.updates.channel]
+description = "वह रिलीज़ चैनल जिससे Cap अपडेट होता है।"
+label = "अपडेट चैनल"
+
+[settings.general.self_host]
+confirm_change = "क्या आप वाकई सर्वर URL को '{origin}' में बदलना चाहते हैं? आपको फिर से साइन इन करना होगा।"
+description = "इसे तभी बदलें जब आप Cap Web का अपना इंस्टेंस चला रहे हों।"
+server_url = "Cap सर्वर URL"
+title = "सेल्फ़-होस्ट"
+update = "अपडेट करें"
+
+[settings.general.privacy]
+title = "गोपनीयता"
+
+[settings.general.privacy.telemetry]
+description = "Cap विश्वसनीयता बेहतर करने और गड़बड़ियाँ ठीक करने के लिए अनाम टेलीमेट्री का उपयोग करता है। हम रिकॉर्डिंग की सामग्री, विंडो के शीर्षक, फ़ाइल पाथ या निजी जानकारी कभी इकट्ठा नहीं करते।"
+label = "अनाम टेलीमेट्री साझा करें"

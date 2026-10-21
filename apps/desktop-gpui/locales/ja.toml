@@ -1,0 +1,225 @@
+[common]
+add = "追加"
+cancel = "キャンセル"
+ok = "OK"
+reset = "リセット"
+reset_to_default = "デフォルトに戻す"
+save = "保存"
+
+[menu.app]
+about = "Capについて"
+hide = "Capを非表示"
+hide_others = "ほかを非表示"
+quit = "Capを終了"
+services = "サービス"
+
+[menu.file]
+close_window = "ウィンドウを閉じる"
+title = "ファイル"
+
+[menu.edit]
+copy = "コピー"
+cut = "カット"
+paste = "ペースト"
+redo = "やり直す"
+select_all = "すべてを選択"
+title = "編集"
+undo = "取り消す"
+
+[menu.view]
+enter_full_screen = "フルスクリーンにする"
+title = "表示"
+
+[menu.window]
+close_window = "ウィンドウを閉じる"
+minimize = "しまう"
+title = "ウィンドウ"
+zoom = "拡大/縮小"
+
+[menu.help]
+title = "ヘルプ"
+
+[tray]
+import_media = "メディアを読み込む..."
+no_recent_items = "最近の項目はありません"
+open_main_window = "メインウィンドウを開く"
+previous = "最近の項目"
+quit = "Capを終了"
+record_area = "範囲を録画"
+record_display = "ディスプレイを録画"
+record_window = "ウィンドウを録画"
+request_permissions = "アクセス権を要求"
+screenshot_area = "範囲のスクリーンショット"
+screenshot_display = "ディスプレイのスクリーンショット"
+screenshot_window = "ウィンドウのスクリーンショット"
+select_mode = "モードを選択"
+settings = "設定"
+take_screenshot = "スクリーンショットを撮る"
+tooltip_recording = "Cap - 録画を停止"
+upload_logs = "ログをアップロード"
+version = "Cap v{version}"
+view_all_recordings = "すべての録画を表示"
+view_all_screenshots = "すべてのスクリーンショットを表示"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "スクリーンショット"
+studio = "Studio"
+
+[settings.nav]
+automations = "オートメーション"
+changelog = "変更履歴"
+cli = "CLI"
+experimental = "実験的機能"
+feedback = "フィードバック"
+general = "一般"
+integrations = "連携"
+license = "プランとライセンス"
+quality = "録画品質"
+recordings = "録画"
+screenshots = "スクリーンショット"
+shortcuts = "ショートカット"
+transcription = "文字起こし"
+
+[settings.general.language]
+description = "Capの表示言語を選択します。"
+label = "アプリの言語"
+system_default = "システムのデフォルト（{language}）"
+title = "言語"
+
+[settings.general.appearance]
+description = "Capの外観をシステムのテーマに合わせるか、固定の外観を選択します。"
+title = "外観"
+
+[settings.general.app]
+description = "システム上でのCapの表示方法を選択します。"
+title = "アプリ"
+
+[settings.general.app.dock_icon]
+description = "ウィンドウが開いていないときもCapをDockに表示します。"
+label = "Dockアイコンを常に表示"
+
+[settings.general.app.notifications]
+description = "クリップボードへのコピーやファイルの保存などを通知します。システムの通知設定でCapを許可する必要がある場合があります。"
+label = "システム通知"
+
+[settings.general.recording]
+description = "録画中と録画停止後の動作。"
+title = "録画"
+
+[settings.general.recording.countdown]
+description = "録画が始まるまでの待ち時間。"
+label = "カウントダウン"
+off = "オフ"
+seconds_10 = "10秒"
+seconds_3 = "3秒"
+seconds_5 = "5秒"
+
+[settings.general.recording.confirm_without_mic]
+description = "マイクが選択されていないとき、または選択したマイクが使用できないときに確認します。"
+label = "マイクなしで録画する前に確認"
+
+[settings.general.recording.studio_sound]
+description = "マイク音声を自動でクリーンアップします。エディタで録画ごとにオフにすることもできます。"
+label = "新しい録画でStudio Soundを使用"
+
+[settings.general.recording.main_window_start]
+description = "録画が始まったときのメインウィンドウの動作。"
+label = "録画開始時のメインウィンドウ"
+
+[settings.general.recording.post_deletion]
+description = "録画ウィンドウをもう一度開くかどうか。"
+label = "録画を削除した後"
+
+[settings.general.recording.delete_after_upload]
+description = "アップロードが完了すると、Capはローカルのファイルを削除します。"
+label = "アップロード後にInstant録画を削除"
+
+[settings.general.recording.crash_recovery]
+description = "クラッシュや電源断の後でも復元できるよう、分割して録画します。録画中はファイルが少し大きくなります。"
+label = "クラッシュから復元できる録画"
+
+[settings.general.recording.custom_cursor]
+description = "カーソルの状態を個別に記録し、エディタでサイズやスムージングを調整できるようにします。"
+label = "カーソルの個別キャプチャ（Studio）"
+
+[settings.general.recording.auto_zoom]
+description = "Studio録画で、マウスクリックの位置に自動でズームセグメントを追加します。"
+label = "クリック時に自動ズーム"
+
+[settings.general.recording.default_zoom]
+description = "新しく作成したズームセグメントと自動生成されたズームセグメントの倍率。"
+label = "デフォルトのズーム倍率"
+
+[settings.general.recording.capture_keyboard]
+description = "キー入力を記録し、エディタでキーボードオーバーレイを追加できるようにします。"
+label = "キー入力を記録"
+
+[settings.general.recording.notch_overlay]
+description = "選択した範囲にノッチ全体が含まれる場合、新しい画面録画と範囲録画でノッチを自動的に復元します。外部ディスプレイ、部分的な範囲、ウィンドウ録画には適用されません。録画ごとにエディタで変更できます。"
+label = "画面録画にMacBookのノッチを描画"
+
+[settings.general.recording.max_fps]
+description = "画面キャプチャの最大フレームレート。"
+description_high = "画面キャプチャの最大フレームレート。値を高くすると、一部のシステムでフレーム落ちやCPU使用率の上昇が起こる場合があります。"
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS（推奨）"
+label = "最大キャプチャフレームレート"
+
+[settings.general.storage]
+choose_folder = "フォルダを選択"
+default_location = "デフォルト（Application Support）"
+description = "Capが録画を保存する場所。"
+title = "保存先"
+
+[settings.general.project_name]
+available_placeholders = "使用できるプレースホルダ"
+description = "新しい録画と書き出したファイルに使うテンプレート。"
+title = "デフォルトのプロジェクト名"
+
+[settings.general.project_name.placeholders]
+date_time = "日付と時刻"
+date_values = "録画の日付"
+mode_values = "\"studio\"、\"instant\"、\"screenshot\" のいずれか"
+recording_mode = "録画モード"
+recording_mode_values = "\"Studio\"、\"Instant\"、\"Screenshot\" のいずれか"
+target = "対象"
+target_kind_values = "\"Display\"、\"Window\"、\"Area\" のいずれか"
+target_name_values = "モニター名またはウィンドウのタイトル。"
+time_values = "録画の時刻"
+
+[settings.general.excluded_windows]
+description = "録画に映さないウィンドウ。"
+empty = "現在、除外されているウィンドウはありません。"
+missing_body = "カメラ、設定、録画のウィンドウが画面録画に黒い枠として映ることがあります。除外されていないウィンドウ: {names}。"
+missing_title = "推奨されるCapのウィンドウが除外されていません"
+restore = "元に戻す"
+title = "除外するウィンドウ"
+
+[settings.general.updates]
+description = "受け取るCapのビルドを選択します。"
+nightly_description = "最新のビルドです。録画や書き出しをしていないときにバックグラウンドで自動的に更新されます。不安定な場合があります。"
+nightly_switch_back = "Stableに戻すと最新の安定版に切り替わります。現在のビルドより古い場合があります。"
+stable_description = "バージョン付きのリリース（推奨）"
+title = "アップデート"
+
+[settings.general.updates.channel]
+description = "Capのアップデートを受け取るリリースチャンネル。"
+label = "アップデートチャンネル"
+
+[settings.general.self_host]
+confirm_change = "サーバーURLを「{origin}」に変更してもよろしいですか？もう一度サインインする必要があります。"
+description = "独自のCap Webインスタンスを運用している場合にのみ変更してください。"
+server_url = "CapサーバーURL"
+title = "セルフホスト"
+update = "更新"
+
+[settings.general.privacy]
+title = "プライバシー"
+
+[settings.general.privacy.telemetry]
+description = "Capは信頼性の向上と不具合の修正のために匿名のテレメトリを使用します。録画の内容、ウィンドウのタイトル、ファイルパス、個人情報を収集することはありません。"
+label = "匿名のテレメトリを共有"
