@@ -155,6 +155,7 @@ mod tests {
 
     fn segment(layout: TextLayout, start: f64, end: f64) -> TextSegment {
         TextSegment {
+            keyframes: Default::default(),
             start,
             end,
             track: 0,

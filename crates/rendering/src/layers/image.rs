@@ -115,20 +115,27 @@ fn visible_images(
         .iter()
         .enumerate()
         .filter_map(|(index, segment)| {
+            let (center, size, opacity) = segment.keyframes.sample(
+                segment.center,
+                segment.size,
+                f64::from(segment.opacity),
+                time - segment.start,
+            );
+            let opacity = opacity as f32;
             if !segment.is_active_at(time)
                 || segment.path.is_empty()
-                || !segment.opacity.is_finite()
-                || segment.opacity <= 0.0
+                || !opacity.is_finite()
+                || opacity <= 0.0
                 || !segment.rotation.is_finite()
                 || !segment.rounding.is_finite()
             {
                 return None;
             }
             let center_size = [
-                (segment.center.x * f64::from(output_size.0)) as f32,
-                (segment.center.y * f64::from(output_size.1)) as f32,
-                (segment.size.x * f64::from(output_size.0)) as f32,
-                (segment.size.y * f64::from(output_size.1)) as f32,
+                (center.x * f64::from(output_size.0)) as f32,
+                (center.y * f64::from(output_size.1)) as f32,
+                (size.x * f64::from(output_size.0)) as f32,
+                (size.y * f64::from(output_size.1)) as f32,
             ];
             if center_size
                 .iter()
@@ -156,7 +163,7 @@ fn visible_images(
                     rotation_opacity_radius: [
                         cos,
                         sin,
-                        segment.opacity.clamp(0.0, 1.0),
+                        opacity.clamp(0.0, 1.0),
                         segment.rounding.clamp(0.0, 100.0)
                             * 0.005
                             * center_size[2].min(center_size[3]),
