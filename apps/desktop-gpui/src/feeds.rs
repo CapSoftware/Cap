@@ -595,20 +595,14 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
                 let processed = if require_verified_output {
                     worker
                         .process_with_status(&image, dims, mode)
-                        .map(|(image, status)| Some((image, Some(status))))
+                        .map(|(image, status)| (image, Some(status)))
                 } else {
                     worker
-                        .process(&image, dims, mode, frame.timestamp)
-                        .map(|blurred| {
-                            blurred.map(|(image, timestamp)| {
-                                frame.timestamp = timestamp;
-                                (image, None)
-                            })
-                        })
+                        .process(&image, dims, mode)
+                        .map(|image| (image, None))
                 };
                 match processed {
-                    Ok(None) => continue,
-                    Ok(Some((blurred, status))) => {
+                    Ok((blurred, status)) => {
                         image = blurred;
                         #[cfg(not(target_os = "linux"))]
                         drop(status);
