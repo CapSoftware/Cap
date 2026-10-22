@@ -283,6 +283,17 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     }
 }
 
+fn frame_seconds(frame: u32) -> f64 {
+    frame as f64 / EDITOR_PREVIEW_FPS as f64
+}
+
+/// Where a seek leaves the playhead. Paused, the engine echoes the seek back
+/// as `playhead_changed(frame)`; storing the frame's own time makes that echo
+/// a no-op instead of a second whole-editor rebuild for every scrub step.
+fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
+    if playing { time } else { frame_seconds(frame) }
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -2967,7 +2978,7 @@ impl EditorWindow {
     /// is `setEditorState("playbackTime", payload.playhead_position / FPS)`
     /// (`Editor.tsx:482-486`).
     pub fn playhead_changed(&mut self, frame: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let next = frame as f64 / EDITOR_PREVIEW_FPS as f64;
+        let next = frame_seconds(frame);
         if (next - self.playhead).abs() < f64::EPSILON {
             return;
         }
@@ -3230,6 +3241,7 @@ impl EditorWindow {
         } else {
             transport.seek(frame);
         }
+        let time = seeked_playhead(time, frame, self.playing);
         self.playhead = time;
         self.view.playhead = time;
         self.view.playing = self.playing;
@@ -11218,6 +11230,7 @@ impl Render for EditorWindow {
         });
         self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
+        self.sidebar.release_retired_images(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
@@ -12677,6 +12690,19 @@ mod tests {
         );
         // A clock hiccup must not pull the playhead backwards.
         assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
+    }
+
+    /// A paused seek stores exactly the time its engine echo carries, so the
+    /// echo's `playhead_changed` returns before rebuilding the editor again.
+    #[test]
+    fn paused_seek_lands_where_its_echo_does() {
+        for frame in 0..=EDITOR_PREVIEW_FPS * 3600 {
+            let time = (frame as f64 + 0.37) / EDITOR_PREVIEW_FPS as f64;
+            let seeked = seeked_playhead(time, frame, false);
+            assert_eq!(seeked, frame_seconds(frame));
+            assert!((frame_seconds(frame) - seeked).abs() < f64::EPSILON);
+        }
+        assert_eq!(seeked_playhead(1.234, 74, true), 1.234);
     }
 
     /// The perf gate's line. `frames` is what reached the window, `dropped`

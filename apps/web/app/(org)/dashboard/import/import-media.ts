@@ -169,24 +169,21 @@ async function uploadVideoForServerProcessing(
 				uploaded: 0,
 				total: 0,
 				pendingTask: undefined as ReturnType<typeof setTimeout> | undefined,
-				lastUpdateTime: Date.now(),
 			};
 
 			const scheduleProgressUpdate = (uploaded: number, total: number) => {
 				uploadState.uploaded = uploaded;
 				uploadState.total = total;
-				uploadState.lastUpdateTime = Date.now();
 
 				if (uploadState.pendingTask) {
-					clearTimeout(uploadState.pendingTask);
-					uploadState.pendingTask = undefined;
+					return;
 				}
 
 				const shouldSendImmediately = uploaded >= total;
 
 				if (!shouldSendImmediately) {
 					uploadState.pendingTask = setTimeout(() => {
-						if (uploadState.videoId) {
+						if (uploadState.uploaded < uploadState.total) {
 							sendProgressUpdate(
 								uploadState.videoId,
 								uploadState.uploaded,
