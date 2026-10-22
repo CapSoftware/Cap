@@ -1,0 +1,42 @@
+name: Scratch seek-gop replay
+
+on:
+  push:
+    branches:
+      - ci/decoder-seek-gop-replay2
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Replay
+        run: |
+          set +e
+          mkdir -p target/ci-verify
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
+          export CAP_VERIFY_TIER=fast
+          git fetch -q origin main
+          git checkout -q FETCH_HEAD -- crates/rendering/src/decoder/avassetreader.rs
+          cargo test --profile ci-verify --locked -p cap-rendering --lib decoder::model::avassetreader_scrubbing -- --test-threads=1 2>&1 | grep -E "test |starts|result" | tee "$RUNNER_TEMP/replay-model-base.log"
+          git checkout -q HEAD -- crates/rendering/src/decoder/avassetreader.rs
+          cargo test --profile ci-verify --locked -p cap-rendering --lib decoder::model:: -- --test-threads=1 2>&1 | grep -E "test |starts|result" | tee "$RUNNER_TEMP/replay-model-head.log"
+          for i in 1 2 3 4; do
+            cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --test playback --test export --no-fail-fast --failure-output final > "$RUNNER_TEMP/replay-$i.log" 2>&1
+            echo "round $i exit=$?"
+            grep -n "FAIL seek\|FAIL export\|FAIL playback" "$RUNNER_TEMP/replay-$i.log" | head -5
+          done
+          true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay
+          path: ${{ runner.temp }}/replay-*.log
