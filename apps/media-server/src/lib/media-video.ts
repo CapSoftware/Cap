@@ -2730,6 +2730,13 @@ async function abortMultipartUpload(
 	await response.body?.cancel().catch(() => {});
 }
 
+export function multipartUploadConcurrencyFromEnv(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number.parseInt(env.MEDIA_SERVER_UPLOAD_CONCURRENCY ?? "", 10);
+	return Number.isFinite(value) && value > 0 ? Math.min(value, 16) : 1;
+}
+
 async function uploadFileMultipart(
 	filePath: string,
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
@@ -2757,25 +2764,45 @@ async function uploadFileMultipart(
 			);
 		}
 
-		for (let partNumber = 1; partNumber <= partCount; partNumber++) {
-			const start = (partNumber - 1) * partSize;
-			const end = Math.min(start + partSize, contentLength);
-			const partLength = end - start;
-			const url = await getMultipartPartUrl(
-				target,
-				partNumber,
-				partLength,
-				abortSignal,
-			);
-			const etag = await uploadMultipartPart(
-				url,
-				fileHandle.slice(start, end),
-				partLength,
-				partNumber,
-				abortSignal,
-			);
-			parts.push({ partNumber, etag, size: partLength });
+		const failed = new AbortController();
+		const signal = abortSignal
+			? AbortSignal.any([abortSignal, failed.signal])
+			: failed.signal;
+		let nextPart = 1;
+		const worker = async () => {
+			while (nextPart <= partCount) {
+				const partNumber = nextPart++;
+				const start = (partNumber - 1) * partSize;
+				const end = Math.min(start + partSize, contentLength);
+				const partLength = end - start;
+				const url = await getMultipartPartUrl(
+					target,
+					partNumber,
+					partLength,
+					signal,
+				);
+				const etag = await uploadMultipartPart(
+					url,
+					fileHandle.slice(start, end),
+					partLength,
+					partNumber,
+					signal,
+				);
+				parts.push({ partNumber, etag, size: partLength });
+			}
+		};
+		const workers = Array.from(
+			{ length: Math.min(multipartUploadConcurrencyFromEnv(), partCount) },
+			() => worker(),
+		);
+		try {
+			await Promise.all(workers);
+		} catch (error) {
+			failed.abort();
+			await Promise.allSettled(workers);
+			throw error;
 		}
+		parts.sort((a, b) => a.partNumber - b.partNumber);
 
 		return await completeMultipartUpload(target, parts, abortSignal);
 	} catch (error) {
