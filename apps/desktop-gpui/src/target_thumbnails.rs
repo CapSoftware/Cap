@@ -71,6 +71,69 @@ pub const THUMBNAIL_STALE_TIME: Duration = Duration::from_secs(10);
 /// idle timeout is the deadline that branch would have used anyway.
 pub const PREWARM_DELAY: Duration = Duration::from_millis(250);
 
+/// A ScreenCaptureKit request that has not answered by now is treated as hung.
+/// A healthy 320x180 thumbnail or shareable-content read takes milliseconds.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long thumbnail captures stay paused after one hangs. A hung
+/// `SCScreenshotManager` request cannot be cancelled and keeps macOS's capture
+/// session (and the purple indicator) open in `replayd`, so retrying on every
+/// picker poll would only pile up more of them:
+/// https://github.com/CapSoftware/Cap/issues/2339
+const CAPTURE_HANG_PAUSE: Duration = Duration::from_secs(5 * 60);
+
+static CAPTURE_PAUSE: CapturePause = CapturePause::new();
+
+pub fn captures_paused() -> bool {
+    CAPTURE_PAUSE.active_at(std::time::Instant::now())
+}
+
+struct CapturePause(std::sync::Mutex<Option<std::time::Instant>>);
+
+impl CapturePause {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    fn active_at(&self, now: std::time::Instant) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some_and(|until| now < until)
+    }
+
+    fn start_at(&self, now: std::time::Instant) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now + CAPTURE_HANG_PAUSE);
+    }
+}
+
+/// `None` when `future` outlives `limit`, which also starts `pause`. The
+/// dropped request may still be pending inside ScreenCaptureKit; this only
+/// stops the sweep from waiting on it forever.
+async fn within_capture_timeout<T>(
+    what: &'static str,
+    limit: Duration,
+    pause: &CapturePause,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    match tokio::time::timeout(limit, future).await {
+        Ok(value) => Some(value),
+        Err(_) => {
+            tracing::warn!(
+                what,
+                timeout_ms = limit.as_millis() as u64,
+                pause_secs = CAPTURE_HANG_PAUSE.as_secs(),
+                "thumbnail capture did not answer; pausing thumbnail captures"
+            );
+            pause.start_at(std::time::Instant::now());
+            None
+        }
+    }
+}
+
 /// A card's images. Both halves are optional and independent: a window can have
 /// an icon and no thumbnail (capture refused) or the reverse (no bundle icon).
 #[derive(Clone, Default)]
@@ -439,44 +502,7 @@ pub fn fitted_capture_size(source: Option<(f64, f64)>) -> (usize, usize) {
 
 /// `normalize_thumbnail_dimensions` (`thumbnails/mod.rs:44-87`), verbatim.
 pub fn normalize_thumbnail_dimensions(image: &RgbaImage) -> RgbaImage {
-    let width = image.width();
-    let height = image.height();
-
-    if width == THUMBNAIL_WIDTH && height == THUMBNAIL_HEIGHT {
-        return image.clone();
-    }
-
-    if width == 0 || height == 0 {
-        return RgbaImage::from_pixel(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, image::Rgba([0, 0, 0, 0]));
-    }
-
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .min(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .max(f32::MIN_POSITIVE);
-
-    let scaled_width = (width as f32 * scale)
-        .round()
-        .clamp(1.0, THUMBNAIL_WIDTH as f32) as u32;
-    let scaled_height = (height as f32 * scale)
-        .round()
-        .clamp(1.0, THUMBNAIL_HEIGHT as f32) as u32;
-
-    let resized = image::imageops::resize(
-        image,
-        scaled_width.max(1),
-        scaled_height.max(1),
-        image::imageops::FilterType::Lanczos3,
-    );
-
-    let mut canvas =
-        RgbaImage::from_pixel(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, image::Rgba([0, 0, 0, 0]));
-
-    let offset_x = (THUMBNAIL_WIDTH - scaled_width) / 2;
-    let offset_y = (THUMBNAIL_HEIGHT - scaled_height) / 2;
-
-    image::imageops::overlay(&mut canvas, &resized, offset_x as i64, offset_y as i64);
-
-    canvas
+    cap_gpui_kernels::thumbnail::fit_centered(image, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
 }
 
 /// Run a capture sweep somewhere it is allowed to be non-`Send`.
@@ -498,7 +524,10 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     let joined = tokio::task::spawn_blocking(move || {
-        match tokio::runtime::Builder::new_current_thread().build() {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+        {
             Ok(runtime) => runtime.block_on(make()),
             Err(error) => tracing::error!("could not start the thumbnail runtime: {error}"),
         }
@@ -533,14 +562,34 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
         return;
     }
 
-    let Some(content) = shareable_content().await else {
+    let Some(Some(content)) = within_capture_timeout(
+        "shareable content",
+        CAPTURE_TIMEOUT,
+        &CAPTURE_PAUSE,
+        shareable_content(),
+    )
+    .await
+    else {
         return;
     };
 
     let total = targets.len();
     let mut captured = 0usize;
     for (option, display) in targets {
-        let Some(rgba) = capture_display_thumbnail(&display, content.retained()).await else {
+        if captures_paused() {
+            return;
+        }
+        let Some(capture) = within_capture_timeout(
+            "display thumbnail",
+            CAPTURE_TIMEOUT,
+            &CAPTURE_PAUSE,
+            capture_display_thumbnail(&display, content.retained()),
+        )
+        .await
+        else {
+            return;
+        };
+        let Some(rgba) = capture else {
             tracing::debug!(id = %option.id, "display thumbnail capture missed");
             continue;
         };
@@ -571,14 +620,32 @@ async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
         return;
     }
 
-    let Some(content) = shareable_content().await else {
+    let Some(Some(content)) = within_capture_timeout(
+        "shareable content",
+        CAPTURE_TIMEOUT,
+        &CAPTURE_PAUSE,
+        shareable_content(),
+    )
+    .await
+    else {
         return;
     };
 
     for (option, window) in targets {
-        let image = capture_window_thumbnail(&window, content.retained())
-            .await
-            .map(crate::library::rgba_to_render_image);
+        if captures_paused() {
+            return;
+        }
+        let Some(capture) = within_capture_timeout(
+            "window thumbnail",
+            CAPTURE_TIMEOUT,
+            &CAPTURE_PAUSE,
+            capture_window_thumbnail(&window, content.retained()),
+        )
+        .await
+        else {
+            return;
+        };
+        let image = capture.map(crate::library::rgba_to_render_image);
         let app_icon = window.app_icon().filter(|bytes| !bytes.is_empty());
         if image.is_some() {
             captured += 1;
@@ -756,7 +823,7 @@ mod platform {
                         lock.bytes_per_row(),
                         width,
                         height,
-                        pixel_format.into(),
+                        channel_order(pixel_format),
                     )
                 }?
             }
@@ -798,18 +865,16 @@ mod platform {
         Some(normalize_thumbnail_dimensions(&img))
     }
 
-    impl From<cv::PixelFormat> for super::ChannelOrder {
-        fn from(value: cv::PixelFormat) -> Self {
-            match value {
-                cv::PixelFormat::_32_BGRA => Self::Bgra,
-                cv::PixelFormat::_32_RGBA => Self::Rgba,
-                cv::PixelFormat::_32_ARGB => Self::Argb,
-                cv::PixelFormat::_32_ABGR => Self::Abgr,
-                // `capture_thumbnail_from_filter` only reaches the conversion
-                // for the four 32-bit orders; anything else has already
-                // returned. Mirrors the source's `_ => unreachable!()`.
-                other => unreachable!("unsupported 32-bit pixel format {other:?}"),
-            }
+    fn channel_order(value: cv::PixelFormat) -> super::ChannelOrder {
+        match value {
+            cv::PixelFormat::_32_BGRA => super::ChannelOrder::Bgra,
+            cv::PixelFormat::_32_RGBA => super::ChannelOrder::Rgba,
+            cv::PixelFormat::_32_ARGB => super::ChannelOrder::Argb,
+            cv::PixelFormat::_32_ABGR => super::ChannelOrder::Abgr,
+            // `capture_thumbnail_from_filter` only reaches the conversion
+            // for the four 32-bit orders; anything else has already
+            // returned. Mirrors the source's `_ => unreachable!()`.
+            other => unreachable!("unsupported 32-bit pixel format {other:?}"),
         }
     }
 
@@ -985,16 +1050,12 @@ use platform::{capture_display_thumbnail, capture_window_thumbnail, shareable_co
 // `PixelBufferLock` so the arithmetic can be unit tested against hand-built
 // buffers on any host.
 
-/// The four 32-bit orders `capture_thumbnail_from_filter` accepts
-/// (`thumbnails/mac.rs:73-78`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
+use cap_gpui_kernels::frame::ycbcr_to_rgb;
 #[cfg(any(target_os = "macos", test))]
-pub enum ChannelOrder {
-    Bgra,
-    Rgba,
-    Argb,
-    Abgr,
-}
+pub use cap_gpui_kernels::frame::{ChannelOrder, Nv12Range};
+#[cfg(any(target_os = "macos", test))]
+use cap_gpui_kernels::frame::{convert_32bit_rows, convert_nv12_planes};
 
 /// `convert_32bit_pixel_buffer` (`thumbnails/mac.rs:111-160`).
 ///
@@ -1017,56 +1078,6 @@ unsafe fn convert_32bit_pixel_buffer(
     let total_len = bytes_per_row.checked_mul(height)?;
     let raw_data = unsafe { std::slice::from_raw_parts(base_ptr, total_len) };
     convert_32bit_rows(raw_data, bytes_per_row, width, height, order)
-}
-
-/// The row loop of `convert_32bit_pixel_buffer`, over a slice.
-#[cfg(any(target_os = "macos", test))]
-fn convert_32bit_rows(
-    raw_data: &[u8],
-    bytes_per_row: usize,
-    width: usize,
-    height: usize,
-    order: ChannelOrder,
-) -> Option<Vec<u8>> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        let row_start = y * bytes_per_row;
-        let row_end = row_start + width * 4;
-        if row_end > raw_data.len() {
-            tracing::warn!(
-                row_start = row_start,
-                row_end = row_end,
-                raw_len = raw_data.len(),
-                "Row bounds exceeded raw data length during thumbnail capture",
-            );
-            return None;
-        }
-
-        let row = &raw_data[row_start..row_end];
-        for chunk in row.chunks_exact(4) {
-            match order {
-                ChannelOrder::Bgra => {
-                    rgba_data.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]])
-                }
-                ChannelOrder::Rgba => rgba_data.extend_from_slice(chunk),
-                ChannelOrder::Argb => {
-                    rgba_data.extend_from_slice(&[chunk[1], chunk[2], chunk[3], chunk[0]])
-                }
-                ChannelOrder::Abgr => {
-                    rgba_data.extend_from_slice(&[chunk[3], chunk[2], chunk[1], chunk[0]])
-                }
-            }
-        }
-    }
-
-    Some(rgba_data)
-}
-
-#[derive(Copy, Clone)]
-#[cfg(any(target_os = "macos", test))]
-pub enum Nv12Range {
-    Video,
-    _Full,
 }
 
 /// The plane geometry `convert_nv12_pixel_buffer` reads out of the lock.
@@ -1131,94 +1142,6 @@ unsafe fn convert_nv12_pixel_buffer(
         height,
         range,
     )
-}
-
-/// The pixel loop of `convert_nv12_pixel_buffer`, over slices.
-#[cfg(any(target_os = "macos", test))]
-fn convert_nv12_planes(
-    y_plane: &[u8],
-    y_stride: usize,
-    uv_plane: &[u8],
-    uv_stride: usize,
-    width: usize,
-    height: usize,
-    range: Nv12Range,
-) -> Option<Vec<u8>> {
-    let mut rgba_data = vec![0u8; width * height * 4];
-
-    for y_idx in 0..height {
-        let y_row_start = y_idx * y_stride;
-        if y_row_start + width > y_plane.len() {
-            tracing::warn!(
-                y_row_start,
-                width,
-                y_plane_len = y_plane.len(),
-                "Y row exceeded plane length during conversion",
-            );
-            return None;
-        }
-        let y_row = &y_plane[y_row_start..y_row_start + width];
-
-        let uv_row_start = (y_idx / 2) * uv_stride;
-        if uv_row_start + width > uv_plane.len() {
-            tracing::warn!(
-                uv_row_start,
-                width,
-                uv_plane_len = uv_plane.len(),
-                "UV row exceeded plane length during conversion",
-            );
-            return None;
-        }
-        let uv_row = &uv_plane[uv_row_start..uv_row_start + width];
-
-        for (x, y_val) in y_row.iter().enumerate().take(width) {
-            let uv_index = (x / 2) * 2;
-            if uv_index + 1 >= uv_row.len() {
-                tracing::warn!(
-                    uv_index,
-                    uv_row_len = uv_row.len(),
-                    "UV index out of bounds during conversion",
-                );
-                return None;
-            }
-
-            let cb = uv_row[uv_index];
-            let cr = uv_row[uv_index + 1];
-            let (r, g, b) = ycbcr_to_rgb(*y_val, cb, cr, range);
-            let out = (y_idx * width + x) * 4;
-            rgba_data[out] = r;
-            rgba_data[out + 1] = g;
-            rgba_data[out + 2] = b;
-            rgba_data[out + 3] = 255;
-        }
-    }
-
-    Some(rgba_data)
-}
-
-/// `ycbcr_to_rgb` (`thumbnails/mac.rs:256-275`): BT.601 coefficients, with the
-/// video-range 16..235 luma expansion.
-#[cfg(any(target_os = "macos", test))]
-fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
-    let y = y as f32;
-    let cb = cb as f32 - 128.0;
-    let cr = cr as f32 - 128.0;
-
-    let (y_value, scale) = match range {
-        Nv12Range::Video => ((y - 16.0).max(0.0), 1.164383_f32),
-        Nv12Range::_Full => (y, 1.0_f32),
-    };
-
-    let r = scale * y_value + 1.596027_f32 * cr;
-    let g = scale * y_value - 0.391762_f32 * cb - 0.812968_f32 * cr;
-    let b = scale * y_value + 2.017232_f32 * cb;
-
-    (clamp_channel(r), clamp_channel(g), clamp_channel(b))
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn clamp_channel(value: f32) -> u8 {
-    value.clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]
@@ -1607,5 +1530,46 @@ mod tests {
             let _ = tx.send("captured");
         }));
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!["captured"]);
+    }
+
+    #[test]
+    fn a_hung_capture_times_out_inside_a_sweep_and_pauses_captures() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let pause = Arc::new(CapturePause::new());
+        let sweep_pause = pause.clone();
+        let (tx, rx) = flume::unbounded();
+        runtime.block_on(run_capture(move || async move {
+            let hung = within_capture_timeout(
+                "test capture",
+                Duration::from_millis(20),
+                &sweep_pause,
+                std::future::pending::<()>(),
+            )
+            .await;
+            let answered = within_capture_timeout(
+                "test capture",
+                Duration::from_secs(5),
+                &sweep_pause,
+                async { 7 },
+            )
+            .await;
+            let _ = tx.send((hung, answered));
+        }));
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![(None, Some(7))]);
+        assert!(pause.active_at(std::time::Instant::now()));
+    }
+
+    #[test]
+    fn capture_pause_lasts_for_the_hang_pause() {
+        let pause = CapturePause::new();
+        let now = std::time::Instant::now();
+        assert!(!pause.active_at(now));
+        pause.start_at(now);
+        assert!(pause.active_at(now));
+        assert!(pause.active_at(now + CAPTURE_HANG_PAUSE.saturating_sub(Duration::from_millis(1))));
+        assert!(!pause.active_at(now + CAPTURE_HANG_PAUSE));
     }
 }

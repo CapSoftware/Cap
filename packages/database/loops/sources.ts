@@ -23,7 +23,7 @@ type UserSignals = {
 
 export const profileUserQuery = `
 	SELECT u.id,u.email,u.name,u.lastName,u.emailVerified,u.stripeCustomerId,
-		u.stripeSubscriptionStatus,u.thirdPartyStripeSubscriptionId,u.created_at,
+		u.stripeSubscriptionStatus,u.thirdPartyStripeSubscriptionId,u.inviteQuota,u.created_at,
 		u.defaultOrgId,u.marketingOrigin,
 		EXISTS(SELECT 1 FROM accounts a WHERE a.userId = u.id LIMIT 1) AS hasAccount,
 		EXISTS(SELECT 1 FROM accounts a WHERE a.userId = u.id AND BINARY a.provider = 'workos' LIMIT 1) AS hasWorkosAccount,

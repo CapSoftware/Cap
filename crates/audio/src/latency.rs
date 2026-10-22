@@ -452,6 +452,22 @@ pub fn default_output_latency_hint(
     }
 }
 
+/// Whether the default output device is the built-in output, whose stream can
+/// be stopped while idle and restarted within a callback period or two.
+/// External, wireless, AirPlay and display outputs keep running because some
+/// drop the start of audio or take seconds to wake after their stream stops.
+pub fn default_output_supports_idle_pause() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::default_output_supports_idle_pause()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InputLatencyInfo {
     pub device_latency_secs: f64,
@@ -569,6 +585,13 @@ mod macos {
     ) -> Option<OutputLatencyHint> {
         let device = System::default_output_device().ok()?;
         compute_latency_hint(&device, sample_rate, fallback_buffer_frames).ok()
+    }
+
+    pub(super) fn default_output_supports_idle_pause() -> bool {
+        System::default_output_device()
+            .ok()
+            .and_then(|device| device.transport_type().ok())
+            .is_some_and(|transport| transport == DeviceTransportType::BUILT_IN)
     }
 
     pub(super) fn estimate_input_latency(

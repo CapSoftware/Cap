@@ -382,7 +382,7 @@ async fn ordinary_composed_frames(
         let uniforms = match timeline {
             Some(timeline) => ProjectUniforms::new_with_precomputed_cursor(
                 &constants,
-                &fixture.project,
+                &Arc::new(fixture.project.clone()),
                 frame_number,
                 30,
                 XY::new(320, 240),
@@ -394,7 +394,7 @@ async fn ordinary_composed_frames(
             ),
             None => ProjectUniforms::new(
                 &constants,
-                &fixture.project,
+                &Arc::new(fixture.project.clone()),
                 frame_number,
                 30,
                 XY::new(320, 240),
@@ -784,6 +784,7 @@ async fn composed_parity_with_reference(
         PreparingPreviewOptions {
             use_hardware_decoding: true,
             frame_format,
+            shared_device: None,
         },
         Box::new(move |request, output, layout| {
             let frame = match output {
@@ -963,6 +964,7 @@ async fn native_callback_panic_joins_workers_and_releases_source_owner() {
         PreparingPreviewOptions {
             use_hardware_decoding: true,
             frame_format: EditorFrameFormat::Rgba,
+            shared_device: None,
         },
         Box::new(move |_, _, _| {
             sender.take().unwrap().send(()).unwrap();

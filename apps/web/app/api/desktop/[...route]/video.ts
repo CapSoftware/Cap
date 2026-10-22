@@ -10,6 +10,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
@@ -303,9 +304,13 @@ app.get(
 				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
-			await db()
-				.insert(videos)
-				.values({
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
+
+			await db().transaction(async (tx) => {
+				await tx.insert(videos).values({
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
@@ -321,7 +326,7 @@ app.get(
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					public: await getNewVideoPublic(videoOrgId),
 					duration: durationInSecs,
 					width,
 					height,
@@ -329,16 +334,12 @@ app.get(
 					...(metadata ? { metadata } : {}),
 				});
 
-			const clientSupportsUploadProgress = isFromDesktopSemver(
-				c.req,
-				UPLOAD_PROGRESS_VERSION,
-			);
-
-			if (clientSupportsUploadProgress && !isScreenshot)
-				await db().insert(videoUploads).values({
-					videoId: idToUse,
-					mode: "singlepart",
-				});
+				if (clientSupportsUploadProgress && !isScreenshot)
+					await tx.insert(videoUploads).values({
+						videoId: idToUse,
+						mode: "singlepart",
+					});
+			});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {
 				// Off the response path: this endpoint gates recording start on the

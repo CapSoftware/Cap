@@ -253,6 +253,7 @@ pub struct CompositePassInputs<'a> {
     pub sharp: &'a wgpu::TextureView,
     pub blurred: &'a wgpu::TextureView,
     pub mask: &'a wgpu::TextureView,
+    pub matte: &'a wgpu::TextureView,
     pub output: &'a wgpu::TextureView,
 }
 
@@ -300,6 +301,16 @@ impl CompositePipeline {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -397,6 +408,7 @@ impl CompositePipeline {
             sharp: sharp_view,
             blurred: blurred_view,
             mask: mask_view,
+            matte: matte_view,
             output: output_view,
         } = inputs;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -418,6 +430,10 @@ impl CompositePipeline {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(matte_view),
                 },
             ],
         });

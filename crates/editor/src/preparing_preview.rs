@@ -65,10 +65,11 @@ pub struct PreparingPreviewInput {
     pub cursor_assets: FrozenRecordedCursorAssets,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PreparingPreviewOptions {
     pub use_hardware_decoding: bool,
     pub frame_format: EditorFrameFormat,
+    pub shared_device: Option<cap_rendering::SharedWgpuDevice>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -518,6 +519,7 @@ async fn run_preview(
         segments,
         cursor_assets,
     } = input;
+    let project = Arc::new(project);
     let metadata = recording_meta
         .studio_meta()
         .expect("Validated Studio metadata")
@@ -538,17 +540,23 @@ async fn run_preview(
         .camera
         .as_ref()
         .map(|camera| XY::new(camera.video_width, camera.video_height));
-    let constants = RenderVideoConstants::new_with_options(
-        RenderOptions {
-            screen_size,
-            camera_size,
-            preserve_screen_alpha: false,
-        },
-        recording_meta,
-        metadata,
-    )
-    .await
-    .map_err(|error| PreparingPreviewError::Render(error.to_string()))?
+    let render_options = RenderOptions {
+        screen_size,
+        camera_size,
+        preserve_screen_alpha: false,
+    };
+    let constants = match options.shared_device {
+        Some(shared) => RenderVideoConstants::from_shared_device(
+            shared,
+            render_options,
+            metadata,
+            recording_meta,
+            Arc::new(cap_rendering::BackgroundTextureCache::default()),
+        ),
+        None => RenderVideoConstants::new_with_options(render_options, recording_meta, metadata)
+            .await
+            .map_err(|error| PreparingPreviewError::Render(error.to_string()))?,
+    }
     .with_frozen_recorded_cursors(cursor_assets);
     control.check()?;
     let mut layers = RendererLayers::new_for_preparing_preview(
@@ -558,6 +566,14 @@ async fn run_preview(
         &project,
     )
     .map_err(|error| PreparingPreviewError::Render(error.to_string()))?;
+    control.check()?;
+    layers.prepare_for_video_dimensions(
+        &constants.device,
+        screen_size.x,
+        screen_size.y,
+        camera_size.map(|size| size.x),
+        camera_size.map(|size| size.y),
+    );
     control.check()?;
     layers.preload_cursor_assets(
         &constants,

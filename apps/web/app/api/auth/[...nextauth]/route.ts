@@ -2,6 +2,7 @@ import {
 	authOptions,
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
+import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
 	ssoLoginErrorPath,
@@ -12,8 +13,36 @@ import { type NextRequest, NextResponse } from "next/server";
 import NextAuth from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { getSafeNextPath } from "@/app/(org)/safe-next";
+import { isRateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+
+async function idpSignInConnection(request: NextRequest) {
+	const query = request.nextUrl.searchParams;
+	const code = query.get("code");
+	if (
+		request.method !== "GET" ||
+		query.size !== 1 ||
+		!code ||
+		code.length > 2048 ||
+		(await isRateLimited("rl_auth_sso_start", { headers: request.headers }))
+	) {
+		return null;
+	}
+	try {
+		const clientId = serverEnv().WORKOS_CLIENT_ID;
+		if (!clientId) return null;
+		const { profile } = await getWorkOS().sso.getProfileAndToken({
+			clientId,
+			code,
+		});
+		return /^conn_[a-zA-Z0-9]{1,100}$/.test(profile.connectionId)
+			? profile.connectionId
+			: null;
+	} catch {
+		return null;
+	}
+}
 
 async function readSignInBody(request: NextRequest) {
 	if (request.method !== "POST") return null;
@@ -52,6 +81,22 @@ async function handler(
 	}
 	const env = serverEnv();
 	const cookie = ssoIntentCookie(new URL(env.WEB_URL).protocol === "https:");
+	if (
+		nextauth[0] === "callback" &&
+		!request.nextUrl.searchParams.has("state")
+	) {
+		const connectionId = await idpSignInConnection(request);
+		if (connectionId) {
+			// An unsolicited code only selects the IdP; a fresh state/PKCE flow must authenticate the browser.
+			const signInUrl = new URL("/login", env.WEB_URL);
+			signInUrl.searchParams.set("connection_id", connectionId);
+			const response = NextResponse.redirect(signInUrl, 303);
+			response.headers.set("cache-control", "no-store");
+			response.headers.set("referrer-policy", "no-referrer");
+			response.cookies.set(cookie.name, "", { ...cookie.options, maxAge: 0 });
+			return response;
+		}
+	}
 	const intent = verifySsoLoginIntent(
 		request.cookies.get(cookie.name)?.value,
 		env.NEXTAUTH_SECRET,

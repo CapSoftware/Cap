@@ -8,6 +8,7 @@ use cap_project::{ClipOffsets, ProjectConfiguration, RecordingMeta, StudioRecord
 use std::{
     collections::HashMap,
     fmt,
+    ops::Range,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -313,11 +314,21 @@ impl ExportAudioRenderer {
         let Some(timeline) = &project.timeline else {
             return true;
         };
-        if !timeline.audio_segments.is_empty() || !timeline.hold_windows().is_empty() {
+        if !timeline.audio_segments.is_empty() {
+            return false;
+        }
+        let holds = timeline.hold_windows();
+        if holds
+            .iter()
+            .any(|(start, end)| !start.is_finite() || !end.is_finite() || *start < 0.0)
+        {
             return false;
         }
         let mut ends = HashMap::new();
-        let mut duration = 0.0;
+        let mut duration = holds.iter().map(|(start, end)| end - start).sum::<f64>();
+        if !duration.is_finite() || duration * 48_000.0 >= isize::MAX as f64 / 2.0 {
+            return false;
+        }
         for segment in &timeline.segments {
             if segment.timescale != 1.0
                 || !segment.start.is_finite()
@@ -703,6 +714,11 @@ impl AudioSampleSource for ExportAudioView<'_> {
         index
             .checked_sub(self.source_start * self.channels as usize)
             .and_then(|index| self.samples.get(index))
+    }
+    fn sample_slice(&self, range: Range<usize>) -> Option<&[f32]> {
+        let base = self.source_start * self.channels as usize;
+        self.samples
+            .get(range.start.checked_sub(base)?..range.end.checked_sub(base)?)
     }
 }
 
@@ -1470,6 +1486,99 @@ mod tests {
         assert_bounded_sink_variants([19], &[1]);
     }
 
+    #[test]
+    fn fullscreen_holds_match_full_renderer_without_retaining_whole_tracks() {
+        assert_bounded_sink_variants(26..32, &[1, 7, 997, 4_096, 48_001]);
+    }
+
+    #[test]
+    fn streaming_eligibility_accepts_valid_fullscreen_holds() {
+        let mut project = project();
+        let hold = serde_json::from_value(serde_json::json!({
+            "start": 0.1, "end": 0.2, "layout": "fullscreen"
+        }))
+        .unwrap();
+        project.timeline.as_mut().unwrap().text_segments.push(hold);
+        assert!(ExportAudioRenderer::eligible_sources(&project, 3));
+        for (start, end) in [
+            (f64::NEG_INFINITY, 0.2),
+            (-1.0, 0.2),
+            (0.1, f64::INFINITY),
+            (0.1, f64::MAX),
+        ] {
+            let hold = &mut project.timeline.as_mut().unwrap().text_segments[0];
+            hold.start = start;
+            hold.end = end;
+            assert!(
+                !ExportAudioRenderer::eligible_sources(&project, 3),
+                "{start}..{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn fullscreen_hold_emits_silence_without_reading_audio_and_cancels_between_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.wav");
+        write_wav(&path, 48_000, 1);
+        let data = Arc::new(AudioData::from_file(&path).unwrap());
+        let (_, mut candidate) = fixture(
+            &[path.clone(), path.clone(), path],
+            &[data.clone(), data.clone(), data],
+        );
+        let mut project = project();
+        project.timeline.as_mut().unwrap().text_segments.push(
+            serde_json::from_value(serde_json::json!({
+                "start": 0.0, "end": 1.0, "layout": "fullscreen"
+            }))
+            .unwrap(),
+        );
+        let mut samples = Vec::new();
+        assert_eq!(
+            candidate
+                .render_chunks(4_096, &project, |_, block| {
+                    samples.extend_from_slice(block);
+                    Ok(())
+                })
+                .unwrap(),
+            Some(4_096)
+        );
+        assert_eq!(samples, vec![0.0; 4_096 * 2]);
+        assert!(
+            candidate
+                .sources
+                .tracks
+                .iter()
+                .flatten()
+                .all(|track| track.source.position() == 0)
+        );
+
+        let cancellation = candidate.sources.cancellation.clone();
+        let mut blocks = 0;
+        assert!(matches!(
+            candidate.render_chunks(48_000, &project, |_, block| {
+                assert!(block.iter().all(|sample| *sample == 0.0));
+                blocks += 1;
+                cancellation.store(true, Ordering::Relaxed);
+                Ok(())
+            }),
+            Err(ExportAudioError::Cancelled)
+        ));
+        assert_eq!(blocks, 1);
+        assert!(
+            candidate
+                .sources
+                .tracks
+                .iter()
+                .flatten()
+                .all(|track| track.source.position() == 0)
+        );
+        assert!(matches!(
+            candidate.validate_to_end(),
+            Err(ExportAudioError::Cancelled)
+        ));
+    }
+
     fn assert_bounded_sink_variants(variants: impl IntoIterator<Item = usize>, requests: &[usize]) {
         ffmpeg::init().unwrap();
         let directory = tempfile::tempdir().unwrap();
@@ -1566,6 +1675,34 @@ mod tests {
                             } else {
                                 ClipTransitionType::FadeThroughBlack
                             },
+                            duration: 0.131_234_567,
+                        });
+                    }
+                }
+                26..=31 => {
+                    project.audio.improve = variant == 30;
+                    let timeline = project.timeline.as_mut().unwrap();
+                    let windows: &[(f64, f64)] = match variant {
+                        26 => &[(0.0, 0.071_234_567)],
+                        27 | 30 => &[(0.113_456_789, 0.224_567_891)],
+                        28 => &[(0.1, 0.2), (0.15, 0.25), (0.25, 0.3)],
+                        29 => &[(0.25, 0.4)],
+                        31 => &[(0.0, 0.1), (0.4, 0.5), (0.816_98, 0.9)],
+                        _ => unreachable!(),
+                    };
+                    timeline.text_segments = windows
+                        .iter()
+                        .map(|&(start, end)| {
+                            serde_json::from_value(serde_json::json!({
+                                "start": start, "end": end, "layout": "fullscreen"
+                            }))
+                            .unwrap()
+                        })
+                        .collect();
+                    if variant == 29 {
+                        timeline.transitions.push(ClipTransition {
+                            segment_index: 1,
+                            kind: ClipTransitionType::CrossFade,
                             duration: 0.131_234_567,
                         });
                     }
@@ -1694,6 +1831,158 @@ mod tests {
             .segments
             .push(segment(0, 0.01, 0.1));
         assert!(!ExportAudioRenderer::eligible_sources(&project, 3));
+    }
+
+    #[test]
+    fn offset_view_slice_and_indexed_mixing_are_bit_identical() {
+        struct Indexed<'a>(&'a ExportAudioView<'a>);
+
+        impl AudioSampleSource for Indexed<'_> {
+            fn channels(&self) -> u16 {
+                self.0.channels()
+            }
+
+            fn sample_count(&self) -> usize {
+                self.0.sample_count()
+            }
+
+            fn sample(&self, index: usize) -> Option<&f32> {
+                self.0.sample(index)
+            }
+        }
+
+        fn track<'a, T: AudioSampleSource>(
+            data: &'a T,
+            channels: u16,
+            mono_right: bool,
+        ) -> AudioRendererTrack<'a, T> {
+            AudioRendererTrack {
+                data,
+                gain: -6.0,
+                stereo_mode: if channels == 1 {
+                    StereoMode::Stereo
+                } else if mono_right {
+                    StereoMode::MonoR
+                } else {
+                    StereoMode::Stereo
+                },
+                offset: 0,
+            }
+        }
+
+        for channels in [1u16, 2] {
+            for mono_right in [false, true] {
+                if channels == 1 && mono_right {
+                    continue;
+                }
+                let source_start = 1_537usize;
+                let frames = source_start + 5_000;
+                let width = usize::from(channels);
+                let samples = (0..frames * width)
+                    .map(|index| {
+                        let raw = (index.wrapping_mul(73) % 60_001) as i32 - 30_000;
+                        raw as f32 / 32_768.0
+                    })
+                    .collect::<Vec<_>>();
+                let window = &samples[source_start * width..];
+                let view = ExportAudioView {
+                    samples: window,
+                    channels,
+                    source_start,
+                    available_end: frames,
+                };
+                let short = ExportAudioView {
+                    samples: &window[..100 * width],
+                    channels,
+                    source_start,
+                    available_end: frames,
+                };
+                for index in 0..frames * width {
+                    let indexed = view.sample(index).copied().map(f32::to_bits);
+                    let sliced = view
+                        .sample_slice(index..index + 1)
+                        .map(|slice| slice[0].to_bits());
+                    assert_eq!(indexed, sliced, "channels {channels} index {index}");
+                }
+                let aligned = source_start * width..(source_start + 128) * width;
+                let slice = view.sample_slice(aligned.clone()).unwrap();
+                assert_eq!(slice.len(), aligned.end - aligned.start);
+                assert!(view.sample_slice(0..width).is_none());
+                assert!(
+                    view.sample_slice((frames - 1) * width..(frames + 1) * width)
+                        .is_none()
+                );
+                assert!(view.sample((frames - 1) * width).is_some());
+                assert!(
+                    short
+                        .sample_slice(source_start * width..(source_start + 101) * width)
+                        .is_none()
+                );
+                assert!(
+                    short
+                        .sample_slice(source_start * width..(source_start + 100) * width)
+                        .is_some()
+                );
+
+                let indexed = Indexed(&view);
+                let indexed_short = Indexed(&short);
+                let mut slice_out = vec![13.0f32; 4_096 * 2];
+                let mut indexed_out = slice_out.clone();
+                for (cursor, request, source_view, source_indexed) in [
+                    (0usize, 64usize, &view, &indexed),
+                    (source_start - 3, 4_096, &view, &indexed),
+                    (source_start, 4_096, &view, &indexed),
+                    (source_start + 17, 1, &view, &indexed),
+                    (source_start + 100, 7, &view, &indexed),
+                    (frames - 10, 4_096, &view, &indexed),
+                    (frames, 8, &view, &indexed),
+                    (source_start, 4_096, &short, &indexed_short),
+                    (source_start + 90, 4_096, &short, &indexed_short),
+                ] {
+                    let rendered_slice = cap_audio::render_audio(
+                        &[track(source_view, channels, mono_right)],
+                        cursor,
+                        request,
+                        0,
+                        &mut slice_out,
+                    );
+                    let rendered_indexed = cap_audio::render_audio(
+                        &[track(source_indexed, channels, mono_right)],
+                        cursor,
+                        request,
+                        0,
+                        &mut indexed_out,
+                    );
+                    assert_eq!(rendered_slice, rendered_indexed);
+                    if cursor >= source_start
+                        && cursor + rendered_slice <= source_view.sample_count()
+                        && rendered_slice > 0
+                        && (cursor + rendered_slice).saturating_sub(source_start) * width
+                            <= source_view.samples.len()
+                    {
+                        assert!(
+                            source_view
+                                .sample_slice(cursor * width..(cursor + rendered_slice) * width)
+                                .is_some(),
+                            "channels {channels} cursor {cursor}"
+                        );
+                    }
+                    assert_eq!(
+                        slice_out[..rendered_slice * 2]
+                            .iter()
+                            .copied()
+                            .map(f32::to_bits)
+                            .collect::<Vec<_>>(),
+                        indexed_out[..rendered_indexed * 2]
+                            .iter()
+                            .copied()
+                            .map(f32::to_bits)
+                            .collect::<Vec<_>>(),
+                        "channels {channels} cursor {cursor} mono_right {mono_right}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

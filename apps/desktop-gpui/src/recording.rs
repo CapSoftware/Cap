@@ -50,6 +50,10 @@ pub struct StartConfig {
     /// recording locks these instead of spawning its own -- the Tauri model.
     pub camera_feed: Option<ActorRef<CameraFeed>>,
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
+    /// The app's mic level meter. A recording that opens its own microphone
+    /// feed (the app feed is released while the main window is hidden) feeds
+    /// it too, or the recording bar's level would stay empty.
+    pub mic_meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
     /// When set, the pipeline is primed behind this gate and records nothing
@@ -423,42 +427,19 @@ async fn finalize_studio(
         completed.meta.status(),
         cap_project::StudioRecordingStatus::NeedsRemux
     );
+    let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
             ensure_finalization_storage(&project_path)?;
         }
-        let preparing = progress
+        let preparing = claim_progress
             .as_ref()
             .and_then(|progress| progress.claim_preparing(&completed));
         let result = match preparing {
             Some(job) => RecoveryManager::remux_stopped_with_preparing(&completed, job),
             None => RecoveryManager::remux_if_needed(&project_path),
         };
-        result.map(|_| completed).map_err(anyhow::Error::from)
-    })
-    .await
-    .context("studio finalize task")?
-    .context("studio finalize")?;
-    tracing::info!(
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "Studio stop remux complete"
-    );
-
-    // Everything `handle_recording_finish` does after the remux,
-    // in its order: the first-frame JPEG the library's card is
-    // drawn from, then the camera preview's blur toggle copied
-    // into the project's configuration. Neither is fatal to a
-    // recording that is already on disk, so both only warn.
-    let project_path = completed.project_path.clone();
-    tokio::task::spawn_blocking(move || {
-        let thumbnail_started = std::time::Instant::now();
-        if let Some(display_path) = studio_display_path(&project_path) {
-            write_bundle_thumbnail(&project_path, &display_path);
-        }
-        tracing::info!(
-            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
-            "Studio stop thumbnail complete"
-        );
+        result.map_err(anyhow::Error::from)?;
         let placement = completed
             .meta
             .camera_path()
@@ -478,6 +459,30 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
         }
+        Ok::<_, anyhow::Error>(completed)
+    })
+    .await
+    .context("studio finalize task")?
+    .context("studio finalize")?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "Studio stop remux complete"
+    );
+
+    if let Some(progress) = &progress {
+        progress.complete(&Ok(completed.project_path.clone()));
+    }
+
+    let project_path = completed.project_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let thumbnail_started = std::time::Instant::now();
+        if let Some(display_path) = studio_display_path(&project_path) {
+            write_bundle_thumbnail(&project_path, &display_path);
+        }
+        tracing::info!(
+            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio stop thumbnail complete"
+        );
     })
     .await
     .context("studio post-finalize task")?;
@@ -734,13 +739,17 @@ impl StudioFinalizationPublisher {
     }
 
     fn complete(&self, result: &anyhow::Result<PathBuf>) {
-        self.state.send_modify(|state| {
+        self.state.send_if_modified(|state| {
+            if state.result.is_some() && result.is_ok() {
+                return false;
+            }
             state.result = Some(
                 result
                     .as_ref()
                     .map(|_| ())
                     .map_err(|error| format!("{error:#}")),
             );
+            true
         });
     }
 }
@@ -2096,17 +2105,24 @@ async fn start_attempt_with_upload(
             }
             Err(error) => {
                 tracing::warn!("app mic feed lock failed ({error}), spawning one for '{label}'");
-                let (feed, lock, error_rx) =
-                    setup_microphone(label, config.device_settings.microphone)
-                        .await
-                        .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+                let (feed, lock, error_rx) = setup_microphone(
+                    label,
+                    config.device_settings.microphone,
+                    config.mic_meter.clone(),
+                )
+                .await
+                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
                 (Some(feed), Some(lock), Some(error_rx))
             }
         },
         (None, Some(label)) => {
-            let (feed, lock, error_rx) = setup_microphone(label, config.device_settings.microphone)
-                .await
-                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+            let (feed, lock, error_rx) = setup_microphone(
+                label,
+                config.device_settings.microphone,
+                config.mic_meter.clone(),
+            )
+            .await
+            .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
             (Some(feed), Some(lock), Some(error_rx))
         }
         _ => (None, None, None),
@@ -2426,6 +2442,7 @@ async fn setup_camera(
 async fn setup_microphone(
     label: &str,
     settings: Option<microphone::MicrophoneDeviceSettings>,
+    meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
 ) -> anyhow::Result<(
     Arc<RecordingOwnedFeed<MicrophoneFeed>>,
     Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
@@ -2434,6 +2451,11 @@ async fn setup_microphone(
     let (error_tx, error_rx) = flume::unbounded();
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
     let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
+    if let Some(meter) = meter {
+        feed.ask(microphone::AddSender(meter))
+            .await
+            .map_err(|e| anyhow!("meter: {e}"))?;
+    }
     let ready = feed
         .ask(microphone::SetInput {
             label: label.to_string(),
@@ -2569,15 +2591,51 @@ fn format_recording_project_name(
         RecordingMode::Studio => ("Studio", "studio"),
         RecordingMode::Instant => ("Instant", "instant"),
     };
+    let template = replace_random_template_tokens(
+        template.unwrap_or(crate::store::DEFAULT_PROJECT_NAME_TEMPLATE),
+    );
     let formatted = template
-        .unwrap_or(crate::store::DEFAULT_PROJECT_NAME_TEMPLATE)
         .replace("{recording_mode}", recording_mode)
         .replace("{mode}", mode)
         .replace("{target_kind}", target_kind)
         .replace("{target_name}", &target_name);
     let formatted = replace_datetime_template_token(&formatted, "date", "%Y-%m-%d", datetime);
     let formatted = replace_datetime_template_token(&formatted, "time", "%I:%M %p", datetime);
-    replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime)
+    let formatted =
+        replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime);
+    formatted
+}
+
+fn replace_random_template_tokens(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut remaining = input;
+
+    while let Some(start) = remaining.find("{random") {
+        output.push_str(&remaining[..start]);
+        let candidate = &remaining[start..];
+        let Some(end) = candidate.find('}') else {
+            output.push_str(candidate);
+            return output;
+        };
+        let token = &candidate[..=end];
+        let length = if token == "{random}" {
+            Some(10)
+        } else {
+            token
+                .strip_prefix("{random:")
+                .and_then(|value| value.strip_suffix('}'))
+                .and_then(|value| value.parse::<usize>().ok())
+        };
+        if let Some(length @ 1..=32) = length {
+            let random = crate::store::new_uuid_v4().replace('-', "");
+            output.push_str(&random[..length]);
+        } else {
+            output.push_str(token);
+        }
+        remaining = &candidate[end + 1..];
+    }
+    output.push_str(remaining);
+    output
 }
 
 fn replace_datetime_template_token(
@@ -2688,6 +2746,49 @@ mod tests {
             ),
             format!("studio-{}...-{{unknown}}", "x".repeat(180))
         );
+    }
+
+    #[test]
+    fn recording_project_names_expand_filename_safe_random_tokens() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+        let name = format_recording_project_name(
+            Some("{random}-{random:16}-{random:0}"),
+            "Example Window",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+        let parts = name.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts[0].len(), 10);
+        assert_eq!(parts[1].len(), 16);
+        assert!(
+            parts[..2]
+                .iter()
+                .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
+        );
+        assert_eq!(parts[2], "{random:0}");
+    }
+
+    #[test]
+    fn recording_project_names_preserve_random_placeholder_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        let name = format_recording_project_name(
+            None,
+            "Implement {random} placeholder",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+
+        assert!(name.contains("Implement {random} placeholder"));
     }
 
     #[test]

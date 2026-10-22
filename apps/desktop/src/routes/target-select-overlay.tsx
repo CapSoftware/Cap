@@ -1299,6 +1299,14 @@ function Inner() {
 
 								try {
 									await commands.suspendTargetSelectOverlays();
+									// The overlay webview is hidden rather than closed (only
+									// Windows closes it, and only after a successful capture), and
+									// the next picker session reuses it with targetMode still
+									// "area", so this branch stays mounted. Suspending ended this
+									// session; drop its selection so the next area screenshot
+									// starts empty: https://github.com/CapSoftware/Cap/issues/2432
+									setInitialAreaBounds(undefined);
+									cropperRef?.reset({ animate: false });
 									await new Promise((resolve) => setTimeout(resolve, 50));
 
 									const path = await commands.takeScreenshot(target);
