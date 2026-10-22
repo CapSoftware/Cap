@@ -110,8 +110,7 @@ impl InterpolatedScene {
             let transition_in = segment.transition_in.max(0.0);
             let transition_out = segment
                 .transition_out
-                .min(segment.end - segment.start)
-                .max(0.0);
+                .clamp(0.0, (segment.end - segment.start).max(0.0));
             let transition_start = segment.start - transition_in;
             let transition_end = segment.end - transition_out;
 
