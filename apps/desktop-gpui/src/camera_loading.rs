@@ -1,5 +1,7 @@
 mod script_outline;
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -84,6 +86,7 @@ pub(crate) fn camera_loading(
     opacity: f32,
     animate: bool,
     show_script: bool,
+    redraw: LoadingRedraw,
 ) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -119,7 +122,8 @@ pub(crate) fn camera_loading(
             }
             if animate {
                 let due = Instant::now() + frame_gap(elapsed, opacity, show_script);
-                redraw_when_due(window, window.current_view(), due);
+                let generation = redraw.begin();
+                redraw_when_due(window, window.current_view(), due, redraw, generation);
             }
         },
     )
@@ -139,14 +143,40 @@ fn frame_gap(elapsed: f32, opacity: f32, show_script: bool) -> Duration {
     Duration::from_secs_f32(0.8 / fps)
 }
 
+/// Each paint supersedes the redraw scheduled by the one before it, so extra
+/// paints (a resize, a chrome change) never leave several deadlines running.
+#[derive(Clone, Default)]
+pub(crate) struct LoadingRedraw(Rc<Cell<u64>>);
+
+impl LoadingRedraw {
+    fn begin(&self) -> u64 {
+        let generation = self.0.get().wrapping_add(1);
+        self.0.set(generation);
+        generation
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.0.get() == generation
+    }
+}
+
 /// Checks on each display refresh and only re-renders the view once `due`
 /// has passed, so redraws never outpace the platform's own frames.
-fn redraw_when_due(window: &Window, view: EntityId, due: Instant) {
+fn redraw_when_due(
+    window: &Window,
+    view: EntityId,
+    due: Instant,
+    redraw: LoadingRedraw,
+    generation: u64,
+) {
     window.on_next_frame(move |window, cx| {
+        if !redraw.is_current(generation) {
+            return;
+        }
         if Instant::now() >= due {
             cx.notify(view);
         } else {
-            redraw_when_due(window, view, due);
+            redraw_when_due(window, view, due, redraw, generation);
         }
     });
 }
@@ -388,5 +418,43 @@ mod tests {
         }
         let slow_display = paints_in(period_start, SWEEP_SECONDS, 20., 1., true);
         assert!((19..=21).contains(&slow_display), "{slow_display}");
+    }
+
+    #[test]
+    fn extra_paints_leave_one_pending_redraw() {
+        let refresh = 1. / 120.;
+        let start = SWEEP_PERIOD_SECONDS - SWEEP_LEAD_SECONDS + SWEEP_SECONDS;
+        let end = start + SWEEP_PERIOD_SECONDS - SWEEP_SECONDS;
+        let redraw = LoadingRedraw::default();
+        let mut pending: Vec<(u64, f32)> = Vec::new();
+        let paint = |now: f32, pending: &mut Vec<(u64, f32)>| {
+            pending.push((redraw.begin(), now + frame_gap(now, 1., true).as_secs_f32()));
+        };
+        paint(start, &mut pending);
+        paint(start + refresh, &mut pending);
+
+        let mut paints = 0;
+        let mut frame = (start / refresh).ceil() + 2.;
+        while frame * refresh < end {
+            let now = frame * refresh;
+            let mut due_paints = 0;
+            pending.retain(|&(generation, due)| {
+                if !redraw.is_current(generation) {
+                    return false;
+                }
+                if now >= due {
+                    due_paints += 1;
+                    return false;
+                }
+                true
+            });
+            for _ in 0..due_paints {
+                paints += 1;
+                paint(now, &mut pending);
+            }
+            assert!(pending.len() <= 1, "{} pending at {now}", pending.len());
+            frame += 1.;
+        }
+        assert!((17..=19).contains(&paints), "{paints}");
     }
 }
