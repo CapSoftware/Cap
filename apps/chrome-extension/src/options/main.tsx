@@ -15,6 +15,7 @@ import {
 	type FailedRecording,
 	loadAuth,
 	loadFailedRecordings,
+	loadManagedApiBaseUrl,
 	loadSettings,
 	loadSharedRecordingState,
 	removeFailedRecording,
@@ -310,16 +311,18 @@ const DoodleCheckbox = ({
 function App() {
 	const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
 	const [auth, setAuth] = useState<ExtensionAuth | null>(null);
+	const [apiBaseUrlManaged, setApiBaseUrlManaged] = useState(false);
 	const [saved, setSaved] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let disposed = false;
-		Promise.all([loadSettings(), loadAuth()])
-			.then(([nextSettings, nextAuth]) => {
+		Promise.all([loadSettings(), loadAuth(), loadManagedApiBaseUrl()])
+			.then(([nextSettings, nextAuth, managedApiBaseUrl]) => {
 				if (disposed) return;
 				setSettings(nextSettings);
 				setAuth(nextAuth);
+				setApiBaseUrlManaged(managedApiBaseUrl !== null);
 			})
 			.catch((err: unknown) => {
 				if (!disposed) {
@@ -420,6 +423,7 @@ function App() {
 							<input
 								type="url"
 								value={settings.apiBaseUrl}
+								disabled={apiBaseUrlManaged}
 								onChange={(event) =>
 									setSettings({
 										...settings,
@@ -427,6 +431,11 @@ function App() {
 									})
 								}
 							/>
+							{apiBaseUrlManaged ? (
+								<small className="field-note">
+									Set by your organization's administrator.
+								</small>
+							) : null}
 						</label>
 					</section>
 
