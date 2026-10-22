@@ -730,7 +730,9 @@ impl TextStyle {
         let previous_style = Self::of(segment);
         let previous_center = segment.center;
         let previous_size = segment.size;
-        scale_text_box(segment, self.font_size);
+        if segment.font_size != self.font_size {
+            scale_text_box(segment, self.font_size);
+        }
         segment.font_family = self.font_family.clone();
         segment.font_size = self.font_size;
         segment.font_weight = self.font_weight;
@@ -8099,18 +8101,23 @@ mod tests {
 
     #[test]
     fn pasting_a_text_style_onto_its_own_source_changes_nothing() {
-        let mut segment = crate::editor_edits::default_text_segment(0., 2., 0);
-        segment.color = "#ff0000".into();
-        segment.center = XY::new(0.3, 0.6);
-        segment.size = XY::new(0.25, 0.08);
-        let style = TextStyle::of(&segment);
-        let before = segment.clone();
+        for (center, size) in [
+            (XY::new(0.3, 0.6), XY::new(0.25, 0.08)),
+            (XY::new(0.5, 0.9), XY::new(0.3, 0.4)),
+        ] {
+            let mut segment = crate::editor_edits::default_text_segment(0., 2., 0);
+            segment.color = "#ff0000".into();
+            segment.center = center;
+            segment.size = size;
+            let style = TextStyle::of(&segment);
+            let before = segment.clone();
 
-        assert!(!style.apply_to(&mut segment));
+            assert!(!style.apply_to(&mut segment));
 
-        assert_eq!(TextStyle::of(&segment), style);
-        assert_eq!(segment.center, before.center);
-        assert_eq!(segment.size, before.size);
+            assert_eq!(TextStyle::of(&segment), style);
+            assert_eq!(segment.center, before.center);
+            assert_eq!(segment.size, before.size);
+        }
     }
 
     fn camera3d(start: f64, end: f64) -> Camera3DSegment {
