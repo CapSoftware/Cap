@@ -137,6 +137,31 @@ describe("Loom processing retries", () => {
 		expect(mocks.start).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		{ rawFileKey: null, updatedAt: new Date() },
+		{ rawFileKey: null, updatedAt: new Date(0) },
+		{ rawFileKey: "owner-1/video-1/raw-upload.mp4", updatedAt: new Date() },
+		{ rawFileKey: "owner-1/video-1/raw-upload.mp4", updatedAt: new Date(0) },
+	])(
+		"does not replace an uploading import without a startup receipt: %j",
+		async (uploading) => {
+			mocks.where
+				.mockResolvedValueOnce([video])
+				.mockResolvedValueOnce([
+					{ ...upload, ...uploading, phase: "uploading" },
+				])
+				.mockResolvedValueOnce([{ source: "loom", sourceId: "loom-1" }])
+				.mockResolvedValueOnce([{ affectedRows: 1 }]);
+			await expect(retryVideoProcessing({ videoId })).resolves.toEqual({
+				success: true,
+				status: "already-processing",
+			});
+			expect(mocks.set).not.toHaveBeenCalled();
+			expect(mocks.start).not.toHaveBeenCalled();
+			expect(mocks.startProcessing).not.toHaveBeenCalled();
+		},
+	);
+
 	it("recovers a source lookup failure that has no raw file key", async () => {
 		mocks.where
 			.mockResolvedValueOnce([video])

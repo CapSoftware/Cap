@@ -88,6 +88,7 @@ export async function retryVideoProcessing({
 		}
 		if (
 			runState !== "inactive" ||
+			upload.phase === "uploading" ||
 			((upload.phase === "processing" ||
 				upload.phase === "generating_thumbnail") &&
 				!shouldForceRetryProcessing(upload))
