@@ -1081,6 +1081,15 @@ pub struct CropState {
 }
 
 impl CropState {
+    /// The display frame is a full-resolution decode and the window's atlas
+    /// keeps every painted image until it is told otherwise, so a closed crop
+    /// would otherwise stay resident until the editor window closes.
+    pub fn release_frame(&mut self, window: &mut Window) {
+        if let Some(frame) = self.frame.take() {
+            let _ = window.drop_image(frame);
+        }
+    }
+
     /// `computeInitialBounds` (`:483-517`) at open, with the container the
     /// viewport gives.
     pub fn new(target: (u32, u32), box_size: (f32, f32), initial: CropBounds) -> Self {
@@ -1606,9 +1615,10 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.crop.take().is_none() {
+        let Some(mut state) = self.crop.take() else {
             return;
-        }
+        };
+        state.release_frame(window);
         tracing::info!(reason, "crop cancelled");
         self.publish_project();
         cx.notify();
@@ -1630,6 +1640,7 @@ impl EditorWindow {
             cx.notify();
             return;
         }
+        state.release_frame(window);
         let bounds = state.real();
         let crop = Crop {
             position: XY::new(bounds.x.max(0.) as u32, bounds.y.max(0.) as u32),
@@ -2154,12 +2165,16 @@ impl EditorWindow {
                 Some(task) => task.await.ok().flatten(),
                 None => None,
             };
-            this.update(cx, |this: &mut Self, cx| {
+            this.update_in(cx, |this: &mut Self, window, cx| {
                 let Some(state) = this.crop.as_mut() else {
                     return;
                 };
                 match image {
-                    Some(image) => state.frame = Some(image),
+                    Some(image) => {
+                        if let Some(previous) = state.frame.replace(image) {
+                            let _ = window.drop_image(previous);
+                        }
+                    }
                     None => {
                         tracing::warn!("crop: display frame decode failed");
                         state.frame_failed = true;
