@@ -12,13 +12,13 @@ permissions:
   actions: read
 
 env:
-  ROUNDS: "1"
-  SAMPLE: "sample"
-  BASE_REF: ""
+  ROUNDS: "3"
+  SAMPLE: "none"
+  BASE_REF: "ci/editor-playback-sync-base"
   MODES: "profile"
   FIXTURES: "display camera"
   ROUNDS_OVERRIDE: "1"
-  RUST_LOG: "warn,cap_gpui=info,cap_probe=info"
+  RUST_LOG: "warn,cap_gpui=info"
 
 jobs:
   fixture:
@@ -139,4 +139,95 @@ jobs:
         if: always()
         with:
           name: editor-playback-out
+          path: ${{ runner.temp }}/out
+
+  linux:
+    name: Editor playback (Linux)
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 200
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install Linux GPU and display
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 xvfb x11-xserver-utils
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build
+        run: |
+          set +e
+          cp -R .github/scripts/editor-playback "$RUNNER_TEMP/editor-playback"
+          head_sha=$(git rev-parse HEAD)
+          build() {
+            local variant=$1 ref=$2
+            git checkout -f "$ref" -- apps crates
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target x86_64-unknown-linux-gnu --bin cap-gpui \
+              --config 'profile.dev.package.cap-desktop-gpui.opt-level=3' \
+              --config 'profile.dev.package.cap-desktop-gpui.incremental=false' || return 1
+            mkdir -p "$RUNNER_TEMP/bin-$variant/debug"
+            cp apps/desktop-gpui/target/x86_64-unknown-linux-gnu/debug/cap-gpui "$RUNNER_TEMP/bin-$variant/debug/cap-gpui"
+          }
+          git fetch origin "$BASE_REF"
+          build base FETCH_HEAD || exit 1
+          build head "$head_sha" || exit 1
+          echo "VARIANTS=bin:base=$RUNNER_TEMP/bin-base/debug/cap-gpui bin:head=$RUNNER_TEMP/bin-head/debug/cap-gpui" >> "$GITHUB_ENV"
+
+      - name: Wait for the fixture
+        run: |
+          for attempt in $(seq 1 120); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].name' | grep -qx editor-playback-fixtures; then
+              exit 0
+            fi
+            sleep 15
+          done
+          exit 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-playback-fixtures
+          path: ${{ runner.temp }}/fixtures
+
+      - name: Measure
+        run: |
+          set +e
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/x86_64-unknown-linux-gnu/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          Xvfb :99 -screen 0 1920x1080x24 -noreset > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+          export DISPLAY=:99
+          sleep 2
+          xrandr --current 2>/dev/null | head -5 || true
+          python3 -I "$RUNNER_TEMP/editor-playback/run.py" "$RUNNER_TEMP/out" "$ROUNDS" "$SAMPLE" $VARIANTS \
+            "fix:display=$RUNNER_TEMP/fixtures/display.cap" "fix:camera=$RUNNER_TEMP/fixtures/camera.cap"
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editor-playback-out-linux
           path: ${{ runner.temp }}/out
