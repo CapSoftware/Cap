@@ -232,8 +232,6 @@ pub struct AudioMixer {
     required_stop: Option<CancellationToken>,
     drain_deadline: Option<Instant>,
     finishing: bool,
-    /// Registered on every input channel, so a frame arriving wakes the mixer
-    /// thread instead of waiting for its next poll.
     input_waker: std::task::Waker,
 }
 
