@@ -330,6 +330,7 @@ impl Mp4ExportSettings {
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
         mut mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
+        mode.software_encoder |= cap_rendering::software_video_codecs_requested();
         let on_progress = Arc::new(Mutex::new(on_progress));
         let user_cancellation = base
             .audio_cancellation

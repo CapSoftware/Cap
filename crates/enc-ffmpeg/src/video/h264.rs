@@ -1201,12 +1201,17 @@ fn get_encoder_priority_with_override(
 }
 
 fn force_software_encoder() -> bool {
-    std::env::var("CAP_EXPORT_FORCE_SOFTWARE_ENCODER").is_ok_and(|value| {
-        matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+    let enabled = |name: &str| {
+        std::env::var(name).is_ok_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+    };
+
+    enabled("CAP_EXPORT_FORCE_SOFTWARE_ENCODER")
+        || (cfg!(target_os = "macos") && enabled("CAP_MACOS_SOFTWARE_CODECS"))
 }
 
 fn export_encoder_priority_override(
