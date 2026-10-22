@@ -56,4 +56,6 @@ jobs:
             __tests__/unit/video-edit-published-output.test.ts \
             __tests__/unit/upload-progress-playback.test.ts \
             __tests__/unit/recording-prepare.test.ts \
-            __tests__/unit/s3-bucket-connections.test.ts
+            __tests__/unit/s3-bucket-connections.test.ts \
+            __tests__/unit/media-processing-workflows.test.ts \
+            __tests__/unit/new-media-comment-thumbnail.test.ts
