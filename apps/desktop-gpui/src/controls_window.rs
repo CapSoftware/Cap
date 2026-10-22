@@ -10,13 +10,13 @@
 use std::time::Duration;
 
 use gpui::{
-    Context, Entity, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled, Window, div,
-    prelude::FluentBuilder as _, px, svg,
+    AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled,
+    Window, div, prelude::FluentBuilder as _, px, svg,
 };
 
 use crate::{
-    feeds::{self, Feeds},
+    feeds::Feeds,
     recording::RecordingMode,
     session::{Phase, RecordingSession},
     theme::Theme,
@@ -33,9 +33,7 @@ pub struct ControlsWindow {
     /// platform, so the tick both notifies and asks for a frame explicitly.
     _tick: gpui::Task<()>,
     ticking_live: bool,
-    /// The mic level bar's fill in device pixels as last drawn, `None` while
-    /// the bar is hidden.
-    drawn_level_px: std::cell::Cell<Option<u32>>,
+    level_bar: Entity<ui::MicrophoneLevel>,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +69,15 @@ impl ControlsWindow {
             cx.notify();
         })
         .detach();
+        let mic_level = Feeds::global(cx).read(cx).mic_level().clone();
+        let level_bar = cx.new(|cx| {
+            ui::MicrophoneLevel::new(
+                ui::MicrophoneLevelKind::RecordingBar,
+                &mic_level,
+                window,
+                cx,
+            )
+        });
 
         let mut this = Self {
             session,
@@ -80,7 +87,7 @@ impl ControlsWindow {
             confirmation_pending: false,
             _tick: gpui::Task::ready(()),
             ticking_live: false,
-            drawn_level_px: std::cell::Cell::new(None),
+            level_bar,
         };
         this.ticking_live = this.timer_is_live(cx);
         this._tick = Self::spawn_tick(window, cx);
@@ -119,13 +126,6 @@ impl ControlsWindow {
                 }
             }
         })
-    }
-
-    /// Whether a new mic level would move the bar by at least a device pixel.
-    pub fn level_bar_moves(&self, db: f64, scale: f32) -> bool {
-        self.drawn_level_px
-            .get()
-            .is_some_and(|drawn| drawn != level_bar_px(db, scale))
     }
 
     /// `formatTime`: `M:SS`, hours folded into minutes the same way.
@@ -231,17 +231,21 @@ impl ControlsWindow {
     /// gray-10 track). In instant mode with a live mic it doubles as the mute
     /// button -- studio deliberately does not expose mute, since the mic is an
     /// editable track and muted spans would bake zeros in.
-    fn render_microphone(&self, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_microphone(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
         let muted = session.mic_muted;
         let can_mute = session.mode() == Some(RecordingMode::Instant)
             && session.has_microphone()
             && matches!(session.phase, Phase::Recording { .. });
-        let level_db = Feeds::global(cx).read(cx).mic_level_db;
-        let level = feeds::bar_level(level_db);
-        self.drawn_level_px
-            .set((self.has_microphone && !muted).then(|| level_bar_px(level_db, scale)));
+        self.level_bar.update(cx, |bar, cx| {
+            bar.configure(
+                self.has_microphone && !muted,
+                theme.blue_9.into(),
+                theme.gray_10.into(),
+                cx,
+            );
+        });
 
         let icon = if !self.has_microphone || muted {
             "icons/mic-off.svg"
@@ -277,26 +281,7 @@ impl ControlsWindow {
             })
             .child(svg().path(icon).size(px(20.)).text_color(icon_color))
             .when(self.has_microphone && !muted, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .bottom(px(4.))
-                        .left(px(4.))
-                        .right(px(4.))
-                        .h(px(2.))
-                        .rounded_full()
-                        .overflow_hidden()
-                        .bg(theme.gray_10)
-                        .child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(gpui::relative(level as f32))
-                                .bg(theme.blue_9),
-                        ),
-                )
+                this.child(self.level_bar.clone())
             })
     }
 
@@ -376,7 +361,7 @@ impl ControlsWindow {
         .detach();
     }
 
-    fn render_bar(&mut self, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
         let paused = session.is_paused();
@@ -434,7 +419,7 @@ impl ControlsWindow {
                             .items_center()
                             .gap(px(2.))
                             .flex_shrink_0()
-                            .child(self.render_microphone(scale, cx))
+                            .child(self.render_microphone(cx))
                             .child(
                                 self.action_button(
                                     "pause",
@@ -559,7 +544,7 @@ impl Render for ControlsWindow {
                         .child(recording_issue_text(issue)),
                 )
             })
-            .child(self.render_bar(window.scale_factor(), cx))
+            .child(self.render_bar(cx))
     }
 }
 
@@ -580,11 +565,6 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
         } else {
             error
         })
-}
-
-/// The bar's track is 20pt wide.
-fn level_bar_px(db: f64, scale: f32) -> u32 {
-    (feeds::bar_level(db) * 20.0 * f64::from(scale)).round() as u32
 }
 
 fn tick_delay(live: bool, elapsed: Duration) -> Duration {
@@ -628,16 +608,5 @@ mod repaint_tests {
             tick_delay(false, Duration::from_millis(3_900)),
             Duration::from_secs(1)
         );
-    }
-
-    #[test]
-    fn level_changes_under_a_device_pixel_do_not_move_the_bar() {
-        assert_eq!(level_bar_px(-30.0, 2.0), level_bar_px(-30.5, 2.0));
-        assert_ne!(level_bar_px(-30.0, 2.0), level_bar_px(-32.0, 2.0));
-        assert_eq!(level_bar_px(-30.0, 1.0), level_bar_px(-31.0, 1.0));
-        assert_ne!(level_bar_px(-30.0, 1.0), level_bar_px(-33.0, 1.0));
-        assert_eq!(level_bar_px(-96.0, 2.0), 0);
-        assert_eq!(level_bar_px(0.0, 1.0), 20);
-        assert_eq!(level_bar_px(0.0, 2.0), 40);
     }
 }
