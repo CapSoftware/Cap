@@ -57,7 +57,7 @@ pub const SCREENSHOT_EDITOR_MIN_WIDTH: f32 = 800.;
 pub const SCREENSHOT_EDITOR_MIN_HEIGHT: f32 = 600.;
 
 /// `MAX_DIMENSION` (`screenshot_editor.rs:38` over there).
-const MAX_DIMENSION: u32 = 16_384;
+pub(crate) const MAX_DIMENSION: u32 = 16_384;
 
 /// `saveConfig`'s debounce (`context.tsx:427-438`) -- 1000ms, not the video
 /// editor's 250.
@@ -106,7 +106,7 @@ pub fn resolve_bundle(path: &Path) -> Option<PathBuf> {
 
 /// Everything the window and the renderer need off disk.
 pub struct LoadedSource {
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub pretty_name: String,
@@ -153,7 +153,7 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
     let config = ProjectConfiguration::load(bundle).unwrap_or_default();
 
     Ok(LoadedSource {
-        rgba: image.to_rgba8().into_raw(),
+        rgba: Arc::new(image.to_rgba8().into_raw()),
         width,
         height,
         pretty_name: meta.pretty_name.clone(),
@@ -161,6 +161,20 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
         meta,
         studio_meta,
     })
+}
+
+fn load_source_for_editor(
+    bundle: &Path,
+    captured: Option<LoadedSource>,
+) -> Result<LoadedSource, String> {
+    let source = captured.map_or_else(|| load_source(bundle), Ok)?;
+    if source.width > MAX_DIMENSION || source.height > MAX_DIMENSION {
+        return Err(format!(
+            "Image dimensions exceed maximum: {}x{}",
+            source.width, source.height
+        ));
+    }
+    Ok(source)
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +238,7 @@ pub async fn run_still_renderer(
     };
     let _ = setup_tx.send(Ok(()));
 
-    let decoded = DecodedFrame::new_with_arc(Arc::new(source.rgba), source.width, source.height);
+    let decoded = DecodedFrame::new_with_arc(source.rgba, source.width, source.height);
 
     let mut frame_renderer = FrameRenderer::new(&constants);
     let mut layers = RendererLayers::new_with_options(
@@ -4769,13 +4783,15 @@ fn frame_buffers(frame: &RenderedFrame) -> Option<(Arc<Vec<u8>>, Arc<RenderImage
 pub fn load_screenshot_project(
     bundle: PathBuf,
     handle: WindowHandle<ScreenshotEditorWindow>,
+    captured: Option<LoadedSource>,
     cx: &mut App,
 ) {
     cx.spawn(async move |cx| {
+        let fresh_capture = captured.is_some();
         let load_bundle = bundle.clone();
         let source = cx
             .background_executor()
-            .spawn(async move { load_source(&load_bundle) })
+            .spawn(async move { load_source_for_editor(&load_bundle, captured) })
             .await;
         let source = match source {
             Ok(source) => source,
@@ -4798,6 +4814,30 @@ pub fn load_screenshot_project(
         let (setup_tx, setup_rx) = flume::bounded(1);
 
         let image_size = (source.width, source.height);
+        let (source, preview) = cx
+            .background_executor()
+            .spawn(async move {
+                let preview = if fresh_capture
+                    && source.width.is_multiple_of(4)
+                    && source.height.is_multiple_of(2)
+                {
+                    image::RgbaImage::from_raw(
+                        source.width,
+                        source.height,
+                        source.rgba.as_ref().clone(),
+                    )
+                    .map(|image| {
+                        (
+                            source.rgba.clone(),
+                            crate::library::rgba_to_render_image(image),
+                        )
+                    })
+                } else {
+                    None
+                };
+                (source, preview)
+            })
+            .await;
         if handle
             .update(cx, |view, window, cx| {
                 view.set_loaded(
@@ -4810,7 +4850,10 @@ pub fn load_screenshot_project(
                     },
                     window,
                     cx,
-                )
+                );
+                if let Some((rgba, image)) = preview {
+                    view.frame_arrived(image, rgba, image_size, window, cx);
+                }
             })
             .is_err()
         {
@@ -4850,7 +4893,9 @@ pub fn load_screenshot_project(
             );
             if handle
                 .update(cx, |view, window, cx| {
-                    view.frame_arrived(image, rgba, size, window, cx)
+                    if revision >= view.revision {
+                        view.frame_arrived(image, rgba, size, window, cx);
+                    }
                 })
                 .is_err()
             {
@@ -5143,7 +5188,7 @@ mod tests {
         let mut config = new_screenshot_config();
         config.annotations.push(arrow("a", 4.));
         LoadedSource {
-            rgba,
+            rgba: Arc::new(rgba),
             width,
             height,
             pretty_name: "bench".into(),
@@ -5151,6 +5196,26 @@ mod tests {
             meta,
             studio_meta,
         }
+    }
+
+    #[test]
+    fn retained_capture_pixels_obey_the_editor_dimension_limit() {
+        for (width, height) in [(MAX_DIMENSION + 1, 2), (4, MAX_DIMENSION + 1)] {
+            let result = load_source_for_editor(
+                Path::new("unused.cap"),
+                Some(synthetic_source(width, height)),
+            );
+            assert!(
+                matches!(result, Err(message) if message == format!("Image dimensions exceed maximum: {width}x{height}"))
+            );
+        }
+        assert!(
+            load_source_for_editor(
+                Path::new("unused.cap"),
+                Some(synthetic_source(MAX_DIMENSION, 2)),
+            )
+            .is_ok()
+        );
     }
 
     struct DragResult {
