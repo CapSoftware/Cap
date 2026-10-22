@@ -424,6 +424,8 @@ jobs:
       - name: Test GPUI patches
         shell: bash
         working-directory: ../zed-cap
+        env:
+          GPUI_REQUIRE_TEST_DEVICE: "1"
         run: |
           cargo +1.95.0 test -p gpui --lib stream
           if [[ "$RUNNER_OS" == "Linux" ]]; then
