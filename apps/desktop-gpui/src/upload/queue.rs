@@ -377,7 +377,7 @@ struct LiveBackend;
 
 impl UploadBackend for LiveBackend {
     fn check_account(&self, state: &UploadState) -> Result<(), String> {
-        if state.server_url != auth::server_url()
+        if !auth::has_same_origin(&state.server_url, &auth::server_url())
             || state.owner_id != owner_id()
             || store_auth_missing()
         {
