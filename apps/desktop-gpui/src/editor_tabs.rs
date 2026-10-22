@@ -351,6 +351,10 @@ pub enum CameraSlider {
     ShadowSize,
     ShadowOpacity,
     ShadowBlur,
+    CropLeft,
+    CropTop,
+    CropRight,
+    CropBottom,
 }
 
 impl CameraSlider {
@@ -360,6 +364,7 @@ impl CameraSlider {
             Self::Size => (20., 80., 0.1),
             // `minValue={10} maxValue={60}` (`:3213-3215`).
             Self::ZoomSize => (10., 60., 0.1),
+            Self::CropLeft | Self::CropTop | Self::CropRight | Self::CropBottom => (0., 45., 0.5),
             _ => (0., 100., 0.1),
         }
     }
@@ -376,6 +381,10 @@ impl CameraSlider {
             Self::ShadowSize => shadow.map_or(UI_SHADOW_FALLBACK.size, |s| s.size),
             Self::ShadowOpacity => shadow.map_or(UI_SHADOW_FALLBACK.opacity, |s| s.opacity),
             Self::ShadowBlur => shadow.map_or(UI_SHADOW_FALLBACK.blur, |s| s.blur),
+            Self::CropLeft => camera.crop.map_or(0., |c| (c.left * 100.) as f32),
+            Self::CropTop => camera.crop.map_or(0., |c| (c.top * 100.) as f32),
+            Self::CropRight => camera.crop.map_or(0., |c| (c.right * 100.) as f32),
+            Self::CropBottom => camera.crop.map_or(0., |c| (c.bottom * 100.) as f32),
         }
     }
 }
@@ -1020,6 +1029,20 @@ impl EditorWindow {
                     }
                     camera.advanced_shadow = Some(shadow);
                 }
+                CameraSlider::CropLeft
+                | CameraSlider::CropTop
+                | CameraSlider::CropRight
+                | CameraSlider::CropBottom => {
+                    let mut crop = camera.crop.unwrap_or_default();
+                    let fraction = f64::from(value) / 100.;
+                    match slider {
+                        CameraSlider::CropLeft => crop.left = fraction,
+                        CameraSlider::CropTop => crop.top = fraction,
+                        CameraSlider::CropRight => crop.right = fraction,
+                        _ => crop.bottom = fraction,
+                    }
+                    camera.crop = (crop != cap_project::CameraCrop::default()).then_some(crop);
+                }
             }
             true
         });
@@ -1279,6 +1302,39 @@ impl EditorWindow {
                 ),
             )
             // `<div class="w-full border-t border-dashed border-gray-5" />`
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(
+                ui::Field::section(&theme, "Crop").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .child(self.slider_field(
+                            "Left",
+                            SliderKey::Camera(CameraSlider::CropLeft),
+                            "%",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Right",
+                            SliderKey::Camera(CameraSlider::CropRight),
+                            "%",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Top",
+                            SliderKey::Camera(CameraSlider::CropTop),
+                            "%",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Bottom",
+                            SliderKey::Camera(CameraSlider::CropBottom),
+                            "%",
+                            cx,
+                        )),
+                ),
+            )
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.slider_field("Size", SliderKey::Camera(CameraSlider::Size), "%", cx))
             .child(self.slider_field(
