@@ -8231,6 +8231,7 @@ impl EditorWindow {
             .bg(Hsla::from(theme.editor.card))
             .p(px(6.))
             .shadow(theme.editor.pop_shadow())
+            .occlude()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _, _, cx| cx.stop_propagation()),
@@ -9162,6 +9163,8 @@ impl EditorWindow {
                 )
                 .child(
                     div()
+                        .debug_selector(|| "preset-dialog".into())
+                        .occlude()
                         .w(px(400.))
                         .flex()
                         .flex_col()
@@ -9853,7 +9856,6 @@ impl EditorWindow {
     /// the sprite atlas.
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = cx.entity().downgrade();
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
             (_, true) => loading::reveal(
@@ -9873,26 +9875,11 @@ impl EditorWindow {
             .min_h_0()
             .overflow_hidden()
             .bg(Hsla::from(theme.editor.card))
-            .child(
-                gpui::canvas(
-                    |bounds, _, _| bounds,
-                    move |_, bounds, window, _| {
-                        let editor = editor.clone();
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-                            if phase == gpui::DispatchPhase::Capture
-                                && event.button == MouseButton::Left
-                                && bounds.contains(&event.position)
-                            {
-                                let _ = editor.update(cx, |this, cx| {
-                                    this.focus_root(window, cx);
-                                });
-                            }
-                        });
-                    },
-                )
-                .absolute()
-                .inset_0(),
-            )
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if event.button == MouseButton::Left {
+                    this.focus_root(window, cx);
+                }
+            }))
             .child(body)
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
@@ -12568,6 +12555,9 @@ mod tests {
         let project_path = project.path().to_path_buf();
         let (editor, cx) = cx
             .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("unreadable".into(), window, cx);
+        });
         let (input_focus, editor_focus) = editor.read_with(cx, |editor, cx| {
             (
                 editor.name_input.read(cx).focus_handle(),
@@ -12586,6 +12576,31 @@ mod tests {
             assert!(!input_focus.is_focused(window));
             assert!(editor_focus.is_focused(window));
         });
+    }
+
+    #[gpui::test]
+    fn dialog_click_over_the_preview_keeps_its_focus(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("unreadable".into(), window, cx);
+            editor.open_preset_dialog(PresetDialog::Create { default: false }, window, cx);
+        });
+        let input_focus = editor.read_with(cx, |editor, cx| {
+            editor.preset_name_input.read(cx).focus_handle()
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(input_focus.is_focused(window)));
+
+        let preview = cx.debug_bounds("editor-preview-canvas").unwrap();
+        let title = cx.debug_bounds("preset-dialog").unwrap().origin + point(px(8.), px(8.));
+        assert!(preview.contains(&title));
+        cx.simulate_mouse_move(title, None, gpui::Modifiers::default());
+        cx.simulate_click(title, gpui::Modifiers::default());
+
+        cx.update(|window, _| assert!(input_focus.is_focused(window)));
     }
 
     /// `default_editor_preview_resolution()` is asserted to be 1248x702 in the
