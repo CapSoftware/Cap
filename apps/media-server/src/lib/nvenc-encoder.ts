@@ -1,6 +1,6 @@
-const DEFAULT_PRESET = "p5";
-const DEFAULT_CQ_OFFSET = 2;
-const DEFAULT_LOOKAHEAD = 20;
+const DEFAULT_PRESET = "p1";
+const DEFAULT_CQ_OFFSET = 8;
+const DEFAULT_LOOKAHEAD = 0;
 const MAX_LOOKAHEAD = 32;
 const GOP_LENGTH = "250";
 const NVENC_PRESETS = new Set(["p1", "p2", "p3", "p4", "p5", "p6", "p7"]);

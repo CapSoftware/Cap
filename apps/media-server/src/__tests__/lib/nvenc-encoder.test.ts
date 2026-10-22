@@ -28,9 +28,9 @@ import {
 
 const enabled = { CAP_MEDIA_VIDEO_ENCODER: "nvenc" };
 const defaults: NvencOptions = {
-	preset: "p5",
-	cqOffset: 2,
-	lookahead: 20,
+	preset: "p1",
+	cqOffset: 8,
+	lookahead: 0,
 	spatialAq: true,
 	temporalAq: false,
 	gpuDecodeCodecs: ["hevc", "av1"],
@@ -46,19 +46,17 @@ const nvencVideoArgs = [
 	"-c:v",
 	"h264_nvenc",
 	"-preset",
-	"p5",
+	"p1",
 	"-tune",
 	"hq",
 	"-rc",
 	"vbr",
 	"-cq",
-	"25",
+	"31",
 	"-b:v",
 	"0",
 	"-spatial-aq",
 	"1",
-	"-rc-lookahead",
-	"20",
 	"-profile:v",
 	"high",
 	"-g",
@@ -141,7 +139,7 @@ describe("nvenc encoder selection", () => {
 		});
 	});
 
-	test("uses p5, cq = crf + 2, lookahead 20 and spatial AQ by default", () => {
+	test("uses p1, cq = crf + 8, no lookahead and spatial AQ by default", () => {
 		expect(nvencOptionsFromEnv(enabled)).toEqual(defaults);
 	});
 
@@ -204,13 +202,13 @@ describe("nvenc encoder selection", () => {
 			"-c:v",
 			"h264_nvenc",
 			"-preset",
-			"p5",
+			"p1",
 			"-tune",
 			"hq",
 			"-rc",
 			"vbr",
 			"-cq",
-			"20",
+			"26",
 			"-b:v",
 			"0",
 			"-temporal-aq",
@@ -562,19 +560,17 @@ describe("edit re-encode args", () => {
 			"-c:v",
 			"h264_nvenc",
 			"-preset",
-			"p5",
+			"p1",
 			"-tune",
 			"hq",
 			"-rc",
 			"vbr",
 			"-cq",
-			"20",
+			"26",
 			"-b:v",
 			"0",
 			"-spatial-aq",
 			"1",
-			"-rc-lookahead",
-			"20",
 			"-profile:v",
 			"high",
 			"-g",
