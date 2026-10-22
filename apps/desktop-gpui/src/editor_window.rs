@@ -6449,7 +6449,10 @@ impl EditorWindow {
         // dirty, and the fork's `will_draw` bypass is what lets a dirty frame
         // through the inactive-window throttle -- so the cheap half is enough
         // and this stays scoped to the first frame and the paused re-render.
-        if !window.is_window_active() && (first_frame || !self.playing) {
+        if !window.is_window_active()
+            && std::env::var_os("CAP_PROBE_ASSUME_ACTIVE").is_none()
+            && (first_frame || !self.playing)
+        {
             window.refresh();
         }
         if let Some(adoption) = adoption {

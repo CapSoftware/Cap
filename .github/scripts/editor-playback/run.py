@@ -35,6 +35,7 @@ def launch(binary, fixture, mode, label):
         CAP_GPUI_NO_TRAY="1",
         CAP_PERF_SKIP_ONBOARDING="1",
         CAP_GPUI_APP_DATA_DIR=data,
+        CAP_PROBE_ASSUME_ACTIVE="1",
         RUST_LOG=os.environ.get("RUST_LOG", "warn,cap_gpui=info"),
     )
     if mode == "profile":
