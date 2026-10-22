@@ -1294,7 +1294,6 @@ fn ripple_relative_keyframes<T>(
     keyframes: &mut Vec<T>,
     old_start: f64,
     new_start: f64,
-    new_end: f64,
     cut_start: f64,
     cut_end: f64,
     shift: f64,
@@ -1311,7 +1310,7 @@ fn ripple_relative_keyframes<T>(
         } else {
             absolute
         };
-        *value = (mapped - new_start).clamp(0.0, new_end - new_start);
+        *value = mapped - new_start;
         true
     });
 }
@@ -1341,7 +1340,6 @@ fn ripple_delete_mask_track(
             &mut segment.keyframes.position,
             old_start,
             new_start,
-            new_end,
             cut_start,
             cut_end,
             shift,
@@ -1351,7 +1349,6 @@ fn ripple_delete_mask_track(
             &mut segment.keyframes.size,
             old_start,
             new_start,
-            new_end,
             cut_start,
             cut_end,
             shift,
@@ -1361,7 +1358,6 @@ fn ripple_delete_mask_track(
             &mut segment.keyframes.intensity,
             old_start,
             new_start,
-            new_end,
             cut_start,
             cut_end,
             shift,
@@ -3894,6 +3890,20 @@ mod tests {
             let mask = &timeline.mask_segments[0];
             assert_eq!((mask.start, mask.end), expected_bounds);
         }
+    }
+
+    #[test]
+    fn mask_keyframes_before_an_overlapping_ripple_delete_keep_their_times() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.mask_segments.push(animated_mask());
+        assert!(set_segment_start(timeline, TrackKind::Mask, 0, 5.0));
+
+        ripple_delete_output_tracks(timeline, 8.0, 9.0, 1.0);
+
+        let mask = &timeline.mask_segments[0];
+        assert_eq!((mask.start, mask.end), (5.0, 9.0));
+        assert_eq!(mask_keyframe_times(mask), [-3.0, 1.0, 4.0].repeat(3));
     }
 
     // -- Split snapping -----------------------------------------------------
