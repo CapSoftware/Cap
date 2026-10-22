@@ -2989,6 +2989,11 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
+								yield* Effect.sync(() => {
+									revalidatePath("/dashboard/caps");
+									revalidatePath("/dashboard/shared-caps");
+									revalidatePath(`/s/${path.id}`);
+								});
 								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),
