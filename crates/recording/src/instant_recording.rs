@@ -822,6 +822,7 @@ async fn create_pipeline(
                 output_pipeline::DashSegmentedAudioMuxerConfig {
                     shared_pause_state: None,
                     segment_tx: segment_tx_for_audio,
+                    write_behind: cfg!(target_os = "macos"),
                     ..Default::default()
                 },
             )
