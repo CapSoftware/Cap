@@ -1,0 +1,30 @@
+name: Arch package
+
+on:
+  pull_request:
+    paths:
+      - "scripts/build-linux-arch-package*"
+      - ".github/workflows/arch-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Arch package versions
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    container: archlinux:base-devel@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        run: pacman -Syu --noconfirm --needed nodejs
+      - name: Test package ordering and payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          useradd --create-home cap-package-test
+          runuser -u cap-package-test -- node --test --test-reporter=tap scripts/build-linux-arch-package.test.mjs | tee /tmp/arch-package-tests.tap
+          grep -q '^# skipped 0$' /tmp/arch-package-tests.tap
