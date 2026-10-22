@@ -30,7 +30,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Test performance report isolation
-        run: python3 -B scripts/verify/test_perf_ab.py
+        run: python3 -B scripts/verify/test-perf-ab.py
       - name: Scope
         id: scope
         env:
