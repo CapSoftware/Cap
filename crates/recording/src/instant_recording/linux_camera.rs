@@ -906,6 +906,7 @@ fn push_alpha_runs(spans: &mut Vec<OverlaySpan>, alphas: impl Iterator<Item = u8
     }
 }
 
+#[cfg(test)]
 fn classify_alpha_row(alphas: &[u8]) -> Vec<OverlaySpan> {
     let mut spans = Vec::new();
     push_alpha_runs(&mut spans, alphas.iter().copied());
@@ -919,13 +920,10 @@ fn overlay_runs(frame: &ffmpeg::frame::Video) -> OverlayRuns {
     let data = frame.data(0);
     let mut spans = Vec::new();
     let mut row_starts = Vec::with_capacity(height + 1);
-    let mut alphas = Vec::with_capacity(width);
     for row in 0..height {
         row_starts.push(spans.len() as u32);
-        alphas.clear();
         let row_bytes = &data[row * stride..][..width * 4];
-        alphas.extend(row_bytes.chunks_exact(4).map(|pixel| pixel[3]));
-        spans.extend(classify_alpha_row(&alphas));
+        push_alpha_runs(&mut spans, row_bytes.chunks_exact(4).map(|p| p[3]));
     }
     row_starts.push(spans.len() as u32);
     OverlayRuns {
