@@ -407,10 +407,10 @@ async fn render_preview_frame(
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
 
-    if let Some(cache) = layers_cache {
-        if let Ok(mut guard) = cache.lock() {
-            *guard = Some(layers);
-        }
+    if let Some(cache) = layers_cache
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = Some(layers);
     }
 
     Ok(ExportPreviewResult {
