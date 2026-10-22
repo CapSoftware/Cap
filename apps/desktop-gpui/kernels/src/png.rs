@@ -223,6 +223,7 @@ fn filter_rows(data: &[u8], stride: usize, bpp: usize, first_row: usize, out: &m
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn apply_up_neon(previous: &[u8], current: &[u8], out: &mut [u8]) -> u64 {
+    debug_assert!(previous.len() == current.len() && current.len() == out.len());
     use core::arch::aarch64::*;
     let mut len = current.len();
     let mut p_ptr = previous.as_ptr();
@@ -289,6 +290,7 @@ unsafe fn apply_up_neon(previous: &[u8], current: &[u8], out: &mut [u8]) -> u64 
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn apply_sub_neon(current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
+    debug_assert!(current.len() == out.len());
     use core::arch::aarch64::*;
     out[..bpp].copy_from_slice(&current[..bpp]);
     let mut sum = 0u64;
@@ -360,6 +362,7 @@ unsafe fn apply_sub_neon(current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn apply_avg_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
+    debug_assert!(previous.len() == current.len() && current.len() == out.len());
     use core::arch::aarch64::*;
     let mut sum = 0u64;
     for ((&c, &p), o) in current[..bpp]
@@ -447,6 +450,7 @@ unsafe fn apply_avg_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut 
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn apply_paeth_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
+    debug_assert!(previous.len() == current.len() && current.len() == out.len());
     use core::arch::aarch64::*;
     let mut sum = 0u64;
     for ((&c, &p), o) in current[..bpp]
@@ -593,56 +597,15 @@ fn adaptive_filter(
     best
 }
 
-#[cfg_attr(target_arch = "aarch64", allow(dead_code))]
 fn sum_abs(buf: &[u8]) -> u64 {
-    #[cfg(target_arch = "aarch64")]
-    {
-        use core::arch::aarch64::*;
-        let mut sum = 0u64;
-        let mut ptr = buf.as_ptr();
-        let mut len = buf.len();
-        while len >= 64 {
-            unsafe {
-                let v0 = vld1q_s8(ptr as *const i8);
-                let v1 = vld1q_s8(ptr.add(16) as *const i8);
-                let v2 = vld1q_s8(ptr.add(32) as *const i8);
-                let v3 = vld1q_s8(ptr.add(48) as *const i8);
-                let a0 = vabsq_s8(v0);
-                let a1 = vabsq_s8(v1);
-                let a2 = vabsq_s8(v2);
-                let a3 = vabsq_s8(v3);
-                let s0 = vaddlvq_u8(vreinterpretq_u8_s8(a0));
-                let s1 = vaddlvq_u8(vreinterpretq_u8_s8(a1));
-                let s2 = vaddlvq_u8(vreinterpretq_u8_s8(a2));
-                let s3 = vaddlvq_u8(vreinterpretq_u8_s8(a3));
-                sum += u64::from(s0) + u64::from(s1) + u64::from(s2) + u64::from(s3);
-                ptr = ptr.add(64);
-                len -= 64;
-            }
-        }
-        while len >= 16 {
-            unsafe {
-                let v0 = vld1q_s8(ptr as *const i8);
-                let a0 = vabsq_s8(v0);
-                sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(a0)));
-                ptr = ptr.add(16);
-                len -= 16;
-            }
-        }
-        let rem = unsafe { core::slice::from_raw_parts(ptr, len) };
-        for &b in rem {
-            sum += u64::from((b as i8).unsigned_abs());
-        }
-        sum
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        let mut sum = 0u64;
-        for &b in buf {
-            sum += u64::from((b as i8).unsigned_abs());
-        }
-        sum
-    }
+    buf.chunks(32)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|&b| u64::from((b as i8).unsigned_abs()))
+                .sum::<u64>()
+        })
+        .sum()
 }
 
 #[cfg_attr(target_arch = "aarch64", allow(dead_code))]
@@ -703,9 +666,6 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 mod tests {
     use super::*;
 
-    // Expected costs must not come from `sum_abs`: this PR gives it a NEON path
-    // built from the same `vabsq_s8`/`vaddlvq_u8` pair the filters use, so a wrong
-    // absolute-value or reduction would cancel out on both sides of the assert.
     #[cfg(target_arch = "aarch64")]
     fn scalar_filter_cost(buf: &[u8]) -> u64 {
         let mut total = 0u64;
