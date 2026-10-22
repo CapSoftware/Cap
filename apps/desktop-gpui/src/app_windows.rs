@@ -278,11 +278,12 @@ pub struct AppWindows {
     /// button, the tile toggled off). A recording start hands the foreground
     /// to the bar instead. Set even when the window was already hidden (the
     /// tray path): the Tauri effect does the same, which is why cancelling a
-    /// tray-opened picker reveals the main window.
+    /// tray-opened picker reveals the main window, unless
+    /// `keepMainHiddenOnCancel` is set.
     pub main_hidden_for_picker: bool,
-    /// Whether the main window was on screen when the picker hid it. Only the
-    /// copy/save screenshot finish reads it; the cancel reveal keeps the
-    /// Tauri behaviour above.
+    /// Whether the main window was on screen when the picker hid it. The
+    /// copy/save screenshot finish and a cancel under `keepMainHiddenOnCancel`
+    /// reveal the main window only when it was.
     pub main_visible_before_picker: bool,
     /// [`hide_main_window`] put the main window away and
     /// [`show_main_window_after_capture_pause`] has not brought it back since.
@@ -2185,7 +2186,8 @@ fn keep_arranged_windows(cx: &mut App) {
 ///
 /// A "cancelled" dismissal in the Tauri vocabulary, which is the kind that
 /// reveals the main window again (`dismissalReveals`,
-/// `new-main/index.tsx:2047-2058`).
+/// `new-main/index.tsx:2047-2058`). With `keepMainHiddenOnCancel` it only
+/// comes back if it was on screen when the picker opened.
 pub fn dismiss_target_overlays(cx: &mut App) {
     restore_arranged_windows(cx);
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle
@@ -2231,12 +2233,24 @@ pub fn dismiss_target_overlays(cx: &mut App) {
         return;
     }
 
-    let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+    let windows = cx.global_mut::<AppWindows>();
+    let hidden = std::mem::take(&mut windows.main_hidden_for_picker);
+    let was_visible = std::mem::take(&mut windows.main_visible_before_picker);
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    tracing::info!(hidden, idle, "picker dismissed");
-    if hidden && idle {
+    let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_on_cancel;
+    tracing::info!(hidden, was_visible, idle, keep_hidden, "picker dismissed");
+    if reveal_main_after_picker_cancel(hidden, was_visible, idle, keep_hidden) {
         show_main_window(cx);
     }
+}
+
+fn reveal_main_after_picker_cancel(
+    hidden_for_picker: bool,
+    was_visible: bool,
+    idle: bool,
+    keep_hidden: bool,
+) -> bool {
+    hidden_for_picker && idle && (was_visible || !keep_hidden)
 }
 
 /// Close the overlays and disarm the cursor probe, leaving the main window's
@@ -8296,6 +8310,19 @@ mod tests {
         assert!(!reveal_main_after_editor_close(1, true, true));
         // Mid-recording the session observer owns the reveal, not this path.
         assert!(!reveal_main_after_editor_close(0, false, false));
+    }
+
+    #[test]
+    fn cancelling_a_picker_keeps_main_hidden_only_when_asked() {
+        // Default: a cancel reveals main even if the picker opened from another app.
+        assert!(reveal_main_after_picker_cancel(true, false, true, false));
+        assert!(reveal_main_after_picker_cancel(true, true, true, false));
+        // `keepMainHiddenOnCancel`: only a main window that was on screen comes back.
+        assert!(!reveal_main_after_picker_cancel(true, false, true, true));
+        assert!(reveal_main_after_picker_cancel(true, true, true, true));
+        // The picker never hid main, or a recording owns the foreground.
+        assert!(!reveal_main_after_picker_cancel(false, true, true, false));
+        assert!(!reveal_main_after_picker_cancel(true, true, false, false));
     }
 
     #[test]
