@@ -1,5 +1,10 @@
 #![cfg(target_os = "linux")]
 
+use std::{
+    io::{BufRead, BufReader},
+    process::{Child, Command, Stdio},
+};
+
 use scap_targets::{Display, Window, WindowId};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT,
@@ -10,10 +15,60 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
+struct Xvfb(Child);
+
+impl Xvfb {
+    fn start() -> Option<(Self, String)> {
+        let (reader, writer) = std::io::pipe().ok()?;
+        let child = Command::new("Xvfb")
+            .args([
+                "-displayfd",
+                "1",
+                "-screen",
+                "0",
+                "1280x720x24",
+                "-nolisten",
+                "tcp",
+            ])
+            .stdin(Stdio::null())
+            .stdout(writer)
+            .stderr(Stdio::null())
+            .spawn();
+        let child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("skipping X11 targets test: cannot start Xvfb: {error}");
+                return None;
+            }
+        };
+        let server = Self(child);
+        let mut line = String::new();
+        BufReader::new(reader)
+            .read_line(&mut line)
+            .expect("Xvfb display number");
+        let number: u32 = line.trim().parse().expect("Xvfb display number");
+        Some((server, format!(":{number}")))
+    }
+}
+
+impl Drop for Xvfb {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
-#[ignore = "requires an isolated X11 server, run with xvfb-run"]
 fn partially_offscreen_window_remains_a_recording_target() {
-    let (conn, screen_num) = x11rb::connect(None).unwrap();
+    let Some((_server, display)) = Xvfb::start() else {
+        return;
+    };
+    // SAFETY: this binary has one test, which sets the variables before calling scap_targets.
+    unsafe {
+        std::env::set_var("DISPLAY", &display);
+        std::env::set_var("XDG_SESSION_TYPE", "x11");
+    }
+    let (conn, screen_num) = x11rb::connect(Some(&display)).unwrap();
     let screen = &conn.setup().roots[screen_num];
     let id = conn.generate_id().unwrap();
     conn.create_window(
