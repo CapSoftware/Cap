@@ -6,6 +6,31 @@ export interface CaptureVideoFrameDeps {
 	quality?: number;
 }
 
+export const MAX_LIVE_THUMBNAIL_DRIFT_SECONDS = 1.5;
+
+export interface ShouldCaptureLiveThumbnailParams {
+	hoverTime: number;
+	currentTime: number;
+	maxDriftSeconds?: number;
+}
+
+/**
+ * Determines whether a live video element snapshot accurately reflects the hovered timeline time.
+ * Because HTMLVideoElement only holds decoded frame data for its active currentTime,
+ * snapshotting the element is only valid when hovering within close proximity of playback.
+ * Returning false for distant timestamps prevents displaying misleading frame snapshots.
+ */
+export function shouldCaptureLiveThumbnail({
+	hoverTime,
+	currentTime,
+	maxDriftSeconds = MAX_LIVE_THUMBNAIL_DRIFT_SECONDS,
+}: ShouldCaptureLiveThumbnailParams): boolean {
+	if (!Number.isFinite(hoverTime) || !Number.isFinite(currentTime)) {
+		return false;
+	}
+	return Math.abs(hoverTime - currentTime) <= maxDriftSeconds;
+}
+
 export function captureVideoFrameDataUrl(
 	deps: CaptureVideoFrameDeps,
 ): string | undefined {
