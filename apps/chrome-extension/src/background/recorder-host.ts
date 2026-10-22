@@ -20,7 +20,7 @@ const getRecorderContexts = async () => {
 				contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType],
 				documentUrls: [recorderUrl],
 			},
-			(contexts) => resolve(contexts),
+			(contexts) => resolve(contexts ?? []),
 		);
 	});
 };

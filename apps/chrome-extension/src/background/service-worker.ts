@@ -83,7 +83,6 @@ let mediaPermissionsCache: MediaPermissionSnapshot = {
 let uploadProgressTabId: number | null = null;
 let activePreviewTabId: number | null = null;
 let pendingPreviewTabId: number | null = null;
-let readyPreviewTabId: number | null = null;
 let browserWindowFocused = true;
 let externalCaptureAutoPipPending = false;
 let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
