@@ -3,6 +3,7 @@ use super::core::{
     combine_finish_errors, wait_for_blocking_thread_finish,
 };
 use super::frame_pacing::{FramePacer, Paced};
+use super::mjpeg::MjpegDecoder;
 use super::win::reference_video_frame;
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
@@ -830,6 +831,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                 let mut duplicated_frames = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
+                let mut mjpeg_decoder = MjpegDecoder::default();
                 const SLOW_THRESHOLD_MS: u128 = 5;
 
                 let normalize_timestamp =
@@ -848,10 +850,11 @@ impl WindowsFragmentedM4SCameraMuxer {
                      slow_convert_count: &mut u32,
                      slow_encode_count: &mut u32,
                      total_frames: &mut u64,
-                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>,
+                     mjpeg_decoder: &mut MjpegDecoder|
                      -> anyhow::Result<()> {
                         let convert_start = std::time::Instant::now();
-                        let ffmpeg_frame_result = camera_frame_to_ffmpeg(camera_frame);
+                        let ffmpeg_frame_result = camera_frame_to_ffmpeg(camera_frame, mjpeg_decoder);
                         let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
                         if convert_elapsed_ms > SLOW_THRESHOLD_MS {
@@ -949,6 +952,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                                             &mut slow_encode_count,
                                             &mut total_frames,
                                             &encoder_clone,
+                                            &mut mjpeg_decoder,
                                         ) {
                                             warn!("Failed to encode drained camera frame: {e}");
                                             break;
@@ -983,6 +987,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                         &mut slow_encode_count,
                         &mut total_frames,
                         &encoder_clone,
+                        &mut mjpeg_decoder,
                     ) {
                         error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
                         return Err(e);

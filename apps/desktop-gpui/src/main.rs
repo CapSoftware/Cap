@@ -60,6 +60,7 @@ mod picker_benchmark;
 mod picker_ui_benchmark;
 mod platform;
 mod presets;
+mod project_save;
 mod recording;
 mod screenshot;
 mod screenshot_annotations;
