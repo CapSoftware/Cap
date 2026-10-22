@@ -688,8 +688,7 @@ pub struct Feeds {
     pub camera: Option<SelectedCamera>,
     /// Selected microphone name.
     pub microphone: Option<String>,
-    /// Rolling 200ms max of the mic level, in dB FS. `-96` when silent/absent.
-    pub mic_level_db: f64,
+    mic_level: Entity<MicLevel>,
     mic_level_shown: Arc<std::sync::atomic::AtomicU64>,
     pub camera_error: Option<String>,
     camera_preview_parked: bool,
@@ -729,12 +728,34 @@ pub struct SelectedCamera {
 struct FeedsGlobal(Entity<Feeds>);
 impl Global for FeedsGlobal {}
 
+/// The live mic level: rolling 200ms max in dB FS, `-96` when absent. Kept
+/// out of `Feeds` because windows read device state from `Feeds` in render,
+/// so each of its notifies redraws them, and the level changes up to 20
+/// times a second.
+pub struct MicLevel {
+    db: f64,
+}
+
+impl MicLevel {
+    pub fn db(&self) -> f64 {
+        self.db
+    }
+
+    fn set(&mut self, db: f64, cx: &mut Context<Self>) {
+        if self.db != db {
+            self.db = db;
+            cx.notify();
+        }
+    }
+}
+
 impl Feeds {
     pub fn camera_input_pending(&self) -> bool {
         self.camera_input_pending
     }
 
     pub fn init(cx: &mut App) -> Entity<Self> {
+        let mic_level = cx.new(|_| MicLevel { db: -96.0 });
         let feeds = cx.new(|_| Self {
             camera_actor: None,
             camera_preview_sender: None,
@@ -754,7 +775,7 @@ impl Feeds {
             microphone_ready: None,
             camera: None,
             microphone: None,
-            mic_level_db: -96.0,
+            mic_level,
             mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
             camera_error: None,
             camera_preview_parked: false,
@@ -1126,7 +1147,7 @@ impl Feeds {
         self.microphone_error = None;
         self.mic_input_pending = label.is_some();
         self.mic_input_released = false;
-        self.set_mic_level(-96.0);
+        self.set_mic_level(-96.0, cx);
         let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
         let gate = self.mic_input_gate.clone();
@@ -1239,13 +1260,17 @@ impl Feeds {
             })
             .detach();
         }
-        self.set_mic_level(-96.0);
+        self.set_mic_level(-96.0, cx);
         cx.notify();
     }
 
-    fn set_mic_level(&mut self, db: f64) {
-        self.mic_level_db = db;
+    pub fn mic_level(&self) -> &Entity<MicLevel> {
+        &self.mic_level
+    }
+
+    fn set_mic_level(&mut self, db: f64, cx: &mut Context<Self>) {
         self.mic_level_shown.store(db.to_bits(), Ordering::Release);
+        self.mic_level.update(cx, |level, cx| level.set(db, cx));
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
@@ -1370,20 +1395,11 @@ impl Feeds {
             let _meter = meter;
             while wakes.recv_async().await.is_ok() {
                 let level = f64::from_bits(latest.load(Ordering::Acquire));
-                let changed = this.update(cx, |this: &mut Feeds, cx| {
-                    if this.mic_level_db == level {
-                        return false;
-                    }
-                    this.set_mic_level(level);
-                    cx.notify();
-                    true
-                });
-                match changed {
-                    Err(_) => return,
-                    Ok(true) => {
-                        cx.update(app_windows::refresh_controls_window);
-                    }
-                    Ok(false) => {}
+                if this
+                    .update(cx, |this: &mut Feeds, cx| this.set_mic_level(level, cx))
+                    .is_err()
+                {
+                    return;
                 }
             }
         });
@@ -1458,6 +1474,10 @@ pub(crate) fn camera_preview_image(
     Some((image, (width, height)))
 }
 
+/// The quietest level any meter draws: `bar_level` bottoms out at -60 dB and
+/// `picker_level` at -40 dB, so anything below looks identical everywhere.
+const METER_FLOOR_DB: f64 = -60.0;
+
 /// A 200ms max-hold window, coalesced to ~20 updates/s and quantized to
 /// 0.5dB (under a pixel on both level mappings).
 #[derive(Default)]
@@ -1501,6 +1521,7 @@ impl MeterSender {
         let Some(level) = self.window.push(now, db) else {
             return;
         };
+        let level = level.max(METER_FLOOR_DB);
         self.latest.store(level.to_bits(), Ordering::Release);
         if level.to_bits() != self.shown.load(Ordering::Acquire) {
             let _ = self.wake.try_send(());
@@ -1698,6 +1719,44 @@ mod tests {
             sender.push(at(callback), -30.0);
         }
         assert!(wakes.try_recv().is_err());
+    }
+
+    #[test]
+    fn input_below_every_meter_floor_never_wakes_the_ui() {
+        use std::sync::atomic::AtomicU64;
+
+        let shown = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let latest = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let (wake, wakes) = flume::bounded(1);
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
+        let start = Instant::now();
+        let at = |callback: u64| start + Duration::from_micros(callback * 10_667);
+
+        sender.push(at(0), -72.0);
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert_eq!(
+            f64::from_bits(latest.load(Ordering::Acquire)),
+            METER_FLOOR_DB
+        );
+
+        shown.store(METER_FLOOR_DB.to_bits(), Ordering::Release);
+        for callback in 1..400 {
+            let db = -96.0 + (callback % 7) as f64 * 5.0;
+            sender.push(at(callback), db);
+        }
+        assert!(wakes.try_recv().is_err());
+
+        sender.push(at(400), -42.0);
+        sender.push(at(410), -42.0);
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert_eq!(f64::from_bits(latest.load(Ordering::Acquire)), -42.0);
+        assert_eq!(picker_level(METER_FLOOR_DB), picker_level(-96.0));
+        assert_eq!(bar_level(METER_FLOOR_DB), bar_level(-96.0));
     }
 
     #[test]

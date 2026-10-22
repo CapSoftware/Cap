@@ -6356,23 +6356,6 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
-/// Repaint the bar between its once-a-second ticks -- the mic meter updates at
-/// up to ~20Hz and the bar is never the active window.
-pub fn refresh_controls_window(cx: &mut App) {
-    let level_db = crate::feeds::Feeds::global(cx).read(cx).mic_level_db;
-    if let Some(handle) = cx.global::<AppWindows>().controls {
-        handle
-            .update(cx, |controls, window, cx| {
-                if !controls.level_bar_moves(level_db, window.scale_factor()) {
-                    return;
-                }
-                cx.notify();
-                window.refresh();
-            })
-            .ok();
-    }
-}
-
 fn camera_window_number(cx: &mut App) -> Option<isize> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
