@@ -1846,20 +1846,20 @@ mod digital_silence_tests {
         assert_eq!(count_nonzero_samples(&empty), None);
     }
 
-    struct CountingMuxer(Arc<AtomicU64>);
+    struct SinkMuxer;
 
-    impl Muxer for CountingMuxer {
-        type Config = Arc<AtomicU64>;
+    impl Muxer for SinkMuxer {
+        type Config = ();
 
         async fn setup(
-            counter: Arc<AtomicU64>,
+            _: (),
             _: std::path::PathBuf,
             _: Option<cap_media_info::VideoInfo>,
             _: Option<AudioInfo>,
             _: Arc<AtomicBool>,
             _: &mut TaskPool,
         ) -> anyhow::Result<Self> {
-            Ok(Self(counter))
+            Ok(Self)
         }
 
         fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -1867,71 +1867,92 @@ mod digital_silence_tests {
         }
     }
 
-    impl AudioMuxer for CountingMuxer {
-        fn send_audio_frame(&mut self, frame: AudioFrame, _: Duration) -> anyhow::Result<()> {
-            self.0
-                .fetch_add(frame.inner.samples() as u64, Ordering::Release);
+    impl AudioMuxer for SinkMuxer {
+        fn send_audio_frame(&mut self, _: AudioFrame, _: Duration) -> anyhow::Result<()> {
             Ok(())
         }
     }
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Reported {
         DigitalSilence,
         Restarted,
     }
 
-    async fn record_through_feed(segments: &[(&[f32], u32)]) -> (Option<u32>, Vec<Reported>) {
+    enum Push<'a> {
+        Samples(&'a [f32], u32),
+        EmptyCallbacks(u32),
+    }
+
+    // Synchronizes on the source's own health events rather than on what the
+    // muxer accepted: downstream timing stages may drop frames whose
+    // timestamps run ahead of the wall clock, but the detector sits upstream.
+    async fn record_through_feed(pushes: &[Push<'_>], expected: &[Reported]) -> Option<u32> {
         let mic = SyntheticMicrophone::spawn("voip-held-input", RATE, 1);
         let lock = Arc::new(mic.lock().await.unwrap());
-        let muxed = Arc::new(AtomicU64::new(0));
         let temp = tempfile::tempdir().unwrap();
         let mut pipeline = OutputPipeline::builder(temp.path().join("audio-input.ogg"))
             .with_audio_source::<Microphone>(lock.clone())
-            .build::<CountingMuxer>(muxed.clone())
+            .build::<SinkMuxer>(())
             .await
             .unwrap();
         let mut health = pipeline.take_health_rx().unwrap();
+        let wanted = expected.len();
+        let collector = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while seen.len() < wanted {
+                match health.recv().await {
+                    Some(PipelineHealthEvent::MicrophoneDigitalSilence) => {
+                        seen.push(Reported::DigitalSilence)
+                    }
+                    Some(PipelineHealthEvent::SourceRestarted) => seen.push(Reported::Restarted),
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            seen
+        });
 
         let start = Instant::now();
         let mut pushed_samples: u64 = 0;
-        for (samples, seconds) in segments {
-            let chunks = RATE as usize / samples.len() * *seconds as usize;
-            for _ in 0..chunks {
-                let at = start + Duration::from_secs_f64(pushed_samples as f64 / f64::from(RATE));
-                mic.push(samples, Timestamp::Instant(at)).await;
-                pushed_samples += samples.len() as u64;
-                tokio::task::yield_now().await;
-            }
-        }
-
-        let expected = pushed_samples * 9 / 10;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while muxed.load(Ordering::Acquire) < expected {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("the forwarded samples never reached the muxer");
-
-        let finished = pipeline.stop().await.unwrap();
-        let mut reported = Vec::new();
-        while let Ok(event) = health.try_recv() {
-            match event {
-                PipelineHealthEvent::MicrophoneDigitalSilence => {
-                    reported.push(Reported::DigitalSilence)
+        for push in pushes {
+            match push {
+                Push::Samples(samples, seconds) => {
+                    let chunks = RATE as usize / samples.len() * *seconds as usize;
+                    for _ in 0..chunks {
+                        let at = start
+                            + Duration::from_secs_f64(pushed_samples as f64 / f64::from(RATE));
+                        mic.push(samples, Timestamp::Instant(at)).await;
+                        pushed_samples += samples.len() as u64;
+                        tokio::task::yield_now().await;
+                    }
                 }
-                PipelineHealthEvent::SourceRestarted => reported.push(Reported::Restarted),
-                _ => {}
+                Push::EmptyCallbacks(count) => {
+                    for _ in 0..*count {
+                        let at = start
+                            + Duration::from_secs_f64(pushed_samples as f64 / f64::from(RATE));
+                        mic.push(&[], Timestamp::Instant(at)).await;
+                        tokio::task::yield_now().await;
+                    }
+                }
             }
         }
-        (finished.digital_silence_ms, reported)
+
+        let seen = tokio::time::timeout(Duration::from_secs(20), collector)
+            .await
+            .expect("the source never reported the expected health events")
+            .unwrap();
+        assert_eq!(seen, expected);
+        pipeline.stop().await.unwrap().digital_silence_ms
     }
 
     #[tokio::test]
     async fn all_zero_frames_through_the_feed_surface_on_stop() {
-        let (digital_silence_ms, reported) = record_through_feed(&[(&[0.0; 4_800], 8)]).await;
-        assert_eq!(reported, vec![Reported::DigitalSilence]);
+        let digital_silence_ms = record_through_feed(
+            &[Push::Samples(&[0.0; 4_800], 8)],
+            &[Reported::DigitalSilence],
+        )
+        .await;
         assert!(
             digital_silence_ms.is_some_and(|ms| ms >= 5_000),
             "expected the stop result to carry the silent span, got {digital_silence_ms:?}"
@@ -1940,51 +1961,36 @@ mod digital_silence_tests {
 
     #[tokio::test]
     async fn quiet_room_through_the_feed_reports_nothing() {
-        let (digital_silence_ms, reported) = record_through_feed(&[(&quiet_room(4_800), 8)]).await;
-        assert!(reported.is_empty());
-        assert_eq!(digital_silence_ms, None);
+        let room = quiet_room(4_800);
+        let digital_silence_ms = record_through_feed(
+            &[Push::Samples(&room, 8), Push::Samples(&[0.0; 4_800], 6)],
+            &[Reported::DigitalSilence],
+        )
+        .await;
+        assert!(
+            digital_silence_ms.is_some_and(|ms| (5_000..=6_000).contains(&ms)),
+            "only the trailing zeros may count, got {digital_silence_ms:?}"
+        );
     }
 
     #[tokio::test]
     async fn real_audio_after_the_call_clears_the_live_warning() {
-        let (digital_silence_ms, reported) =
-            record_through_feed(&[(&[0.0; 4_800], 6), (&quiet_room(4_800), 2)]).await;
-        assert_eq!(
-            reported,
-            vec![Reported::DigitalSilence, Reported::Restarted]
-        );
+        let room = quiet_room(4_800);
+        let digital_silence_ms = record_through_feed(
+            &[Push::Samples(&[0.0; 4_800], 6), Push::Samples(&room, 2)],
+            &[Reported::DigitalSilence, Reported::Restarted],
+        )
+        .await;
         assert_eq!(digital_silence_ms, Some(6_000));
     }
 
     #[tokio::test]
     async fn empty_device_callbacks_do_not_stop_the_forwarder() {
-        let mic = SyntheticMicrophone::spawn("empty-callbacks", RATE, 1);
-        let lock = Arc::new(mic.lock().await.unwrap());
-        let muxed = Arc::new(AtomicU64::new(0));
-        let temp = tempfile::tempdir().unwrap();
-        let mut pipeline = OutputPipeline::builder(temp.path().join("audio-input.ogg"))
-            .with_audio_source::<Microphone>(lock.clone())
-            .build::<CountingMuxer>(muxed.clone())
-            .await
-            .unwrap();
-        let _health = pipeline.take_health_rx();
-
-        let start = Instant::now();
-        let room = quiet_room(4_800);
-        for i in 0..20u64 {
-            let at = start + Duration::from_millis(i * 100);
-            mic.push(&[], Timestamp::Instant(at)).await;
-            mic.push(&room, Timestamp::Instant(at)).await;
-            tokio::task::yield_now().await;
-        }
-
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while muxed.load(Ordering::Acquire) < u64::from(RATE) {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("real audio after empty callbacks never reached the muxer");
-        pipeline.stop().await.unwrap();
+        let digital_silence_ms = record_through_feed(
+            &[Push::EmptyCallbacks(50), Push::Samples(&[0.0; 4_800], 6)],
+            &[Reported::DigitalSilence],
+        )
+        .await;
+        assert!(digital_silence_ms.is_some_and(|ms| ms >= 5_000));
     }
 }
