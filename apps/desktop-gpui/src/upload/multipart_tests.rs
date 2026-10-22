@@ -592,7 +592,9 @@ fn fast_local_profile() -> mock_network::Profile {
 
 #[tokio::test]
 async fn drive_urls_without_a_drive_initiate_are_put_in_order_with_content_range() {
-    let export = TempExport::new(&export_bytes(4500));
+    const CHUNK: usize = 6 * 1024 * 1024;
+    const SIZE: usize = 2 * CHUNK + 123;
+    let export = TempExport::new(&export_bytes(SIZE));
     let server = mock_network::start(fast_local_profile());
     let transport = MockPartTransport {
         addr: server.addr,
@@ -606,36 +608,32 @@ async fn drive_urls_without_a_drive_initiate_are_put_in_order_with_content_range
         )),
         drive_urls: true,
     };
-    let (result, progress) = run(&transport, &export, 1000, &AtomicBool::new(false), None).await;
+    let (result, progress) = run(
+        &transport,
+        &export,
+        chunk_size_for(601 * 1024 * 1024),
+        &AtomicBool::new(false),
+        None,
+    )
+    .await;
     let parts = result.unwrap();
     assert_eq!(
         parts
             .iter()
             .map(|part| (part.part_number, part.size))
             .collect::<Vec<_>>(),
-        [(1, 1000), (2, 1000), (3, 1000), (4, 1000), (5, 500)]
+        [(1, CHUNK), (2, CHUNK), (3, 123)]
     );
     assert_eq!(
         *server.recorded.puts.lock().unwrap(),
         [
-            (1, Some("bytes 0-999/4500".to_string())),
-            (2, Some("bytes 1000-1999/4500".to_string())),
-            (3, Some("bytes 2000-2999/4500".to_string())),
-            (4, Some("bytes 3000-3999/4500".to_string())),
-            (5, Some("bytes 4000-4499/4500".to_string())),
+            (1, Some(format!("bytes 0-{}/{SIZE}", CHUNK - 1))),
+            (2, Some(format!("bytes {CHUNK}-{}/{SIZE}", 2 * CHUNK - 1))),
+            (3, Some(format!("bytes {}-{}/{SIZE}", 2 * CHUNK, SIZE - 1))),
         ]
     );
     assert_eq!(server.recorded.max_active_puts.load(Ordering::Acquire), 1);
-    assert_eq!(
-        progress,
-        [
-            1000.0 / 4500.0,
-            2000.0 / 4500.0,
-            3000.0 / 4500.0,
-            4000.0 / 4500.0,
-            0.99
-        ]
-    );
+    assert_eq!(progress, [CHUNK as f64 / SIZE as f64, 0.99, 0.99]);
 }
 
 #[tokio::test]

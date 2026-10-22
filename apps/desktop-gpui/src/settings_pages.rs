@@ -20,12 +20,12 @@ use std::{
     time::Duration,
 };
 
+use cap_cli_install as cli_install;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, rgb, svg,
 };
-use cap_cli_install as cli_install;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 

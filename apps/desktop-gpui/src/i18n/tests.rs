@@ -322,6 +322,14 @@ fn english_matches_the_literals_it_replaced() {
             "\"studio\", \"instant\", or \"screenshot\"".into(),
         ),
         (
+            tr::settings::general::project_name::placeholders::random(),
+            "Random".into(),
+        ),
+        (
+            tr::settings::general::project_name::placeholders::random_values(),
+            "10 filename-safe hexadecimal characters; use {random:N} for 1–32.".into(),
+        ),
+        (
             tr::settings::general::project_name::placeholders::recording_mode(),
             "Recording mode".into(),
         ),
