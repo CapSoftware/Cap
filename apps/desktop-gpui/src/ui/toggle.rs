@@ -6,7 +6,8 @@
 
 use gpui::{
     App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
 };
 
 use super::keyboard_nav;
@@ -55,6 +56,7 @@ pub struct Toggle {
     /// `bg-white` -- the thumb is white on every surface.
     thumb: Hsla,
     disabled: bool,
+    label: Option<SharedString>,
     on_click: Option<crate::ui::button::ClickHandler>,
 }
 
@@ -69,6 +71,7 @@ impl Toggle {
             on_fill: Hsla::from(theme.editor.accent),
             thumb: gpui::white(),
             disabled: false,
+            label: None,
             on_click: None,
         }
     }
@@ -116,6 +119,11 @@ impl Toggle {
         self
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -135,6 +143,7 @@ impl RenderOnce for Toggle {
             on_fill,
             thumb,
             disabled,
+            label,
             on_click,
         } = self;
         let (width, height, padding) = size.track();
@@ -151,6 +160,7 @@ impl RenderOnce for Toggle {
             } else {
                 gpui::Toggled::False
             })
+            .when_some(label, |this, label| this.aria_label(label))
             .w(width)
             .h(height)
             .p(padding)

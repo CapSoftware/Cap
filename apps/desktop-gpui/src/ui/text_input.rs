@@ -75,6 +75,7 @@ use gpui::{
 use smallvec::SmallVec;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::keyboard_nav;
 use crate::theme::Theme;
 
 // -- Actions and key bindings -------------------------------------------------
@@ -1882,6 +1883,7 @@ impl RenderOnce for TextInput {
             .id(self.id.clone())
             .key_context(KEY_CONTEXT)
             .track_focus(&focus)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .relative()
             .flex()
             .flex_row()

@@ -3068,6 +3068,7 @@ impl SettingsWindow {
                         // The row is the *inverse* of the stored key.
                         self.toggle(
                             "hide-dock-icon",
+                            "Always show dock icon",
                             !self.settings.hide_dock_icon,
                             cx,
                             |this, cx| {
@@ -3091,6 +3092,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "enable-notifications",
+                            "System notifications",
                             self.settings.enable_notifications,
                             cx,
                             |this, cx| {
@@ -3150,6 +3152,7 @@ impl SettingsWindow {
                             Some("Open the link in your browser when an upload finishes."),
                             self.toggle(
                                 "auto-open-links",
+                                "Open share links automatically",
                                 !self.settings.disable_auto_open_links,
                                 cx,
                                 |this, cx| {
@@ -3432,6 +3435,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "confirm-without-mic",
+                            "Confirm before recording without a microphone",
                             settings.confirm_without_microphone,
                             cx,
                             |this, cx| {
@@ -3458,6 +3462,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "studio-sound-default",
+                            "Studio Sound on new recordings",
                             settings.studio_sound_by_default,
                             cx,
                             |this, cx| {
@@ -3502,6 +3507,7 @@ impl SettingsWindow {
                         Some("Cap removes the local file once it has uploaded successfully."),
                         self.toggle(
                             "delete-after-upload",
+                            "Delete Instant recordings after upload",
                             settings.delete_instant_recordings_after_upload,
                             cx,
                             |this, cx| {
@@ -3521,6 +3527,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "crash-recovery",
+                            "Crash-recoverable recording",
                             settings.crash_recovery_recording,
                             cx,
                             |this, cx| {
@@ -3540,6 +3547,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "custom-cursor",
+                            "Custom cursor capture (Studio)",
                             settings.custom_cursor_capture,
                             cx,
                             |this, cx| {
@@ -3557,11 +3565,18 @@ impl SettingsWindow {
                             "Automatically add zoom segments around mouse clicks in Studio \
                              recordings.",
                         ),
-                        self.toggle("auto-zoom", settings.auto_zoom_on_clicks, cx, |this, cx| {
-                            this.settings.auto_zoom_on_clicks = !this.settings.auto_zoom_on_clicks;
-                            let value = this.settings.auto_zoom_on_clicks;
-                            this.write_bool("autoZoomOnClicks", value, cx);
-                        })
+                        self.toggle(
+                            "auto-zoom",
+                            "Auto zoom on clicks",
+                            settings.auto_zoom_on_clicks,
+                            cx,
+                            |this, cx| {
+                                this.settings.auto_zoom_on_clicks =
+                                    !this.settings.auto_zoom_on_clicks;
+                                let value = this.settings.auto_zoom_on_clicks;
+                                this.write_bool("autoZoomOnClicks", value, cx);
+                            },
+                        )
                         .into_any_element(),
                     ),
                     self.setting_row(
@@ -3590,6 +3605,7 @@ impl SettingsWindow {
                         Some("Record key presses so you can add keyboard overlays in the editor."),
                         self.toggle(
                             "capture-keyboard",
+                            "Capture keyboard presses",
                             settings.capture_keyboard_events,
                             cx,
                             |this, cx| {
@@ -3611,6 +3627,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "notch-overlay",
+                            "Draw the MacBook notch on screen recordings",
                             settings.macbook_notch_overlay,
                             cx,
                             |this, cx| {
@@ -4290,6 +4307,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "telemetry",
+                            "Share anonymous telemetry",
                             self.settings.enable_telemetry,
                             cx,
                             |this, cx| {
@@ -4358,11 +4376,13 @@ impl SettingsWindow {
     pub(crate) fn toggle(
         &self,
         id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> ui::Toggle {
         ui::Toggle::settings(&self.theme, id, checked)
+            .label(label)
             .on_click(cx.listener(move |this, _, _window, cx| on_change(this, cx)))
     }
 

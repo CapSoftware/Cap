@@ -152,8 +152,7 @@ fn settings_shortcut_allowed(idle: bool, onboarding_open: bool, hotkeys_paused: 
 /// The menu bar model.
 ///
 /// One-to-one with `build_macos_app_menu`, including the empty Help submenu
-/// (`Submenu::with_id_and_items(.., HELP_SUBMENU_ID, "Help", true, &[])`),
-/// plus the standard Settings… item the Tauri menu never had.
+/// (`Submenu::with_id_and_items(.., HELP_SUBMENU_ID, "Help", true, &[])`).
 pub fn build_menus() -> Vec<Menu> {
     vec![
         Menu {
