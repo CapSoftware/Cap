@@ -646,6 +646,25 @@ describe("nvenc jobs on hosts without an NVENC device", () => {
 		}
 	}
 
+	test("does not start the encoder once the job is cancelled", async () => {
+		const metadata = await probeVideo(`file://${fixture}`);
+		const attempts = getVideoEncoderStatus(enabled).nvenc?.attempts ?? 0;
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			withNvencEnv(() =>
+				processVideo(
+					fixture,
+					metadata,
+					{ maxWidth: 160, maxHeight: 120 },
+					undefined,
+					controller.signal,
+				),
+			),
+		).rejects.toThrow("Video processing was cancelled");
+		expect(getVideoEncoderStatus(enabled).nvenc?.attempts ?? 0).toBe(attempts);
+	});
+
 	test("still produces the transcode", async () => {
 		const metadata = await probeVideo(`file://${fixture}`);
 		const attempts = getVideoEncoderStatus(enabled).nvenc?.attempts ?? 0;

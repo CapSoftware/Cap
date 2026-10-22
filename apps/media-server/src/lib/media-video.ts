@@ -1808,6 +1808,7 @@ async function runTranscodeCommand(
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
+	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
 		spawn({
 			cmd: ffmpegArgs,
