@@ -1382,7 +1382,7 @@ mod tests {
         10.0 * (255.0_f64.powi(2) * screen.as_raw().len() as f64 / squared).log10()
     }
 
-    /// `screen` as a recording would hand it over: limited-range 4:2:0.
+    /// `screen` as a recording would hand it over: limited-range BT.709 4:2:0.
     fn recorded_frame(screen: &image::RgbImage) -> ffmpeg::frame::Video {
         let (width, height) = screen.dimensions();
         let mut rgb = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGB24, width, height);
@@ -1394,8 +1394,7 @@ mod tests {
         {
             row[..pixels.len()].copy_from_slice(pixels);
         }
-        let mut frame = ffmpeg::frame::Video::empty();
-        ffmpeg::software::scaling::context::Context::get(
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
             ffmpeg::format::Pixel::RGB24,
             width,
             height,
@@ -1404,9 +1403,25 @@ mod tests {
             height,
             ffmpeg::software::scaling::flag::Flags::BILINEAR,
         )
-        .unwrap()
-        .run(&rgb, &mut frame)
         .unwrap();
+        unsafe {
+            let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+            let set = ffmpeg::ffi::sws_setColorspaceDetails(
+                scaler.as_mut_ptr(),
+                bt709,
+                1,
+                bt709,
+                0,
+                0,
+                1 << 16,
+                1 << 16,
+            );
+            assert!(set >= 0);
+        }
+        let mut frame = ffmpeg::frame::Video::empty();
+        scaler.run(&rgb, &mut frame).unwrap();
+        frame.set_color_space(ffmpeg::color::Space::BT709);
+        frame.set_color_range(ffmpeg::color::Range::MPEG);
         frame
     }
 
