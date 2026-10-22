@@ -341,7 +341,7 @@ fn run(
         drop(output);
         if index >= WARMUP_FRAMES {
             convert_ms.push(converted.as_secs_f64() * 1000.0);
-            process_ms.push((elapsed - converted).as_secs_f64() * 1000.0);
+            process_ms.push(elapsed.saturating_sub(converted).as_secs_f64() * 1000.0);
             worker_cpu_ms.push(cpu as f64 / 1e6);
             if let Some(status) = worker.processor.output_status()
                 && let BlurMaskStatus::Ready(receipt) = status.mask
