@@ -1038,6 +1038,26 @@ const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
     ),
 ];
 
+/// `keepMainHiddenOnCancel`, phrased as what cancelling a picker does.
+const CANCEL_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: "Show Cap",
+            hint: "Back to the recorder",
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/eye-off.svg",
+            label: "Stay hidden",
+            hint: "Unless Cap was open",
+        },
+    ),
+];
+
 fn shortcut_label(action: &str) -> &'static str {
     match action {
         "screenshotArea" => "Screenshot an area",
@@ -1536,6 +1556,30 @@ impl SettingsWindow {
             ),
         );
 
+        let cancel = vec![
+            self.render_outcome_panel(
+                "outcome-cancel",
+                "When you cancel",
+                "Esc or closing the picker",
+                &CANCEL_OUTCOMES
+                    .iter()
+                    .map(|(keep_hidden, option)| {
+                        (
+                            *option,
+                            *keep_hidden == self.settings.keep_main_hidden_on_cancel,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((keep_hidden, _)) = CANCEL_OUTCOMES.get(index) {
+                        this.settings.keep_main_hidden_on_cancel = *keep_hidden;
+                        this.write_bool("keepMainHiddenOnCancel", *keep_hidden, cx);
+                    }
+                },
+                cx,
+            ),
+        ];
+
         let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
@@ -1564,6 +1608,13 @@ impl SettingsWindow {
                 Some("Start a recording without opening Cap first."),
                 None,
                 vec![card("shortcuts-recording", recording, cx)],
+            )
+            .into_any_element(),
+            self.section(
+                "Cancelling",
+                Some("For screenshots and recordings started from a shortcut or the tray."),
+                None,
+                vec![card("shortcuts-cancel", cancel, cx)],
             )
             .into_any_element(),
             self.section(
