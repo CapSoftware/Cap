@@ -675,6 +675,7 @@ impl RecordingSession {
             self.clean_control.invalidate();
             self.clean_control.uncertain = false;
         }
+        crate::network_health::recording_admitted();
         self.phase = Phase::Starting;
         self.error = None;
         self.storage_warning = false;
@@ -1700,6 +1701,7 @@ impl RecordingSession {
         {
             self.failure_monitor = None;
         }
+        crate::network_health::recording_admitted();
         self.phase = Phase::Starting;
         self.started_at = None;
         cx.notify();
@@ -1950,6 +1952,7 @@ impl RecordingSession {
         self.storage_monitor = None;
         self.countdown_remaining = None;
         self.phase = Phase::Idle;
+        crate::network_health::recording_released();
         self.mic_muted = false;
         self.storage_warning = false;
         self.stopped_elapsed = None;

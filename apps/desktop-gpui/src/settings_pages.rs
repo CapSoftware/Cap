@@ -20,12 +20,12 @@ use std::{
     time::Duration,
 };
 
+use cap_cli_install as cli_install;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, rgb, svg,
 };
-use cap_cli_install as cli_install;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -4543,6 +4543,7 @@ impl SettingsWindow {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
                         this.info_dialog("S3 configuration saved successfully", window, cx);
+                        crate::network_health::invalidate();
                     }
                     _ => this.pages.s3.error = Some("Failed to save S3 config".to_string()),
                 }
@@ -4579,6 +4580,7 @@ impl SettingsWindow {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
                         this.info_dialog("S3 configuration deleted successfully", window, cx);
+                        crate::network_health::invalidate();
                     }
                     _ => this.pages.s3.error = Some("Failed to delete S3 config".to_string()),
                 }
@@ -4775,6 +4777,7 @@ impl SettingsWindow {
                                 this.pages.storage = Some(parsed);
                             }
                             if connected {
+                                crate::network_health::invalidate();
                                 this.pages.gdrive.waiting = false;
                                 this.gdrive_fetch_s3_presence(window, cx);
                             }
@@ -4892,7 +4895,10 @@ impl SettingsWindow {
             |this, result, window, cx| {
                 this.pages.gdrive.set_active_pending = false;
                 match result {
-                    Ok((200, _)) => this.gdrive_refresh(window, cx),
+                    Ok((200, _)) => {
+                        crate::network_health::invalidate();
+                        this.gdrive_refresh(window, cx);
+                    }
                     _ => {
                         this.pages.gdrive.error =
                             Some("Failed to update active storage provider".to_string())
@@ -4934,6 +4940,7 @@ impl SettingsWindow {
                     Ok((200, _)) => {
                         this.gdrive_refresh(window, cx);
                         this.info_dialog("Google Drive disconnected", window, cx);
+                        crate::network_health::invalidate();
                     }
                     _ => {
                         this.pages.gdrive.error =

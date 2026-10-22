@@ -1994,6 +1994,7 @@ async fn start_internal(
     config: StartConfig,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
+    crate::network_health::wait_for_probe().await;
     #[cfg(target_os = "linux")]
     validate_linux_camera_request(
         config.mode,
@@ -2224,6 +2225,11 @@ async fn start_attempt_with_upload(
         settings.instant_mode_max_resolution
     } else {
         cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+    };
+    let instant_max_resolution = if config.mode == RecordingMode::Instant {
+        crate::network_health::max_width(instant_max_resolution)
+    } else {
+        instant_max_resolution
     };
 
     #[cfg(target_os = "macos")]
