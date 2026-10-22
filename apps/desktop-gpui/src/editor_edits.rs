@@ -437,7 +437,6 @@ pub fn trim_start_bounds(
 }
 
 /// `SegmentHandle position="end"`'s setup (`TL/MaskTrack.tsx:499-508`):
-/// `minValue = start + minDuration`, `maxValue = max(minValue, nextStart)`.
 pub fn trim_end_bounds(
     segments: &[Segment],
     lane: u32,
@@ -446,11 +445,11 @@ pub fn trim_end_bounds(
     total: f64,
 ) -> DragBounds {
     let (_, next_start) = neighbours(segments, lane, index, total);
-    let min = segments[index].start + min_duration;
-    DragBounds {
-        min,
-        max: min.max(next_start),
-    }
+    let max = next_start.max(segments[index].end);
+    let min = (segments[index].start + min_duration)
+        .min(segments[index].end)
+        .min(max);
+    DragBounds { min, max }
 }
 
 pub fn audio_trim_start_bounds(segment: &AudioTrackSegment, bounds: DragBounds) -> DragBounds {
@@ -3187,6 +3186,58 @@ mod tests {
         assert_eq!(bounds.min, 0.);
         assert_eq!(bounds.max, 0., "pinned, not inverted");
         assert_eq!(bounds.clamp(4.), 0.);
+    }
+
+    #[test]
+    fn zoom_end_resize_cannot_cross_a_neighbour_when_zoomed_out() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.zoom_segments[1].start = 6.;
+        let model = TimelineModel::build(&project, false, false);
+        let zoom = segments(&model, TrackKind::Zoom);
+        let floor = min_segment_duration(TrackKind::Zoom, 0.2);
+        let bounds = trim_end_bounds(&zoom, 0, 0, floor, 30.);
+
+        assert_eq!(bounds, DragBounds { min: 5., max: 6. });
+        let timeline = project.timeline.as_mut().unwrap();
+        set_segment_end(timeline, TrackKind::Zoom, 0, bounds.clamp(4.));
+        assert_eq!(timeline.zoom_segments[0].end, 5.);
+        for requested_end in [5.5, 12.] {
+            set_segment_end(timeline, TrackKind::Zoom, 0, bounds.clamp(requested_end));
+            assert!(timeline.zoom_segments[0].end <= timeline.zoom_segments[1].start);
+        }
+    }
+
+    #[test]
+    fn zoom_end_resize_cannot_cross_the_timeline_end_when_zoomed_out() {
+        let mut project = zoom_fixture();
+        let model = TimelineModel::build(&project, false, false);
+        let zoom = segments(&model, TrackKind::Zoom);
+        let floor = min_segment_duration(TrackKind::Zoom, 0.5);
+        let bounds = trim_end_bounds(&zoom, 0, 1, floor, 30.);
+
+        assert_eq!(bounds, DragBounds { min: 24., max: 30. });
+        let timeline = project.timeline.as_mut().unwrap();
+        for requested_end in [23., 28., 40.] {
+            set_segment_end(timeline, TrackKind::Zoom, 1, bounds.clamp(requested_end));
+            assert!(timeline.zoom_segments[1].end <= timeline.duration());
+        }
+    }
+
+    #[test]
+    fn zoom_end_resize_preserves_a_range_left_beyond_a_shortened_timeline() {
+        let mut project = zoom_fixture();
+        project.timeline.as_mut().unwrap().segments[0].end = 10.;
+        let model = TimelineModel::build(&project, false, false);
+        let zoom = segments(&model, TrackKind::Zoom);
+        let floor = min_segment_duration(TrackKind::Zoom, 0.2);
+        let bounds = trim_end_bounds(&zoom, 0, 1, floor, 10.);
+
+        for requested_end in [8., 22., 30.] {
+            let end = bounds.clamp(requested_end);
+            assert!(end >= zoom[1].start);
+            assert!(end <= zoom[1].end);
+        }
     }
 
     // -- Clip trim ----------------------------------------------------------
