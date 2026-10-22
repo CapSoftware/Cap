@@ -289,6 +289,8 @@ export async function generateMetadata(
 							videoId,
 							name: video.name,
 							sourceType: video.source.type,
+							width: Option.getOrNull(video.width),
+							height: Option.getOrNull(video.height),
 							webUrl,
 							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
