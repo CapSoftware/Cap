@@ -1069,9 +1069,16 @@ mod tests {
         assert!(parse_window_replies(offscreen, &displays, &|_| None).is_none());
     }
 
+    fn lock_shared_x11_display() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     #[ignore = "needs an X server; run under Xvfb"]
     fn snapshot_matches_per_field_queries() {
+        let _x11_display = lock_shared_x11_display();
         let (conn, screen_num) = x11rb::connect(None).expect("X11 connection");
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
@@ -1210,6 +1217,7 @@ mod tests {
     #[test]
     #[ignore = "needs an X server; run under Xvfb"]
     fn stale_client_list_falls_back_to_the_window_tree() {
+        let _x11_display = lock_shared_x11_display();
         let (conn, screen_num) = x11rb::connect(None).expect("X11 connection");
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
