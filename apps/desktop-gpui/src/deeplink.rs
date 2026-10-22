@@ -430,6 +430,7 @@ impl DeepLinkAction {
                                     #[cfg(target_os = "linux")]
                                     linux_instant_camera: None,
                                     start_gate: None,
+                                    start_cancel: None,
                                 },
                                 permit.clone(),
                                 cx,

@@ -59,6 +59,10 @@ pub struct StartConfig {
     /// When set, the pipeline is primed behind this gate and records nothing
     /// until the session arms it at the end of the start cue.
     pub start_gate: Option<cap_recording::RecordingStartGate>,
+    /// Notified when the session cancels this start. A macOS Instant start
+    /// checks it while the shareable link is still pending behind a built
+    /// capture, and discards the capture instead of waiting for the link.
+    pub start_cancel: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -2020,24 +2024,22 @@ async fn start_internal(
         .filter(|organization| !organization.is_empty())
         .map(str::to_string);
 
-    let pre_created_video = if config.mode == RecordingMode::Instant {
-        Some(
-            crate::upload::prepare_instant_upload(
-                matches!(config.target, ScreenCaptureTarget::CameraOnly),
-                project_name,
-                organization_id,
-            )
-            .await
-            .map_err(anyhow::Error::msg)?,
+    let mut pending_video = (config.mode == RecordingMode::Instant).then(|| {
+        PendingInstantVideo::spawn(
+            matches!(config.target, ScreenCaptureTarget::CameraOnly),
+            project_name,
+            organization_id,
         )
-    } else {
-        None
-    };
+    });
+    #[cfg(not(target_os = "macos"))]
+    if let Some(pending) = &mut pending_video {
+        pending.video().await?;
+    }
 
     let result = start_attempt_with_upload(
         config,
         project_dir,
-        pre_created_video.clone(),
+        pending_video.as_mut(),
         #[cfg(target_os = "linux")]
         attempt.clone(),
     )
@@ -2056,8 +2058,11 @@ async fn start_internal(
             );
         }
     }
-    if result.is_err()
-        && let Some(video) = pre_created_video
+    let created_video = match pending_video {
+        Some(pending) if result.is_err() => pending.created().await,
+        _ => None,
+    };
+    if let Some(video) = created_video
         && let Err(error) = crate::upload::delete_instant_video(&video.id).await
     {
         tracing::error!(video_id = %video.id, "Failed to clean up instant recording: {error}");
@@ -2069,7 +2074,7 @@ async fn start_internal(
 async fn start_attempt_with_upload(
     config: StartConfig,
     project_dir: PathBuf,
-    pre_created_video: Option<cap_project::VideoUploadInfo>,
+    pending_video: Option<&mut PendingInstantVideo>,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
     #[cfg(target_os = "linux")]
@@ -2314,6 +2319,24 @@ async fn start_attempt_with_upload(
                     .await
                     .context("instant recording actor")?,
             );
+            let pre_created_video = match pending_video {
+                Some(pending) => match pending
+                    .video_unless_cancelled(config.start_cancel.as_deref())
+                    .await
+                {
+                    Ok(video) => Some(video),
+                    Err(error) => {
+                        discard_unpublished_instant_capture(
+                            &handle,
+                            config.start_gate.as_ref(),
+                            &project_dir,
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                },
+                None => None,
+            };
             let setup = (|| {
                 let video = pre_created_video
                     .ok_or_else(|| anyhow!("instant recording has no reserved upload"))?;
@@ -2372,6 +2395,94 @@ async fn start_attempt_with_upload(
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
     })
+}
+
+/// The Instant shareable link request. On macOS it stays in flight while the
+/// capture is built, so a slow server round trip cannot delay the capture start.
+struct PendingInstantVideo {
+    task: Option<tokio::task::JoinHandle<Result<cap_project::VideoUploadInfo, String>>>,
+    video: Option<cap_project::VideoUploadInfo>,
+}
+
+impl PendingInstantVideo {
+    fn spawn(camera_only: bool, project_name: String, organization_id: Option<String>) -> Self {
+        Self::from_task(tokio::spawn(crate::upload::prepare_instant_upload(
+            camera_only,
+            project_name,
+            organization_id,
+        )))
+    }
+
+    fn from_task(
+        task: tokio::task::JoinHandle<Result<cap_project::VideoUploadInfo, String>>,
+    ) -> Self {
+        Self {
+            task: Some(task),
+            video: None,
+        }
+    }
+
+    /// Cancel safe: the request task is kept until it completes, so an
+    /// interrupted wait can still recover the created link for cleanup.
+    async fn video(&mut self) -> anyhow::Result<cap_project::VideoUploadInfo> {
+        if let Some(task) = self.task.as_mut() {
+            let result = task.await;
+            self.task = None;
+            let video = result
+                .map_err(|error| anyhow!("Could not create the shareable link: {error}"))?
+                .map_err(anyhow::Error::msg)?;
+            self.video = Some(video);
+        }
+        self.video
+            .clone()
+            .ok_or_else(|| anyhow!("instant recording has no reserved upload"))
+    }
+
+    async fn video_unless_cancelled(
+        &mut self,
+        cancel: Option<&tokio::sync::Notify>,
+    ) -> anyhow::Result<cap_project::VideoUploadInfo> {
+        let Some(cancel) = cancel else {
+            return self.video().await;
+        };
+        tokio::select! {
+            biased;
+            () = cancel.notified() => Err(anyhow!("Recording start was cancelled")),
+            video = self.video() => video,
+        }
+    }
+
+    async fn created(mut self) -> Option<cap_project::VideoUploadInfo> {
+        self.video().await.ok()
+    }
+}
+
+impl Drop for PendingInstantVideo {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+async fn discard_unpublished_instant_capture(
+    handle: &instant_recording::ActorHandle,
+    start_gate: Option<&cap_recording::RecordingStartGate>,
+    project_dir: &std::path::Path,
+) {
+    if let Some(gate) = start_gate {
+        gate.arm();
+    }
+    if let Err(error) = handle.cancel().await {
+        tracing::warn!(%error, "Instant capture without a shareable link did not stop cleanly");
+        return;
+    }
+    let dir = project_dir.to_path_buf();
+    match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "Could not delete the discarded Instant capture"),
+        Err(error) => tracing::warn!(%error, "Could not delete the discarded Instant capture"),
+    }
 }
 
 /// `window_exclusion::resolve_window_ids`: every on-screen window matching a
@@ -3611,6 +3722,100 @@ mod tests {
                 Value::String(json.to_string())
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pending_instant_video_tests {
+    use super::PendingInstantVideo;
+    use std::{sync::Arc, time::Duration};
+
+    fn link(id: &str) -> cap_project::VideoUploadInfo {
+        cap_project::VideoUploadInfo {
+            id: id.to_string(),
+            link: format!("https://cap.so/s/{id}"),
+            config: cap_project::S3UploadMeta { id: id.to_string() },
+        }
+    }
+
+    fn after(
+        delay: Duration,
+        result: Result<cap_project::VideoUploadInfo, String>,
+    ) -> PendingInstantVideo {
+        PendingInstantVideo::from_task(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            result
+        }))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_link_that_arrives_first_starts_the_upload() {
+        let cancel = tokio::sync::Notify::new();
+        let mut pending = after(Duration::from_millis(800), Ok(link("a")));
+        let video = pending.video_unless_cancelled(Some(&cancel)).await.unwrap();
+        assert_eq!(video.id, "a");
+        assert_eq!(pending.video().await.unwrap().id, "a");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_before_the_link_cancels_the_start_and_keeps_the_link_for_cleanup() {
+        let cancel = Arc::new(tokio::sync::Notify::new());
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            stop.notify_one();
+        });
+        let mut pending = after(Duration::from_secs(3), Ok(link("late")));
+        let error = pending
+            .video_unless_cancelled(Some(&cancel))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error}");
+        assert_eq!(
+            pending.created().await.map(|video| video.id).as_deref(),
+            Some("late")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_pressed_before_the_wait_still_cancels() {
+        let cancel = tokio::sync::Notify::new();
+        cancel.notify_one();
+        let mut pending = after(Duration::from_millis(50), Ok(link("b")));
+        assert!(pending.video_unless_cancelled(Some(&cancel)).await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_link_request_fails_the_start_with_nothing_to_delete() {
+        let cancel = tokio::sync::Notify::new();
+        let mut pending = after(
+            Duration::from_millis(10),
+            Err("500 Internal Server Error".into()),
+        );
+        let error = pending
+            .video_unless_cancelled(Some(&cancel))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("500"), "{error}");
+        assert!(pending.created().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_cancel_signal_the_start_waits_for_the_link() {
+        let mut pending = after(Duration::from_millis(400), Ok(link("c")));
+        assert_eq!(pending.video_unless_cancelled(None).await.unwrap().id, "c");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_a_pending_request_aborts_it() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let pending = PendingInstantVideo::from_task(tokio::spawn(async move {
+            let _keep = tx;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(link("never"))
+        }));
+        drop(pending);
+        assert!(rx.await.is_err());
     }
 }
 
