@@ -120,6 +120,7 @@ describe("comment recorder lifecycle", () => {
 	afterEach(async () => {
 		await act(async () => root.unmount());
 		container.remove();
+		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});
 
@@ -131,6 +132,7 @@ describe("comment recorder lifecycle", () => {
 		const micStream = new Stream([micTrack]);
 		const closeMixer = vi.fn(async () => {});
 		const pendingMic = deferred<Stream>();
+		const start = vi.spyOn(Recorder.prototype, "start");
 		mocks.display.mockResolvedValue(displayStream);
 		mocks.mic.mockReturnValue(pendingMic.promise);
 		mocks.mixer.mockResolvedValue({
@@ -154,6 +156,10 @@ describe("comment recorder lifecycle", () => {
 		});
 
 		expect(recorder.phase).toBe("idle");
+		expect(recorder.error).toBe(
+			"The recording source ended before recording could start.",
+		);
+		expect(start).not.toHaveBeenCalled();
 		expect(videoTrack.stop).toHaveBeenCalled();
 		expect(micTrack.stop).toHaveBeenCalled();
 		expect(mixedTrack.stop).toHaveBeenCalled();
