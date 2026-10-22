@@ -361,23 +361,3 @@ hosts = ["github-hosted", "local"]
 bound = { count = 1, screen-pictures = 1 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-# Crash safety (crates/verify/tests/crash.rs). Measured on Blacksmith runners
-# (run 38850661948: macos-15 libx264, ubuntu-2404, windows-2025) with the suite
-# merged into main 3ec0c9497; each fix has its own proof branch
-# ci/fixproof-crash-<a|b1|c|ce> (runs 38850662667, 38850661576, 38850663436,
-# 38850662102), which removes exactly its entries. Fixes: #2640 (bug A),
-# #2641 (bug B1), #2643 (bug C), #2644 (bug E).
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "loss-time"
-bound = { count = 1, secs = [2.5, 20.5] }
-reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
-link = "https://github.com/CapSoftware/Cap/pull/2641"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "missing"
-bound = { count = 1 }
-reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2641"

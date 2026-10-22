@@ -273,10 +273,11 @@ impl SegmentedVideoEncoder {
         #[cfg(not(target_os = "macos"))]
         let hw_attempt: Option<H264Encoder> = None;
 
-        let encoder = match hw_attempt {
+        let mut encoder = match hw_attempt {
             Some(encoder) => encoder,
             None => builder.build(&mut output)?,
         };
+        encoder.set_keyframe_interval(config.segment_duration);
 
         output.write_header()?;
 
@@ -1446,13 +1447,6 @@ mod tests {
 
     #[test]
     fn default_config_cuts_segments_from_encoder_keyframe_cadence() {
-        // Production always runs segment_duration == the encoder GOP
-        // (DEFAULT_KEYFRAME_INTERVAL_SECS), so segment cuts depend on the
-        // encoder emitting keyframes at its configured cadence — no caller
-        // forces I-frames. Pin that contract: if the GOP options regress
-        // (g/keyint_min or the default interval), segments stop cutting and
-        // this fails. Test helpers that force I-frames at shorter cadences
-        // cannot catch that.
         ffmpeg::init().ok();
 
         let temp = tempfile::tempdir().unwrap();
@@ -1502,5 +1496,56 @@ mod tests {
             "assembled output must carry the full 6.6s of content, got {duration:.2}s"
         );
         assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
+    }
+
+    #[test]
+    fn sparse_capture_cuts_bounded_segments_without_losing_frames() {
+        ffmpeg::init().unwrap();
+        for pixel_format in [cap_media_info::Pixel::NV12, cap_media_info::Pixel::BGRA] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut info = test_video_info();
+            info.pixel_format = pixel_format;
+            let mut encoder = SegmentedVideoEncoder::init(
+                temp.path().to_path_buf(),
+                info,
+                SegmentedVideoEncoderConfig::default(),
+            )
+            .unwrap();
+            for index in 0..37 {
+                let mut frame = ffmpeg::frame::Video::new(pixel_format, info.width, info.height);
+                for plane in 0..frame.planes() {
+                    frame.data_mut(plane).fill(128);
+                }
+                encoder
+                    .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 3))
+                    .unwrap();
+            }
+            encoder.finish().unwrap();
+            let mut segments: Vec<_> = std::fs::read_dir(temp.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "m4s"))
+                .collect();
+            segments.sort();
+            assert!(
+                segments.len() >= 6,
+                "sparse capture must close fragments before EOF"
+            );
+            for path in &segments {
+                let metadata = read_fragment_metadata(path).unwrap();
+                assert!(metadata.duration <= Duration::from_millis(2334));
+            }
+            let output = temp.path().join("sparse.mp4");
+            crate::remux::concatenate_m4s_segments_with_init(
+                &temp.path().join(INIT_SEGMENT_NAME),
+                &segments,
+                &output,
+            )
+            .unwrap();
+            let mut input = ffmpeg::format::input(&output).unwrap();
+            let packets: Vec<_> = input.packets().map(|(_, packet)| packet).collect();
+            assert_eq!(packets.len(), 37);
+            assert!(crate::remux::probe_video_can_decode(&output).unwrap());
+        }
     }
 }

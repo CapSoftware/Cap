@@ -10,6 +10,7 @@ use ffmpeg::{
 use crate::video::h264::OpenedVideoEncoder;
 
 pub struct H264PacketEncoder {
+    keyframes: Option<super::keyframe_interval::KeyframeInterval>,
     encoder: encoder::Video,
     converter: Option<ffmpeg::software::scaling::Context>,
     converted_frame_pool: Option<frame::Video>,
@@ -53,6 +54,7 @@ impl H264PacketEncoder {
         frame_rate: Rational,
     ) -> Self {
         Self {
+            keyframes: None,
             encoder: opened.encoder,
             converter: opened.converter,
             converted_frame_pool: opened.converted_frame_pool,
@@ -74,6 +76,10 @@ impl H264PacketEncoder {
 
     pub fn codec_name(&self) -> &str {
         &self.codec_name
+    }
+
+    pub fn set_keyframe_interval(&mut self, interval: Duration) {
+        self.keyframes = Some(super::keyframe_interval::KeyframeInterval::new(interval));
     }
 
     pub fn time_base(&self) -> Rational {
@@ -144,14 +150,26 @@ impl H264PacketEncoder {
                 .run(&frame, converted)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
-            converted as &frame::Video
+            if self.keyframes.is_some() {
+                converted.set_kind(frame.kind());
+            }
+            converted as &mut frame::Video
         } else {
-            &frame
+            &mut frame
         };
 
-        self.encoder
-            .send_frame(frame_to_send)
-            .map_err(EncodePacketError::Encode)?;
+        let original_kind = frame_to_send.kind();
+        let keyframe_checkpoint = self.keyframes;
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(frame_to_send, timestamp);
+        }
+
+        let result = self.encoder.send_frame(frame_to_send);
+        frame_to_send.set_kind(original_kind);
+        if result.is_err() {
+            self.keyframes = keyframe_checkpoint;
+        }
+        result.map_err(EncodePacketError::Encode)?;
 
         self.drain_packets(on_packet)
     }
@@ -177,14 +195,26 @@ impl H264PacketEncoder {
                 .run(frame, converted)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
-            converted as &frame::Video
+            if self.keyframes.is_some() {
+                converted.set_kind(frame.kind());
+            }
+            converted as &mut frame::Video
         } else {
-            frame as &frame::Video
+            frame
         };
 
-        self.encoder
-            .send_frame(frame_to_send)
-            .map_err(EncodePacketError::Encode)?;
+        let original_kind = frame_to_send.kind();
+        let keyframe_checkpoint = self.keyframes;
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(frame_to_send, timestamp);
+        }
+
+        let result = self.encoder.send_frame(frame_to_send);
+        frame_to_send.set_kind(original_kind);
+        if result.is_err() {
+            self.keyframes = keyframe_checkpoint;
+        }
+        result.map_err(EncodePacketError::Encode)?;
 
         self.drain_packets(on_packet)
     }
@@ -383,5 +413,60 @@ mod tests {
             packets_seen > 0,
             "expected at least one packet after encoding 10 frames + flush"
         );
+    }
+
+    #[test]
+    fn standalone_sparse_capture_preserves_frames_and_bounds_keyframe_spacing() {
+        ffmpeg::init().unwrap();
+        for reusable in [false, true] {
+            let mut encoder = H264EncoderBuilder::new(test_video_info())
+                .with_preset(H264Preset::Ultrafast)
+                .build_standalone()
+                .unwrap();
+            encoder.set_keyframe_interval(Duration::from_secs(2));
+            let time_base = encoder.time_base();
+            let mut packets = Vec::new();
+            let mut frame = create_test_frame(320, 240);
+            let mut converted = None;
+            for index in 0..37 {
+                let timestamp = Duration::from_micros(index * 1_000_000 / 3);
+                let on_packet = |packet| {
+                    packets.push(packet);
+                    Ok(())
+                };
+                if reusable {
+                    encoder
+                        .encode_frame_reusable(&mut frame, &mut converted, timestamp, on_packet)
+                        .unwrap();
+                    assert_eq!(frame.kind(), ffmpeg::picture::Type::None);
+                } else {
+                    encoder
+                        .encode_frame(create_test_frame(320, 240), timestamp, on_packet)
+                        .unwrap();
+                }
+            }
+            encoder
+                .flush(|packet| {
+                    packets.push(packet);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(packets.len(), 37);
+            let keyframes: Vec<_> = packets.iter().filter(|packet| packet.is_keyframe).collect();
+            assert!(
+                keyframes.len() >= 7,
+                "{} keyframes: {:?}",
+                encoder.codec_name(),
+                keyframes
+                    .iter()
+                    .map(|packet| packet.pts)
+                    .collect::<Vec<_>>()
+            );
+            for pair in keyframes.windows(2) {
+                let seconds = (pair[1].pts - pair[0].pts) as f64 * time_base.numerator() as f64
+                    / time_base.denominator() as f64;
+                assert!(seconds <= 2.334);
+            }
+        }
     }
 }

@@ -15,11 +15,7 @@ use cap_enc_ffmpeg::segmented_stream::{
 use cap_media_info::{AudioInfo, VideoInfo};
 use std::{
     path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::AtomicBool,
-        mpsc::{SyncSender, sync_channel},
-    },
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::sync_channel},
     thread::JoinHandle,
     time::Duration,
 };
@@ -148,7 +144,7 @@ fn finish_segmented_encoder(
 }
 
 struct EncoderState {
-    video_tx: SyncSender<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>,
+    video_tx: flume::Sender<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>,
     encoder: Arc<Mutex<SegmentedVideoEncoder>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -247,11 +243,11 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                 std::thread::sleep(Duration::from_millis(50));
                 match state.video_tx.try_send(None) {
                     Ok(()) => return,
-                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    Err(flume::TrySendError::Disconnected(_)) => {
                         trace!("M4S encoder channel closed during stop retry");
                         return;
                     }
-                    Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                    Err(flume::TrySendError::Full(_)) => {}
                 }
             }
             warn!("M4S encoder channel still full after retries, finish() will deliver sentinel");
@@ -288,7 +284,7 @@ impl MacOSFragmentedM4SMuxer {
         );
 
         let (video_tx, video_rx) =
-            sync_channel::<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>(buffer_size);
+            flume::bounded::<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
         let encoder_config = SegmentedVideoEncoderConfig {
@@ -514,18 +510,18 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
         }
 
         if let Some(state) = &self.state {
-            match state
-                .video_tx
-                .try_send(Some((frame.sample_buf, adjusted_timestamp)))
-            {
+            match state.video_tx.send_timeout(
+                Some((frame.sample_buf, adjusted_timestamp)),
+                Duration::from_millis(super::core::STALL_BUDGET_MS),
+            ) {
                 Ok(()) => {
                     self.frame_drops.record_frame();
                 }
                 Err(e) => match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
+                    flume::SendTimeoutError::Timeout(_) => {
                         self.frame_drops.record_drop();
                     }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
+                    flume::SendTimeoutError::Disconnected(_) => {
                         return Err(anyhow!("M4S encoder channel disconnected"));
                     }
                 },
@@ -636,11 +632,11 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
                 std::thread::sleep(Duration::from_millis(50));
                 match state.video_tx.try_send(None) {
                     Ok(()) => return,
-                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    Err(flume::TrySendError::Disconnected(_)) => {
                         trace!("M4S camera encoder channel closed during stop retry");
                         return;
                     }
-                    Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                    Err(flume::TrySendError::Full(_)) => {}
                 }
             }
             warn!(
@@ -679,7 +675,7 @@ impl MacOSFragmentedM4SCameraMuxer {
         );
 
         let (video_tx, video_rx) =
-            sync_channel::<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>(buffer_size);
+            flume::bounded::<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
         let encoder_config = SegmentedVideoEncoderConfig {
@@ -860,18 +856,18 @@ impl VideoMuxer for MacOSFragmentedM4SCameraMuxer {
         }
 
         if let Some(state) = &self.state {
-            match state
-                .video_tx
-                .try_send(Some((frame.sample_buf, adjusted_timestamp)))
-            {
+            match state.video_tx.send_timeout(
+                Some((frame.sample_buf, adjusted_timestamp)),
+                Duration::from_millis(super::core::STALL_BUDGET_MS),
+            ) {
                 Ok(()) => {
                     self.frame_drops.record_frame();
                 }
                 Err(e) => match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
+                    flume::SendTimeoutError::Timeout(_) => {
                         self.frame_drops.record_drop();
                     }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
+                    flume::SendTimeoutError::Disconnected(_) => {
                         return Err(anyhow!("M4S camera encoder channel disconnected"));
                     }
                 },
