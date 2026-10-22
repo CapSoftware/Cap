@@ -10,6 +10,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tracing::debug;
 use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
@@ -22,13 +23,14 @@ use windows::{
         Media::MediaFoundation::{
             self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
             IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
-            MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NONE, MF_EVENT_TYPE,
-            MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-            MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
-            MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
+            MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NO_WAIT,
+            MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE,
+            MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+            MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_PIXEL_ASPECT_RATIO,
+            MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
             MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
             MFCreateSample, MFMediaType_Video, MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE,
-            MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_FLUSH,
+            MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_COMMAND_FLUSH,
             MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
             MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
             MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_SET_TYPE_TEST_ONLY,
@@ -38,6 +40,8 @@ use windows::{
     core::{Error, Interface},
 };
 
+/// DASH segments are cut on keyframes; 2 s matches the software encoder's GOP.
+const MUXED_KEYFRAME_INTERVAL_SECS: u32 = 2;
 const MAX_CONSECUTIVE_EMPTY_SAMPLES: u8 = 20;
 const MAX_INPUT_WITHOUT_OUTPUT: u32 = 30;
 const MAX_PROCESS_INPUT_FAILURES: u32 = 5;
@@ -241,17 +245,10 @@ impl H264Encoder {
         input_resolution: SizeInt32,
         output_resolution: SizeInt32,
         frame_rate: u32,
-        bitrate_multipler: f32,
+        bitrate: u32,
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
     ) -> Result<Self, NewVideoEncoderError> {
-        let bitrate = calculate_bitrate(
-            output_resolution.Width as u32,
-            output_resolution.Height as u32,
-            frame_rate,
-            bitrate_multipler,
-        );
-
         let transform =
             EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
                 .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
@@ -357,6 +354,10 @@ impl H264Encoder {
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
             output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
+            output_type.SetUINT32(
+                &MF_MT_MAX_KEYFRAME_SPACING,
+                frame_rate.saturating_mul(MUXED_KEYFRAME_INTERVAL_SECS),
+            )?;
             MFSetAttributeSize(
                 &attributes,
                 &MF_MT_FRAME_SIZE,
@@ -444,13 +445,36 @@ impl H264Encoder {
         frame_rate: u32,
         bitrate_multipler: f32,
     ) -> Result<Self, NewVideoEncoderError> {
+        Self::new_with_scaled_output_and_bitrate(
+            d3d_device,
+            format,
+            input_resolution,
+            output_resolution,
+            frame_rate,
+            calculate_bitrate(
+                output_resolution.Width as u32,
+                output_resolution.Height as u32,
+                frame_rate,
+                bitrate_multipler,
+            ),
+        )
+    }
+
+    pub fn new_with_scaled_output_and_bitrate(
+        d3d_device: &ID3D11Device,
+        format: DXGI_FORMAT,
+        input_resolution: SizeInt32,
+        output_resolution: SizeInt32,
+        frame_rate: u32,
+        bitrate: u32,
+    ) -> Result<Self, NewVideoEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
             format,
             input_resolution,
             output_resolution,
             frame_rate,
-            bitrate_multipler,
+            bitrate,
             MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
             true,
         )
@@ -470,7 +494,12 @@ impl H264Encoder {
             input_resolution,
             output_resolution,
             frame_rate,
-            bitrate_multipler,
+            calculate_bitrate(
+                output_resolution.Width as u32,
+                output_resolution.Height as u32,
+                frame_rate,
+                bitrate_multipler,
+            ),
             MFT_ENUM_FLAG_TRANSCODE_ONLY,
             false,
         )
@@ -516,6 +545,28 @@ impl H264Encoder {
 
     pub fn output_type(&self) -> &IMFMediaType {
         &self.output_type
+    }
+
+    /// SPS/PPS in Annex B, as the encoder exposes them on its output type. The DASH `init.mp4` is
+    /// written before the first sample, so a caller muxing compressed samples must have this up
+    /// front.
+    pub fn sequence_header(&self) -> Option<Vec<u8>> {
+        let attributes: IMFAttributes = self.output_type.cast().ok()?;
+        let size = unsafe { attributes.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER) }.ok()?;
+        if size == 0 {
+            return None;
+        }
+
+        let mut header = vec![0u8; size as usize];
+        let mut written = 0u32;
+        unsafe {
+            attributes
+                .GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut header, Some(&mut written))
+                .ok()?;
+        }
+        header.truncate(written as usize);
+
+        Some(header)
     }
 
     pub fn validate(&self) -> Result<(), NewVideoEncoderError> {
@@ -665,6 +716,57 @@ impl H264Encoder {
                         panic!("Unknown media event type: {}", event_type.0);
                     }
                 }
+            }
+
+            let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+
+            let drain_deadline = Instant::now() + Duration::from_millis(250);
+            let mut drained = 0u64;
+            while Instant::now() < drain_deadline {
+                let event = match self.event_generator.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
+                    Ok(event) => event,
+                    Err(_) => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                };
+                let event_type = match event.GetType() {
+                    Ok(event_type) => event_type,
+                    Err(_) => break,
+                };
+
+                match MF_EVENT_TYPE(event_type as i32) {
+                    MediaFoundation::METransformHaveOutput => {
+                        let mut status = 0;
+                        let output_buffer = MFT_OUTPUT_DATA_BUFFER {
+                            dwStreamID: self.output_stream_id,
+                            ..Default::default()
+                        };
+                        let mut output_buffers = [output_buffer];
+
+                        match self
+                            .transform
+                            .ProcessOutput(0, &mut output_buffers, &mut status)
+                        {
+                            Ok(()) => {
+                                if let Some(sample) = output_buffers[0].pSample.take() {
+                                    on_sample(sample)?;
+                                    drained += 1;
+                                }
+                            }
+                            Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
+                            Err(error) => {
+                                debug!(%error, "Media Foundation drain output stopped early");
+                                break;
+                            }
+                        }
+                    }
+                    MediaFoundation::METransformDrainComplete => break,
+                    _ => {}
+                }
+            }
+            if drained > 0 {
+                debug!(drained, "Drained Media Foundation samples before shutdown");
             }
 
             self.transform

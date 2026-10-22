@@ -1,6 +1,7 @@
 use super::fragment_metadata::read_fragment_metadata;
 use super::write_behind::{MuxSink, MuxTarget};
-use cap_media_info::VideoInfo;
+use crate::base::PacketSink;
+use cap_media_info::{VideoInfo, ensure_even};
 use ffmpeg::{format, frame};
 use serde::Serialize;
 use std::{
@@ -16,16 +17,7 @@ use crate::video::h264::{
 };
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
-
-#[derive(Debug, Clone)]
-pub struct DiskSpaceWarning {
-    pub available_mb: u64,
-    pub threshold_mb: u64,
-    pub path: String,
-    pub is_critical: bool,
-}
-
-pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
+const STREAM_TIME_BASE: ffmpeg::Rational = ffmpeg::Rational(1, 10_000_000);
 
 /// Shared so a write-behind muxer can install the callback without waiting
 /// for the writer thread, which may be blocked on storage.
@@ -95,10 +87,6 @@ pub struct SegmentedVideoEncoder {
     encoder: H264Encoder,
     mux: MuxSink<SegmentMux>,
     segment_tx: SegmentSender,
-
-    segment_duration: Duration,
-
-    disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 struct SegmentMux {
@@ -199,6 +187,10 @@ pub enum InitError {
     Encoder(#[from] H264EncoderError),
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
+    #[error("The encoder did not expose an H.264 sequence header for init.mp4")]
+    MissingExtradata,
+    #[error("Failed to allocate the H.264 extradata buffer")]
+    Extradata,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -245,6 +237,92 @@ impl Default for SegmentedVideoEncoderConfig {
     }
 }
 
+fn init_segment_path(base_path: &Path) -> PathBuf {
+    base_path.join(INIT_SEGMENT_NAME)
+}
+
+fn validate_init_segment(init_path: &Path) -> Result<(), String> {
+    if !init_path.exists() {
+        return Err(format!(
+            "init.mp4 is missing at {}. M4S segments will be unplayable without it.",
+            init_path.display()
+        ));
+    }
+
+    match std::fs::metadata(init_path) {
+        Ok(metadata) => {
+            let size = metadata.len();
+            if size < 100 {
+                return Err(format!(
+                    "init.mp4 at {} is too small ({} bytes). It may be corrupted.",
+                    init_path.display(),
+                    size
+                ));
+            }
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "Cannot read init.mp4 metadata at {}: {e}",
+            init_path.display()
+        )),
+    }
+}
+
+fn open_dash_output(
+    base_path: &Path,
+    segment_duration: Duration,
+    timed_fragments: bool,
+) -> Result<format::context::Output, InitError> {
+    let manifest_path = base_path.join("dash_manifest.mpd");
+
+    #[cfg(target_os = "windows")]
+    let manifest_path_str = manifest_path.to_string_lossy().replace('\\', "/");
+    #[cfg(not(target_os = "windows"))]
+    let manifest_path_str = manifest_path.to_string_lossy().to_string();
+
+    let mut output = super::dash_output::create(&manifest_path_str)?;
+
+    let init_seg_str = INIT_SEGMENT_NAME;
+    let media_seg_str = "segment_$Number%03d$.m4s";
+
+    unsafe {
+        let opts = output.as_mut_ptr();
+
+        let set_opt = |key: &str, value: &str| {
+            let k = CString::new(key).unwrap();
+            let v = CString::new(value).unwrap();
+            ffmpeg::ffi::av_opt_set((*opts).priv_data, k.as_ptr(), v.as_ptr(), 0);
+        };
+
+        set_opt("init_seg_name", init_seg_str);
+        set_opt("media_seg_name", media_seg_str);
+        set_opt("seg_duration", &segment_duration.as_secs_f64().to_string());
+        set_opt("use_timeline", "1");
+        set_opt("use_template", "1");
+        set_opt("single_file", "0");
+        set_opt("hls_playlist", "1");
+        if timed_fragments {
+            set_opt("frag_type", "duration");
+            set_opt("frag_duration", "2");
+            set_opt("streaming", "1");
+        }
+    }
+
+    Ok(output)
+}
+
+fn dash_codec_info(video_config: VideoInfo, stream_size: (u32, u32)) -> CodecInfo {
+    CodecInfo {
+        width: stream_size.0,
+        height: stream_size.1,
+        frame_rate_num: video_config.frame_rate.0,
+        frame_rate_den: video_config.frame_rate.1,
+        time_base_num: video_config.time_base.0,
+        time_base_den: video_config.time_base.1,
+        pixel_format: format!("{:?}", video_config.pixel_format),
+    }
+}
+
 impl SegmentedVideoEncoder {
     pub fn init(
         base_path: PathBuf,
@@ -287,43 +365,16 @@ impl SegmentedVideoEncoder {
     ) -> Result<Self, InitError> {
         std::fs::create_dir_all(&base_path)?;
 
+        let stream_size = config
+            .output_size
+            .map(|(width, height)| (ensure_even(width), ensure_even(height)))
+            .unwrap_or((
+                ensure_even(video_config.width),
+                ensure_even(video_config.height),
+            ));
+
         let manifest_path = base_path.join("dash_manifest.mpd");
-
-        #[cfg(target_os = "windows")]
-        let manifest_path_str = manifest_path.to_string_lossy().replace('\\', "/");
-        #[cfg(not(target_os = "windows"))]
-        let manifest_path_str = manifest_path.to_string_lossy().to_string();
-
-        let mut output = super::dash_output::create(&manifest_path_str)?;
-
-        let init_seg_str = INIT_SEGMENT_NAME;
-        let media_seg_str = "segment_$Number%03d$.m4s";
-
-        unsafe {
-            let opts = output.as_mut_ptr();
-
-            let set_opt = |key: &str, value: &str| {
-                let k = CString::new(key).unwrap();
-                let v = CString::new(value).unwrap();
-                ffmpeg::ffi::av_opt_set((*opts).priv_data, k.as_ptr(), v.as_ptr(), 0);
-            };
-
-            set_opt("init_seg_name", init_seg_str);
-            set_opt("media_seg_name", media_seg_str);
-            set_opt(
-                "seg_duration",
-                &config.segment_duration.as_secs_f64().to_string(),
-            );
-            set_opt("use_timeline", "1");
-            set_opt("use_template", "1");
-            set_opt("single_file", "0");
-            set_opt("hls_playlist", "1");
-            if timed_fragments {
-                set_opt("frag_type", "duration");
-                set_opt("frag_duration", "2");
-                set_opt("streaming", "1");
-            }
-        }
+        let mut output = open_dash_output(&base_path, config.segment_duration, timed_fragments)?;
 
         let mut builder = H264EncoderBuilder::new(video_config)
             .with_preset(config.preset)
@@ -369,15 +420,7 @@ impl SegmentedVideoEncoder {
             "FFmpeg DASH muxer state after write_header()"
         );
 
-        let codec_info = CodecInfo {
-            width: video_config.width,
-            height: video_config.height,
-            frame_rate_num: video_config.frame_rate.0,
-            frame_rate_den: video_config.frame_rate.1,
-            time_base_num: video_config.time_base.0,
-            time_base_den: video_config.time_base.1,
-            pixel_format: format!("{:?}", video_config.pixel_format),
-        };
+        let codec_info = dash_codec_info(video_config, stream_size);
 
         tracing::info!(
             path = %base_path.display(),
@@ -405,8 +448,6 @@ impl SegmentedVideoEncoder {
             encoder,
             mux: MuxSink::Direct(mux),
             segment_tx,
-            segment_duration: config.segment_duration,
-            disk_space_callback: None,
         };
 
         if write_behind {
@@ -423,10 +464,6 @@ impl SegmentedVideoEncoder {
         }
 
         Ok(instance)
-    }
-
-    pub fn set_disk_space_callback(&mut self, callback: DiskSpaceCallback) {
-        self.disk_space_callback = Some(callback);
     }
 
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
@@ -512,50 +549,16 @@ impl SegmentedVideoEncoder {
         Some(&mut self.encoder)
     }
 
-    pub fn base_path(&self) -> &Path {
-        &self.base_path
-    }
-
-    pub fn segment_duration(&self) -> Duration {
-        self.segment_duration
-    }
-
     pub fn current_index(&self) -> u32 {
         self.mux.with_target_ref(|mux| mux.current_index)
     }
 
     pub fn init_segment_path(&self) -> PathBuf {
-        self.base_path.join(INIT_SEGMENT_NAME)
+        init_segment_path(&self.base_path)
     }
 
     pub fn validate_init_segment(&self) -> Result<(), String> {
-        let init_path = self.init_segment_path();
-
-        if !init_path.exists() {
-            return Err(format!(
-                "init.mp4 is missing at {}. M4S segments will be unplayable without it.",
-                init_path.display()
-            ));
-        }
-
-        match std::fs::metadata(&init_path) {
-            Ok(metadata) => {
-                let size = metadata.len();
-                if size < 100 {
-                    return Err(format!(
-                        "init.mp4 at {} is too small ({} bytes). It may be corrupted.",
-                        init_path.display(),
-                        size
-                    ));
-                }
-                Ok(())
-            }
-            Err(e) => Err(format!(
-                "Cannot read init.mp4 metadata at {}: {}",
-                init_path.display(),
-                e
-            )),
-        }
+        validate_init_segment(&self.init_segment_path())
     }
 }
 
@@ -872,6 +875,156 @@ impl SegmentMux {
     }
 }
 
+/// Muxes externally encoded H.264 access units into the same DASH segments as
+/// [`SegmentedVideoEncoder`], for encoders that cannot hand over raw frames (the Windows Media
+/// Foundation encoder takes D3D11 textures and emits compressed samples).
+pub struct SegmentedPacketMuxer {
+    mux: MuxSink<SegmentMux>,
+    stream_index: usize,
+    segment_tx: SegmentSender,
+    last_written_pts: Option<i64>,
+    consecutive_pts_bumps: u64,
+}
+
+impl SegmentedPacketMuxer {
+    /// `extradata` must be the H.264 sequence header (SPS/PPS) in Annex B; `init.mp4` is written
+    /// during construction and cannot carry a codec configuration discovered later.
+    pub fn new(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        stream_size: (u32, u32),
+        segment_duration: Duration,
+        timed_fragments: bool,
+        bitrate: u32,
+        extradata: &[u8],
+    ) -> Result<Self, InitError> {
+        if extradata.is_empty() {
+            return Err(InitError::MissingExtradata);
+        }
+
+        let stream_size = (ensure_even(stream_size.0), ensure_even(stream_size.1));
+
+        std::fs::create_dir_all(&base_path)?;
+
+        let mut output = open_dash_output(&base_path, segment_duration, timed_fragments)?;
+
+        let h264 = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::H264)
+            .ok_or(ffmpeg::Error::DecoderNotFound)?;
+        let mut stream = output.add_stream(h264)?;
+        let stream_index = stream.index();
+        stream.set_time_base(STREAM_TIME_BASE);
+
+        unsafe {
+            let codecpar = (*stream.as_mut_ptr()).codecpar;
+            (*codecpar).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO;
+            (*codecpar).codec_id = ffmpeg::ffi::AVCodecID::AV_CODEC_ID_H264;
+            (*codecpar).width = stream_size.0 as i32;
+            (*codecpar).height = stream_size.1 as i32;
+            (*codecpar).bit_rate = i64::from(bitrate);
+            (*codecpar).format = ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NV12 as i32;
+
+            let stream_ptr = stream.as_mut_ptr();
+            (*stream_ptr).avg_frame_rate = ffmpeg::ffi::AVRational {
+                num: video_config.frame_rate.0,
+                den: video_config.frame_rate.1,
+            };
+            (*stream_ptr).r_frame_rate = ffmpeg::ffi::AVRational {
+                num: video_config.frame_rate.0,
+                den: video_config.frame_rate.1,
+            };
+
+            let size = extradata.len() + ffmpeg::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
+            let buffer = ffmpeg::ffi::av_mallocz(size).cast::<u8>();
+            if buffer.is_null() {
+                return Err(InitError::Extradata);
+            }
+            std::ptr::copy_nonoverlapping(extradata.as_ptr(), buffer, extradata.len());
+            (*codecpar).extradata = buffer;
+            (*codecpar).extradata_size = extradata.len() as i32;
+        }
+
+        output.write_header()?;
+
+        let mut mux = SegmentMux {
+            base_path: base_path.clone(),
+            output,
+            current_index: 1,
+            completed_segments: Vec::new(),
+            frames_since_segment_scan: 0,
+            codec_info: dash_codec_info(video_config, stream_size),
+            segment_tx: SegmentSender::default(),
+            init_notified: false,
+            initial_manifest_pending: true,
+        };
+        mux.write_initial_manifest();
+
+        Ok(Self {
+            segment_tx: mux.segment_tx.clone(),
+            mux: MuxSink::Direct(mux),
+            stream_index,
+            last_written_pts: None,
+            consecutive_pts_bumps: 0,
+        })
+    }
+
+    pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
+        *self
+            .segment_tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        self.mux.with_target(SegmentMux::try_notify_init_segment);
+    }
+
+    pub fn write_packet(
+        &mut self,
+        mut packet: ffmpeg::Packet,
+        source_time_base: ffmpeg::Rational,
+    ) -> Result<(), ffmpeg::Error> {
+        packet.set_stream(self.stream_index);
+
+        let destination_time_base = self.mux.stream_time_base(self.stream_index);
+        packet.rescale_ts(source_time_base, destination_time_base);
+
+        // The mov/DASH muxer rejects duplicate pts/dts. MF timestamps normally advance in step with
+        // the stream time base, but a re-quantized or stuck source clock can repeat one; advance the
+        // tie by a tick so muxing never fails on it.
+        if let Some(pts) = packet.pts() {
+            let pts = match self.last_written_pts {
+                Some(last) if pts <= last => {
+                    self.consecutive_pts_bumps += 1;
+                    if self.consecutive_pts_bumps == 30
+                        || self.consecutive_pts_bumps.is_multiple_of(300)
+                    {
+                        tracing::warn!(
+                            consecutive_bumps = self.consecutive_pts_bumps,
+                            "Media Foundation sample times are not advancing; the muxer is tie-bumping every packet (stuck source clock?)"
+                        );
+                    }
+                    last + 1
+                }
+                _ => {
+                    self.consecutive_pts_bumps = 0;
+                    pts
+                }
+            };
+            self.last_written_pts = Some(pts);
+            packet.set_pts(Some(pts));
+            packet.set_dts(Some(pts));
+        }
+
+        self.mux.write_packet(packet)?;
+        self.mux.frame_queued();
+
+        Ok(())
+    }
+
+    pub fn finish(&mut self) -> Result<(), FinishError> {
+        self.mux
+            .finish(|_| Ok(()), |mux, flush_result| mux.finish(flush_result))
+            .map_err(std::io::Error::from)?
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -897,6 +1050,95 @@ mod tests {
             }
         }
         frame
+    }
+
+    #[test]
+    fn packet_muxer_writes_the_same_init_and_manifest_contract() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let video_info = test_video_info();
+        let capture_config = VideoInfo {
+            width: 640,
+            height: 480,
+            ..video_info
+        };
+
+        let mut encoder = H264EncoderBuilder::new(video_info)
+            .with_preset(H264Preset::Ultrafast)
+            .build_standalone()
+            .unwrap();
+        let extradata = encoder.extradata();
+        assert!(!extradata.is_empty(), "encoder must expose SPS/PPS");
+
+        let mut muxer = SegmentedPacketMuxer::new(
+            base_path.clone(),
+            capture_config,
+            (video_info.width, video_info.height),
+            Duration::from_secs(2),
+            false,
+            300_000,
+            &extradata,
+        )
+        .unwrap();
+
+        let mut packets = Vec::new();
+        for index in 0..90u64 {
+            encoder
+                .encode_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(index * 33_333),
+                    |encoded| {
+                        packets.push(encoded);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+        }
+
+        let source_time_base = encoder.time_base();
+        for encoded in packets {
+            let mut packet = ffmpeg::Packet::copy(&encoded.data);
+            packet.set_pts(Some(encoded.pts));
+            packet.set_dts(Some(encoded.dts));
+            packet.set_duration(encoded.duration);
+            if encoded.is_keyframe {
+                packet.set_flags(ffmpeg::packet::Flags::KEY);
+            }
+            muxer
+                .write_packet(packet, source_time_base)
+                .expect("write packet");
+        }
+        muxer.finish().unwrap();
+
+        let init_path = base_path.join(INIT_SEGMENT_NAME);
+        validate_init_segment(&init_path).unwrap();
+        let init = std::fs::read(&init_path).unwrap();
+        assert!(
+            init.windows(4).any(|window| window == b"avcC"),
+            "init.mp4 must carry the H.264 decoder configuration"
+        );
+
+        let input = ffmpeg::format::input(&init_path).expect("open init.mp4");
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .expect("video stream");
+        let parameters = stream.parameters();
+        let (declared_width, declared_height) =
+            unsafe { ((*parameters.as_ptr()).width, (*parameters.as_ptr()).height) };
+        assert_eq!((declared_width, declared_height), (320, 240));
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["is_complete"].as_bool(), Some(true));
+        assert!(
+            !manifest["segments"].as_array().unwrap().is_empty(),
+            "the DASH muxer must publish at least one media segment"
+        );
+        assert_eq!(manifest["codec_info"]["width"].as_u64(), Some(320));
+        assert_eq!(manifest["codec_info"]["height"].as_u64(), Some(240));
     }
 
     #[test]

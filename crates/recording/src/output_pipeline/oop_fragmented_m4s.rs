@@ -16,7 +16,7 @@ use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::fragment_manifest::FragmentManifestTracker;
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::h264_packet::EncodePacketError;
-use cap_enc_ffmpeg::segmented_stream::{DiskSpaceCallback, SegmentCompletedEvent};
+use cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent;
 use cap_media_info::{AudioInfo, VideoInfo};
 use std::{
     path::PathBuf,
@@ -117,7 +117,6 @@ pub struct OutOfProcessFragmentedM4SMuxerConfig {
     pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
-    pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     pub max_respawns: u32,
 }
@@ -130,7 +129,6 @@ impl Default for OutOfProcessFragmentedM4SMuxerConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             shared_pause_state: None,
-            disk_space_callback: None,
             segment_tx: None,
             max_respawns: DEFAULT_MAX_RESPAWNS,
         }
@@ -148,7 +146,6 @@ pub struct OutOfProcessFragmentedM4SMuxer {
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
-    disk_space_callback: Option<DiskSpaceCallback>,
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     health_tx: SharedHealthSender,
     max_respawns: u32,
@@ -189,7 +186,6 @@ impl Muxer for OutOfProcessFragmentedM4SMuxer {
             pause,
             frame_drops: FrameDropTracker::new(SharedHealthSender::new(), "muxer:macos-oop"),
             started: false,
-            disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
             health_tx: SharedHealthSender::new(),
             max_respawns: config.max_respawns,
@@ -270,7 +266,6 @@ impl OutOfProcessFragmentedM4SMuxer {
         let preset = self.preset;
         let bpp = self.bpp;
         let output_size = self.output_size;
-        let disk_space_callback = self.disk_space_callback.clone();
         let segment_tx = self.segment_tx.clone();
         let health_tx = self.health_tx.clone();
         let max_respawns = self.max_respawns;
@@ -363,7 +358,6 @@ impl OutOfProcessFragmentedM4SMuxer {
                 };
 
                 let mut disk_monitor = DiskSpaceMonitor::new();
-                let _ = disk_space_callback;
                 disk_monitor.poll(&base_path, &health_tx);
 
                 if ready_tx.send(Ok(())).is_err() {

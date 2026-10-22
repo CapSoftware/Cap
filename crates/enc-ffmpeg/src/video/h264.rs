@@ -1663,6 +1663,13 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     ((pixels_per_second * bpp as f64) as usize).min(MAX_BITRATE)
 }
 
+/// Bitrate this module's encoders target for `bpp`, so a hardware encoder fed straight from the
+/// capture texture keeps the recording quality of the software path.
+pub fn bitrate_for_bpp(width: u32, height: u32, frame_rate: ffmpeg::Rational, bpp: f32) -> u32 {
+    let fps = frame_rate.0 as f32 / frame_rate.1.max(1) as f32;
+    get_bitrate(width, height, fps, bpp) as u32
+}
+
 const MAX_BITRATE: usize = 1_000_000_000;
 
 #[cfg(test)]

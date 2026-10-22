@@ -130,7 +130,7 @@ impl ScreenFrame {
         }
     }
 
-    pub fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, ::windows::core::Error> {
+    pub fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, scap_ffmpeg::AsFFmpegError> {
         match self {
             ScreenFrame::Captured(frame) => {
                 use scap_ffmpeg::AsFFmpeg;
