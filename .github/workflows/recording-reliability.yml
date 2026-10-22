@@ -58,4 +58,5 @@ jobs:
             __tests__/unit/recording-prepare.test.ts \
             __tests__/unit/s3-bucket-connections.test.ts \
             __tests__/unit/media-processing-workflows.test.ts \
-            __tests__/unit/new-media-comment-thumbnail.test.ts
+            __tests__/unit/new-media-comment-thumbnail.test.ts \
+            __tests__/unit/comment-reply-parent.test.ts

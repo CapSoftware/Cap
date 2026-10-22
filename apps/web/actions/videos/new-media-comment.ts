@@ -15,6 +15,7 @@ import { type Comment, Policy } from "@cap/web-domain";
 import { Effect, Exit, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeWaveform } from "@/lib/comment-media";
+import { isReplyParentOnVideo } from "@/lib/comment-reply-parent";
 import { canUseMediaComments } from "@/lib/media-comments";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
@@ -68,6 +69,12 @@ export async function newMediaComment(data: {
 	if (Exit.isFailure(accessExit) || Option.isNone(accessExit.value))
 		throw new Error("Video not found");
 	const [video] = accessExit.value.value;
+
+	if (
+		data.parentCommentId &&
+		!(await isReplyParentOnVideo(data.parentCommentId, data.videoId))
+	)
+		throw new Error("Comment not found");
 
 	const expectedPrefix = `${video.ownerId}/${video.id}/comments/${data.commentId}/`;
 	if (!claims.key.startsWith(expectedPrefix))
