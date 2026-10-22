@@ -21,6 +21,7 @@ health.get("/", async (c) => {
 	);
 	const resources = getSystemResources();
 	const draining = isDraining();
+	const authenticated = hasMediaServerSecret(c);
 
 	return c.json(
 		{
@@ -34,7 +35,7 @@ health.get("/", async (c) => {
 				available: mediaEngine.available,
 				version: mediaEngine.version,
 			},
-			videoEncoder: getVideoEncoderStatus(),
+			videoEncoder: getVideoEncoderStatus(process.env, authenticated),
 			system: {
 				...resources,
 				loadAvg5m,
@@ -45,7 +46,7 @@ health.get("/", async (c) => {
 				uptimeSeconds: Math.round(os.uptime()),
 				processUptimeSeconds: Math.round(process.uptime()),
 			},
-			...(hasMediaServerSecret(c) && { runtime: await getRuntimeReport() }),
+			...(authenticated && { runtime: await getRuntimeReport() }),
 		},
 		draining ? 503 : 200,
 	);

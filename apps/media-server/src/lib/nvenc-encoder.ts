@@ -181,7 +181,9 @@ export function nvencFallbackReason(
 	aborted: boolean,
 ): string | null {
 	if (aborted) return null;
-	const message = error instanceof Error ? error.message : String(error);
+	const message = (
+		error instanceof Error ? error.message : String(error)
+	).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>");
 	return message.slice(-MAX_FALLBACK_REASON_LENGTH) || "unknown error";
 }
 
@@ -214,12 +216,15 @@ export function logNvencFallback(details: {
 	);
 }
 
-export function getVideoEncoderStatus(env: Env = process.env) {
+export function getVideoEncoderStatus(
+	env: Env = process.env,
+	includeDetails = true,
+) {
 	const active = selectedVideoEncoder(env);
 	return {
 		active,
 		nvenc:
-			active === "nvenc"
+			active === "nvenc" && includeDetails
 				? {
 						attempts: nvencStatus.attempts,
 						fallbacks: nvencStatus.fallbacks,

@@ -137,6 +137,10 @@ describe("nvenc encoder selection", () => {
 			active: "libx264",
 			nvenc: null,
 		});
+		expect(getVideoEncoderStatus(enabled, false)).toEqual({
+			active: "nvenc",
+			nvenc: null,
+		});
 	});
 
 	test("uses p1, cq = crf + 8, no lookahead and spatial AQ by default", () => {
@@ -261,6 +265,14 @@ describe("nvenc fallback", () => {
 			),
 		).toBe("FFmpeg exited with code 1. Last stderr: No device");
 		expect(nvencFallbackReason("boom", false)).toBe("boom");
+		expect(
+			nvencFallbackReason(
+				new Error(
+					"https://bucket.s3.amazonaws.com/u/v/raw.mp4?X-Amz-Signature=abc: Server returned 403",
+				),
+				false,
+			),
+		).toBe("<url> Server returned 403");
 		expect(nvencFallbackReason(new Error(""), false)).toBe("unknown error");
 		expect(
 			nvencFallbackReason(new Error("x".repeat(2000)), false),
