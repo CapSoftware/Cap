@@ -27,6 +27,8 @@ impl Default for MuxerConfig {
     }
 }
 
+/// Writes Media Foundation H.264 samples into an mp4/mov output. Production callers are the
+/// Windows MP4 hardware paths in `recording::output_pipeline::win` (studio and camera).
 pub struct H264StreamMuxer {
     stream_index: usize,
     time_base: ffmpeg::Rational,
@@ -99,7 +101,7 @@ impl H264StreamMuxer {
             return Err("Muxer is already finished".into());
         }
 
-        let mut packet = self.mf_sample_to_avpacket(sample)?;
+        let mut packet = sample_to_packet(sample, self.time_base, self.stream_index)?;
 
         packet.rescale_ts(
             self.time_base,
@@ -145,44 +147,9 @@ impl H264StreamMuxer {
 
         packet.write_interleaved(output)?;
 
+        self.frame_count += 1;
+
         Ok(())
-    }
-
-    fn mf_sample_to_avpacket(&self, sample: &IMFSample) -> windows::core::Result<ffmpeg::Packet> {
-        let len = unsafe { sample.GetTotalLength()? };
-        let mut packet = ffmpeg::Packet::new(len as usize);
-
-        {
-            let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
-            let data = buffer.lock()?;
-
-            packet
-                .data_mut()
-                .unwrap()
-                .copy_from_slice(&data[0..len as usize]);
-        }
-
-        let pts = unsafe { sample.GetSampleTime() }
-            .ok()
-            .map(|v| mf_from_mf_time(self.time_base, v));
-        packet.set_pts(pts);
-        packet.set_dts(pts);
-
-        let duration = unsafe { sample.GetSampleDuration() }
-            .ok()
-            .map(|v| mf_from_mf_time(self.time_base, v))
-            .unwrap_or_default();
-        packet.set_duration(duration);
-
-        if let Ok(t) = unsafe { sample.GetUINT32(&MFSampleExtension_CleanPoint) }
-            && t != 0
-        {
-            packet.set_flags(packet::Flags::KEY);
-        }
-
-        packet.set_stream(self.stream_index);
-
-        Ok(packet)
     }
 
     pub fn finish(&mut self) -> Result<(), ffmpeg::Error> {
@@ -206,7 +173,74 @@ impl H264StreamMuxer {
     }
 }
 
-const MF_TIMEBASE: ffmpeg::Rational = ffmpeg::Rational(1, 10_000_000);
+/// Media Foundation sample times are in 100 ns ticks.
+pub const MF_TIMEBASE: ffmpeg::Rational = ffmpeg::Rational(1, 10_000_000);
+
+pub fn sample_to_packet(
+    sample: &IMFSample,
+    time_base: Rational,
+    stream_index: usize,
+) -> windows::core::Result<ffmpeg::Packet> {
+    let len = unsafe { sample.GetTotalLength()? };
+    let mut packet = ffmpeg::Packet::new(len as usize);
+
+    {
+        let buffer = unsafe { sample.ConvertToContiguousBuffer()? };
+        let data = buffer.lock()?;
+
+        packet
+            .data_mut()
+            .unwrap()
+            .copy_from_slice(&data[0..len as usize]);
+    }
+
+    let pts = unsafe { sample.GetSampleTime() }
+        .ok()
+        .map(|v| mf_from_mf_time(time_base, v));
+    packet.set_pts(pts);
+    packet.set_dts(pts);
+
+    let duration = unsafe { sample.GetSampleDuration() }
+        .ok()
+        .map(|v| mf_from_mf_time(time_base, v))
+        .unwrap_or_default();
+    packet.set_duration(duration);
+
+    let clean_point =
+        unsafe { sample.GetUINT32(&MFSampleExtension_CleanPoint) }.is_ok_and(|value| value != 0);
+    if clean_point || contains_idr_nal(packet.data().unwrap_or_default()) {
+        packet.set_flags(packet::Flags::KEY);
+    }
+
+    packet.set_stream(stream_index);
+
+    Ok(packet)
+}
+
+/// Some Media Foundation encoders leave `MFSampleExtension_CleanPoint` unset. The DASH muxer
+/// splits segments on keyframes, so fall back to the bitstream: an IDR NAL (type 5) after an
+/// Annex B start code.
+fn contains_idr_nal(data: &[u8]) -> bool {
+    let mut index = 0;
+    while index + 3 < data.len() {
+        if data[index] == 0
+            && data[index + 1] == 0
+            && (data[index + 2] == 1
+                || (data[index + 2] == 0 && index + 4 < data.len() && data[index + 3] == 1))
+        {
+            let nal = if data[index + 2] == 1 {
+                index + 3
+            } else {
+                index + 4
+            };
+            if data.get(nal).is_some_and(|byte| byte & 0x1F == 5) {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
+}
 
 fn mf_from_mf_time(tb: Rational, stime: i64) -> i64 {
     unsafe { av_rescale_q(stime, MF_TIMEBASE.into(), tb.into()) }
@@ -252,4 +286,18 @@ pub fn set_fragmented_mp4_options(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_idr_nal;
+
+    #[test]
+    fn detects_idr_after_three_and_four_byte_start_codes() {
+        assert!(contains_idr_nal(&[0, 0, 1, 0x65]));
+        assert!(contains_idr_nal(&[0, 0, 0, 1, 0x65]));
+        assert!(!contains_idr_nal(&[0, 0, 1, 0x41]));
+        assert!(!contains_idr_nal(&[0, 0, 1]));
+        assert!(!contains_idr_nal(&[]));
+    }
 }
