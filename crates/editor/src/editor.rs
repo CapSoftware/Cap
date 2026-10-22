@@ -6,7 +6,8 @@ use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
 use cap_rendering::SurfaceFrame;
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
-    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, RgbaToBgraReadback,
+    TransitionRenderInput,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -52,6 +53,8 @@ pub struct RendererTransitionInput {
 
 pub enum EditorFrameOutput {
     Rgba(RenderedFrame),
+    /// Tightly packed BGRA: `padded_bytes_per_row == width * 4`.
+    Bgra(RenderedFrame),
     Nv12(Nv12RenderedFrame),
     #[cfg(target_os = "macos")]
     Surface(SurfaceFrame),
@@ -61,8 +64,23 @@ pub enum EditorFrameOutput {
 pub enum EditorFrameFormat {
     #[default]
     Rgba,
+    Bgra,
     #[cfg(target_os = "macos")]
     BgraSurface,
+}
+
+/// `Bgra` needs the adapter to render to and copy from a `Bgra8Unorm`
+/// texture; where it cannot, the preview falls back to `Rgba` frames, which
+/// every consumer of `Bgra` also accepts.
+pub(crate) fn supported_frame_format(
+    format: EditorFrameFormat,
+    constants: &RenderVideoConstants,
+) -> EditorFrameFormat {
+    if format == EditorFrameFormat::Bgra && !RgbaToBgraReadback::supported(&constants._adapter) {
+        tracing::warn!("adapter cannot render BGRA readbacks; preview frames stay RGBA");
+        return EditorFrameFormat::Rgba;
+    }
+    format
 }
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
@@ -203,6 +221,7 @@ impl Renderer {
             output_format,
         } = self;
 
+        let output_format = supported_frame_format(output_format, &render_constants);
         let mut frame_renderer = FrameRenderer::new(&render_constants);
 
         let mut layers = match layers_rx.await {
@@ -491,6 +510,56 @@ impl Renderer {
                             FrameRenderStageTimings::default(),
                         )
                     }),
+                (EditorFrameFormat::Bgra, PendingRenderInput::Single(input)) => frame_renderer
+                    .render_immediate_bgra_with_timings(
+                        input.segment_frames,
+                        input.uniforms,
+                        &input.cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|(frame, timings)| {
+                        (
+                            EditorFrameOutput::Bgra(frame),
+                            PlaybackRenderOutputFormat::Bgra,
+                            timings,
+                        )
+                    }),
+                (
+                    EditorFrameFormat::Bgra,
+                    PendingRenderInput::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                    },
+                ) => frame_renderer
+                    .render_transition_bgra(
+                        TransitionRenderInput {
+                            segment_frames: outgoing.segment_frames,
+                            uniforms: outgoing.uniforms,
+                            cursor: &outgoing.cursor,
+                            render_display: true,
+                        },
+                        TransitionRenderInput {
+                            segment_frames: incoming.segment_frames,
+                            uniforms: incoming.uniforms,
+                            cursor: &incoming.cursor,
+                            render_display: true,
+                        },
+                        kind,
+                        progress,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Bgra(frame),
+                            PlaybackRenderOutputFormat::Bgra,
+                            FrameRenderStageTimings::default(),
+                        )
+                    }),
                 #[cfg(target_os = "macos")]
                 (EditorFrameFormat::BgraSurface, PendingRenderInput::Single(input)) => {
                     frame_renderer
@@ -550,7 +619,9 @@ impl Renderer {
                 Ok((frame, output_format, render_stage_timings)) => {
                     let render_duration = render_start.elapsed();
                     let frame_number = match &frame {
-                        EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => {
+                            frame.frame_number
+                        }
                         EditorFrameOutput::Nv12(frame) => frame.frame_number,
                         #[cfg(target_os = "macos")]
                         EditorFrameOutput::Surface(frame) => frame.frame_number,
