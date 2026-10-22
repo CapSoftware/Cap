@@ -83,6 +83,17 @@ const video = {
 const metadata = { duration: 30, width: 1920, height: 1080, fps: 30 };
 const pending = { phase: "processing", processingProgress: 25 };
 
+function storageError(cause: unknown) {
+	return { _tag: "StorageError", cause: { _tag: "S3Error", cause } };
+}
+
+function s3Error(name: string, httpStatusCode: number) {
+	return Object.assign(new Error(name), {
+		name,
+		$metadata: { httpStatusCode },
+	});
+}
+
 describe("media processing workflows", () => {
 	beforeEach(() => {
 		mocks.rows = [];
@@ -212,6 +223,56 @@ describe("media processing workflows", () => {
 			expect.anything(),
 		);
 	});
+
+	it("does not re-import from Loom when the preserved upload check fails transiently", async () => {
+		mocks.head.mockReturnValue(
+			Effect.fail(storageError(s3Error("ServiceUnavailable", 503))),
+		);
+		mocks.rows = [[video]];
+		await expect(
+			importLoomVideoWorkflow({ ...payload, reuseExistingRawUpload: true }),
+		).rejects.toThrow();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.put).not.toHaveBeenCalled();
+	});
+
+	it("does not re-import from Loom when the preserved upload check hits a network error", async () => {
+		mocks.head.mockReturnValue(
+			Effect.fail(storageError(new Error("socket hang up"))),
+		);
+		mocks.rows = [[video]];
+		await expect(
+			importLoomVideoWorkflow({ ...payload, reuseExistingRawUpload: true }),
+		).rejects.toThrow();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.put).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["storage", storageError(s3Error("NotFound", 404))],
+		[
+			"Google Drive",
+			{
+				_tag: "StorageError",
+				cause: Object.assign(new Error("Storage object not found"), {
+					name: "GoogleDriveRequestError",
+					status: 404,
+				}),
+			},
+		],
+	])(
+		"re-imports from Loom when %s reports the preserved upload missing",
+		async (_, error) => {
+			mocks.head.mockReturnValue(Effect.fail(error));
+			mocks.rows = [[video], [video], [pending], [], [metadata]];
+			await expect(
+				importLoomVideoWorkflow({ ...payload, reuseExistingRawUpload: true }),
+			).resolves.toMatchObject({ success: true });
+			expect(mocks.fetch.mock.calls.at(-1)?.[0]).toBe(
+				"https://worker.example.com/video/import",
+			);
+		},
+	);
 
 	it("retries a failed Loom worker from its preserved original", async () => {
 		mocks.rows = [
