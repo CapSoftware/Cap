@@ -14,15 +14,15 @@ type SlideKey = ModeKey | "all";
 
 type Slide = {
 	key: SlideKey;
-
-	words: [string, string, string];
+	/** The end of "The open source screen recorder for …". */
+	tail: string;
 };
 
 const SLIDES: Slide[] = [
-	{ key: "all", words: ["Record.", "Edit.", "Share."] },
-	{ key: "instant", words: ["Record.", "Stop.", "Instant Share."] },
-	{ key: "studio", words: ["Record.", "Edit.", "Export."] },
-	{ key: "screenshot", words: ["Screenshot.", "Style.", "Share."] },
+	{ key: "all", tail: "everyone." },
+	{ key: "instant", tail: "quick shares." },
+	{ key: "studio", tail: "polished videos." },
+	{ key: "screenshot", tail: "screenshots, too." },
 ];
 
 const NUDGE = "Click me \u{1F440}";
@@ -51,8 +51,6 @@ const PILL_ICON = {
 	studio: StudioIcon,
 	screenshot: ScreenshotIcon,
 } as const;
-
-const SLOT_DELAY = [0, 120, 240];
 
 const STRIKE_MS = 260;
 
@@ -253,7 +251,7 @@ export const HeroHeadline = () => {
 				{CSS}
 			</style>
 
-			<div className="relative pb-10 md:pb-14">
+			<div className="ht-rise relative pb-10 [--d:0.35s] md:pb-14">
 				<div className="mx-auto flex w-fit flex-nowrap items-center justify-center gap-0.5 rounded-full border border-[#DDE4EB] bg-white/70 p-1 shadow-[0_1px_2px_rgba(17,17,17,0.04)]">
 					{PILLS.map((pill) => {
 						const active = index === pill.slide;
@@ -303,25 +301,27 @@ export const HeroHeadline = () => {
 				</span>
 			</div>
 
-			<h1 className={`${H_HERO} text-[clamp(36px,5.6vw,74px)]`}>
+			<h1
+				className={`ht-rise ht-rise-soft [--d:0.5s] ${H_HERO} max-w-[15ch] text-balance text-[clamp(34px,4.4vw,60px)] sm:max-w-none`}
+			>
 				<span className="sr-only">
-					Record. Edit. Share. Cap has three recording modes: Instant, Studio,
-					and Screenshot.
+					The open source screen recorder for everyone. Cap has three recording
+					modes: Instant, Studio, and Screenshot.
 				</span>
-				<span
-					aria-hidden="true"
-					className="ht-headline flex flex-col items-center sm:flex-row sm:justify-center sm:gap-[0.26em]"
-				>
-					{slide.words.map((word, i) => (
+				<span aria-hidden="true" className="ht-headline block">
+					<span className="block">The open source screen recorder</span>
+					{/* The line that changes with the mode, in the subheading's
+					    serif so the short line reads as deliberate. */}
+					<span className="ht-tail block">
+						for{" "}
 						<Slot
-							key={`slot-${i === 0 ? "capture" : i === 1 ? "beat" : "payoff"}`}
-							text={word}
-							color={i === 2 ? accent : INK}
+							text={slide.tail}
+							color={accent}
 							strike={accent}
-							delay={SLOT_DELAY[i] ?? 0}
+							delay={0}
 							animate={!reduced}
 						/>
-					))}
+					</span>
 				</span>
 			</h1>
 		</div>
@@ -329,9 +329,36 @@ export const HeroHeadline = () => {
 };
 
 const CSS = `
+/* The hero's entrance, staggered by --d on each piece. */
+.ht-rise { animation: ht-rise 1.1s cubic-bezier(0.16, 1, 0.3, 1) var(--d, 0s) both; }
+.ht-rise-soft { animation-name: ht-rise-soft; animation-duration: 1.3s; }
+@keyframes ht-rise {
+	from { opacity: 0; transform: translate3d(0, 14px, 0); }
+	to { opacity: 1; transform: none; }
+}
+@keyframes ht-rise-soft {
+	from { opacity: 0; transform: translate3d(0, 18px, 0); filter: blur(10px); }
+	to { opacity: 1; transform: none; filter: blur(0); }
+}
+
 /* The site's base sheet pins spans to line-height 1.5rem, which would
    collapse the slot line boxes. Restore the H_HERO leading. */
 .ht-headline, .ht-headline span { line-height: 0.98; }
+.ht-tail {
+	margin-top: 0.06em;
+	font-family: var(--font-ht-serif), Georgia, serif;
+	font-style: italic;
+	font-weight: 400;
+	font-size: 1.06em;
+	letter-spacing: -0.025em;
+	white-space: nowrap;
+}
+/* Never let "for" and the ending split across lines: on narrow phones the
+   line shrinks until the longest ending ("for screenshots, too.", about
+   8.6em wide) fits inside the hero's padding. */
+@media (max-width: 639px) {
+	.ht-tail { font-size: min(1.06em, calc((100vw - 64px) / 8.8)); }
+}
 
 .ht-slot {
 	position: relative;
@@ -471,6 +498,7 @@ const CSS = `
 @media (min-width: 1024px) { .ht-nudge { right: 94%; } }
 
 @media (prefers-reduced-motion: reduce) {
+	.ht-rise { animation: none; }
 	.ht-slot { transition: none; }
 	.ht-nudge, .ht-nudge-chip { transition: none; }
 	.ht-strike, .ht-out, .ht-in, .ht-caret { animation: none; }
