@@ -21,6 +21,10 @@ import {
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
 import { fetchMedia, materializeMedia } from "./media-transfer";
+import {
+	downloadUrlToPathParallel,
+	parallelDownloadOptionsFromEnv,
+} from "./parallel-download";
 import { readRecordingAudioTail } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
@@ -1251,6 +1255,18 @@ export async function downloadVideoToTemp(
 		const combinedSignal = abortSignal
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;
+
+		const parallel = parallelDownloadOptionsFromEnv();
+		if (parallel.concurrency > 1) {
+			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
+				...parallel,
+				signal: combinedSignal,
+			});
+			if (file(tempFile.path).size === 0) {
+				throw new Error("Downloaded video is empty");
+			}
+			return tempFile;
+		}
 
 		const response = await fetchMedia(videoUrl, {
 			signal: combinedSignal,
