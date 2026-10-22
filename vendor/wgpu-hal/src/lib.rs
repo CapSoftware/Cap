@@ -262,6 +262,8 @@ pub mod noop;
 pub mod vulkan;
 
 pub mod auxil;
+pub static PROBE_BIND_GROUPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static PROBE_BUFFERS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub mod api {
     #[cfg(dx12)]
     pub use super::dx12::Api as Dx12;

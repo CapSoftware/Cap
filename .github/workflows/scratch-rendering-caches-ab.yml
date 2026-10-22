@@ -1,0 +1,111 @@
+name: Scratch rendering caches A/B
+
+on:
+  push:
+    branches: [ci/rendering-caches-ab]
+
+permissions:
+  contents: read
+
+env:
+  BASE_REF: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
+  ROUNDS: "3"
+  FRAMES: "300"
+
+jobs:
+  ab:
+    name: A/B (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+          - os: macos
+            runner: blacksmith-6vcpu-macos-26
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    steps:
+      - name: Keep the display awake
+        if: runner.os == 'macOS'
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          sudo mdutil -a -i off || true
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: fast
+          rust-cache: "false"
+
+      - name: Toolchain and tools
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --target ${{ matrix.target }}
+          if [[ "$RUNNER_OS" == Linux ]]; then sudo apt-get install -y -qq strace ffmpeg >/dev/null; fi
+          command -v ffmpeg || true
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-rendering-caches-ab
+          save-cache: "true"
+          cache-on-failure: "true"
+
+      - name: Build base and head
+        run: |
+          set -euo pipefail
+          tip=$(git rev-parse HEAD)
+          profile=(--profile abperf --config 'profile.abperf.inherits="release"' --config 'profile.abperf.lto=false' --config 'profile.abperf.codegen-units=16' --config 'profile.abperf.debug=0')
+          build() {
+            local side=$1 ref=$2
+            git checkout -f "$ref" -- crates apps
+            git status --short | head -20
+            cargo build --locked "${profile[@]}" -p cap-rendering --example per-frame-bench
+            cargo build --locked "${profile[@]}" -p cap-export --example export-cli
+            test_bin=$(cargo test --locked "${profile[@]}" -p cap-rendering --test per_frame_caches --no-run --message-format=json \
+              | python3 -c 'import json,sys; print([j["executable"] for j in map(json.loads, sys.stdin) if j.get("executable") and j["target"]["name"] == "per_frame_caches"][-1])')
+            mkdir -p "$RUNNER_TEMP/bin/$side"
+            cp target/abperf/examples/per-frame-bench target/abperf/examples/export-cli "$RUNNER_TEMP/bin/$side/"
+            cp "$test_bin" "$RUNNER_TEMP/bin/$side/per_frame_caches"
+          }
+          build base "$BASE_REF"
+          build head "$tip"
+          git status --short | head
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            clang -dynamiclib -O2 -o "$RUNNER_TEMP/bin/interpose.dylib" .github/scripts/rendering-caches-ab/interpose.c
+          fi
+
+      - name: Fixtures
+        run: |
+          set -euo pipefail
+          cargo run --locked --profile abperf --config 'profile.abperf.inherits="release"' --config 'profile.abperf.lto=false' --config 'profile.abperf.codegen-units=16' --config 'profile.abperf.debug=0' \
+            -p cap-verify --example cursor-wallpaper-fixture -- "$RUNNER_TEMP/fx/cursor-wallpaper.cap" 10
+          "$RUNNER_TEMP/bin/head/per-frame-bench" augment "$RUNNER_TEMP/fx/cursor-wallpaper.cap"
+          cp -R "$RUNNER_TEMP/fx/cursor-wallpaper.cap" "$RUNNER_TEMP/fx/effects.cap"
+          "$RUNNER_TEMP/bin/head/per-frame-bench" augment "$RUNNER_TEMP/fx/effects.cap" effects
+          ls -la "$RUNNER_TEMP/fx/cursor-wallpaper.cap" "$RUNNER_TEMP/fx/effects.cap/assets"
+          cat "$RUNNER_TEMP/fx/effects.cap/recording-meta.json" | head -c 2000
+
+      - name: Measure
+        run: |
+          set +e
+          python3 -I .github/scripts/rendering-caches-ab/run.py "$RUNNER_TEMP/out" "$RUNNER_TEMP/bin" "$RUNNER_TEMP/fx" "$ROUNDS" "$FRAMES"
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-caches-ab-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/out/*.md
+            ${{ runner.temp }}/out/*.txt
+            ${{ runner.temp }}/out/*.hashes
+            ${{ runner.temp }}/out/*.framemd5
+          if-no-files-found: ignore

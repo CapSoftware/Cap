@@ -1030,6 +1030,7 @@ impl crate::Device for super::Device {
         &self,
         desc: &crate::BufferDescriptor,
     ) -> Result<super::Buffer, crate::DeviceError> {
+        crate::PROBE_BUFFERS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let vk_info = vk::BufferCreateInfo::default()
             .size(desc.size)
             .usage(conv::map_buffer_usage(desc.usage))
@@ -1619,6 +1620,7 @@ impl crate::Device for super::Device {
             super::AccelerationStructure,
         >,
     ) -> Result<super::BindGroup, crate::DeviceError> {
+        crate::PROBE_BIND_GROUPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let contains_binding_arrays = !desc.layout.binding_arrays.is_empty();
 
         let desc_set_layout_flags = if contains_binding_arrays {

@@ -345,6 +345,7 @@ impl crate::Device for super::Device {
     type A = super::Api;
 
     unsafe fn create_buffer(&self, desc: &crate::BufferDescriptor) -> DeviceResult<super::Buffer> {
+        crate::PROBE_BUFFERS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let map_read = desc.usage.contains(wgt::BufferUses::MAP_READ);
         let map_write = desc.usage.contains(wgt::BufferUses::MAP_WRITE);
 
@@ -821,6 +822,7 @@ impl crate::Device for super::Device {
             super::AccelerationStructure,
         >,
     ) -> DeviceResult<super::BindGroup> {
+        crate::PROBE_BIND_GROUPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         objc::rc::autoreleasepool(|| {
             let mut bg = super::BindGroup::default();
             for (&stage, counter) in super::NAGA_STAGES.iter().zip(bg.counters.iter_mut()) {
