@@ -21,6 +21,8 @@ jobs:
       - name: Replay
         run: |
           set +e
+          mkdir -p target/ci-verify
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
           CAP_VERIFY_CASE='seek/seek-gop/keyframes60/avf' CAP_VERIFY_TIER=fast cargo test --profile ci-verify -p cap-verify --test seek keyframe_seeks -- --nocapture > "$RUNNER_TEMP/replay.log" 2>&1
           echo "exit=$?"
           grep -n "FAIL\|pass seek\|stale" "$RUNNER_TEMP/replay.log" | head -20
