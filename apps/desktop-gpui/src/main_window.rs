@@ -1276,11 +1276,14 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for image in self.thumbnails.retain_displays(&displays) {
+        let dropped = self.thumbnails.retain_displays(&displays);
+        let changed = self.devices.install_displays(displays) || !dropped.is_empty();
+        for image in dropped {
             let _ = window.drop_image(image);
         }
-        self.devices.displays = displays;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     fn install_windows(
@@ -1289,11 +1292,14 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for image in self.thumbnails.retain_windows(&windows) {
+        let dropped = self.thumbnails.retain_windows(&windows);
+        let changed = self.devices.install_windows(windows) || !dropped.is_empty();
+        for image in dropped {
             let _ = window.drop_image(image);
         }
-        self.devices.windows = windows;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     /// Start one capture sweep, or return `None` because one is already in

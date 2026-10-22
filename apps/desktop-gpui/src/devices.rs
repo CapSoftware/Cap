@@ -124,6 +124,24 @@ impl WindowOption {
             (None, None) => None,
         }
     }
+
+    /// Whether two entries draw the same card. `position` only feeds the
+    /// thumbnail signature, so a window that moved still draws the same card.
+    pub fn same_card(&self, other: &Self) -> bool {
+        let Self {
+            id,
+            label,
+            app,
+            size,
+            position: _,
+            refresh_rate,
+        } = self;
+        *id == other.id
+            && *label == other.label
+            && *app == other.app
+            && *size == other.size
+            && *refresh_rate == other.refresh_rate
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -135,6 +153,28 @@ pub struct DeviceSnapshot {
 }
 
 impl DeviceSnapshot {
+    /// Store a fresh display list. Returns whether any card changed.
+    pub fn install_displays(&mut self, displays: Vec<DisplayOption>) -> bool {
+        if self.displays == displays {
+            return false;
+        }
+        self.displays = displays;
+        true
+    }
+
+    /// Store a fresh window list. Returns whether any card changed. The list is
+    /// stored either way so the thumbnail signature sees moved windows.
+    pub fn install_windows(&mut self, windows: Vec<WindowOption>) -> bool {
+        let changed = self.windows.len() != windows.len()
+            || self
+                .windows
+                .iter()
+                .zip(&windows)
+                .any(|(current, next)| !current.same_card(next));
+        self.windows = windows;
+        changed
+    }
+
     pub fn update_camera_formats(
         &mut self,
         queried: &CameraOption,
@@ -228,6 +268,122 @@ impl InputSnapshot {
             _ => return false,
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod target_list_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn window(id: &str, label: &str) -> WindowOption {
+        WindowOption {
+            id: WindowId::from_str(id).unwrap(),
+            label: label.into(),
+            app: "Cap".into(),
+            size: Some((1920, 1080)),
+            position: Some((0., 0.)),
+            refresh_rate: Some(60.),
+        }
+    }
+
+    fn display(id: &str, label: &str) -> DisplayOption {
+        DisplayOption {
+            id: DisplayId::from_str(id).unwrap(),
+            label: label.into(),
+            refresh_rate: 60.,
+        }
+    }
+
+    #[test]
+    fn unchanged_display_list_does_not_repaint() {
+        let list = vec![display("1", "Built-in"), display("2", "Studio Display")];
+        let mut snapshot = DeviceSnapshot::default();
+        assert!(snapshot.install_displays(list.clone()));
+        assert!(!snapshot.install_displays(list.clone()));
+        assert_eq!(snapshot.displays, list);
+    }
+
+    #[test]
+    fn display_changes_repaint() {
+        let list = vec![display("1", "Built-in"), display("2", "Studio Display")];
+        let mut renamed = list.clone();
+        renamed[1].label = "Sidecar".into();
+        let mut slower = list.clone();
+        slower[0].refresh_rate = 30.;
+        let reordered = vec![list[1].clone(), list[0].clone()];
+        for next in [
+            renamed,
+            slower,
+            reordered,
+            vec![list[0].clone()],
+            Vec::new(),
+        ] {
+            let mut snapshot = DeviceSnapshot {
+                displays: list.clone(),
+                ..Default::default()
+            };
+            assert!(snapshot.install_displays(next.clone()));
+            assert_eq!(snapshot.displays, next);
+        }
+    }
+
+    #[test]
+    fn unchanged_window_list_does_not_repaint() {
+        let list = vec![window("1", "Main"), window("2", "Editor")];
+        let mut snapshot = DeviceSnapshot::default();
+        assert!(snapshot.install_windows(list.clone()));
+        assert!(!snapshot.install_windows(list.clone()));
+        assert_eq!(snapshot.windows, list);
+    }
+
+    #[test]
+    fn moved_window_is_stored_without_a_repaint() {
+        let list = vec![window("1", "Main"), window("2", "Editor")];
+        let mut moved = list.clone();
+        moved[1].position = Some((240., 96.));
+        let mut snapshot = DeviceSnapshot {
+            windows: list,
+            ..Default::default()
+        };
+        assert!(!snapshot.install_windows(moved.clone()));
+        assert_eq!(snapshot.windows, moved);
+    }
+
+    #[test]
+    fn window_card_changes_repaint() {
+        let list = vec![window("1", "Main"), window("2", "Editor")];
+        let mut renamed = list.clone();
+        renamed[0].label = "Untitled".into();
+        let mut other_app = list.clone();
+        other_app[1].app = "Finder".into();
+        let mut resized = list.clone();
+        resized[0].size = Some((1280, 720));
+        let mut sizeless = list.clone();
+        sizeless[0].size = None;
+        let mut slower = list.clone();
+        slower[1].refresh_rate = Some(30.);
+        let reordered = vec![list[1].clone(), list[0].clone()];
+        let mut opened = list.clone();
+        opened.push(window("3", "Settings"));
+        for next in [
+            renamed,
+            other_app,
+            resized,
+            sizeless,
+            slower,
+            reordered,
+            opened,
+            vec![list[0].clone()],
+            Vec::new(),
+        ] {
+            let mut snapshot = DeviceSnapshot {
+                windows: list.clone(),
+                ..Default::default()
+            };
+            assert!(snapshot.install_windows(next.clone()));
+            assert_eq!(snapshot.windows, next);
+        }
     }
 }
 
