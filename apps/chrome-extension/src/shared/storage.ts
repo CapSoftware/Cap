@@ -148,11 +148,48 @@ const removeSession = (keys: string[] | string) =>
 		chrome.storage.session.remove(keys, resolve);
 	});
 
+// Admins can pin the Cap URL through Chrome enterprise policy (MDM), which
+// Chrome exposes read-only via chrome.storage.managed using the schema in
+// public/managed_schema.json. The managed area is absent outside Chrome and
+// errors when no policy is installed, so both resolve to "not managed".
+export const loadManagedApiBaseUrl = async (): Promise<string | null> => {
+	const managed =
+		typeof chrome === "undefined" ? undefined : chrome.storage?.managed;
+	if (!managed) return null;
+	const items = await new Promise<Record<string, unknown>>((resolve) => {
+		try {
+			managed.get(["apiBaseUrl"], (result) => {
+				resolve(chrome.runtime?.lastError ? {} : (result ?? {}));
+			});
+		} catch {
+			resolve({});
+		}
+	});
+	const value = items.apiBaseUrl;
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim().replace(/\/+$/, "");
+	try {
+		const url = new URL(trimmed);
+		return url.protocol === "https:" || url.protocol === "http:"
+			? trimmed
+			: null;
+	} catch {
+		return null;
+	}
+};
+
 export const loadSettings = async () => {
-	const result = await getLocal([SETTINGS_KEY]);
+	const [result, managedApiBaseUrl] = await Promise.all([
+		getLocal([SETTINGS_KEY]),
+		loadManagedApiBaseUrl(),
+	]);
 	const saved = result[SETTINGS_KEY];
-	if (!isSettings(saved)) return defaultSettings;
-	const apiBaseUrl =
+	if (!isSettings(saved)) {
+		return managedApiBaseUrl
+			? { ...defaultSettings, apiBaseUrl: managedApiBaseUrl }
+			: defaultSettings;
+	}
+	const savedApiBaseUrl =
 		import.meta.env.MODE === "development" &&
 		saved.apiBaseUrl === PRODUCTION_API_BASE_URL
 			? DEFAULT_API_BASE_URL
@@ -160,7 +197,7 @@ export const loadSettings = async () => {
 	return {
 		...defaultSettings,
 		...saved,
-		apiBaseUrl,
+		apiBaseUrl: managedApiBaseUrl ?? savedApiBaseUrl,
 		capture: normalizeCapturePreferences(saved.capture),
 		webcam: normalizeWebcamSettings(saved.webcam),
 		microphone: normalizeMicrophoneSettings(saved.microphone),

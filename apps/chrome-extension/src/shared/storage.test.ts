@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	type FailedRecording,
 	loadFailedRecordings,
+	loadManagedApiBaseUrl,
 	loadOverlayTokens,
+	loadSettings,
 	loadSharedRecordingState,
 	loadSharedUiState,
 	registerOverlayToken,
+	saveSettings,
 	saveSharedRecordingState,
 	updateSharedUiState,
 	upsertFailedRecording,
@@ -145,5 +148,54 @@ describe("storage read-modify-write serialization", () => {
 		]);
 
 		expect((await loadSharedRecordingState())?.status.phase).toBe("idle");
+	});
+});
+
+const setManagedPolicy = (policy: Record<string, unknown> | null) => {
+	const chromeGlobal = (globalThis as { chrome: { storage: object } }).chrome;
+	chromeGlobal.storage = {
+		...chromeGlobal.storage,
+		managed: {
+			get(_keys: string[], callback: (items: Record<string, unknown>) => void) {
+				setTimeout(() => callback(policy ?? {}), 0);
+			},
+		},
+	};
+};
+
+describe("managed apiBaseUrl policy", () => {
+	it("ignores the managed area when it is unavailable", async () => {
+		expect(await loadManagedApiBaseUrl()).toBeNull();
+	});
+
+	it("overrides the saved Cap URL with the managed one", async () => {
+		const settings = await loadSettings();
+		await saveSettings({ ...settings, apiBaseUrl: "https://user.example" });
+		setManagedPolicy({ apiBaseUrl: " https://cap.corp.example/ " });
+
+		const { apiBaseUrl } = await loadSettings();
+		expect(apiBaseUrl).toBe("https://cap.corp.example");
+	});
+
+	it("applies the managed Cap URL before any settings are saved", async () => {
+		setManagedPolicy({ apiBaseUrl: "https://cap.corp.example" });
+
+		const { apiBaseUrl } = await loadSettings();
+		expect(apiBaseUrl).toBe("https://cap.corp.example");
+	});
+
+	it("rejects managed values that are not http(s) URLs", async () => {
+		for (const apiBaseUrl of ["not a url", "javascript:alert(1)", 42]) {
+			setManagedPolicy({ apiBaseUrl });
+			expect(await loadManagedApiBaseUrl()).toBeNull();
+		}
+	});
+
+	it("keeps the saved Cap URL when no policy is set", async () => {
+		const settings = await loadSettings();
+		await saveSettings({ ...settings, apiBaseUrl: "https://user.example" });
+		setManagedPolicy(null);
+
+		expect((await loadSettings()).apiBaseUrl).toBe("https://user.example");
 	});
 });
