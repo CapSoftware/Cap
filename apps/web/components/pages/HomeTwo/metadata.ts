@@ -1,15 +1,22 @@
 import type { Metadata } from "next";
-import { buildMarketingMetadata } from "@/lib/og/url";
+import { buildMarketingMetadata, ogImageUrl } from "@/lib/og/url";
 import { homepageSeo } from "./seo";
+
+export const homepageOgTitle = "Record. Edit. Share.";
+export const homepageOgDescription =
+	"The open source screen recorder for Mac, Windows, and Linux.";
+export const homepageOgImageUrl = new URL(
+	ogImageUrl({ title: homepageOgTitle, description: homepageOgDescription }),
+	homepageSeo.url,
+).toString();
 
 export const homePageMetadata: Metadata = {
 	...buildMarketingMetadata({
 		title: homepageSeo.title,
 		description: homepageSeo.description,
 		path: homepageSeo.url,
-		ogTitle: "Record. Edit. Share.",
-		ogDescription:
-			"The open source screen recorder for Mac, Windows, and Linux.",
+		ogTitle: homepageOgTitle,
+		ogDescription: homepageOgDescription,
 	}),
 	robots: {
 		index: true,
