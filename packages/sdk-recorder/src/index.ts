@@ -14,10 +14,10 @@ import type {
 import { MultipartClient } from "./upload/multipart-client";
 
 export type {
+	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
 	RecordingResult,
-	RecorderEventMap,
 };
 
 const DEFAULT_API_BASE = "https://cap.so";
@@ -109,10 +109,11 @@ export class CapRecorder {
 		this.emit("phasechange", { phase });
 	}
 
-	async start(): Promise<void> {
+	async start(options?: Pick<RecorderOptions, "maxDurationMs">): Promise<void> {
 		if (this._phase !== "idle") {
 			throw new Error(`Cannot start from phase "${this._phase}"`);
 		}
+		const maxDurationMs = options?.maxDurationMs ?? this.maxDurationMs;
 
 		try {
 			this.setPhase("requesting-permission");
@@ -124,7 +125,7 @@ export class CapRecorder {
 				systemAudio: this.options.systemAudio,
 			});
 
-			const composite = buildCompositeStream(this.streams);
+			const composite = await buildCompositeStream(this.streams);
 			if (composite.getTracks().length === 0) {
 				throw new Error("No media tracks available");
 			}
@@ -157,7 +158,7 @@ export class CapRecorder {
 			this.startDurationTimer();
 			this.maxDurationTimeout = setTimeout(() => {
 				this.stop();
-			}, this.maxDurationMs);
+			}, maxDurationMs);
 			this.setPhase("recording");
 		} catch (error) {
 			this.setPhase("error");

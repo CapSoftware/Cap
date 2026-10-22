@@ -129,7 +129,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
         return Err("Recording is not a studio recording".into());
     };
 
-    let project_config = recording_meta.project_config();
+    let project_config = Arc::new(recording_meta.project_config());
     let recordings = Arc::new(
         ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
             .map_err(std::io::Error::other)?,

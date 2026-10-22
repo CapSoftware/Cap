@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
@@ -220,6 +220,7 @@ async fn render_preview_frame(
         segments,
         total_duration,
     } = source;
+    let project_config = &Arc::new(project_config.clone());
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -465,8 +466,6 @@ fn encode_preview_jpeg(frame: &RenderedFrame, quality: u8) -> Result<Vec<u8>, Ex
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     fn frame(width: u32, height: u32, stride: usize, mut state: u64) -> RenderedFrame {
