@@ -65,7 +65,7 @@ vi.mock("next/image", async () => {
 });
 
 vi.mock("next/navigation", () => ({
-	useSearchParams: () => new URLSearchParams(),
+	useSearchParams: () => new URLSearchParams(window.location.search),
 	useRouter: () => ({ refresh: () => undefined }),
 }));
 
@@ -163,12 +163,13 @@ const findButton = (container: HTMLElement, label: string) =>
 const stageOf = (video: Element | null) =>
 	video?.parentElement?.parentElement?.parentElement ?? null;
 
-describe("Share view toggle", () => {
+describe("Share", () => {
 	beforeAll(() => {
 		actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		document.body.replaceChildren();
 		window.localStorage.clear();
 		window.history.replaceState(window.history.state, "", "/s/video-id");
@@ -177,6 +178,41 @@ describe("Share view toggle", () => {
 	afterAll(() => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
 	});
+
+	it.each(["loadedmetadata", "canplay"])(
+		"seeks a timestamp link when %s arrives after five seconds",
+		async (readyEvent) => {
+			vi.useFakeTimers();
+			window.history.replaceState(null, "", "/s/video-id?t=42");
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+
+			try {
+				await act(async () => {
+					root.render(createElement(Share, createProps()));
+				});
+
+				const video = container.querySelector("video");
+				if (!video) throw new Error("Share video did not mount");
+				expect(video.currentTime).toBe(0);
+
+				await act(async () => {
+					vi.advanceTimersByTime(5000);
+					Object.defineProperty(video, "duration", { value: 60 });
+					video.dispatchEvent(new Event(readyEvent));
+				});
+
+				expect(video.currentTime).toBe(42);
+				video.currentTime = 50;
+				video.dispatchEvent(new Event("loadedmetadata"));
+				video.dispatchEvent(new Event("canplay"));
+				expect(video.currentTime).toBe(50);
+			} finally {
+				await act(async () => root.unmount());
+			}
+		},
+	);
 
 	it("keeps the sidebar open after mounting with an old collapsed preference", async () => {
 		window.localStorage.setItem("cap_share_rail_collapsed", "true");

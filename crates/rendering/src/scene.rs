@@ -383,6 +383,38 @@ mod tests {
     }
 
     #[test]
+    fn loaded_unsorted_scenes_fade_into_the_next_scene() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("project-config.json"),
+            r#"{
+                "timeline": {
+                    "segments": [{ "recordingSegment": 0, "start": 0.0, "end": 12.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "sceneSegments": [
+                        { "start": 8.0, "end": 10.0, "mode": "cameraOnly" },
+                        { "start": 1.0, "end": 3.0, "mode": "cameraOnly" },
+                        { "start": 5.0, "end": 7.0, "mode": "hideCamera" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let config = cap_project::ProjectConfiguration::load(project.path()).unwrap();
+        let segments = &config.timeline.as_ref().unwrap().scene_segments;
+        let before = scene_at(4.6, segments);
+        let during = scene_at(4.85, segments);
+        let after = scene_at(5.0, segments);
+        assert_eq!(before.camera_opacity, 1.0);
+        assert!(
+            (during.camera_opacity - 0.5).abs() < 1e-5,
+            "expected the camera halfway faded out, got {}",
+            during.camera_opacity
+        );
+        assert_eq!(after.camera_opacity, 0.0);
+    }
+
+    #[test]
     fn camera_only_blur_tracks_motion_at_both_boundaries() {
         let segments = [camera_scene(0.3)];
         for fps in [30, 60, 120] {
