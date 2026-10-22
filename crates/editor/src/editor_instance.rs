@@ -1849,8 +1849,7 @@ async fn create_segments_with_audio(
                     .unwrap_or_else(AudioLoader::none);
 
                 let system_audio = s
-                    .system_audio
-                    .as_ref()
+                    .usable_system_audio()
                     .filter(|_| load_audio)
                     .map(|audio| {
                         audio_loader_with_completed(

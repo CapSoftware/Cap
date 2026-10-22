@@ -217,7 +217,7 @@ impl ExportAudioPreparation {
                     if let Some(audio) = &segment.mic {
                         inputs.push((index, recording.path(&audio.path), true));
                     }
-                    if let Some(audio) = &segment.system_audio {
+                    if let Some(audio) = segment.usable_system_audio() {
                         inputs.push((index, recording.path(&audio.path), false));
                     }
                 }
@@ -292,7 +292,8 @@ impl ExportAudioRenderer {
                 .segments
                 .iter()
                 .map(|segment| {
-                    usize::from(segment.mic.is_some()) + usize::from(segment.system_audio.is_some())
+                    usize::from(segment.mic.is_some())
+                        + usize::from(segment.usable_system_audio().is_some())
                 })
                 .sum(),
         };

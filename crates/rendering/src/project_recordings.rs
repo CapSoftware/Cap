@@ -338,7 +338,10 @@ impl ProjectRecordingsMeta {
                         })
                     };
 
-                    let system_audio = match Option::map(s.system_audio.as_ref(), load_audio)
+                    if s.system_audio.is_some() && s.usable_system_audio().is_none() {
+                        tracing::warn!("System audio start time does not match display, treating as no audio");
+                    }
+                    let system_audio = match Option::map(s.usable_system_audio(), load_audio)
                         .transpose()
                     {
                         Ok(audio) => audio,
