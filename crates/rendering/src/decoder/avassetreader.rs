@@ -1218,6 +1218,32 @@ impl AVAssetReaderDecoder {
                 }
 
                 decoder.is_done = true;
+
+                // A failed reader (a decode error, seen with many decode
+                // sessions on a loaded machine) vends nothing more, and the
+                // newest cached frame is stale for every request still
+                // waiting. Read them again from a fresh reader; when that one
+                // fails too, leave them unanswered so the handle switches to
+                // software decoding instead of showing an older frame.
+                if !pending_requests.is_empty()
+                    && let Some(error) = decoder.inner.failure()
+                {
+                    tracing::warn!(
+                        decoder_idx,
+                        requested_frame,
+                        %error,
+                        "Video reader failed; reading the requests again from a fresh reader"
+                    );
+                    retry_requests.extend(
+                        pending_requests
+                            .drain(..)
+                            .filter(|request| !request.retried)
+                            .map(|request| PendingRequest {
+                                retried: true,
+                                ..request
+                            }),
+                    );
+                }
             }
 
             for request in retry_requests.into_iter().rev() {
