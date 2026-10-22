@@ -289,7 +289,6 @@ impl H264EncoderBuilder {
 
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
-            keyframes: None,
             encoder,
             converter,
             output_format,
@@ -424,7 +423,6 @@ impl H264EncoderBuilder {
 
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
-            keyframes: None,
             encoder,
             converter: None,
             output_format: ffmpeg::format::Pixel::VIDEOTOOLBOX,
@@ -813,7 +811,6 @@ fn open_video_encoder_inner(
 }
 
 pub struct H264Encoder {
-    keyframes: Option<super::keyframe_interval::KeyframeInterval>,
     base: EncoderBase,
     encoder: encoder::Video,
     converter: Option<ffmpeg::software::scaling::Context>,
@@ -847,10 +844,6 @@ pub enum QueueFrameError {
 }
 
 impl H264Encoder {
-    pub fn set_keyframe_interval(&mut self, interval: Duration) {
-        self.keyframes = Some(super::keyframe_interval::KeyframeInterval::new(interval));
-    }
-
     const TIME_BASE: i32 = 90000;
 
     pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
@@ -917,28 +910,14 @@ impl H264Encoder {
                 .run(&frame, converted)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
-            if self.keyframes.is_some() {
-                converted.set_kind(frame.kind());
-            }
-            converted as &mut frame::Video
+            converted as &frame::Video
         } else {
-            &mut frame
+            &frame
         };
 
-        let original_kind = frame_to_send.kind();
-        let keyframe_checkpoint = self.keyframes;
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(frame_to_send, timestamp);
-        }
-
-        let result = self
-            .base
-            .send_frame(frame_to_send, output, &mut self.encoder);
-        frame_to_send.set_kind(original_kind);
-        if result.is_err() {
-            self.keyframes = keyframe_checkpoint;
-        }
-        result.map_err(QueueFrameError::Encode)?;
+        self.base
+            .send_frame(frame_to_send, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode)?;
 
         Ok(())
     }
@@ -961,28 +940,14 @@ impl H264Encoder {
                 .run(frame, converted)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
-            if self.keyframes.is_some() {
-                converted.set_kind(frame.kind());
-            }
-            converted as &mut frame::Video
+            converted as &frame::Video
         } else {
-            frame
+            frame as &frame::Video
         };
 
-        let original_kind = frame_to_send.kind();
-        let keyframe_checkpoint = self.keyframes;
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(frame_to_send, timestamp);
-        }
-
-        let result = self
-            .base
-            .send_frame(frame_to_send, output, &mut self.encoder);
-        frame_to_send.set_kind(original_kind);
-        if result.is_err() {
-            self.keyframes = keyframe_checkpoint;
-        }
-        result.map_err(QueueFrameError::Encode)?;
+        self.base
+            .send_frame(frame_to_send, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode)?;
 
         Ok(())
     }
@@ -1006,16 +971,9 @@ impl H264Encoder {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
 
-        let keyframe_checkpoint = self.keyframes;
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(&mut frame, timestamp);
-        }
-
-        let result = self.base.send_frame(&frame, output, &mut self.encoder);
-        if result.is_err() {
-            self.keyframes = keyframe_checkpoint;
-        }
-        result.map_err(QueueFrameError::Encode)?;
+        self.base
+            .send_frame(&frame, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode)?;
 
         Ok(())
     }
@@ -1283,9 +1241,6 @@ fn get_codec_and_options(
                 }
             }
             "h264_nvenc" => {
-                if !is_export {
-                    options.set("forced-idr", "1");
-                }
                 if is_export {
                     options.set("preset", "p5");
                     options.set("tune", "hq");
@@ -1303,9 +1258,6 @@ fn get_codec_and_options(
                 options.set("g", &keyframe_interval_str);
             }
             "h264_qsv" => {
-                if !is_export {
-                    options.set("forced_idr", "1");
-                }
                 if is_export {
                     options.set("preset", "medium");
                     options.set("look_ahead", "1");
@@ -1338,9 +1290,6 @@ fn get_codec_and_options(
                 options.set("g", &keyframe_interval_str);
             }
             "libx264" => {
-                if !is_export {
-                    options.set("forced-idr", "1");
-                }
                 if let Some(ref crf_val) = crf_str {
                     options.set("preset", "slow");
                     options.set("crf", crf_val);

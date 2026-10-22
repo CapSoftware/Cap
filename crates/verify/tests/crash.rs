@@ -16,9 +16,9 @@
 //! against what is physically on disk after the failure: every fragment whose
 //! box structure is complete must come back frame for frame at its capture
 //! time. Frames lost to a failure must be the newest ones and fit in the
-//! fragment being written: one GOP (`GOP_SECS` x fps frames, the encoder's
-//! keyframe interval, so the longest a segment can be when frames arrive at
-//! the nominal rate) plus `IN_FLIGHT` frames still inside the pipeline.
+//! timed fragment being written plus `IN_FLIGHT` frames still inside the
+//! pipeline. A segment can contain several recoverable moof/mdat pairs
+//! without introducing extra keyframes.
 
 mod common;
 
@@ -46,11 +46,10 @@ use cap_verify::{
 const FPS: u32 = 30;
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
-/// `DEFAULT_KEYFRAME_INTERVAL_SECS` in crates/enc-ffmpeg/src/video/h264.rs:
-/// the encoder emits a keyframe every `GOP_SECS * fps` frames and both DASH
-/// writers cut a segment only at a keyframe.
-const GOP_SECS: f64 = 2.0;
-const GOP: u32 = (GOP_SECS as u32) * FPS;
+/// Studio flushes complete moof/mdat pairs at this capture-time interval.
+/// The encoder GOP and the enclosing segment can be longer on a static screen.
+const FRAGMENT_SECS: f64 = 2.0;
+const FRAGMENT_FRAMES: u32 = (FRAGMENT_SECS as u32) * FPS;
 /// Frames that can still be inside the pipeline when the process dies: the
 /// one the encoder holds back to stamp real durations (segmented_stream.rs
 /// `queue_frame`), the one being encoded, and the one in the muxer channel.
@@ -182,7 +181,10 @@ mod source {
             Arm::InProcess => {
                 builder
                     .build::<ObservedMuxer<MacOSFragmentedM4SMuxer>>(
-                        MacOSFragmentedM4SMuxerConfig::default(),
+                        MacOSFragmentedM4SMuxerConfig {
+                            timed_fragments: true,
+                            ..Default::default()
+                        },
                     )
                     .await
             }
@@ -245,6 +247,7 @@ mod source {
             // The Studio display config (capture_pipeline.rs, X11Capture):
             // 2 s segments.
             .build::<ObservedMuxer<SegmentedVideoMuxer>>(SegmentedVideoMuxerConfig {
+                timed_fragments: true,
                 segment_duration: Duration::from_secs(2),
                 ..Default::default()
             })
@@ -443,10 +446,11 @@ fn read_truth(path: &Path) -> anyhow::Result<(Vec<Handed>, bool, Vec<String>)> {
                     continue;
                 };
                 // A kill can cut the last line short.
-                if let (Ok(index), Ok(secs)) = (index.parse(), secs.parse()) {
-                    if line.len() > 2 && secs_complete(line) {
-                        handed.push(Handed { index, secs });
-                    }
+                if let (Ok(index), Ok(secs)) = (index.parse(), secs.parse())
+                    && line.len() > 2
+                    && secs_complete(line)
+                {
+                    handed.push(Handed { index, secs });
                 }
             }
             Some("stop") => stopped = true,
@@ -639,35 +643,86 @@ fn wait_for_exit(pids: &[u32], case: &mut Case) {
     }
 }
 
-/// Top-level ISO BMFF boxes span the file exactly and include moof + mdat:
-/// the writer finished this fragment (independent of recovery.rs).
-fn fragment_complete(path: &Path) -> bool {
-    let Ok(data) = std::fs::read(path) else {
-        return false;
+fn box_bounds(data: &[u8], at: usize) -> Option<(usize, usize)> {
+    let header = data.get(at..at.checked_add(8)?)?;
+    let size = u32::from_be_bytes(header[..4].try_into().ok()?);
+    let (size, header_size) = match size {
+        0 => return None,
+        1 => (
+            usize::try_from(u64::from_be_bytes(
+                data.get(at.checked_add(8)?..at.checked_add(16)?)?
+                    .try_into()
+                    .ok()?,
+            ))
+            .ok()?,
+            16,
+        ),
+        size => (size as usize, 8),
     };
-    let mut at = 0usize;
-    let (mut moof, mut mdat) = (false, false);
-    while at + 8 <= data.len() {
-        let size32 = u32::from_be_bytes(data[at..at + 4].try_into().unwrap()) as usize;
-        let kind = &data[at + 4..at + 8];
-        let size = match size32 {
-            0 => return false,
-            1 => {
-                if at + 16 > data.len() {
-                    return false;
+    let end = at.checked_add(size)?;
+    (size >= header_size && end <= data.len()).then_some((at + header_size, end))
+}
+
+fn moof_sample_count(data: &[u8]) -> Option<usize> {
+    let mut at = 0;
+    let mut samples = 0usize;
+    while at < data.len() {
+        let (payload, end) = box_bounds(data, at)?;
+        if &data[at + 4..at + 8] == b"traf" {
+            let mut child = payload;
+            while child < end {
+                let (run, next) = box_bounds(&data[..end], child)?;
+                if &data[child + 4..child + 8] == b"trun" {
+                    let count = u32::from_be_bytes(data[run..next].get(4..8)?.try_into().ok()?);
+                    samples = samples.checked_add(count as usize)?;
                 }
-                u64::from_be_bytes(data[at + 8..at + 16].try_into().unwrap()) as usize
+                child = next;
             }
-            n => n,
-        };
-        if size < 8 {
-            return false;
         }
-        moof |= kind == b"moof";
-        mdat |= kind == b"mdat";
-        at += size;
+        at = end;
     }
-    at == data.len() && moof && mdat
+    Some(samples)
+}
+
+fn complete_prefix(data: &[u8]) -> Option<(usize, Vec<usize>)> {
+    let mut at = 0;
+    let mut complete = 0;
+    let mut pending = None;
+    let mut fragments = Vec::new();
+    while let Some((payload, end)) = box_bounds(data, at) {
+        match &data[at + 4..at + 8] {
+            b"moof" => {
+                if pending.is_some() {
+                    break;
+                }
+                let Some(samples) =
+                    moof_sample_count(&data[payload..end]).filter(|count| *count > 0)
+                else {
+                    break;
+                };
+                pending = Some(samples);
+            }
+            b"mdat" => {
+                let Some(samples) = pending.take() else {
+                    break;
+                };
+                fragments.push(samples);
+                complete = end;
+            }
+            _ => {}
+        }
+        at = end;
+    }
+    (complete > 0).then_some((complete, fragments))
+}
+
+fn has_complete_fragment(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|data| complete_prefix(&data).is_some())
+}
+
+fn fragment_complete(path: &Path) -> bool {
+    std::fs::read(path)
+        .is_ok_and(|data| complete_prefix(&data).is_some_and(|(length, _)| length == data.len()))
 }
 
 fn segment_index(name: &str) -> Option<u32> {
@@ -678,9 +733,8 @@ fn segment_index(name: &str) -> Option<u32> {
         .ok()
 }
 
-/// Physically complete fragments of one writer directory (finished
-/// `segment_NNN.m4s`, or a finished `.m4s.tmp` the writer had not renamed
-/// yet), in index order.
+/// Segments containing complete moof/mdat pairs, including a verified prefix
+/// of an open `.m4s.tmp`, in index order.
 fn complete_fragments(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -694,7 +748,7 @@ fn complete_fragments(dir: &Path) -> Vec<PathBuf> {
         let Some(index) = segment_index(name) else {
             continue;
         };
-        if !fragment_complete(&path) {
+        if !has_complete_fragment(&path) {
             continue;
         }
         // Prefer the renamed file when both exist.
@@ -735,10 +789,22 @@ fn decode_fragments(
     if fragments.is_empty() {
         return Ok(Vec::new());
     }
-    let mut joined = std::fs::read(dir.join("init.mp4")).context("init.mp4")?;
+    let mut bytes = Vec::new();
     for fragment in fragments {
-        joined.extend(std::fs::read(fragment)?);
+        let data = std::fs::read(fragment)?;
+        let (length, _) = complete_prefix(&data).context("no complete video fragment")?;
+        bytes.extend_from_slice(&data[..length]);
     }
+    decode_fragment_bytes(dir, &bytes, scratch)
+}
+
+fn decode_fragment_bytes(
+    dir: &Path,
+    bytes: &[u8],
+    scratch: &Path,
+) -> anyhow::Result<Vec<(u32, f64)>> {
+    let mut joined = std::fs::read(dir.join("init.mp4")).context("init.mp4")?;
+    joined.extend_from_slice(bytes);
     let path = scratch.join(format!(
         "joined-{}.mp4",
         dir.file_name().unwrap_or_default().to_string_lossy()
@@ -772,11 +838,18 @@ fn fragments_on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<Vec<(
     let mut out = Vec::new();
     for dir in writer_dirs(display) {
         for fragment in complete_fragments(&dir) {
-            out.push(decode_fragments(
-                &dir,
-                std::slice::from_ref(&fragment),
-                scratch,
-            )?);
+            let data = std::fs::read(&fragment)?;
+            let (length, samples) = complete_prefix(&data).context("no complete video fragment")?;
+            let frames = decode_fragment_bytes(&dir, &data[..length], scratch)?;
+            anyhow::ensure!(
+                frames.len() == samples.iter().sum::<usize>(),
+                "video sample tables and decoded frame count differ"
+            );
+            let mut offset = 0;
+            for count in samples {
+                out.push(frames[offset..offset + count].to_vec());
+                offset += count;
+            }
         }
     }
     Ok(out)
@@ -838,7 +911,7 @@ fn on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<(u32, f64)>> {
 
 /// A fragment covers the capture time from its first frame to the first
 /// frame of the next one, and the encoders must start a new one once
-/// `GOP_SECS` have passed: the span may exceed `GOP_SECS` only by the
+/// `FRAGMENT_SECS` have passed: the span may exceed `FRAGMENT_SECS` only by the
 /// interval before the frame that closed it.
 fn check_fragment_spans(case: &mut Case, fragments: &[Vec<(u32, f64)>], handed: &[Handed]) {
     let time: BTreeMap<u32, f64> = handed.iter().map(|h| (h.index, h.secs)).collect();
@@ -856,11 +929,11 @@ fn check_fragment_spans(case: &mut Case, fragments: &[Vec<(u32, f64)>], handed: 
         };
         let span = next - start;
         worst = worst.max(span);
-        if span > GOP_SECS + (next - end) + 1e-6 {
+        if span > FRAGMENT_SECS + (next - end) + 1e-6 {
             case.problem(
                 "fragment-span",
                 format!(
-                    "fragment of frames {}..={} covers {span:.2}s of capture, more than {GOP_SECS}s plus the {:.2}s before the frame that closed it",
+                    "fragment of frames {}..={} covers {span:.2}s of capture, more than {FRAGMENT_SECS}s plus the {:.2}s before the frame that closed it",
                     first.0,
                     last.0,
                     next - end
@@ -1044,7 +1117,7 @@ fn check_recovery(
             ),
         );
     }
-    let bound = GOP + IN_FLIGHT;
+    let bound = FRAGMENT_FRAMES + IN_FLIGHT;
     // In time: one fragment of capture time, plus the in-flight frames and
     // the frame that closes the fragment at the delivered interval (a static
     // screen delivers far fewer frames than the nominal rate).
@@ -1052,7 +1125,7 @@ fn check_recovery(
         .windows(2)
         .map(|w| w[1].secs - w[0].secs)
         .fold(1.0 / f64::from(FPS), f64::max);
-    let bound_secs = GOP_SECS + f64::from(IN_FLIGHT + 1) * interval;
+    let bound_secs = FRAGMENT_SECS + f64::from(IN_FLIGHT + 1) * interval;
     case.note(format!(
         "handed {} frames, complete on disk up to {:?}, lost tail {lost_tail} frames / {lost_secs:.2}s (bound {bound} frames / {bound_secs:.2}s)",
         handed.len(),
@@ -1063,7 +1136,7 @@ fn check_recovery(
         case.problem(
             "loss",
             format!(
-                "the crash lost the last {lost_tail} handed frames, more than one fragment ({GOP}) plus {IN_FLIGHT} in flight"
+                "the crash lost the last {lost_tail} handed frames, more than one fragment ({FRAGMENT_FRAMES}) plus {IN_FLIGHT} in flight"
             ),
         );
     }
@@ -1072,7 +1145,7 @@ fn check_recovery(
         case.problem(
             "loss-time",
             format!(
-                "the crash lost {lost_secs:.2}s of capture, more than one {GOP_SECS}s fragment plus {} frames in flight ({bound_secs:.2}s at the delivered interval)", IN_FLIGHT + 1
+                "the crash lost {lost_secs:.2}s of capture, more than one {FRAGMENT_SECS}s fragment plus {} frames in flight ({bound_secs:.2}s at the delivered interval)", IN_FLIGHT + 1
             ),
         );
     }
@@ -1148,7 +1221,7 @@ const STATIC_STEP: u32 = 10;
 const STATIC_SECONDS: f64 = 14.0;
 const STATIC_KILL_SECS: f64 = 11.0;
 
-/// Kills at 2*GOP + k for k = 0..=12 and reports the first k at which the
+/// Kills at 2*FRAGMENT_FRAMES + k for k = 0..=12 and reports the first k at which the
 /// second fragment was complete on disk.
 fn writer_latency(arm: Arm, case: &mut Case) -> anyhow::Result<()> {
     let mut first_complete = None;
@@ -1159,14 +1232,14 @@ fn writer_latency(arm: Arm, case: &mut Case) -> anyhow::Result<()> {
         let display = scratch.join("display");
         let truth = scratch.join("truth.txt");
         let mut child = ChildRecorder::spawn(&display, &truth, arm, 5.0, 1)?;
-        let n = 2 * GOP + k;
+        let n = 2 * FRAGMENT_FRAMES + k;
         child.wait_until(Duration::from_secs(40), |handed, _| {
             handed.last().is_some_and(|h| h.index >= n)
         })?;
         let orphans = child.kill()?;
         wait_for_exit(&orphans, case);
         let physical = on_disk(&display, &scratch)?;
-        let done = physical.iter().any(|f| f.0 == 2 * GOP - 1);
+        let done = physical.iter().any(|f| f.0 == 2 * FRAGMENT_FRAMES - 1);
         case.note(format!(
             "kill after frame {n}: fragment 2 complete = {done}"
         ));
@@ -1197,18 +1270,18 @@ fn kill_points(seed: u64) -> Vec<(String, KillPoint)> {
     let mut points = Vec::new();
     // Mid-fragment, at seeded random frames past the first fragment.
     for k in 0..2 {
-        let lo = GOP + 15;
+        let lo = FRAGMENT_FRAMES + 15;
         let index = lo + (rng.next_u64() % u64::from(total - lo - 10)) as u32;
         points.push((format!("random{k}"), KillPoint::Frame(index)));
     }
     // Around the second rollover: the keyframe that closes fragment 2 is
-    // frame 2*GOP; the writer renames the segment when the packet after it
+    // frame 2*FRAGMENT_FRAMES; the writer renames the segment when the packet after it
     // arrives (the encoder holds one back), and the manifest learns about
     // it on its next 10-frame scan.
     for offset in [0u32, 2, 5] {
         points.push((
             format!("rollover+{offset}"),
-            KillPoint::Frame(2 * GOP + offset),
+            KillPoint::Frame(2 * FRAGMENT_FRAMES + offset),
         ));
     }
     for delay in [0u64, 40] {
@@ -1290,7 +1363,7 @@ fn muxer_kill(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<(
     let scratch = scratch_root().join("muxer-kill");
     fresh(&scratch)?;
     let display = scratch.join("display");
-    let kill_at = GOP + GOP / 2;
+    let kill_at = FRAGMENT_FRAMES + FRAGMENT_FRAMES / 2;
     let me = std::process::id();
     let killed = std::sync::Arc::new(std::sync::Mutex::new(None::<u32>));
     let killed_hook = killed.clone();
@@ -1349,7 +1422,7 @@ fn muxer_kill(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<(
         recovered.len(),
         run.handed.len()
     ));
-    if gap > 2 * GOP + IN_FLIGHT {
+    if gap > 2 * FRAGMENT_FRAMES + IN_FLIGHT {
         case.problem(
             "loss",
             format!(
@@ -1576,7 +1649,7 @@ fn crash_safety() {
             settle(case);
         }
         // A mostly static screen: one frame every STATIC_STEP slots. A
-        // fragment must still close every GOP_SECS of capture time.
+        // fragment must still close every FRAGMENT_SECS of capture time.
         let id = format!("crash/recorder-kill/{}/static-screen", arm.label());
         if report::selected(&id) {
             let mut case = Case::new(&id);
@@ -1729,4 +1802,48 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
     );
     assert!(case.classes.contains("dropped-complete"));
     assert!(!case.classes.contains("loss"));
+}
+
+#[test]
+fn complete_prefix_keeps_whole_moof_pairs_before_every_truncated_tail() {
+    fn boxed(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        bytes.extend(kind);
+        bytes.extend(payload);
+        bytes
+    }
+    fn fragment(samples: u32) -> Vec<u8> {
+        let mut run = 0u32.to_be_bytes().to_vec();
+        run.extend(samples.to_be_bytes());
+        let mut bytes = boxed(b"moof", &boxed(b"traf", &boxed(b"trun", &run)));
+        bytes.extend(boxed(b"mdat", &[1, 2, 3, 4]));
+        bytes
+    }
+    let first = fragment(6);
+    let next = fragment(5);
+    for end in 0..next.len() {
+        let mut bytes = first.clone();
+        bytes.extend(&next[..end]);
+        assert_eq!(complete_prefix(&bytes), Some((first.len(), vec![6])));
+    }
+    let mut both = first.clone();
+    both.extend(next);
+    assert_eq!(complete_prefix(&both), Some((both.len(), vec![6, 5])));
+    assert!(complete_prefix(&first[..first.len() - 1]).is_none());
+    let short_run = boxed(b"moof", &boxed(b"traf", &boxed(b"trun", &[0; 4])));
+    assert!(complete_prefix(&short_run).is_none());
+}
+
+#[test]
+fn complete_prefix_rejects_missing_moof_and_invalid_box_sizes() {
+    assert!(complete_prefix(&[]).is_none());
+    assert!(complete_prefix(&[0; 16]).is_none());
+    let mut data = 8u32.to_be_bytes().to_vec();
+    data.extend(b"mdat");
+    assert!(complete_prefix(&data).is_none());
+    data[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+    assert!(complete_prefix(&data).is_none());
+    data[..4].copy_from_slice(&1u32.to_be_bytes());
+    data.extend(u64::MAX.to_be_bytes());
+    assert!(complete_prefix(&data).is_none());
 }

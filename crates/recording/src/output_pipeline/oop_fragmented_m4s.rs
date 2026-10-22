@@ -376,7 +376,6 @@ impl OutOfProcessFragmentedM4SMuxer {
                     FramePool::new(pixel_format, video_config.width, video_config.height);
 
                 let mut encoder = encoder;
-                encoder.set_keyframe_interval(segment_duration);
                 let mut subprocess = subprocess;
 
                 let mut slow_convert_count = 0u32;
@@ -489,8 +488,7 @@ impl OutOfProcessFragmentedM4SMuxer {
                                             dispatch_packet(&mut subprocess, pkt)
                                         });
                                         match rebuild_builder.clone().build_standalone() {
-                                            Ok(mut new_enc) => {
-                                                new_enc.set_keyframe_interval(segment_duration);
+                                            Ok(new_enc) => {
                                                 let old_name = encoder.codec_name().to_string();
                                                 let new_name = new_enc.codec_name().to_string();
                                                 info!(

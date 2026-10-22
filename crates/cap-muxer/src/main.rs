@@ -454,6 +454,11 @@ fn open_output(state: &mut State, params: &StartParams) -> Result<OpenOutput, Mu
         set_opt("use_template", "1");
         set_opt("single_file", "0");
         set_opt("hls_playlist", "1");
+        if state.init_video.is_some() {
+            set_opt("frag_type", "duration");
+            set_opt("frag_duration", &segment_duration_secs.to_string());
+            set_opt("streaming", "1");
+        }
         set_opt(
             "format_options",
             "movflags=+negative_cts_offsets+skip_trailer",

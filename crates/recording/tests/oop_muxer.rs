@@ -53,6 +53,104 @@ fn minimal_video_config(output_dir: &std::path::Path, extradata: Vec<u8>) -> Mux
 }
 
 #[test]
+fn sparse_subprocess_flushes_recoverable_media_without_extra_keyframes() {
+    use cap_enc_ffmpeg::{
+        fragmented_mp4::read_fragment_prefix,
+        h264::{H264EncoderBuilder, H264Preset},
+    };
+    use cap_media_info::{Pixel, VideoInfo};
+    use std::time::{Duration, Instant};
+
+    ffmpeg::init().unwrap();
+    let directory = TempDir::new().unwrap();
+    let output = directory.path().join("video");
+    let info = VideoInfo {
+        pixel_format: Pixel::NV12,
+        width: TEST_WIDTH,
+        height: TEST_HEIGHT,
+        time_base: ffmpeg::Rational(1, 90_000),
+        frame_rate: ffmpeg::Rational(TEST_FPS as i32, 1),
+    };
+    let mut encoder = H264EncoderBuilder::new(info)
+        .with_preset(H264Preset::Ultrafast)
+        .with_encoder_priority_override(&["libx264"])
+        .build_standalone()
+        .unwrap();
+    let config = minimal_video_config(&output, encoder.extradata());
+    let mut packets = Vec::new();
+    for index in 0..37 {
+        let mut frame = ffmpeg::frame::Video::new(Pixel::NV12, TEST_WIDTH, TEST_HEIGHT);
+        for plane in 0..frame.planes() {
+            frame.data_mut(plane).fill(128);
+        }
+        encoder
+            .encode_frame(
+                frame,
+                Duration::from_micros(index * 1_000_000 / 3),
+                |packet| {
+                    packets.push(packet);
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+    encoder
+        .flush(|packet| {
+            packets.push(packet);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(packets.len(), 37);
+    assert_eq!(
+        packets.iter().filter(|packet| packet.is_keyframe).count(),
+        1
+    );
+    let mut subprocess = MuxerSubprocess::spawn(setup_muxer_binary(), config, None).unwrap();
+    for packet in &packets {
+        subprocess
+            .write_video_packet(
+                packet.pts,
+                packet.dts,
+                packet.duration.max(0) as u64,
+                packet.is_keyframe,
+                &packet.data,
+            )
+            .unwrap();
+    }
+    let init = output.join("init.mp4");
+    let pending = output.join("segment_001.m4s.tmp");
+    let started = Instant::now();
+    loop {
+        if read_fragment_prefix(&init, &pending)
+            .is_ok_and(|prefix| prefix.duration >= Duration::from_secs(10))
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "complete fragments were not flushed before EOF"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let report = subprocess.finish().unwrap();
+    assert_eq!(report.packets_written, 37);
+    let mut bytes = std::fs::read(init).unwrap();
+    bytes.extend(std::fs::read(output.join("segment_001.m4s")).unwrap());
+    let assembled = directory.path().join("assembled.mp4");
+    std::fs::write(&assembled, bytes).unwrap();
+    let mut input = ffmpeg::format::input(&assembled).unwrap();
+    let output_packets: Vec<_> = input.packets().map(|(_, packet)| packet).collect();
+    assert_eq!(output_packets.len(), 37);
+    assert_eq!(
+        output_packets
+            .iter()
+            .filter(|packet| packet.is_key())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn subprocess_spawns_and_finishes_cleanly_without_packets() {
     let bin = setup_muxer_binary();
     let temp_dir = TempDir::new().unwrap();
