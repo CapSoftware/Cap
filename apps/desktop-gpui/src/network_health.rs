@@ -68,6 +68,11 @@ fn current_scope() -> Option<Scope> {
             .get("user_id")?
             .as_str()?
             .to_string(),
+        organization: store::store_section(store::RECORDING_SETTINGS)
+            .get("organizationId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string),
     })
 }
 
@@ -92,6 +97,11 @@ pub(crate) fn recording_released() {
     state.applied_width = None;
 }
 
+#[cfg(test)]
+pub(crate) fn probe_admitted_for_test() -> bool {
+    controller().admission.begin_probe().is_some()
+}
+
 pub(crate) async fn wait_for_probe() {
     let done = controller()
         .running
@@ -102,7 +112,7 @@ pub(crate) async fn wait_for_probe() {
     }
 }
 
-pub(crate) fn max_width(configured: u32) -> u32 {
+pub(crate) fn max_width(configured: u32, organization: Option<&str>) -> u32 {
     let Some(scope) = current_scope() else {
         return configured;
     };
@@ -110,8 +120,7 @@ pub(crate) fn max_width(configured: u32) -> u32 {
     let width = state
         .measurement
         .as_ref()
-        .filter(|measurement| measurement.fresh_for(&scope, SystemTime::now()))
-        .and_then(|measurement| measurement.max_width)
+        .and_then(|measurement| measurement.max_width_for(&scope, organization, SystemTime::now()))
         .map_or(configured, |cap| configured.min(cap));
     state.applied_width = (width < configured).then_some(width);
     width
@@ -298,6 +307,7 @@ enum ProbeError {
 struct ProbeResponse {
     bytes: usize,
     body_read_ms: f64,
+    organization_id: String,
 }
 
 async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
@@ -334,6 +344,7 @@ async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
                 bytes: 0,
                 body_read_ms: 0.,
             }; 2];
+            let mut organization: Option<String> = None;
             for (index, sample) in samples.iter_mut().enumerate() {
                 if current_scope().as_ref() != Some(&scope) {
                     return Err(ProbeError::Failed);
@@ -343,8 +354,13 @@ async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
                 } else {
                     "/api/desktop/upload-health"
                 };
-                let response = auth::authed_request_builder(&client, reqwest::Method::POST, path)
-                    .map_err(|_| ProbeError::Failed)?
+                let mut request =
+                    auth::authed_request_builder(&client, reqwest::Method::POST, path)
+                        .map_err(|_| ProbeError::Failed)?;
+                if let Some(id) = organization.as_ref().or(scope.organization.as_ref()) {
+                    request = request.query(&[("orgId", id)]);
+                }
+                let response = request
                     .header("Content-Type", "application/octet-stream")
                     .timeout(Duration::from_secs(30))
                     .body(payload.clone())
@@ -358,9 +374,15 @@ async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
                     .json::<ProbeResponse>()
                     .await
                     .map_err(|_| ProbeError::Failed)?;
-                if response.bytes != payload.len() {
+                if response.bytes != payload.len()
+                    || response.organization_id.is_empty()
+                    || organization
+                        .as_ref()
+                        .is_some_and(|id| *id != response.organization_id)
+                {
                     return Err(ProbeError::Failed);
                 }
+                organization = Some(response.organization_id);
                 *sample = Sample {
                     bytes: response.bytes,
                     body_read_ms: response.body_read_ms,
@@ -368,6 +390,7 @@ async fn probe(scope: Scope) -> Result<Measurement, ProbeError> {
             }
             Ok(Measurement::from_samples(
                 scope.clone(),
+                organization.ok_or(ProbeError::Failed)?,
                 samples,
                 SystemTime::now(),
             ))

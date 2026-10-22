@@ -2021,24 +2021,24 @@ async fn start_internal(
         .filter(|organization| !organization.is_empty())
         .map(str::to_string);
 
-    let pre_created_video = if config.mode == RecordingMode::Instant {
-        Some(
-            crate::upload::prepare_instant_upload(
-                matches!(config.target, ScreenCaptureTarget::CameraOnly),
-                project_name,
-                organization_id,
-            )
-            .await
-            .map_err(anyhow::Error::msg)?,
+    let (pre_created_video, upload_organization_id) = if config.mode == RecordingMode::Instant {
+        let (video, organization) = crate::upload::prepare_instant_upload(
+            matches!(config.target, ScreenCaptureTarget::CameraOnly),
+            project_name,
+            organization_id,
         )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        (Some(video), organization)
     } else {
-        None
+        (None, None)
     };
 
     let result = start_attempt_with_upload(
         config,
         project_dir,
         pre_created_video.clone(),
+        upload_organization_id,
         #[cfg(target_os = "linux")]
         attempt.clone(),
     )
@@ -2071,6 +2071,7 @@ async fn start_attempt_with_upload(
     config: StartConfig,
     project_dir: PathBuf,
     pre_created_video: Option<cap_project::VideoUploadInfo>,
+    upload_organization_id: Option<String>,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
     #[cfg(target_os = "linux")]
@@ -2227,7 +2228,7 @@ async fn start_attempt_with_upload(
         cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
     };
     let instant_max_resolution = if config.mode == RecordingMode::Instant {
-        crate::network_health::max_width(instant_max_resolution)
+        crate::network_health::max_width(instant_max_resolution, upload_organization_id.as_deref())
     } else {
         instant_max_resolution
     };

@@ -4,7 +4,8 @@ The signed-in GPUI app checks its upload path at startup and at most once an hou
 while idle. The header indicator can request a manual check, with a one-minute
 cooldown. Signing out or changing the server invalidates the account-bound result;
 saving/deleting S3 settings or connecting, disconnecting, or switching Google Drive
-also invalidates it. Checks do not block recording when diagnostics are unavailable.
+also invalidates it. Changing the selected recording organization invalidates the
+result. Checks do not block recording when diagnostics are unavailable.
 
 ## Measurement and resolution
 
@@ -35,16 +36,29 @@ expires.
 Recording admission cancels the active probe and invalidates its generation.
 Engine startup waits for the probe future to be dropped before continuing; late
 results cannot update the measurement or start another probe during recording.
+Failed startup releases admission only after capture cleanup has joined. A cap
+also requires the organization returned when creating the recording to match the
+probe destination; missing organization information from an older server preserves
+the configured resolution.
 
 ## Storage check and bounds
 
-Only the first sample checks storage. After validating current organization
-membership, it resolves the same writable storage access used for recordings
+Only the first sample checks storage. The endpoint uses the recording organization
+selection order: a valid saved organization, a valid default, then the earliest
+owned or joined organization. Both samples must resolve to the same organization.
+After validating current membership, it resolves the same writable access used for recordings
 (organization/personal S3, Google Drive, or default storage). It writes at most
 1 KiB of synthetic data under `<user-id>/.cap-upload-health/<uuid>` and attempts
 cleanup even when writing fails. Write failures make the check unavailable;
 cleanup failures are logged and do not turn a successful upload into a failure.
 The check verifies storage write access, not screen capture or encoder correctness.
+Drive probes use a null video ID and the configured root folder, without creating
+recording folders or warning files. Ordinary recording uploads retain their existing
+folder layout and video association.
+
+Cookie-authenticated POSTs require same-origin Fetch Metadata, or an exact configured
+Origin when Fetch Metadata is absent. Validated API keys remain usable by native
+clients without browser headers; malformed authorization cannot bypass this guard.
 
 Body input is streamed with an 8 MiB limit; the reader retains only the small
 storage sample. Storage writes time out after ten seconds, cleanup after three,
@@ -64,12 +78,14 @@ they demonstrate rendering, not measured network performance or a real recording
 - [Failed upload check](docs/upload-health-failed-linux.png)
 
 ```sh
-bun run --cwd apps/web test __tests__/unit/upload-health.test.ts __tests__/unit/upload-health-route.test.ts
+bun run --cwd apps/web test __tests__/unit/upload-health.test.ts __tests__/unit/upload-health-route.test.ts __tests__/unit/desktop-video-create.test.ts __tests__/unit/google-drive-storage.test.ts
 ./scripts/prepare-gpui-dependency.sh
 # Run scripts/setup.js with the same target/native dependencies as desktop CI.
 cd apps/desktop-gpui
 cargo check --locked -p cap-desktop-gpui
 cargo test --locked -p cap-desktop-gpui --bin cap-gpui network_health
+cargo test --locked -p cap-desktop-gpui --bin cap-gpui failed_starts_release_upload_checks_only_after_capture_cleanup
+cargo test --locked -p cap-desktop-gpui --bin cap-gpui created_video_accepts_legacy_and_organization_bound_responses
 ```
 
 Manual desktop checks before acceptance:

@@ -6,6 +6,7 @@ pub const MEASUREMENT_TTL: Duration = Duration::from_secs(15 * 60);
 pub struct Scope {
     pub server: String,
     pub owner: String,
+    pub organization: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -27,13 +28,19 @@ impl Sample {
 #[derive(Clone, Debug)]
 pub struct Measurement {
     pub scope: Scope,
+    pub organization: String,
     pub checked_at: SystemTime,
     pub mbps: Option<f64>,
     pub max_width: Option<u32>,
 }
 
 impl Measurement {
-    pub fn from_samples(scope: Scope, samples: [Sample; 2], now: SystemTime) -> Self {
+    pub fn from_samples(
+        scope: Scope,
+        organization: String,
+        samples: [Sample; 2],
+        now: SystemTime,
+    ) -> Self {
         let rates = samples[0].mbps().zip(samples[1].mbps());
         let mbps = rates.map(|(first, second)| first.max(second));
         let max_width = rates.and_then(|(first, second)| {
@@ -51,6 +58,7 @@ impl Measurement {
         });
         Self {
             scope,
+            organization,
             checked_at: now,
             mbps,
             max_width,
@@ -62,6 +70,17 @@ impl Measurement {
             && now
                 .duration_since(self.checked_at)
                 .is_ok_and(|age| age < MEASUREMENT_TTL)
+    }
+
+    pub fn max_width_for(
+        &self,
+        scope: &Scope,
+        organization: Option<&str>,
+        now: SystemTime,
+    ) -> Option<u32> {
+        (self.fresh_for(scope, now) && organization == Some(self.organization.as_str()))
+            .then_some(self.max_width)
+            .flatten()
     }
 }
 
@@ -106,6 +125,7 @@ mod tests {
         Scope {
             server: "https://cap.example".into(),
             owner: "owner".into(),
+            organization: None,
         }
     }
 
@@ -116,6 +136,7 @@ mod tests {
         };
         Measurement::from_samples(
             scope(),
+            "org-1".into(),
             [sample(first_mbps), sample(second_mbps)],
             SystemTime::now(),
         )
@@ -143,7 +164,8 @@ mod tests {
                 bytes: 2 * 1024 * 1024,
                 body_read_ms: duration,
             };
-            let result = Measurement::from_samples(scope(), [sample; 2], SystemTime::now());
+            let result =
+                Measurement::from_samples(scope(), "org-1".into(), [sample; 2], SystemTime::now());
             assert_eq!(result.max_width, None);
             assert_eq!(result.mbps, None);
         }
@@ -152,7 +174,8 @@ mod tests {
             body_read_ms: 1000.,
         };
         assert_eq!(
-            Measurement::from_samples(scope(), [sample; 2], SystemTime::now()).max_width,
+            Measurement::from_samples(scope(), "org-1".into(), [sample; 2], SystemTime::now())
+                .max_width,
             None
         );
     }
@@ -190,6 +213,26 @@ mod tests {
         let next = admission.begin_probe().unwrap();
         assert!(admission.accepts(next));
         assert!(!admission.accepts(ticket));
+    }
+
+    #[test]
+    fn storage_selection_and_actual_recording_destination_bound_the_cap() {
+        let result = measure(3., 3.);
+        assert_eq!(
+            result.max_width_for(&scope(), Some("org-1"), result.checked_at),
+            Some(1280)
+        );
+        assert_eq!(
+            result.max_width_for(&scope(), Some("org-2"), result.checked_at),
+            None
+        );
+        assert_eq!(
+            result.max_width_for(&scope(), None, result.checked_at),
+            None
+        );
+        let mut other = scope();
+        other.organization = Some("different-selection".into());
+        assert!(!result.fresh_for(&other, result.checked_at));
     }
 
     #[test]

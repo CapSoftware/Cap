@@ -1,9 +1,5 @@
-import {
-	HttpApiBuilder,
-	HttpServer,
-	HttpServerRequest,
-} from "@effect/platform";
-import { Context, Effect, Layer, Option } from "effect";
+import { HttpApiBuilder, HttpServer } from "@effect/platform";
+import { Context, Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
@@ -12,6 +8,10 @@ const state = vi.hoisted(() => ({
 	storageAvailable: true,
 	cleanupAvailable: true,
 	organizationAllowed: true,
+	cookieValid: false,
+	apiKeyValid: true,
+	rateChecks: 0,
+	selectedOrganization: "",
 	rateLimited: false,
 }));
 
@@ -21,38 +21,85 @@ vi.mock("@cap/web-backend", async () => {
 });
 
 vi.mock("@/lib/rate-limit", () => ({
-	isRateLimited: async () => state.rateLimited,
+	isRateLimited: async () => {
+		state.rateChecks++;
+		return state.rateLimited;
+	},
 	RATE_LIMIT_IDS: { DESKTOP_UPLOAD_HEALTH: "rl_desktop_upload_health" },
 }));
 
-vi.mock("@/app/api/desktop/[...route]/organizationStorage", () => ({
-	getAccessibleOrganization: async () =>
-		state.organizationAllowed ? { id: "org" } : null,
+vi.mock("@/lib/desktop-recording-organization", async (importOriginal) => {
+	const { Organisation } = await import("@cap/web-domain");
+	const original =
+		await importOriginal<
+			typeof import("@/lib/desktop-recording-organization")
+		>();
+	return {
+		...original,
+		getDesktopRecordingOrganization: async (
+			_user: string,
+			requested?: string,
+		) =>
+			state.organizationAllowed
+				? original.selectDesktopRecordingOrganization(
+						[{ id: "org-default" }, { id: "org-selected" }].map(({ id }) => ({
+							id: Organisation.OrganisationId.make(id),
+						})),
+						requested ? Organisation.OrganisationId.make(requested) : undefined,
+						Organisation.OrganisationId.make("org-default"),
+					)
+				: undefined,
+	};
+});
+
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
+}));
+vi.mock("@cap/database/auth/auth-options", () => ({
+	getServerSession: async () =>
+		state.cookieValid ? { user: { id: "test-user" } } : null,
 }));
 
 vi.mock("@/lib/server", async () => {
-	const { CurrentUser, HttpAuthMiddleware, Organisation, User } = await import(
-		"@cap/web-domain"
-	);
-	const { HttpApiError } = await import("@effect/platform");
 	const storage = Context.GenericTag("UploadHealthTestStorage");
-	const authentication = Layer.succeed(
-		HttpAuthMiddleware,
-		Effect.gen(function* () {
-			const request = yield* HttpServerRequest.HttpServerRequest;
-			if (request.headers.authorization !== "Bearer test") {
-				return yield* new HttpApiError.Unauthorized();
-			}
-			return CurrentUser.of({
-				id: User.UserId.make("test-user"),
-				email: "dev@example.test",
-				activeOrganizationId: Organisation.OrganisationId.make("org"),
-				iconUrlOrKey: Option.none(),
-			});
-		}),
+	const { HttpAuthMiddlewareLive } = await import(
+		"../../../../packages/web-backend/src/Auth"
 	);
+	const { Database } = await import(
+		"../../../../packages/web-backend/src/Database"
+	);
+	const user = {
+		id: "test-user",
+		email: "dev@example.test",
+		activeOrganizationId: "org-dashboard",
+		image: null,
+	};
+	const database = {
+		use: (run: (db: unknown) => Promise<unknown>) =>
+			Effect.promise(() =>
+				run({
+					select: () => ({
+						from: () => ({
+							leftJoin: () => ({
+								where: async () => (state.apiKeyValid ? [{ users: user }] : []),
+							}),
+							where: async () => [user],
+						}),
+					}),
+				}),
+			),
+	};
+	const authentication = HttpAuthMiddlewareLive.pipe(
+		Layer.provide(
+			Layer.succeed(
+				Database,
+				database as unknown as Context.Tag.Service<typeof Database>,
+			),
+		),
+	);
+
 	const access = {
-		putObject: (key: string) =>
+		putProbeObject: (key: string) =>
 			Effect.suspend(() => {
 				state.writes.push(key);
 				return state.storageAvailable
@@ -74,7 +121,13 @@ vi.mock("@/lib/server", async () => {
 					Layer.provide(authentication),
 					Layer.provide(
 						Layer.succeed(storage, {
-							getWritableAccessForUser: () => Effect.succeed({ access }),
+							getWritableAccessForUser: (
+								_user: string,
+								organization: string,
+							) => {
+								state.selectedOrganization = organization;
+								return Effect.succeed({ access });
+							},
 						}),
 					),
 					Layer.provide(HttpServer.layerContext),
@@ -88,7 +141,7 @@ import { GET, POST } from "@/app/api/desktop/upload-health/route";
 function request(
 	checkStorage = true,
 	body = new Uint8Array(1024),
-	token = "test",
+	token = "12345678-1234-1234-1234-123456789abc",
 ) {
 	return new Request(
 		`http://localhost/api/desktop/upload-health${checkStorage ? "?checkStorage=true" : ""}`,
@@ -110,6 +163,10 @@ beforeEach(() => {
 	state.cleanupAvailable = true;
 	state.organizationAllowed = true;
 	state.rateLimited = false;
+	state.cookieValid = false;
+	state.apiKeyValid = true;
+	state.rateChecks = 0;
+	state.selectedOrganization = "";
 });
 
 describe("authenticated upload-health API", () => {
@@ -122,7 +179,9 @@ describe("authenticated upload-health API", () => {
 	it("warms the connection without writing or deleting an object", async () => {
 		const response = await GET(
 			new Request("http://localhost/api/desktop/upload-health", {
-				headers: { authorization: "Bearer test" },
+				headers: {
+					authorization: "Bearer 12345678-1234-1234-1234-123456789abc",
+				},
 			}),
 		);
 		expect(response.status).toBe(200);
@@ -133,7 +192,11 @@ describe("authenticated upload-health API", () => {
 	it("checks the selected storage under the user's prefix and returns body timing", async () => {
 		const response = await POST(request());
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ bytes: 1024, bodyReadMs: 0 });
+		expect(await response.json()).toEqual({
+			bytes: 1024,
+			bodyReadMs: 0,
+			organizationId: "org-default",
+		});
 		expect(state.writes[0]).toMatch(/^test-user\/\.cap-upload-health\//);
 		expect(state.deletes).toEqual(state.writes);
 	});
@@ -144,10 +207,10 @@ describe("authenticated upload-health API", () => {
 		expect(state.writes).toEqual([]);
 	});
 
-	it("rejects a stale organization membership before touching storage", async () => {
+	it("reports no available organization without touching storage", async () => {
 		state.organizationAllowed = false;
 		const response = await POST(request());
-		expect(response.status).toBe(403);
+		expect(response.status).toBe(503);
 		expect(state.writes).toEqual([]);
 	});
 
@@ -191,5 +254,80 @@ describe("authenticated upload-health API", () => {
 		state.rateLimited = true;
 		expect((await POST(request())).status).toBe(429);
 		expect(state.writes).toEqual([]);
+	});
+});
+
+describe("upload probe credential boundary", () => {
+	const cookieProbe = (headers: Record<string, string> = {}) => {
+		state.cookieValid = true;
+		return new Request(
+			"https://cap.test/api/desktop/upload-health?checkStorage=true",
+			{
+				method: "POST",
+				headers: {
+					cookie: "next-auth.session-token=valid",
+					"content-type": "text/plain",
+					...headers,
+				},
+				body: "probe",
+			},
+		);
+	};
+	it.each<Record<string, string>>([
+		{},
+		{ origin: "https://attacker.test" },
+		{ origin: "null" },
+		{ "sec-fetch-site": "cross-site", origin: "https://attacker.test" },
+		{ "sec-fetch-site": "same-site", origin: "https://sub.cap.test" },
+		{ "sec-fetch-site": "none", origin: "https://cap.test" },
+		{ authorization: "Bearer invalid", origin: "https://attacker.test" },
+		{ authorization: "Bearer", origin: "https://attacker.test" },
+	])(
+		"rejects ambient cookie POSTs before rate limiting/storage: %j",
+		async (headers) => {
+			expect((await POST(cookieProbe(headers))).status).toBe(403);
+			expect(state.rateChecks).toBe(0);
+			expect(state.writes).toEqual([]);
+			expect(state.deletes).toEqual([]);
+		},
+	);
+	it.each<Record<string, string>>([
+		{ "sec-fetch-site": "same-origin" },
+		{ origin: "https://cap.test" },
+	])("allows legitimate same-origin cookies: %j", async (headers) => {
+		expect((await POST(cookieProbe(headers))).status).toBe(200);
+		expect(state.writes).toHaveLength(1);
+	});
+	it("does not fall back to a cookie for an invalid API key", async () => {
+		state.apiKeyValid = false;
+		expect(
+			(
+				await POST(
+					cookieProbe({
+						authorization: "Bearer 00000000-0000-0000-0000-000000000000",
+						origin: "https://attacker.test",
+					}),
+				)
+			).status,
+		).toBe(401);
+		expect(state.writes).toEqual([]);
+	});
+	it("checks the saved desktop organization instead of the dashboard organization", async () => {
+		const probe = request();
+		const url = new URL(probe.url);
+		url.searchParams.set("orgId", "org-selected");
+		const response = await POST(new Request(url, probe));
+		expect(response.status).toBe(200);
+		expect(state.selectedOrganization).toBe("org-selected");
+		expect(await response.json()).toMatchObject({
+			organizationId: "org-selected",
+		});
+	});
+	it("uses the default organization for a stale desktop selection", async () => {
+		const probe = request();
+		const url = new URL(probe.url);
+		url.searchParams.set("orgId", "departed-org");
+		expect((await POST(new Request(url, probe))).status).toBe(200);
+		expect(state.selectedOrganization).toBe("org-default");
 	});
 });

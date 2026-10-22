@@ -1,5 +1,6 @@
+import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend";
-import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
+import { CurrentUser, HttpAuthMiddleware, Organisation } from "@cap/web-domain";
 import {
 	HttpApi,
 	HttpApiBuilder,
@@ -10,6 +11,7 @@ import {
 	HttpServerRequest,
 } from "@effect/platform";
 import { Effect, Layer, Schema, Stream } from "effect";
+import { getDesktopRecordingOrganization } from "@/lib/desktop-recording-organization";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
 import {
@@ -19,7 +21,6 @@ import {
 	UploadProbeLimiter,
 	UploadProbeTooLarge,
 } from "@/lib/upload-health";
-import { getAccessibleOrganization } from "../[...route]/organizationStorage";
 
 class ProbeTooLarge extends HttpApiSchema.EmptyError<ProbeTooLarge>()({
 	tag: "ProbeTooLarge",
@@ -43,10 +44,15 @@ class Api extends HttpApi.make("DesktopUploadHealth").add(
 				.setUrlParams(
 					Schema.Struct({
 						checkStorage: Schema.optional(Schema.Literal("true")),
+						orgId: Schema.optional(Organisation.OrganisationId),
 					}),
 				)
 				.addSuccess(
-					Schema.Struct({ bytes: Schema.Number, bodyReadMs: Schema.Number }),
+					Schema.Struct({
+						bytes: Schema.Number,
+						bodyReadMs: Schema.Number,
+						organizationId: Organisation.OrganisationId,
+					}),
 				)
 				.addError(ProbeTooLarge)
 				.addError(ProbeRateLimited)
@@ -69,6 +75,18 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					Effect.gen(function* () {
 						const user = yield* CurrentUser;
 						const request = yield* HttpServerRequest.HttpServerRequest;
+						const apiKey = request.headers.authorization?.split(" ")[1];
+						if (apiKey?.length !== 36) {
+							const site = request.headers["sec-fetch-site"];
+							if (
+								site !== undefined
+									? site !== "same-origin"
+									: request.headers.origin !==
+										new URL(serverEnv().WEB_URL).origin
+							) {
+								return yield* new HttpApiError.Forbidden();
+							}
+						}
 						if (
 							!limiter.admit(user.id) ||
 							(yield* Effect.promise(() =>
@@ -103,21 +121,17 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						);
 						const result = probe.result();
 						if (!result.bytes) return yield* new HttpApiError.BadRequest();
+						const organizationId = yield* Effect.tryPromise({
+							try: () =>
+								getDesktopRecordingOrganization(user.id, urlParams.orgId),
+							catch: () => new HttpApiError.ServiceUnavailable(),
+						});
+						if (!organizationId)
+							return yield* new HttpApiError.ServiceUnavailable();
 						if (urlParams.checkStorage) {
-							if (user.activeOrganizationId) {
-								const organization = yield* Effect.tryPromise({
-									try: () =>
-										getAccessibleOrganization(
-											user.id,
-											user.activeOrganizationId,
-										),
-									catch: () => new HttpApiError.ServiceUnavailable(),
-								});
-								if (!organization) return yield* new HttpApiError.Forbidden();
-							}
 							const storage = yield* Storage;
 							const { access } = yield* storage
-								.getWritableAccessForUser(user.id, user.activeOrganizationId)
+								.getWritableAccessForUser(user.id, organizationId)
 								.pipe(
 									Effect.mapError(() => new HttpApiError.ServiceUnavailable()),
 								);
@@ -125,9 +139,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								userId: user.id,
 								bytes: probe.sample(),
 								put: (key, bytes) =>
-									access.putObject(key, Buffer.from(bytes), {
-										contentType: "application/octet-stream",
-									}),
+									access.putProbeObject(key, Buffer.from(bytes)),
 								remove: (key) => access.deleteObject(key),
 								onCleanupFailure: () =>
 									console.warn("Upload-health probe cleanup failed"),
@@ -135,7 +147,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								Effect.mapError(() => new HttpApiError.ServiceUnavailable()),
 							);
 						}
-						return result;
+						return { ...result, organizationId };
 					}).pipe(
 						Effect.timeoutFail({
 							duration: "25 seconds",

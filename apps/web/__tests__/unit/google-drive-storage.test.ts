@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Organisation, Storage, User, Video } from "@cap/web-domain";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkUploadStorage } from "@/lib/upload-health";
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
@@ -1844,6 +1845,70 @@ const getStorageAccess = (harness: RepoHarness) => {
 		),
 	);
 };
+
+describe("Google Drive upload-health objects", () => {
+	it.each(["video", "userVideo"] as const)(
+		"probes %s storage without video IDs or recording folders",
+		async (layout) => {
+			const harness = makeRepoHarness();
+			vi.spyOn(harness.repo, "getGoogleDriveConfig").mockReturnValue(
+				Effect.succeed(makeConfig(layout)),
+			);
+			const reserve = harness.repo.reserveObject;
+			vi.spyOn(harness.repo, "reserveObject").mockImplementation((input) => {
+				if (input.videoId && input.videoId.length > 15)
+					return Effect.die(new Error("videoId exceeds database width"));
+				return reserve(input);
+			});
+			let uploaded = false;
+			const fetchMock = vi.fn(
+				async (input: string | URL | Request, init?: RequestInit) => {
+					const url = String(input);
+					if (url.includes("/files/generateIds"))
+						return jsonResponse({ ids: ["probe-file"] });
+					if (url.includes("uploadType=resumable") && init?.method === "POST") {
+						expect(requestBody(init)).toMatchObject({
+							parents: ["root-folder"],
+							appProperties: {
+								capObjectKey: `${videoOwnerId}/.cap-upload-health/probe`,
+							},
+						});
+						return response(200, { Location: "https://upload.test/probe" });
+					}
+					if (url === "https://upload.test/probe" && init?.method === "PUT") {
+						uploaded = true;
+						return response(200);
+					}
+					if (url.includes("/files/probe-file") && init?.method === "DELETE")
+						return response(204);
+					throw new Error(
+						`Unexpected Drive probe request: ${init?.method} ${url}`,
+					);
+				},
+			);
+			vi.stubGlobal("fetch", fetchMock);
+			const access = await getStorageAccess(harness);
+			await Effect.runPromise(
+				checkUploadStorage({
+					userId: videoOwnerId,
+					bytes: new Uint8Array([1, 2, 3]),
+					uuid: () => "probe",
+					put: (key, bytes) => access.putProbeObject(key, bytes),
+					remove: (key) => access.deleteObject(key),
+					onCleanupFailure: () => {
+						throw new Error("Cleanup failed");
+					},
+				}),
+			);
+			expect(uploaded).toBe(true);
+			expect(harness.reservations).toHaveLength(1);
+			expect(harness.reservations[0]?.videoId).toBeNull();
+			expect(harness.reservations[0]?.metadata?.videoId).toBeUndefined();
+			expect(harness.objects.size).toBe(0);
+			expect(fetchMock).toHaveBeenCalledTimes(4);
+		},
+	);
+});
 
 const getStorageObjectExit = async (harness: RepoHarness) => {
 	const access = await getStorageAccess(harness);
