@@ -77,6 +77,7 @@ import {
 	uploadFileToStorage,
 	uploadToS3,
 } from "../lib/media-video";
+import { encodeAttemptsBudgetMs } from "../lib/nvenc-encoder";
 import { RecordingTimingError } from "../lib/recording-timing";
 import {
 	hashRecordingFile,
@@ -378,7 +379,7 @@ function extendJobLifetimeForWork(
 ): void {
 	extendJobLifetime(
 		jobId,
-		workTimeoutMs +
+		encodeAttemptsBudgetMs(workTimeoutMs) +
 			JOB_TRANSFER_ALLOWANCE_MS +
 			POST_VERIFICATION_ASSET_BUDGET_MS +
 			Math.ceil(

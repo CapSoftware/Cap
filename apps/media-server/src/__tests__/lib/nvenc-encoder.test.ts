@@ -16,6 +16,7 @@ import {
 import {
 	buildNvencEncodeArgs,
 	canDecodeOnGpu,
+	encodeAttemptsBudgetMs,
 	fitWithinEven,
 	getVideoEncoderStatus,
 	type NvencOptions,
@@ -257,6 +258,11 @@ describe("nvenc encoder selection", () => {
 });
 
 describe("nvenc fallback", () => {
+	test("reserves job time for the libx264 retry only when nvenc is on", () => {
+		expect(encodeAttemptsBudgetMs(60_000, {})).toBe(60_000);
+		expect(encodeAttemptsBudgetMs(60_000, enabled)).toBe(120_000);
+	});
+
 	test("falls back to libx264 on any failure that was not a cancellation", () => {
 		expect(
 			nvencFallbackReason(

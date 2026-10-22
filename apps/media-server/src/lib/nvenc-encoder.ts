@@ -176,6 +176,17 @@ export function canDecodeOnGpu(
 	return gpuDecodeCodecs.includes(videoCodec) && rotation === 0;
 }
 
+// A failed NVENC encode is retried on libx264 with a fresh timeout, so the job
+// deadline has to leave room for both attempts.
+export function encodeAttemptsBudgetMs(
+	encodeTimeoutMs: number,
+	env: Env = process.env,
+): number {
+	return selectedVideoEncoder(env) === "nvenc"
+		? encodeTimeoutMs * 2
+		: encodeTimeoutMs;
+}
+
 export function nvencFallbackReason(
 	error: unknown,
 	aborted: boolean,
