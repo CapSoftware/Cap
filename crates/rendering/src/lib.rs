@@ -266,28 +266,30 @@ fn system_metal_adapter(instance: &wgpu::Instance) -> Option<wgpu::Adapter> {
     adapter
 }
 
-/// wgpu's Metal backend puts low-power devices first, so `PowerPreference::None`
-/// would pick the integrated GPU even when macOS is driving the display from
-/// the discrete one. Match `MTLCreateSystemDefaultDevice()` by name instead.
-async fn request_hardware_adapter(
+/// Requests a hardware adapter, or a fallback adapter when
+/// `force_fallback_adapter` is set. On macOS with no override, the adapter
+/// matching the system Metal device is used so Cap follows the GPU macOS is
+/// currently driving.
+pub async fn request_wgpu_adapter(
     instance: &wgpu::Instance,
     default: wgpu::PowerPreference,
-) -> Option<wgpu::Adapter> {
+    force_fallback_adapter: bool,
+) -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
     #[cfg(target_os = "macos")]
-    if configured_gpu_power_preference().is_none()
+    if !force_fallback_adapter
+        && configured_gpu_power_preference().is_none()
         && let Some(adapter) = system_metal_adapter(instance)
     {
-        return Some(adapter);
+        return Ok(adapter);
     }
 
     instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: gpu_power_preference(default),
-            force_fallback_adapter: false,
+            force_fallback_adapter,
             compatible_surface: None,
         })
         .await
-        .ok()
 }
 
 pub fn create_wgpu_instance_sync() -> wgpu::Instance {
@@ -357,7 +359,9 @@ pub async fn probe_software_adapter() -> Option<(bool, String)> {
     let hardware_adapter = if force_software_adapter {
         None
     } else {
-        request_hardware_adapter(&instance, wgpu::PowerPreference::HighPerformance).await
+        request_wgpu_adapter(&instance, wgpu::PowerPreference::HighPerformance, false)
+            .await
+            .ok()
     };
 
     let adapter = match hardware_adapter {
@@ -2562,7 +2566,9 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let hardware_adapter = if force_software_adapter {
         None
     } else {
-        request_hardware_adapter(&instance, wgpu::PowerPreference::HighPerformance).await
+        request_wgpu_adapter(&instance, wgpu::PowerPreference::HighPerformance, false)
+            .await
+            .ok()
     };
 
     let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {

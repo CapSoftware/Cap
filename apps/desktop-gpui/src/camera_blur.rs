@@ -184,19 +184,16 @@ fn shared_device(runtime: &tokio::runtime::Runtime) -> Option<(wgpu::Device, wgp
         .get_or_init(|| {
             runtime.block_on(async {
                 let instance = cap_rendering::create_wgpu_instance_sync();
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: cap_rendering::gpu_power_preference(
-                            wgpu::PowerPreference::LowPower,
-                        ),
-                        force_fallback_adapter: cap_rendering::force_software_wgpu_adapter(),
-                        compatible_surface: None,
-                    })
-                    .await
-                    .map_err(|error| {
-                        tracing::warn!("camera blur adapter unavailable: {error}");
-                    })
-                    .ok()?;
+                let adapter = cap_rendering::request_wgpu_adapter(
+                    &instance,
+                    wgpu::PowerPreference::LowPower,
+                    cap_rendering::force_software_wgpu_adapter(),
+                )
+                .await
+                .map_err(|error| {
+                    tracing::warn!("camera blur adapter unavailable: {error}");
+                })
+                .ok()?;
                 let (device, queue) = adapter
                     .request_device(&wgpu::DeviceDescriptor {
                         label: Some("Camera Preview Blur"),

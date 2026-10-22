@@ -27,12 +27,12 @@ diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/met
 +        }
 +        if let Some(device) = metal::Device::all().into_iter().min_by_key(|device| {
 +            (
-+                device.is_removable(),
 +                if prefer_low_power {
 +                    !device.is_low_power()
 +                } else {
 +                    device.is_low_power()
 +                },
++                device.is_removable(),
 +            )
 +        }) {
 +            log::info!(
