@@ -79,6 +79,11 @@ vi.mock("@cap/database/schema", () => ({
 	videos: { name: "video", id: "id" },
 	videoUploads: { name: "upload", videoId: "videoId" },
 }));
+// The real lookup reads `organizations`, which this transaction mock does not
+// model; visibility is not what these tests are about.
+vi.mock("@cap/database/video-sharing-default", () => ({
+	getNewVideoPublic: async () => true,
+}));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ CAP_VIDEOS_DEFAULT_PUBLIC: true }),
 }));
