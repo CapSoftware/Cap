@@ -423,6 +423,23 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
+fn export_file_name(pretty_name: &str, extension: &str) -> String {
+    let mut name = sanitize_filename::sanitize_with_options(
+        pretty_name,
+        sanitize_filename::Options {
+            windows: true,
+            ..Default::default()
+        },
+    );
+    while name.len() > 255 - extension.len() - 1 {
+        let _ = name.pop();
+    }
+    if name.trim().is_empty() {
+        name = "Cap Recording".into();
+    }
+    format!("{name}.{extension}")
+}
+
 fn format_estimate_range(range: [f64; 2], time: bool) -> String {
     if range[1] < 1.0 {
         return if time { "< 1s" } else { "< 1 MB" }.into();
@@ -817,7 +834,7 @@ impl EditorWindow {
                 } else {
                     "mp4"
                 };
-                let default = format!("{pretty_name}.{ext}");
+                let default = export_file_name(&pretty_name, ext);
                 let chosen: Result<Option<PathBuf>, String> = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
                     Some(path) => Ok(Some(PathBuf::from(path))),
                     None => {
@@ -2951,7 +2968,9 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportDestination, ExportPhase, ExportUi, cancel_matching_export};
+    use super::{
+        ExportDestination, ExportPhase, ExportUi, cancel_matching_export, export_file_name,
+    };
     use crate::store::ExportPrefs;
     use std::path::PathBuf;
     use std::sync::{
@@ -2973,6 +2992,42 @@ mod tests {
             advanced_open: false,
             organization_id: None,
         })
+    }
+
+    #[test]
+    fn export_names_sanitize_titles_and_preserve_the_format_extension() {
+        for extension in ["mp4", "gif", "mov"] {
+            for (title, expected) in [
+                ("Sprint 1/2", "Sprint 12"),
+                (r#"a/b\c:d*e?f"g<h>i|j"#, "abcdefghij"),
+                ("\0\n", "Cap Recording"),
+                ("/\\:*?\"<>|", "Cap Recording"),
+                ("...", "Cap Recording"),
+                ("   ", "Cap Recording"),
+                ("CON", "Cap Recording"),
+                ("Clip final. ", "Clip final"),
+                ("My Clip 2026", "My Clip 2026"),
+                ("你好 🎬", "你好 🎬"),
+            ] {
+                let filename = export_file_name(title, extension);
+                assert_eq!(filename, format!("{expected}.{extension}"), "{title:?}");
+                assert_eq!(PathBuf::from(&filename).components().count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn long_export_names_leave_room_for_the_format_extension() {
+        for title in ["a".repeat(300), "🎬".repeat(100)] {
+            for extension in ["mp4", "gif", "mov"] {
+                let filename = export_file_name(&title, extension);
+                assert!(filename.len() <= 255, "{} bytes", filename.len());
+                assert!(filename.ends_with(&format!(".{extension}")));
+                assert!(
+                    title.starts_with(filename.strip_suffix(&format!(".{extension}")).unwrap())
+                );
+            }
+        }
     }
 
     #[test]
