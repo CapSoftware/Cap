@@ -82,9 +82,13 @@ impl PortableCameraBlur {
                 .await
                 .map_err(|error| anyhow!("camera blur device: {error}"))
         })?;
-        let mut processor =
-            cap_camera_effects::BlurProcessor::new(&device, wgpu::TextureFormat::Rgba8Unorm)
-                .context("camera blur processor")?;
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let processor =
+            cap_camera_effects::BlurProcessor::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        if let Some(error) = runtime.block_on(device.pop_error_scope()) {
+            anyhow::bail!("camera blur GPU validation: {error}");
+        }
+        let mut processor = processor.context("camera blur processor")?;
         processor.set_inference_interval(INFERENCE_INTERVAL);
 
         Ok(Self {
@@ -292,6 +296,19 @@ mod tests {
             blur_allowed(),
             total_memory_bytes().is_none_or(|bytes| bytes > LOW_MEMORY_THRESHOLD_BYTES)
         );
+    }
+
+    #[test]
+    fn unsupported_gpu_returns_an_error_without_panicking() {
+        if std::env::var_os("CAP_GPUI_TEST_UNSUPPORTED_BLUR_GPU").is_none() {
+            return;
+        }
+
+        cap_camera_effects::initialize_onnx_runtime().expect("ONNX Runtime available");
+        let error = PortableCameraBlur::new()
+            .err()
+            .expect("unsupported GPU rejected");
+        assert!(error.to_string().contains("camera blur GPU validation"));
     }
 
     #[test]
