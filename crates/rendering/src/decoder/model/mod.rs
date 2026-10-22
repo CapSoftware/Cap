@@ -1092,6 +1092,8 @@ fn run_suite(decoder: Decoder) {
 #[cfg(target_os = "macos")]
 #[test]
 fn avassetreader_answers_match_the_reference_model() {
+    // Engine verify runs only this test of the module on macOS.
+    avassetreader_answers_stay_exact_when_its_reader_fails();
     run_suite(Decoder::Avf);
 }
 

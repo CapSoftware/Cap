@@ -668,14 +668,14 @@ impl AVAssetReaderDecoder {
     /// end of its range. A failed reader never vends again.
     pub fn failure(&self) -> Option<String> {
         match &self.source {
-            ReaderSource::Native { reader, .. } => (reader.status()
-                == av::AssetReaderStatus::Failed)
-                .then(|| {
+            ReaderSource::Native { reader, .. } => {
+                (reader.status() == av::AssetReaderStatus::Failed).then(|| {
                     reader.error().map_or_else(
                         || "unknown error".to_string(),
                         |error| format!("{} ({})", error.localized_description(), error.code()),
                     )
-                }),
+                })
+            }
             #[cfg(feature = "scripted")]
             ReaderSource::Scripted(reader) => reader
                 .failed()
