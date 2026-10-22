@@ -4076,10 +4076,18 @@ mod studio_finalization_tests {
         let written = studio_thumbnail_events();
         while written.try_recv().is_ok() {}
 
-        let project = finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None)
-            .await
-            .unwrap();
+        let writing = hold_studio_thumbnail_writes().unwrap();
+        let project = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(project, root);
+        assert!(studio_thumbnails_pending());
+        assert!(!crate::library::bundle_thumbnail_path(&root).exists());
+        drop(writing);
 
         next_thumbnail_event(&written).await;
         assert!(!studio_thumbnails_pending());

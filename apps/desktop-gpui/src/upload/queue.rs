@@ -1107,7 +1107,9 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
         state.phase = UploadPhase::Cancelled;
         write_state(&canonical, &state)?;
     }
-    crate::library::delete_recording_directory(&project)
+    tokio::task::spawn_blocking(move || crate::library::delete_recording_directory(&project))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
