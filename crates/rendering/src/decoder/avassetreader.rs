@@ -1006,6 +1006,19 @@ impl AVAssetReaderDecoder {
                 request_direction.frame_cache_limit(sequential_access.load(Ordering::Relaxed));
             let mut exit = false;
             let mut abandoned = false;
+            eprintln!(
+                "DEC {} reqs={:?} reset={} idx={} run_start={:?} prev={:?} floor={} cache_min={} cache_max={} cache={:?}",
+                path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                pending_requests.iter().map(|r| r.frame).collect::<Vec<_>>(),
+                was_reset,
+                decoder_idx,
+                this.decoders[decoder_idx].run_start,
+                this.decoders[decoder_idx].prev_vended,
+                minimum_fallback_frame,
+                cache_min,
+                cache_max,
+                cache.keys().collect::<Vec<_>>(),
+            );
             let mut frames_iterated = 0u32;
             let mut last_decoded_position: Option<f32> = None;
             // Newest vended frame below the fallback floor: after a seek the
@@ -1036,6 +1049,7 @@ impl AVAssetReaderDecoder {
                         }
                     };
                     frames_iterated += 1;
+                    eprintln!("DEC vend {}", pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps));
 
                     let current_frame =
                         pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
@@ -1227,6 +1241,7 @@ impl AVAssetReaderDecoder {
                 decoder.is_done = true;
             }
 
+            eprintln!("DEC loop end abandoned={abandoned} left={:?} retry={}", pending_requests.iter().map(|r| r.frame).collect::<Vec<_>>(), retry_requests.len());
             if abandoned {
                 pending_requests.clear();
             }

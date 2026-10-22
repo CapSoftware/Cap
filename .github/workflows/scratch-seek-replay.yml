@@ -1,0 +1,32 @@
+name: Scratch seek-gop replay
+
+on:
+  push:
+    branches:
+      - ci/decoder-seek-gop-replay
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: blacksmith-6vcpu-macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Replay
+        run: |
+          set +e
+          CAP_VERIFY_CASE='seek/seek-gop/keyframes60/avf' CAP_VERIFY_TIER=fast cargo test --profile ci-verify -p cap-verify --test seek keyframe_seeks -- --nocapture > "$RUNNER_TEMP/replay.log" 2>&1
+          echo "exit=$?"
+          grep -n "FAIL\|pass seek\|stale" "$RUNNER_TEMP/replay.log" | head -20
+          true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay
+          path: ${{ runner.temp }}/replay.log
