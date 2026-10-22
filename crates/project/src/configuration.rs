@@ -1824,6 +1824,15 @@ where
     Ok(by_segment.into_values().collect())
 }
 
+fn deserialize_scene_segments<'de, D>(deserializer: D) -> Result<Vec<SceneSegment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut segments = Vec::<SceneSegment>::deserialize(deserializer)?;
+    segments.sort_by(|left, right| left.start.total_cmp(&right.start));
+    Ok(segments)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -1835,7 +1844,7 @@ pub struct TimelineConfiguration {
     )]
     pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_segments")]
     pub scene_segments: Vec<SceneSegment>,
     #[serde(default)]
     pub mask_segments: Vec<MaskSegment>,
