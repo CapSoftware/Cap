@@ -89,7 +89,7 @@ pub use field::{Field, Subfield};
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
-pub(crate) use microphone_level::MicrophoneLevel;
+pub(crate) use microphone_level::{MicrophoneLevel, MicrophoneLevelKind};
 #[allow(unused_imports)]
 pub use number_field::{
     NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,

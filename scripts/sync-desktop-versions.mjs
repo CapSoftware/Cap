@@ -12,6 +12,9 @@ const tauriManifest = path.join(
 	"Cargo.toml",
 );
 const gpuiManifest = path.join(repoRoot, "apps", "desktop-gpui", "Cargo.toml");
+// The bundled `cap` CLI reports its own version (`cap --version`, MCP server
+// info, `cap doctor`), so it ships with the desktop version too.
+const cliManifest = path.join(repoRoot, "apps", "cli", "Cargo.toml");
 
 function packageVersion(source, manifestPath) {
 	const packageStart = source.indexOf("[package]");
@@ -39,12 +42,14 @@ function replacePackageVersion(source, manifestPath, version) {
 	return source.slice(0, packageStart) + nextSection + source.slice(end);
 }
 
-const [tauriSource, gpuiSource] = await Promise.all([
+const [tauriSource, gpuiSource, cliSource] = await Promise.all([
 	fs.readFile(tauriManifest, "utf8"),
 	fs.readFile(gpuiManifest, "utf8"),
+	fs.readFile(cliManifest, "utf8"),
 ]);
 const version = packageVersion(tauriSource, tauriManifest);
 const gpuiVersion = packageVersion(gpuiSource, gpuiManifest);
+const cliVersion = packageVersion(cliSource, cliManifest);
 
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))
 	throw new Error(`Invalid desktop version: ${version}`);
@@ -57,4 +62,12 @@ if (gpuiVersion !== version) {
 	console.log(`Synchronized Cap GPUI ${gpuiVersion} -> ${version}`);
 } else {
 	console.log(`Cap desktop versions match: ${version}`);
+}
+
+if (cliVersion !== version) {
+	await fs.writeFile(
+		cliManifest,
+		replacePackageVersion(cliSource, cliManifest, version),
+	);
+	console.log(`Synchronized Cap CLI ${cliVersion} -> ${version}`);
 }

@@ -2108,7 +2108,6 @@ pub fn sync_caption_words_with_text(
         .iter()
         .enumerate()
         .map(|(index, token)| {
-            let source = existing.get(index);
             let word_start = start + step * index as f64;
             let word_end = if index == tokens.len() - 1 {
                 end
@@ -2117,8 +2116,8 @@ pub fn sync_caption_words_with_text(
             };
             CaptionWord {
                 text: (*token).to_string(),
-                start: source.map_or(word_start as f32, |word| word.start),
-                end: source.map_or(word_end as f32, |word| word.end),
+                start: word_start as f32,
+                end: word_end as f32,
             }
         })
         .collect()
@@ -2352,6 +2351,100 @@ mod tests {
             end,
             text: caption_text_from_words(&words),
             words,
+        }
+    }
+
+    #[test]
+    fn caption_text_edits_redistribute_timings_when_word_count_changes() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 1.5, 4.0)],
+        );
+
+        for text in ["hello", "hello new world"] {
+            let words = sync_caption_words_with_text(text, &existing.words, 1.0, 4.0);
+            assert_eq!(caption_text_from_words(&words), text);
+            assert_eq!(words.first().unwrap().start, 1.0);
+            assert_eq!(words.last().unwrap().end, 4.0);
+            assert!(words.iter().all(|word| word.start < word.end));
+            assert!(words.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        }
+    }
+
+    #[test]
+    fn caption_spelling_edits_preserve_timings_and_empty_text_clears_words() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 2.0, 4.0)],
+        );
+        let words = sync_caption_words_with_text("Hello world!", &existing.words, 1.0, 4.0);
+        assert_eq!(caption_text_from_words(&words), "Hello world!");
+        for (word, original) in words.iter().zip(&existing.words) {
+            assert_eq!((word.start, word.end), (original.start, original.end));
+        }
+        assert!(sync_caption_words_with_text(" \n\t", &existing.words, 1.0, 4.0).is_empty());
+    }
+
+    #[test]
+    fn caption_text_edits_survive_source_write_and_reload() {
+        for text in ["hello new world", "hello"] {
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 1, "timescale": 2.0, "start": 1.0, "end": 6.0 }
+                    ],
+                    "zoomSegments": [],
+                    "textSegments": [
+                        { "start": 0.5, "end": 1.5, "layout": "fullscreen" }
+                    ]
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![caption(
+                        "caption",
+                        11.0,
+                        13.0,
+                        &[("hello", 11.0, 11.5), ("world", 11.5, 13.0)],
+                    )],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0, 10.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            project.timeline.as_mut().unwrap().caption_segments[0].text = text.into();
+
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            cap_project::synchronize_captions(&mut project, &durations);
+            let dir = tempfile::tempdir().unwrap();
+            project.write(dir.path()).unwrap();
+            let mut loaded = ProjectConfiguration::load(dir.path()).unwrap();
+            cap_project::synchronize_captions(&mut loaded, &durations);
+
+            let source = &loaded.captions.as_ref().unwrap().segments[0];
+            assert_eq!(source.text, text);
+            assert_eq!(source.words.first().unwrap().start, 11.0);
+            assert_eq!(source.words.last().unwrap().end, 13.0);
+            assert!(
+                source
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
+            let track = &loaded.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!(track.text, text);
+            assert_eq!((track.start, track.end), (0.0, 2.0));
+            assert_eq!(track.words.len(), text.split_whitespace().count());
+            assert!(
+                track
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
         }
     }
 

@@ -109,9 +109,9 @@ pub fn render_audio<T: AudioSampleSource>(
                     .zip((first + count).checked_mul(2))
                     .and_then(|(start, end)| track.data.sample_slice(start..end));
                 if let Some(input) = input {
-                    for (sample, frame) in input.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
-                        mix_stereo(sample[0], sample[1], frame, &track.stereo_mode, gain);
-                    }
+                    // `opt-level = s` does not inline `chunks_exact().zip()`, so this
+                    // path was a call per frame and slower than indexing.
+                    mix_stereo_slice(input, output, count, &track.stereo_mode, gain);
                 } else {
                     for (index, frame) in output.chunks_exact_mut(2).enumerate() {
                         let base = (first + index).saturating_mul(2);
@@ -134,6 +134,48 @@ pub fn render_audio<T: AudioSampleSource>(
     }
 
     samples
+}
+
+#[inline(always)]
+fn mix_stereo_slice(
+    input: &[f32],
+    output: &mut [f32],
+    frames: usize,
+    mode: &StereoMode,
+    gain: f32,
+) {
+    let frames = frames.min(input.len() / 2).min(output.len() / 2);
+    match mode {
+        StereoMode::Stereo => {
+            let mut index = 0;
+            while index < frames {
+                let base = index * 2;
+                output[base] += input[base] * gain;
+                output[base + 1] += input[base + 1] * gain;
+                index += 1;
+            }
+        }
+        StereoMode::MonoL => {
+            let mut index = 0;
+            while index < frames {
+                let base = index * 2;
+                let sample = input[base] * gain;
+                output[base] += sample;
+                output[base + 1] += sample;
+                index += 1;
+            }
+        }
+        StereoMode::MonoR => {
+            let mut index = 0;
+            while index < frames {
+                let base = index * 2;
+                let sample = input[base + 1] * gain;
+                output[base] += sample;
+                output[base + 1] += sample;
+                index += 1;
+            }
+        }
+    }
 }
 
 fn mix_stereo(left: f32, right: f32, frame: &mut [f32], mode: &StereoMode, gain: f32) {
