@@ -24,6 +24,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,6 +66,9 @@ jobs:
               - 'scripts/sync-desktop-versions.mjs'
               - 'scripts/verify-gpui-release-inputs.mjs'
               - 'scripts/verify-windows-stack.mjs'
+            gpui-patches:
+              - 'apps/desktop-gpui/patches/**'
+              - 'scripts/prepare-gpui-dependency.sh'
             tauri-plugins:
               - 'Cargo.lock'
               - 'bun.lock'
@@ -384,3 +388,30 @@ jobs:
       - name: Run verify
         shell: bash
         run: node scripts/check-tauri-plugin-versions.js
+
+  # Cap only builds gpui's crates as dependencies, so their own tests never run
+  # in the app jobs above. Run the Metal renderer's tests for the surface alpha
+  # patch on a real device. Zed's lockfile predates the patches' dependency
+  # changes, so this build cannot use --locked.
+  gpui-metal-tests:
+    name: GPUI Metal renderer tests
+    needs: changes
+    if: needs.changes.outputs.gpui-patches == 'true'
+    timeout-minutes: 90
+    runs-on: blacksmith-6vcpu-macos-15
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      - name: Test GPUI Metal renderer
+        working-directory: ../zed-cap
+        run: cargo +1.95.0 test -p gpui_macos --lib surface_alpha_tests -- --nocapture

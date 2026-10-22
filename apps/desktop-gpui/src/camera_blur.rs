@@ -298,7 +298,9 @@ impl Worker {
         let frame = runtime
             .block_on(pending.wait(&self.device, submission))
             .map_err(|error| anyhow!("{error}"))?;
-        let cutout = if mode == cap_camera_effects::BlurMode::Remove {
+        let cutout = if mode == cap_camera_effects::BlurMode::Remove
+            && crate::camera_window::cutout_uses_render_image()
+        {
             use core_foundation::base::TCFType as _;
             use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
             let raw = &*frame.pixel_buffer as *const cv::PixelBuf as CVPixelBufferRef;
@@ -427,7 +429,12 @@ mod tests {
                 timings.push(start.elapsed().as_secs_f64() * 1000.0);
                 assert_eq!(output.mode, mode);
                 if mode == BlurMode::Remove {
-                    let image = output.cutout.unwrap();
+                    let raw = &*output.buffer.0 as *const cv::PixelBuf as CVPixelBufferRef;
+                    let surface = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+                    let image = output
+                        .cutout
+                        .or_else(|| crate::camera_window::snapshot_cutout(&surface))
+                        .unwrap();
                     let bytes = image.as_bytes(0).unwrap();
                     assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] == 0));
                     assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] == 255));

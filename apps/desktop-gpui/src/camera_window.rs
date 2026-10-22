@@ -910,6 +910,17 @@ pub(crate) fn snapshot_cutout(
     snapshot_bgra(buffer, (1280., 720.))
 }
 
+/// The cutout paints straight from its IOSurface with alpha;
+/// `CAP_GPUI_CUTOUT_RENDER_IMAGE=1` copies every frame into a `RenderImage`
+/// for the sprite atlas instead, as before.
+#[cfg(target_os = "macos")]
+pub(crate) fn cutout_uses_render_image() -> bool {
+    static RENDER_IMAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *RENDER_IMAGE.get_or_init(|| {
+        std::env::var("CAP_GPUI_CUTOUT_RENDER_IMAGE").is_ok_and(|value| value == "1")
+    })
+}
+
 #[cfg(target_os = "macos")]
 fn snapshot_bgra(
     buffer: &core_video::pixel_buffer::CVPixelBuffer,
@@ -986,6 +997,9 @@ struct CameraPreviewView {
     cutout_frame: Option<Arc<gpui::RenderImage>>,
     #[cfg(target_os = "macos")]
     painted_cutout_frame: Option<Arc<gpui::RenderImage>>,
+    /// `latest_frame` is a background-removal cutout, painted with its alpha.
+    #[cfg(target_os = "macos")]
+    cutout_surface: bool,
     theme: Theme,
     radius: f32,
     /// Clamped bubble size, for the issue overlay's scaled text metrics.
@@ -1093,6 +1107,8 @@ impl CameraPreviewView {
             cutout_frame: None,
             #[cfg(target_os = "macos")]
             painted_cutout_frame: None,
+            #[cfg(target_os = "macos")]
+            cutout_surface: false,
             theme,
             radius,
             size,
@@ -1128,6 +1144,7 @@ impl CameraPreviewView {
         cx: &mut Context<Self>,
     ) {
         self.cutout_frame = None;
+        self.cutout_surface = false;
         self.latest_frame = Some(frame);
         self.frame_dims = Some(dims);
         self.frame_revision = Some(self.selection_revision);
@@ -1251,6 +1268,11 @@ impl Render for CameraPreviewView {
         {
             let frame_dims = self.frame_dims;
             let paints = self.paints.clone();
+            // The cutout window is transparent, so the person fades in while
+            // the loading disc fades out.
+            let cutout_reveal = self
+                .cutout_surface
+                .then(|| loading.map_or(1., |(_, opacity, _)| 1. - opacity));
             // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
             // computes the same fitted box the old `img()` element used, and
             // `paint_surface_fitted` UV-crops it to the element bounds so the
@@ -1267,12 +1289,23 @@ impl Render for CameraPreviewView {
                             gpui::DevicePixels(height as i32),
                         );
                         let fitted = gpui::ObjectFit::Cover.get_bounds(bounds, frame_size);
-                        window.paint_surface_fitted(
-                            bounds,
-                            fitted,
-                            gpui::Corners::all(px(radius)).clamp_radii_for_quad_size(bounds.size),
-                            buffer.clone(),
-                        );
+                        if let Some(reveal) = cutout_reveal {
+                            window.paint_surface_fitted_with_alpha(
+                                bounds.intersect(&fitted),
+                                fitted,
+                                gpui::Corners::default(),
+                                reveal,
+                                buffer.clone(),
+                            );
+                        } else {
+                            window.paint_surface_fitted(
+                                bounds,
+                                fitted,
+                                gpui::Corners::all(px(radius))
+                                    .clamp_radii_for_quad_size(bounds.size),
+                                buffer.clone(),
+                            );
+                        }
                         paints.fetch_add(1, Ordering::Relaxed);
                     },
                 )
@@ -1984,6 +2017,8 @@ impl CameraWindow {
         let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
         self.preview.update(cx, |preview, cx| {
             preview.set_frame(buffer, dims, cx);
+            preview.cutout_surface =
+                output.mode == cap_camera_effects::BlurMode::Remove && output.cutout.is_none();
             preview.cutout_frame = output.cutout;
         });
         first

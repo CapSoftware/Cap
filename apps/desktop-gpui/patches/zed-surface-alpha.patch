@@ -1,0 +1,527 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index 6cc3562..776e85b 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -5,8 +5,8 @@ use schemars::JsonSchema;
+ use serde::{Deserialize, Serialize};
+ 
+ use crate::{
+-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
+-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
++    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges, Hsla,
++    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point, size,
+ };
+ use std::{
+     fmt::Debug,
+@@ -832,10 +832,52 @@ pub struct PaintSurface {
+     /// Normalized sub-rect of the source texture to sample, for object-fit
+     /// crops. The full texture is `(0,0)..(1,1)`.
+     pub source_uv: Bounds<f32>,
++    /// Composite a 32BGRA surface by its own straight alpha, the way
++    /// polychrome sprites composite atlas images, instead of painting it
++    /// opaque.
++    pub straight_alpha: bool,
++    /// Scales the alpha of a `straight_alpha` surface.
++    pub opacity: f32,
+     #[cfg(target_os = "macos")]
+     pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+ }
+ 
++impl PaintSurface {
++    /// The source UVs that crop a `texture_size` surface to the `visible`
++    /// part of its `fitted` box, snapped to whole texels the same way
++    /// `Window::paint_image_fitted` crops an atlas tile.
++    pub fn texel_source_uv(
++        visible: Bounds<Pixels>,
++        fitted: Bounds<Pixels>,
++        texture_size: Size<DevicePixels>,
++    ) -> Bounds<f32> {
++        if visible == fitted {
++            return Bounds {
++                origin: point(0., 0.),
++                size: size(1., 1.),
++            };
++        }
++        let fw = f32::from(fitted.size.width).max(1.0);
++        let fh = f32::from(fitted.size.height).max(1.0);
++        let fx = (f32::from(visible.origin.x) - f32::from(fitted.origin.x)) / fw;
++        let fy = (f32::from(visible.origin.y) - f32::from(fitted.origin.y)) / fh;
++        let fsw = f32::from(visible.size.width) / fw;
++        let fsh = f32::from(visible.size.height) / fh;
++        let tw = texture_size.width.0 as f32;
++        let th = texture_size.height.0 as f32;
++        Bounds {
++            origin: point(
++                (fx * tw).round() as i32 as f32 / tw,
++                (fy * th).round() as i32 as f32 / th,
++            ),
++            size: size(
++                (fsw * tw).round().max(1.0) as i32 as f32 / tw,
++                (fsh * th).round().max(1.0) as i32 as f32 / th,
++            ),
++        }
++    }
++}
++
+ impl From<PaintSurface> for Primitive {
+     fn from(surface: PaintSurface) -> Self {
+         Primitive::Surface(surface)
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index de95b7d..a72616d 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4704,6 +4704,48 @@ impl Window {
+             content_mask,
+             corner_radii,
+             source_uv,
++            straight_alpha: false,
++            opacity: 1.,
++            image_buffer,
++        });
++    }
++
++    /// [`Self::paint_surface_fitted`] for a 32BGRA surface with straight
++    /// alpha, composited exactly like [`Self::paint_image_fitted`] composites
++    /// the same pixels from the atlas: the crop snaps to whole texels and
++    /// `opacity` times the element opacity scales the alpha.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    #[cfg(target_os = "macos")]
++    pub fn paint_surface_fitted_with_alpha(
++        &mut self,
++        visible: Bounds<Pixels>,
++        fitted: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        opacity: f32,
++        image_buffer: CVPixelBuffer,
++    ) {
++        use crate::PaintSurface;
++
++        self.invalidator.debug_assert_paint();
++
++        let texture_size = size(
++            DevicePixels(image_buffer.get_width() as i32),
++            DevicePixels(image_buffer.get_height() as i32),
++        );
++        let source_uv = PaintSurface::texel_source_uv(visible, fitted, texture_size);
++        let bounds = self.snap_bounds(visible);
++        let content_mask = self.snapped_content_mask();
++        let corner_radii = corner_radii.scale(self.scale_factor());
++        let opacity = opacity * self.element_opacity();
++        self.next_frame.scene.insert_primitive(PaintSurface {
++            order: 0,
++            bounds,
++            content_mask,
++            corner_radii,
++            source_uv,
++            straight_alpha: true,
++            opacity,
+             image_buffer,
+         });
+     }
+diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+index 1d35af1..8d9df4b 100644
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -174,6 +174,7 @@ pub(crate) struct MetalRenderer {
+     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
+     surfaces_pipeline_state: metal::RenderPipelineState,
+     bgra_surfaces_pipeline_state: metal::RenderPipelineState,
++    straight_alpha_surfaces_pipeline_state: metal::RenderPipelineState,
+     unit_vertices: metal::Buffer,
+     #[allow(clippy::arc_with_non_send_sync)]
+     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
+@@ -391,6 +392,14 @@ impl MetalRenderer {
+             "surface_bgra_fragment",
+             MTLPixelFormat::BGRA8Unorm,
+         )?;
++        let straight_alpha_surfaces_pipeline_state = build_pipeline_state(
++            &device,
++            &library,
++            "straight_alpha_surfaces",
++            "surface_vertex",
++            "surface_bgra_straight_alpha_fragment",
++            MTLPixelFormat::BGRA8Unorm,
++        )?;
+ 
+         let command_queue = device.new_command_queue();
+         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
+@@ -424,6 +433,7 @@ impl MetalRenderer {
+             polychrome_sprites_pipeline_state,
+             surfaces_pipeline_state,
+             bgra_surfaces_pipeline_state,
++            straight_alpha_surfaces_pipeline_state,
+             unit_vertices,
+             instance_buffer_pool,
+             sprite_atlas,
+@@ -2005,7 +2015,11 @@ impl MetalRenderer {
+                     continue;
+                 }
+ 
+-                command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
++                command_encoder.set_render_pipeline_state(if surface.straight_alpha {
++                    &self.straight_alpha_surfaces_pipeline_state
++                } else {
++                    &self.bgra_surfaces_pipeline_state
++                });
+                 command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
+                     Some(metal::TextureRef::from_ptr(metal_texture as *mut _))
+                 });
+@@ -2051,6 +2065,7 @@ impl MetalRenderer {
+                         content_mask: surface.content_mask,
+                         corner_radii: surface.corner_radii,
+                         source_uv: surface.source_uv,
++                        opacity: surface.opacity,
+                     },
+                 );
+             }
+@@ -2434,6 +2449,7 @@ pub struct SurfaceBounds {
+     pub content_mask: ContentMask<ScaledPixels>,
+     pub corner_radii: Corners<ScaledPixels>,
+     pub source_uv: Bounds<f32>,
++    pub opacity: f32,
+ }
+ 
+ #[cfg(any(test, feature = "test-support"))]
+@@ -2548,6 +2564,315 @@ mod renderer_hardening_tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod surface_alpha_tests {
++    use super::*;
++    use core_foundation::{
++        base::CFType, boolean::CFBoolean, dictionary::CFDictionary, string::CFString,
++    };
++    use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferKeys};
++    use gpui::{
++        AtlasKey, AtlasTile, EdgeFadeParams, Edges, Hsla, ImageId, ObjectFit, Pixels,
++        PlatformAtlas, RenderImageParams, px, solid_background, transparent_black,
++    };
++    use image::RgbaImage;
++    use std::borrow::Cow;
++
++    const WIDTH: usize = 1280;
++    const HEIGHT: usize = 720;
++
++    /// Straight-alpha BGRA shaped like a camera cutout (opaque person, soft
++    /// edge, transparent background) with per-texel noise, so any texel or
++    /// filter-weight mismatch between the two paths changes the output.
++    fn cutout_pixels() -> Vec<u8> {
++        let mut state = 0x2545_f491_u32;
++        let mut pixels = Vec::with_capacity(WIDTH * HEIGHT * 4);
++        for y in 0..HEIGHT {
++            for x in 0..WIDTH {
++                state ^= state << 13;
++                state ^= state >> 17;
++                state ^= state << 5;
++                let dx = (x as f32 - WIDTH as f32 / 2.) / (WIDTH as f32 * 0.25);
++                let dy = (y as f32 - HEIGHT as f32) / (HEIGHT as f32 * 0.8);
++                let alpha = ((1.1 - (dx * dx + dy * dy).sqrt()) * 6.).clamp(0., 1.);
++                let noise = state.to_le_bytes();
++                let alpha = if noise[3] < 16 {
++                    noise[3]
++                } else {
++                    (alpha * 255.).round() as u8
++                };
++                pixels.extend_from_slice(&[noise[0], noise[1], noise[2], alpha]);
++            }
++        }
++        pixels
++    }
++
++    fn surface(pixels: &[u8]) -> CVPixelBuffer {
++        let io_surface_properties = CFDictionary::<CFString, CFType>::from_CFType_pairs(&[]);
++        let options = CFDictionary::from_CFType_pairs(&[
++            (
++                CFString::from(CVPixelBufferKeys::IOSurfaceProperties),
++                io_surface_properties.as_CFType(),
++            ),
++            (
++                CFString::from(CVPixelBufferKeys::MetalCompatibility),
++                CFBoolean::true_value().as_CFType(),
++            ),
++        ]);
++        let buffer =
++            CVPixelBuffer::new(kCVPixelFormatType_32BGRA, WIDTH, HEIGHT, Some(&options)).unwrap();
++        assert_eq!(buffer.lock_base_address(0), 0);
++        let stride = buffer.get_bytes_per_row();
++        let base = unsafe { buffer.get_base_address() }.cast::<u8>();
++        for (row, source) in pixels.chunks_exact(WIDTH * 4).enumerate() {
++            unsafe {
++                ptr::copy_nonoverlapping(source.as_ptr(), base.add(row * stride), source.len())
++            };
++        }
++        assert_eq!(buffer.unlock_base_address(0), 0);
++        buffer
++    }
++
++    /// `Window::paint_image_fitted`'s crop of an atlas tile.
++    fn crop_tile(
++        mut tile: AtlasTile,
++        visible: Bounds<Pixels>,
++        fitted: Bounds<Pixels>,
++    ) -> AtlasTile {
++        if visible == fitted {
++            return tile;
++        }
++        let fw = f32::from(fitted.size.width).max(1.0);
++        let fh = f32::from(fitted.size.height).max(1.0);
++        let fx = (f32::from(visible.origin.x) - f32::from(fitted.origin.x)) / fw;
++        let fy = (f32::from(visible.origin.y) - f32::from(fitted.origin.y)) / fh;
++        let fsw = f32::from(visible.size.width) / fw;
++        let fsh = f32::from(visible.size.height) / fh;
++        let tw = tile.bounds.size.width.0 as f32;
++        let th = tile.bounds.size.height.0 as f32;
++        tile.bounds.origin.x = DevicePixels(tile.bounds.origin.x.0 + (fx * tw).round() as i32);
++        tile.bounds.origin.y = DevicePixels(tile.bounds.origin.y.0 + (fy * th).round() as i32);
++        tile.bounds.size.width = DevicePixels((fsw * tw).round().max(1.0) as i32);
++        tile.bounds.size.height = DevicePixels((fsh * th).round().max(1.0) as i32);
++        tile
++    }
++
++    /// Name, scale factor, logical bubble size, corner radius and opacity:
++    /// cutout bubbles at the smallest, default and largest sizes in both
++    /// shapes, the reveal fade, and a rounded crop.
++    const CASES: &[(&str, f32, (f32, f32), f32, f32)] = &[
++        ("full 230 @2x", 2., (408.88889, 230.), 0., 1.),
++        ("full 150 @1x", 1., (266.66666, 150.), 0., 1.),
++        ("square 230 @2x", 2., (230., 230.), 0., 1.),
++        ("square 400 @1.5x", 1.5, (400., 400.), 0., 1.),
++        ("full 230 @2x reveal", 2., (408.88889, 230.), 0., 0.37),
++        ("full 600 @2x", 2., (1066.6666, 600.), 0., 1.),
++        ("square 600 @2x", 2., (600., 600.), 0., 1.),
++        ("rounded 300 @2x", 2., (300., 300.), 150., 0.8),
++    ];
++
++    fn device_bounds(bounds: Bounds<Pixels>, scale: f32) -> Bounds<ScaledPixels> {
++        let left = (f32::from(bounds.origin.x) * scale).round();
++        let top = (f32::from(bounds.origin.y) * scale).round();
++        let right = (f32::from(bounds.origin.x + bounds.size.width) * scale).round();
++        let bottom = (f32::from(bounds.origin.y + bounds.size.height) * scale).round();
++        Bounds::from_corners(
++            point(ScaledPixels(left), ScaledPixels(top)),
++            point(ScaledPixels(right), ScaledPixels(bottom)),
++        )
++    }
++
++    fn render(
++        renderer: &mut MetalRenderer,
++        viewport: Size<DevicePixels>,
++        primitive: impl FnOnce(&mut Scene, ContentMask<ScaledPixels>),
++    ) -> RgbaImage {
++        let content_mask = ContentMask {
++            bounds: Bounds {
++                origin: point(ScaledPixels(0.), ScaledPixels(0.)),
++                size: size(
++                    ScaledPixels(viewport.width.0 as f32),
++                    ScaledPixels(viewport.height.0 as f32),
++                ),
++            },
++        };
++        let mut scene = Scene::default();
++        scene.insert_primitive(Quad {
++            order: 0,
++            border_style: Default::default(),
++            bounds: Bounds {
++                origin: point(ScaledPixels(0.), ScaledPixels(0.)),
++                size: size(
++                    ScaledPixels(viewport.width.0 as f32 / 2.),
++                    ScaledPixels(viewport.height.0 as f32),
++                ),
++            },
++            content_mask: content_mask.clone(),
++            background: solid_background(Hsla {
++                h: 0.6,
++                s: 0.5,
++                l: 0.4,
++                a: 0.6,
++            }),
++            border_color: transparent_black(),
++            corner_radii: Corners::default(),
++            border_widths: Edges::default(),
++        });
++        primitive(&mut scene, content_mask);
++        scene.finish();
++        renderer
++            .render_scene_to_image(&scene, viewport)
++            .expect("render_scene_to_image failed")
++    }
++
++    /// The camera cutout used to be copied into a `RenderImage` and painted
++    /// from the sprite atlas every frame. Painting the IOSurface with
++    /// `straight_alpha` must put the same bytes on screen.
++    #[test]
++    fn straight_alpha_surface_matches_atlas_image() {
++        if metal::Device::system_default().is_none() {
++            return;
++        }
++        let mut renderer =
++            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())))
++                .expect("failed to initialize headless renderer");
++        renderer.update_transparency(true);
++        let pixels = cutout_pixels();
++        let buffer = surface(&pixels);
++        let texture_size = size(DevicePixels(WIDTH as i32), DevicePixels(HEIGHT as i32));
++        let atlas = renderer.sprite_atlas().clone();
++
++        for (index, &(name, scale, (width, height), radius, opacity)) in CASES.iter().enumerate() {
++            let element = Bounds {
++                origin: point(px(0.), px(0.)),
++                size: size(px(width), px(height)),
++            };
++            let fitted = ObjectFit::Cover.get_bounds(element, texture_size);
++            let visible = element.intersect(&fitted);
++            let bounds = device_bounds(visible, scale);
++            let corner_radii = Corners::all(ScaledPixels(radius * scale));
++            let viewport = size(
++                DevicePixels(bounds.size.width.0 as i32 + 8),
++                DevicePixels(bounds.size.height.0 as i32 + 8),
++            );
++
++            let key = AtlasKey::Image(RenderImageParams {
++                image_id: ImageId(index + 1),
++                frame_index: 0,
++            });
++            let tile = atlas
++                .get_or_insert_with(&key, &mut || {
++                    Ok(Some((texture_size, Cow::Borrowed(pixels.as_slice()))))
++                })
++                .unwrap()
++                .unwrap();
++            let tile = crop_tile(tile, visible, fitted);
++            let image = render(&mut renderer, viewport, |scene, content_mask| {
++                scene.insert_primitive(PolychromeSprite {
++                    order: 0,
++                    pad: 0,
++                    grayscale: false.into(),
++                    opacity,
++                    bounds,
++                    content_mask,
++                    corner_radii,
++                    fade: EdgeFadeParams::default(),
++                    tile,
++                });
++            });
++            atlas.remove(&key);
++
++            let source_uv = PaintSurface::texel_source_uv(visible, fitted, texture_size);
++            let painted = render(&mut renderer, viewport, |scene, content_mask| {
++                scene.insert_primitive(PaintSurface {
++                    order: 0,
++                    bounds,
++                    content_mask,
++                    corner_radii,
++                    source_uv,
++                    straight_alpha: true,
++                    opacity,
++                    image_buffer: buffer.clone(),
++                });
++            });
++
++            // The atlas tile ends at texel row 720 of a 1024-row texture, so
++            // where the draw magnifies, today's path filters the last device
++            // row against texels outside the image; the surface clamps to its
++            // own edge instead. Every other pixel has to match exactly.
++            let texel_height = (source_uv.size.height * HEIGHT as f32).round();
++            let device_height = bounds.size.height.0;
++            let past_last_texel = |row: u32| {
++                (row as f32 + 0.5 - bounds.origin.y.0) / device_height * texel_height
++                    > texel_height - 0.5
++            };
++            let mut differing = 0usize;
++            let mut edge_differing = 0usize;
++            let mut max_difference = 0u8;
++            for (x, y, expected) in image.enumerate_pixels() {
++                let actual = painted.get_pixel(x, y);
++                if expected == actual {
++                    continue;
++                }
++                if past_last_texel(y) {
++                    edge_differing += 1;
++                    continue;
++                }
++                differing += 1;
++                for channel in 0..4 {
++                    max_difference =
++                        max_difference.max(expected[channel].abs_diff(actual[channel]));
++                }
++            }
++            println!(
++                "{name}: {}x{} device px, {differing} differing pixels (max {max_difference}), {edge_differing} on the magnified bottom edge",
++                bounds.size.width.0, bounds.size.height.0,
++            );
++            assert_eq!(
++                differing, 0,
++                "{name}: max channel difference {max_difference}"
++            );
++            let right_half = painted.enumerate_pixels().filter(|(x, y, _)| {
++                *x >= viewport.width.0 as u32 / 2 && *y < bounds.size.height.0 as u32
++            });
++            let alphas = right_half.map(|(_, _, pixel)| pixel[3]).collect::<Vec<_>>();
++            assert!(
++                alphas.contains(&0) && alphas.iter().any(|&alpha| alpha > 0 && alpha < 255),
++                "{name}: surface alpha was not preserved"
++            );
++        }
++    }
++
++    #[test]
++    fn opaque_bgra_surface_still_ignores_alpha() {
++        if metal::Device::system_default().is_none() {
++            return;
++        }
++        let mut renderer =
++            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())))
++                .expect("failed to initialize headless renderer");
++        renderer.update_transparency(true);
++        let buffer = surface(&cutout_pixels());
++        let viewport = size(DevicePixels(320), DevicePixels(180));
++        let image = render(&mut renderer, viewport, |scene, content_mask| {
++            scene.insert_primitive(PaintSurface {
++                order: 0,
++                bounds: content_mask.bounds,
++                content_mask,
++                corner_radii: Corners::default(),
++                source_uv: Bounds {
++                    origin: point(0., 0.),
++                    size: size(1., 1.),
++                },
++                straight_alpha: false,
++                opacity: 1.,
++                image_buffer: buffer,
++            });
++        });
++        assert!(image.pixels().all(|pixel| pixel[3] == 255));
++    }
++}
++
+ #[cfg(test)]
+ mod backdrop_blur_tests {
+     use super::*;
+diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
+index e087c0d..53212e2 100644
+--- a/crates/gpui_macos/src/shaders.metal
++++ b/crates/gpui_macos/src/shaders.metal
+@@ -935,6 +935,21 @@ fragment float4 surface_bgra_fragment(SurfaceFragmentInput input [[stage_in]],
+   return color;
+ }
+ 
++// Straight alpha, composited like `polychrome_sprite_fragment` composites
++// the same pixels from the atlas.
++fragment float4 surface_bgra_straight_alpha_fragment(
++    SurfaceFragmentInput input [[stage_in]],
++    constant SurfaceBounds *surfaces [[buffer(SurfaceInputIndex_Surfaces)]],
++    texture2d<float> color_texture [[texture(SurfaceInputIndex_YTexture)]]) {
++  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
++  SurfaceBounds surface = surfaces[0];
++  float4 color = color_texture.sample(texture_sampler, input.texture_position);
++  float distance =
++      quad_sdf(input.position.xy, surface.bounds, surface.corner_radii);
++  color.a *= surface.opacity * saturate(0.5 - distance);
++  return color;
++}
++
+ float4 hsla_to_rgba(Hsla hsla) {
+   float h = hsla.h * 6.0; // Now, it's an angle but scaled in [0, 6) range
+   float s = hsla.s;
