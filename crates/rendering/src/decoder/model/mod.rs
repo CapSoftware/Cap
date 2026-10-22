@@ -1092,7 +1092,66 @@ fn run_suite(decoder: Decoder) {
 #[cfg(target_os = "macos")]
 #[test]
 fn avassetreader_answers_match_the_reference_model() {
+    // Engine verify runs only this test of the module on macOS.
+    avassetreader_answers_stay_exact_when_its_reader_fails();
     run_suite(Decoder::Avf);
+}
+
+/// A native reader can fail mid-stream with a decode error and vend nothing
+/// more. Every later answer must still be the frame on screen: read from a
+/// fresh reader, or from software decoding when that one fails too.
+#[cfg(target_os = "macos")]
+#[test]
+fn avassetreader_answers_stay_exact_when_its_reader_fails() {
+    let script = Script {
+        time_base: (1, 30),
+        frames: (0..120)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 30 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let runtime = runtime();
+    let patterns: [(&str, Vec<u32>, bool); 2] = [
+        ("playback", (0..90).collect(), false),
+        ("scrub", (0..112).step_by(7).collect(), true),
+    ];
+    for failed_reads in [1, 2] {
+        for (pattern, frames, initial) in &patterns {
+            let registration = scripted::register(script.clone());
+            for _ in 0..failed_reads {
+                registration.fail_avf_read_at(40);
+            }
+            let path = registration.path().to_path_buf();
+            runtime.block_on(async {
+                let handle = spawn_decoder("model", path, 30, 0.0, false)
+                    .await
+                    .unwrap()
+                    .with_max_fallback_distance(2);
+                for &frame in frames {
+                    let time = frame as f32 / 30.0;
+                    let decoded = if *initial {
+                        handle.get_frame_initial(time).await
+                    } else {
+                        handle.get_frame(time).await
+                    };
+                    assert_eq!(
+                        decoded.as_ref().and_then(frame_identity),
+                        Some(frame),
+                        "{pattern} with {failed_reads} failed reads at sample 40: request {frame}"
+                    );
+                }
+                assert_eq!(
+                    handle.decoder_type() == DecoderType::AVAssetReader,
+                    failed_reads == 1,
+                    "{pattern} with {failed_reads} failed reads ended on {}",
+                    handle.decoder_type()
+                );
+            });
+        }
+    }
 }
 
 #[test]
