@@ -150,7 +150,19 @@ let retryInProgress = false;
 let lastProgressBroadcastAt = 0;
 let cameraPreviewStream: MediaStream | null = null;
 let cameraPreviewDeviceId: string | null = null;
+let cameraPreviewStreamRequest: {
+	deviceId: string | null;
+	promise: Promise<MediaStream>;
+} | null = null;
+let cameraPreviewReleaseTimer: number | null = null;
 const cameraPreviewSessions = new Map<string, RTCPeerConnection>();
+// A tab hand-off disconnects the old tab's session before the new tab's
+// connect arrives. Releasing the camera the instant the session count hits
+// zero closes and reopens the physical device on every tab switch — and a
+// reopen that lands too soon after the close fails with NotReadableError on
+// exclusive-access platforms. Keep the stream warm across that gap instead.
+const CAMERA_PREVIEW_RELEASE_GRACE_MS = 2000;
+const CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS = 5000;
 const activeRecordingSounds = new Set<HTMLAudioElement>();
 
 const playRecordingSound = (
@@ -265,7 +277,15 @@ const stopTracks = (stream: MediaStream) => {
 	}
 };
 
+const cancelCameraPreviewRelease = () => {
+	if (cameraPreviewReleaseTimer !== null) {
+		window.clearTimeout(cameraPreviewReleaseTimer);
+		cameraPreviewReleaseTimer = null;
+	}
+};
+
 const stopCameraPreviewStream = () => {
+	cancelCameraPreviewRelease();
 	if (!cameraPreviewStream) return;
 	stopTracks(cameraPreviewStream);
 	cameraPreviewStream = null;
@@ -278,29 +298,78 @@ const disconnectCameraPreview = (sessionId: string) => {
 	cameraPreviewSessions.delete(sessionId);
 	peer.close();
 	if (cameraPreviewSessions.size === 0) {
-		stopCameraPreviewStream();
+		cancelCameraPreviewRelease();
+		cameraPreviewReleaseTimer = window.setTimeout(() => {
+			cameraPreviewReleaseTimer = null;
+			if (cameraPreviewSessions.size === 0) {
+				stopCameraPreviewStream();
+			}
+		}, CAMERA_PREVIEW_RELEASE_GRACE_MS);
 	}
 };
 
-const disconnectCameraPreviews = () => {
+const disconnectCameraPreviewsExcept = (keepSessionId?: string) => {
 	for (const sessionId of Array.from(cameraPreviewSessions.keys())) {
+		if (sessionId === keepSessionId) continue;
 		disconnectCameraPreview(sessionId);
 	}
 	stopCameraPreviewStream();
 };
 
-const getCameraPreviewStream = async (settings: WebcamSettings) => {
+const disconnectCameraPreviews = () => {
+	disconnectCameraPreviewsExcept();
+};
+
+const getCameraPreviewStream = async (
+	settings: WebcamSettings,
+	keepSessionId?: string,
+) => {
+	const videoTrack = cameraPreviewStream?.getVideoTracks()[0];
 	if (
 		cameraPreviewStream?.active &&
+		videoTrack &&
+		videoTrack.readyState === "live" &&
 		cameraPreviewDeviceId === settings.deviceId
 	) {
 		return cameraPreviewStream;
 	}
 
-	disconnectCameraPreviews();
-	cameraPreviewStream = await getCameraMediaStream(settings, false);
-	cameraPreviewDeviceId = settings.deviceId;
-	return cameraPreviewStream;
+	if (cameraPreviewStreamRequest?.deviceId === settings.deviceId) {
+		return cameraPreviewStreamRequest.promise;
+	}
+
+	if (cameraPreviewStreamRequest) {
+		await cameraPreviewStreamRequest.promise.catch(() => undefined);
+	}
+
+	disconnectCameraPreviewsExcept(keepSessionId);
+	const promise = getCameraMediaStream(settings, false).then((stream) => {
+		// The camera can take long enough to open that every waiting session
+		// may have disconnected (or moved to another device) in the meantime;
+		// adopting the stream then would leave the camera lit with no consumer.
+		if (
+			cameraPreviewStreamRequest?.promise !== promise ||
+			cameraPreviewSessions.size === 0
+		) {
+			stopTracks(stream);
+			throw new Error("Camera preview was disconnected while opening.");
+		}
+		cameraPreviewStream = stream;
+		cameraPreviewDeviceId = settings.deviceId;
+		return stream;
+	});
+	cameraPreviewStreamRequest = {
+		deviceId: settings.deviceId,
+		promise,
+	};
+
+	try {
+		return await promise;
+	} finally {
+		if (cameraPreviewStreamRequest?.promise === promise) {
+			cameraPreviewStreamRequest = null;
+		}
+	}
 };
 
 const getStreamSize = (stream: MediaStream) => {
@@ -351,38 +420,39 @@ const broadcastCaptureSource = (source: RecordingCaptureSource) => {
 	);
 };
 
-const getVideoConstraint = (webcam: WebcamSettings) =>
-	webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID
-		? {
-				deviceId: { exact: webcam.deviceId },
-			}
-		: true;
-
-const shouldRetryDefaultCamera = (webcam: WebcamSettings, error: unknown) =>
-	webcam.deviceId !== null &&
-	webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID &&
-	error instanceof DOMException &&
-	(error.name === "NotFoundError" || error.name === "OverconstrainedError");
-
 const getCameraMediaStream = async (
 	webcam: WebcamSettings,
 	audio: boolean | MediaTrackConstraints,
 ) => {
-	try {
-		return await navigator.mediaDevices.getUserMedia({
-			video: getVideoConstraint(webcam),
+	const constraints: MediaStreamConstraints[] = [];
+	if (webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID) {
+		constraints.push({
+			video: { deviceId: { exact: webcam.deviceId } },
 			audio,
 		});
-	} catch (error) {
-		if (!shouldRetryDefaultCamera(webcam, error)) {
-			throw error;
-		}
-
-		return navigator.mediaDevices.getUserMedia({
-			video: true,
+		constraints.push({
+			video: { deviceId: { ideal: webcam.deviceId } },
 			audio,
 		});
 	}
+	constraints.push({
+		video: true,
+		audio,
+	});
+
+	let lastError: unknown = null;
+	for (const constraint of constraints) {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia(constraint);
+			const videoTrack = stream.getVideoTracks()[0];
+			if (videoTrack && videoTrack.readyState === "live") {
+				return stream;
+			}
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError ?? new Error("Failed to acquire camera stream");
 };
 
 const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
@@ -475,8 +545,8 @@ const getMicrophoneStream = async (
 // amplitude (time-domain, 0..1) that counts as sound. A muted/dead device
 // flat-lines near 0; a working mic's noise floor clears this threshold, so it
 // only flags an effectively-silent input.
-const MIC_PROBE_WINDOW_MS = 1200;
-const MIC_PROBE_SAMPLE_INTERVAL_MS = 50;
+const MIC_PROBE_WINDOW_MS = 250;
+const MIC_PROBE_SAMPLE_INTERVAL_MS = 20;
 const MIC_SOUND_MIN_PEAK = 0.0015;
 
 // Opens the selected mic and listens for any signal so the recorder can warn
@@ -1588,18 +1658,43 @@ const queryMediaPermissions = async (): Promise<MediaPermissionSnapshot> => {
 
 const connectCameraPreview = async (request: ConnectCameraPreviewRequest) => {
 	disconnectCameraPreview(request.sessionId);
-	const stream = await getCameraPreviewStream(request.settings);
 	const peer = new RTCPeerConnection();
+	// Register before the first await: once the previous tab's session
+	// disconnects, only a registered successor keeps the shared camera
+	// stream from being released mid-connect.
 	cameraPreviewSessions.set(request.sessionId, peer);
 
 	try {
+		const stream = await getCameraPreviewStream(
+			request.settings,
+			request.sessionId,
+		);
+		let disconnectTimer: number | null = null;
 		peer.addEventListener("connectionstatechange", () => {
+			if (disconnectTimer !== null) {
+				window.clearTimeout(disconnectTimer);
+				disconnectTimer = null;
+			}
 			if (
 				peer.connectionState === "closed" ||
-				peer.connectionState === "disconnected" ||
 				peer.connectionState === "failed"
 			) {
 				disconnectCameraPreview(request.sessionId);
+				return;
+			}
+			// The preview page drives recovery from a transient disconnect with
+			// its own shorter grace; this only reaps a peer whose page died
+			// without sending disconnect-camera-preview.
+			if (peer.connectionState === "disconnected") {
+				disconnectTimer = window.setTimeout(() => {
+					disconnectTimer = null;
+					if (
+						peer.connectionState === "disconnected" &&
+						cameraPreviewSessions.get(request.sessionId) === peer
+					) {
+						disconnectCameraPreview(request.sessionId);
+					}
+				}, CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS);
 			}
 		});
 
@@ -1673,6 +1768,21 @@ const handleRequest = async (
 
 	if (message.type === "probe-microphone") {
 		return { ok: true, micProbe: await probeMicrophone(message.microphone) };
+	}
+
+	if (message.type === "toggle-microphone-mute") {
+		const recording = activeRecording;
+		if (recording) {
+			for (const stream of recording.streams) {
+				for (const track of stream.getAudioTracks()) {
+					track.enabled = !message.muted;
+				}
+			}
+			for (const track of recording.recordingStream.getAudioTracks()) {
+				track.enabled = !message.muted;
+			}
+		}
+		return { ok: true };
 	}
 
 	return { ok: true, status };

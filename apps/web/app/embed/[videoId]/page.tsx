@@ -12,20 +12,27 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
+import { Logo } from "@cap/ui";
+import { userIsPro } from "@cap/utils";
 import {
+	ImageUploads,
 	provideOptionalAuth,
 	resolveEffectiveVideoRules,
 	Videos,
 	VideosPolicy,
 } from "@cap/web-backend";
-import { type Organisation, Policy, type Video } from "@cap/web-domain";
+import { type Organisation, Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
+import { getSharePageBranding } from "@/lib/share-branding";
+import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
@@ -143,6 +150,9 @@ export default async function EmbedVideoPage(
 						organizationId: sharedVideos.organizationId,
 					},
 					orgSettings: organizations.settings,
+					organizationName: organizations.name,
+					organizationIconUrl: organizations.iconUrl,
+					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
 					hasActiveUpload:
 						sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 							Boolean,
@@ -201,6 +211,9 @@ async function EmbedContent({
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
 		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
+		organizationName: (typeof organizations.$inferSelect)["name"] | null;
+		organizationIconUrl: (typeof organizations.$inferSelect)["iconUrl"];
+		shareableLinkIconUrl: (typeof organizations.$inferSelect)["shareableLinkIconUrl"];
 	};
 	autoplay: boolean;
 	startTime: number | null;
@@ -225,6 +238,7 @@ async function EmbedContent({
 	});
 
 	let aiGenerationEnabled = false;
+	let ownerIsProUser = false;
 	const videoOwnerQuery = await db()
 		.select({
 			email: users.email,
@@ -238,6 +252,7 @@ async function EmbedContent({
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
+		ownerIsProUser = userIsPro(videoOwner);
 	}
 
 	if (
@@ -275,6 +290,45 @@ async function EmbedContent({
 		);
 	}
 
+	// Same quota gate as the share page, so embeds are not a loophole around
+	// it. Fail-open: a broken count must never take the embed down.
+	const overShareLimit =
+		!ownerIsProUser &&
+		(await isVideoOverShareableLinkLimit({
+			id: video.id,
+			ownerId: video.ownerId,
+			createdAt: video.createdAt,
+			isScreenshot: video.isScreenshot,
+		}).catch((error) => {
+			console.error(
+				`[EmbedVideoPage] Shareable link quota check failed for ${video.id}:`,
+				error,
+			);
+			return false;
+		}));
+
+	if (overShareLimit) {
+		return (
+			<div className="flex flex-col gap-3 justify-center items-center px-6 min-h-screen text-center bg-black">
+				<Logo className="w-auto h-7" white />
+				<h1 className="text-lg font-semibold text-white">
+					This video is over its free limit
+				</h1>
+				<p className="max-w-sm text-sm leading-relaxed text-white/60">
+					{`The owner of this video has used all ${Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH} shareable links included with Cap's free plan this month. As soon as they upgrade to Cap Pro, this video will be instantly viewable.`}
+				</p>
+				<a
+					href={`${buildEnv.NEXT_PUBLIC_WEB_URL}/s/${video.id}`}
+					target="_blank"
+					rel="noreferrer"
+					className="mt-2 rounded-full border border-gray-5 bg-gray-3 px-5 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-6"
+				>
+					Open on Cap
+				</a>
+			</div>
+		);
+	}
+
 	const commentsQuery = await db()
 		.select({
 			id: comments.id,
@@ -298,25 +352,70 @@ async function EmbedContent({
 	const videoOwner = await db()
 		.select({
 			name: users.name,
+			image: users.image,
 		})
 		.from(users)
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
+	const ownerImageUrl = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* Option.fromNullable(videoOwner[0]?.image).pipe(
+			Option.map(imageUploads.resolveImageUrl),
+			Effect.transposeOption,
+			Effect.map(Option.getOrNull),
+		);
+	}).pipe(EffectRuntime.runPromise);
+
+	const branding = await Effect.gen(function* () {
+		const brandingInput = {
+			owner: { isPro: ownerIsProUser },
+			orgSettings: video.orgSettings,
+			organizationName: video.organizationName,
+		};
+		const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
+			? video.organizationIconUrl
+			: video.shareableLinkIconUrl;
+
+		if (!ownerIsProUser || !icon || minimal) {
+			return getSharePageBranding(brandingInput);
+		}
+
+		const imageUploads = yield* ImageUploads;
+		const imageUrl = yield* imageUploads.resolveImageUrl(icon);
+
+		return getSharePageBranding({
+			...brandingInput,
+			organizationIconUrl: imageUrl,
+			shareableLinkIconUrl: imageUrl,
+		});
+	}).pipe(EffectRuntime.runPromise);
+
 	return (
 		<EmbedVideo
 			data={video}
+			branding={branding}
 			user={user}
 			comments={commentsQuery}
 			chapters={
 				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
 			}
 			ownerName={videoOwner[0]?.name || null}
+			ownerImageUrl={ownerImageUrl}
 			autoplay={autoplay}
 			startTime={startTime}
 			minimal={minimal}
+			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
+				video.settings?.defaultPlaybackSpeed,
+				video.orgSettings?.defaultPlaybackSpeed,
+			)}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
+			callToAction={
+				ownerIsProUser && !minimal
+					? parseShareCallToAction(video.settings)
+					: null
+			}
 		/>
 	);
 }

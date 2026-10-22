@@ -15,6 +15,7 @@ import {
 	use,
 	useCallback,
 	useEffect,
+	useId,
 	useMemo,
 	useOptimistic,
 	useRef,
@@ -26,12 +27,13 @@ import {
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import { CaptionProvider } from "./_components/CaptionContext";
+import { DashboardBackLink } from "./_components/DashboardBackLink";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
 import { Sidebar } from "./_components/Sidebar";
-import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
 import { formatTimeAgo } from "./_components/tabs/Activity/utils";
 import { TimelineSkeleton } from "./_components/timeline/TimelineSkeleton";
@@ -41,8 +43,10 @@ import type { VideoData } from "./types";
 const importTimelineView = () => import("./_components/timeline/TimelineView");
 const TimelineView = dynamic(importTimelineView, { ssr: false });
 
-/** Whether the viewer last left the comments rail collapsed. */
-const RAIL_COLLAPSED_KEY = "cap_share_rail_collapsed";
+// Carries react-markdown; split out and only rendered once AI data actually
+// exists, so videos without a summary never download it. SSR still renders
+// the summary into the initial HTML when the data is already there.
+const SummaryChapters = dynamic(() => import("./_components/SummaryChapters"));
 
 /**
  * The interactive walkthrough behind the header's "How does this work?".
@@ -180,6 +184,7 @@ type TranscriptionStatus =
 
 interface ShareProps {
 	data: VideoData;
+	initialPlaybackUrl?: Promise<string | null>;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -201,6 +206,8 @@ interface ShareProps {
 	transcriptionGenerationAvailable: boolean;
 	/** Server-resolved `?view=` so the first paint already has the right layout. */
 	initialView?: ShareView;
+	/** Server-resolved `?captions=off` so the player never flashes captions on before hiding them. */
+	captionsInitiallyOff?: boolean;
 	canRecordMedia?: boolean;
 	viewerSignedIn?: boolean;
 	/**
@@ -209,6 +216,7 @@ interface ShareProps {
 	 * view is active.
 	 */
 	header?: React.ReactNode;
+	dashboardDestination?: ShareDashboardDestination | null;
 }
 
 const useVideoStatus = (
@@ -315,6 +323,7 @@ const useVideoStatus = (
 
 export const Share = ({
 	data,
+	initialPlaybackUrl,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -327,14 +336,20 @@ export const Share = ({
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
 	initialView = "classic",
+	captionsInitiallyOff = false,
 	canRecordMedia = false,
 	viewerSignedIn = false,
 	header,
+	dashboardDestination = null,
 }: ShareProps) => {
 	const isScreenshot = data.isScreenshot === true;
-	const effectiveDate: Date = data.metadata?.customCreatedAt
-		? new Date(data.metadata.customCreatedAt)
-		: data.createdAt;
+	// Memoized: a fresh Date each render would defeat the memoized `data`
+	// objects below and re-render Sidebar's whole tree on every poll tick.
+	const customCreatedAt = data.metadata?.customCreatedAt;
+	const effectiveDate: Date = useMemo(
+		() => (customCreatedAt ? new Date(customCreatedAt) : data.createdAt),
+		[customCreatedAt, data.createdAt],
+	);
 
 	const playerRef = useRef<HTMLVideoElement | null>(null);
 	const stageRef = useRef<HTMLDivElement | null>(null);
@@ -455,6 +470,7 @@ export const Share = ({
 	const initialSeekDone = useRef(false);
 
 	useEffect(() => {
+		if (data.source.type === "desktopSegments") return;
 		if (!searchParams.has("recordingStopped")) return;
 
 		const url = new URL(window.location.href);
@@ -464,7 +480,7 @@ export const Share = ({
 			"",
 			`${url.pathname}${url.search}${url.hash}`,
 		);
-	}, [searchParams]);
+	}, [data.source.type, searchParams]);
 
 	const handleSeek = useCallback((time: number) => {
 		const v =
@@ -574,12 +590,28 @@ export const Share = ({
 		);
 	}, [optimisticComments]);
 
+	// Stable identities for the spreads handed to ShareVideo and Sidebar —
+	// without these, every Share render (each 2s status poll while a video is
+	// processing) re-rendered both subtrees with brand-new `data` objects.
+	const shareVideoData = useMemo(
+		() => ({ ...data, transcriptionStatus }),
+		[data, transcriptionStatus],
+	);
+	const sidebarData = useMemo(
+		() => ({ ...data, createdAt: effectiveDate, transcriptionStatus }),
+		[data, effectiveDate, transcriptionStatus],
+	);
+
 	const reduceMotion = useReducedMotion() ?? false;
 	const [selectedView, setSelectedView] = useState<ShareView>(initialView);
 	// Screenshots have no timeline to show, and a comments-disabled video has
 	// nothing to branch — both stay on the classic layout even if someone
-	// hand-writes `?view=timeline`.
-	const timelineAvailable = !isScreenshot && !areCommentStampsDisabled;
+	// hand-writes `?view=timeline`. Over-quota videos stay classic too: the
+	// timeline deck's filmstrip would leak frames below the upgrade gate.
+	const timelineAvailable =
+		!isScreenshot &&
+		!areCommentStampsDisabled &&
+		data.ownerIsOverShareLimit !== true;
 
 	// Where the timeline's filmstrip frames come from. Mirrors the source split
 	// in `ShareVideo`: instant recordings have a result.mp4 a bare <video> can
@@ -692,31 +724,12 @@ export const Share = ({
 	]);
 
 	const showRail = view === "classic" && !allSettingsDisabled;
+	const sidebarId = useId();
 	const [railCollapsed, setRailCollapsed] = useState(false);
 
-	// Read after mount, not during render: the server has no idea what the
-	// viewer collapsed last time, and guessing would hydrate the wrong width.
-	useEffect(() => {
-		try {
-			setRailCollapsed(
-				window.localStorage.getItem(RAIL_COLLAPSED_KEY) === "true",
-			);
-		} catch {
-			/* private mode; the default (open) is fine */
-		}
-	}, []);
-
 	const toggleRail = useCallback(() => {
-		// Persist outside the updater: React may invoke updater functions more
-		// than once, and localStorage writes don't belong in render-adjacent code.
-		const next = !railCollapsed;
-		setRailCollapsed(next);
-		try {
-			window.localStorage.setItem(RAIL_COLLAPSED_KEY, String(next));
-		} catch {
-			/* not worth failing the toggle over */
-		}
-	}, [railCollapsed]);
+		setRailCollapsed((collapsed) => !collapsed);
+	}, []);
 
 	return (
 		<CaptionProvider
@@ -779,6 +792,12 @@ export const Share = ({
 									// the player instead.
 									<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-3 rounded-t-xl border border-b-0 border-gray-5 bg-white px-5">
 										<div className="flex min-w-0 items-center gap-3">
+											{dashboardDestination && (
+												<DashboardBackLink
+													destination={dashboardDestination}
+													compact
+												/>
+											)}
 											<SignedImageUrl
 												image={data.owner.image}
 												name={data.owner.name ?? "Someone"}
@@ -934,10 +953,12 @@ export const Share = ({
 													/>
 												) : (
 													<ShareVideo
-														data={{ ...data, transcriptionStatus }}
+														initialPlaybackUrl={initialPlaybackUrl}
+														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
 														areCaptionsDisabled={areCaptionsDisabled}
+														captionsInitiallyOff={captionsInitiallyOff}
 														// The deck under the video owns seeking, the clock and
 														// comments in timeline view; duplicating them inside the
 														// video reads as two players. Fullscreen hides the deck,
@@ -968,6 +989,8 @@ export const Share = ({
 														isEditProcessing={isEditProcessing}
 														recordingStopped={recordingStopped}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
+														viewerIsOwner={viewerId === data.owner.id}
+														callToAction={data.callToAction}
 														ref={playerRef}
 													/>
 												)}
@@ -990,7 +1013,12 @@ export const Share = ({
 												 * absolute placement (desktop) keeps the toolbar pill
 												 * centred rather than pushed aside.
 												 */}
-												<div className="relative">
+												<div
+													className={clsx(
+														"relative",
+														showRail && railCollapsed && "lg:min-h-10 lg:px-40",
+													)}
+												>
 													{timelineAvailable && (
 														<div className="mb-3 flex justify-start lg:absolute lg:left-0 lg:top-1/2 lg:mb-0 lg:-translate-y-1/2">
 															<ShareViewToggle
@@ -1009,6 +1037,18 @@ export const Share = ({
 														canRecordMedia={canRecordMedia && !isScreenshot}
 														data={data}
 													/>
+													{showRail && railCollapsed && (
+														<button
+															type="button"
+															onClick={toggleRail}
+															aria-controls={sidebarId}
+															aria-expanded={false}
+															className="hidden absolute right-0 top-1/2 items-center justify-center gap-2 -translate-y-1/2 rounded-lg border border-gray-5 bg-white h-10 px-3 text-sm font-medium text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
+														>
+															<ChevronGlyph direction="left" />
+															Show sidebar
+														</button>
+													)}
 												</div>
 											</motion.div>
 										) : (
@@ -1081,15 +1121,21 @@ export const Share = ({
 													</div>
 												)}
 
-												{!isScreenshot && (
-													<SummaryChapters
-														isSummaryDisabled={isSummaryDisabled}
-														areChaptersDisabled={areChaptersDisabled}
-														handleSeek={handleSeek}
-														aiData={aiData}
-														aiLoading={aiLoading}
-													/>
-												)}
+												{/* Mirrors the component's own empty-state bail-out so the
+												    chunk is never fetched for a video with nothing to show. */}
+												{!isScreenshot &&
+													!aiLoading &&
+													((!isSummaryDisabled && Boolean(aiData.summary)) ||
+														(!areChaptersDisabled &&
+															(aiData.chapters?.length ?? 0) > 0)) && (
+														<SummaryChapters
+															isSummaryDisabled={isSummaryDisabled}
+															areChaptersDisabled={areChaptersDisabled}
+															handleSeek={handleSeek}
+															aiData={aiData}
+															aiLoading={aiLoading}
+														/>
+													)}
 											</motion.div>
 										)}
 									</AnimatePresence>
@@ -1107,6 +1153,7 @@ export const Share = ({
 					 */}
 					{showRail && (
 						<aside
+							id={sidebarId}
 							className={clsx(
 								"shrink-0 px-4 pb-8 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-white lg:overflow-hidden",
 								reduceMotion
@@ -1115,10 +1162,6 @@ export const Share = ({
 								railCollapsed ? "lg:w-0" : "lg:w-[22rem] xl:w-[24rem]",
 							)}
 						>
-							{/* Hidden rather than merely clipped while collapsed, so the
-						    panel's inputs leave the tab order. Scoped to lg: the
-						    stored preference is a desktop one and the phone layout
-						    shows the panel regardless. */}
 							<div
 								className={clsx(
 									"lg:h-full lg:w-[22rem] xl:w-[24rem]",
@@ -1126,11 +1169,8 @@ export const Share = ({
 								)}
 							>
 								<Sidebar
-									data={{
-										...data,
-										createdAt: effectiveDate,
-										transcriptionStatus,
-									}}
+									sidebarId={sidebarId}
+									data={sidebarData}
 									videoSettings={videoSettings}
 									commentsData={commentsData}
 									setCommentsData={setCommentsData}
@@ -1150,20 +1190,6 @@ export const Share = ({
 								/>
 							</div>
 						</aside>
-					)}
-
-					{/* Only handle back to the panel once it's away. Sits on the edge
-					    it collapsed into, so the gesture reverses itself. */}
-					{showRail && railCollapsed && (
-						<button
-							type="button"
-							onClick={toggleRail}
-							aria-label="Show comments"
-							title="Show comments"
-							className="hidden fixed right-0 top-1/2 z-30 items-center justify-center -translate-y-1/2 rounded-l-lg border border-r-0 border-gray-5 bg-white h-16 w-6 text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
-						>
-							<ChevronGlyph direction="left" />
-						</button>
 					)}
 				</div>
 			</PlaybackProvider>

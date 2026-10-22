@@ -1,11 +1,17 @@
 import { ProgressCircle } from "@cap/ui-solid";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ask, save } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import type { ComponentProps } from "solid-js";
-import { createMemo, createSignal, Show, splitProps } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	Show,
+	splitProps,
+} from "solid-js";
 import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
 import {
@@ -14,6 +20,7 @@ import {
 	screenshotShareStatusText,
 } from "~/routes/screenshot-editor/screenshotExport";
 import { openRecordingFolder } from "~/utils/recording";
+import { createRecordingThumbnail } from "~/utils/recording-thumbnail";
 import {
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindowWithThumbnail,
@@ -169,12 +176,13 @@ export default function TargetCard(props: TargetCardProps) {
 		return target ? formatRefreshRate(target.refresh_rate) : undefined;
 	});
 
+	const recordingThumbnail = createRecordingThumbnail(
+		() => recordingTarget()?.path,
+	);
 	const thumbnailSrc = createMemo(() => {
 		const recording = recordingTarget();
 		if (recording) {
-			return `${convertFileSrc(
-				`${recording.path}/screenshots/display.jpg`,
-			)}?t=${Date.now()}`;
+			return recordingThumbnail();
 		}
 		const screenshot = screenshotTarget();
 		if (screenshot) {
@@ -183,6 +191,10 @@ export default function TargetCard(props: TargetCardProps) {
 		const target = displayTarget() ?? windowTarget();
 		if (!target?.thumbnail) return undefined;
 		return `data:image/png;base64,${target.thumbnail}`;
+	});
+	createEffect(() => {
+		thumbnailSrc();
+		setImageExists(true);
 	});
 
 	const appIconSrc = createMemo(() => {
@@ -243,15 +255,10 @@ export default function TargetCard(props: TargetCardProps) {
 		const screenshot = screenshotTarget();
 		if (!screenshot) return;
 		try {
-			const path = await save({
-				defaultPath: `${screenshot.pretty_name}.png`,
-				filters: [
-					{
-						name: "Image",
-						extensions: ["png"],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				`${screenshot.pretty_name}.png`,
+				"png",
+			);
 			if (!path) return;
 			await commands.copyFileToPath(screenshot.path, path);
 			toast.success("Screenshot saved");
@@ -297,9 +304,9 @@ export default function TargetCard(props: TargetCardProps) {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		commands.showWindow({
-			Editor: { project_path: recording.path },
-		});
+		if (e.currentTarget instanceof HTMLElement) {
+			e.currentTarget.closest("button")?.click();
+		}
 	};
 
 	const handleOpenRecordingLink = (e: MouseEvent) => {

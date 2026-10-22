@@ -4,7 +4,6 @@
 	"exclude": ["dist", "build", "node_modules"],
 	"compilerOptions": {
 		"rootDir": "src",
-		"baseUrl": ".",
 		"moduleResolution": "bundler",
 		"composite": true,
 		"outDir": "dist",

@@ -6,6 +6,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
@@ -17,6 +18,7 @@ import {
 	Videos,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
 	CurrentUser,
@@ -63,6 +65,7 @@ import {
 import { createNotification } from "@/lib/Notification";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -388,6 +391,10 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
+	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	if (publishedThumbnail) {
+		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
+	}
 	const response = yield* bucket.listObjects({
 		prefix: `${video.ownerId}/${video.id}/`,
 	});
@@ -2384,7 +2391,7 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 				source: { type: "webMP4" },
 				bucket: Option.getOrNull(writable.bucketId),
 				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+				public: await getNewVideoPublic(user.activeOrganizationId),
 				duration: download.durationSeconds,
 				width: download.width,
 				height: download.height,
@@ -2467,30 +2474,29 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
-	const videoId = yield* repo.create({
-		ownerId: user.id,
-		orgId: organizationId,
-		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-		source: { type: "webMP4" },
-		bucketId: writable.bucketId,
-		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.fromNullable(input.width),
-		height: Option.fromNullable(input.height),
-		duration: Option.fromNullable(input.durationSeconds),
-		metadata: Option.none(),
-		transcriptionStatus: Option.none(),
-	});
-
-	yield* database.use((db) =>
-		db.insert(Db.videoUploads).values({
-			videoId,
-			total: input.contentLength ?? 0,
-			mode: "singlepart",
-		}),
+	const videoId = yield* repo.create(
+		{
+			ownerId: user.id,
+			orgId: organizationId,
+			name: getUploadTitle(input.fileName),
+			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			source: { type: "webMP4" },
+			bucketId: writable.bucketId,
+			storageIntegrationId: writable.storageIntegrationId,
+			folderId: Option.fromNullable(folderId),
+			width: Option.fromNullable(input.width),
+			height: Option.fromNullable(input.height),
+			duration: Option.fromNullable(input.durationSeconds),
+			metadata: Option.none(),
+			transcriptionStatus: Option.none(),
+		},
+		{
+			initialUpload: {
+				total: input.contentLength ?? 0,
+				mode: "singlepart",
+			},
+		},
 	);
-
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
 		contentType: input.contentType,
@@ -2562,28 +2568,28 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		user.id,
 		organizationId,
 	);
-	const videoId = yield* repo.create({
-		ownerId: user.id,
-		orgId: organizationId,
-		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-		source: { type: "desktopSegments" },
-		bucketId: writable.bucketId,
-		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.some(input.width),
-		height: Option.some(input.height),
-		duration: Option.none(),
-		metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
-		transcriptionStatus: Option.none(),
-	});
-
-	yield* database.use((db) =>
-		db.insert(Db.videoUploads).values({
-			videoId,
-			total: 0,
-			mode: "singlepart",
-		}),
+	const videoId = yield* repo.create(
+		{
+			ownerId: user.id,
+			orgId: organizationId,
+			name: getUploadTitle(input.fileName),
+			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			source: { type: "desktopSegments" },
+			bucketId: writable.bucketId,
+			storageIntegrationId: writable.storageIntegrationId,
+			folderId: Option.fromNullable(folderId),
+			width: Option.some(input.width),
+			height: Option.some(input.height),
+			duration: Option.none(),
+			metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
+			transcriptionStatus: Option.none(),
+		},
+		{
+			initialUpload: {
+				total: 0,
+				mode: "singlepart",
+			},
+		},
 	);
 
 	return {
@@ -2766,14 +2772,16 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								serverEnv().APPLE_CLIENT_ID && serverEnv().APPLE_CLIENT_SECRET,
 							),
 							googleAuthAvailable: Boolean(serverEnv().GOOGLE_CLIENT_ID),
-							workosAuthAvailable: Boolean(serverEnv().WORKOS_CLIENT_ID),
+							workosAuthAvailable: Boolean(
+								serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY,
+							),
 						}),
 					)
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* getCurrentUser;
-								if (Option.isNone(user)) {
+								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =
 										Mobile.createMobileSessionLoginRedirectUrl({
 											deploymentOrigin: getDeploymentOrigin(),
@@ -2932,13 +2940,19 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
-										.set({ name: title })
+										.set({
+											name: title,
+											metadata: sql`JSON_SET(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), '$.titleManuallyEdited', true)`,
+										})
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
 											),
 										),
+								);
+								yield* Effect.promise(() =>
+									enqueueVideoStorageNameSync(path.id),
 								);
 								yield* Effect.sync(() => {
 									revalidatePath("/dashboard/caps");

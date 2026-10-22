@@ -1,10 +1,12 @@
 use super::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 struct MockHost {
     caps: Vec<Capability>,
     actions_run: Mutex<Vec<String>>,
+    upload_results: Mutex<VecDeque<Result<(), String>>>,
+    upload_verification: Result<bool, String>,
 }
 
 impl MockHost {
@@ -12,6 +14,8 @@ impl MockHost {
         Self {
             caps,
             actions_run: Mutex::new(Vec::new()),
+            upload_results: Mutex::new(VecDeque::new()),
+            upload_verification: Ok(false),
         }
     }
 
@@ -66,7 +70,16 @@ impl AutomationHost for MockHost {
         _open: bool,
     ) -> Result<(), String> {
         self.record("upload");
-        Ok(())
+        self.upload_results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Ok(()))
+    }
+
+    async fn upload_is_verified(&self, _ctx: &TriggerContext) -> Result<bool, String> {
+        self.record("verify_upload");
+        self.upload_verification.clone()
     }
 
     async fn reveal_in_file_manager(&self, _ctx: &TriggerContext) -> Result<(), String> {
@@ -635,6 +648,172 @@ fn cli_capabilities() -> Vec<Capability> {
         Capability::ApplyPreset,
         Capability::DeleteLocalFiles,
     ]
+}
+
+fn upload_action() -> Action {
+    Action::Upload {
+        organization_id: None,
+        copy_link: false,
+        open_in_browser: false,
+    }
+}
+
+fn upload_cleanup_store(trigger: Trigger, actions: Vec<Action>) -> AutomationsStore {
+    AutomationsStore {
+        version: 1,
+        rules: vec![AutomationRule {
+            id: "upload-cleanup".to_string(),
+            name: "Upload cleanup".to_string(),
+            enabled: true,
+            trigger,
+            match_mode: MatchMode::All,
+            conditions: vec![],
+            actions,
+        }],
+    }
+}
+
+#[tokio::test]
+async fn failed_or_unverified_upload_retains_files_and_continues_notifications() {
+    for upload_result in [Ok(()), Err("storage offline".to_string())] {
+        let submitted = upload_result.is_ok();
+        let host = MockHost::new(desktop_capabilities());
+        host.upload_results.lock().unwrap().push_back(upload_result);
+        let store = upload_cleanup_store(
+            Trigger::StudioRecordingFinished,
+            vec![
+                upload_action(),
+                Action::DeleteLocalFiles,
+                Action::Notify {
+                    title_template: "Recording".to_string(),
+                    body_template: "Saved".to_string(),
+                },
+            ],
+        );
+        let results = run(
+            &host,
+            &store,
+            &Trigger::StudioRecordingFinished,
+            &TriggerContext::new(),
+        )
+        .await;
+        let actions = &results[0].action_results;
+        assert_eq!(actions[0].success, submitted);
+        assert!(!actions[1].success);
+        assert!(actions[1].error.as_deref().unwrap().contains("retained"));
+        assert!(actions[2].success);
+        let expected = if submitted {
+            vec!["upload", "verify_upload", "notify:Recording:Saved"]
+        } else {
+            vec!["upload", "notify:Recording:Saved"]
+        };
+        assert_eq!(host.actions_run(), expected);
+        if submitted {
+            assert_eq!(
+                actions[1].error.as_deref(),
+                Some(
+                    "Upload submitted, but remote verification is unavailable; local recording retained"
+                )
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn deletion_waits_for_every_upload_and_does_not_forget_a_failure() {
+    for first_upload in [Ok(()), Err("first upload failed".to_string())] {
+        let first_succeeded = first_upload.is_ok();
+        let mut host = MockHost::new(desktop_capabilities());
+        host.upload_verification = Ok(true);
+        host.upload_results.lock().unwrap().push_back(first_upload);
+        let store = upload_cleanup_store(
+            Trigger::InstantRecordingFinished,
+            vec![
+                upload_action(),
+                Action::DeleteLocalFiles,
+                upload_action(),
+                Action::DeleteLocalFiles,
+            ],
+        );
+        let results = run(
+            &host,
+            &store,
+            &Trigger::InstantRecordingFinished,
+            &TriggerContext::new(),
+        )
+        .await;
+        assert!(!results[0].action_results[1].success);
+        assert_eq!(results[0].action_results[3].success, first_succeeded);
+        assert_eq!(
+            host.actions_run(),
+            if first_succeeded {
+                vec!["upload", "upload", "verify_upload", "delete_local_files"]
+            } else {
+                vec!["upload", "upload"]
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn upload_completed_trigger_requires_proof_even_with_a_share_link() {
+    for verification in [
+        Ok(false),
+        Err("receipt refers to changed media".to_string()),
+        Ok(true),
+    ] {
+        let verified = verification == Ok(true);
+        let mut host = MockHost::new(desktop_capabilities());
+        host.upload_verification = verification;
+        let store = upload_cleanup_store(Trigger::UploadCompleted, vec![Action::DeleteLocalFiles]);
+        let ctx = TriggerContext::new()
+            .with_share_link("https://cap.test/s/owned".to_string())
+            .with_share_id("owned".to_string());
+        let results = run(&host, &store, &Trigger::UploadCompleted, &ctx).await;
+        assert_eq!(results[0].action_results[0].success, verified);
+        assert_eq!(
+            host.actions_run(),
+            if verified {
+                vec!["verify_upload", "delete_local_files"]
+            } else {
+                vec!["verify_upload"]
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn standalone_deletion_is_preserved_but_unsupported_upload_cannot_authorize_it() {
+    let host = MockHost::new(vec![Capability::DeleteLocalFiles]);
+    let store = upload_cleanup_store(
+        Trigger::StudioRecordingFinished,
+        vec![Action::DeleteLocalFiles],
+    );
+    let result = run(
+        &host,
+        &store,
+        &Trigger::StudioRecordingFinished,
+        &TriggerContext::new(),
+    )
+    .await;
+    assert!(result[0].action_results[0].success);
+    assert_eq!(host.actions_run(), vec!["delete_local_files"]);
+
+    let host = MockHost::new(vec![Capability::DeleteLocalFiles]);
+    let store = upload_cleanup_store(
+        Trigger::StudioRecordingFinished,
+        vec![upload_action(), Action::DeleteLocalFiles],
+    );
+    let result = run(
+        &host,
+        &store,
+        &Trigger::StudioRecordingFinished,
+        &TriggerContext::new(),
+    )
+    .await;
+    assert!(!result[0].action_results[0].success);
+    assert!(!result[0].action_results[1].success);
+    assert!(host.actions_run().is_empty());
 }
 
 // Both surfaces share the same engine + store, so they must match the same rules and run the same

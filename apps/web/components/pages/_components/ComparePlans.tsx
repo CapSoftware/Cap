@@ -4,11 +4,13 @@ import { Button } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useCurrency } from "hooks/useCurrency";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { trackEvent } from "@/app/utils/analytics";
+import { PRICING } from "@/data/pricing";
 
 type PlanKey = "free" | "desktop" | "pro";
 
@@ -114,7 +116,7 @@ const sections: FeatureSection[] = [
 		title: "Security, support & licensing",
 		rows: [
 			{
-				label: "SOC 2 Type II & ISO 27001 compliance",
+				label: "SOC 2 Type II, ISO 27001 & HIPAA compliance",
 				free: false,
 				desktop: false,
 				pro: true,
@@ -158,6 +160,7 @@ const getButtonText = (key: PlanKey): string => {
 
 export const ComparePlans = () => {
 	const user = useCurrentUser();
+	const { symbol } = useCurrency();
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const [commercialLoading, setCommercialLoading] = useState(false);
@@ -187,11 +190,16 @@ export const ComparePlans = () => {
 				key: "desktop",
 				name: "Desktop License",
 				short: "Desktop",
-				price: "$29/yr",
+				price: `${symbol}${PRICING.commercial.yearly}/yr`,
 			},
-			{ key: "pro", name: "Cap Pro", short: "Pro", price: "$8.16/user/mo" },
+			{
+				key: "pro",
+				name: "Cap Pro",
+				short: "Pro",
+				price: `${symbol}${PRICING.pro.annualPerMonth}/user/mo`,
+			},
 		],
-		[],
+		[symbol],
 	);
 
 	const handleCheckout = async (

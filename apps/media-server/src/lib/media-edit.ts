@@ -195,6 +195,8 @@ export function buildTranscodeEditArgs(
 		"18",
 		"-pix_fmt",
 		"yuv420p",
+		"-enc_time_base:v",
+		`1/${getOutputFps(fps)}`,
 		...(hasAudio ? ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"] : ["-an"]),
 		"-movflags",
 		"+faststart",

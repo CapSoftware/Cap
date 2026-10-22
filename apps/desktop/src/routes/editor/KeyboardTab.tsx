@@ -2,6 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
 import { batch, createMemo, createSignal, Show } from "solid-js";
+import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import {
 	defaultKeyboardSettings,
@@ -12,6 +13,10 @@ import { commands } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
 import { useEditorContext } from "./context";
+import {
+	generateForStableKeyboardTimeline,
+	keyboardTimelineSignature,
+} from "./keyboard-timing";
 import {
 	FONT_OPTIONS,
 	getTextWeightLabel,
@@ -25,16 +30,26 @@ import {
 	MenuItem,
 	MenuItemList,
 	PopperContent,
+	Section,
+	SectionLabel,
 	Slider,
 	Subfield,
 	topSlideAnimateClasses,
 } from "./ui";
 
+const selectTriggerClass =
+	"flex flex-row gap-1.5 items-center px-2 h-7 max-w-full rounded-[7px] text-[13px] transition-colors outline-hidden bg-ed-ctl text-ed-text-1 hover:bg-ed-ctl-hover focus-visible:ring-1 focus-visible:ring-ed-accent";
+
 export function KeyboardTab(props: {
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
-	const { project, setProject, editorState, setEditorState } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorState,
+		setEditorState,
+		flushProjectConfig,
+	} = useEditorContext();
 
 	const getSetting = <K extends keyof KeyboardSettings>(
 		key: K,
@@ -88,24 +103,50 @@ export function KeyboardTab(props: {
 	};
 
 	const generateSegments = async () => {
+		if (!project.timeline || isGenerating()) return;
 		setIsGenerating(true);
 		try {
-			const segments = await commands.generateKeyboardSegments(
-				getSetting("groupingThresholdMs"),
-				getSetting("lingerDuration") * 1000,
-				getSetting("showModifiers"),
-				getSetting("showSpecialKeys"),
+			const segments = await generateForStableKeyboardTimeline(
+				() => {
+					const timeline = keyboardTimelineSignature(project.timeline);
+					if (timeline === null) return null;
+					return [
+						timeline,
+						getSetting("groupingThresholdMs"),
+						getSetting("lingerDuration"),
+						getSetting("showModifiers"),
+						getSetting("showSpecialKeys"),
+					].join("@@");
+				},
+				async () => {
+					await flushProjectConfig();
+					return commands.generateKeyboardSegments(
+						getSetting("groupingThresholdMs"),
+						getSetting("lingerDuration") * 1000,
+						getSetting("showModifiers"),
+						getSetting("showSpecialKeys"),
+					);
+				},
 			);
 
-			if (segments.length > 0) {
-				batch(() => {
-					ensureKeyboardSettings(true);
-					setProject("timeline", "keyboardSegments", segments);
-					setEditorState("timeline", "tracks", "keyboard", true);
-				});
+			if (!segments) {
+				toast.error(
+					"The timeline changed while keyboard events were generated. Try again.",
+				);
+				return;
 			}
+			batch(() => {
+				setProject("timeline", "keyboardSegments", segments);
+				if (segments.length > 0) {
+					ensureKeyboardSettings(true);
+					setEditorState("timeline", "tracks", "keyboard", true);
+				} else if (editorState.timeline.selection?.type === "keyboard") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
 		} catch (e) {
 			console.error("Failed to generate keyboard segments:", e);
+			toast.error("Unable to generate keyboard events");
 		} finally {
 			setIsGenerating(false);
 		}
@@ -126,119 +167,124 @@ export function KeyboardTab(props: {
 	};
 
 	return (
-		<Field
-			name="Show keyboard"
-			value={
-				<Toggle checked={getSetting("enabled")} onChange={setKeyboardVisible} />
-			}
-			badge="Beta"
-		>
-			<div class="flex flex-col gap-4">
-				<div
-					class={cx(
-						"space-y-4",
-						!getSetting("enabled") && "opacity-50 pointer-events-none",
-					)}
-				>
-					<Field name="Font Settings" icon={<IconLucideKeyboard />}>
-						<div class="space-y-3">
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Font Family</span>
-								<KSelect<string>
-									options={FONT_OPTIONS.map((f) => f.value)}
-									value={getSetting("font")}
-									onChange={(value) => {
-										if (value === null) return;
-										updateSetting("font", value);
-									}}
-									itemComponent={(props) => (
-										<MenuItem<typeof KSelect.Item>
-											as={KSelect.Item}
-											item={props.item}
-										>
-											<KSelect.ItemLabel class="flex-1">
-												{
-													FONT_OPTIONS.find(
-														(f) => f.value === props.item.rawValue,
-													)?.label
-												}
-											</KSelect.ItemLabel>
-										</MenuItem>
-									)}
-								>
-									<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
-										<KSelect.Value<string>>
-											{(state) =>
+		<div class="flex flex-col gap-3.5">
+			<div class="flex flex-row gap-2 items-center min-h-[22px]">
+				<SectionLabel name="Show keyboard" />
+				<span class="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-ed-ctl text-ed-text-2">
+					Beta
+				</span>
+				<div class="ml-auto">
+					<Toggle
+						checked={getSetting("enabled")}
+						onChange={setKeyboardVisible}
+					/>
+				</div>
+			</div>
+			<div
+				class={cx(
+					"flex flex-col gap-3.5",
+					!getSetting("enabled") && "opacity-50 pointer-events-none",
+				)}
+			>
+				<Section name="Font settings">
+					<div class="flex flex-col gap-2">
+						<Field name="Font Family" inline>
+							<KSelect<string>
+								options={FONT_OPTIONS.map((f) => f.value)}
+								value={getSetting("font")}
+								onChange={(value) => {
+									if (value === null) return;
+									updateSetting("font", value);
+								}}
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{
 												FONT_OPTIONS.find(
-													(f) => f.value === state.selectedOption(),
+													(f) => f.value === props.item.rawValue,
 												)?.label
 											}
-										</KSelect.Value>
-										<KSelect.Icon>
-											<IconCapChevronDown />
-										</KSelect.Icon>
-									</KSelect.Trigger>
-									<KSelect.Portal>
-										<PopperContent<typeof KSelect.Content>
-											as={KSelect.Content}
-											class={topSlideAnimateClasses}
-										>
-											<MenuItemList<typeof KSelect.Listbox>
-												class="max-h-48 overflow-y-auto"
-												as={KSelect.Listbox}
-											/>
-										</PopperContent>
-									</KSelect.Portal>
-								</KSelect>
-							</div>
+										</KSelect.ItemLabel>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class={selectTriggerClass}>
+									<KSelect.Value<string> class="truncate">
+										{(state) =>
+											FONT_OPTIONS.find(
+												(f) => f.value === state.selectedOption(),
+											)?.label
+										}
+									</KSelect.Value>
+									<KSelect.Icon>
+										<IconCapChevronDown class="shrink-0 size-3.5 text-ed-text-3" />
+									</KSelect.Icon>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={topSlideAnimateClasses}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-48"
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Field>
 
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Size</span>
-								<Slider
-									value={[getSetting("size")]}
-									onChange={(v) => updateSetting("size", v[0])}
-									minValue={12}
-									maxValue={100}
-									step={1}
-								/>
-							</div>
+						<Field name="Size" inline>
+							<Slider
+								value={[getSetting("size")]}
+								onChange={(v) => updateSetting("size", v[0])}
+								minValue={12}
+								maxValue={100}
+								step={1}
+							/>
+						</Field>
 
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Text Color</span>
-								<HexColorInput
-									value={getSetting("color")}
-									brandColorSwatches={props.brandColorSwatches}
-									onChange={(value) => updateSetting("color", value)}
-								/>
-							</div>
-						</div>
-					</Field>
+						<Field name="Text Color">
+							<HexColorInput
+								value={getSetting("color")}
+								brandColorSwatches={props.brandColorSwatches}
+								onChange={(value) => updateSetting("color", value)}
+							/>
+						</Field>
+					</div>
+				</Section>
 
-					<Field name="Background Settings" icon={<IconLucideKeyboard />}>
-						<div class="space-y-3">
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Background Color</span>
-								<HexColorInput
-									value={getSetting("backgroundColor")}
-									brandColorSwatches={props.brandColorSwatches}
-									onChange={(value) => updateSetting("backgroundColor", value)}
-								/>
-							</div>
+				<div class="w-full border-t border-ed-line" />
 
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Background Opacity</span>
-								<Slider
-									value={[getSetting("backgroundOpacity")]}
-									onChange={(v) => updateSetting("backgroundOpacity", v[0])}
-									minValue={0}
-									maxValue={100}
-									step={1}
-								/>
-							</div>
-						</div>
-					</Field>
+				<Section name="Background settings">
+					<div class="flex flex-col gap-2">
+						<Field name="Background Color">
+							<HexColorInput
+								value={getSetting("backgroundColor")}
+								brandColorSwatches={props.brandColorSwatches}
+								onChange={(value) => updateSetting("backgroundColor", value)}
+							/>
+						</Field>
 
-					<Field name="Position" icon={<IconLucideKeyboard />}>
+						<Field name="Background Opacity" inline>
+							<Slider
+								value={[getSetting("backgroundOpacity")]}
+								onChange={(v) => updateSetting("backgroundOpacity", v[0])}
+								minValue={0}
+								maxValue={100}
+								step={1}
+							/>
+						</Field>
+					</div>
+				</Section>
+
+				<div class="w-full border-t border-ed-line" />
+
+				<div class="flex flex-col gap-2">
+					<Field name="Position" inline>
 						<KSelect<string>
 							options={KEYBOARD_POSITION_OPTIONS.map((p) => p.value)}
 							value={getSetting("position")}
@@ -261,8 +307,8 @@ export function KeyboardTab(props: {
 								</MenuItem>
 							)}
 						>
-							<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
-								<KSelect.Value<string>>
+							<KSelect.Trigger class={selectTriggerClass}>
+								<KSelect.Value<string> class="truncate">
 									{(state) => (
 										<span>
 											{
@@ -274,7 +320,7 @@ export function KeyboardTab(props: {
 									)}
 								</KSelect.Value>
 								<KSelect.Icon>
-									<IconCapChevronDown />
+									<IconCapChevronDown class="shrink-0 size-3.5 text-ed-text-3" />
 								</KSelect.Icon>
 							</KSelect.Trigger>
 							<KSelect.Portal>
@@ -288,7 +334,7 @@ export function KeyboardTab(props: {
 						</KSelect>
 					</Field>
 
-					<Field name="Font Weight" icon={<IconLucideKeyboard />}>
+					<Field name="Font Weight" inline>
 						<KSelect
 							options={TEXT_WEIGHT_OPTIONS}
 							optionValue="value"
@@ -309,13 +355,13 @@ export function KeyboardTab(props: {
 									<KSelect.ItemLabel class="flex-1">
 										{selectItemProps.item.rawValue.label}
 									</KSelect.ItemLabel>
-									<KSelect.ItemIndicator class="ml-auto text-blue-9">
+									<KSelect.ItemIndicator class="ml-auto text-ed-accent">
 										<IconCapCircleCheck />
 									</KSelect.ItemIndicator>
 								</MenuItem>
 							)}
 						>
-							<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-hidden focus:ring-1 focus:ring-blue-9">
+							<KSelect.Trigger class={selectTriggerClass}>
 								<KSelect.Value<{
 									label: string;
 									value: number;
@@ -326,7 +372,7 @@ export function KeyboardTab(props: {
 									}
 								</KSelect.Value>
 								<KSelect.Icon>
-									<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)" />
+									<IconCapChevronDown class="shrink-0 size-3.5 transition-transform transform text-ed-text-3 data-expanded:rotate-180" />
 								</KSelect.Icon>
 							</KSelect.Trigger>
 							<KSelect.Portal>
@@ -342,112 +388,103 @@ export function KeyboardTab(props: {
 							</KSelect.Portal>
 						</KSelect>
 					</Field>
+				</div>
 
-					<Field name="Animation" icon={<IconLucideKeyboard />}>
-						<div class="space-y-3">
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Fade Duration</span>
-								<Slider
-									value={[getSetting("fadeDuration") * 100]}
-									onChange={(v) => updateSetting("fadeDuration", v[0] / 100)}
-									minValue={0}
-									maxValue={50}
-									step={1}
-								/>
-								<span class="text-xs text-gray-11 text-right">
-									{(getSetting("fadeDuration") * 1000).toFixed(0)}ms
-								</span>
-							</div>
+				<div class="w-full border-t border-ed-line" />
 
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Linger Duration</span>
-								<Slider
-									value={[getSetting("lingerDuration") * 100]}
-									onChange={(v) => updateSetting("lingerDuration", v[0] / 100)}
-									minValue={0}
-									maxValue={300}
-									step={5}
-								/>
-								<span class="text-xs text-gray-11 text-right">
-									{(getSetting("lingerDuration") * 1000).toFixed(0)}ms
-								</span>
-							</div>
-
-							<div class="flex flex-col gap-2">
-								<span class="text-gray-11 text-sm">Grouping Threshold</span>
-								<Slider
-									value={[getSetting("groupingThresholdMs")]}
-									onChange={(v) => updateSetting("groupingThresholdMs", v[0])}
-									minValue={50}
-									maxValue={1000}
-									step={10}
-								/>
-								<span class="text-xs text-gray-11 text-right">
-									{getSetting("groupingThresholdMs").toFixed(0)}ms
-								</span>
-							</div>
-						</div>
-					</Field>
-
-					<Field name="Behavior" icon={<IconLucideKeyboard />}>
-						<div class="space-y-3">
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center justify-between">
-									<span class="text-gray-11 text-sm">Show Modifier Keys</span>
-									<Toggle
-										checked={getSetting("showModifiers")}
-										onChange={(checked) =>
-											updateSetting("showModifiers", checked)
-										}
-									/>
-								</div>
-							</div>
-
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center justify-between">
-									<span class="text-gray-11 text-sm">Show Special Keys</span>
-									<Toggle
-										checked={getSetting("showSpecialKeys")}
-										onChange={(checked) =>
-											updateSetting("showSpecialKeys", checked)
-										}
-									/>
-								</div>
-							</div>
-
-							<div class="flex flex-col gap-2">
-								<div class="flex items-center justify-between">
-									<span class="text-gray-11 text-sm">Uppercase</span>
-									<Toggle
-										checked={getSetting("uppercase")}
-										onChange={(checked) => updateSetting("uppercase", checked)}
-									/>
-								</div>
-							</div>
-						</div>
-					</Field>
-
-					<div class="pt-2">
-						<Button
-							onClick={generateSegments}
-							disabled={isGenerating()}
-							class="w-full"
+				<Section name="Animation">
+					<div class="flex flex-col gap-2">
+						<Field
+							name="Fade Duration"
+							inline
+							value={`${(getSetting("fadeDuration") * 1000).toFixed(0)}ms`}
 						>
-							{isGenerating()
-								? "Generating..."
-								: hasKeyboardSegments()
-									? "Regenerate Keyboard Segments"
-									: "Generate Keyboard Segments"}
-						</Button>
-					</div>
+							<Slider
+								value={[getSetting("fadeDuration") * 100]}
+								onChange={(v) => updateSetting("fadeDuration", v[0] / 100)}
+								minValue={0}
+								maxValue={50}
+								step={1}
+							/>
+						</Field>
 
-					<Show when={selectedSegment()}>
-						{(seg) => (
-							<Field
-								name="Selected Segment Override"
-								icon={<IconLucideKeyboard />}
-							>
-								<div class="space-y-3">
+						<Field
+							name="Linger Duration"
+							inline
+							value={`${(getSetting("lingerDuration") * 1000).toFixed(0)}ms`}
+						>
+							<Slider
+								value={[getSetting("lingerDuration") * 100]}
+								onChange={(v) => updateSetting("lingerDuration", v[0] / 100)}
+								minValue={0}
+								maxValue={300}
+								step={5}
+							/>
+						</Field>
+
+						<Field
+							name="Grouping Threshold"
+							inline
+							value={`${getSetting("groupingThresholdMs").toFixed(0)}ms`}
+						>
+							<Slider
+								value={[getSetting("groupingThresholdMs")]}
+								onChange={(v) => updateSetting("groupingThresholdMs", v[0])}
+								minValue={50}
+								maxValue={1000}
+								step={10}
+							/>
+						</Field>
+					</div>
+				</Section>
+
+				<div class="w-full border-t border-ed-line" />
+
+				<Section name="Behavior">
+					<div class="flex flex-col gap-2">
+						<Field name="Show Modifier Keys" inline>
+							<Toggle
+								checked={getSetting("showModifiers")}
+								onChange={(checked) => updateSetting("showModifiers", checked)}
+							/>
+						</Field>
+
+						<Field name="Show Special Keys" inline>
+							<Toggle
+								checked={getSetting("showSpecialKeys")}
+								onChange={(checked) =>
+									updateSetting("showSpecialKeys", checked)
+								}
+							/>
+						</Field>
+
+						<Field name="Uppercase" inline>
+							<Toggle
+								checked={getSetting("uppercase")}
+								onChange={(checked) => updateSetting("uppercase", checked)}
+							/>
+						</Field>
+					</div>
+				</Section>
+
+				<Button
+					onClick={generateSegments}
+					disabled={isGenerating()}
+					class="w-full"
+				>
+					{isGenerating()
+						? "Generating..."
+						: hasKeyboardSegments()
+							? "Regenerate Keyboard Segments"
+							: "Generate Keyboard Segments"}
+				</Button>
+
+				<Show when={selectedSegment()}>
+					{(seg) => (
+						<>
+							<div class="w-full border-t border-ed-line" />
+							<Section name="Selected segment override">
+								<div class="flex flex-col gap-1">
 									<Subfield name="Start Time">
 										<Input
 											type="number"
@@ -499,6 +536,7 @@ export function KeyboardTab(props: {
 									</Subfield>
 									<Subfield name="Fade Duration Override">
 										<Slider
+											class="flex-1"
 											value={[
 												(seg().fadeDurationOverride ??
 													getSetting("fadeDuration")) * 100,
@@ -534,21 +572,21 @@ export function KeyboardTab(props: {
 										/>
 									</Subfield>
 								</div>
-							</Field>
-						)}
-					</Show>
+							</Section>
+						</>
+					)}
+				</Show>
 
-					<Show when={!hasKeyboardSegments()}>
-						<div class="text-center text-sm text-gray-11 py-4">
-							<p>No keyboard segments yet.</p>
-							<p class="text-xs mt-1 text-gray-10">
-								Click "Generate Keyboard Segments" to create segments from
-								recorded keyboard presses.
-							</p>
-						</div>
-					</Show>
-				</div>
+				<Show when={!hasKeyboardSegments()}>
+					<div class="py-2 text-center text-ed-text-2">
+						<p class="text-[13px]">No keyboard segments yet.</p>
+						<p class="mt-1 text-[11px] text-ed-text-3">
+							Click "Generate Keyboard Segments" to create segments from
+							recorded keyboard presses.
+						</p>
+					</div>
+				</Show>
 			</div>
-		</Field>
+		</div>
 	);
 }

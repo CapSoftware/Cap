@@ -1,9 +1,10 @@
 use strum::{EnumString, IntoStaticStr};
 
-use crate::{CursorShape, ResolvedCursor};
+use crate::{CursorShape, CursorShapeMacOS, ResolvedCursor};
 
 // https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumString, IntoStaticStr)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum CursorShapeWindows {
     /// IDC_ARROW
     Arrow,
@@ -267,5 +268,21 @@ mod windows_only {
 impl From<CursorShapeWindows> for CursorShape {
     fn from(value: CursorShapeWindows) -> Self {
         CursorShape::Windows(value)
+    }
+}
+
+impl CursorShapeWindows {
+    /// The closest classic (pre-Tahoe) macOS counterpart.
+    pub(crate) fn to_macos(self) -> CursorShapeMacOS {
+        match self {
+            Self::IBeam => CursorShapeMacOS::IBeam,
+            Self::Hand => CursorShapeMacOS::PointingHand,
+            Self::Cross => CursorShapeMacOS::Crosshair,
+            Self::No => CursorShapeMacOS::OperationNotAllowed,
+            Self::SizeWE => CursorShapeMacOS::ResizeLeftRight,
+            Self::SizeNS => CursorShapeMacOS::ResizeUpDown,
+            Self::SizeAll => CursorShapeMacOS::OpenHand,
+            _ => CursorShapeMacOS::Arrow,
+        }
     }
 }

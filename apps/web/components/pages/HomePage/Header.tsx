@@ -222,15 +222,13 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					<div className="flex flex-col text-center md:text-left w-full max-w-[650px]">
 						<div className="flex justify-center mb-4 md:justify-start">
 							<Link
-								href="/blog/soc2-type-ii-iso-27001"
+								href="/hipaa-compliant-screen-recording"
 								className="inline-flex gap-2 items-center px-3.5 py-1.5 rounded-full border transition-colors group bg-gray-2 border-gray-4 hover:bg-gray-3 hover:border-gray-5"
 							>
 								<span className="text-xs font-medium text-gray-12">
 									<span className="font-semibold text-blue-500">New</span>
 									<span className="mx-1.5 text-gray-7">·</span>
-									Cap is now SOC 2
-									<span className="hidden sm:inline"> Type II</span> &amp; ISO
-									27001 certified
+									Cap is now HIPAA compliant
 								</span>
 								<FontAwesomeIcon
 									icon={faArrowRight}

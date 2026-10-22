@@ -1,0 +1,65 @@
+---
+title: Cap is now HIPAA compliant
+description: Cap is fully HIPAA compliant. Sign a Business Associate Agreement with us in minutes from your dashboard, keep recordings on your own storage, or self-host the whole platform. Here is what that means for healthcare teams.
+publishedAt: "2026-08-20"
+category: Security
+image: /blog/hipaa-compliant.jpg
+author: Richie McIlroy
+tags: Security, Compliance, Healthcare, News
+---
+
+Hey everyone,
+
+A couple of weeks ago we announced that Cap is [SOC 2 Type II and ISO 27001 certified](/blog/soc2-type-ii-iso-27001). Today we have the next one: Cap is now fully HIPAA compliant, and you can execute a signed Business Associate Agreement with us in minutes, straight from your dashboard.
+
+If you work in healthcare and have been waiting on this before using Cap for clinical walkthroughs, patient education videos, EHR training, or anything else that might touch protected health information, the wait is over.
+
+## What this means
+
+HIPAA is the US law that governs protected health information, or PHI. When a healthcare organization uses a tool like Cap, that tool becomes a "business associate" under the law, and the organization needs a signed Business Associate Agreement, a BAA, with the vendor before any PHI touches it.
+
+Here is what being HIPAA compliant means for Cap, concretely:
+
+- We sign BAAs with our customers. Not "contact sales and we will think about it". A real, self-serve, countersigned agreement.
+- Every vendor in Cap's production infrastructure is covered by a BAA with us: cloud hosting, storage, database, transcription, all of it. The chain from your recording to its storage has no uncovered link.
+- The technical and administrative safeguards HIPAA requires are the same controls our SOC 2 Type II and ISO 27001 audits already test continuously: encryption in transit and at rest, access control, monitoring, incident response, vendor management.
+
+## A signed BAA in minutes, not months
+
+Getting a BAA from a software vendor usually looks like this: find the "contact sales" form, wait for a reply, discover the BAA is only available on the enterprise tier, and spend weeks in legal back-and-forth.
+
+We built something better. If your organization is on Cap Pro, you can execute a BAA directly from your organization's settings in the Cap dashboard. Enter your legal entity details, sign, and your countersigned PDF is emailed to you instantly. The whole thing takes about two minutes.
+
+That is the entire process. No sales call, no enterprise tier, no special pricing conversation. It is available to anyone on the Pro plan.
+
+## Choose how much of Cap you want to run
+
+HIPAA compliance is not one-size-fits-all, and different organizations draw their compliance boundary in different places. Cap supports all of them:
+
+**Cap Cloud with a BAA.** Sign the BAA and use Cap exactly as it works out of the box. Your recordings are covered by our BAA with you and by our BAAs with every vendor underneath us.
+
+**Your own storage.** Connect Cap to your own AWS S3 bucket, Cloudflare R2, or any S3-compatible storage. Recordings upload directly from the desktop app to your bucket, so recording content stays inside your own infrastructure and your existing compliance boundary, like a HIPAA-covered AWS account you already have a BAA for.
+
+**Self-host everything.** The entire Cap platform, including the web dashboard and sharing layer, can run on your own infrastructure, entirely inside your network perimeter.
+
+And because Cap is open source, this is all verifiable. Your compliance team does not have to take our word for how the desktop app handles recordings. Every line is [on GitHub](https://github.com/CapSoftware/Cap).
+
+## The details your compliance team will ask about
+
+- SOC 2 Type II and ISO 27001 certified, with reports available through our [Trust Portal](https://trust.cap.so)
+- BAAs executed with every production vendor; our subprocessor list is on the Trust Portal
+- Encryption of data in transit and at rest
+- Password-protected sharing, so recordings with sensitive content are only viewable by people you authorize
+- Studio Mode records screen and webcam as separate tracks, so content can be reviewed and redacted before sharing
+- AI captions run through a BAA-covered transcription provider, and they are fully optional: if your policies restrict external audio processing, leave them off and everything else works exactly the same
+- Our [DPA](/dpa) is available alongside the BAA
+
+If you are evaluating Cap for a healthcare organization, the [HIPAA-compliant screen recording page](/hipaa-compliant-screen-recording) goes deeper on all of this.
+
+## Getting started
+
+If you are on Cap Pro, head to your organization's settings in the dashboard and look for the Signed BAA card. Sign it and you are covered from today. If you are not on Pro yet, [pricing is here](/pricing).
+
+And if your organization has specific compliance requirements we have not covered, [talk to us](/support). These last few months of compliance work, SOC 2, ISO 27001, and now HIPAA, all came from the same place: people telling us what they needed before they could bring Cap to work.
+
+Richie

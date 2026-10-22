@@ -9,7 +9,6 @@ export * as Http from "./Http/index.ts";
 export * as ImageUpload from "./ImageUpload.ts";
 export * as Language from "./Language.ts";
 export * from "./Language.ts";
-export * as Loom from "./Loom.ts";
 export * as Mobile from "./Mobile.ts";
 export * as Organisation from "./Organisation.ts";
 export * from "./Organisation.ts";

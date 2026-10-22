@@ -1,12 +1,10 @@
 "use client";
 
-import { Logo } from "@cap/ui";
-import {
-	faDiscord,
-	faLinkedinIn,
-	faXTwitter,
-} from "@fortawesome/free-brands-svg-icons";
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { Logo } from "@cap/ui/logo";
+import { faDiscord } from "@fortawesome/free-brands-svg-icons/faDiscord";
+import { faLinkedinIn } from "@fortawesome/free-brands-svg-icons/faLinkedinIn";
+import { faXTwitter } from "@fortawesome/free-brands-svg-icons/faXTwitter";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
@@ -23,6 +21,7 @@ const footerLinks = {
 		{ label: "Blog", href: "/blog" },
 		{ label: "Changelog", href: "/changelog" },
 		{ label: "Docs", href: "/docs" },
+		{ label: "Cap for Agents", href: "/agents" },
 		{ label: "Pricing", href: "/pricing" },
 		{ label: "Download", href: "/download" },
 		{
@@ -55,7 +54,7 @@ const footerLinks = {
 		},
 		{
 			label: "System Status",
-			href: "https://cap.openstatus.dev/",
+			href: "https://status.cap.so",
 			isExternal: true,
 		},
 	] as FooterLink[],
@@ -155,7 +154,7 @@ const complianceBadges: {
 	},
 	{
 		label: "HIPAA",
-		status: "in progress",
+		status: "compliant",
 		content: (
 			<text
 				x="22"
@@ -234,7 +233,7 @@ const ComplianceBadges = () => (
 			))}
 		</div>
 		<p className="mt-2 text-[11px] text-gray-9">
-			SOC 2 Type II & ISO 27001 compliant · HIPAA in progress
+			SOC 2 Type II, ISO 27001 & HIPAA compliant
 		</p>
 	</div>
 );

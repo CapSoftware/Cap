@@ -12,9 +12,12 @@ vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: {},
 }));
 
-vi.mock("@/lib/groq-client", () => ({
-	GROQ_MODEL: "test-model",
-	getGroqClient: vi.fn(() => null),
+vi.mock("@/lib/ai/provider", () => ({
+	isAiConfigured: vi.fn(() => true),
+}));
+
+vi.mock("@/lib/ai/run", () => ({
+	runWithAiProviders: vi.fn(),
 }));
 
 vi.mock("@/lib/workflow-runtime", () => ({

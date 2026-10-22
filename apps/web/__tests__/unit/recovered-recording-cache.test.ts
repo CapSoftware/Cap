@@ -11,6 +11,7 @@ describe("recovered recording cache", () => {
 			"@/app/(org)/dashboard/caps/components/web-recorder-dialog/recovered-recording-cache"
 		);
 		resetRecoveredRecordingSpoolsCache();
+		vi.useRealTimers();
 		vi.clearAllMocks();
 	});
 
@@ -58,5 +59,32 @@ describe("recovered recording cache", () => {
 		const secondLoad = await loadRecoveredRecordingSpools();
 		expect(secondLoad.map((spool) => spool.sessionId)).toEqual(["second"]);
 		expect(recoverOrphanedRecordingSpools).toHaveBeenCalledTimes(1);
+	});
+	it("refreshes an empty result so recordings excluded as live can be recovered later", async () => {
+		vi.useFakeTimers();
+		const recover = vi.mocked(
+			(await import("@cap/recorder-core/recording-spool"))
+				.recoverOrphanedRecordingSpools,
+		);
+		recover.mockResolvedValueOnce([]).mockResolvedValueOnce([
+			{
+				sessionId: "later",
+				mimeType: "video/webm",
+				totalBytes: 1,
+				chunkCount: 1,
+				createdAt: 1,
+				updatedAt: 2,
+				blob: new Blob(["a"]),
+			},
+		]);
+		const { loadRecoveredRecordingSpools } = await import(
+			"@/app/(org)/dashboard/caps/components/web-recorder-dialog/recovered-recording-cache"
+		);
+		expect(await loadRecoveredRecordingSpools()).toEqual([]);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(
+			(await loadRecoveredRecordingSpools()).map((spool) => spool.sessionId),
+		).toEqual(["later"]);
+		expect(recover).toHaveBeenCalledTimes(2);
 	});
 });

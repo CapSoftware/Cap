@@ -52,8 +52,8 @@ export const ImportLoomButton = ({
 				orgId: activeOrganization.organization.id,
 			});
 
-			if (!result.success) {
-				toast.error(result.error || "Failed to import video.");
+			if (!result?.success) {
+				toast.error(result?.error || "Failed to import video.");
 				setIsImporting(false);
 				return;
 			}

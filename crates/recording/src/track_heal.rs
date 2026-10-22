@@ -21,7 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use cap_enc_ffmpeg::remux::{
-    get_media_duration, get_video_fps, probe_video_pts_ladder, rescale_video_timestamps,
+    get_media_duration, get_video_capture_fps, get_video_fps, probe_video_pts_ladder,
+    rescale_video_timestamps,
 };
 use cap_project::{ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
 use tracing::{info, warn};
@@ -39,9 +40,54 @@ pub fn heal_stretched_tracks(project_path: &Path) -> anyhow::Result<bool> {
         return Ok(false);
     };
 
+    let fps_healed = heal_average_display_fps(project_path)?;
     let display_healed = heal_stretched_display(project_path)?;
     let camera_healed = heal_stretched_camera(project_path)?;
-    Ok(display_healed || camera_healed)
+    Ok(fps_healed || display_healed || camera_healed)
+}
+
+/// Finalizing a fragmented Studio recording stored the display track's
+/// average frame rate as its fps. Decoders place frames on that rate, so a
+/// mostly static screen, averaging well under its capture rate, played and
+/// exported with frames missing. A track whose fps is still its average
+/// rate gets the rate its frames were captured at; the media is untouched,
+/// and a healed fps no longer matches the average, so this runs once.
+pub fn heal_average_display_fps(project_path: &Path) -> anyhow::Result<bool> {
+    let mut meta = RecordingMeta::load_for_project(project_path)
+        .map_err(|e| anyhow::anyhow!("failed to load recording meta: {e}"))?;
+    let RecordingMetaInner::Studio(studio_meta) = &mut meta.inner else {
+        return Ok(false);
+    };
+    let StudioRecordingMeta::MultipleSegments { inner } = studio_meta.as_mut() else {
+        return Ok(false);
+    };
+
+    let mut healed_any = false;
+    for (segment_index, segment) in inner.segments.iter_mut().enumerate() {
+        let display_path = segment.display.path.to_path(project_path);
+        let stored = segment.display.fps;
+        if get_video_fps(&display_path) != Some(stored) {
+            continue;
+        }
+        let Some(capture) = get_video_capture_fps(&display_path) else {
+            continue;
+        };
+        if capture <= stored {
+            continue;
+        }
+        info!(
+            segment_index,
+            stored, capture, "Display fps was the track's average rate, restoring its capture rate"
+        );
+        segment.display.fps = capture;
+        healed_any = true;
+    }
+
+    if healed_any {
+        meta.save_for_project()
+            .map_err(|e| anyhow::anyhow!("failed to save healed recording meta: {e:?}"))?;
+    }
+    Ok(healed_any)
 }
 
 struct HealInFlightGuard(PathBuf);
@@ -607,13 +653,22 @@ fn rescale_project_config(project_path: &Path, scales: &HashMap<u32, f64>) {
             s.start *= scale;
             s.end *= scale;
         }
+        for s in &mut timeline.camera3d_segments {
+            s.start *= scale;
+            s.end *= scale;
+            s.transition_in *= scale;
+            s.transition_out *= scale;
+            for track in s.tracks.all_tracks_mut() {
+                for k in track.iter_mut() {
+                    k.time *= scale;
+                }
+            }
+        }
         changed = true;
     }
 
-    if changed {
-        if let Err(e) = config.write(project_path) {
-            warn!("Failed to write rescaled project config after display heal: {e}");
-        }
+    if changed && let Err(e) = config.write(project_path) {
+        warn!("Failed to write rescaled project config after display heal: {e}");
     }
 }
 
@@ -671,6 +726,124 @@ fn evaluate_stretch(camera_secs: f64, references: &[(&str, f64)]) -> Option<Stre
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use cap_project::{Cursors, MultipleSegment, MultipleSegments, VideoMeta};
+    use std::time::Duration;
+
+    /// A Studio project whose display track holds `timestamps`, with `fps`
+    /// stored for it.
+    fn display_project(
+        timestamps: &[Duration],
+        fps: impl FnOnce(&Path) -> u32,
+    ) -> tempfile::TempDir {
+        use cap_enc_ffmpeg::{h264::H264Encoder, mp4::MP4File};
+
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path();
+        let display = project.join("content/segments/segment-0/display.mp4");
+        std::fs::create_dir_all(display.parent().unwrap()).unwrap();
+        let info = cap_media_info::VideoInfo {
+            pixel_format: cap_media_info::Pixel::NV12,
+            width: 320,
+            height: 240,
+            time_base: ffmpeg::Rational(1, 1_000_000),
+            frame_rate: ffmpeg::Rational(60, 1),
+        };
+        let mut file = MP4File::init(
+            "display",
+            display.clone(),
+            false,
+            |o| H264Encoder::builder(info).build(o),
+            |_| None,
+        )
+        .unwrap();
+        for (index, timestamp) in timestamps.iter().enumerate() {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill(32 + index as u8);
+            frame.data_mut(1).fill(128);
+            file.queue_video_frame(frame, *timestamp).unwrap();
+        }
+        file.finish().unwrap();
+        RecordingMeta {
+            platform: None,
+            project_path: project.to_path_buf(),
+            pretty_name: "fps heal fixture".into(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: vec![MultipleSegment {
+                        display: VideoMeta {
+                            path: "content/segments/segment-0/display.mp4".into(),
+                            fps: fps(&display),
+                            start_time: None,
+                            device_id: None,
+                        },
+                        camera: None,
+                        mic: None,
+                        system_audio: None,
+                        cursor: None,
+                        keyboard: None,
+                        display_notch: None,
+                    }],
+                    cursors: Cursors::default(),
+                    status: None,
+                },
+            })),
+        }
+        .save_for_project()
+        .unwrap();
+        directory
+    }
+
+    fn stored_display_fps(project: &Path) -> u32 {
+        let meta = RecordingMeta::load_for_project(project).unwrap();
+        let RecordingMetaInner::Studio(studio) = meta.inner else {
+            panic!("not a studio recording");
+        };
+        studio.max_fps()
+    }
+
+    /// 60 fps frames in bursts of six between half-second holds.
+    fn static_screen_capture() -> Vec<Duration> {
+        (0..20u64)
+            .flat_map(|burst| (0..6).map(move |i| burst * 36 + i))
+            .map(|slot| Duration::from_nanos(slot * 1_000_000_000 / 60))
+            .collect()
+    }
+
+    #[test]
+    fn an_average_display_fps_is_healed_to_the_capture_rate() {
+        let project = display_project(&static_screen_capture(), |display| {
+            get_video_fps(display).unwrap()
+        });
+        let average = stored_display_fps(project.path());
+        assert!(average < 12, "fixture averages {average} fps");
+
+        assert!(heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 60);
+        assert!(!heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 60);
+    }
+
+    #[test]
+    fn a_recorded_display_fps_is_left_alone() {
+        let project = display_project(&static_screen_capture(), |_| 60);
+        assert!(!heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 60);
+    }
+
+    #[test]
+    fn a_steady_capture_at_its_average_is_left_alone() {
+        let timestamps: Vec<Duration> = (0..90u64)
+            .map(|i| Duration::from_nanos(i * 1_000_000_000 / 30))
+            .collect();
+        let project = display_project(&timestamps, |display| get_video_fps(display).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 30);
+        assert!(!heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 30);
+    }
 
     const USER_REPORT_CAMERA_SECS: f64 = 13.666;
 
@@ -1041,6 +1214,8 @@ mod tests {
                 end: 202.220711,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
@@ -1054,11 +1229,14 @@ mod tests {
                 edge_snap_ratio: 0.25,
             }],
             scene_segments: vec![],
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
+            camera3d_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),
@@ -1079,6 +1257,84 @@ mod tests {
     }
 
     #[test]
+    fn config_rescale_scales_camera3d_segments_exactly() {
+        use cap_project::{
+            Camera3DKeyframe, Camera3DSegment, Camera3DTracks, ProjectConfiguration,
+            TimelineConfiguration, TimelineSegment,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = TimelineConfiguration {
+            segments: vec![TimelineSegment {
+                recording_clip: 0,
+                timescale: 1.0,
+                start: 0.0,
+                end: 202.220711,
+                name: None,
+                speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
+            }],
+            transitions: Vec::new(),
+            zoom_segments: vec![],
+            scene_segments: vec![],
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            mask_segments: vec![],
+            text_segments: vec![],
+            caption_segments: vec![],
+            keyboard_segments: vec![],
+            audio_segments: vec![],
+            camera3d_segments: vec![Camera3DSegment {
+                start: 100.0,
+                end: 150.0,
+                enabled: true,
+                properties: Default::default(),
+                blur: Default::default(),
+                tracks: Camera3DTracks {
+                    tilt_x: vec![
+                        Camera3DKeyframe {
+                            time: 0.0,
+                            value: 0.0,
+                            out_easing: None,
+                            in_easing: None,
+                        },
+                        Camera3DKeyframe {
+                            time: 10.0,
+                            value: 15.0,
+                            out_easing: None,
+                            in_easing: None,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                transition_in: 0.5,
+                transition_out: 0.8,
+            }],
+        };
+        let config = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
+        config.write(dir.path()).unwrap();
+
+        let scale = 0.4468;
+        let mut scales = HashMap::new();
+        scales.insert(0u32, scale);
+        rescale_project_config(dir.path(), &scales);
+
+        let reloaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let timeline = reloaded.timeline.unwrap();
+        let segment = &timeline.camera3d_segments[0];
+        assert!((segment.start - 100.0 * scale).abs() < 1e-6);
+        assert!((segment.end - 150.0 * scale).abs() < 1e-6);
+        assert!((segment.transition_in - 0.5 * scale).abs() < 1e-6);
+        assert!((segment.transition_out - 0.8 * scale).abs() < 1e-6);
+        assert!((segment.tracks.tilt_x[0].time - 0.0 * scale).abs() < 1e-6);
+        assert!((segment.tracks.tilt_x[1].time - 10.0 * scale).abs() < 1e-6);
+    }
+
+    #[test]
     fn config_rescale_leaves_overlays_alone_with_unhealed_clips() {
         use cap_project::{
             ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomMode, ZoomSegment,
@@ -1094,6 +1350,8 @@ mod tests {
                     end: 100.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1102,6 +1360,8 @@ mod tests {
                     end: 50.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 },
             ],
             transitions: Vec::new(),
@@ -1116,11 +1376,14 @@ mod tests {
                 edge_snap_ratio: 0.25,
             }],
             scene_segments: vec![],
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
+            camera3d_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),

@@ -8,6 +8,7 @@ export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
+	enableGpuiApp?: boolean;
 };
 
 export const DEFAULT_TRANSCRIPTION_HINTS = [

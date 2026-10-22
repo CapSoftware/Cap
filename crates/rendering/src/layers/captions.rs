@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cap_project::XY;
+use cap_project::{CaptionWord, XY};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -9,13 +9,6 @@ use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
-
-#[derive(Debug, Clone)]
-pub struct CaptionWord {
-    pub text: String,
-    pub start: f32,
-    pub end: f32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
@@ -268,6 +261,16 @@ fn calculate_word_highlight(
     0.0
 }
 
+#[derive(PartialEq)]
+struct ShapedCaptionText {
+    text: String,
+    font_size: u32,
+    wrap_width: u32,
+    family: Family<'static>,
+    weight: Weight,
+    color: Color,
+}
+
 pub struct CaptionsLayer {
     _settings_buffer: wgpu::Buffer,
     font_system: FontSystem,
@@ -275,6 +278,7 @@ pub struct CaptionsLayer {
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
     text_buffer: Buffer,
+    shaped: Option<ShapedCaptionText>,
     current_text: Option<String>,
     current_segment_start: f32,
     current_segment_end: f32,
@@ -302,6 +306,7 @@ impl CaptionsLayer {
         });
 
         let font_system = super::new_font_system();
+        let glyph_phase = crate::readiness::Phase::start("glyph.captions.gpu_resources");
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -312,6 +317,7 @@ impl CaptionsLayer {
             wgpu::MultisampleState::default(),
             None,
         );
+        glyph_phase.finish("returned");
 
         let metrics = Metrics::new(24.0, 24.0 * 1.2);
         let text_buffer = Buffer::new_empty(metrics);
@@ -417,6 +423,7 @@ impl CaptionsLayer {
             text_atlas,
             text_renderer,
             text_buffer,
+            shaped: None,
             current_text: None,
             current_segment_start: 0.0,
             current_segment_end: 0.0,
@@ -518,23 +525,14 @@ impl CaptionsLayer {
         } else {
             joined_caption_text
         };
-        let caption_words: Vec<CaptionWord> = active
-            .segment
-            .words
-            .iter()
-            .map(|w| CaptionWord {
-                text: w.text.clone(),
-                start: w.start,
-                end: w.end,
-            })
-            .collect();
+        let caption_words = &active.segment.words;
 
         let fade_opacity = calculate_caption_fade(
             current_time,
             active.segment.start,
             effective_end,
             segment_fade,
-        );
+        ) * uniforms.takeover_overlay_fade();
         if fade_opacity <= 0.0 {
             self.current_text = None;
             return;
@@ -572,8 +570,8 @@ impl CaptionsLayer {
             active_word_highlight_enabled && !caption_words.is_empty() && !use_pill_highlight;
 
         let active_word_byte_range = if use_pill_highlight {
-            find_active_word_index(current_time as f32, &caption_words)
-                .and_then(|idx| word_byte_range(&caption_text, &caption_words, idx, uppercase))
+            find_active_word_index(current_time as f32, caption_words)
+                .and_then(|idx| word_byte_range(&caption_text, caption_words, idx, uppercase))
         } else {
             None
         };
@@ -619,12 +617,13 @@ impl CaptionsLayer {
             .clamp(0.0, 1.0);
 
         let font_size = caption_data.settings.size as f32 * (height as f32 / 1080.0);
-        let metrics = Metrics::new(font_size, font_size * 1.2);
-
-        let mut updated_buffer = Buffer::new(&mut self.font_system, metrics);
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
-        updated_buffer.set_size(&mut self.font_system, Some(wrap_width), None);
-        updated_buffer.set_wrap(&mut self.font_system, glyphon::Wrap::None);
+        let new_buffer = |font_system: &mut FontSystem| {
+            let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
+            buffer.set_size(font_system, Some(wrap_width), None);
+            buffer.set_wrap(font_system, glyphon::Wrap::None);
+            buffer
+        };
 
         let font_family = match caption_data.settings.font.as_str() {
             "System Serif" => Family::Serif,
@@ -677,7 +676,7 @@ impl CaptionsLayer {
                         current_time as f32,
                         word,
                         idx,
-                        &caption_words,
+                        caption_words,
                         word_transition_duration,
                     );
 
@@ -722,13 +721,16 @@ impl CaptionsLayer {
                 ));
             }
 
-            updated_buffer.set_rich_text(
+            let mut buffer = new_buffer(&mut self.font_system);
+            buffer.set_rich_text(
                 &mut self.font_system,
                 rich_text,
                 &Attrs::new().family(font_family).weight(weight),
                 Shaping::Advanced,
                 None,
             );
+            self.text_buffer = buffer;
+            self.shaped = None;
         } else {
             let color = Color::rgba(
                 (base_color[0] * 255.0) as u8,
@@ -736,19 +738,31 @@ impl CaptionsLayer {
                 (base_color[2] * 255.0) as u8,
                 (highlight_alpha * 255.0) as u8,
             );
-            let attrs = Attrs::new().family(font_family).weight(weight).color(color);
-            updated_buffer.set_text(
-                &mut self.font_system,
-                caption_text.as_str(),
-                &attrs,
-                Shaping::Advanced,
-            );
+            let shaped = ShapedCaptionText {
+                text: caption_text,
+                font_size: font_size.to_bits(),
+                wrap_width: wrap_width.to_bits(),
+                family: font_family,
+                weight,
+                color,
+            };
+            if self.shaped.as_ref() != Some(&shaped) {
+                let mut buffer = new_buffer(&mut self.font_system);
+                buffer.set_text(
+                    &mut self.font_system,
+                    &shaped.text,
+                    &Attrs::new().family(font_family).weight(weight).color(color),
+                    Shaping::Advanced,
+                );
+                self.text_buffer = buffer;
+                self.shaped = Some(shaped);
+            }
         }
 
         let mut layout_width: f32 = 0.0;
         let mut layout_height: f32 = 0.0;
         let mut highlight_extent: Option<(f32, f32, f32, f32)> = None;
-        for run in LayoutRunIter::new(&updated_buffer) {
+        for run in LayoutRunIter::new(&self.text_buffer) {
             layout_width = layout_width.max(run.line_w);
             layout_height = layout_height.max(run.line_top + run.line_height);
 
@@ -858,7 +872,6 @@ impl CaptionsLayer {
             bottom: (text_top + draw_text_height + 2.0).ceil() as i32,
         };
 
-        self.text_buffer = updated_buffer;
         self.viewport.update(queue, Resolution { width, height });
 
         let mut text_areas = Vec::new();
@@ -960,64 +973,62 @@ impl CaptionsLayer {
             bytemuck::bytes_of(&background_uniforms),
         );
 
-        if let Some((min_x, max_x, line_top, line_height)) = highlight_extent {
-            if max_x > min_x {
-                let pill_pad_x = effective_font_size * 0.28 * anim_scale;
-                let pill_pad_y = effective_font_size * 0.12 * anim_scale;
-                let pill_left = (text_left + min_x * render_scale - pill_pad_x).max(0.0);
-                let pill_top = (text_top + line_top * render_scale - pill_pad_y).max(0.0);
-                let pill_width = ((max_x - min_x) * render_scale + pill_pad_x * 2.0)
-                    .min((width as f32 - pill_left).max(0.0))
-                    .max(1.0);
-                let pill_height = (line_height * render_scale + pill_pad_y * 2.0)
-                    .min((height as f32 - pill_top).max(0.0))
-                    .max(1.0);
-                let pill_radius = (pill_height * 0.4).min(pill_width / 2.0);
+        if let Some((min_x, max_x, line_top, line_height)) = highlight_extent
+            && max_x > min_x
+        {
+            let pill_pad_x = effective_font_size * 0.28 * anim_scale;
+            let pill_pad_y = effective_font_size * 0.12 * anim_scale;
+            let pill_left = (text_left + min_x * render_scale - pill_pad_x).max(0.0);
+            let pill_top = (text_top + line_top * render_scale - pill_pad_y).max(0.0);
+            let pill_width = ((max_x - min_x) * render_scale + pill_pad_x * 2.0)
+                .min((width as f32 - pill_left).max(0.0))
+                .max(1.0);
+            let pill_height = (line_height * render_scale + pill_pad_y * 2.0)
+                .min((height as f32 - pill_top).max(0.0))
+                .max(1.0);
+            let pill_radius = (pill_height * 0.4).min(pill_width / 2.0);
 
-                let pill_uniforms = CaptionBackgroundUniforms {
-                    rect: [pill_left, pill_top, pill_width, pill_height],
-                    color: [
-                        highlight_color_rgb[0],
-                        highlight_color_rgb[1],
-                        highlight_color_rgb[2],
-                        fade_opacity,
-                    ],
-                    radius: pill_radius,
-                    _padding: [0.0; 3],
-                    _padding2: [0.0; 4],
-                };
-                queue.write_buffer(
-                    &self.highlight_uniform_buffer,
-                    0,
-                    bytemuck::bytes_of(&pill_uniforms),
-                );
+            let pill_uniforms = CaptionBackgroundUniforms {
+                rect: [pill_left, pill_top, pill_width, pill_height],
+                color: [
+                    highlight_color_rgb[0],
+                    highlight_color_rgb[1],
+                    highlight_color_rgb[2],
+                    fade_opacity,
+                ],
+                radius: pill_radius,
+                _padding: [0.0; 3],
+                _padding2: [0.0; 4],
+            };
+            queue.write_buffer(
+                &self.highlight_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&pill_uniforms),
+            );
 
-                let pill_scissor_pad = 3.0;
-                let pill_scissor_x = (pill_left - pill_scissor_pad).max(0.0).floor() as u32;
-                let pill_scissor_y = (pill_top - pill_scissor_pad).max(0.0).floor() as u32;
-                let pill_max_width = width.saturating_sub(pill_scissor_x);
-                let pill_max_height = height.saturating_sub(pill_scissor_y);
+            let pill_scissor_pad = 3.0;
+            let pill_scissor_x = (pill_left - pill_scissor_pad).max(0.0).floor() as u32;
+            let pill_scissor_y = (pill_top - pill_scissor_pad).max(0.0).floor() as u32;
+            let pill_max_width = width.saturating_sub(pill_scissor_x);
+            let pill_max_height = height.saturating_sub(pill_scissor_y);
 
-                if pill_max_width > 0 && pill_max_height > 0 {
-                    let pill_scissor_width = (pill_width + pill_scissor_pad * 2.0)
-                        .ceil()
-                        .max(1.0)
-                        .min(pill_max_width as f32)
-                        as u32;
-                    let pill_scissor_height = (pill_height + pill_scissor_pad * 2.0)
-                        .ceil()
-                        .max(1.0)
-                        .min(pill_max_height as f32)
-                        as u32;
+            if pill_max_width > 0 && pill_max_height > 0 {
+                let pill_scissor_width = (pill_width + pill_scissor_pad * 2.0)
+                    .ceil()
+                    .max(1.0)
+                    .min(pill_max_width as f32) as u32;
+                let pill_scissor_height = (pill_height + pill_scissor_pad * 2.0)
+                    .ceil()
+                    .max(1.0)
+                    .min(pill_max_height as f32) as u32;
 
-                    self.highlight_scissor = Some([
-                        pill_scissor_x,
-                        pill_scissor_y,
-                        pill_scissor_width,
-                        pill_scissor_height,
-                    ]);
-                    self.has_highlight = true;
-                }
+                self.highlight_scissor = Some([
+                    pill_scissor_x,
+                    pill_scissor_y,
+                    pill_scissor_width,
+                    pill_scissor_height,
+                ]);
+                self.has_highlight = true;
             }
         }
 
@@ -1062,7 +1073,7 @@ impl CaptionsLayer {
         self.active_layout
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_caption {
             return;
         }
@@ -1182,7 +1193,10 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 
 #[cfg(test)]
 mod tests {
-    use super::{caption_segment_effective_end, find_active_caption_segment};
+    use super::{
+        caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
+        word_byte_range,
+    };
     use cap_project::{CaptionTrackSegment, CaptionWord};
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
@@ -1231,5 +1245,496 @@ mod tests {
         assert!(find_active_caption_segment(41.0, &segments, 0.2).is_none());
         // Still active while the (capped) word is on screen.
         assert!(find_active_caption_segment(37.0, &segments, 0.2).is_some());
+    }
+
+    #[test]
+    fn active_word_selection_preserves_boundaries_and_gaps() {
+        let words = [word(0.1, 0.4), word(0.5, 0.9)];
+
+        for (time, expected) in [
+            (-0.1, 0),
+            (0.1, 0),
+            (0.4, 0),
+            (0.49, 0),
+            (0.5, 1),
+            (0.9, 1),
+            (1.2, 1),
+        ] {
+            assert_eq!(find_active_word_index(time, &words), Some(expected));
+        }
+        assert_eq!(find_active_word_index(0.5, &[]), None);
+    }
+
+    #[test]
+    fn word_ranges_preserve_repeated_words_and_unicode_uppercase() {
+        let words = ["ŉ", "Straße", "ŉ"].map(|text| CaptionWord {
+            text: text.to_string(),
+            start: 0.0,
+            end: 1.0,
+        });
+        let text = "ŉ Straße ŉ";
+
+        for (index, expected) in [(0, (0, 2)), (1, (3, 10)), (2, (11, 13))] {
+            assert_eq!(word_byte_range(text, &words, index, false), Some(expected));
+        }
+        for (index, expected) in [(0, (0, 3)), (1, (4, 11)), (2, (12, 15))] {
+            assert_eq!(
+                word_byte_range(&text.to_uppercase(), &words, index, true),
+                Some(expected)
+            );
+        }
+        assert_eq!(word_byte_range(text, &words, 3, false), None);
+        assert_eq!(word_byte_range("missing", &words, 0, false), None);
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    use cap_project::{
+        CaptionSettings, CaptionTrackSegment, CaptionWord, CaptionsData, CursorEvents,
+        ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+        TimelineConfiguration, XY,
+    };
+
+    use super::CaptionsLayer;
+    use crate::{
+        DecodedSegmentFrames, ProjectUniforms, RenderOptions, RenderVideoConstants,
+        ZoomTransformTimeline,
+    };
+
+    const FPS: u32 = 60;
+
+    fn constants(size: XY<u32>) -> RenderVideoConstants {
+        let meta: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "display": { "path": "synthetic.mp4", "fps": FPS }
+        }))
+        .unwrap();
+        let recording = RecordingMeta {
+            platform: None,
+            project_path: Default::default(),
+            pretty_name: "Caption overlay test".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(meta.clone())),
+            upload: None,
+        };
+        pollster::block_on(RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording,
+            meta,
+        ))
+        .unwrap()
+    }
+
+    fn spoken_segments(sentences: &[&str]) -> Vec<CaptionTrackSegment> {
+        let mut start = 0.3;
+        sentences
+            .iter()
+            .enumerate()
+            .map(|(index, sentence)| {
+                let words = sentence
+                    .split_whitespace()
+                    .enumerate()
+                    .map(|(word_index, text)| CaptionWord {
+                        text: text.to_string(),
+                        start: start as f32 + word_index as f32 * 0.3,
+                        end: start as f32 + word_index as f32 * 0.3 + 0.25,
+                    })
+                    .collect::<Vec<_>>();
+                let end = f64::from(words.last().map_or(start as f32, |word| word.end));
+                let segment = CaptionTrackSegment {
+                    id: format!("caption-{index}"),
+                    start,
+                    end,
+                    text: sentence.to_string(),
+                    words,
+                    fade_duration_override: None,
+                    linger_duration_override: None,
+                    position_override: None,
+                    color_override: None,
+                    background_color_override: None,
+                    font_size_override: None,
+                };
+                start = end + 0.4;
+                segment
+            })
+            .collect()
+    }
+
+    fn frames(size: XY<u32>) -> DecodedSegmentFrames {
+        DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: None,
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        }
+    }
+
+    fn uniforms(
+        constants: &RenderVideoConstants,
+        settings: CaptionSettings,
+        segments: &[CaptionTrackSegment],
+        size: XY<u32>,
+    ) -> ProjectUniforms {
+        let project = ProjectConfiguration::default();
+        let cursor = CursorEvents::default();
+        let frames = frames(size);
+        let mut zoom = ZoomTransformTimeline::from_project(&project, &cursor, 60.0, size);
+        zoom.ensure_precomputed_until(60.0);
+        let mut uniforms = ProjectUniforms::new(
+            constants,
+            &std::sync::Arc::new(project),
+            0,
+            FPS,
+            size,
+            &cursor,
+            &frames,
+            60.0,
+            &zoom,
+        );
+        uniforms.output_size = (size.x, size.y);
+        std::sync::Arc::make_mut(&mut uniforms.project).captions = Some(CaptionsData {
+            segments: vec![],
+            settings,
+            source_timed: false,
+        });
+        std::sync::Arc::make_mut(&mut uniforms.project).timeline = Some(TimelineConfiguration {
+            segments: vec![],
+            transitions: vec![],
+            zoom_segments: vec![],
+            scene_segments: vec![],
+            mask_segments: vec![],
+            text_segments: vec![],
+            caption_segments: segments.to_vec(),
+            keyboard_segments: vec![],
+            audio_segments: vec![],
+            style_segments: vec![],
+            image_segments: vec![],
+            camera3d_segments: vec![],
+        });
+        uniforms
+    }
+
+    fn render_pixels(
+        constants: &RenderVideoConstants,
+        layer: &CaptionsLayer,
+        size: XY<u32>,
+    ) -> Vec<u8> {
+        let device = &constants.device;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Caption Test Target"),
+            size: wgpu::Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Caption Test Readback"),
+            size: u64::from(size.x * size.y * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Caption Test Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            layer.render(&mut pass);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size.x * 4),
+                    rows_per_image: Some(size.y),
+                },
+            },
+            wgpu::Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            },
+        );
+        constants.queue.submit([encoder.finish()]);
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait).unwrap();
+        let pixels = readback.slice(..).get_mapped_range().to_vec();
+        readback.unmap();
+        pixels
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn every_caption_frame_renders_like_a_fresh_layer() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let segments = spoken_segments(&["Hello there", "Ship it today"]);
+        let frames = frames(size);
+        let enabled = CaptionSettings {
+            enabled: true,
+            size: 60,
+            ..Default::default()
+        };
+        let variants = [
+            enabled.clone(),
+            CaptionSettings {
+                outline: true,
+                uppercase: true,
+                animation: "pop".to_string(),
+                ..enabled.clone()
+            },
+            CaptionSettings {
+                active_word_highlight: true,
+                highlight_style: "pill".to_string(),
+                ..enabled.clone()
+            },
+            CaptionSettings {
+                active_word_highlight: true,
+                ..enabled
+            },
+        ];
+        let last_frame = (segments.last().unwrap().end + 0.3) * f64::from(FPS);
+        for settings in variants {
+            let mut uniforms = uniforms(&constants, settings, &segments, size);
+            let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+            let mut drawn_frames = 0;
+            for frame in 0..last_frame as u32 {
+                uniforms.frame_number = frame;
+                reused.prepare(&uniforms, &frames, size, &constants);
+                let mut fresh = CaptionsLayer::new(&constants.device, &constants.queue);
+                fresh.prepare(&uniforms, &frames, size, &constants);
+                assert_eq!(reused.has_caption, fresh.has_caption, "frame {frame}");
+                let pixels = render_pixels(&constants, &reused, size);
+                assert_eq!(
+                    pixels,
+                    render_pixels(&constants, &fresh, size),
+                    "frame {frame}"
+                );
+                drawn_frames += usize::from(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+            }
+            assert!(drawn_frames > 60);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layer_follows_style_and_output_size_changes() {
+        let base_size = XY::new(512, 288);
+        let constants = constants(base_size);
+        let segments = spoken_segments(&["Ship it today"]);
+        let frames = frames(base_size);
+        let render = |layer: &mut CaptionsLayer, settings: &CaptionSettings, size: XY<u32>| {
+            let mut uniforms = uniforms(&constants, settings.clone(), &segments, size);
+            uniforms.frame_number = 45;
+            layer.prepare(&uniforms, &frames, size, &constants);
+            assert!(layer.has_caption);
+            render_pixels(&constants, layer, size)
+        };
+        let plain = CaptionSettings {
+            enabled: true,
+            size: 60,
+            ..Default::default()
+        };
+        let color_highlight = CaptionSettings {
+            active_word_highlight: true,
+            highlight_color: "#FF0000".to_string(),
+            ..plain.clone()
+        };
+        let cases = [
+            (
+                "font size",
+                plain.clone(),
+                CaptionSettings {
+                    size: 80,
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "font family",
+                plain.clone(),
+                CaptionSettings {
+                    font: "System Monospace".to_string(),
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "font weight",
+                plain.clone(),
+                CaptionSettings {
+                    font_weight: 400,
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "text color",
+                plain.clone(),
+                CaptionSettings {
+                    color: "#FF0000".to_string(),
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "output height",
+                plain.clone(),
+                plain.clone(),
+                XY::new(512, 216),
+            ),
+            (
+                "output width",
+                plain.clone(),
+                plain.clone(),
+                XY::new(384, 288),
+            ),
+            (
+                "plain to color highlight",
+                plain.clone(),
+                color_highlight.clone(),
+                base_size,
+            ),
+            (
+                "color highlight to plain",
+                color_highlight.clone(),
+                plain.clone(),
+                base_size,
+            ),
+        ];
+
+        for (name, before, after, size) in cases {
+            let expected = render(
+                &mut CaptionsLayer::new(&constants.device, &constants.queue),
+                &after,
+                size,
+            );
+            let previous = render(
+                &mut CaptionsLayer::new(&constants.device, &constants.queue),
+                &before,
+                base_size,
+            );
+            assert!(expected != previous, "{name} edit should change the output");
+
+            let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+            render(&mut reused, &before, base_size);
+            assert!(
+                render(&mut reused, &after, size) == expected,
+                "{name} edit reused a stale layout"
+            );
+        }
+
+        let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+        render(&mut reused, &plain, base_size);
+        render(&mut reused, &color_highlight, base_size);
+        let expected = render(
+            &mut CaptionsLayer::new(&constants.device, &constants.queue),
+            &plain,
+            base_size,
+        );
+        assert!(
+            render(&mut reused, &plain, base_size) == expected,
+            "returning to plain text reused the highlighted layout"
+        );
+    }
+
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn benchmark_captions_layer_prepare() {
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let segments = spoken_segments(&[
+            "Today I want to walk you through the new export flow",
+            "First pick a preset and the resolution you need",
+            "Then trim the start and end so the video gets to the point",
+            "When you are happy with it press export and share the link",
+        ]);
+        let frames = frames(size);
+        let last_frame = (segments.last().unwrap().end * f64::from(FPS)) as u32;
+        let base = CaptionSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let cases = [
+            ("default", base.clone()),
+            (
+                "outline",
+                CaptionSettings {
+                    outline: true,
+                    ..base.clone()
+                },
+            ),
+            (
+                "pill highlight",
+                CaptionSettings {
+                    active_word_highlight: true,
+                    highlight_style: "pill".to_string(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "color highlight",
+                CaptionSettings {
+                    active_word_highlight: true,
+                    ..base
+                },
+            ),
+        ];
+        for (name, settings) in cases {
+            let mut uniforms = uniforms(&constants, settings, &segments, size);
+            let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
+            let mut samples = Vec::new();
+            for pass in 0..4 {
+                for frame in 0..last_frame {
+                    uniforms.frame_number = frame;
+                    let started = std::time::Instant::now();
+                    layer.prepare(&uniforms, &frames, size, &constants);
+                    let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                    if pass > 0 && layer.has_caption {
+                        samples.push(elapsed);
+                    }
+                }
+            }
+            constants.device.poll(wgpu::PollType::Wait).unwrap();
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "captions layer prepare [{name}] ({} visible frames): p50 {:.1} us, p95 {:.1} us, mean {:.1} us",
+                samples.len(),
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+                samples.iter().sum::<f64>() / samples.len() as f64,
+            );
+        }
     }
 }

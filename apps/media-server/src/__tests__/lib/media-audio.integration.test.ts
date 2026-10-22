@@ -104,6 +104,48 @@ describe("mediaAudio integration tests", () => {
 			expect(hasAudio).toBe(false);
 		});
 
+		test.each([
+			[90, true],
+			[-90, true],
+			[180, true],
+			[90, false],
+		] as const)(
+			"detects audio with display rotation %i and audio=%s",
+			async (rotation, hasAudio) => {
+				const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-rotation-"));
+				const outputPath = join(dirPath, "rotated.mp4");
+				try {
+					const proc = Bun.spawn({
+						cmd: [
+							"ffmpeg",
+							"-v",
+							"error",
+							"-display_rotation",
+							String(rotation),
+							"-i",
+							hasAudio ? TEST_VIDEO_WITH_AUDIO : TEST_VIDEO_NO_AUDIO,
+							"-c",
+							"copy",
+							outputPath,
+						],
+						stdout: "ignore",
+						stderr: "pipe",
+					});
+					const [stderr, exitCode] = await Promise.all([
+						new Response(proc.stderr).text(),
+						proc.exited,
+					]);
+					expect(stderr).toBe("");
+					expect(exitCode).toBe(0);
+					expect(await checkHasAudioTrack(`file://${outputPath}`)).toBe(
+						hasAudio,
+					);
+				} finally {
+					await rm(dirPath, { recursive: true, force: true });
+				}
+			},
+		);
+
 		test("inherits signed queries for relative HLS segments", async () => {
 			const dirPath = await createHlsFixture();
 			const requests: string[] = [];
@@ -130,6 +172,21 @@ describe("mediaAudio integration tests", () => {
 				expect(requests).toContain("/segment-000.ts?token=signed");
 			} finally {
 				await server.stop(true);
+				await rm(dirPath, { recursive: true, force: true });
+			}
+		});
+
+		test("still rejects audio-only inputs without leaking an operation", async () => {
+			const beforeCount = getActiveProcessCount();
+			const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-only-"));
+			const outputPath = join(dirPath, "audio.mp3");
+			try {
+				await Bun.write(outputPath, await extractAudio(TEST_VIDEO_WITH_AUDIO));
+				await expect(
+					checkHasAudioTrack(`file://${outputPath}`),
+				).rejects.toThrow("No video stream found");
+				await waitForAudioOperations(beforeCount);
+			} finally {
 				await rm(dirPath, { recursive: true, force: true });
 			}
 		});

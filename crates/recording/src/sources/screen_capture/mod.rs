@@ -23,6 +23,8 @@ pub use macos::*;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
+mod linux_shm;
+#[cfg(target_os = "linux")]
 pub use linux::*;
 
 pub struct StopCapturing;
@@ -73,10 +75,10 @@ pub enum ScreenCaptureTarget {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum LinuxCaptureSource {
     Display,
-    Window,
+    Window { id: WindowId },
     Area,
 }
 
@@ -84,7 +86,7 @@ pub enum LinuxCaptureSource {
 impl LinuxCaptureSource {
     pub fn from_target(target: &ScreenCaptureTarget) -> Self {
         match target {
-            ScreenCaptureTarget::Window { .. } => Self::Window,
+            ScreenCaptureTarget::Window { id } => Self::Window { id: id.clone() },
             ScreenCaptureTarget::Area { .. } => Self::Area,
             ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
         }
@@ -715,6 +717,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn h264_bounded_capture_matches_the_encoder_downscale() {
+        for (width, height) in [
+            (5120, 2880),
+            (6016, 3384),
+            (5120, 2160),
+            (2880, 5120),
+            (4096, 2304),
+        ] {
+            let bounded = constrain_capture_size(
+                PhysicalSize::new(width as f64, height as f64),
+                Some((crate::H264_MAX_DIMENSION, crate::H264_MAX_DIMENSION)),
+            );
+            let encoder_size =
+                crate::calculate_gpu_compatible_size(width, height, crate::H264_MAX_DIMENSION)
+                    .unwrap_or((width, height));
+            assert_eq!(
+                (bounded.width() as u32, bounded.height() as u32),
+                encoder_size,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_window_source_preserves_selected_window_id() {
+        let id: WindowId = "247".parse().unwrap();
+        let target = ScreenCaptureTarget::Window { id: id.clone() };
+        let LinuxCaptureSource::Window { id: selected } = LinuxCaptureSource::from_target(&target)
+        else {
+            panic!("window target must retain a window source");
+        };
+        assert_eq!(selected, id);
+    }
+
+    #[test]
     fn logical_area_to_physical_bounds_scales_each_axis() {
         let bounds = LogicalBounds::new(
             LogicalPosition::new(120.0, 80.0),
@@ -854,7 +892,7 @@ mod tests {
                 PhysicalSize::new(1920.0, 1080.0),
             ), // 150%
             (
-                LogicalSize::new(1097.142_857_142_857, 617.142_857_142_857),
+                LogicalSize::new(1_097.142_857_142_857, 617.142_857_142_857),
                 PhysicalSize::new(1920.0, 1080.0),
             ), // 175%
             (

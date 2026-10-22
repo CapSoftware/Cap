@@ -1,7 +1,5 @@
-import { Button } from "@cap/ui-solid";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { Menu } from "@tauri-apps/api/menu";
-import { cx } from "cva";
 import { Array, Option } from "effect";
 import {
 	batch,
@@ -10,23 +8,22 @@ import {
 	createRoot,
 	createSignal,
 	Index,
-	Match,
+	onCleanup,
 	Show,
-	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import toast from "solid-toast";
+import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
-import {
-	useSegmentContext,
-	useTimelineContext,
-	useTrackContext,
-} from "./context";
+import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
+	useSegmentVisibleBox,
 	useSetPreviewTime,
 } from "./Track";
 
@@ -38,6 +35,8 @@ export type ZoomSegmentDragState =
 const MIN_ZOOM_SEGMENT_PIXEL_WIDTH = 40;
 const MIN_NEW_SEGMENT_PIXEL_WIDTH = 80;
 const MIN_NEW_SEGMENT_SECS_WIDTH = 1;
+const NO_AUTO_ZOOM_CLICKS_MESSAGE =
+	"No clicks found to zoom into. Drag across the lane to add one.";
 
 export function ZoomTrack(props: {
 	onDragStateChanged: (v: ZoomSegmentDragState) => void;
@@ -56,6 +55,7 @@ export function ZoomTrack(props: {
 
 	const { duration, secsPerPixel } = useTimelineContext();
 	const setPreviewTime = useSetPreviewTime();
+	const generalSettings = generalSettingsStore.createQuery();
 
 	const [creatingSegmentViaDrag, setCreatingSegmentViaDrag] =
 		createSignal(false);
@@ -87,9 +87,14 @@ export function ZoomTrack(props: {
 		setIsGeneratingAutoZoom(true);
 		try {
 			const zoomSegments = await commands.generateZoomSegmentsFromClicks();
+			if (zoomSegments.length === 0) {
+				toast.error(NO_AUTO_ZOOM_CLICKS_MESSAGE);
+				return;
+			}
 			setProject("timeline", "zoomSegments", zoomSegments);
 		} catch (error) {
 			console.error("Failed to generate zoom segments:", error);
+			toast.error("Failed to generate zoom segments");
 		} finally {
 			setIsGeneratingAutoZoom(false);
 		}
@@ -225,7 +230,7 @@ export function ZoomTrack(props: {
 									zoomSegments.splice(index, 0, {
 										start: baseSegment.start,
 										end: Math.max(minEndTime, endTime),
-										amount: 1.5,
+										amount: generalSettings.data?.defaultZoomAmount ?? 1.5,
 										mode: "auto",
 									});
 
@@ -299,39 +304,38 @@ export function ZoomTrack(props: {
 			<Show
 				when={hasZoomSegments()}
 				fallback={
-					<div class="relative z-1 isolate text-center text-sm text-(--text-tertiary) flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-auto px-2 py-1">
+					<div class="cap-empty-lane relative z-1 isolate pointer-events-auto">
 						<Show
 							when={
 								hasRecordedCursorData() && !sessionDismissedGenerateZoomPrompt()
 							}
+							fallback={<span>Drag across this lane to add a zoom</span>}
 						>
 							<div
-								class="relative z-10 flex items-center gap-1"
+								class="relative z-10 flex items-center gap-1.5"
 								onMouseEnter={() => setIsHoveringGenerateZoomButton(true)}
 								onMouseLeave={() => setIsHoveringGenerateZoomButton(false)}
 								onMouseDown={(e) => e.stopPropagation()}
 							>
-								<Button
-									variant="gray"
-									size="md"
-									class="shadow-md border-gray-7 dark:border-gray-8 font-medium"
+								<span>Generate zoom segments automatically</span>
+								<button
+									type="button"
+									class="cap-empty-lane-action outline-hidden"
 									disabled={isGeneratingAutoZoom()}
 									onClick={() => {
 										void handleGenerateZoomSegments();
 									}}
 								>
-									{isGeneratingAutoZoom()
-										? "Generating..."
-										: "Click to generate zoom segments"}
-								</Button>
+									· {isGeneratingAutoZoom() ? "Generating..." : "Generate"}
+								</button>
 								<button
 									type="button"
-									class="flex shrink-0 justify-center items-center rounded-full outline-hidden text-gray-11 hover:text-gray-12 hover:bg-gray-5 focus-visible:ring-2 focus-visible:ring-gray-8 size-8 transition-colors"
+									class="flex shrink-0 justify-center items-center rounded-md outline-hidden text-ed-text-3 hover:text-ed-text-1 hover:bg-ed-ctl-hover size-5 transition-colors"
 									disabled={isGeneratingAutoZoom()}
 									aria-label="Dismiss for this session"
 									onClick={() => setSessionDismissedGenerateZoomPrompt(true)}
 								>
-									<IconLucideX class="size-4" />
+									<IconLucideX class="size-3" />
 								</button>
 							</div>
 						</Show>
@@ -341,11 +345,16 @@ export function ZoomTrack(props: {
 				<Index each={project.timeline?.zoomSegments}>
 					{(segment, i) => {
 						const { setTrackState } = useTrackContext();
+						let cancelDrag: (() => void) | undefined;
+						onCleanup(() => cancelDrag?.());
 
 						const zoomPercentage = () => {
 							const amount = segment().amount;
 							return `${amount.toFixed(1)}x`;
 						};
+
+						const zoomModeLabel = () =>
+							segment().mode === "auto" ? "Automatic Zoom" : "Manual Zoom";
 
 						const zoomSegments = () => project.timeline?.zoomSegments ?? [];
 
@@ -402,11 +411,17 @@ export function ZoomTrack(props: {
 							_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
 						) {
 							return (downEvent: MouseEvent) => {
-								if (editorState.timeline.interactMode !== "seek") return;
+								if (
+									downEvent.button !== 0 ||
+									editorState.timeline.interactMode !== "seek"
+								)
+									return;
 
 								downEvent.stopPropagation();
+								cancelDrag?.();
 
 								const initial = setup();
+								const draggedSegment = segment();
 
 								let moved = false;
 								let initialMouseX: null | number = null;
@@ -418,7 +433,6 @@ export function ZoomTrack(props: {
 								props.onDragStateChanged({ type: "movePending" });
 
 								function finish(e: MouseEvent) {
-									resumeHistory();
 									if (!moved) {
 										e.stopPropagation();
 
@@ -476,8 +490,6 @@ export function ZoomTrack(props: {
 										}
 										props.handleUpdatePlayhead(e);
 									}
-									props.onDragStateChanged({ type: "idle" });
-									setTrackState("draggingSegment", false);
 								}
 
 								function update(event: MouseEvent) {
@@ -497,15 +509,30 @@ export function ZoomTrack(props: {
 								}
 
 								createRoot((dispose) => {
+									cancelDrag = dispose;
+									onCleanup(() => {
+										cancelDrag = undefined;
+										resumeHistory();
+										props.onDragStateChanged({ type: "idle" });
+										setTrackState("draggingSegment", false);
+									});
+									const isCurrentSegment = () =>
+										zoomSegments()[i] === draggedSegment;
+									createEffect(() => {
+										if (!isCurrentSegment()) dispose();
+									});
 									createEventListenerMap(window, {
 										mousemove: (e) => {
+											if (!isCurrentSegment()) return dispose();
 											update(e);
 										},
 										mouseup: (e) => {
+											if (!isCurrentSegment()) return dispose();
 											update(e);
 											finish(e);
 											dispose();
 										},
+										blur: dispose,
 									});
 								});
 							};
@@ -520,14 +547,13 @@ export function ZoomTrack(props: {
 						return (
 							<SegmentRoot
 								segColor="var(--track-zoom)"
-								class={cx(
-									"border duration-200 transition-colors group",
-									isSelected() ? "border-gray-12" : "border-transparent",
-								)}
-								innerClass="ring-red-5"
+								class="group"
+								selected={isSelected()}
+								title={`${zoomModeLabel()} · ${zoomPercentage()}`}
 								segment={segment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
+									if (e.button !== 0) return;
 
 									if (editorState.timeline.interactMode === "split") {
 										const rect = e.currentTarget.getBoundingClientRect();
@@ -538,6 +564,60 @@ export function ZoomTrack(props: {
 
 										projectActions.splitZoomSegment(i, splitTime);
 									}
+								}}
+								onContextMenu={async (e: MouseEvent) => {
+									e.preventDefault();
+									e.stopPropagation();
+									// Native menus can consume mouseup before deleting the dragged segment.
+									cancelDrag?.();
+
+									// Right-clicking an unselected segment selects it first,
+									// so the menu always acts on what's highlighted.
+									const selection = editorState.timeline.selection;
+									const targetIndices =
+										selection?.type === "zoom" && selection.indices.includes(i)
+											? [...selection.indices]
+											: [i];
+									if (
+										targetIndices.length === 1 &&
+										!selectedZoomIndices()?.has(i)
+									)
+										setEditorState("timeline", "selection", {
+											type: "zoom",
+											indices: [i],
+										});
+
+									// `Array` here is effect's module, so derive the index
+									// list from the segments themselves.
+									const allIndices = (project.timeline?.zoomSegments ?? []).map(
+										(_, idx) => idx,
+									);
+
+									const menu = await Menu.new({
+										id: "zoom-segment-options",
+										items: [
+											{
+												id: "selectAllZoomSegments",
+												text: "Select all zoom segments",
+												enabled: allIndices.length > 1,
+												action: () =>
+													setEditorState("timeline", "selection", {
+														type: "zoom",
+														indices: allIndices,
+													}),
+											},
+											{
+												id: "deleteZoomSegments",
+												text:
+													targetIndices.length > 1
+														? `Delete ${targetIndices.length} zoom segments`
+														: "Delete zoom segment",
+												action: () =>
+													projectActions.deleteZoomSegments(targetIndices),
+											},
+										],
+									});
+									menu.popup();
 								}}
 							>
 								<SegmentHandle
@@ -598,7 +678,7 @@ export function ZoomTrack(props: {
 									)}
 								/>
 								<SegmentContent
-									class="flex justify-center items-center cursor-grab"
+									class="flex items-center cursor-grab"
 									onMouseDown={createMouseDownDrag(
 										() => {
 											const original = { ...segment() };
@@ -637,37 +717,36 @@ export function ZoomTrack(props: {
 									)}
 								>
 									{(() => {
-										const ctx = useSegmentContext();
+										const visibleBox = useSegmentVisibleBox();
 
 										return (
-											<Switch>
-												<Match when={ctx.width() < 40}>
-													<div class="flex justify-center items-center">
-														<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
-													</div>
-												</Match>
-												<Match when={ctx.width() < 100}>
-													<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-														<IconLucideSearch class="size-3" />
-														<span>{zoomPercentage()}</span>
-													</div>
-												</Match>
-												<Match when={true}>
-													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-														<span class="opacity-70">
-															{ctx.width() >= 140
-																? segment().mode === "auto"
-																	? "Automatic Zoom"
-																	: "Manual Zoom"
+											<SegmentLabel
+												full={() => (
+													<div class="cap-seg-labels animate-in fade-in">
+														<span class="cap-seg-label truncate">
+															{visibleBox().width >= 140
+																? zoomModeLabel()
 																: "Zoom"}
 														</span>
-														<div class="flex gap-1 items-center text-md">
-															<IconLucideSearch class="size-3.5" />
+														<span class="cap-seg-sublabel">
 															{zoomPercentage()}
-														</div>
+														</span>
 													</div>
-												</Match>
-											</Switch>
+												)}
+												compact={() => (
+													<div class="cap-seg-labels">
+														<span class="cap-seg-label">Zoom</span>
+														<span class="cap-seg-sublabel">
+															{zoomPercentage()}
+														</span>
+													</div>
+												)}
+												glyph={() => (
+													<div class="flex justify-center items-center">
+														<IconLucideSearch class="size-3.5 cap-seg-label" />
+													</div>
+												)}
+											/>
 										);
 									})()}
 								</SegmentContent>
@@ -737,14 +816,12 @@ export function ZoomTrack(props: {
 				{(details) => (
 					<SegmentRoot
 						class="pointer-events-none z-0"
-						innerClass="ring-red-300"
+						ghost
 						segColor="var(--track-zoom)"
 						segment={details()}
 					>
-						<SegmentContent class="group">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
-								+
-							</p>
+						<SegmentContent class="group justify-center">
+							<p class="cap-seg-label">+</p>
 						</SegmentContent>
 					</SegmentRoot>
 				)}

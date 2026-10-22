@@ -33,9 +33,7 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
 }
 
 fn sync_file(path: &Path) {
-    if let Ok(file) = std::fs::File::open(path)
-        && let Err(e) = file.sync_all()
-    {
+    if let Err(e) = crate::sync_media_file(path) {
         tracing::warn!("File fsync failed for {}: {e}", path.display());
     }
 }

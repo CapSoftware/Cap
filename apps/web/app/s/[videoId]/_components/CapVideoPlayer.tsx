@@ -9,12 +9,16 @@ import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AlertTriangleIcon, InfoIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import CommentStamp from "./CommentStamp";
+import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
+import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -22,17 +26,17 @@ import {
 	probeAvcLevelFromUrl,
 } from "./mp4-level-patch";
 import {
-	canRetryFailedProcessing,
-	getUploadFailureMessage,
-	shouldDeferPlaybackSource,
-	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
-import {
 	type ResolvedPlaybackSource,
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	type UploadProgress,
+} from "./upload-progress";
 import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -56,6 +60,12 @@ import {
 } from "./video/media-player";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
 import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
+
+// Mounted only mid-upload; its RPC client drags the Effect runtime along, so
+// keeping it behind a dynamic import keeps that chunk off finished videos.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
 
 const { circumference } = getProgressCircleConfig();
 
@@ -86,11 +96,13 @@ interface CaptionOption {
 
 interface Props {
 	videoSrc: string;
+	initialPlaybackUrl?: Promise<string | null>;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
 	disableCaptions?: boolean;
+	captionsInitiallyOff?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
@@ -130,15 +142,18 @@ interface Props {
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
+	callToAction?: ShareCallToAction | null;
 }
 
 export function CapVideoPlayer({
 	videoSrc,
+	initialPlaybackUrl,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
 	captionsSrc,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
@@ -166,16 +181,21 @@ export function CapVideoPlayer({
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
+	callToAction = null,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
+	const [
+		isRefreshingInitialPlaybackSource,
+		setIsRefreshingInitialPlaybackSource,
+	] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
@@ -184,6 +204,16 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
+	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
+		undefined,
+	);
+	const hasRetriedInitialPlaybackSource = useRef(false);
+	const initialPlaybackSourceRetryPending = useRef(false);
+	const playbackToRestore = useRef<{
+		sourceUrl: string;
+		time: number;
+		wasPlaying: boolean;
+	} | null>(null);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -196,10 +226,20 @@ export function CapVideoPlayer({
 		return () => window.removeEventListener("resize", checkMobile);
 	}, []);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
+	// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+	// idle, "fetching" from the first enabled render. The hook itself now lives
+	// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+	const trackUploadProgress = hasActiveUpload || false;
+	const [uploadProgressRaw, setUploadProgressRaw] =
+		useState<UploadProgress | null>(
+			trackUploadProgress ? { status: "fetching" } : null,
+		);
+	useEffect(() => {
+		// Both directions of an enable/disable flip mirror the old inline hook:
+		// tracking starting mid-session reads "fetching" immediately (the lazy
+		// tracker hasn't mounted yet), and stopping reads null.
+		setUploadProgressRaw(trackUploadProgress ? { status: "fetching" } : null);
+	}, [trackUploadProgress]);
 	const uploadProgress = blockPlaybackDuringProcessing
 		? uploadProgressRaw
 		: videoLoaded
@@ -223,13 +263,22 @@ export function CapVideoPlayer({
 		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
-			: () =>
-					resolvePlaybackSource({
+			: async () => {
+					const useInitialUrl =
+						preferredSource === "mp4" &&
+						initialPlaybackUrl !== initialPlaybackUrlUsed.current;
+					if (useInitialUrl)
+						initialPlaybackUrlUsed.current = initialPlaybackUrl;
+					return resolvePlaybackSource({
 						videoSrc,
+						initialUrl: useInitialUrl
+							? await resolveInitialPlaybackUrl(initialPlaybackUrl)
+							: undefined,
 						rawFallbackSrc,
 						enableCrossOrigin,
 						preferredSource,
-					}),
+					});
+				},
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
@@ -243,6 +292,10 @@ export function CapVideoPlayer({
 		setShowPlayButton(false);
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
+		hasRetriedInitialPlaybackSource.current = false;
+		initialPlaybackSourceRetryPending.current = false;
+		playbackToRestore.current = null;
+		setIsRefreshingInitialPlaybackSource(false);
 	}, [videoSrc, rawFallbackSrc]);
 
 	useEffect(() => {
@@ -390,6 +443,18 @@ export function CapVideoPlayer({
 		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				const restore = playbackToRestore.current;
+				if (
+					restore &&
+					resolvedSrc.data?.url !== restore.sourceUrl &&
+					!video.seeking &&
+					Math.abs(video.currentTime - restore.time) < 0.25
+				) {
+					finishPlaybackSourceRestore();
+				}
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -398,6 +463,10 @@ export function CapVideoPlayer({
 		};
 
 		const handleCanPlay = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				handleLoadedData();
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -410,6 +479,45 @@ export function CapVideoPlayer({
 		};
 
 		const handleError = () => {
+			if (initialPlaybackSourceRetryPending.current) return;
+			if (
+				!rawFallbackSrc &&
+				resolvedSrc.data?.fromInitialUrl &&
+				!hasRetriedInitialPlaybackSource.current
+			) {
+				hasRetriedInitialPlaybackSource.current = true;
+				initialPlaybackSourceRetryPending.current = true;
+				playbackToRestore.current = {
+					sourceUrl: resolvedSrc.data.url,
+					time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+					wasPlaying: !video.paused && !video.ended,
+				};
+				setIsRefreshingInitialPlaybackSource(true);
+				setVideoLoaded(false);
+				setHasError(false);
+				setShowPlayButton(false);
+				void resolvedSrc
+					.refetch()
+					.then((result) => {
+						if (
+							!result.data ||
+							result.data.url === playbackToRestore.current?.sourceUrl
+						) {
+							playbackToRestore.current = null;
+							setIsRefreshingInitialPlaybackSource(false);
+							setHasError(true);
+						}
+					})
+					.catch(() => {
+						playbackToRestore.current = null;
+						setIsRefreshingInitialPlaybackSource(false);
+						setHasError(true);
+					})
+					.finally(() => {
+						initialPlaybackSourceRetryPending.current = false;
+					});
+				return;
+			}
 			if (
 				shouldFallbackToRawPlaybackSource(
 					resolvedSrc.data?.type,
@@ -425,22 +533,68 @@ export function CapVideoPlayer({
 				return;
 			}
 
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
 			setHasError(true);
 		};
 
 		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
+		const finishPlaybackSourceRestore = () => {
+			const restore = playbackToRestore.current;
+			if (!restore) return;
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
+			setVideoLoaded(true);
+			setHasError(false);
+			if (restore.wasPlaying) void video.play().catch(() => undefined);
+		};
 
 		const handleLoadedMetadataWithTracks = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				const duration = video.duration;
+				const time = Number.isFinite(duration)
+					? Math.min(restore.time, Math.max(0, duration - 0.1))
+					: restore.time;
+				restore.time = time;
+				if (time > 0) {
+					try {
+						video.currentTime = time;
+						return;
+					} catch {
+						finishPlaybackSourceRestore();
+						return;
+					}
+				}
+				finishPlaybackSourceRestore();
+				return;
+			}
+			if (isRefreshingInitialPlaybackSource) return;
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 		};
+		const handleSeeked = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				finishPlaybackSourceRestore();
+			}
+		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
+		video.addEventListener("seeked", handleSeeked);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
 
@@ -453,6 +607,7 @@ export function CapVideoPlayer({
 			video.removeEventListener("canplay", handleCanPlay);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
+			video.removeEventListener("seeked", handleSeeked);
 			video.removeEventListener(
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
@@ -462,8 +617,12 @@ export function CapVideoPlayer({
 	}, [
 		hasPlayedOnce,
 		hasTriedRawFallback,
+		isRefreshingInitialPlaybackSource,
 		rawFallbackSrc,
+		resolvedSrc.data?.fromInitialUrl,
 		resolvedSrc.data?.type,
+		resolvedSrc.data?.url,
+		resolvedSrc.refetch,
 		resolvedSrc.isPending,
 		videoRef.current,
 	]);
@@ -614,6 +773,12 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			{trackUploadProgress && (
+				<UploadProgressTracker
+					videoId={videoId}
+					onChange={setUploadProgressRaw}
+				/>
+			)}
 			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
@@ -675,6 +840,13 @@ export function CapVideoPlayer({
 			)}
 			<VideoPreviewGif
 				videoId={videoId}
+				preload={
+					!disablePreviewGif &&
+					!hasActiveUpload &&
+					!hasPlayedOnce &&
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError
+				}
 				visible={
 					!disablePreviewGif &&
 					videoLoaded &&
@@ -689,7 +861,7 @@ export function CapVideoPlayer({
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
-						setVideoLoaded(true);
+						if (!isRefreshingInitialPlaybackSource) setVideoLoaded(true);
 					}}
 					onPlay={() => {
 						setShowPlayButton(false);
@@ -705,9 +877,19 @@ export function CapVideoPlayer({
 					{captionsSrc && (
 						<track
 							key={captionsSrc}
-							label="English"
+							label={
+								availableCaptions.find(
+									(caption) => caption.code === captionLanguage,
+								)?.name ?? "Original"
+							}
 							kind="captions"
-							srcLang="en"
+							srcLang={
+								captionLanguage &&
+								captionLanguage !== "original" &&
+								captionLanguage !== "off"
+									? captionLanguage
+									: "en"
+							}
 							src={captionsSrc}
 						/>
 					)}
@@ -825,9 +1007,21 @@ export function CapVideoPlayer({
 			)}
 			<MediaPlayerLoading />
 			{!isUploading &&
+				!isRefreshingInitialPlaybackSource &&
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
+			{callToAction &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<CallToActionOverlay
+						cta={callToAction}
+						videoId={videoId}
+						controlsDocked={externalTimeline && controlsPortalEl !== null}
+					/>
+				)}
 			{showFloatingVolumeControl &&
 				videoLoaded &&
 				!showUploadFailureOverlay &&

@@ -1,0 +1,466 @@
+import { DEBLOCK_ALPHA, DEBLOCK_BETA, DEBLOCK_TC0 } from "./tables"
+
+const ZIP8 = [0, 32, 1, 33, 2, 34, 3, 35, 4, 36, 5, 37, 6, 38, 7, 39, 16, 48, 17, 49, 18, 50, 19, 51, 20, 52, 21, 53, 22, 54, 23, 55]
+const ZIP16_LO = [0, 16, 1, 17, 2, 18, 3, 19, 8, 24, 9, 25, 10, 26, 11, 27]
+const ZIP16_HI = [4, 20, 5, 21, 6, 22, 7, 23, 12, 28, 13, 29, 14, 30, 15, 31]
+const ZIP32_LO = [0, 8, 1, 9, 4, 12, 5, 13]
+const ZIP32_HI = [2, 10, 3, 11, 6, 14, 7, 15]
+const HALVES = [0, 2, 1, 3]
+const HIGH8 = [8, 9, 10, 11, 12, 13, 14, 15, 8, 9, 10, 11, 12, 13, 14, 15]
+const ROW4_0 = [0, 1, 2, 3, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+const ROW4_1 = [4, 5, 6, 7, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+const ROW4_2 = [8, 9, 10, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+const ROW4_3 = [12, 13, 14, 15, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+
+function iabs(v: int): int {
+  return v < 0 ? -v : v
+}
+
+function clip3(lo: int, hi: int, v: int): int {
+  return v < lo ? lo : v > hi ? hi : v
+}
+
+function clip1(v: int): int {
+  return v < 0 ? 0 : v > 255 ? 255 : v
+}
+
+export function edgeAlpha(indexA: int): int {
+  return DEBLOCK_ALPHA[indexA]!
+}
+
+export function edgeBeta(indexB: int): int {
+  return DEBLOCK_BETA[indexB]!
+}
+
+export function filterLuma(px: Uint8Array, o: int, across: int, along: int, lines: int, bs: int, indexA: int, indexB: int) {
+  const alpha = DEBLOCK_ALPHA[indexA]!
+  const beta = DEBLOCK_BETA[indexB]!
+  if (alpha === 0 || beta === 0) return
+  const tc0 = DEBLOCK_TC0[indexA * 5 + bs]!
+  for (let l = 0; l < lines; l++) {
+    const q = o + l * along
+    const p0 = int(px[q - across]!)
+    const q0 = int(px[q]!)
+    if (iabs(p0 - q0) >= alpha) continue
+    const p1 = int(px[q - 2 * across]!)
+    if (iabs(p1 - p0) >= beta) continue
+    const q1 = int(px[q + across]!)
+    if (iabs(q1 - q0) >= beta) continue
+    const p2 = int(px[q - 3 * across]!)
+    const q2 = int(px[q + 2 * across]!)
+    if (p0 === q0 && p1 === p0 && q1 === q0 && p2 === p0 && q2 === q0) {
+      if (bs < 4) continue
+      if (int(px[q - 4 * across]!) === p0 && int(px[q + 3 * across]!) === q0) continue
+    }
+    const ap = iabs(p2 - p0)
+    const aq = iabs(q2 - q0)
+    if (bs < 4) {
+      const tc = tc0 + (ap < beta ? 1 : 0) + (aq < beta ? 1 : 0)
+      const delta = clip3(-tc, tc, (((q0 - p0) << 2) + (p1 - q1) + 4) >> 3)
+      px[q - across] = clip1(p0 + delta)
+      px[q] = clip1(q0 - delta)
+      if (ap < beta) px[q - 2 * across] = p1 + clip3(-tc0, tc0, (p2 + ((p0 + q0 + 1) >> 1) - (p1 << 1)) >> 1)
+      if (aq < beta) px[q + across] = q1 + clip3(-tc0, tc0, (q2 + ((p0 + q0 + 1) >> 1) - (q1 << 1)) >> 1)
+    } else {
+      const strong = iabs(p0 - q0) < ((alpha >> 2) + 2)
+      if (ap < beta && strong) {
+        const p3 = int(px[q - 4 * across]!)
+        px[q - across] = (p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3
+        px[q - 2 * across] = (p2 + p1 + p0 + q0 + 2) >> 2
+        px[q - 3 * across] = (2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3
+      } else {
+        px[q - across] = (2 * p1 + p0 + q1 + 2) >> 2
+      }
+      if (aq < beta && strong) {
+        const q3 = int(px[q + 3 * across]!)
+        px[q] = (p1 + 2 * p0 + 2 * q0 + 2 * q1 + q2 + 4) >> 3
+        px[q + across] = (p0 + q0 + q1 + q2 + 2) >> 2
+        px[q + 2 * across] = (2 * q3 + 3 * q2 + q1 + q0 + p0 + 4) >> 3
+      } else {
+        px[q] = (2 * q1 + q0 + p1 + 2) >> 2
+      }
+    }
+  }
+}
+
+export function filterChroma(px: Uint8Array, o: int, across: int, along: int, lines: int, bs: int, indexA: int, indexB: int) {
+  const alpha = DEBLOCK_ALPHA[indexA]!
+  const beta = DEBLOCK_BETA[indexB]!
+  if (alpha === 0 || beta === 0) return
+  const tc = DEBLOCK_TC0[indexA * 5 + bs]! + 1
+  for (let l = 0; l < lines; l++) {
+    const q = o + l * along
+    const p0 = int(px[q - across]!)
+    const q0 = int(px[q]!)
+    if (iabs(p0 - q0) >= alpha) continue
+    const p1 = int(px[q - 2 * across]!)
+    if (iabs(p1 - p0) >= beta) continue
+    const q1 = int(px[q + across]!)
+    if (iabs(q1 - q0) >= beta) continue
+    if (bs < 4) {
+      const delta = clip3(-tc, tc, (((q0 - p0) << 2) + (p1 - q1) + 4) >> 3)
+      px[q - across] = clip1(p0 + delta)
+      px[q] = clip1(q0 - delta)
+    } else {
+      px[q - across] = (2 * p1 + p0 + q1 + 2) >> 2
+      px[q] = (2 * q1 + q0 + p1 + 2) >> 2
+    }
+  }
+}
+
+function edgeMask(p1: i16x16, p0: i16x16, q0: i16x16, q1: i16x16, alpha: int, beta: int): i16x16 {
+  const vb = i16x16.splat(beta)
+  return (p0 - q0).abs().lt(i16x16.splat(alpha)) & (p1 - p0).abs().lt(vb) & (q1 - q0).abs().lt(vb)
+}
+
+function weakDelta(p1: i16x16, p0: i16x16, q0: i16x16, q1: i16x16, tc: i16x16): i16x16 {
+  return ((((q0 - p0) << 2) + (p1 - q1) + i16x16.splat(4)) >> 3).max(-tc).min(tc)
+}
+
+function weakOuter(x2: i16x16, x1: i16x16, avg: i16x16, tc0: i16x16): i16x16 {
+  return x1 + ((x2 + avg - (x1 << 1)) >> 1).max(-tc0).min(tc0)
+}
+
+function weakInner(x1: i16x16, x0: i16x16, y1: i16x16): i16x16 {
+  return ((x1 << 1) + x0 + y1 + i16x16.splat(2)) >> 2
+}
+
+function strongInner(x2: i16x16, x1: i16x16, x0: i16x16, y0: i16x16, y1: i16x16): i16x16 {
+  return (x2 + ((x1 + x0 + y0) << 1) + y1 + i16x16.splat(4)) >> 3
+}
+
+function strongMid(x2: i16x16, x1: i16x16, x0: i16x16, y0: i16x16): i16x16 {
+  return (x2 + x1 + x0 + y0 + i16x16.splat(2)) >> 2
+}
+
+function strongOuter(x3: i16x16, x2: i16x16, x1: i16x16, x0: i16x16, y0: i16x16): i16x16 {
+  return ((x3 << 1) + x2 + (x2 << 1) + x1 + x0 + y0 + i16x16.splat(4)) >> 3
+}
+
+function clampPixel(v: i16x16): i16x16 {
+  return v.max(i16x16.splat(0)).min(i16x16.splat(255))
+}
+
+function bytePairs(lo: i16x16, hi: i16x16): i16x16 {
+  return lo | (hi << 8)
+}
+
+function columnPairs(v: i32x8): u8x32 {
+  return u8x32.bitcast(i64x4.bitcast(v).swizzle(HALVES))
+}
+
+function zipRows(px: Uint8Array, a: int, along: int): i16x16 {
+  const r0 = u8x32.concat(u8x16.load(px, a), u8x16.load(px, a + 8 * along))
+  const r1 = u8x32.concat(u8x16.load(px, a + along), u8x16.load(px, a + 9 * along))
+  return i16x16.bitcast(u8x32.shuffle(r0, r1, ZIP8))
+}
+
+function zipPlanes(u: Uint8Array, v: Uint8Array, a: int, along: int): i16x16 {
+  const r0 = u8x32.concat(u8x16.load(u, a), u8x16.load(v, a))
+  const r1 = u8x32.concat(u8x16.load(u, a + along), u8x16.load(v, a + along))
+  return i16x16.bitcast(u8x32.shuffle(r0, r1, ZIP8))
+}
+
+function storeRow(px: Uint8Array, a: int, v: i16x16) {
+  u8x16.packSat(v.low(), v.high()).store(px, a)
+}
+
+function putRows8(px: Uint8Array, a: int, along: int, rows: u8x32) {
+  const lo = rows.low()
+  const hi = rows.high()
+  lo.storeLow(px, a)
+  lo.swizzle(HIGH8).storeLow(px, a + along)
+  hi.storeLow(px, a + 8 * along)
+  hi.swizzle(HIGH8).storeLow(px, a + 9 * along)
+}
+
+function putRows4(px: Uint8Array, a: int, along: int, rows: u8x16) {
+  u8x16.shuffle(rows, u8x16.load(px, a), ROW4_0).store(px, a)
+  u8x16.shuffle(rows, u8x16.load(px, a + along), ROW4_1).store(px, a + along)
+  u8x16.shuffle(rows, u8x16.load(px, a + 2 * along), ROW4_2).store(px, a + 2 * along)
+  u8x16.shuffle(rows, u8x16.load(px, a + 3 * along), ROW4_3).store(px, a + 3 * along)
+}
+
+function putPlanes(u: Uint8Array, v: Uint8Array, a: int, x: i16x16) {
+  x.low().storeU8(u, a)
+  x.high().storeU8(v, a)
+}
+
+export function filterLuma16(px: Uint8Array, o: int, across: int, along: int, bs: int, indexA: int, indexB: int) {
+  const alpha = DEBLOCK_ALPHA[indexA]!
+  const beta = DEBLOCK_BETA[indexB]!
+  if (alpha === 0 || beta === 0) return
+  lumaEdge(px, o, across, along, alpha, beta, bs === 4, i16x16.splat(DEBLOCK_TC0[indexA * 5 + bs]!))
+}
+
+export function filterLumaSegments(px: Uint8Array, o: int, across: int, along: int, coded: int, motion: int, indexA: int, indexB: int) {
+  const alpha = DEBLOCK_ALPHA[indexA]!
+  const beta = DEBLOCK_BETA[indexB]!
+  if (alpha === 0 || beta === 0) return
+  const sel = (i16x16.splat(coded) & i16x16(1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 8, 8, 8, 8)).ne(i16x16.splat(0))
+  const other = motion === 0 ? -1 : DEBLOCK_TC0[indexA * 5 + motion]!
+  lumaEdge(px, o, across, along, alpha, beta, false, i16x16.select(sel, i16x16.splat(DEBLOCK_TC0[indexA * 5 + 2]!), i16x16.splat(other)))
+}
+
+function lumaEdge(px: Uint8Array, o: int, across: int, along: int, alpha: int, beta: int, bs4: bool, tc0: i16x16) {
+  let p3: i16x16
+  let p2: i16x16
+  let p1: i16x16
+  let p0: i16x16
+  let q0: i16x16
+  let q1: i16x16
+  let q2: i16x16
+  let q3: i16x16
+  if (along === 1) {
+    p3 = i16x16.loadU8(px, o - 4 * across)
+    p2 = i16x16.loadU8(px, o - 3 * across)
+    p1 = i16x16.loadU8(px, o - 2 * across)
+    p0 = i16x16.loadU8(px, o - across)
+    q0 = i16x16.loadU8(px, o)
+    q1 = i16x16.loadU8(px, o + across)
+    q2 = i16x16.loadU8(px, o + 2 * across)
+    q3 = i16x16.loadU8(px, o + 3 * across)
+  } else {
+    const b = o - 4
+    const a0 = zipRows(px, b, along)
+    const a1 = zipRows(px, b + 2 * along, along)
+    const a2 = zipRows(px, b + 4 * along, along)
+    const a3 = zipRows(px, b + 6 * along, along)
+    const lo0 = i32x8.bitcast(i16x16.shuffle(a0, a1, ZIP16_LO))
+    const hi0 = i32x8.bitcast(i16x16.shuffle(a0, a1, ZIP16_HI))
+    const lo1 = i32x8.bitcast(i16x16.shuffle(a2, a3, ZIP16_LO))
+    const hi1 = i32x8.bitcast(i16x16.shuffle(a2, a3, ZIP16_HI))
+    const c01 = columnPairs(i32x8.shuffle(lo0, lo1, ZIP32_LO))
+    const c23 = columnPairs(i32x8.shuffle(lo0, lo1, ZIP32_HI))
+    const c45 = columnPairs(i32x8.shuffle(hi0, hi1, ZIP32_LO))
+    const c67 = columnPairs(i32x8.shuffle(hi0, hi1, ZIP32_HI))
+    p3 = i16x16.convert(c01.low())
+    p2 = i16x16.convert(c01.high())
+    p1 = i16x16.convert(c23.low())
+    p0 = i16x16.convert(c23.high())
+    q0 = i16x16.convert(c45.low())
+    q1 = i16x16.convert(c45.high())
+    q2 = i16x16.convert(c67.low())
+    q3 = i16x16.convert(c67.high())
+  }
+  const m = edgeMask(p1, p0, q0, q1, alpha, beta) & tc0.ge(i16x16.splat(0))
+  if (m.mask() === 0) return
+  const vb = i16x16.splat(beta)
+  const ap = (p2 - p0).abs().lt(vb)
+  const aq = (q2 - q0).abs().lt(vb)
+  let p2n = p2
+  let p1n: i16x16
+  let p0n: i16x16
+  let q0n: i16x16
+  let q1n: i16x16
+  let q2n = q2
+  if (!bs4) {
+    const delta = weakDelta(p1, p0, q0, q1, tc0 - ap - aq)
+    const avg = (p0 + q0 + i16x16.splat(1)) >> 1
+    p1n = i16x16.select(m & ap, weakOuter(p2, p1, avg, tc0), p1)
+    p0n = i16x16.select(m, clampPixel(p0 + delta), p0)
+    q0n = i16x16.select(m, clampPixel(q0 - delta), q0)
+    q1n = i16x16.select(m & aq, weakOuter(q2, q1, avg, tc0), q1)
+  } else {
+    const strong = (p0 - q0).abs().lt(i16x16.splat((alpha >> 2) + 2))
+    const sp = m & ap & strong
+    const sq = m & aq & strong
+    p2n = i16x16.select(sp, strongOuter(p3, p2, p1, p0, q0), p2)
+    p1n = i16x16.select(sp, strongMid(p2, p1, p0, q0), p1)
+    p0n = i16x16.select(m, i16x16.select(sp, strongInner(p2, p1, p0, q0, q1), weakInner(p1, p0, q1)), p0)
+    q0n = i16x16.select(m, i16x16.select(sq, strongInner(q2, q1, q0, p0, p1), weakInner(q1, q0, p1)), q0)
+    q1n = i16x16.select(sq, strongMid(q2, q1, q0, p0), q1)
+    q2n = i16x16.select(sq, strongOuter(q3, q2, q1, q0, p0), q2)
+  }
+  if (along === 1) {
+    if (bs4) storeRow(px, o - 3 * across, p2n)
+    storeRow(px, o - 2 * across, p1n)
+    storeRow(px, o - across, p0n)
+    storeRow(px, o, q0n)
+    storeRow(px, o + across, q1n)
+    if (bs4) storeRow(px, o + 2 * across, q2n)
+    return
+  }
+  const w0 = bytePairs(p3, p2n)
+  const w1 = bytePairs(p1n, p0n)
+  const w2 = bytePairs(q0n, q1n)
+  const w3 = bytePairs(q2n, q3)
+  const l0 = i32x8.bitcast(i16x16.shuffle(w0, w1, ZIP16_LO))
+  const l1 = i32x8.bitcast(i16x16.shuffle(w0, w1, ZIP16_HI))
+  const l2 = i32x8.bitcast(i16x16.shuffle(w2, w3, ZIP16_LO))
+  const l3 = i32x8.bitcast(i16x16.shuffle(w2, w3, ZIP16_HI))
+  const b = o - 4
+  putRows8(px, b, along, u8x32.bitcast(i32x8.shuffle(l0, l2, ZIP32_LO)))
+  putRows8(px, b + 2 * along, along, u8x32.bitcast(i32x8.shuffle(l0, l2, ZIP32_HI)))
+  putRows8(px, b + 4 * along, along, u8x32.bitcast(i32x8.shuffle(l1, l3, ZIP32_LO)))
+  putRows8(px, b + 6 * along, along, u8x32.bitcast(i32x8.shuffle(l1, l3, ZIP32_HI)))
+}
+
+export function filterChromaUV(u: Uint8Array, v: Uint8Array, o: int, across: int, along: int, bs: int, indexA: int, indexB: int) {
+  const alpha = DEBLOCK_ALPHA[indexA]!
+  const beta = DEBLOCK_BETA[indexB]!
+  if (alpha === 0 || beta === 0) return
+  chromaEdge(u, v, o, across, along, alpha, beta, bs === 4, i16x16.splat(DEBLOCK_TC0[indexA * 5 + bs]! + 1))
+}
+
+export function filterChromaSegments(u: Uint8Array, v: Uint8Array, o: int, across: int, along: int, coded: int, motion: int, indexA: int, indexB: int) {
+  const alpha = DEBLOCK_ALPHA[indexA]!
+  const beta = DEBLOCK_BETA[indexB]!
+  if (alpha === 0 || beta === 0) return
+  const sel = (i16x16.splat(coded) & i16x16(1, 1, 2, 2, 4, 4, 8, 8, 1, 1, 2, 2, 4, 4, 8, 8)).ne(i16x16.splat(0))
+  const other = motion === 0 ? 0 : DEBLOCK_TC0[indexA * 5 + motion]! + 1
+  chromaEdge(u, v, o, across, along, alpha, beta, false, i16x16.select(sel, i16x16.splat(DEBLOCK_TC0[indexA * 5 + 2]! + 1), i16x16.splat(other)))
+}
+
+function chromaEdge(u: Uint8Array, v: Uint8Array, o: int, across: int, along: int, alpha: int, beta: int, bs4: bool, tc: i16x16) {
+  let p1: i16x16
+  let p0: i16x16
+  let q0: i16x16
+  let q1: i16x16
+  if (along === 1) {
+    p1 = i16x16.concat(i16x8.loadU8(u, o - 2 * across), i16x8.loadU8(v, o - 2 * across))
+    p0 = i16x16.concat(i16x8.loadU8(u, o - across), i16x8.loadU8(v, o - across))
+    q0 = i16x16.concat(i16x8.loadU8(u, o), i16x8.loadU8(v, o))
+    q1 = i16x16.concat(i16x8.loadU8(u, o + across), i16x8.loadU8(v, o + across))
+  } else {
+    const b = o - 2
+    const a0 = zipPlanes(u, v, b, along)
+    const a1 = zipPlanes(u, v, b + 2 * along, along)
+    const a2 = zipPlanes(u, v, b + 4 * along, along)
+    const a3 = zipPlanes(u, v, b + 6 * along, along)
+    const lo0 = i32x8.bitcast(i16x16.shuffle(a0, a1, ZIP16_LO))
+    const lo1 = i32x8.bitcast(i16x16.shuffle(a2, a3, ZIP16_LO))
+    const c01 = columnPairs(i32x8.shuffle(lo0, lo1, ZIP32_LO))
+    const c23 = columnPairs(i32x8.shuffle(lo0, lo1, ZIP32_HI))
+    p1 = i16x16.convert(c01.low())
+    p0 = i16x16.convert(c01.high())
+    q0 = i16x16.convert(c23.low())
+    q1 = i16x16.convert(c23.high())
+  }
+  const m = edgeMask(p1, p0, q0, q1, alpha, beta)
+  if (m.mask() === 0) return
+  let p0n: i16x16
+  let q0n: i16x16
+  if (!bs4) {
+    const delta = weakDelta(p1, p0, q0, q1, tc)
+    p0n = i16x16.select(m, clampPixel(p0 + delta), p0)
+    q0n = i16x16.select(m, clampPixel(q0 - delta), q0)
+  } else {
+    p0n = i16x16.select(m, weakInner(p1, p0, q1), p0)
+    q0n = i16x16.select(m, weakInner(q1, q0, p1), q0)
+  }
+  if (along === 1) {
+    putPlanes(u, v, o - across, p0n)
+    putPlanes(u, v, o, q0n)
+    return
+  }
+  const w0 = bytePairs(p1, p0n)
+  const w1 = bytePairs(q0n, q1)
+  const top = u8x32.bitcast(i16x16.shuffle(w0, w1, ZIP16_LO))
+  const bottom = u8x32.bitcast(i16x16.shuffle(w0, w1, ZIP16_HI))
+  const b = o - 2
+  putRows4(u, b, along, top.low())
+  putRows4(u, b + 4 * along, along, bottom.low())
+  putRows4(v, b, along, top.high())
+  putRows4(v, b + 4 * along, along, bottom.high())
+}
+
+function noisePlane(seed: int, n: int, smooth: bool): u8[] {
+  let out: u8[] = []
+  let x = seed
+  let prev = 128
+  for (let i = 0; i < n; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    let v = (x >> 9) & 255
+    if (smooth) {
+      v = prev + ((x >> 9) % 7) - 3
+      v = v < 0 ? 0 : v > 255 ? 255 : v
+      prev = v
+    }
+    out.push(u8(v))
+  }
+  return out
+}
+
+test("vector luma and chroma deblocking equal the scalar filters", () => {
+  let bad = 0
+  const stride = 48
+  for (let seed = 1; seed <= 160; seed++) {
+    const base = noisePlane(seed, stride * 48, seed % 3 !== 0)
+    const other = noisePlane(seed + 1000, stride * 48, seed % 5 !== 0)
+    const bs = 1 + seed % 4
+    const ia = 10 + (seed * 7) % 42
+    const ib = 10 + (seed * 11) % 42
+    for (let dir = 0; dir < 2; dir++) {
+      const a = new Uint8Array(base)
+      const b = new Uint8Array(base)
+      const o = 16 * stride + 16
+      const across = dir === 0 ? 1 : stride
+      const along = dir === 0 ? stride : 1
+      filterLuma(a, o, across, along, 16, bs, ia, ib)
+      filterLuma16(b, o, across, along, bs, ia, ib)
+      for (let i = 0; i < a.length; i++) {
+        if (a[i]! !== b[i]!) bad++
+      }
+      const cu = new Uint8Array(base)
+      const cv = new Uint8Array(other)
+      const du = new Uint8Array(base)
+      const dv = new Uint8Array(other)
+      filterChroma(cu, o, across, along, 8, bs, ia, ib)
+      filterChroma(cv, o, across, along, 8, bs, ia, ib)
+      filterChromaUV(du, dv, o, across, along, bs, ia, ib)
+      for (let i = 0; i < cu.length; i++) {
+        if (cu[i]! !== du[i]!) bad++
+        if (cv[i]! !== dv[i]!) bad++
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("per-segment vector deblocking equals the scalar filters segment by segment", () => {
+  let bad = 0
+  const stride = 48
+  for (let seed = 1; seed <= 160; seed++) {
+    const base = noisePlane(seed, stride * 48, seed % 3 !== 0)
+    const other = noisePlane(seed + 2000, stride * 48, seed % 4 !== 0)
+    const coded = 1 + seed % 14
+    const motion = (seed >> 2) & 1
+    const ia = 10 + (seed * 13) % 42
+    const ib = 10 + (seed * 5) % 42
+    for (let dir = 0; dir < 2; dir++) {
+      const o = 16 * stride + 16
+      const across = dir === 0 ? 1 : stride
+      const along = dir === 0 ? stride : 1
+      const a = new Uint8Array(base)
+      const b = new Uint8Array(base)
+      const cu = new Uint8Array(base)
+      const cv = new Uint8Array(other)
+      for (let k = 0; k < 4; k++) {
+        const bs = ((coded >> k) & 1) !== 0 ? 2 : motion
+        if (bs === 0) continue
+        filterLuma(a, o + k * 4 * along, across, along, 4, bs, ia, ib)
+        filterChroma(cu, o + k * 2 * along, across, along, 2, bs, ia, ib)
+        filterChroma(cv, o + k * 2 * along, across, along, 2, bs, ia, ib)
+      }
+      filterLumaSegments(b, o, across, along, coded, motion, ia, ib)
+      const du = new Uint8Array(base)
+      const dv = new Uint8Array(other)
+      filterChromaSegments(du, dv, o, across, along, coded, motion, ia, ib)
+      for (let i = 0; i < a.length; i++) {
+        if (a[i]! !== b[i]!) bad++
+        if (cu[i]! !== du[i]!) bad++
+        if (cv[i]! !== dv[i]!) bad++
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("a strong edge across a flat area is smoothed at bS 4", () => {
+  const px = new Uint8Array(8)
+  for (let i = 0; i < 8; i++) px[i] = i < 4 ? 100 : 104
+  filterLuma(px, 4, 1, 0, 1, 4, 40, 40)
+  expect(px[3]! > 100).toBe(true)
+  expect(px[4]! < 104).toBe(true)
+})

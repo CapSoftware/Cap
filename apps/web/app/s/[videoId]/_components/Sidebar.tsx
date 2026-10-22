@@ -3,14 +3,31 @@ import { classNames } from "@cap/utils";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../types";
 import { Activity } from "./tabs/Activity";
-import { Settings } from "./tabs/Settings";
-import { Summary } from "./tabs/Summary";
-import { Transcript } from "./tabs/Transcript";
+import type { SummaryEditingState } from "./tabs/SummaryEditor";
+
+// Activity is the default tab, so it stays in the entry chunk; the other tabs
+// (and their deps — react-markdown for Summary, the 1000-line transcript view)
+// load when first shown. With SSR on, a non-default initial tab still renders
+// server-side and preloads its own chunk. Hovering a tab button warms its
+// chunk so the click still feels instant.
+const importSummary = () => import("./tabs/Summary");
+const importTranscript = () => import("./tabs/Transcript");
+const Summary = dynamic(() => importSummary().then((m) => m.Summary));
+const Transcript = dynamic(() => importTranscript().then((m) => m.Transcript));
+const Settings = dynamic(() =>
+	import("./tabs/Settings").then((m) => m.Settings),
+);
+
+const prefetchTab = (tabId: string) => {
+	if (tabId === "summary") void importSummary();
+	else if (tabId === "transcript") void importTranscript();
+};
 
 type TabType = "activity" | "transcript" | "summary" | "settings";
 
@@ -27,6 +44,7 @@ type AiGenerationStatus =
 	| "SKIPPED";
 
 interface SidebarProps {
+	sidebarId?: string;
 	data: VideoData;
 	commentsData: CommentType[];
 	optimisticComments: CommentType[];
@@ -82,6 +100,7 @@ const tabTransition = {
 export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	(
 		{
+			sidebarId,
 			data,
 			commentsData,
 			setCommentsData,
@@ -127,6 +146,13 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							? "transcript"
 							: "activity";
 
+		const [summaryEditingState, setSummaryEditingState] =
+			useState<SummaryEditingState>("clean");
+		const canLeaveSummary = () =>
+			summaryEditingState !== "saving" &&
+			(summaryEditingState !== "dirty" ||
+				window.confirm("Discard your unsaved summary and chapter changes?"));
+
 		const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
 		const [[page, direction], setPage] = useState([0, 0]);
 
@@ -158,6 +184,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		];
 
 		const paginate = (tabId: TabType) => {
+			if (tabId === activeTab || !canLeaveSummary()) return;
 			const currentIndex = tabs.findIndex((tab) => tab.id === activeTab);
 			const newIndex = tabs.findIndex((tab) => tab.id === tabId);
 			const direction = newIndex > currentIndex ? 1 : -1;
@@ -200,6 +227,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						<Summary
 							videoId={data.id}
 							ownerIsPro={data.owner.isPro}
+							isOwner={isOwner}
+							transcriptionStatus={data.transcriptionStatus}
+							duration={data.duration}
+							onEditingStateChange={setSummaryEditingState}
 							onSeek={onSeek}
 							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
@@ -235,6 +266,8 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									type="button"
 									key={tab.id}
 									onClick={() => paginate(tab.id as TabType)}
+									onPointerEnter={() => prefetchTab(tab.id)}
+									onFocus={() => prefetchTab(tab.id)}
 									className={classNames(
 										"flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
 										"hover:bg-gray-1",
@@ -266,9 +299,13 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						{onCollapse && (
 							<button
 								type="button"
-								onClick={onCollapse}
-								aria-label="Hide comments"
-								title="Hide comments"
+								onClick={() => {
+									if (canLeaveSummary()) onCollapse();
+								}}
+								aria-label="Hide sidebar"
+								title="Hide sidebar"
+								aria-controls={sidebarId}
+								aria-expanded={true}
 								className="hidden shrink-0 items-center justify-center px-3 text-gray-9 transition-colors hover:bg-gray-1 hover:text-gray-12 lg:flex"
 							>
 								<svg
@@ -276,7 +313,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									className="size-4 fill-current"
 									aria-hidden
 								>
-									<title>Hide comments</title>
+									<title>Hide sidebar</title>
 									<path d="M5.7 3.3a.6.6 0 0 0 0 .85L9.55 8 5.7 11.85a.6.6 0 1 0 .85.85l4.27-4.27a.6.6 0 0 0 0-.86L6.55 3.3a.6.6 0 0 0-.85 0Z" />
 								</svg>
 							</button>

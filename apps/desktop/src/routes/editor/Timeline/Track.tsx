@@ -1,10 +1,14 @@
 import { mergeRefs } from "@solid-primitives/refs";
 import { cx } from "cva";
 import {
+	type Accessor,
 	type ComponentProps,
 	createMemo,
 	createSignal,
+	type JSX,
+	Match,
 	Show,
+	Switch,
 	splitProps,
 } from "solid-js";
 import { useEditorContext } from "../context";
@@ -20,7 +24,7 @@ export const CAP_TRACK_FILL_CLASS = "cap-track-fill";
 
 export function TrackRoot(props: ComponentProps<"div">) {
 	const [ref, setRef] = createSignal<HTMLDivElement>();
-	const height = "var(--track-height, 3.25rem)";
+	const height = "var(--track-height, 44px)";
 	const style =
 		typeof props.style === "string"
 			? `${props.style};height:${height}`
@@ -63,20 +67,24 @@ export function useSegmentWidth(segment: () => { start: number; end: number }) {
 
 export function SegmentRoot(
 	props: ComponentProps<"div"> & {
-		innerClass: string;
 		segColor?: string;
 		segment: { start: number; end: number };
 		forceVisible?: boolean;
+		selected?: boolean;
+		muted?: boolean;
+		ghost?: boolean;
 		onMouseDown?: (
 			e: MouseEvent & { currentTarget: HTMLDivElement; target: Element },
 		) => void;
 	},
 ) {
 	const [local, rest] = splitProps(props, [
-		"innerClass",
 		"segColor",
 		"segment",
 		"forceVisible",
+		"selected",
+		"muted",
+		"ghost",
 		"onMouseDown",
 		"class",
 		"style",
@@ -95,11 +103,11 @@ export function SegmentRoot(
 
 	return (
 		<Show when={visible()}>
-			<SegmentContextProvider width={width}>
+			<SegmentContextProvider width={width} segment={() => local.segment}>
 				<div
 					{...rest}
 					class={cx(
-						"absolute overflow-visible border rounded-xl inset-y-0",
+						"absolute overflow-visible inset-y-0",
 						editorState.timeline.interactMode === "split" &&
 							"timeline-scissors-cursor",
 						local.class,
@@ -116,9 +124,11 @@ export function SegmentRoot(
 					<div
 						class={cx(
 							CAP_TRACK_FILL_CLASS,
-							"relative h-full flex flex-row rounded-xl overflow-hidden group",
-							local.innerClass,
+							"relative h-full flex flex-row overflow-hidden group",
 						)}
+						data-selected={local.selected ? "" : undefined}
+						data-muted={local.muted ? "" : undefined}
+						data-ghost={local.ghost ? "" : undefined}
 						style={
 							local.segColor
 								? ({ "--seg-color": local.segColor } as Record<string, string>)
@@ -133,14 +143,126 @@ export function SegmentRoot(
 	);
 }
 
+export const SEGMENT_LABEL_FULL_PX = 100;
+export const SEGMENT_LABEL_COMPACT_PX = 48;
+const SEGMENT_LABEL_INSET_PX = 13;
+const SEGMENT_LABEL_TAIL_PX = 10;
+
+// Pixel box of the segment's intersection with the viewport, in
+// segment-local coordinates, with a clamped center for label anchoring.
+// A zoomed-in segment can extend well past the viewport, so its true
+// centre is often off-screen; labels anchor to this instead.
+export function useSegmentVisibleBox(): Accessor<{
+	width: number;
+	centerX: number;
+	startX: number;
+}> {
+	const { width, segment } = useSegmentContext();
+	const { secsPerPixel } = useTrackContext();
+	const { editorState } = useEditorContext();
+
+	return createMemo(() => {
+		const segmentWidth = width();
+		const { transform } = editorState.timeline;
+
+		const leftPx = (segment().start - transform.position) / secsPerPixel();
+		const viewportPx = transform.zoom / secsPerPixel();
+
+		const visibleStart = Math.max(0, -leftPx);
+		const visibleEnd = Math.min(segmentWidth, viewportPx - leftPx);
+		const visibleWidth = Math.max(0, visibleEnd - visibleStart);
+
+		// Keep the label inside the segment box, but when only a small slice
+		// of a wide segment is on screen the margin must shrink with it, or
+		// the clamp would push the label out of view past the viewport edge.
+		const margin = Math.min(
+			60,
+			segmentWidth / 2,
+			Math.max(visibleWidth / 2, 4),
+		);
+		const centerX = Math.min(
+			Math.max((visibleStart + visibleEnd) / 2, margin),
+			segmentWidth - margin,
+		);
+
+		return { width: visibleWidth, centerX, startX: visibleStart };
+	});
+}
+
+// Progressive disclosure for segment labels: the label degrades from its
+// full form down to a compact row and then to a state glyph as the visible
+// slice of the segment shrinks, rather than vanishing at a hard cliff.
+export function SegmentLabel(props: {
+	full: () => JSX.Element;
+	compact?: () => JSX.Element;
+	glyph?: () => JSX.Element;
+	fullAt?: number;
+	compactAt?: number;
+}) {
+	const visibleBox = useSegmentVisibleBox();
+
+	const fullAt = () => props.fullAt ?? SEGMENT_LABEL_FULL_PX;
+	const compactAt = () => props.compactAt ?? SEGMENT_LABEL_COMPACT_PX;
+
+	// Segments read left-to-right, so the label hugs the leading edge of the
+	// visible slice rather than the segment's true centre (which is often
+	// scrolled out of view on a long clip). The glyph tier is too narrow for
+	// the content padding, so it stays centred.
+	const leftAligned = () => {
+		const visibleWidth = visibleBox().width;
+		return (
+			visibleWidth >= fullAt() ||
+			(visibleWidth >= compactAt() && !!props.compact)
+		);
+	};
+
+	return (
+		<div
+			class="absolute pointer-events-none"
+			style={
+				leftAligned()
+					? {
+							left: `${visibleBox().startX + SEGMENT_LABEL_INSET_PX}px`,
+							top: "50%",
+							transform: "translateY(-50%)",
+							"max-width": `${Math.max(
+								0,
+								visibleBox().width -
+									SEGMENT_LABEL_INSET_PX -
+									SEGMENT_LABEL_TAIL_PX,
+							)}px`,
+							overflow: "hidden",
+						}
+					: {
+							left: `${visibleBox().centerX}px`,
+							top: "50%",
+							transform: "translate(-50%, -50%)",
+							"max-width": `${Math.max(0, visibleBox().width - 8)}px`,
+							overflow: "hidden",
+						}
+			}
+		>
+			<Switch>
+				<Match when={visibleBox().width >= fullAt()}>{props.full()}</Match>
+				<Match when={visibleBox().width >= compactAt() && !!props.compact}>
+					{props.compact?.()}
+				</Match>
+				<Match when={visibleBox().width >= 16 && !!props.glyph}>
+					{props.glyph?.()}
+				</Match>
+			</Switch>
+		</div>
+	);
+}
+
 export function SegmentContent(props: ComponentProps<"div">) {
 	const ctx = useSegmentContext();
 	return (
 		<div
 			{...props}
 			class={cx(
-				"relative w-full h-full flex flex-row items-center py-1",
-				ctx.width() < 100 ? "px-0" : "px-2",
+				"relative w-full h-full flex flex-row items-center",
+				ctx.width() < 100 ? "px-0" : "pl-[13px] pr-[10px]",
 				props.class,
 			)}
 		/>
@@ -157,16 +279,16 @@ export function SegmentHandle(
 		<div
 			{...props}
 			class={cx(
-				"absolute inset-y-0 z-10 flex w-5 cursor-col-resize items-center justify-center transition-opacity",
+				"absolute inset-y-0 z-10 flex w-5 cursor-col-resize items-center transition-opacity",
 				props.position === "start"
-					? "left-0 -translate-x-1/2"
-					: "right-0 translate-x-1/2",
-				compact() ? "opacity-55" : "opacity-35 group-hover:opacity-100",
+					? "left-0 -translate-x-1/2 justify-end pr-[2px]"
+					: "right-0 translate-x-1/2 justify-start pl-[2px]",
+				compact() ? "opacity-55" : "opacity-0 group-hover:opacity-90",
 				props.class,
 			)}
 			data-compact={compact()}
 		>
-			<div class="w-[3px] h-8 bg-solid-white rounded-full" />
+			<div class="cap-seg-handle" />
 		</div>
 	);
 }

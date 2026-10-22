@@ -12,6 +12,7 @@ import {
 } from "@/actions/organization/get-subscription-details";
 import { manageBilling } from "@/actions/organization/manage-billing";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { formatAmount } from "@/utils/currency";
 
 export function BillingSummaryCard() {
 	const { activeOrganization, setUpgradeModalOpen } = useDashboardContext();
@@ -89,14 +90,22 @@ export function BillingSummaryCard() {
 	}
 
 	const pastDue = subscription.status === "past_due";
+	const canceling = subscription.cancelAtPeriodEnd && !pastDue;
 	const statusLabel = pastDue
 		? "Payment failed"
-		: subscription.status === "trialing"
-			? "Trialing"
-			: "Active";
+		: canceling
+			? "Canceling"
+			: subscription.status === "trialing"
+				? "Trialing"
+				: "Active";
 	const intervalLabel =
 		subscription.billingInterval === "year" ? "annually" : "monthly";
 	const totalAmount = subscription.pricePerSeat * subscription.currentQuantity;
+	const seatAmountLabel = formatAmount(
+		subscription.pricePerSeat,
+		subscription.currency,
+	);
+	const totalAmountLabel = formatAmount(totalAmount, subscription.currency);
 	const nextBillingDate = format(
 		new Date(subscription.currentPeriodEnd * 1000),
 		"MMM d, yyyy",
@@ -112,7 +121,11 @@ export function BillingSummaryCard() {
 						</h3>
 						<span
 							className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-								pastDue ? "bg-red-100 text-red-700" : "bg-gray-4 text-gray-11"
+								pastDue
+									? "bg-red-100 text-red-700"
+									: canceling
+										? "bg-amber-100 text-amber-700"
+										: "bg-gray-4 text-gray-11"
 							}`}
 						>
 							{statusLabel}
@@ -120,15 +133,19 @@ export function BillingSummaryCard() {
 					</div>
 					<div className="flex flex-col gap-1 text-sm text-gray-11">
 						<p>
-							${subscription.pricePerSeat.toFixed(2)}/seat/mo (
-							{subscription.currentQuantity}{" "}
-							{subscription.currentQuantity === 1 ? "seat" : "seats"} = $
-							{totalAmount.toFixed(2)}/mo, billed {intervalLabel})
+							{seatAmountLabel}/seat/mo ({subscription.currentQuantity}{" "}
+							{subscription.currentQuantity === 1 ? "seat" : "seats"} ={" "}
+							{totalAmountLabel}/mo, billed {intervalLabel})
 						</p>
 						{pastDue ? (
 							<p className="text-red-700">
 								Your last payment failed. Update your payment method to keep Pro
 								active; we'll keep retrying in the meantime.
+							</p>
+						) : canceling ? (
+							<p className="text-amber-700">
+								Your subscription ends on {nextBillingDate}. You keep Pro until
+								then; add seats or use Manage Billing to resume.
 							</p>
 						) : (
 							<p>Next billing date: {nextBillingDate}</p>

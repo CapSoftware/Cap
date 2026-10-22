@@ -6,7 +6,7 @@ import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../../Share";
-import { AuthOverlay } from "../AuthOverlay";
+import { AuthOverlay } from "../AuthOverlayLazy";
 import { MicGlyph } from "./TimelineBranch";
 import { useTimelineActions, useTimelineState } from "./TimelineProvider";
 import {

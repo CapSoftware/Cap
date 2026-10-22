@@ -3,7 +3,6 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
-	importedVideos,
 	organizationMembers,
 	organizations,
 	users,
@@ -11,9 +10,10 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { Storage } from "@cap/web-backend";
+import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
@@ -24,7 +24,6 @@ import { z } from "zod";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
-import { decodeStorageVideo } from "@/lib/video-storage";
 import {
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
@@ -58,6 +57,8 @@ function mergeUserOrganizationSelections(
 		.map(({ createdAt, ...organization }) => organization);
 }
 
+app.get("/new-id", (c) => c.json({ id: nanoId() }));
+
 app.get(
 	"/create",
 	zValidator(
@@ -72,6 +73,7 @@ app.get(
 				.optional(),
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
+			createWithId: z.coerce.boolean().default(false),
 			name: z.string().optional(),
 			durationInSecs: stringOrNumberOptional,
 			width: stringOrNumberOptional,
@@ -91,6 +93,7 @@ app.get(
 				recordingMode,
 				isScreenshot,
 				videoId,
+				createWithId,
 				name,
 				durationInSecs,
 				width,
@@ -99,6 +102,11 @@ app.get(
 				orgId,
 			} = c.req.valid("query");
 			const user = c.get("user");
+			if (
+				createWithId &&
+				(!videoId || !/^[0-9abcdefghjkmnpqrstvwxyz]{15}$/.test(videoId))
+			)
+				return c.json({ error: "invalid_video_id" }, { status: 400 });
 
 			const isCapPro = userIsPro(user);
 
@@ -109,6 +117,7 @@ app.get(
 				recordingMode,
 				isScreenshot,
 				videoId,
+				createWithId,
 				userId: user.id,
 				durationInSecs,
 				height,
@@ -261,7 +270,9 @@ app.get(
 				videoOrgId = userOrganizations[0].id;
 			}
 
-			const idToUse = Video.VideoId.make(nanoId());
+			const idToUse = Video.VideoId.make(
+				createWithId && videoId ? videoId : nanoId(),
+			);
 
 			const videoName =
 				name ??
@@ -293,9 +304,13 @@ app.get(
 				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
-			await db()
-				.insert(videos)
-				.values({
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
+
+			await db().transaction(async (tx) => {
+				await tx.insert(videos).values({
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
@@ -311,7 +326,7 @@ app.get(
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					public: await getNewVideoPublic(videoOrgId),
 					duration: durationInSecs,
 					width,
 					height,
@@ -319,16 +334,12 @@ app.get(
 					...(metadata ? { metadata } : {}),
 				});
 
-			const clientSupportsUploadProgress = isFromDesktopSemver(
-				c.req,
-				UPLOAD_PROGRESS_VERSION,
-			);
-
-			if (clientSupportsUploadProgress && !isScreenshot)
-				await db().insert(videoUploads).values({
-					videoId: idToUse,
-					mode: "singlepart",
-				});
+				if (clientSupportsUploadProgress && !isScreenshot)
+					await tx.insert(videoUploads).values({
+						videoId: idToUse,
+						mode: "singlepart",
+					});
+			});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {
 				// Off the response path: this endpoint gates recording start on the
@@ -411,28 +422,23 @@ app.delete(
 					{ status: 404 },
 				);
 
-			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
-			await db().delete(importedVideos).where(eq(importedVideos.id, videoId));
-
-			await db()
-				.delete(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
-
-			await Effect.gen(function* () {
-				const video = decodeStorageVideo(result.video);
-				const [bucket] = yield* Storage.getAccessForVideo(video);
-
-				const listedObjects = yield* bucket.listObjects({
-					prefix: `${user.id}/${videoId}/`,
-				});
-
-				if (listedObjects.Contents)
-					yield* bucket.deleteObjects(
-						listedObjects.Contents.map((content) => ({
-							Key: content.Key,
-						})),
-					);
-			}).pipe(runPromise);
+			const deleted = await Effect.gen(function* () {
+				const videoService = yield* Videos;
+				yield* videoService.delete(videoId);
+				return true;
+			}).pipe(
+				Effect.provide(makeCurrentUserLayer(user)),
+				Effect.catchTags({
+					VideoNotFoundError: () => Effect.succeed(false),
+					PolicyDenied: () => Effect.succeed(false),
+				}),
+				runPromise,
+			);
+			if (!deleted)
+				return c.json(
+					{ error: true, message: "Video not found" },
+					{ status: 404 },
+				);
 			await invalidateGoogleDriveStorageQuotaCache(
 				result.video.storageIntegrationId,
 			);

@@ -89,8 +89,8 @@ Core principles:
 
 - Storage targets: Cap Cloud, your own Google Drive (OAuth), any S3-compatible bucket, or fully local.
 - S3-compatible providers: AWS S3, Cloudflare R2, Supabase, MinIO, DigitalOcean Spaces, Backblaze B2, Wasabi, and more.
-- Security: end-to-end encryption for cloud storage; GDPR-friendly via bring-your-own storage in any region; HIPAA via self-hosting plus signed BAAs for enterprise.
-- Compliance: SOC 2, HIPAA, and ISO 27001 (certifications in progress). Trust Portal: https://trust.cap.so.
+- Security: end-to-end encryption for cloud storage; GDPR-friendly via bring-your-own storage in any region; HIPAA compliant with signed BAAs, plus self-hosting for full control.
+- Compliance: SOC 2 Type II, ISO 27001, and HIPAA compliant. Trust Portal: https://trust.cap.so.
 - Self-hosting documentation: https://cap.so/docs/self-hosting.
 
 ## Export
@@ -108,6 +108,8 @@ Core principles:
 ## Command Line (for AI agents)
 
 Cap ships a `cap` CLI designed to be driven by AI coding agents (Claude Code, Codex, Cursor, OpenCode) and scripts.
+
+Start at https://cap.so/agents for the copyable setup prompt, per-agent install steps, and the safety rules; the full reference lives under https://cap.so/docs/agents.
 
 Install:
 - `curl -fsSL https://cap.so/install-cli.sh | sh` (PowerShell: `irm https://cap.so/install-cli.ps1 | iex`)
@@ -175,7 +177,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - **vs OBS Studio** — Simpler, no complex scene setup; instant cloud sharing and AI built in; native lightweight app.
 - **vs Camtasia / ScreenFlow** — Free and open source, cross-platform, cloud sharing built in, lighter weight.
 - **vs Vidyard / Panopto** — Open source, bring-your-own storage, transparent pricing, self-hosting option.
-- **vs Zoom recordings** — Purpose-built async video with editing, analytics, and HIPAA-friendly self-hosting.
+- **vs Zoom recordings** — Purpose-built async video with editing, analytics, and HIPAA compliance with signed BAAs.
 - **vs Scribe** — Real screen video with narration and chapters vs static step screenshots.
 
 ## Use Cases & Solution Pages
@@ -199,7 +201,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
 - Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
-- Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Turborepo monorepo.
+- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Turborepo monorepo.
 
 ## Free Web Tools
 

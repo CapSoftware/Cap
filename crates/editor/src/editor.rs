@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
+#[cfg(target_os = "macos")]
+use cap_rendering::SurfaceFrame;
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
     ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
@@ -16,12 +18,17 @@ pub enum RendererMessage {
         width: u32,
         height: u32,
     },
+    RenderThumbnail {
+        input: RendererTransitionInput,
+        finished: oneshot::Sender<Result<RenderedFrame, String>>,
+    },
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<bool>,
         cursor: Arc<CursorEvents>,
         queued_at: Instant,
+        realtime: bool,
     },
     RenderTransition {
         outgoing: RendererTransitionInput,
@@ -30,6 +37,7 @@ pub enum RendererMessage {
         progress: f32,
         finished: oneshot::Sender<bool>,
         queued_at: Instant,
+        realtime: bool,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -45,6 +53,16 @@ pub struct RendererTransitionInput {
 pub enum EditorFrameOutput {
     Rgba(RenderedFrame),
     Nv12(Nv12RenderedFrame),
+    #[cfg(target_os = "macos")]
+    Surface(SurfaceFrame),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditorFrameFormat {
+    #[default]
+    Rgba,
+    #[cfg(target_os = "macos")]
+    BgraSurface,
 }
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
@@ -57,6 +75,7 @@ pub struct Renderer {
     render_constants: Arc<RenderVideoConstants>,
     layers_rx: RendererLayersReceiver,
     telemetry: Option<PlaybackTelemetry>,
+    output_format: EditorFrameFormat,
 }
 
 pub struct RendererHandle {
@@ -72,7 +91,7 @@ pub fn start_renderer_layers_creation(
     let constants = render_constants.clone();
     let use_svg = project.cursor.use_svg;
     let cursor_type = project.cursor.cursor_type().clone();
-    std::thread::Builder::new()
+    if let Err(error) = std::thread::Builder::new()
         .name("renderer-layers-init".into())
         .spawn(move || {
             let mut layers = RendererLayers::new_with_options(
@@ -80,10 +99,19 @@ pub fn start_renderer_layers_creation(
                 &constants.queue,
                 constants.is_software_adapter,
             );
+            layers.prepare_for_video_dimensions(
+                &constants.device,
+                constants.options.screen_size.x,
+                constants.options.screen_size.y,
+                constants.options.camera_size.map(|size| size.x),
+                constants.options.camera_size.map(|size| size.y),
+            );
             layers.preload_cursor_assets(&constants, use_svg, &cursor_type);
             let _ = layers_tx.send(layers);
         })
-        .expect("failed to spawn renderer layers init thread");
+    {
+        tracing::warn!(%error, "renderer layer initialization thread unavailable; initializing inline");
+    }
     layers_rx
 }
 
@@ -103,13 +131,50 @@ impl Renderer {
         frame_cb: EditorFrameCallback,
         layers_rx: RendererLayersReceiver,
     ) -> Result<RendererHandle, String> {
-        Self::spawn_with_telemetry(render_constants, frame_cb, layers_rx, None)
+        Self::spawn_with_format_and_telemetry(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            EditorFrameFormat::Rgba,
+            None,
+        )
+    }
+
+    pub fn spawn_with_format(
+        render_constants: Arc<RenderVideoConstants>,
+        frame_cb: EditorFrameCallback,
+        layers_rx: RendererLayersReceiver,
+        output_format: EditorFrameFormat,
+    ) -> Result<RendererHandle, String> {
+        Self::spawn_with_format_and_telemetry(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            output_format,
+            None,
+        )
     }
 
     pub fn spawn_with_telemetry(
         render_constants: Arc<RenderVideoConstants>,
         frame_cb: EditorFrameCallback,
         layers_rx: RendererLayersReceiver,
+        telemetry: Option<PlaybackTelemetry>,
+    ) -> Result<RendererHandle, String> {
+        Self::spawn_with_format_and_telemetry(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            EditorFrameFormat::Rgba,
+            telemetry,
+        )
+    }
+
+    pub fn spawn_with_format_and_telemetry(
+        render_constants: Arc<RenderVideoConstants>,
+        frame_cb: EditorFrameCallback,
+        layers_rx: RendererLayersReceiver,
+        output_format: EditorFrameFormat,
         telemetry: Option<PlaybackTelemetry>,
     ) -> Result<RendererHandle, String> {
         let (tx, rx) = mpsc::channel(64);
@@ -120,6 +185,7 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry: telemetry.clone(),
+            output_format,
         };
 
         tokio::spawn(this.run());
@@ -134,6 +200,7 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry,
+            output_format,
         } = self;
 
         let mut frame_renderer = FrameRenderer::new(&render_constants);
@@ -141,11 +208,18 @@ impl Renderer {
         let mut layers = match layers_rx.await {
             Ok(layers) => layers,
             Err(_) => {
-                tracing::error!("Failed to receive pre-created renderer layers, creating inline");
+                tracing::warn!("Failed to receive pre-created renderer layers, creating inline");
                 let mut layers = RendererLayers::new_with_options(
                     &render_constants.device,
                     &render_constants.queue,
                     render_constants.is_software_adapter,
+                );
+                layers.prepare_for_video_dimensions(
+                    &render_constants.device,
+                    render_constants.options.screen_size.x,
+                    render_constants.options.screen_size.y,
+                    render_constants.options.camera_size.map(|size| size.x),
+                    render_constants.options.camera_size.map(|size| size.y),
                 );
                 let project = render_constants.recording_meta.project_config();
                 layers.preload_cursor_assets(
@@ -161,6 +235,7 @@ impl Renderer {
             input: PendingRenderInput,
             finished: oneshot::Sender<bool>,
             queued_at: Instant,
+            realtime: bool,
         }
 
         enum PendingRenderInput {
@@ -193,12 +268,27 @@ impl Renderer {
                         Self::prepare_output_size(&telemetry, &mut frame_renderer, width, height);
                         continue;
                     }
+                    Some(RendererMessage::RenderThumbnail { input, finished }) => {
+                        let result = frame_renderer
+                            .render_immediate(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = finished.send(result);
+                        continue;
+                    }
                     Some(RendererMessage::RenderFrame {
                         segment_frames,
                         uniforms,
                         finished,
                         cursor,
                         queued_at,
+                        realtime,
                     }) => Some(PendingFrame {
                         input: PendingRenderInput::Single(RendererTransitionInput {
                             segment_frames,
@@ -207,6 +297,7 @@ impl Renderer {
                         }),
                         finished,
                         queued_at,
+                        realtime,
                     }),
                     Some(RendererMessage::RenderTransition {
                         outgoing,
@@ -215,6 +306,7 @@ impl Renderer {
                         progress,
                         finished,
                         queued_at,
+                        realtime,
                     }) => Some(PendingFrame {
                         input: PendingRenderInput::Transition {
                             outgoing,
@@ -224,6 +316,7 @@ impl Renderer {
                         },
                         finished,
                         queued_at,
+                        realtime,
                     }),
                     Some(RendererMessage::Stop { finished }) => {
                         let _ = finished.send(());
@@ -241,6 +334,19 @@ impl Renderer {
             let queue_drain_start = Instant::now();
             while let Ok(msg) = rx.try_recv() {
                 match msg {
+                    RendererMessage::RenderThumbnail { input, finished } => {
+                        let result = frame_renderer
+                            .render_immediate(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = finished.send(result);
+                    }
                     RendererMessage::PrepareOutputSize { width, height } => {
                         Self::prepare_output_size(&telemetry, &mut frame_renderer, width, height);
                     }
@@ -250,6 +356,7 @@ impl Renderer {
                         finished,
                         cursor,
                         queued_at,
+                        realtime,
                     } => {
                         let dropped_frame_number = current.input.uniforms().frame_number;
                         let replacement_frame_number = uniforms.frame_number;
@@ -268,6 +375,7 @@ impl Renderer {
                             }),
                             finished,
                             queued_at,
+                            realtime,
                         };
                         drained_count += 1;
                     }
@@ -278,6 +386,7 @@ impl Renderer {
                         progress,
                         finished,
                         queued_at,
+                        realtime,
                     } => {
                         let dropped_frame_number = current.input.uniforms().frame_number;
                         let replacement_frame_number = incoming.uniforms.frame_number;
@@ -297,6 +406,7 @@ impl Renderer {
                             },
                             finished,
                             queued_at,
+                            realtime,
                         };
                         drained_count += 1;
                     }
@@ -323,27 +433,39 @@ impl Renderer {
                 std::time::Duration::ZERO
             };
 
+            // Playback frames composite with the newest finished camera mask;
+            // seeks and paused redraws wait for their own, since nothing
+            // redraws a still frame when a later mask lands.
+            layers.set_realtime_camera_effects(current.realtime);
             let render_start = Instant::now();
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
-            let render_result = match current.input {
-                PendingRenderInput::Single(input) => {
-                    frame_renderer
-                        .render_immediate_with_timings(
-                            input.segment_frames,
-                            input.uniforms,
-                            &input.cursor,
-                            true,
-                            &mut layers,
+            let render_result = match (output_format, current.input) {
+                (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => frame_renderer
+                    .render_immediate_with_timings(
+                        input.segment_frames,
+                        input.uniforms,
+                        &input.cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|(frame, timings)| {
+                        (
+                            EditorFrameOutput::Rgba(frame),
+                            PlaybackRenderOutputFormat::Rgba,
+                            timings,
                         )
-                        .await
-                }
-                PendingRenderInput::Transition {
-                    outgoing,
-                    incoming,
-                    kind,
-                    progress,
-                } => frame_renderer
+                    }),
+                (
+                    EditorFrameFormat::Rgba,
+                    PendingRenderInput::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                    },
+                ) => frame_renderer
                     .render_transition_immediate(
                         TransitionRenderInput {
                             segment_frames: outgoing.segment_frames,
@@ -362,15 +484,79 @@ impl Renderer {
                         &mut layers,
                     )
                     .await
-                    .map(|frame| (frame, FrameRenderStageTimings::default())),
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Rgba(frame),
+                            PlaybackRenderOutputFormat::Rgba,
+                            FrameRenderStageTimings::default(),
+                        )
+                    }),
+                #[cfg(target_os = "macos")]
+                (EditorFrameFormat::BgraSurface, PendingRenderInput::Single(input)) => {
+                    frame_renderer
+                        .render_immediate_bgra_surface(
+                            input.segment_frames,
+                            input.uniforms,
+                            &input.cursor,
+                            true,
+                            &mut layers,
+                        )
+                        .await
+                        .map(|frame| {
+                            (
+                                EditorFrameOutput::Surface(frame),
+                                PlaybackRenderOutputFormat::Bgra,
+                                FrameRenderStageTimings::default(),
+                            )
+                        })
+                }
+                #[cfg(target_os = "macos")]
+                (
+                    EditorFrameFormat::BgraSurface,
+                    PendingRenderInput::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                    },
+                ) => frame_renderer
+                    .render_transition_bgra_surface(
+                        TransitionRenderInput {
+                            segment_frames: outgoing.segment_frames,
+                            uniforms: outgoing.uniforms,
+                            cursor: &outgoing.cursor,
+                            render_display: true,
+                        },
+                        TransitionRenderInput {
+                            segment_frames: incoming.segment_frames,
+                            uniforms: incoming.uniforms,
+                            cursor: &incoming.cursor,
+                            render_display: true,
+                        },
+                        kind,
+                        progress,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Surface(frame),
+                            PlaybackRenderOutputFormat::Bgra,
+                            FrameRenderStageTimings::default(),
+                        )
+                    }),
             };
             match render_result {
-                Ok((frame, render_stage_timings)) => {
+                Ok((frame, output_format, render_stage_timings)) => {
                     let render_duration = render_start.elapsed();
-                    let frame_number = frame.frame_number;
-                    let output_format = PlaybackRenderOutputFormat::Rgba;
+                    let frame_number = match &frame {
+                        EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                        EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                        #[cfg(target_os = "macos")]
+                        EditorFrameOutput::Surface(frame) => frame.frame_number,
+                    };
                     let callback_start = Instant::now();
-                    (frame_cb)(EditorFrameOutput::Rgba(frame), frame_layout);
+                    (frame_cb)(frame, frame_layout);
                     let callback_duration = callback_start.elapsed();
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {
@@ -415,6 +601,20 @@ impl Renderer {
 }
 
 impl RendererHandle {
+    pub(crate) async fn render_thumbnail(
+        &self,
+        input: RendererTransitionInput,
+    ) -> Result<RenderedFrame, String> {
+        let (finished, result) = oneshot::channel();
+        self.tx
+            .send(RendererMessage::RenderThumbnail { input, finished })
+            .await
+            .map_err(|_| "Thumbnail renderer stopped".to_string())?;
+        result
+            .await
+            .map_err(|_| "Thumbnail render cancelled".to_string())?
+    }
+
     pub fn prepare_output_size(&self, width: u32, height: u32) {
         let _ = self
             .tx
@@ -437,6 +637,7 @@ impl RendererHandle {
                 finished: finished_tx,
                 cursor,
                 queued_at: Instant::now(),
+                realtime: true,
             })
             .is_err()
             && let Some(telemetry) = &self.telemetry
@@ -463,6 +664,7 @@ impl RendererHandle {
                 progress,
                 finished: finished_tx,
                 queued_at: Instant::now(),
+                realtime: true,
             })
             .is_err()
             && let Some(telemetry) = &self.telemetry
@@ -485,6 +687,7 @@ impl RendererHandle {
             finished: finished_tx,
             cursor,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.blocking_send(msg).is_err()
             && let Some(telemetry) = &self.telemetry
@@ -507,6 +710,7 @@ impl RendererHandle {
             finished: finished_tx,
             cursor,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.send(msg).await.is_err() {
             if let Some(telemetry) = &self.telemetry {
@@ -534,6 +738,7 @@ impl RendererHandle {
             progress,
             finished: finished_tx,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.send(message).await.is_err() {
             if let Some(telemetry) = &self.telemetry {
@@ -559,6 +764,7 @@ impl RendererHandle {
             finished: finished_tx,
             cursor,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.blocking_send(msg).is_err() {
             if let Some(telemetry) = &self.telemetry {
@@ -586,6 +792,7 @@ impl RendererHandle {
             progress,
             finished: finished_tx,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.blocking_send(message).is_err() {
             if let Some(telemetry) = &self.telemetry {

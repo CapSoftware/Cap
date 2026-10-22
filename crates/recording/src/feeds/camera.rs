@@ -31,6 +31,7 @@ const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
 /// macOS (native + compatibility fallback) plus session teardown in between.
 const CAMERA_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_CONCURRENT_CAMERA_SETUPS: usize = 2;
 
 #[cfg(target_os = "macos")]
 static CAMERA_CAPTURE_LIFECYCLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -44,16 +45,99 @@ fn camera_capture_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[derive(Actor)]
 pub struct CameraFeed {
+    setup_slots: Arc<tokio::sync::Semaphore>,
+    setup_cancel: tokio_util::sync::CancellationToken,
+    _cancel_setup: tokio_util::sync::DropGuard,
     lock_generation: u64,
     setup_generation: u64,
     state: State,
     senders: Vec<flume::Sender<FFmpegVideoFrame>>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_senders: Vec<flume::Sender<NativeCameraFrame>>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_senders: Vec<CountedSender<NativeCameraFrame>>,
+    native_ingress: Arc<NativeCameraIngress>,
+    native_fanout_full: u64,
+    native_fanout_log: DropLog,
+    ffmpeg_fanout_full: u64,
+    ffmpeg_fanout_log: DropLog,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
-    previous_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Shared between the camera feed and its capture callback, which runs on a
+/// capture thread and must never wait for the feed.
+#[derive(Debug, Default)]
+pub struct NativeCameraIngress {
+    senders: std::sync::atomic::AtomicUsize,
+    mailbox_full: std::sync::atomic::AtomicU64,
+}
+
+impl NativeCameraIngress {
+    /// Frames the capture callback could not hand to the feed because its
+    /// mailbox was full. Monotonic over the feed's lifetime.
+    pub fn mailbox_full(&self) -> u64 {
+        self.mailbox_full.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn record_mailbox_full(&self) {
+        self.mailbox_full
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A fan-out target. Senders attached with a counter (recordings) count the
+/// frames the feed could not deliver to them; previews attach without one.
+struct CountedSender<T> {
+    tx: flume::Sender<T>,
+    dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
+}
+
+trait FanoutTarget<T> {
+    fn channel(&self) -> &flume::Sender<T>;
+    fn record_drop(&self) {}
+}
+
+impl<T> FanoutTarget<T> for flume::Sender<T> {
+    fn channel(&self) -> &flume::Sender<T> {
+        self
+    }
+}
+
+impl<T> FanoutTarget<T> for CountedSender<T> {
+    fn channel(&self) -> &flume::Sender<T> {
+        &self.tx
+    }
+
+    fn record_drop(&self) {
+        if let Some(dropped) = &self.dropped {
+            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Rate limit for drop warnings: the first drop is reported at once, later
+/// drops at most once per interval with the count since the last report, so
+/// an isolated loss is never hidden and a sustained loss cannot flood the log.
+#[derive(Debug, Default)]
+pub(crate) struct DropLog {
+    last_report: Option<std::time::Instant>,
+    unreported: u64,
+}
+
+impl DropLog {
+    pub(crate) const INTERVAL: Duration = Duration::from_secs(5);
+
+    pub(crate) fn record(&mut self, count: u64, now: std::time::Instant) -> Option<u64> {
+        self.unreported = self.unreported.saturating_add(count);
+        if self.unreported == 0
+            || self
+                .last_report
+                .is_some_and(|last| now.duration_since(last) < Self::INTERVAL)
+        {
+            return None;
+        }
+        self.last_report = Some(now);
+        Some(std::mem::take(&mut self.unreported))
+    }
 }
 
 enum State {
@@ -132,6 +216,8 @@ struct AttachedState {
     id: DeviceOrModelID,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    settings: Option<CameraDeviceSettings>,
+    last_frame_at: Option<std::time::Instant>,
     done_tx: mpsc::SyncSender<()>,
     pending_release: Option<mpsc::SyncSender<()>>,
 }
@@ -142,6 +228,7 @@ impl AttachedState {
             done_tx,
             camera_info,
             video_info,
+            settings,
             ..
         } = data;
 
@@ -149,6 +236,8 @@ impl AttachedState {
             id,
             camera_info,
             video_info,
+            settings,
+            last_frame_at: None,
             done_tx,
             pending_release: None,
         }
@@ -159,18 +248,21 @@ impl AttachedState {
             done_tx,
             camera_info,
             video_info,
+            settings,
             ..
         } = data;
 
         self.id = id;
         self.camera_info = camera_info;
         self.video_info = video_info;
+        self.settings = settings;
+        self.last_frame_at = None;
         self.done_tx = done_tx;
     }
 
     fn stage_pending_release(&mut self) {
         if let Some(pending) = self.pending_release.take() {
-            let _ = pending.send(());
+            let _ = pending.try_send(());
         }
 
         self.pending_release = Some(self.done_tx.clone());
@@ -178,14 +270,18 @@ impl AttachedState {
 
     fn finalize_pending_release(&mut self) {
         if let Some(pending) = self.pending_release.take() {
-            let _ = pending.send(());
+            let _ = pending.try_send(());
         }
     }
 }
 
 impl Default for CameraFeed {
     fn default() -> Self {
+        let setup_cancel = tokio_util::sync::CancellationToken::new();
         Self {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CAMERA_SETUPS)),
+            _cancel_setup: setup_cancel.clone().drop_guard(),
+            setup_cancel,
             lock_generation: 0,
             setup_generation: 0,
             state: State::Open(OpenState {
@@ -195,10 +291,13 @@ impl Default for CameraFeed {
             senders: Vec::new(),
             ffmpeg_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             native_senders: Vec::new(),
-            native_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            native_ingress: Arc::new(NativeCameraIngress::default()),
+            native_fanout_full: 0,
+            native_fanout_log: DropLog::default(),
+            ffmpeg_fanout_full: 0,
+            ffmpeg_fanout_log: DropLog::default(),
             on_ready: Vec::new(),
             on_disconnect: Vec::new(),
-            previous_thread: None,
         }
     }
 }
@@ -215,11 +314,16 @@ pub struct CameraFeedLock {
     actor: ActorRef<CameraFeed>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    native_ingress: Arc<NativeCameraIngress>,
     drop_tx: Option<oneshot::Sender<()>>,
     _token: Arc<()>,
 }
 
 impl CameraFeedLock {
+    pub fn native_ingress(&self) -> &Arc<NativeCameraIngress> {
+        &self.native_ingress
+    }
+
     pub fn camera_info(&self) -> &cap_camera::CameraInfo {
         &self.camera_info
     }
@@ -276,11 +380,23 @@ pub struct SetInput {
     pub settings: Option<CameraDeviceSettings>,
 }
 
+pub struct CheckInput {
+    pub id: DeviceOrModelID,
+    pub settings: Option<CameraDeviceSettings>,
+}
+
 pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
 
 pub struct AddNativeSender(pub flume::Sender<NativeCameraFrame>);
+
+/// Attaches a recording's native queue; every frame the feed cannot deliver
+/// to it is added to the counter.
+pub struct AddCountedNativeSender(
+    pub flume::Sender<NativeCameraFrame>,
+    pub Arc<std::sync::atomic::AtomicU64>,
+);
 
 pub struct RemoveSender(pub flume::Sender<FFmpegVideoFrame>);
 
@@ -301,6 +417,7 @@ struct InputConnected {
     done_tx: SyncSender<()>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    settings: Option<CameraDeviceSettings>,
 }
 
 type ReadyFuture = Shared<BoxFuture<'static, Result<InputConnected, SetInputError>>>;
@@ -308,7 +425,7 @@ type ReadyFuture = Shared<BoxFuture<'static, Result<InputConnected, SetInputErro
 #[derive(Clone, Copy)]
 enum CameraSetupFlow {
     Open,
-    Locked,
+    Locked { lock_generation: u64 },
 }
 
 struct InputConnectFailed {
@@ -317,9 +434,12 @@ struct InputConnectFailed {
 }
 
 struct LockedCameraInputReconnected {
+    generation: u64,
+    lock_generation: u64,
     id: DeviceOrModelID,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    settings: Option<CameraDeviceSettings>,
     done_tx: SyncSender<()>,
 }
 
@@ -332,10 +452,13 @@ struct Unlock {
 }
 
 struct FinalizePendingRelease {
+    generation: u64,
     id: DeviceOrModelID,
 }
 
 struct CameraSetupArgs {
+    setup_slots: Arc<tokio::sync::Semaphore>,
+    setup_cancel: tokio_util::sync::CancellationToken,
     id: DeviceOrModelID,
     generation: u64,
     settings: Option<CameraDeviceSettings>,
@@ -343,14 +466,62 @@ struct CameraSetupArgs {
     new_frame_recipient: Recipient<NewFrame>,
     native_frame_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
     flow: CameraSetupFlow,
 }
 
-fn spawn_camera_setup(
-    args: CameraSetupArgs,
-) -> (ReadyFuture, SyncSender<()>, std::thread::JoinHandle<()>) {
+fn bounded_camera_ready(
+    ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
+    cancel: tokio_util::sync::CancellationToken,
+    timeout: Duration,
+) -> ReadyFuture {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let cancel_on_drop = cancel.clone().drop_guard();
+    async move {
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(SetInputError::SetupCancelled),
+            result = tokio::time::timeout_at(deadline, ready) => {
+                result.unwrap_or_else(|error| Err(SetInputError::Timeout(error.to_string())))
+            }
+        };
+        if result.is_ok() {
+            drop(cancel_on_drop.disarm());
+        }
+        result
+    }
+    .boxed()
+    .shared()
+}
+
+async fn spawn_camera_worker(
+    slots: Arc<tokio::sync::Semaphore>,
+    cancel: tokio_util::sync::CancellationToken,
+    worker: impl FnOnce(tokio::sync::OwnedSemaphorePermit) + Send + 'static,
+) -> Result<(), SetInputError> {
+    let permit = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(SetInputError::SetupCancelled),
+        permit = slots.acquire_owned() => permit.map_err(|error| {
+            SetInputError::StartCapturing(format!("Camera setup is unavailable: {error}"))
+        })?,
+    };
+    if cancel.is_cancelled() {
+        return Err(SetInputError::SetupCancelled);
+    }
+    std::thread::Builder::new()
+        .name("camera-capture".into())
+        .spawn(move || worker(permit))
+        .map(drop)
+        .map_err(|error| {
+            SetInputError::StartCapturing(format!("Could not start camera worker: {error}"))
+        })
+}
+
+fn spawn_camera_setup(args: CameraSetupArgs) -> (ReadyFuture, SyncSender<()>) {
     let CameraSetupArgs {
+        setup_slots,
+        setup_cancel,
         id,
         generation,
         settings,
@@ -358,48 +529,63 @@ fn spawn_camera_setup(
         new_frame_recipient,
         native_frame_recipient,
         ffmpeg_sender_count,
-        native_sender_count,
+        native_ingress,
         flow,
     } = args;
 
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
 
-    let ready = ready_rx
-        .map(|v| {
-            v.map_err(|_| SetInputError::BuildStreamCrashed)
-                .and_then(|v| v)
-        })
-        .boxed()
-        .shared();
+    let ready = bounded_camera_ready(
+        ready_rx
+            .map(|v| {
+                v.map_err(|_| SetInputError::BuildStreamCrashed)
+                    .and_then(|v| v)
+            })
+            .boxed(),
+        setup_cancel.clone(),
+        CAMERA_READY_TIMEOUT,
+    );
+
+    if matches!(flow, CameraSetupFlow::Open) {
+        let ready = ready.clone();
+        let actor = actor_ref.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            if ready.await.is_err() {
+                let _ = actor.tell(InputConnectFailed { id, generation }).await;
+            }
+        });
+    }
 
     let done_rx_thread = done_rx;
     let done_tx_thread = done_tx.clone();
     let ready_tx_thread = ready_tx;
 
-    let join_handle = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build camera tokio runtime");
+    tokio::spawn(async move {
+        let worker = spawn_camera_worker(setup_slots, setup_cancel.clone(), move |setup_permit| {
+            if setup_cancel.is_cancelled() {
+                return;
+            }
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = ready_tx_thread.send(Err(SetInputError::StartCapturing(format!(
+                        "Could not initialize the camera worker: {error}"
+                    ))));
+                    return;
+                }
+            };
 
-        {
-            #[cfg(target_os = "macos")]
-            let _capture_lifecycle_guard = camera_capture_lifecycle_guard();
+            {
+                #[cfg(target_os = "macos")]
+                let _capture_lifecycle_guard = camera_capture_lifecycle_guard();
 
-            LocalSet::new().block_on(&runtime, async move {
-                if done_rx_thread.try_recv().is_ok() {
-                    let _ = ready_tx_thread.send(Err(SetInputError::BuildStreamCrashed));
-
-                    if matches!(flow, CameraSetupFlow::Open) {
-                        let _ = actor_ref
-                            .tell(InputConnectFailed {
-                                id: id.clone(),
-                                generation,
-                            })
-                            .await;
-                    }
-
+                LocalSet::new().block_on(&runtime, async move {
+                if setup_cancel.is_cancelled() || done_rx_thread.try_recv().is_ok() {
                     return;
                 }
 
@@ -409,7 +595,7 @@ fn spawn_camera_setup(
                     new_frame_recipient,
                     native_frame_recipient,
                     ffmpeg_sender_count,
-                    native_sender_count,
+                    native_ingress,
                     &done_rx_thread,
                 )
                 .await;
@@ -422,25 +608,37 @@ fn spawn_camera_setup(
                             video_info,
                         } = result;
 
+                        if setup_cancel.is_cancelled() {
+                            let _ = handle.stop_capturing();
+                            return;
+                        }
+
                         let ready_payload = InputConnected {
                             generation,
                             id: id.clone(),
                             camera_info: camera_info.clone(),
                             video_info,
+                            settings,
                             done_tx: done_tx_thread.clone(),
                         };
 
                         match flow {
                             CameraSetupFlow::Open => {
-                                let _ = ready_tx_thread.send(Ok(ready_payload.clone()));
+                                if ready_tx_thread.send(Ok(ready_payload.clone())).is_err() {
+                                    let _ = handle.stop_capturing();
+                                    return;
+                                }
                                 let _ = actor_ref.ask(ready_payload).await;
                             }
-                            CameraSetupFlow::Locked => {
+                            CameraSetupFlow::Locked { lock_generation } => {
                                 let reconnect_result = actor_ref
                                     .ask(LockedCameraInputReconnected {
+                                        generation,
+                                        lock_generation,
                                         id: id.clone(),
                                         camera_info,
                                         video_info,
+                                        settings,
                                         done_tx: done_tx_thread.clone(),
                                     })
                                     .await;
@@ -449,7 +647,10 @@ fn spawn_camera_setup(
                                     Ok(true) => {
                                         let _ = ready_tx_thread.send(Ok(ready_payload));
                                         let _ = actor_ref
-                                            .tell(FinalizePendingRelease { id: id.clone() })
+                                            .tell(FinalizePendingRelease {
+                                                generation,
+                                                id: id.clone(),
+                                            })
                                             .await;
                                     }
                                     Ok(false) => {
@@ -481,18 +682,15 @@ fn spawn_camera_setup(
                     Err(e) => {
                         let _ = ready_tx_thread.send(Err(e.clone()));
 
-                        if matches!(flow, CameraSetupFlow::Open) {
-                            let _ = actor_ref
-                                .tell(InputConnectFailed {
-                                    id: id.clone(),
-                                    generation,
-                                })
-                                .await;
-                        }
-
                         return;
                     }
                 };
+
+                if setup_cancel.is_cancelled() {
+                    let _ = handle.stop_capturing();
+                    return;
+                }
+                drop(setup_permit);
 
                 debug!(
                     "Camera capture thread: waiting for done signal for {:?}",
@@ -514,49 +712,25 @@ fn spawn_camera_setup(
 
                 debug!("Camera capture thread: capture closed for {:?}", &id);
             });
-        }
+            }
 
-        drop(runtime);
+            drop(runtime);
+        })
+        .await;
+        if let Err(error) = worker {
+            debug!(%error, "Camera setup worker did not start");
+        }
     });
 
-    (ready, done_tx, join_handle)
-}
-
-fn release_camera_thread(handle: std::thread::JoinHandle<()>) {
-    if handle.is_finished() {
-        let _ = handle.join();
-    } else {
-        debug!("Camera setup thread is still running after cancellation");
-        if let Err(err) = std::thread::Builder::new()
-            .name("camera-setup-reaper".to_string())
-            .spawn(move || {
-                let _ = handle.join();
-            })
-        {
-            warn!(?err, "Failed to spawn camera-setup-reaper thread");
-        }
-    }
+    (ready, done_tx)
 }
 
 fn camera_ready_future(
     ready: ReadyFuture,
-    actor_ref: ActorRef<CameraFeed>,
-    id: DeviceOrModelID,
-    generation: u64,
-    flow: CameraSetupFlow,
 ) -> BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>> {
-    async move {
-        match tokio::time::timeout(CAMERA_READY_TIMEOUT, ready).await {
-            Ok(result) => result.map(|v| (v.camera_info, v.video_info)),
-            Err(err) => {
-                if matches!(flow, CameraSetupFlow::Open) {
-                    let _ = actor_ref.tell(InputConnectFailed { id, generation }).await;
-                }
-                Err(SetInputError::Timeout(err.to_string()))
-            }
-        }
-    }
-    .boxed()
+    ready
+        .map(|result| result.map(|v| (v.camera_info, v.video_info)))
+        .boxed()
 }
 
 // Impls
@@ -573,6 +747,8 @@ pub enum SetInputError {
     DeviceNotFound,
     #[error("BuildStreamCrashed")]
     BuildStreamCrashed, // TODO: Maybe rename this?
+    #[error("Camera setup was cancelled by a newer selection")]
+    SetupCancelled,
     #[error("InvalidFormat")]
     InvalidFormat,
     #[error("CameraTimeout")]
@@ -778,7 +954,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
     cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -803,7 +979,7 @@ async fn setup_camera(
         recipient.clone(),
         native_recipient.clone(),
         ffmpeg_sender_count.clone(),
-        native_sender_count.clone(),
+        native_ingress.clone(),
     )
     .await;
 
@@ -831,7 +1007,7 @@ async fn setup_camera(
                 recipient,
                 native_recipient,
                 ffmpeg_sender_count,
-                native_sender_count,
+                native_ingress,
             )
             .await
             .inspect(|_| {
@@ -839,6 +1015,21 @@ async fn setup_camera(
             })
         }
         Err(err) => Err(err),
+    }
+}
+
+/// The capture callback's hand-over to the feed: never waits for mailbox
+/// capacity; a full mailbox loses the frame and counts it.
+#[cfg(any(target_os = "macos", windows))]
+fn hand_native_frame_to_feed(
+    recipient: &Recipient<NewNativeFrame>,
+    ingress: &NativeCameraIngress,
+    frame: NativeCameraFrame,
+) {
+    if let Err(kameo::error::SendError::MailboxFull(_)) =
+        recipient.tell(NewNativeFrame(frame)).try_send()
+    {
+        ingress.record_mailbox_full();
     }
 }
 
@@ -850,7 +1041,7 @@ async fn start_camera_capture_attempt(
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
@@ -866,13 +1057,19 @@ async fn start_camera_capture_attempt(
                 cidre::cm::Clock::convert_host_time_to_sys_units(frame.native().sample_buf().pts()),
             ));
 
-            if native_sender_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-                let _ = native_recipient
-                    .tell(NewNativeFrame(NativeCameraFrame {
+            if native_ingress
+                .senders
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+            {
+                hand_native_frame_to_feed(
+                    &native_recipient,
+                    &native_ingress,
+                    NativeCameraFrame {
                         sample_buf: frame.native().sample_buf().clone(),
                         timestamp,
-                    }))
-                    .try_send();
+                    },
+                );
             }
 
             // Until the ready signal fires the first frame must still be
@@ -936,7 +1133,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     native_recipient: Recipient<NewNativeFrame>,
     ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    native_ingress: Arc<NativeCameraIngress>,
     _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -955,7 +1152,10 @@ async fn setup_camera(
                 cap_timestamp::PerformanceCounterTimestamp::new(frame.native().perf_counter),
             );
 
-            if native_sender_count.load(std::sync::atomic::Ordering::Relaxed) > 0
+            if native_ingress
+                .senders
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
                 && let Ok(bytes) = frame.native().bytes()
             {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
@@ -977,16 +1177,18 @@ async fn setup_camera(
 
                         #[allow(clippy::arc_with_non_send_sync)]
                         let buffer = std::sync::Arc::new(std::sync::Mutex::new(buffer));
-                        let _ = native_recipient
-                            .tell(NewNativeFrame(NativeCameraFrame {
+                        hand_native_frame_to_feed(
+                            &native_recipient,
+                            &native_ingress,
+                            NativeCameraFrame {
                                 buffer,
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,
                                 is_bottom_up: frame.native().is_bottom_up,
                                 timestamp,
-                            }))
-                            .try_send();
+                            },
+                        );
                     }
                 }
             }
@@ -1052,7 +1254,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     _native_recipient: Recipient<NewNativeFrame>,
     _ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    _native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
+    _native_ingress: Arc<NativeCameraIngress>,
     _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -1114,6 +1316,26 @@ async fn setup_camera(
     })
 }
 
+impl Message<CheckInput> for CameraFeed {
+    type Reply = bool;
+
+    async fn handle(&mut self, msg: CheckInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &self.state
+        else {
+            return false;
+        };
+        !self.setup_cancel.is_cancelled()
+            && attached.id == msg.id
+            && attached.settings == msg.settings
+            && attached
+                .last_frame_at
+                .is_some_and(|received| received.elapsed() < Duration::from_millis(250))
+    }
+}
+
 impl Message<SetInput> for CameraFeed {
     type Reply =
         Result<BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>>, SetInputError>;
@@ -1126,24 +1348,29 @@ impl Message<SetInput> for CameraFeed {
             SetInputError::Initialisation
         );
 
+        if let State::Locked { inner, .. } = &self.state
+            && inner.id != msg.id
+        {
+            return Err(SetInputError::Locked(FeedLockedError));
+        }
+
         match &self.state {
             State::Open(state) => {
                 if let Some(connecting) = &state.connecting {
-                    let _ = connecting.done_tx.send(());
+                    let _ = connecting.done_tx.try_send(());
                 }
                 if let Some(attached) = &state.attached {
-                    let _ = attached.done_tx.send(());
+                    let _ = attached.done_tx.try_send(());
                 }
             }
             State::Locked { inner, .. } => {
-                let _ = inner.done_tx.send(());
+                let _ = inner.done_tx.try_send(());
             }
         }
 
-        if let Some(handle) = self.previous_thread.take() {
-            release_camera_thread(handle);
-        }
-
+        self.setup_cancel.cancel();
+        self.setup_cancel = tokio_util::sync::CancellationToken::new();
+        self._cancel_setup = self.setup_cancel.clone().drop_guard();
         let generation = self.next_setup_generation();
 
         match &mut self.state {
@@ -1153,7 +1380,9 @@ impl Message<SetInput> for CameraFeed {
                 let native_frame_recipient = actor_ref.clone().recipient();
                 let id = msg.id.clone();
 
-                let (ready, done_tx, join_handle) = spawn_camera_setup(CameraSetupArgs {
+                let (ready, done_tx) = spawn_camera_setup(CameraSetupArgs {
+                    setup_slots: self.setup_slots.clone(),
+                    setup_cancel: self.setup_cancel.clone(),
                     id: id.clone(),
                     generation,
                     settings: msg.settings,
@@ -1161,11 +1390,9 @@ impl Message<SetInput> for CameraFeed {
                     new_frame_recipient,
                     native_frame_recipient,
                     ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
-                    native_sender_count: self.native_sender_count.clone(),
+                    native_ingress: self.native_ingress.clone(),
                     flow: CameraSetupFlow::Open,
                 });
-
-                self.previous_thread = Some(join_handle);
 
                 state.connecting = Some(ConnectingState {
                     id: id.clone(),
@@ -1174,24 +1401,16 @@ impl Message<SetInput> for CameraFeed {
                     done_tx,
                 });
 
-                Ok(camera_ready_future(
-                    ready,
-                    ctx.actor_ref(),
-                    id,
-                    generation,
-                    CameraSetupFlow::Open,
-                ))
+                Ok(camera_ready_future(ready))
             }
-            State::Locked { inner, .. } => {
-                if inner.id != msg.id {
-                    return Err(SetInputError::Locked(FeedLockedError));
-                }
-
+            State::Locked { .. } => {
                 let actor_ref = ctx.actor_ref();
                 let new_frame_recipient = actor_ref.clone().recipient();
                 let native_frame_recipient = actor_ref.clone().recipient();
 
-                let (ready, _done_tx, join_handle) = spawn_camera_setup(CameraSetupArgs {
+                let (ready, _done_tx) = spawn_camera_setup(CameraSetupArgs {
+                    setup_slots: self.setup_slots.clone(),
+                    setup_cancel: self.setup_cancel.clone(),
                     id: msg.id.clone(),
                     generation,
                     settings: msg.settings,
@@ -1199,19 +1418,13 @@ impl Message<SetInput> for CameraFeed {
                     new_frame_recipient,
                     native_frame_recipient,
                     ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
-                    native_sender_count: self.native_sender_count.clone(),
-                    flow: CameraSetupFlow::Locked,
+                    native_ingress: self.native_ingress.clone(),
+                    flow: CameraSetupFlow::Locked {
+                        lock_generation: self.lock_generation,
+                    },
                 });
 
-                self.previous_thread = Some(join_handle);
-
-                Ok(camera_ready_future(
-                    ready,
-                    ctx.actor_ref(),
-                    msg.id,
-                    generation,
-                    CameraSetupFlow::Locked,
-                ))
+                Ok(camera_ready_future(ready))
             }
         }
     }
@@ -1224,26 +1437,24 @@ impl Message<RemoveInput> for CameraFeed {
         trace!("CameraFeed.RemoveInput");
 
         let state = self.state.try_as_open()?;
+        self.setup_cancel.cancel();
 
         if let Some(connecting) = state.connecting.take() {
-            let _ = connecting.done_tx.send(());
+            let _ = connecting.done_tx.try_send(());
         }
 
         if let Some(mut attached) = state.attached.take() {
             attached.finalize_pending_release();
-            let _ = attached.done_tx.send(());
+            let _ = attached.done_tx.try_send(());
         }
 
         self.senders.clear();
         self.ffmpeg_sender_count
             .store(0, std::sync::atomic::Ordering::Release);
         self.native_senders.clear();
-        self.native_sender_count
+        self.native_ingress
+            .senders
             .store(0, std::sync::atomic::Ordering::Release);
-
-        if let Some(handle) = self.previous_thread.take() {
-            release_camera_thread(handle);
-        }
 
         for cb in &self.on_disconnect {
             (cb)();
@@ -1272,6 +1483,29 @@ impl Message<AddSender> for CameraFeed {
     }
 }
 
+impl CameraFeed {
+    fn add_native_sender(
+        &mut self,
+        tx: flume::Sender<NativeCameraFrame>,
+        dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
+    ) {
+        if self
+            .native_senders
+            .iter()
+            .any(|sender| sender.tx.same_channel(&tx))
+        {
+            return;
+        }
+
+        debug!("CameraFeed: Adding new native sender");
+        self.native_senders.push(CountedSender { tx, dropped });
+        self.native_ingress.senders.store(
+            self.native_senders.len(),
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+}
+
 impl Message<AddNativeSender> for CameraFeed {
     type Reply = ();
 
@@ -1280,20 +1514,19 @@ impl Message<AddNativeSender> for CameraFeed {
         msg: AddNativeSender,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if self
-            .native_senders
-            .iter()
-            .any(|sender| sender.same_channel(&msg.0))
-        {
-            return;
-        }
+        self.add_native_sender(msg.0, None);
+    }
+}
 
-        debug!("CameraFeed: Adding new native sender");
-        self.native_senders.push(msg.0);
-        self.native_sender_count.store(
-            self.native_senders.len(),
-            std::sync::atomic::Ordering::Release,
-        );
+impl Message<AddCountedNativeSender> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AddCountedNativeSender,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.add_native_sender(msg.0, Some(msg.1));
     }
 }
 
@@ -1320,8 +1553,8 @@ impl Message<RemoveNativeSender> for CameraFeed {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.native_senders
-            .retain(|sender| !sender.same_channel(&msg.0));
-        self.native_sender_count.store(
+            .retain(|sender| !sender.tx.same_channel(&msg.0));
+        self.native_ingress.senders.store(
             self.native_senders.len(),
             std::sync::atomic::Ordering::Release,
         );
@@ -1364,16 +1597,39 @@ impl Message<OnFeedDisconnect> for CameraFeed {
 
 static CAMERA_FRAME_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn send_frame_to_camera_senders<T: Clone>(
-    senders: &mut Vec<flume::Sender<T>>,
+/// Frames a fan-out could not deliver: one per sender whose queue was full.
+struct FanoutDrops<'a> {
+    total: &'a mut u64,
+    log: &'a mut DropLog,
+}
+
+impl FanoutDrops<'_> {
+    fn record(&mut self, count: u64, frame_num: u64, sender_label: &str) {
+        if count == 0 {
+            return;
+        }
+        *self.total = self.total.saturating_add(count);
+        let total = *self.total;
+        if let Some(dropped) = self.log.record(count, std::time::Instant::now()) {
+            warn!(
+                dropped,
+                total, frame_num, "{sender_label} ingress queue full, frames dropped"
+            );
+        }
+    }
+}
+
+fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
+    senders: &mut Vec<S>,
     frame: T,
     frame_num: u64,
     sender_label: &str,
+    mut drops: FanoutDrops<'_>,
 ) -> bool {
     // A disconnected sender whose queue is still full would otherwise never be
     // try_send'd again, leaving it (and its queued frames) retained forever.
     let len_before_retain = senders.len();
-    senders.retain(|sender| !sender.is_disconnected());
+    senders.retain(|sender| !sender.channel().is_disconnected());
     let removed_disconnected = senders.len() != len_before_retain;
     if removed_disconnected {
         debug!(
@@ -1383,54 +1639,40 @@ fn send_frame_to_camera_senders<T: Clone>(
         );
     }
 
-    let mut last_ready_sender = None;
-
-    for (i, sender) in senders.iter().enumerate() {
-        if sender.is_full() {
-            if frame_num.is_multiple_of(30) {
-                warn!(
-                    "{} sender {} channel full at frame {}, dropping frame",
-                    sender_label, i, frame_num
-                );
-            }
-        } else {
-            last_ready_sender = Some(i);
-        }
-    }
-
-    let Some(last_ready_sender) = last_ready_sender else {
-        return removed_disconnected;
-    };
+    // The last sender with room takes the frame itself instead of a clone.
+    let last_ready_sender = senders
+        .iter()
+        .rposition(|sender| !sender.channel().is_full());
 
     let mut frame = Some(frame);
+    let mut skipped = 0;
     let mut to_remove = vec![];
 
-    for (i, sender) in senders.iter().enumerate().take(last_ready_sender + 1) {
-        if sender.is_full() {
+    for (i, sender) in senders.iter().enumerate() {
+        let ready = last_ready_sender.is_some_and(|last| i <= last);
+        if !ready || sender.channel().is_full() {
+            sender.record_drop();
+            skipped += 1;
             continue;
         }
 
-        let send_result = if i == last_ready_sender {
+        let send_result = if Some(i) == last_ready_sender {
             let Some(frame) = frame.take() else {
                 break;
             };
-            sender.try_send(frame)
+            sender.channel().try_send(frame)
         } else {
             let Some(frame) = frame.as_ref() else {
                 break;
             };
-            sender.try_send((*frame).clone())
+            sender.channel().try_send(frame.clone())
         };
 
         match send_result {
             Ok(()) => {}
             Err(flume::TrySendError::Full(_)) => {
-                if frame_num.is_multiple_of(30) {
-                    warn!(
-                        "{} sender {} channel full at frame {}, dropping frame",
-                        sender_label, i, frame_num
-                    );
-                }
+                sender.record_drop();
+                skipped += 1;
             }
             Err(flume::TrySendError::Disconnected(_)) => {
                 debug!(
@@ -1441,6 +1683,8 @@ fn send_frame_to_camera_senders<T: Clone>(
             }
         }
     }
+
+    drops.record(skipped, frame_num, sender_label);
 
     if to_remove.is_empty() {
         return removed_disconnected;
@@ -1461,9 +1705,25 @@ impl Message<NewFrame> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &mut self.state
+        {
+            attached.last_frame_at = Some(std::time::Instant::now());
+        }
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if send_frame_to_camera_senders(&mut self.senders, msg.0, frame_num, "Camera") {
+        if send_frame_to_camera_senders(
+            &mut self.senders,
+            msg.0,
+            frame_num,
+            "Camera",
+            FanoutDrops {
+                total: &mut self.ffmpeg_fanout_full,
+                log: &mut self.ffmpeg_fanout_log,
+            },
+        ) {
             self.ffmpeg_sender_count
                 .store(self.senders.len(), std::sync::atomic::Ordering::Release);
         }
@@ -1481,12 +1741,27 @@ impl Message<NewNativeFrame> for CameraFeed {
         msg: NewNativeFrame,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &mut self.state
+        {
+            attached.last_frame_at = Some(std::time::Instant::now());
+        }
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if send_frame_to_camera_senders(&mut self.native_senders, msg.0, frame_num, "Native camera")
-        {
-            self.native_sender_count.store(
+        if send_frame_to_camera_senders(
+            &mut self.native_senders,
+            msg.0,
+            frame_num,
+            "Native camera",
+            FanoutDrops {
+                total: &mut self.native_fanout_full,
+                log: &mut self.native_fanout_log,
+            },
+        ) {
+            self.native_ingress.senders.store(
                 self.native_senders.len(),
                 std::sync::atomic::Ordering::Release,
             );
@@ -1514,16 +1789,26 @@ impl Message<Lock> for CameraFeed {
 
         if let Some(connecting) = &mut state.connecting {
             let ready = &mut connecting.ready;
-            let data = tokio::time::timeout(CAMERA_READY_TIMEOUT, ready)
+            let result = tokio::time::timeout(CAMERA_READY_TIMEOUT, ready)
                 .await
-                .map_err(|err| {
-                    LockFeedError::InitializeFailed(SetInputError::Timeout(err.to_string()))
-                })??;
+                .unwrap_or_else(|error| Err(SetInputError::Timeout(error.to_string())));
+            let data = match result {
+                Ok(data) => data,
+                Err(error) => {
+                    connecting.ready = futures::future::ready(Err(error.clone())).boxed();
+                    self.setup_cancel.cancel();
+                    return Err(error.into());
+                }
+            };
 
-            if state.handle_input_connected(data)
-                && let Some(attached) = &mut state.attached
-            {
-                attached.finalize_pending_release();
+            if state.handle_input_connected(data) {
+                if let Some(attached) = &mut state.attached {
+                    attached.finalize_pending_release();
+                }
+
+                for tx in self.on_ready.drain(..) {
+                    let _ = tx.send(());
+                }
             }
         }
 
@@ -1555,6 +1840,7 @@ impl Message<Lock> for CameraFeed {
         Ok(CameraFeedLock {
             camera_info,
             video_info,
+            native_ingress: self.native_ingress.clone(),
             actor: ctx.actor_ref(),
             drop_tx: Some(drop_tx),
             _token: token,
@@ -1563,7 +1849,7 @@ impl Message<Lock> for CameraFeed {
 }
 
 impl Message<InputConnected> for CameraFeed {
-    type Reply = Result<(), FeedLockedError>;
+    type Reply = ();
 
     async fn handle(
         &mut self,
@@ -1572,7 +1858,14 @@ impl Message<InputConnected> for CameraFeed {
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnected");
 
-        let state = self.state.try_as_open()?;
+        if self.setup_cancel.is_cancelled() {
+            return;
+        }
+
+        // Lock can consume this connection before the notification reaches the mailbox.
+        let Ok(state) = self.state.try_as_open() else {
+            return;
+        };
 
         if state.handle_input_connected(msg) {
             if let Some(attached) = &mut state.attached {
@@ -1583,13 +1876,11 @@ impl Message<InputConnected> for CameraFeed {
                 tx.send(()).ok();
             }
         }
-
-        Ok(())
     }
 }
 
 impl Message<InputConnectFailed> for CameraFeed {
-    type Reply = Result<(), FeedLockedError>;
+    type Reply = ();
 
     async fn handle(
         &mut self,
@@ -1598,7 +1889,9 @@ impl Message<InputConnectFailed> for CameraFeed {
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnectFailed");
 
-        let state = self.state.try_as_open()?;
+        let Ok(state) = self.state.try_as_open() else {
+            return;
+        };
 
         let should_clear = state.connecting.as_ref().is_some_and(|connecting| {
             connecting.id == msg.id && connecting.generation == msg.generation
@@ -1606,15 +1899,17 @@ impl Message<InputConnectFailed> for CameraFeed {
 
         if should_clear {
             if let Some(connecting) = state.connecting.take() {
-                let _ = connecting.done_tx.send(());
+                let _ = connecting.done_tx.try_send(());
+            }
+            if let Some(mut attached) = state.attached.take() {
+                attached.finalize_pending_release();
+                let _ = attached.done_tx.try_send(());
             }
 
             for tx in &mut self.on_ready.drain(..) {
                 tx.send(()).ok();
             }
         }
-
-        Ok(())
     }
 }
 
@@ -1626,19 +1921,24 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
         msg: LockedCameraInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner, .. } = &mut self.state
+        if self.setup_generation == msg.generation
+            && self.lock_generation == msg.lock_generation
+            && !self.setup_cancel.is_cancelled()
+            && let State::Locked { inner, token } = &mut self.state
             && inner.id == msg.id
+            && token.strong_count() > 0
         {
             let id = msg.id;
             inner.stage_pending_release();
             inner.overwrite(
                 id.clone(),
                 InputConnected {
-                    generation: 0,
+                    generation: msg.generation,
                     id,
                     done_tx: msg.done_tx,
                     camera_info: msg.camera_info,
                     video_info: msg.video_info,
+                    settings: msg.settings,
                 },
             );
             true
@@ -1656,6 +1956,9 @@ impl Message<FinalizePendingRelease> for CameraFeed {
         msg: FinalizePendingRelease,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if self.setup_generation != msg.generation {
+            return;
+        }
         match &mut self.state {
             State::Open(OpenState { attached, .. }) => {
                 if let Some(attached) = attached
@@ -1697,5 +2000,1045 @@ impl Message<Unlock> for CameraFeed {
                 state
             }
         });
+    }
+}
+
+/// Test-only camera feeds driven by a synthetic device instead of hardware,
+/// so recording tests exercise the real feed, lock and pipeline paths.
+#[cfg(feature = "test-utils")]
+pub mod synthetic {
+    use super::*;
+
+    impl Message<crate::feeds::Stall> for CameraFeed {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            msg: crate::feeds::Stall,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            tokio::time::sleep(msg.0).await;
+        }
+    }
+
+    pub struct SyntheticCamera {
+        feed: ActorRef<CameraFeed>,
+        _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl SyntheticCamera {
+        pub fn spawn(name: &str, video_info: VideoInfo) -> Self {
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let id = DeviceOrModelID::DeviceID(name.to_string());
+            let camera_info = serde_json::from_value(serde_json::json!({
+                "device_id": name,
+                "model_id": null,
+                "display_name": name
+            }))
+            .expect("synthetic camera info");
+            let attached = AttachedState::new(
+                id.clone(),
+                InputConnected {
+                    generation: 0,
+                    id,
+                    done_tx,
+                    camera_info,
+                    video_info,
+                    settings: None,
+                },
+            );
+            let feed = CameraFeed::spawn(CameraFeed {
+                state: State::Open(OpenState {
+                    connecting: None,
+                    attached: Some(attached),
+                }),
+                ..CameraFeed::default()
+            });
+            Self {
+                feed,
+                _done_rx: std::sync::Mutex::new(done_rx),
+            }
+        }
+
+        pub async fn lock(&self) -> anyhow::Result<CameraFeedLock> {
+            self.feed
+                .ask(Lock)
+                .await
+                .map_err(|error| anyhow::anyhow!("synthetic camera lock: {error}"))
+        }
+
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
+        pub async fn push_native(&self, frame: NativeCameraFrame) {
+            let _ = self.feed.tell(NewNativeFrame(frame)).await;
+        }
+
+        /// Hands a frame over the way the macOS capture callback does
+        /// (`try_send`, never waiting for mailbox capacity).
+        pub fn try_push_native(&self, frame: NativeCameraFrame) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(NewNativeFrame(frame)).try_send())
+        }
+
+        /// Blocks the feed actor for `duration` (scripted slow consumer).
+        pub fn stall(&self, duration: Duration) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(crate::feeds::Stall(duration)).try_send())
+        }
+
+        pub async fn push(&self, frame: FFmpegVideoFrame) {
+            let _ = self.feed.tell(NewFrame(frame)).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_camera_connection(generation: u64) -> (InputConnected, mpsc::Receiver<()>) {
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let connection = InputConnected {
+            id: DeviceOrModelID::DeviceID("test-camera".to_string()),
+            generation,
+            done_tx,
+            camera_info: serde_json::from_value(serde_json::json!({
+                "device_id": "test-camera",
+                "model_id": null,
+                "display_name": "Test camera"
+            }))
+            .unwrap(),
+            video_info: VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRA, 16, 16, 30),
+            settings: None,
+        };
+        (connection, done_rx)
+    }
+
+    struct AttachedCamera;
+
+    #[tokio::test]
+    async fn camera_reuse_requires_matching_settings_and_recent_frames() {
+        for (age, matching_id, matching_settings, cancelled, expected) in [
+            (Some(0), true, true, false, true),
+            (None, true, true, false, false),
+            (Some(500), true, true, false, false),
+            (Some(0), false, true, false, false),
+            (Some(0), true, false, false, false),
+            (Some(0), true, true, true, false),
+        ] {
+            let (connection, stopped) = test_camera_connection(1);
+            let id = connection.id.clone();
+            let mut attached = AttachedState::new(id.clone(), connection);
+            attached.last_frame_at = age
+                .and_then(|age| std::time::Instant::now().checked_sub(Duration::from_millis(age)));
+            let camera = CameraFeed {
+                state: State::Open(OpenState {
+                    connecting: None,
+                    attached: Some(attached),
+                }),
+                ..CameraFeed::default()
+            };
+            if cancelled {
+                camera.setup_cancel.cancel();
+            }
+            let feed = CameraFeed::spawn(camera);
+            let reusable = feed
+                .ask(CheckInput {
+                    id: if matching_id {
+                        id
+                    } else {
+                        DeviceOrModelID::DeviceID("different-camera".into())
+                    },
+                    settings: (!matching_settings).then_some(CameraDeviceSettings {
+                        width: Some(1280),
+                        height: Some(720),
+                        frame_rate: Some(30.0),
+                    }),
+                })
+                .await
+                .unwrap();
+            assert_eq!(reusable, expected);
+            assert!(matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn camera_reuse_does_not_bypass_a_pending_selection_or_recording_lock() {
+        for locked in [false, true] {
+            let (connection, _stopped) = test_camera_connection(1);
+            let id = connection.id.clone();
+            let mut attached = AttachedState::new(id.clone(), connection.clone());
+            attached.last_frame_at = Some(std::time::Instant::now());
+            let token = Arc::new(());
+            let state = if locked {
+                State::Locked {
+                    inner: attached,
+                    token: Arc::downgrade(&token),
+                }
+            } else {
+                State::Open(OpenState {
+                    connecting: Some(ConnectingState {
+                        id: id.clone(),
+                        generation: 2,
+                        ready: futures::future::pending().boxed(),
+                        done_tx: connection.done_tx,
+                    }),
+                    attached: Some(attached),
+                })
+            };
+            let feed = CameraFeed::spawn(CameraFeed {
+                state,
+                ..CameraFeed::default()
+            });
+            assert!(!feed.ask(CheckInput { id, settings: None }).await.unwrap());
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
+    }
+
+    impl Message<AttachedCamera> for CameraFeed {
+        type Reply = Option<DeviceOrModelID>;
+
+        async fn handle(
+            &mut self,
+            _: AttachedCamera,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            match &self.state {
+                State::Open(state) => state.attached.as_ref().map(|attached| attached.id.clone()),
+                State::Locked { inner, .. } => Some(inner.id.clone()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn camera_readiness_timeout_cancels_native_work_and_success_stays_attached() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (native_tx, native_rx) = oneshot::channel();
+        let ready = bounded_camera_ready(
+            async move { native_rx.await.unwrap() }.boxed(),
+            cancel.clone(),
+            Duration::from_millis(20),
+        );
+        assert!(matches!(ready.await, Err(SetInputError::Timeout(_))));
+        assert!(cancel.is_cancelled());
+        assert!(native_tx.is_closed());
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (connection, done_rx) = test_camera_connection(1);
+        let ready = bounded_camera_ready(
+            futures::future::ready(Ok(connection)).boxed(),
+            cancel.clone(),
+            CAMERA_READY_TIMEOUT,
+        );
+        let attached = ready.await.unwrap();
+        assert!(!cancel.is_cancelled());
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(attached);
+    }
+
+    #[tokio::test]
+    async fn dropping_camera_readiness_cancels_queued_work_before_native_spawn() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ready = bounded_camera_ready(
+            futures::future::pending().boxed(),
+            cancel.clone(),
+            CAMERA_READY_TIMEOUT,
+        );
+        let (started_tx, started_rx) = flume::bounded(1);
+        let queued = tokio::spawn(spawn_camera_worker(slots.clone(), cancel, move |_| {
+            started_tx.send(()).unwrap();
+        }));
+        tokio::task::yield_now().await;
+        drop(ready);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), queued)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(SetInputError::SetupCancelled)
+        ));
+        slots.add_permits(1);
+        assert!(started_rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn camera_stuck_setups_bound_workers_without_holding_slots_for_live_capture() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CAMERA_SETUPS));
+        let (started_tx, started_rx) = flume::bounded(MAX_CONCURRENT_CAMERA_SETUPS + 1);
+        let (stopped_tx, stopped_rx) = flume::bounded(MAX_CONCURRENT_CAMERA_SETUPS + 1);
+        let mut release = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CAMERA_SETUPS {
+            let (release_tx, release_rx) = mpsc::channel();
+            release.push(release_tx);
+            let started = started_tx.clone();
+            let stopped = stopped_tx.clone();
+            spawn_camera_worker(
+                slots.clone(),
+                tokio_util::sync::CancellationToken::new(),
+                move |permit| {
+                    started.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    drop(permit);
+                    stopped.send(()).unwrap();
+                },
+            )
+            .await
+            .unwrap();
+        }
+        for _ in 0..MAX_CONCURRENT_CAMERA_SETUPS {
+            started_rx.recv_async().await.unwrap();
+        }
+        assert_eq!(slots.available_permits(), 0);
+        for _ in 0..32 {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let started = started_tx.clone();
+            let queued = tokio::spawn(spawn_camera_worker(
+                slots.clone(),
+                cancel.clone(),
+                move |_| started.send(()).unwrap(),
+            ));
+            tokio::task::yield_now().await;
+            cancel.cancel();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), queued)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                Err(SetInputError::SetupCancelled)
+            ));
+        }
+        assert!(started_rx.is_empty());
+        release[0].send(()).unwrap();
+        stopped_rx.recv_async().await.unwrap();
+
+        let (capture_stop_tx, capture_stop_rx) = mpsc::channel();
+        spawn_camera_worker(
+            slots.clone(),
+            tokio_util::sync::CancellationToken::new(),
+            move |permit| {
+                drop(permit);
+                started_tx.send(()).unwrap();
+                capture_stop_rx.recv().unwrap();
+                stopped_tx.send(()).unwrap();
+            },
+        )
+        .await
+        .unwrap();
+        started_rx.recv_async().await.unwrap();
+        assert_eq!(slots.available_permits(), 1);
+        capture_stop_tx.send(()).unwrap();
+        stopped_rx.recv_async().await.unwrap();
+        for release in &release[1..] {
+            release.send(()).unwrap();
+            stopped_rx.recv_async().await.unwrap();
+        }
+        assert_eq!(slots.available_permits(), MAX_CONCURRENT_CAMERA_SETUPS);
+        assert!(started_rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn camera_reselection_and_removal_cancel_queued_attempts() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let camera = CameraFeed {
+            setup_slots: slots.clone(),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let mut pending = Vec::new();
+        for _ in 0..32 {
+            pending.push(
+                feed.ask(SetInput {
+                    id: DeviceOrModelID::DeviceID("queued-camera".into()),
+                    settings: None,
+                })
+                .await
+                .unwrap(),
+            );
+        }
+        feed.ask(RemoveInput).await.unwrap();
+        for ready in pending {
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), ready)
+                    .await
+                    .unwrap(),
+                Err(SetInputError::SetupCancelled)
+            ));
+        }
+        assert!(feed.ask(AttachedCamera).await.unwrap().is_none());
+        assert_eq!(slots.available_permits(), 0);
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn stopping_camera_actor_cancels_queued_setup() {
+        let feed = CameraFeed::spawn(CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            ..CameraFeed::default()
+        });
+        let ready = feed
+            .ask(SetInput {
+                id: DeviceOrModelID::DeviceID("queued-camera".into()),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), ready)
+                .await
+                .unwrap(),
+            Err(SetInputError::SetupCancelled)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_camera_setup_cannot_attach_a_late_success() {
+        let (connection, done_rx) = test_camera_connection(1);
+        let camera = CameraFeed {
+            setup_generation: 1,
+            state: State::Open(OpenState {
+                connecting: Some(ConnectingState {
+                    id: connection.id.clone(),
+                    generation: 1,
+                    ready: futures::future::pending().boxed(),
+                    done_tx: connection.done_tx.clone(),
+                }),
+                attached: None,
+            }),
+            ..CameraFeed::default()
+        };
+        camera.setup_cancel.cancel();
+        let feed = CameraFeed::spawn(camera);
+        feed.ask(connection).await.unwrap();
+        assert!(feed.ask(AttachedCamera).await.unwrap().is_none());
+        feed.ask(RemoveInput).await.unwrap();
+        assert!(done_rx.try_recv().is_ok());
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    async fn locked_test_camera() -> (
+        ActorRef<CameraFeed>,
+        CameraFeedLock,
+        InputConnected,
+        oneshot::Receiver<()>,
+    ) {
+        let (connection, _done_rx) = test_camera_connection(1);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let camera = CameraFeed {
+            setup_generation: 1,
+            state: State::Open(OpenState {
+                connecting: Some(ConnectingState {
+                    id: connection.id.clone(),
+                    generation: connection.generation,
+                    ready: futures::future::ready(Ok(connection.clone())).boxed(),
+                    done_tx: connection.done_tx.clone(),
+                }),
+                attached: None,
+            }),
+            on_ready: vec![ready_tx],
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let lock = feed.ask(Lock).await.unwrap();
+        (feed, lock, connection, ready_rx)
+    }
+
+    #[tokio::test]
+    async fn failed_camera_reselection_cannot_lock_a_stopped_attachment() {
+        let (connection, stopped) = test_camera_connection(0);
+        let id = connection.id.clone();
+        let camera = CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            state: State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState::new(id.clone(), connection)),
+            }),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let selection = feed
+            .ask(SetInput {
+                id: id.clone(),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        assert!(stopped.try_recv().is_ok());
+        feed.ask(InputConnectFailed { id, generation: 1 })
+            .await
+            .unwrap();
+
+        let mut unavailable = Vec::new();
+        for _ in 0..2 {
+            let result = feed.ask(Lock).await;
+            unavailable.push(matches!(
+                &result,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::NoInput
+                ))
+            ));
+            drop(result);
+        }
+        feed.ask(RemoveInput).await.unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(matches!(
+            selection.await,
+            Err(SetInputError::SetupCancelled)
+        ));
+        assert_eq!(unavailable, [true, true]);
+    }
+
+    #[tokio::test]
+    async fn failed_camera_selection_preserves_a_newer_attached_camera() {
+        let (connection, still_running) = test_camera_connection(2);
+        let id = connection.id.clone();
+        let feed = CameraFeed::spawn(CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            ..CameraFeed::default()
+        });
+        let first_selection = feed
+            .ask(SetInput {
+                id: id.clone(),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        let second_selection = feed
+            .ask(SetInput {
+                id: id.clone(),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        feed.ask(connection).await.unwrap();
+        for generation in [1, 2] {
+            feed.ask(InputConnectFailed {
+                id: id.clone(),
+                generation,
+            })
+            .await
+            .unwrap();
+        }
+        let lock = feed.ask(Lock).await;
+        let connected = lock.is_ok();
+        let running = matches!(still_running.try_recv(), Err(mpsc::TryRecvError::Empty));
+        drop(lock);
+        feed.ask(RemoveInput).await.unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+        drop(first_selection);
+        drop(second_selection);
+        assert!(connected);
+        assert!(running);
+    }
+
+    #[tokio::test]
+    async fn queued_locks_keep_camera_setup_failure_without_locking_the_previous_camera() {
+        let (connection, _previous_rx) = test_camera_connection(1);
+        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+        let ready = futures::future::ready(Err(SetInputError::BuildStreamCrashed))
+            .boxed()
+            .shared();
+        let camera = CameraFeed {
+            setup_generation: 2,
+            state: State::Open(OpenState {
+                connecting: Some(ConnectingState {
+                    id: DeviceOrModelID::DeviceID("requested-camera".into()),
+                    generation: 2,
+                    ready: ready.boxed(),
+                    done_tx,
+                }),
+                attached: Some(AttachedState::new(connection.id.clone(), connection)),
+            }),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let results = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(feed.ask(Lock), feed.ask(Lock), feed.ask(Lock))
+        })
+        .await
+        .expect("repeated camera locks blocked the actor mailbox");
+        for result in [results.0, results.1, results.2] {
+            assert!(matches!(
+                result,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::InitializeFailed(SetInputError::BuildStreamCrashed)
+                ))
+            ));
+        }
+        let (sender, _receiver) = flume::bounded(1);
+        feed.ask(AddSender(sender)).await.unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn rejected_locked_camera_selection_does_not_stop_the_recording_camera() {
+        let (connection, done_rx) = test_camera_connection(1);
+        let token = Arc::new(());
+        let camera = CameraFeed {
+            lock_generation: 7,
+            setup_generation: 1,
+            state: State::Locked {
+                inner: AttachedState::new(connection.id.clone(), connection),
+                token: Arc::downgrade(&token),
+            },
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let result = feed
+            .ask(SetInput {
+                id: DeviceOrModelID::DeviceID("different-camera".into()),
+                settings: None,
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(kameo::error::SendError::HandlerError(
+                SetInputError::Locked(_)
+            ))
+        ));
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(token);
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn camera_removal_does_not_block_on_an_already_queued_stop() {
+        let (connection, done_rx) = test_camera_connection(1);
+        connection.done_tx.try_send(()).unwrap();
+        let camera = CameraFeed {
+            state: State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState::new(connection.id.clone(), connection)),
+            }),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let result = tokio::time::timeout(Duration::from_millis(250), feed.ask(RemoveInput)).await;
+        drop(done_rx);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(matches!(result, Ok(Ok(()))));
+    }
+
+    #[tokio::test]
+    async fn camera_reconnect_requires_current_setup_and_a_live_recording_lock() {
+        for (generation, lock_generation, live, cancelled, expected) in [
+            (11, 8, true, false, false),
+            (12, 7, true, false, false),
+            (12, 8, false, false, false),
+            (12, 8, true, true, false),
+            (12, 8, true, false, true),
+        ] {
+            let (connection, original_rx) = test_camera_connection(10);
+            let (replacement, replacement_rx) = test_camera_connection(generation);
+            let mut token = Some(Arc::new(()));
+            let camera = CameraFeed {
+                lock_generation: 8,
+                setup_generation: 12,
+                state: State::Locked {
+                    inner: AttachedState::new(connection.id.clone(), connection),
+                    token: Arc::downgrade(token.as_ref().unwrap()),
+                },
+                ..CameraFeed::default()
+            };
+            if !live {
+                drop(token.take());
+            }
+            if cancelled {
+                camera.setup_cancel.cancel();
+            }
+            let feed = CameraFeed::spawn(camera);
+            let id = replacement.id.clone();
+            let accepted = feed
+                .ask(LockedCameraInputReconnected {
+                    generation,
+                    lock_generation,
+                    id: replacement.id,
+                    camera_info: replacement.camera_info,
+                    video_info: replacement.video_info,
+                    settings: replacement.settings,
+                    done_tx: replacement.done_tx,
+                })
+                .await
+                .unwrap();
+            assert_eq!(accepted, expected);
+            assert_eq!(
+                matches!(replacement_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                expected,
+            );
+            if accepted {
+                feed.ask(FinalizePendingRelease {
+                    generation: 11,
+                    id: id.clone(),
+                })
+                .await
+                .unwrap();
+                assert!(matches!(
+                    original_rx.try_recv(),
+                    Err(mpsc::TryRecvError::Empty)
+                ));
+                feed.ask(FinalizePendingRelease { generation: 12, id })
+                    .await
+                    .unwrap();
+                assert!(original_rx.try_recv().is_ok());
+            }
+            drop(token);
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn camera_late_connection_notification_keeps_locked_feed_alive() {
+        let (feed, lock, connection, _ready) = locked_test_camera().await;
+        feed.tell(connection).await.unwrap();
+        let (sender, _receiver) = flume::bounded(1);
+        let result = feed.ask(AddSender(sender)).await;
+        drop(lock);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(
+            result.is_ok(),
+            "late connection notification stopped the feed: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn camera_late_failure_notification_keeps_locked_feed_alive() {
+        let (feed, lock, connection, _ready) = locked_test_camera().await;
+        feed.tell(InputConnectFailed {
+            id: connection.id,
+            generation: connection.generation,
+        })
+        .await
+        .unwrap();
+        let (sender, _receiver) = flume::bounded(1);
+        let result = feed.ask(AddSender(sender)).await;
+        drop(lock);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(
+            result.is_ok(),
+            "late failure notification stopped the feed: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn camera_lock_notifies_waiters_when_it_consumes_the_connection() {
+        let (feed, lock, _connection, mut ready) = locked_test_camera().await;
+        let result = ready.try_recv();
+        drop(lock);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(
+            result.is_ok(),
+            "camera readiness was not delivered: {result:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ingress_tests {
+    use super::*;
+    use crate::sources::native_camera::native_ingress_capacity;
+    use cap_media_info::RawVideoFormat;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    type Output = (flume::Receiver<u32>, Arc<AtomicU64>);
+
+    struct Fanout {
+        senders: Vec<CountedSender<u32>>,
+        total: u64,
+        log: DropLog,
+    }
+
+    impl Fanout {
+        fn new(capacities: &[usize]) -> (Self, Vec<Output>) {
+            let mut senders = vec![];
+            let mut outputs = vec![];
+            for &capacity in capacities {
+                let (tx, rx) = flume::bounded(capacity);
+                let dropped = Arc::new(AtomicU64::new(0));
+                senders.push(CountedSender {
+                    tx,
+                    dropped: Some(dropped.clone()),
+                });
+                outputs.push((rx, dropped));
+            }
+            let fanout = Self {
+                senders,
+                total: 0,
+                log: DropLog::default(),
+            };
+            (fanout, outputs)
+        }
+
+        fn send(&mut self, frame: u32) {
+            send_frame_to_camera_senders(
+                &mut self.senders,
+                frame,
+                u64::from(frame),
+                "Native camera",
+                FanoutDrops {
+                    total: &mut self.total,
+                    log: &mut self.log,
+                },
+            );
+        }
+    }
+
+    fn hd30() -> VideoInfo {
+        VideoInfo::from_raw(RawVideoFormat::Nv12, 1280, 720, 30)
+    }
+
+    #[test]
+    fn burst_after_a_two_second_stall_fits_the_ingress_queue() {
+        let (mut fanout, outputs) = Fanout::new(&[native_ingress_capacity(&hd30())]);
+        // The consumer is stalled for 2 s at 30 fps; the feed then hands the
+        // whole backlog over at once.
+        for frame in 0..60 {
+            fanout.send(frame);
+        }
+        let (rx, dropped) = &outputs[0];
+        assert_eq!(dropped.load(Relaxed), 0);
+        assert_eq!(fanout.total, 0);
+        assert_eq!(rx.drain().collect::<Vec<_>>(), (0..60).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn frames_past_the_ingress_bound_are_counted_and_reported() {
+        let capacity = native_ingress_capacity(&hd30());
+        let (mut fanout, outputs) = Fanout::new(&[capacity]);
+        for frame in 0..capacity as u32 + 5 {
+            fanout.send(frame);
+        }
+        assert_eq!(outputs[0].1.load(Relaxed), 5);
+        assert_eq!(outputs[0].0.len(), capacity);
+        assert_eq!(fanout.total, 5);
+        // The first drop was reported at once; the other four wait for the
+        // next report window.
+        let now = std::time::Instant::now();
+        assert_eq!(fanout.log.record(0, now), None);
+        assert_eq!(fanout.log.record(0, now + DropLog::INTERVAL), Some(4));
+    }
+
+    #[test]
+    fn previous_eight_frame_queue_lost_most_of_the_same_burst() {
+        let (mut fanout, outputs) = Fanout::new(&[8]);
+        for frame in 0..60 {
+            fanout.send(frame);
+        }
+        assert_eq!(outputs[0].1.load(Relaxed), 52);
+        assert_eq!(outputs[0].0.len(), 8);
+    }
+
+    /// A full preview queue is not a recording loss: each attached queue
+    /// counts only the frames it did not receive.
+    #[test]
+    fn losses_are_counted_per_attached_queue() {
+        let (mut fanout, outputs) = Fanout::new(&[4, 64, 2]);
+        for frame in 0..10 {
+            fanout.send(frame);
+        }
+        let counts: Vec<_> = outputs
+            .iter()
+            .map(|(rx, dropped)| (rx.len(), dropped.load(Relaxed)))
+            .collect();
+        assert_eq!(counts, [(4, 6), (10, 0), (2, 8)]);
+        assert_eq!(fanout.total, 14);
+    }
+
+    /// Consumers draining concurrently with the fan-out: every frame is
+    /// either received or counted as dropped for each queue, never both.
+    #[test]
+    fn received_plus_dropped_is_every_frame_per_queue() {
+        const FRAMES: u32 = 20_000;
+        let (mut fanout, outputs) = Fanout::new(&[1, 2, 1]);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let drains: Vec<_> = outputs
+            .iter()
+            .enumerate()
+            .map(|(i, (rx, _))| {
+                let rx = rx.clone();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    let mut received = 0_u64;
+                    while !stop.load(Relaxed) || !rx.is_empty() {
+                        if rx.try_recv().is_ok() {
+                            received += 1;
+                        }
+                        if i == 1 {
+                            std::thread::yield_now();
+                        }
+                    }
+                    received
+                })
+            })
+            .collect();
+        for frame in 0..FRAMES {
+            fanout.send(frame);
+        }
+        stop.store(true, Relaxed);
+        let mut total_dropped = 0;
+        for ((_, dropped), drain) in outputs.iter().zip(drains) {
+            let received = drain.join().unwrap();
+            let dropped = dropped.load(Relaxed);
+            assert_eq!(received + dropped, u64::from(FRAMES));
+            total_dropped += dropped;
+        }
+        assert_eq!(fanout.total, total_dropped);
+    }
+
+    #[test]
+    fn drop_log_reports_the_first_drop_then_rate_limits() {
+        let mut log = DropLog::default();
+        let start = std::time::Instant::now();
+        assert_eq!(log.record(0, start), None);
+        assert_eq!(log.record(1, start), Some(1));
+        assert_eq!(log.record(3, start + Duration::from_secs(1)), None);
+        assert_eq!(log.record(1, start + Duration::from_secs(4)), None);
+        assert_eq!(log.record(2, start + DropLog::INTERVAL), Some(6));
+        assert_eq!(log.record(0, start + DropLog::INTERVAL * 3), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    mod actor {
+        use super::*;
+
+        /// Scripted runtime stall: the feed actor handles nothing else.
+        struct Hold(Duration, oneshot::Sender<()>);
+
+        impl Message<Hold> for CameraFeed {
+            type Reply = ();
+
+            async fn handle(&mut self, msg: Hold, _: &mut Context<Self, Self::Reply>) {
+                let _ = msg.1.send(());
+                tokio::time::sleep(msg.0).await;
+            }
+        }
+
+        fn frame(index: i64) -> NativeCameraFrame {
+            use cidre::{cm, cv};
+            let buf = cv::PixelBuf::new(16, 16, cv::PixelFormat::_420V, None).unwrap();
+            let desc = cm::VideoFormatDesc::with_image_buf(&buf).unwrap();
+            let timing = cm::SampleTimingInfo {
+                duration: cm::Time::new(1, 30),
+                pts: cm::Time::new(index, 30),
+                dts: cm::Time::invalid(),
+            };
+            let sample_buf =
+                cm::SampleBuf::with_image_buf(&buf, true, None, std::ptr::null(), &desc, &timing)
+                    .unwrap();
+            NativeCameraFrame {
+                sample_buf,
+                timestamp: Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(
+                    index as u64,
+                )),
+            }
+        }
+
+        async fn eventually(what: &str, check: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !check() {
+                assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+
+        struct StalledFeed {
+            feed: ActorRef<CameraFeed>,
+            ingress: Arc<NativeCameraIngress>,
+            dropped: Arc<AtomicU64>,
+            rx: flume::Receiver<NativeCameraFrame>,
+        }
+
+        async fn stalled_feed(capacity: usize, hold: Duration) -> StalledFeed {
+            let ingress = Arc::new(NativeCameraIngress::default());
+            let feed = CameraFeed::spawn(CameraFeed {
+                native_ingress: ingress.clone(),
+                ..CameraFeed::default()
+            });
+            let (tx, rx) = flume::bounded(capacity);
+            let dropped = Arc::new(AtomicU64::new(0));
+            feed.ask(AddCountedNativeSender(tx, dropped.clone()))
+                .await
+                .unwrap();
+            let (held_tx, held_rx) = oneshot::channel();
+            feed.tell(Hold(hold, held_tx)).await.unwrap();
+            held_rx.await.unwrap();
+            StalledFeed {
+                feed,
+                ingress,
+                dropped,
+                rx,
+            }
+        }
+
+        /// The capture callback keeps delivering while the feed is stalled;
+        /// after the stall the feed fans the backlog out in one burst and the
+        /// recording receives every frame, in order.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn stall_then_burst_keeps_every_frame() {
+            let capacity = native_ingress_capacity(&hd30());
+            let f = stalled_feed(capacity, Duration::from_millis(1500)).await;
+            let recipient = f.feed.clone().recipient::<NewNativeFrame>();
+            let frames: Vec<_> = (0..45).map(frame).collect();
+            for frame in frames {
+                hand_native_frame_to_feed(&recipient, &f.ingress, frame);
+            }
+            eventually("burst delivered", || f.rx.len() == 45).await;
+            assert_eq!(f.ingress.mailbox_full(), 0);
+            assert_eq!(f.dropped.load(Relaxed), 0);
+            let pts: Vec<_> =
+                f.rx.drain()
+                    .map(|frame| frame.sample_buf.pts().value)
+                    .collect();
+            assert_eq!(pts, (0..45).collect::<Vec<_>>());
+        }
+
+        /// Past the mailbox and the ingress queue every lost frame is
+        /// counted, and the callback's hand-over never waits for the stalled
+        /// feed.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn losses_past_the_bound_are_counted_without_blocking_the_callback() {
+            let capacity = native_ingress_capacity(&hd30());
+            let f = stalled_feed(capacity, Duration::from_millis(1000)).await;
+            let recipient = f.feed.clone().recipient::<NewNativeFrame>();
+            let frames: Vec<_> = (0..70).map(frame).collect();
+            let mut slowest = Duration::ZERO;
+            for frame in frames {
+                let start = std::time::Instant::now();
+                hand_native_frame_to_feed(&recipient, &f.ingress, frame);
+                slowest = slowest.max(start.elapsed());
+            }
+            assert!(
+                slowest < Duration::from_millis(50),
+                "callback hand-over waited {slowest:?}"
+            );
+            // The mailbox holds 64 frames; the other six are lost and counted.
+            assert_eq!(f.ingress.mailbox_full(), 6);
+            eventually("backlog delivered", || f.rx.len() == capacity).await;
+            assert_eq!(f.dropped.load(Relaxed), 0);
+            // The recording still does not drain: the next frames overflow
+            // its ingress queue and are counted.
+            for frame in (70..73).map(frame) {
+                hand_native_frame_to_feed(&recipient, &f.ingress, frame);
+            }
+            eventually("overflow counted", || f.dropped.load(Relaxed) == 3).await;
+            assert_eq!(f.rx.len(), capacity);
+        }
     }
 }
