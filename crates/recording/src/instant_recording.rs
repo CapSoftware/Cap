@@ -6,9 +6,9 @@ mod linux_camera;
 #[cfg(target_os = "linux")]
 pub use linux_camera::{
     LINUX_CAMERA_MAX_MASK_AGE, LinuxCameraBlur, LinuxCameraEffect, LinuxCameraMaskReceipt,
-    LinuxCameraPresentation, LinuxCameraPresentationError, LinuxCameraProcessing,
-    LinuxCameraPublisher, LinuxCameraRect, LinuxCameraShape, LinuxProcessedCameraFrame,
-    LinuxProcessedCameraSource,
+    LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
+    LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraShape,
+    LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
 };
 
 use crate::{
