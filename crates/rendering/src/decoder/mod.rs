@@ -1375,6 +1375,7 @@ pub fn spawn_managed_decoder<'a>(
     offset: f64,
     use_hw_acceleration: bool,
 ) -> Result<ManagedVideoDecoder, ManagedVideoError> {
+    let use_hw_acceleration = use_hw_acceleration && !crate::software_video_codecs_requested();
     let input = ManagedVideoInput {
         source,
         paths: paths
