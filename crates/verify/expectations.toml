@@ -367,17 +367,24 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
 # ci/fixproof-crash-<a|b1|c|ce> (runs 38850662667, 38850661576, 38850663436,
 # 38850662102), which removes exactly its entries. Fixes: #2640 (bug A),
 # #2641 (bug B1), #2643 (bug C), #2644 (bug E).
+#
+# bug B1 still has one symptom on macOS: the static-screen recording now
+# recovers its complete fragment within the loss-time and missing bounds, but
+# the keyframe-only cut makes that fragment span 4 s of capture instead of
+# GOP_SECS plus the interval before the closing frame. Tracked by #2641.
 
 [[xfail]]
 case = "crash/recorder-kill/inproc/static-screen"
-class = "loss-time"
-bound = { count = 1, secs = [2.5, 20.5] }
-reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
+class = "fragment-span"
+platforms = ["macos"]
+bound = { count = 2 }
+reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count, so the two complete fragments span 4 s of capture instead of GOP_SECS plus the 0.33 s before the closing frame; macOS reports one fragment-span problem per fragment. The loss-time and missing symptoms no longer occur on macOS"
 link = "https://github.com/CapSoftware/Cap/pull/2641"
 
 [[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "missing"
-bound = { count = 1 }
-reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
+case = "crash/recorder-kill/oop/static-screen"
+class = "fragment-span"
+platforms = ["macos"]
+bound = { count = 3 }
+reason = "NEW (bug B1): the out-of-process static-screen recording keeps three complete fragments and each spans 3 to 4 s of capture instead of GOP_SECS plus the 0.33 s before the closing frame; macOS reports one fragment-span problem per fragment. The loss-time and missing symptoms no longer occur on macOS"
 link = "https://github.com/CapSoftware/Cap/pull/2641"
