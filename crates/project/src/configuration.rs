@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     fmt,
+    io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
     sync::LazyLock,
@@ -2985,17 +2986,16 @@ impl ProjectConfiguration {
 
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let temp_path =
-            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4()));
+        let temp_path = tempfile::TempPath::from_path(
+            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4())),
+        );
+        let config = serde_json::to_string_pretty(self)?;
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(config.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
 
-        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
-
-        if let Err(error) = std::fs::rename(&temp_path, &config_path) {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(error);
-        }
-
-        Ok(())
+        std::fs::rename(&temp_path, &config_path)
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
