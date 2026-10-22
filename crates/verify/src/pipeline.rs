@@ -495,6 +495,7 @@ async fn record_segment(
                     overlap_dropped_frames: s.overlap_dropped_frames,
                     startup_overlap_drops: s.startup_overlap_drops,
                 }),
+            digital_silence_ms: finished.digital_silence_ms,
         };
         if name == "mic" {
             mic_meta = Some(meta);

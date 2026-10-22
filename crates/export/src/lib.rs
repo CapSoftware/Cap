@@ -799,6 +799,7 @@ mod clip_offset_tests {
             start_time: Some(start),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         };
         StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {

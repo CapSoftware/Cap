@@ -134,6 +134,7 @@ fn imported_video_meta(
                         start_time: Some(0.0),
                         device_id: None,
                         gap_summary: None,
+                        digital_silence_ms: None,
                     }),
                     cursor: None,
                     keyboard: None,

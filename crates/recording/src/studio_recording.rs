@@ -2838,12 +2838,14 @@ async fn stop_recording(
                         start_time: mic_start_time,
                         device_id: s.mic_device_id.clone(),
                         gap_summary: to_project_gap_summary(mic.audio_gap_summary),
+                        digital_silence_ms: mic.digital_silence_ms,
                     }),
                     system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
                         path: make_relative(&audio.path),
                         start_time: start_times.system_audio,
                         device_id: None,
                         gap_summary: to_project_gap_summary(audio.audio_gap_summary),
+                        digital_silence_ms: None,
                     }),
                     cursor: s
                         .pipeline
@@ -5405,6 +5407,7 @@ mod tests {
             video_frame_count,
             video_timestamp_span: None,
             audio_gap_summary: None,
+            digital_silence_ms: None,
         }
     }
 
