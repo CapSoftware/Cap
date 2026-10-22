@@ -46,7 +46,7 @@ function getTotalRangeDuration(ranges: EditRange[]) {
 	return ranges.reduce((total, range) => total + getRangeDuration(range), 0);
 }
 
-function getTimeoutMs(ranges: EditRange[]) {
+export function getTimeoutMs(ranges: EditRange[]) {
 	const durationMs = getTotalRangeDuration(ranges) * 20_000;
 	return Math.min(MAX_TIMEOUT_MS, Math.max(DEFAULT_TIMEOUT_MS, durationMs));
 }

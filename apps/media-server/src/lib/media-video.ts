@@ -1297,15 +1297,18 @@ export async function downloadVideoToTemp(
 
 		const reader = response.body.getReader();
 		const writer = file(tempFile.path).writer();
+		let writerEnded = false;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
 				writer.write(value);
 			}
+			writerEnded = true;
 			await writer.end();
 		} finally {
 			reader.releaseLock();
+			if (!writerEnded) await Promise.resolve(writer.end()).catch(() => {});
 		}
 
 		if (file(tempFile.path).size === 0) {
@@ -1339,7 +1342,7 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 	return Boolean(metadata.audioCodec && metadata.audioCodec !== "aac");
 }
 
-function getProcessTimeoutMs(
+export function getProcessTimeoutMs(
 	durationSeconds: number,
 	baseTimeoutMs: number,
 ): number {

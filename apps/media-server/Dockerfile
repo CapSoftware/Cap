@@ -22,6 +22,8 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/lib/media-transfer.test.ts src/__tests__/lib/capcodec-encoder.test.ts src/__tests__/lib/nvenc-encoder.test.ts \
 	&& bun test src/__tests__/routes/recording-verification.test.ts \
 	&& bun test src/__tests__/routes/video.test.ts \
+	&& bun test src/__tests__/lib/lifecycle.test.ts src/__tests__/lib/temp-files.test.ts \
+	&& bun test src/__tests__/routes/lifecycle.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
 	&& bun test src/__tests__/lib/media-video.integration.test.ts
 
@@ -37,6 +39,6 @@ ENV PORT=3456
 EXPOSE 3456
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then(async (response) => process.exit(response.ok || (await response.json().catch(() => ({}))).status === 'draining' ? 0 : 1)).catch(() => process.exit(1))"]
 
 CMD ["bun", "run", "src/index.ts"]
