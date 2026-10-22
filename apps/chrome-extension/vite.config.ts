@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { targetDefine } from "./vite.target";
 
 export default defineConfig({
+	define: targetDefine,
 	plugins: [react()],
 	build: {
 		emptyOutDir: false,
