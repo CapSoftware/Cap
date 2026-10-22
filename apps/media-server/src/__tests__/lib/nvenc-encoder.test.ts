@@ -15,8 +15,8 @@ import {
 } from "../../lib/media-video";
 import {
 	buildNvencEncodeArgs,
-	buildNvencScaleFilter,
 	canDecodeOnGpu,
+	fitWithinEven,
 	getVideoEncoderStatus,
 	type NvencOptions,
 	nvencCq,
@@ -33,6 +33,7 @@ const defaults: NvencOptions = {
 	lookahead: 20,
 	spatialAq: true,
 	temporalAq: false,
+	gpuDecodeCodecs: ["hevc", "av1"],
 };
 const opts: ProcessVideoArgsInput["opts"] = {
 	maxWidth: 1920,
@@ -63,8 +64,7 @@ const nvencVideoArgs = [
 	"-g",
 	"250",
 ];
-const gpuScale =
-	"scale_cuda='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease:format=nv12,scale_cuda=trunc(iw/2)*2:trunc(ih/2)*2";
+const gpuScale = "scale_cuda=format=nv12";
 const cpuScale =
 	"scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2";
 
@@ -104,6 +104,8 @@ function processArgs(
 		extraInputArgs: [],
 		extraOutputArgs: [],
 		decodeThreads: "2",
+		sourceWidth: source.width,
+		sourceHeight: source.height,
 		...overrides,
 	};
 }
@@ -159,7 +161,14 @@ describe("nvenc encoder selection", () => {
 			lookahead: 0,
 			spatialAq: false,
 			temporalAq: true,
+			gpuDecodeCodecs: ["hevc", "av1"],
 		});
+		expect(
+			nvencOptionsFromEnv({
+				...enabled,
+				CAP_NVENC_GPU_DECODE_CODECS: "h264, HEVC,vp8,nope",
+			})?.gpuDecodeCodecs,
+		).toEqual(["h264", "hevc"]);
 	});
 
 	test("ignores invalid tuning overrides", () => {
@@ -213,14 +222,31 @@ describe("nvenc encoder selection", () => {
 		]);
 	});
 
-	test("scales on the GPU with the CPU path's box and even dimensions", () => {
-		expect(buildNvencScaleFilter(1920, 1080)).toBe(gpuScale);
+	test("fits the GPU resize to the CPU path's box and even dimensions", () => {
+		expect(fitWithinEven(3840, 2160, 1920, 1080)).toEqual({
+			width: 1920,
+			height: 1080,
+		});
+		expect(fitWithinEven(3024, 1964, 1920, 1080)).toEqual({
+			width: 1662,
+			height: 1080,
+		});
+		expect(fitWithinEven(1079, 1919, 1920, 1080)).toEqual({
+			width: 606,
+			height: 1080,
+		});
+		expect(fitWithinEven(1281, 721, 1920, 1080)).toEqual({
+			width: 1280,
+			height: 720,
+		});
 	});
 
-	test("decodes on the GPU only for unrotated NVDEC codecs", () => {
-		for (const codec of ["h264", "hevc", "vp9", "av1"]) {
+	test("decodes on the GPU only for configured, unrotated codecs", () => {
+		for (const codec of ["hevc", "av1"]) {
 			expect(canDecodeOnGpu(codec, 0)).toBe(true);
 		}
+		expect(canDecodeOnGpu("h264", 0)).toBe(false);
+		expect(canDecodeOnGpu("h264", 0, ["h264"])).toBe(true);
 		expect(canDecodeOnGpu("vp8", 0)).toBe(false);
 		expect(canDecodeOnGpu("prores", 0)).toBe(false);
 		expect(canDecodeOnGpu("hevc", 90)).toBe(false);
@@ -307,6 +333,10 @@ describe("process video args", () => {
 			"cuda",
 			"-hwaccel_output_format",
 			"cuda",
+			"-c:v",
+			"h264_cuvid",
+			"-resize",
+			"1662x1080",
 			"-i",
 			"in.mp4",
 			...nvencVideoArgs,
@@ -336,6 +366,10 @@ describe("process video args", () => {
 			"cuda",
 			"-hwaccel_output_format",
 			"cuda",
+			"-c:v",
+			"hevc_cuvid",
+			"-resize",
+			"1920x1080",
 			"-i",
 			"in.mov",
 			...nvencVideoArgs,
@@ -374,6 +408,8 @@ describe("process video args", () => {
 			"cuda",
 			"-hwaccel_output_format",
 			"cuda",
+			"-c:v",
+			"vp9_cuvid",
 			"-i",
 			"in.webm",
 			...nvencVideoArgs,

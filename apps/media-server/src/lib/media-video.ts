@@ -23,11 +23,12 @@ import {
 import { probeVideoFile } from "./media-probe";
 import { fetchMedia, materializeMedia } from "./media-transfer";
 import {
+	buildGpuDecodeInputArgs,
 	buildNvencEncodeArgs,
-	buildNvencScaleFilter,
 	canDecodeOnGpu,
+	fitWithinEven,
+	GPU_DECODE_FORMAT_FILTER,
 	logNvencFallback,
-	NVENC_HWACCEL_INPUT_ARGS,
 	type NvencOptions,
 	nvencFallbackReason,
 	nvencOptionsFromEnv,
@@ -1622,6 +1623,8 @@ export async function processVideo(
 		audioTranscode,
 		extraInputArgs,
 		extraOutputArgs,
+		sourceWidth: metadata.width,
+		sourceHeight: metadata.height,
 		decodeThreads: decodeThreadsFromEnv(
 			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
 			2,
@@ -1636,6 +1639,7 @@ export async function processVideo(
 			const gpuDecode = canDecodeOnGpu(
 				metadata.videoCodec,
 				await probeVideoRotation(inputPath, abortSignal),
+				nvenc.gpuDecodeCodecs,
 			);
 			try {
 				await runTranscodeCommand(
@@ -1698,18 +1702,37 @@ export interface ProcessVideoArgsInput {
 	extraInputArgs: string[];
 	extraOutputArgs: string[];
 	decodeThreads: string;
+	sourceWidth?: number;
+	sourceHeight?: number;
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
 }
 
 export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 	const { opts, nvenc } = input;
-	const gpuDecode = Boolean(nvenc?.gpuDecode);
+	const gpuDecode = Boolean(
+		nvenc?.gpuDecode && input.sourceWidth && input.sourceHeight,
+	);
+	const source = {
+		width: input.sourceWidth ?? 0,
+		height: input.sourceHeight ?? 0,
+	};
 	const cpuScaleFilter = `scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
 		"-threads",
 		input.decodeThreads,
-		...(gpuDecode ? NVENC_HWACCEL_INPUT_ARGS : []),
+		...(gpuDecode
+			? buildGpuDecodeInputArgs(
+					input.videoCodec,
+					source,
+					fitWithinEven(
+						source.width,
+						source.height,
+						opts.maxWidth,
+						opts.maxHeight,
+					),
+				)
+			: []),
 		...input.extraInputArgs,
 		"-i",
 		input.inputPath,
@@ -1727,7 +1750,7 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 			ffmpegArgs.push(
 				...buildNvencEncodeArgs(nvenc.options, opts.crf),
 				...(gpuDecode
-					? ["-vf", buildNvencScaleFilter(opts.maxWidth, opts.maxHeight)]
+					? ["-vf", GPU_DECODE_FORMAT_FILTER]
 					: ["-vf", cpuScaleFilter, "-pix_fmt", "yuv420p"]),
 			);
 		} else {

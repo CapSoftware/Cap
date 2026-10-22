@@ -5,6 +5,8 @@ const MAX_LOOKAHEAD = 32;
 const GOP_LENGTH = "250";
 const NVENC_PRESETS = new Set(["p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
 const NVDEC_CODECS = new Set(["h264", "hevc", "vp9", "av1"]);
+// H.264 and VP9 decode faster on the host CPU than on L4 NVDEC; HEVC and AV1 do not.
+const DEFAULT_GPU_DECODE_CODECS = ["hevc", "av1"];
 const MAX_FALLBACK_REASON_LENGTH = 500;
 
 export const NVENC_HWACCEL_INPUT_ARGS = [
@@ -23,6 +25,7 @@ export interface NvencOptions {
 	lookahead: number;
 	spatialAq: boolean;
 	temporalAq: boolean;
+	gpuDecodeCodecs: string[];
 }
 
 interface NvencAttempt {
@@ -82,7 +85,16 @@ export function nvencOptionsFromEnv(
 			DEFAULT_LOOKAHEAD,
 		spatialAq: parseToggle(env.CAP_NVENC_SPATIAL_AQ) ?? true,
 		temporalAq: parseToggle(env.CAP_NVENC_TEMPORAL_AQ) ?? false,
+		gpuDecodeCodecs: parseGpuDecodeCodecs(env.CAP_NVENC_GPU_DECODE_CODECS),
 	};
+}
+
+function parseGpuDecodeCodecs(raw: string | undefined): string[] {
+	if (raw === undefined || raw.trim() === "") return DEFAULT_GPU_DECODE_CODECS;
+	return raw
+		.split(",")
+		.map((codec) => codec.trim().toLowerCase())
+		.filter((codec) => NVDEC_CODECS.has(codec));
 }
 
 export function nvencCq(crf: number, cqOffset: number): string {
@@ -121,19 +133,47 @@ export function buildNvencEncodeArgs(
 	];
 }
 
-export function buildNvencScaleFilter(
+// Mirrors the CPU filter chain: fit within the box keeping aspect (rounded like libavfilter), then floor to even.
+export function fitWithinEven(
+	width: number,
+	height: number,
 	maxWidth: number,
 	maxHeight: number,
-): string {
-	return `scale_cuda='min(${maxWidth},iw)':'min(${maxHeight},ih)':force_original_aspect_ratio=decrease:format=nv12,scale_cuda=trunc(iw/2)*2:trunc(ih/2)*2`;
+): { width: number; height: number } {
+	let w = Math.min(maxWidth, width);
+	let h = Math.min(maxHeight, height);
+	const tmpW = Math.round((h * width) / height);
+	const tmpH = Math.round((w * height) / width);
+	w = Math.min(tmpW, w);
+	h = Math.min(tmpH, h);
+	return { width: Math.trunc(w / 2) * 2, height: Math.trunc(h / 2) * 2 };
 }
+
+// cuvid resizes inside NVDEC for free; scale_cuda then only converts 10-bit surfaces and passes 8-bit through.
+export function buildGpuDecodeInputArgs(
+	videoCodec: string,
+	source: { width: number; height: number },
+	target: { width: number; height: number },
+): string[] {
+	return [
+		...NVENC_HWACCEL_INPUT_ARGS,
+		"-c:v",
+		`${videoCodec}_cuvid`,
+		...(target.width !== source.width || target.height !== source.height
+			? ["-resize", `${target.width}x${target.height}`]
+			: []),
+	];
+}
+
+export const GPU_DECODE_FORMAT_FILTER = "scale_cuda=format=nv12";
 
 // FFmpeg skips autorotation for hardware frames, so rotated sources decode on the CPU to keep the libx264 geometry.
 export function canDecodeOnGpu(
 	videoCodec: string,
 	rotation: number | null,
+	gpuDecodeCodecs: string[] = DEFAULT_GPU_DECODE_CODECS,
 ): boolean {
-	return NVDEC_CODECS.has(videoCodec) && rotation === 0;
+	return gpuDecodeCodecs.includes(videoCodec) && rotation === 0;
 }
 
 export function nvencFallbackReason(
