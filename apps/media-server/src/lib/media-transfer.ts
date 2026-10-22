@@ -45,13 +45,14 @@ const cacheBase = join(tmpdir(), "cap-media-download-cache");
 const cacheRoot = getInstanceDir(cacheBase);
 const CACHE_BYTES = 2 * 1024 ** 3;
 const CACHE_TTL_MS = 30 * 60_000;
-const LEGACY_CACHE_ORPHAN_AGE_MS = 60 * 60_000;
 let cacheBytes = 0;
 let lastPruneAt = 0;
 
-function isLegacyCacheOrphan(name: string, stats: { mtimeMs: number }) {
+// Pre-instance-dir caches are named after their owner's pid. Only remove one
+// once that process is confirmed gone; an old server sharing this volume during
+// a rolling deploy may still be reading from its cache.
+function isLegacyCacheOrphan(name: string) {
 	if (!/^\d+$/.test(name)) return false;
-	if (Date.now() - stats.mtimeMs > LEGACY_CACHE_ORPHAN_AGE_MS) return true;
 	if (name === String(process.pid)) return false;
 	try {
 		process.kill(Number(name), 0);

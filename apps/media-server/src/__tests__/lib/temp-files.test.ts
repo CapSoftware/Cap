@@ -155,22 +155,25 @@ describe("stale temp cleanup", () => {
 });
 
 describe("media transfer cache sweep", () => {
-	test("removes orphaned instance and dead-pid cache dirs", async () => {
+	test("removes orphaned instance and dead-pid cache dirs but keeps a live pid's cache however old", async () => {
 		const base = join(tmpdir(), "cap-media-download-cache");
 		const staleInstance = join(base, `instance-${randomUUID()}`);
 		const liveInstance = join(base, `instance-${randomUUID()}`);
 		const exited = spawn({ cmd: ["true"] });
 		await exited.exited;
 		const deadPidDir = join(base, String(exited.pid));
+		const oldLivePidDir = join(base, String(process.ppid));
 		await makeTree(staleInstance, 10 * 60 * 1000, true);
 		await makeTree(liveInstance, 0, true);
 		await makeTree(deadPidDir, 0);
+		await makeTree(oldLivePidDir, 24 * 60 * 60 * 1000);
 
 		await sweepMediaTransferCache();
 
 		expect(existsSync(staleInstance)).toBe(false);
 		expect(existsSync(deadPidDir)).toBe(false);
 		expect(existsSync(liveInstance)).toBe(true);
+		expect(existsSync(oldLivePidDir)).toBe(true);
 		expect(existsSync(getInstanceDir(base))).toBe(false);
 		await cleanupMediaTransferCache();
 	});
