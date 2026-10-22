@@ -12,15 +12,15 @@ permissions:
   actions: read
 
 env:
-  ROUNDS: "2"
-  SAMPLE: "sample"
+  ROUNDS: "3"
+  SAMPLE: "none"
   BASE_REF: "ci/editor-playback-profile"
   MODES: "profile"
   FIXTURES: "display camera"
   ROUNDS_OVERRIDE: "1"
   RUST_LOG: "warn,cap_gpui=info,cap_probe=info"
-  MODEL_TEST: "1"
-  MODEL_ONLY: "1"
+  MODEL_TEST: ""
+  MODEL_ONLY: ""
 
 jobs:
   fixture:
