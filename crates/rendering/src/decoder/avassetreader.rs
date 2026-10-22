@@ -46,6 +46,7 @@ const SEQUENTIAL_FRAME_CACHE_SIZE: usize = 8;
 // starts decoding eagerly, so only requested tracks may hold native readers.
 const MAX_ACTIVE_READERS: usize = 16;
 const IDLE_READER_TIMEOUT: Duration = Duration::from_millis(250);
+const MAX_CACHED_FRAMES_BELOW_REQUEST: u32 = 10;
 
 fn reader_capacity() -> &'static Arc<Semaphore> {
     static CAPACITY: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -1085,10 +1086,16 @@ impl AVAssetReaderDecoder {
                         if let Some(buf) = frame.image_buf() {
                             hold_candidate = Some((current_frame, buf.retained()));
                             // A seek decodes from the keyframe before the
-                            // request, and scrubbing backwards asks for these
-                            // frames next; caching them makes those requests
-                            // hits instead of another seek over the same span.
-                            if current_frame >= cache_min {
+                            // request, and scrubbing backwards asks for the
+                            // frames just below it next; caching them makes
+                            // those requests hits instead of another seek over
+                            // the same span. Only the last few are kept: each
+                            // pins a buffer of the reader's own pool, and with
+                            // dozens outstanding the reader stops vending.
+                            if current_frame >= cache_min
+                                && current_frame + MAX_CACHED_FRAMES_BELOW_REQUEST
+                                    >= minimum_fallback_frame
+                            {
                                 insert_cached_frame(
                                     &mut cache,
                                     &mut cache_bytes,
@@ -1459,8 +1466,6 @@ fn answer_misses_previous_vend(
         .is_some_and(|expected| answer != Some(expected))
 }
 
-// Drops from the end the cache is trimmed from, skipping pinned frames unless
-// every frame is pinned.
 #[allow(clippy::too_many_arguments)]
 fn insert_cached_frame(
     cache: &mut BTreeMap<u32, CachedFrame>,
@@ -1500,6 +1505,8 @@ fn insert_cached_frame(
     cache.insert(number, frame);
 }
 
+// Drops from the end the cache is trimmed from, skipping pinned frames unless
+// every frame is pinned.
 fn cache_eviction_victim<V>(
     cache: &BTreeMap<u32, V>,
     from_oldest: bool,

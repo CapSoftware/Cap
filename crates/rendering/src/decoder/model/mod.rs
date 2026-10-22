@@ -1144,7 +1144,7 @@ fn ffmpeg_preserves_late_pts_across_playback_and_seeks() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn avassetreader_scrubbing_backwards_seeks_once_per_keyframe_span() {
+fn avassetreader_scrubbing_backwards_reuses_the_frames_below_each_seek() {
     let script = Script {
         time_base: (1, 30),
         frames: (0..120)
@@ -1175,8 +1175,8 @@ fn avassetreader_scrubbing_backwards_seeks_once_per_keyframe_span() {
     assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
     assert_eq!(outcome.requests, case.requests.len());
     assert!(
-        outcome.starts <= 6,
-        "{} reader starts and seeks for a backward scrub over four keyframe spans",
+        outcome.starts <= 16,
+        "{} reader starts and seeks for 60 backward scrub steps",
         outcome.starts
     );
 }
