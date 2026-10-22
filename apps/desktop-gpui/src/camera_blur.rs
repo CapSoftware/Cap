@@ -176,25 +176,24 @@ pub fn run(jobs: flume::Receiver<BlurJob>, results: flume::Sender<BlurOutput>) {
 /// One device + queue for the app's blur lifetime, latched like Tauri's
 /// `blur_processor_init_attempted`: a failed bring-up is not retried on every
 /// toggle. The Tauri preview keeps its device for the window's lifetime
-/// (`camera.rs:573-583`, `LowPower`, downlevel limits); only the ONNX/blur
-/// resources are per-enable.
+/// (`camera.rs:573-583`, downlevel limits); only the ONNX/blur resources are
+/// per-enable.
 fn shared_device(runtime: &tokio::runtime::Runtime) -> Option<(wgpu::Device, wgpu::Queue)> {
     static DEVICE: OnceLock<Option<(wgpu::Device, wgpu::Queue)>> = OnceLock::new();
     DEVICE
         .get_or_init(|| {
             runtime.block_on(async {
                 let instance = cap_rendering::create_wgpu_instance_sync();
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::LowPower,
-                        force_fallback_adapter: cap_rendering::force_software_wgpu_adapter(),
-                        compatible_surface: None,
-                    })
-                    .await
-                    .map_err(|error| {
-                        tracing::warn!("camera blur adapter unavailable: {error}");
-                    })
-                    .ok()?;
+                let adapter = cap_rendering::request_wgpu_adapter(
+                    &instance,
+                    wgpu::PowerPreference::LowPower,
+                    cap_rendering::force_software_wgpu_adapter(),
+                )
+                .await
+                .map_err(|error| {
+                    tracing::warn!("camera blur adapter unavailable: {error}");
+                })
+                .ok()?;
                 let (device, queue) = adapter
                     .request_device(&wgpu::DeviceDescriptor {
                         label: Some("Camera Preview Blur"),

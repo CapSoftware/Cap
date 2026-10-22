@@ -62,14 +62,13 @@ impl PortableCameraBlur {
             .context("camera blur runtime")?;
         let (device, queue) = runtime.block_on(async {
             let instance = cap_rendering::create_wgpu_instance_sync();
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    force_fallback_adapter: cap_rendering::force_software_wgpu_adapter(),
-                    compatible_surface: None,
-                })
-                .await
-                .map_err(|error| anyhow!("camera blur adapter: {error}"))?;
+            let adapter = cap_rendering::request_wgpu_adapter(
+                &instance,
+                wgpu::PowerPreference::LowPower,
+                cap_rendering::force_software_wgpu_adapter(),
+            )
+            .await
+            .map_err(|error| anyhow!("camera blur adapter: {error}"))?;
             adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("Camera Preview Blur"),

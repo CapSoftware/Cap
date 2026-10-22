@@ -1,0 +1,46 @@
+diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -246,14 +246,34 @@
+     }
+ 
+     fn create_device() -> Result<metal::Device> {
+-        // Prefer low‐power integrated GPUs on Intel Mac. On Apple
+-        // Silicon, there is only ever one GPU, so this is equivalent to
+-        // `metal::Device::system_default()`.
+-        if let Some(d) = metal::Device::all()
+-            .into_iter()
+-            .min_by_key(|d| (d.is_removable(), !d.is_low_power()))
+-        {
+-            Ok(d)
++        let preference = std::env::var("CAP_GPU_PREFERENCE")
++            .unwrap_or_default()
++            .to_ascii_lowercase();
++        let prefer_low_power = matches!(preference.as_str(), "low" | "integrated" | "battery");
++        let prefer_high_performance =
++            matches!(preference.as_str(), "high" | "performance" | "discrete");
++        if !prefer_low_power && !prefer_high_performance {
++            if let Some(device) = metal::Device::system_default() {
++                log::info!("selected system Metal device: {}", device.name());
++                return Ok(device);
++            }
++        }
++        if let Some(device) = metal::Device::all().into_iter().min_by_key(|device| {
++            (
++                if prefer_low_power {
++                    !device.is_low_power()
++                } else {
++                    device.is_low_power()
++                },
++                device.is_removable(),
++            )
++        }) {
++            log::info!(
++                "selected Metal device: {} (low_power={})",
++                device.name(),
++                device.is_low_power()
++            );
++            Ok(device)
+         } else {
+             // For some reason `all()` can return an empty list, see https://github.com/zed-industries/zed/issues/37689
+             // In that case, we fall back to the system default device.
