@@ -42,6 +42,7 @@ use cap_verify::{
     report::{self, Case, Tier},
     video_code::{self, FrameMarker, StreamKind},
 };
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 const FPS: u32 = 30;
 const WIDTH: u32 = 640;
@@ -58,12 +59,33 @@ const GOP: u32 = (GOP_SECS as u32) * FPS;
 /// holds at most one frame at a time.
 const IN_FLIGHT: u32 = 3;
 
-fn recorder_in_flight(arm: Arm) -> u32 {
+fn recorder_in_flight(arm: Arm, encoder: &str) -> u32 {
     // VideoToolbox can retain four frames before emitting their packets,
     // in addition to the duration holder, active encode and channel slots.
     // The OOP writer drains its received packets after recorder EOF.
-    IN_FLIGHT + u32::from(cfg!(target_os = "macos") && arm == Arm::InProcess) * 4
+    IN_FLIGHT + u32::from(encoder == "h264_videotoolbox" && arm == Arm::InProcess) * 4
 }
+fn selected_encoder(log: &str) -> Option<&str> {
+    log.lines().find_map(|line| {
+        if line.contains("Selected hardware H264 encoder with zero-copy VideoToolbox input") {
+            Some("h264_videotoolbox")
+        } else {
+            [
+                "Selected hardware H264 encoder ",
+                "Using SOFTWARE H264 encoder (high CPU usage expected) ",
+                "Using SOFTWARE encoder for high throughput (hardware cannot keep up at this resolution/fps) ",
+            ]
+            .into_iter()
+            .find_map(|message| line.split_once(message))
+            .and_then(|(_, fields)| {
+                fields
+                    .split_whitespace()
+                    .find_map(|field| field.strip_prefix("encoder="))
+            })
+        }
+    })
+}
+
 /// Recorded length of every case.
 const SECONDS: f64 = 8.0;
 /// Truth timestamps vs presentation times: the encoder time base and the
@@ -483,7 +505,6 @@ fn crash_child_recorder() {
     let Ok(spec) = std::env::var(CHILD_ENV) else {
         return;
     };
-    common::init();
     let fields: BTreeMap<&str, &str> = spec
         .split(';')
         .filter_map(|kv| kv.split_once('='))
@@ -493,6 +514,25 @@ fn crash_child_recorder() {
     let truth = PathBuf::from(fields["truth"]);
     let seconds: f64 = fields["seconds"].parse().expect("seconds");
     let step: u32 = fields["step"].parse().expect("step");
+    let encoder_log = std::fs::File::create(truth.with_extension("encoder.log"))
+        .expect("create recorder encoder log");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::new(std::env::var("CAP_VERIFY_LOG").unwrap_or_default())
+                .add_directive(
+                    "cap_enc_ffmpeg::video::h264=info"
+                        .parse()
+                        .expect("encoder filter"),
+                ),
+        )
+        .without_time()
+        .with_level(false)
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(encoder_log.and(std::io::stderr))
+        .try_init()
+        .expect("capture recorder encoder selection");
+    common::init();
     if arm == Arm::OutOfProcess {
         cap_recording::oop_muxer::resolve_muxer_binary().expect("child recorder: cap-muxer binary");
     }
@@ -1045,7 +1085,7 @@ fn check_timeline(case: &mut Case, label: &str, frames: &[(u32, f64)], handed: &
 /// fragment being written plus the frames in flight, all at the end.
 fn check_recovery(
     case: &mut Case,
-    arm: Arm,
+    in_flight: u32,
     recovered: &[(u32, f64)],
     physical: &[(u32, f64)],
     handed: &[Handed],
@@ -1114,7 +1154,6 @@ fn check_recovery(
             ),
         );
     }
-    let in_flight = recorder_in_flight(arm);
     let bound = GOP + in_flight;
     // In time: one fragment of capture time, plus the in-flight frames and
     // the frame that closes the fragment at the delivered interval (a static
@@ -1349,7 +1388,16 @@ fn recorder_kill(
         }
         Err(e) => return Err(e),
     };
-    check_recovery(case, arm, &recovered, &physical, &handed, &pending);
+    let in_flight = if arm == Arm::InProcess {
+        let log = std::fs::read_to_string(truth.with_extension("encoder.log"))?;
+        let encoder =
+            selected_encoder(&log).context("recorder did not report its selected encoder")?;
+        case.note(format!("recorder encoder: {encoder}"));
+        recorder_in_flight(arm, encoder)
+    } else {
+        IN_FLIGHT
+    };
+    check_recovery(case, in_flight, &recovered, &physical, &handed, &pending);
     if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -1796,7 +1844,7 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
     let mut case = Case::new("pending-fragment-test");
     check_recovery(
         &mut case,
-        Arm::InProcess,
+        IN_FLIGHT,
         &physical[..1],
         &physical,
         &handed,
@@ -1807,37 +1855,68 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
 }
 
 #[test]
+fn recorder_encoder_selection_ignores_failed_candidates() {
+    let failed = "Hardware H264 encoder failed pre-flight self-test, trying next candidate encoder=h264_videotoolbox";
+    assert_eq!(selected_encoder(failed), None);
+    for (selection, expected) in [
+        (
+            "Selected hardware H264 encoder with zero-copy VideoToolbox input width=640",
+            "h264_videotoolbox",
+        ),
+        (
+            "Selected hardware H264 encoder encoder=h264_videotoolbox width=640",
+            "h264_videotoolbox",
+        ),
+        (
+            "Using SOFTWARE H264 encoder (high CPU usage expected) encoder=libx264 width=640",
+            "libx264",
+        ),
+        (
+            "Using SOFTWARE encoder for high throughput (hardware cannot keep up at this resolution/fps) encoder=libx264 width=640",
+            "libx264",
+        ),
+    ] {
+        assert_eq!(
+            selected_encoder(&format!("{failed}\nrecording: {selection}\n")),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn recorder_loss_budget_accounts_for_codec_buffering_without_hiding_excess_loss() {
     let physical: Vec<_> = (0..120).map(|i| (i, f64::from(i) / 30.0)).collect();
     for arm in [Arm::InProcess, Arm::OutOfProcess] {
-        for lost in [63, 64, 65, 67, 68, 69] {
-            let handed: Vec<_> = (0..120 + lost)
-                .map(|index| Handed {
-                    index,
-                    secs: f64::from(index) / 30.0,
-                })
-                .collect();
-            let mut case = Case::new("recorder-loss-budget");
-            check_recovery(
-                &mut case,
-                arm,
-                &physical,
-                &physical,
-                &handed,
-                &Default::default(),
-            );
-            let videotoolbox = cfg!(target_os = "macos") && arm == Arm::InProcess;
-            assert_eq!(
-                case.classes.contains("loss"),
-                if videotoolbox { lost >= 68 } else { lost >= 64 },
-                "{arm:?}, {lost} lost frames"
-            );
-            assert_eq!(
-                case.classes.contains("loss-time"),
-                if videotoolbox { lost >= 69 } else { lost >= 65 },
-                "{arm:?}, {lost} lost frames"
-            );
-            assert!(!case.classes.contains("dropped-complete"));
+        for encoder in ["libx264", "h264_videotoolbox"] {
+            for lost in [63, 64, 65, 67, 68, 69] {
+                let handed: Vec<_> = (0..120 + lost)
+                    .map(|index| Handed {
+                        index,
+                        secs: f64::from(index) / 30.0,
+                    })
+                    .collect();
+                let mut case = Case::new("recorder-loss-budget");
+                check_recovery(
+                    &mut case,
+                    recorder_in_flight(arm, encoder),
+                    &physical,
+                    &physical,
+                    &handed,
+                    &Default::default(),
+                );
+                let videotoolbox = encoder == "h264_videotoolbox" && arm == Arm::InProcess;
+                assert_eq!(
+                    case.classes.contains("loss"),
+                    if videotoolbox { lost >= 68 } else { lost >= 64 },
+                    "{arm:?}, {encoder}, {lost} lost frames"
+                );
+                assert_eq!(
+                    case.classes.contains("loss-time"),
+                    if videotoolbox { lost >= 69 } else { lost >= 65 },
+                    "{arm:?}, {encoder}, {lost} lost frames"
+                );
+                assert!(!case.classes.contains("dropped-complete"));
+            }
         }
     }
 }
