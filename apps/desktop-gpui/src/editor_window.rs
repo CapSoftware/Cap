@@ -9853,6 +9853,7 @@ impl EditorWindow {
     /// the sprite atlas.
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let editor = cx.entity().downgrade();
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
             (_, true) => loading::reveal(
@@ -9866,11 +9867,32 @@ impl EditorWindow {
         };
 
         div()
+            .debug_selector(|| "editor-preview-canvas".into())
             .relative()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
             .bg(Hsla::from(theme.editor.card))
+            .child(
+                gpui::canvas(
+                    |bounds, _, _| bounds,
+                    move |_, bounds, window, _| {
+                        let editor = editor.clone();
+                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                            if phase == gpui::DispatchPhase::Capture
+                                && event.button == MouseButton::Left
+                                && bounds.contains(&event.position)
+                            {
+                                let _ = editor.update(cx, |this, cx| {
+                                    this.focus_root(window, cx);
+                                });
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(body)
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
@@ -12538,6 +12560,32 @@ mod tests {
             let keystroke = gpui::Keystroke::parse(key).unwrap();
             assert!(!is_playback_shortcut(&keystroke, false, false), "{key}");
         }
+    }
+
+    #[gpui::test]
+    fn preview_click_returns_focus_to_the_editor(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let (input_focus, editor_focus) = editor.read_with(cx, |editor, cx| {
+            (
+                editor.name_input.read(cx).focus_handle(),
+                editor.focus.clone(),
+            )
+        });
+
+        cx.update(|window, cx| window.focus(&input_focus, cx));
+        cx.update(|window, _| assert!(input_focus.is_focused(window)));
+
+        let preview = cx.debug_bounds("editor-preview-canvas").unwrap();
+        cx.simulate_mouse_move(preview.center(), None, gpui::Modifiers::default());
+        cx.simulate_click(preview.center(), gpui::Modifiers::default());
+
+        cx.update(|window, _| {
+            assert!(!input_focus.is_focused(window));
+            assert!(editor_focus.is_focused(window));
+        });
     }
 
     /// `default_editor_preview_resolution()` is asserted to be 1248x702 in the
