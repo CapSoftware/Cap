@@ -55,6 +55,7 @@ fn push_stage(stages: &mut Vec<(&'static str, f64)>, name: &'static str, start: 
 
 async fn profile_startup_stages(
     recording_path: PathBuf,
+    shared_device: Option<cap_rendering::SharedWgpuDevice>,
 ) -> Result<Vec<(&'static str, f64)>, String> {
     let mut stages = Vec::new();
     let total_start = Instant::now();
@@ -76,15 +77,23 @@ async fn profile_startup_stages(
     )?);
     push_stage(&mut stages, "recordings metadata", &mut stage_start);
 
-    let render_constants = Arc::new(
+    let render_constants = Arc::new(if let Some(shared) = shared_device {
+        RenderVideoConstants::new_with_device(
+            shared,
+            &recordings.segments,
+            recording_meta.clone(),
+            (**meta).clone(),
+        )
+        .map_err(|e| format!("Failed to create render constants: {e}"))?
+    } else {
         RenderVideoConstants::new(
             &recordings.segments,
             recording_meta.clone(),
             (**meta).clone(),
         )
         .await
-        .map_err(|e| format!("Failed to create render constants: {e}"))?,
-    );
+        .map_err(|e| format!("Failed to create render constants: {e}"))?
+    });
     push_stage(&mut stages, "render constants", &mut stage_start);
 
     let layers_rx = start_renderer_layers_creation(&render_constants, &project);
@@ -112,13 +121,20 @@ async fn profile_startup_stages(
     Ok(stages)
 }
 
-async fn run_stage_profile(recording_path: PathBuf, runs: usize) {
+async fn run_stage_profile(
+    recording_path: PathBuf,
+    runs: usize,
+    shared_device: Option<&cap_rendering::SharedWgpuDevice>,
+) {
     let mut stage_values: Vec<(&'static str, Vec<f64>)> = Vec::new();
 
     for _ in 0..runs {
-        let stages = profile_startup_stages(recording_path.clone())
-            .await
-            .expect("Failed to profile startup stages");
+        let stages = profile_startup_stages(
+            recording_path.clone(),
+            shared_device.map(clone_shared_device),
+        )
+        .await
+        .expect("Failed to profile startup stages");
 
         for (stage_idx, (name, value)) in stages.into_iter().enumerate() {
             if stage_values.len() <= stage_idx {
@@ -231,7 +247,14 @@ async fn main() {
         );
     }
     if profile_stages_only {
-        run_stage_profile(recording_path, runs).await;
+        if shared_device_mode && shared_device.is_none() {
+            shared_device = Some(
+                cap_rendering::create_shared_device()
+                    .await
+                    .expect("Failed to create shared device"),
+            );
+        }
+        run_stage_profile(recording_path, runs, shared_device.as_ref()).await;
         return;
     }
 
@@ -317,6 +340,6 @@ async fn main() {
     );
 
     if profile_stages {
-        run_stage_profile(recording_path, runs).await;
+        run_stage_profile(recording_path, runs, shared_device.as_ref()).await;
     }
 }

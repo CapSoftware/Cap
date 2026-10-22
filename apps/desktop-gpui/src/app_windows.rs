@@ -4872,6 +4872,11 @@ pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevi
 static GPU_WORK_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(target_os = "macos")]
+fn gpu_work_requested() -> bool {
+    GPU_WORK_REQUESTED.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub(crate) fn prewarm_shared_wgpu_device(cx: &App) {
     GPU_WORK_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
     gpui_tokio::Tokio::spawn(cx, async {
@@ -4907,10 +4912,13 @@ pub(crate) fn schedule_launch_render_warmup(cx: &App) {
 
 #[cfg(target_os = "macos")]
 async fn warm_renderer() -> Option<f64> {
-    if GPU_WORK_REQUESTED.load(std::sync::atomic::Ordering::Acquire) {
+    if gpu_work_requested() {
         return None;
     }
     let shared = shared_wgpu_device().await?;
+    if gpu_work_requested() {
+        return None;
+    }
     let started = std::time::Instant::now();
     let (device, queue, software) = (
         shared.device.clone(),
@@ -4918,10 +4926,14 @@ async fn warm_renderer() -> Option<f64> {
         shared.is_software_adapter,
     );
     let mut layers = tokio::task::spawn_blocking(move || {
-        cap_rendering::RendererLayers::new_with_options(&device, &queue, software)
+        (!gpu_work_requested())
+            .then(|| cap_rendering::RendererLayers::new_with_options(&device, &queue, software))
     })
     .await
-    .ok()?;
+    .ok()??;
+    if gpu_work_requested() {
+        return None;
+    }
     if let Err(error) = cap_rendering::prewarm_first_frame(shared, &mut layers).await {
         tracing::warn!(%error, "launch render warmup frame failed");
     }
