@@ -20,6 +20,7 @@ env:
   ROUNDS_OVERRIDE: "1"
   RUST_LOG: "warn,cap_gpui=info,cap_probe=info"
   MODEL_TEST: "1"
+  MODEL_ONLY: "1"
 
 jobs:
   fixture:
@@ -80,7 +81,21 @@ jobs:
           node scripts/sync-desktop-versions.mjs
           ./scripts/prepare-gpui-dependency.sh
 
+      - name: Model test with the base decoder
+        if: env.MODEL_ONLY != ''
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/out"
+          git fetch -q origin "$BASE_REF"
+          git checkout -f FETCH_HEAD -- crates/rendering/src/decoder/avassetreader.rs
+          git status --short crates
+          cargo +1.95.0 test --locked -p cap-rendering --lib decoder::model::avassetreader_scrubbing -- --test-threads=1 2>&1 | tail -30 | tee "$RUNNER_TEMP/out/model-base-decoder-head-test.txt"
+          git checkout -f HEAD -- crates
+          cargo +1.95.0 test --locked -p cap-rendering --lib decoder::model::avassetreader_scrubbing -- --test-threads=1 2>&1 | tail -30 | tee "$RUNNER_TEMP/out/model-head.txt"
+          true
+
       - name: Build
+        if: env.MODEL_ONLY == ''
         run: |
           set +e
           cp -R .github/scripts/editor-playback "$RUNNER_TEMP/editor-playback"
@@ -112,6 +127,7 @@ jobs:
           echo "VARIANTS=${variants[*]}" >> "$GITHUB_ENV"
 
       - name: Wait for the fixture
+        if: env.MODEL_ONLY == ''
         run: |
           for attempt in $(seq 1 120); do
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].name' | grep -qx editor-playback-fixtures; then
@@ -122,11 +138,13 @@ jobs:
           exit 1
 
       - uses: actions/download-artifact@v4
+        if: env.MODEL_ONLY == ''
         with:
           name: editor-playback-fixtures
           path: ${{ runner.temp }}/fixtures
 
       - name: Measure
+        if: env.MODEL_ONLY == ''
         run: |
           set +e
           sw_vers
@@ -137,7 +155,7 @@ jobs:
           true
 
       - name: Decoder model tests on base and head
-        if: env.MODEL_TEST != ''
+        if: env.MODEL_TEST != '' && env.MODEL_ONLY == ''
         run: |
           set +e
           for ref in FETCH_BASE HEAD_SHA; do
