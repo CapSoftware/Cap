@@ -178,18 +178,11 @@ export const loadManagedApiBaseUrl = async (): Promise<string | null> => {
 	}
 };
 
-export const loadSettings = async () => {
-	const [result, managedApiBaseUrl] = await Promise.all([
-		getLocal([SETTINGS_KEY]),
-		loadManagedApiBaseUrl(),
-	]);
+const loadUserSettings = async (): Promise<ExtensionSettings> => {
+	const result = await getLocal([SETTINGS_KEY]);
 	const saved = result[SETTINGS_KEY];
-	if (!isSettings(saved)) {
-		return managedApiBaseUrl
-			? { ...defaultSettings, apiBaseUrl: managedApiBaseUrl }
-			: defaultSettings;
-	}
-	const savedApiBaseUrl =
+	if (!isSettings(saved)) return defaultSettings;
+	const apiBaseUrl =
 		import.meta.env.MODE === "development" &&
 		saved.apiBaseUrl === PRODUCTION_API_BASE_URL
 			? DEFAULT_API_BASE_URL
@@ -197,7 +190,7 @@ export const loadSettings = async () => {
 	return {
 		...defaultSettings,
 		...saved,
-		apiBaseUrl: managedApiBaseUrl ?? savedApiBaseUrl,
+		apiBaseUrl,
 		capture: normalizeCapturePreferences(saved.capture),
 		webcam: normalizeWebcamSettings(saved.webcam),
 		microphone: normalizeMicrophoneSettings(saved.microphone),
@@ -213,13 +206,70 @@ export const loadSettings = async () => {
 	};
 };
 
-export const saveSettings = (settings: ExtensionSettings) =>
-	setLocal({ [SETTINGS_KEY]: settings });
+export const loadSettings = async (): Promise<ExtensionSettings> => {
+	const [settings, managedApiBaseUrl] = await Promise.all([
+		loadUserSettings(),
+		loadManagedApiBaseUrl(),
+	]);
+	return managedApiBaseUrl
+		? { ...settings, apiBaseUrl: managedApiBaseUrl }
+		: settings;
+};
 
-export const loadAuth = async () => {
-	const result = await getLocal([AUTH_KEY]);
+// Settings handed back by the UI carry the policy URL while it is managed.
+// Persisting that would keep the user pinned to the policy server after the
+// policy is lifted, so their own saved Cap URL is kept instead.
+export const saveSettings = (settings: ExtensionSettings) =>
+	withKeyLock(SETTINGS_KEY, async () => {
+		if (!(await loadManagedApiBaseUrl())) {
+			await setLocal({ [SETTINGS_KEY]: settings });
+			return;
+		}
+		const result = await getLocal([SETTINGS_KEY]);
+		const saved = result[SETTINGS_KEY];
+		await setLocal({
+			[SETTINGS_KEY]: {
+				...settings,
+				apiBaseUrl: isSettings(saved)
+					? saved.apiBaseUrl
+					: defaultSettings.apiBaseUrl,
+			},
+		});
+	});
+
+const originOf = (url: string) => {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return null;
+	}
+};
+
+// An API key is only valid on the Cap server that minted it. When the
+// effective Cap URL moves to another origin (an MDM policy being pushed or
+// lifted), the stored key is dropped rather than sent as a bearer token to
+// the new server. Auth saved before apiOrigin was recorded was issued against
+// the user's own Cap URL, since a policy URL could not be set back then.
+export const loadAuth = async (): Promise<ExtensionAuth | null> => {
+	const [result, userSettings, managedApiBaseUrl] = await Promise.all([
+		getLocal([AUTH_KEY]),
+		loadUserSettings(),
+		loadManagedApiBaseUrl(),
+	]);
 	const saved = result[AUTH_KEY];
-	return isAuth(saved) ? saved : null;
+	if (!isStoredAuth(saved)) return null;
+	const apiOrigin = saved.apiOrigin ?? originOf(userSettings.apiBaseUrl);
+	const currentOrigin = originOf(managedApiBaseUrl ?? userSettings.apiBaseUrl);
+	if (apiOrigin && apiOrigin === currentOrigin) {
+		return { authApiKey: saved.authApiKey, userId: saved.userId, apiOrigin };
+	}
+	await withKeyLock(AUTH_KEY, async () => {
+		const current = (await getLocal([AUTH_KEY]))[AUTH_KEY];
+		if (isStoredAuth(current) && current.authApiKey === saved.authApiKey) {
+			await removeLocal([AUTH_KEY, BOOTSTRAP_CACHE_KEY]);
+		}
+	});
+	return null;
 };
 
 export const saveAuth = (auth: ExtensionAuth) => setLocal({ [AUTH_KEY]: auth });
@@ -858,12 +908,16 @@ const normalizeOverlayUiState = (value: unknown): OverlayUiState => {
 	};
 };
 
-const isAuth = (value: unknown): value is ExtensionAuth => {
+type StoredAuth = Omit<ExtensionAuth, "apiOrigin"> & { apiOrigin?: string };
+
+const isStoredAuth = (value: unknown): value is StoredAuth => {
 	if (!value || typeof value !== "object") return false;
 	const candidate = value as Partial<ExtensionAuth>;
 	return (
 		typeof candidate.authApiKey === "string" &&
-		typeof candidate.userId === "string"
+		typeof candidate.userId === "string" &&
+		(candidate.apiOrigin === undefined ||
+			typeof candidate.apiOrigin === "string")
 	);
 };
 
