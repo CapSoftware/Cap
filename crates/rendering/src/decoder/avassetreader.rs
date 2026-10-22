@@ -246,7 +246,7 @@ impl CachedFrame {
             | format::Pixel::RGBA
             | format::Pixel::BGRA
             | format::Pixel::YUV420P => {
-                let frame = if pixel_format == format::Pixel::NV12 && image_buf.io_surf().is_some()
+                let frame = if std::env::var_os("CAP_PROOF_COPY_FRAMES").is_none() && pixel_format == format::Pixel::NV12 && image_buf.io_surf().is_some()
                 {
                     let y_stride = image_buf.plane_bytes_per_row(0) as u32;
                     let uv_stride = image_buf.plane_bytes_per_row(1) as u32;

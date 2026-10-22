@@ -26,6 +26,7 @@ jobs:
           mkdir -p target/ci-verify
           ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
           export CAP_VERIFY_TIER=fast
+          export CAP_PROOF_COPY_FRAMES=1
           for i in 1 2 3 4 5; do
             cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --no-fail-fast --failure-output final --success-output final > "$RUNNER_TEMP/proof-seek-head-$i.log" 2>&1
             echo "== seek round $i head exit=$?"
