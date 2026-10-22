@@ -2330,6 +2330,13 @@ pub fn new_gap_segment(
     preview: f64,
     secs_per_pixel: f64,
 ) -> Option<(f64, f64)> {
+    if !preview.is_finite()
+        || preview < 0.0
+        || !model.total_duration.is_finite()
+        || preview >= model.total_duration
+    {
+        return None;
+    }
     let min_duration = new_segment_min_duration(secs_per_pixel);
     let segments = model.segments(kind);
 
@@ -2339,25 +2346,15 @@ pub fn new_gap_segment(
         .rev()
         .find(|segment| preview >= segment.start);
 
-    if let Some(previous) = previous
-        && preview > previous.start
-        && preview < previous.end
-    {
+    let gap_start = previous.map_or(0.0, |segment| segment.end);
+    let gap_end = next
+        .map_or(model.total_duration, |segment| segment.start)
+        .min(model.total_duration);
+    if preview < gap_start || gap_end - gap_start < min_duration {
         return None;
     }
-
-    if let Some(next) = next {
-        if let Some(previous) = previous
-            && next.start - previous.end < min_duration
-        {
-            return None;
-        }
-        if next.start - preview < 1. {
-            return Some((next.start - min_duration, next.start));
-        }
-    }
-
-    Some((preview, preview + min_duration))
+    let start = preview.min(gap_end - min_duration);
+    Some((start, start + min_duration))
 }
 
 /// The 3D lane's create ghost: where a click would put a shot, and what it
@@ -4488,6 +4485,55 @@ mod tests {
         // floor takes over.
         let wide = new_zoom_segment(&model, 10.0, 60. / 1000.).unwrap();
         assert!((wide.1 - wide.0 - 4.8).abs() < 1e-9, "{wide:?}");
+    }
+
+    #[test]
+    fn zoom_creation_respects_gap_edges_at_zoomed_out_scales() {
+        let model = TimelineModel {
+            zoom: vec![Segment {
+                start: 20.0,
+                end: 24.0,
+                lane: 0,
+                detail: SegmentDetail::Zoom {
+                    amount: 1.5,
+                    automatic: true,
+                },
+            }],
+            total_duration: 30.0,
+            ..TimelineModel::default()
+        };
+        assert_eq!(new_zoom_segment(&model, 18.0, 0.05), Some((16.0, 20.0)));
+        assert_eq!(new_zoom_segment(&model, 29.5, 0.05), Some((26.0, 30.0)));
+    }
+
+    #[test]
+    fn zoom_creation_requires_a_full_gap_inside_the_timeline() {
+        let model = TimelineModel {
+            zoom: vec![Segment {
+                start: 2.0,
+                end: 8.0,
+                lane: 0,
+                detail: SegmentDetail::Zoom {
+                    amount: 1.5,
+                    automatic: true,
+                },
+            }],
+            total_duration: 10.0,
+            ..TimelineModel::default()
+        };
+        assert_eq!(new_zoom_segment(&model, 1.5, 0.05), None);
+        assert_eq!(new_zoom_segment(&model, 9.0, 0.05), None);
+        assert_eq!(new_zoom_segment(&model, 1.5, 0.025), Some((0.0, 2.0)));
+        assert_eq!(new_zoom_segment(&model, 9.0, 0.025), Some((8.0, 10.0)));
+        assert_eq!(new_zoom_segment(&model, 10.0, 0.01), None);
+        assert_eq!(new_zoom_segment(&model, 11.0, 0.01), None);
+        assert_eq!(new_zoom_segment(&model, -0.5, 0.01), None);
+        assert_eq!(new_zoom_segment(&model, f64::NAN, 0.01), None);
+        let empty = TimelineModel {
+            total_duration: 0.5,
+            ..TimelineModel::default()
+        };
+        assert_eq!(new_zoom_segment(&empty, 0.0, 0.01), None);
     }
 
     #[test]

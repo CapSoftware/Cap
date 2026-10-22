@@ -352,7 +352,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
-				const [video] = maybeVideo.value;
+				const [video, password] = maybeVideo.value;
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
@@ -413,9 +413,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						}
 					} while (continuationToken);
 					publicationAttempted = true;
+					const hasPassword = Option.isSome(password);
 					yield* repo.create(
 						{
-							...video,
+							ownerId: video.ownerId,
+							orgId: video.orgId,
+							name: video.name,
+							public: video.public,
 							source:
 								publishedKeys.size > 0
 									? {
@@ -428,8 +432,17 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							metadata: Option.map(video.metadata, (metadata) => {
 								const copied = { ...metadata };
 								delete copied.desktopRecordingUpload;
+								delete copied.customCreatedAt;
 								return copied;
 							}),
+							bucketId: video.bucketId,
+							storageIntegrationId: video.storageIntegrationId,
+							folderId: video.folderId,
+							transcriptionStatus: video.transcriptionStatus,
+							width: video.width,
+							height: video.height,
+							duration: video.duration,
+							...(hasPassword ? { password: password.value } : {}),
 						},
 						{ id: newVideoId },
 					);
@@ -628,16 +641,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						metadata: Option.none<RepoMetadataValue>(),
 						transcriptionStatus: Option.none<RepoTranscriptionStatusValue>(),
 					};
-					const videoId = yield* repo.create(createData);
-
-					if (input.supportsUploadProgress ?? true)
-						yield* db.use((db) =>
-							db.insert(Db.videoUploads).values({
-								videoId,
-								mode: "singlepart",
-							}),
-						);
-
+					const videoId = yield* repo.create(createData, {
+						initialUpload:
+							(input.supportsUploadProgress ?? true)
+								? { mode: "singlepart" }
+								: undefined,
+					});
 					const fileKey = `${user.id}/${videoId}/result.mp4`;
 					const upload = yield* writable.access.createUploadTarget(fileKey, {
 						contentType: "video/mp4",
@@ -652,7 +661,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							"x-amz-meta-audiocodec": input.audioCodec ?? "",
 						},
 					});
-
 					const canonicalShareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
 
 					const verifiedCustomDomain = yield* db

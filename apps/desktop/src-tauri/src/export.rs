@@ -1950,6 +1950,7 @@ async fn generate_export_preview_inner(
             .map(|segment| segment.display.duration)
             .collect::<Vec<_>>(),
     );
+    let project_config = Arc::new(project_config);
 
     let render_constants = Arc::new(
         RenderVideoConstants::new(
@@ -2546,6 +2547,7 @@ async fn generate_export_preview_fast_inner(
     })
     .await
     .map_err(|error| format!("Failed to synchronize export preview timing: {error}"))?;
+    let project_config = Arc::new(project_config);
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
