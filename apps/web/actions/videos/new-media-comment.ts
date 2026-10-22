@@ -18,6 +18,7 @@ import { sanitizeWaveform } from "@/lib/comment-media";
 import { canUseMediaComments } from "@/lib/media-comments";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
+import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 
 export async function newMediaComment(data: {
 	videoId: Video.VideoId;
@@ -87,7 +88,9 @@ export async function newMediaComment(data: {
 			// A missing thumbnail degrades the card, it doesn't block the comment.
 			const thumbnailExists = yield* bucket.headObject(thumbnailKey).pipe(
 				Effect.map(() => true),
-				Effect.catchAll(() => Effect.succeed(false)),
+				Effect.catchAll((error) =>
+					Effect.succeed(!isStorageObjectNotFound(error)),
+				),
 			);
 			if (!thumbnailExists) thumbnailKey = null;
 		}
