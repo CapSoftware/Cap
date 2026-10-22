@@ -224,6 +224,25 @@ describe("mediaAudio integration tests", () => {
 	});
 
 	describe("extractAudioStream", () => {
+		test("preserves queued audio when the reader pauses before EOF", async () => {
+			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
+			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const reader = stream.getReader();
+			const chunks: Uint8Array[] = [];
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					chunks.push(value);
+					await Bun.sleep(50);
+				}
+				expect(Buffer.concat(chunks).equals(expected)).toBe(true);
+			} finally {
+				reader.releaseLock();
+				cleanup();
+			}
+		});
+
 		test("drains all encoded bytes when the consumer waits for FFmpeg to exit", async () => {
 			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
 			const registration = spyOn(subprocess, "registerSubprocess");

@@ -401,10 +401,10 @@ export function extractAudioStream(
 	let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 	let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
-	const cleanup = (error = new Error("Audio extraction cancelled")) => {
+	const finish = (error?: Error) => {
 		if (cleaned) return;
 		cleaned = true;
-		streamController?.error(error);
+		if (error) streamController?.error(error);
 		if (timeoutId) clearTimeout(timeoutId);
 		if (reader) {
 			try {
@@ -416,9 +416,10 @@ export function extractAudioStream(
 		unregisterMediaOperation(operation);
 		void terminateProcess(proc);
 	};
+	const cleanup = () => finish(new Error("Audio extraction cancelled"));
 
 	timeoutId = setTimeout(() => {
-		cleanup(new Error(`Operation timed out after ${opts.timeoutMs}ms`));
+		finish(new Error(`Operation timed out after ${opts.timeoutMs}ms`));
 	}, opts.timeoutMs);
 
 	void drainStream(proc.stderr as ReadableStream<Uint8Array>);
@@ -426,7 +427,7 @@ export function extractAudioStream(
 	proc.exited.then((exitCode) => {
 		if (cleaned) return;
 		if (exitCode !== 0) {
-			cleanup(new Error(`FFmpeg exited with code ${exitCode}`));
+			finish(new Error(`FFmpeg exited with code ${exitCode}`));
 			return;
 		}
 		if (timeoutId) clearTimeout(timeoutId);
@@ -455,13 +456,13 @@ export function extractAudioStream(
 						await proc.exited;
 						if (cleaned) return;
 						controller.close();
-						cleanup();
+						finish();
 					} else {
 						controller.enqueue(value);
 					}
 				} catch (err) {
 					controller.error(err);
-					cleanup();
+					finish();
 				}
 			},
 			cancel() {
