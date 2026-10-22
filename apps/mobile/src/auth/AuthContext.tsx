@@ -234,6 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			SecureStore.deleteItemAsync(sessionKey),
 			SecureStore.deleteItemAsync(userIdKey),
 		]);
+		sessionRevision.current += 1;
 		setApiKey(null);
 		setUserId(null);
 		setBootstrap(null);
