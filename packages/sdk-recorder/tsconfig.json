@@ -8,10 +8,13 @@
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
+		"composite": true,
 		"declaration": true,
 		"declarationMap": true,
+		"emitDeclarationOnly": true,
 		"outDir": "dist",
 		"rootDir": "src"
 	},
-	"include": ["src"]
+	"include": ["src"],
+	"exclude": ["dist", "node_modules"]
 }
