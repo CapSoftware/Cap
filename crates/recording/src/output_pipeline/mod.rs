@@ -7,6 +7,8 @@ mod frame_pacing;
 mod macos_fragmented_m4s;
 #[cfg(target_os = "macos")]
 mod macos_frame_convert;
+#[cfg(any(windows, test))]
+mod mjpeg;
 #[cfg(target_os = "macos")]
 mod oop_fragmented_m4s;
 pub mod oop_muxer;

@@ -148,7 +148,7 @@ function SignedBaaCardContent() {
 		(!isPaid && !canPurchase);
 
 	const signatureMutation = useMutation({
-		mutationFn: () => {
+		mutationFn: async () => {
 			if (!organizationId) throw new Error("No organization");
 			if (actionsBlocked) throw new Error("Please wait for your BAA status.");
 			if (!signatureDataUrl) throw new Error("Please add your signature");
@@ -156,9 +156,11 @@ function SignedBaaCardContent() {
 				...form,
 				signatureDataUrl,
 			};
-			return isPaid
-				? signPaidBaa(organizationId, input)
-				: purchaseSignedBaa(organizationId, input);
+			const result = isPaid
+				? await signPaidBaa(organizationId, input)
+				: await purchaseSignedBaa(organizationId, input);
+			if (!result.success) throw new Error(result.error);
+			return result;
 		},
 		onSuccess: (result) => {
 			toast.success(
