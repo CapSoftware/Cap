@@ -1,3 +1,9 @@
+//! Refuses to run unless `CAP_X11_BENCH_ISOLATED=1`. It replaces
+//! `_NET_CLIENT_LIST` and `_NET_CLIENT_LIST_STACKING` on the current `DISPLAY`
+//! and warps the pointer. Start an isolated server first
+//! (`Xvfb :99 -screen 0 1920x1080x24`), then run with
+//! `CAP_X11_BENCH_ISOLATED=1 DISPLAY=:99`.
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -31,6 +37,7 @@ mod linux {
     use scap_targets::{Window, WindowImpl};
 
     pub fn run() -> Result<(), String> {
+        ensure_isolated_display()?;
         let windows = arg_usize("windows", 40)?;
         let runs = arg_usize("runs", 11)?;
         if runs == 0 {
@@ -75,6 +82,18 @@ mod linux {
         print_stats("hover_per_call_ms", &hover_old);
         print_stats("hover_snapshot_ms", &hover_new);
         Ok(())
+    }
+
+    fn ensure_isolated_display() -> Result<(), String> {
+        if std::env::var("CAP_X11_BENCH_ISOLATED").ok().as_deref() == Some("1") {
+            return Ok(());
+        }
+        Err(
+            "refusing to run: set CAP_X11_BENCH_ISOLATED=1. This bench replaces \
+_NET_CLIENT_LIST and _NET_CLIENT_LIST_STACKING and warps the pointer on the \
+current DISPLAY. Use an isolated server, for example: Xvfb :99 -screen 0 1920x1080x24"
+                .to_string(),
+        )
     }
 
     fn arg_usize(name: &str, default: usize) -> Result<usize, String> {

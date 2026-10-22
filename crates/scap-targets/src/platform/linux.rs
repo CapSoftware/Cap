@@ -404,10 +404,13 @@ fn client_list(conn: &RustConnection, root: Window) -> Vec<Window> {
         .unwrap_or_else(|| query_window_tree(conn, root))
 }
 
-fn client_windows(conn: &RustConnection, root: Window, atoms: &X11Atoms) -> Vec<Window> {
+fn client_list_windows(
+    conn: &RustConnection,
+    root: Window,
+    atoms: &X11Atoms,
+) -> Option<Vec<Window>> {
     window_list_property(conn, root, atoms.client_list_stacking)
         .or_else(|| window_list_property(conn, root, atoms.client_list))
-        .unwrap_or_else(|| query_window_tree(conn, root))
 }
 
 fn window_list_property(conn: &RustConnection, root: Window, atom: Atom) -> Option<Vec<Window>> {
@@ -597,9 +600,16 @@ fn x11_pass(
     let atoms = recv_interns(atom_cookies)?;
     let displays = recv_displays(monitors_cookie, screen_width, screen_height);
     let cursor = pointer_cookie.and_then(pointer_position);
-    let windows = client_windows(&conn, root, &atoms);
+    let listed = client_list_windows(&conn, root, &atoms);
+    let from_client_list = listed.is_some();
+    let windows = listed.unwrap_or_else(|| query_window_tree(&conn, root));
     let pending = send_window_queries(&conn, root, &windows, &atoms, mode);
-    let snapshots = finish_window_queries(pending, &displays);
+    let mut snapshots = finish_window_queries(pending, &displays);
+    if snapshots.is_empty() && from_client_list {
+        let tree = query_window_tree(&conn, root);
+        let pending = send_window_queries(&conn, root, &tree, &atoms, mode);
+        snapshots = finish_window_queries(pending, &displays);
+    }
     Some((snapshots, cursor))
 }
 
@@ -1195,6 +1205,201 @@ mod tests {
             }
         }
         let _ = conn.flush();
+    }
+
+    #[test]
+    #[ignore = "needs an X server; run under Xvfb"]
+    fn stale_client_list_falls_back_to_the_window_tree() {
+        let (conn, screen_num) = x11rb::connect(None).expect("X11 connection");
+        let screen = &conn.setup().roots[screen_num];
+        let root = screen.root;
+        let white = screen.white_pixel;
+        let window_a = open_named_window(&conn, root, white, 0, 20, 20);
+        let window_b = open_named_window(&conn, root, white, 1, 200, 20);
+        let guard = MappedWindows {
+            conn,
+            windows: vec![window_a, window_b],
+        };
+        publish_client_list(&guard.conn, root, &[window_a]);
+        guard
+            .conn
+            .warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, 240, 50)
+            .expect("warp")
+            .check()
+            .expect("warp accepted");
+
+        assert_eq!(snapshot_ids(), vec![window_a]);
+        assert_eq!(list_ids(), vec![window_a]);
+        assert_eq!(
+            WindowImpl::topmost_x11_snapshot_at_cursor()
+                .map(|found| found.map(|snapshot| snapshot.window.0.0)),
+            Some(None)
+        );
+
+        let decoy = guard.conn.generate_id().expect("decoy id");
+        create_window(
+            &guard.conn,
+            COPY_DEPTH_FROM_PARENT,
+            decoy,
+            root,
+            400,
+            20,
+            40,
+            40,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new().background_pixel(white),
+        )
+        .expect("create decoy")
+        .check()
+        .expect("decoy accepted");
+        guard
+            .conn
+            .destroy_window(decoy)
+            .expect("destroy decoy")
+            .check()
+            .expect("decoy destroyed");
+        publish_client_list(&guard.conn, root, &[decoy]);
+
+        let listed = list_ids();
+        assert!(
+            listed.contains(&window_a) && listed.contains(&window_b),
+            "list missed a live window: {listed:?}"
+        );
+        assert!(
+            !listed.contains(&decoy),
+            "destroyed client-list id survived: {listed:?}"
+        );
+        assert_eq!(snapshot_ids(), listed);
+        assert_eq!(
+            WindowImpl::topmost_x11_snapshot_at_cursor()
+                .map(|found| found.map(|snapshot| snapshot.window.0.0)),
+            Some(Some(window_b))
+        );
+    }
+
+    struct MappedWindows {
+        conn: RustConnection,
+        windows: Vec<u32>,
+    }
+
+    impl Drop for MappedWindows {
+        fn drop(&mut self) {
+            for window in &self.windows {
+                if let Ok(cookie) = self.conn.destroy_window(*window) {
+                    let _ = cookie.check();
+                }
+            }
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn open_named_window(
+        conn: &RustConnection,
+        root: u32,
+        white: u32,
+        index: u32,
+        x: i16,
+        y: i16,
+    ) -> u32 {
+        let window = conn.generate_id().expect("window id");
+        create_window(
+            conn,
+            COPY_DEPTH_FROM_PARENT,
+            window,
+            root,
+            x,
+            y,
+            80,
+            60,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new().background_pixel(white),
+        )
+        .expect("create_window")
+        .check()
+        .expect("create accepted");
+        let name = format!("tree-fallback-{index}");
+        let class = format!("tree-{index}\0Bench\0");
+        let pid = std::process::id().to_ne_bytes();
+        replace_property(
+            conn,
+            window,
+            intern(conn, "_NET_WM_NAME"),
+            AtomEnum::STRING.into(),
+            8,
+            name.as_bytes(),
+        );
+        replace_property(
+            conn,
+            window,
+            AtomEnum::WM_NAME.into(),
+            AtomEnum::STRING.into(),
+            8,
+            name.as_bytes(),
+        );
+        replace_property(
+            conn,
+            window,
+            AtomEnum::WM_CLASS.into(),
+            AtomEnum::STRING.into(),
+            8,
+            class.as_bytes(),
+        );
+        replace_property(
+            conn,
+            window,
+            intern(conn, "_NET_WM_PID"),
+            AtomEnum::CARDINAL.into(),
+            32,
+            &pid,
+        );
+        conn.map_window(window)
+            .expect("map")
+            .check()
+            .expect("map accepted");
+        window
+    }
+
+    fn publish_client_list(conn: &RustConnection, root: u32, windows: &[u32]) {
+        let mut bytes = Vec::with_capacity(windows.len() * 4);
+        for window in windows {
+            bytes.extend_from_slice(&window.to_ne_bytes());
+        }
+        replace_property(
+            conn,
+            root,
+            intern(conn, "_NET_CLIENT_LIST_STACKING"),
+            AtomEnum::WINDOW.into(),
+            32,
+            &bytes,
+        );
+        replace_property(
+            conn,
+            root,
+            intern(conn, "_NET_CLIENT_LIST"),
+            AtomEnum::WINDOW.into(),
+            32,
+            &bytes,
+        );
+        conn.flush().expect("flush");
+    }
+
+    fn snapshot_ids() -> Vec<u32> {
+        WindowImpl::list_x11_snapshots()
+            .expect("x11 snapshots")
+            .into_iter()
+            .map(|snapshot| snapshot.window.0.0)
+            .collect()
+    }
+
+    fn list_ids() -> Vec<u32> {
+        WindowImpl::list()
+            .into_iter()
+            .map(|window| window.0)
+            .collect()
     }
 
     fn intern(conn: &RustConnection, name: &str) -> u32 {
