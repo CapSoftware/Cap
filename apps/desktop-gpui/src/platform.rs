@@ -2765,9 +2765,6 @@ mod stub {
     pub fn open_image_panel(_extensions: &[&str]) -> Option<std::path::PathBuf> {
         None
     }
-    pub fn open_audio_panel() -> Option<std::path::PathBuf> {
-        None
-    }
     pub fn confirm_dialog(
         title: &str,
         message: &str,
