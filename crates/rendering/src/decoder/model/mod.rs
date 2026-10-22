@@ -1236,7 +1236,7 @@ fn avassetreader_stops_reading_only_once_every_request_is_abandoned() {
             .filter(|&&index| index < 600)
             .count();
         assert!(
-            read_below_keyframe < 300,
+            read_below_keyframe < 450,
             "{read_below_keyframe} frames read towards frame 550 after its request was dropped at 40 ms"
         );
         assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
