@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{path::PathBuf, time::Duration};
 
-use crate::{ExportError, ExporterBase};
+use crate::{ExportError, ExporterBase, mp4::temporary_export_output};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct MovExportSettings {
@@ -79,13 +79,15 @@ impl MovExportSettings {
         if let Some(parent) = mov_output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        let temporary_output = temporary_export_output(&mov_output_path)?;
+        let encoder_output_path = temporary_output.to_path_buf();
 
         let video_info =
             VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
 
         let sample_timing = base.sample_timing.clone();
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let mut mov_encoder = MOVFile::init(mov_output_path.clone(), |output| {
+            let mut mov_encoder = MOVFile::init(encoder_output_path, |output| {
                 ProResEncoder::builder(video_info).build(output)
             })
             .map_err(|e| ExportError::Other(format!("Failed to create MOV encoder: {e}")))?;
@@ -131,7 +133,7 @@ impl MovExportSettings {
                 .finish()
                 .map_err(|e| ExportError::Other(format!("Failed to finish MOV: {e}")))?;
 
-            Ok(mov_output_path)
+            Ok(())
         })
         .then(|f| async {
             f.map_err(|e| e.to_string())
@@ -160,10 +162,14 @@ impl MovExportSettings {
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 
-        let (output_path, _) =
-            tokio::try_join!(encoder_thread, render_video_task).map_err(|e| e.to_string())?;
+        let (encoder_result, render_result) = tokio::join!(encoder_thread, render_video_task);
+        encoder_result?;
+        render_result?;
+        temporary_output
+            .persist_replace(&mov_output_path)
+            .map_err(|error| error.to_string())?;
 
-        Ok(output_path)
+        Ok(mov_output_path)
     }
 }
 
