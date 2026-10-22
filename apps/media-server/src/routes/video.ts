@@ -2079,6 +2079,7 @@ async function verifyUploadedRecordingAsync(
 						body.sourceObjectIdentity ?? body.objectIdentity,
 					expectedFileSize: body.fileSize,
 					hashContent: Boolean(body.generation),
+					hashDecodedContent: false,
 					abortSignal: abortController.signal,
 				}),
 			),

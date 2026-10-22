@@ -33,6 +33,7 @@ import {
 	nvencFallbackReason,
 	nvencOptionsFromEnv,
 	recordNvencAttempt,
+	selectedVideoEncoder,
 } from "./nvenc-encoder";
 import {
 	downloadUrlToPathParallel,
@@ -1625,9 +1626,10 @@ export async function processVideo(
 		extraOutputArgs,
 		sourceWidth: metadata.width,
 		sourceHeight: metadata.height,
+		// NVENC leaves the CPU free, so decode (and scale) can use every core.
 		decodeThreads: decodeThreadsFromEnv(
 			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
-			2,
+			selectedVideoEncoder() === "nvenc" ? 0 : 2,
 		),
 	};
 	const totalDurationUs = metadata.duration * 1_000_000;
