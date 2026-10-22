@@ -163,7 +163,6 @@ pub enum WindowEvent {
         image: Option<Arc<RenderImage>>,
         /// Raw PNG bytes from `Window::app_icon()` (`thumbnails/mod.rs:113-122`).
         app_icon: Option<Vec<u8>>,
-        /// The row the image was captured from, and when.
         entry: CapturedWindow,
     },
 }
@@ -302,7 +301,6 @@ impl ThumbnailCache {
         dropped
     }
 
-    /// What a window sweep can skip: see [`window_needs_capture`].
     pub fn captured_windows(&self) -> HashMap<String, CapturedWindow> {
         self.window_entries.clone()
     }
@@ -484,7 +482,6 @@ pub fn window_signature(list: &[WindowOption]) -> String {
         .join("|")
 }
 
-/// One item of [`window_signature`].
 pub fn window_entry_signature(window: &WindowOption) -> String {
     let (x, y) = window.position.unwrap_or((0., 0.));
     let (width, height) = window.size.unwrap_or((0, 0));
@@ -1682,7 +1679,7 @@ mod tests {
         insert_captured(&mut cache, &list[1], captured_at + Duration::from_secs(4));
         let current = cache.captured_windows();
 
-        let fresh = captured_at + THUMBNAIL_STALE_TIME - Duration::from_millis(1);
+        let fresh = captured_at + THUMBNAIL_STALE_TIME.saturating_sub(Duration::from_millis(1));
         assert!(!window_needs_capture(&current, &list[0], fresh));
         assert!(!window_needs_capture(&current, &list[1], fresh));
 
