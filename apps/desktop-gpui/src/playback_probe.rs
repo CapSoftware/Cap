@@ -22,6 +22,96 @@ struct SeekState {
     satisfied: u64,
 }
 
+struct DrawState {
+    shown: Option<u32>,
+    line: Option<(f64, f64)>,
+    previous: Option<Option<u32>>,
+    times: Vec<Instant>,
+    line_offsets_ms: Vec<f64>,
+    sample_off_frames: u64,
+    sample_max_off_frames: u64,
+    no_frame: u64,
+}
+
+static DRAW: Mutex<DrawState> = Mutex::new(DrawState {
+    shown: None,
+    line: None,
+    previous: None,
+    times: Vec::new(),
+    line_offsets_ms: Vec::new(),
+    sample_off_frames: 0,
+    sample_max_off_frames: 0,
+    no_frame: 0,
+});
+
+pub struct DrawReport {
+    pub times: Vec<Instant>,
+    pub line_offsets_ms: Vec<f64>,
+    pub sample_off_frames: u64,
+    pub sample_max_off_frames: u64,
+    pub no_frame: u64,
+}
+
+pub fn line(sample: f64, drawn: f64) {
+    DRAW.lock().unwrap().line = Some((sample, drawn));
+}
+
+pub fn draw(playing: bool) {
+    let mut guard = DRAW.lock().unwrap();
+    let state = &mut *guard;
+    if let Some(shown) = state.previous.take()
+        && let Some((sample, drawn)) = state.line
+    {
+        match shown {
+            Some(shown) => {
+                let frame_time = shown as f64 / 60.0;
+                state.line_offsets_ms.push((drawn - frame_time) * 1000.0);
+                let off = ((sample * 60.0).round() as i64 - shown as i64).unsigned_abs();
+                if off > 0 {
+                    state.sample_off_frames += 1;
+                }
+                state.sample_max_off_frames = state.sample_max_off_frames.max(off);
+            }
+            None => state.no_frame += 1,
+        }
+    }
+    if playing {
+        let shown = state.shown;
+        state.previous = Some(shown);
+        state.times.push(Instant::now());
+    }
+}
+
+pub fn take_draws() -> DrawReport {
+    let mut state = DRAW.lock().unwrap();
+    state.previous = None;
+    DrawReport {
+        times: std::mem::take(&mut state.times),
+        line_offsets_ms: std::mem::take(&mut state.line_offsets_ms),
+        sample_off_frames: std::mem::take(&mut state.sample_off_frames),
+        sample_max_off_frames: std::mem::take(&mut state.sample_max_off_frames),
+        no_frame: std::mem::take(&mut state.no_frame),
+    }
+}
+
+pub fn vsync_draws(times: &[Instant], period_s: f64) -> f64 {
+    let Some(first) = times.first() else {
+        return 0.0;
+    };
+    let phases = 16;
+    let mut total = 0usize;
+    for phase in 0..phases {
+        let offset = period_s * phase as f64 / phases as f64;
+        let mut bins: Vec<u64> = times
+            .iter()
+            .map(|t| ((t.duration_since(*first).as_secs_f64() + offset) / period_s) as u64)
+            .collect();
+        bins.dedup();
+        total += bins.len();
+    }
+    total as f64 / phases as f64
+}
+
 static SEEK: Mutex<SeekState> = Mutex::new(SeekState {
     pending: None,
     latencies_us: Vec::new(),
@@ -52,6 +142,7 @@ pub fn seek(frame: u32) {
 pub fn presented(frame: u32) {
     tracing::info!(target: "cap_probe", frame, "ui presented");
     COUNTERS[8].fetch_add(1, Ordering::Relaxed);
+    DRAW.lock().unwrap().shown = Some(frame);
     let mut state = SEEK.lock().unwrap();
     if let Some((pending, at)) = state.pending
         && pending == frame

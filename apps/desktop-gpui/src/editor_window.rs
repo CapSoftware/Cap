@@ -10317,6 +10317,7 @@ impl EditorWindow {
             }
             view
         };
+        crate::playback_probe::line(self.view.playhead, playhead_view.playhead);
         if self.playing {
             let interacting = self.scrub.is_some()
                 || self.drag.is_some()
@@ -11255,6 +11256,7 @@ impl Render for EditorWindow {
         });
         self.prepare_frame_fields(window, cx);
         crate::playback_probe::root();
+        crate::playback_probe::draw(self.playing);
         self.sync_crop_container(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and

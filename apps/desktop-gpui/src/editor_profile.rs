@@ -86,6 +86,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             let _ = handle.update(cx, |view, window, cx| view.toggle_play(window, cx));
         }
         let _ = playback_probe::take_seek_latencies();
+        let _ = playback_probe::take_draws();
         println!("PROFILE-BEGIN {} {}", phase.label(), phase.seconds());
         let _ = std::io::stdout().flush();
 
@@ -124,6 +125,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let gpui_after = playback_probe::snapshot();
         let render_after = cap_rendering::probe::snapshot();
         let (satisfied, mut latencies) = playback_probe::take_seek_latencies();
+        let draws = playback_probe::take_draws();
         latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let pct = |q: f64| {
             if latencies.is_empty() {
@@ -149,6 +151,40 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             pct(0.5),
             pct(0.95),
             pct(1.0)
+        ));
+        let presented = (gpui_after[8] - gpui_before[8]).max(1) as f64;
+        let mut offsets: Vec<f64> = draws.line_offsets_ms.iter().map(|v| v.abs()).collect();
+        offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let offset_pct = |q: f64| {
+            if offsets.is_empty() {
+                0.0
+            } else {
+                offsets[((offsets.len() as f64 * q) as usize).min(offsets.len() - 1)]
+            }
+        };
+        let signed_mean = if draws.line_offsets_ms.is_empty() {
+            0.0
+        } else {
+            draws.line_offsets_ms.iter().sum::<f64>() / draws.line_offsets_ms.len() as f64
+        };
+        let frame_off = offsets.iter().filter(|v| **v >= 1000.0 / 120.0).count();
+        line.push_str(&format!(
+            " play_draws={} draws_per_frame={:.3} vsync60_draws={:.1} vsync120_draws={:.1} vsync60_per_frame={:.3} vsync120_per_frame={:.3} sync_draws={} sync_sample_off_draws={} sync_sample_off_pct={:.1} sync_sample_max_off={} sync_line_mean_ms={signed_mean:.2} sync_line_abs_p50_ms={:.2} sync_line_abs_p95_ms={:.2} sync_line_abs_max_ms={:.2} sync_line_half_frame_off_pct={:.1} sync_no_frame={}",
+            draws.times.len(),
+            draws.times.len() as f64 / presented,
+            playback_probe::vsync_draws(&draws.times, 1.0 / 60.0),
+            playback_probe::vsync_draws(&draws.times, 1.0 / 120.0),
+            playback_probe::vsync_draws(&draws.times, 1.0 / 60.0) / presented,
+            playback_probe::vsync_draws(&draws.times, 1.0 / 120.0) / presented,
+            offsets.len(),
+            draws.sample_off_frames,
+            draws.sample_off_frames as f64 * 100.0 / offsets.len().max(1) as f64,
+            draws.sample_max_off_frames,
+            offset_pct(0.5),
+            offset_pct(0.95),
+            offset_pct(1.0),
+            frame_off as f64 * 100.0 / offsets.len().max(1) as f64,
+            draws.no_frame,
         ));
         println!("{line}");
         println!("PROFILE-END {}", phase.label());
