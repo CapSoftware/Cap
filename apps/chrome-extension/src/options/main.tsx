@@ -329,8 +329,27 @@ function App() {
 					setError(err instanceof Error ? err.message : String(err));
 				}
 			});
+		const handleStorageChange = (
+			_changes: Record<string, chrome.storage.StorageChange>,
+			areaName: string,
+		) => {
+			if (areaName !== "managed") return;
+			Promise.all([loadSettings(), loadAuth(), loadManagedApiBaseUrl()])
+				.then(([nextSettings, nextAuth, managedApiBaseUrl]) => {
+					if (disposed) return;
+					setSettings((current) => ({
+						...current,
+						apiBaseUrl: nextSettings.apiBaseUrl,
+					}));
+					setAuth(nextAuth);
+					setApiBaseUrlManaged(managedApiBaseUrl !== null);
+				})
+				.catch(() => undefined);
+		};
+		chrome.storage.onChanged.addListener(handleStorageChange);
 		return () => {
 			disposed = true;
+			chrome.storage.onChanged.removeListener(handleStorageChange);
 		};
 	}, []);
 
