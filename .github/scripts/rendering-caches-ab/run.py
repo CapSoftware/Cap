@@ -52,8 +52,8 @@ for round_index in range(rounds):
             results.setdefault((name, side), []).append(json.loads(line))
 
 summary.append(f"### Render CPU per frame ({frames} frames 1920x1080, median of {rounds} rounds, us)\n")
-summary.append("| project | side | prepare | layer render | background prepare | cursor prepare | frame wall | bind groups/frame | buffers/frame |")
-summary.append("|---|---|---|---|---|---|---|---|---|")
+summary.append("| project | side | prepare | prepare excl. display upload | layer render | background prepare | cursor prepare | frame wall | bind groups/frame | buffers/frame |")
+summary.append("|---|---|---|---|---|---|---|---|---|---|")
 
 
 def med(values):
@@ -67,7 +67,7 @@ for name in projects:
         if not rs:
             continue
         row = [name, side]
-        for key in ["prepare_us", "layer_render_us", "background_prepare_us", "cursor_prepare_us", "frame_wall_us"]:
+        for key in ["prepare_us", "prepare_ex_display_us", "layer_render_us", "background_prepare_us", "cursor_prepare_us", "frame_wall_us"]:
             row.append(f"{med([r[key]['mean'] for r in rs]):.1f} (p50 {med([r[key]['p50'] for r in rs]):.1f})")
         row.append(f"{med([r['bind_groups_per_frame'] for r in rs]):.2f}")
         row.append(f"{med([r['buffers_per_frame'] for r in rs]):.2f}")

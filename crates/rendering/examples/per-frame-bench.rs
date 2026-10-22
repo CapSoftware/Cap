@@ -197,6 +197,7 @@ async fn bench(project: &Path, frames: u32, hashes: Option<PathBuf>, label: &str
     let mut prepare = Vec::new();
     let mut layer_render = Vec::new();
     let mut background = Vec::new();
+    let mut prepare_ex_display = Vec::new();
     let mut cursor_prepare = Vec::new();
     let mut wall = Vec::new();
     let mut hash_lines = Vec::new();
@@ -239,6 +240,10 @@ async fn bench(project: &Path, frames: u32, hashes: Option<PathBuf>, label: &str
         prepare.push(timings.prepare_duration.as_secs_f64() * 1e6);
         layer_render.push(timings.layer_render_duration.as_secs_f64() * 1e6);
         background.push(timings.background_prepare_duration.as_secs_f64() * 1e6);
+        prepare_ex_display.push(
+            (timings.prepare_duration.saturating_sub(timings.display_prepare_duration)).as_secs_f64()
+                * 1e6,
+        );
         cursor_prepare.push(timings.cursor_prepare_duration.as_secs_f64() * 1e6);
         wall.push(elapsed.as_secs_f64() * 1e6);
         if hashes.is_some() {
@@ -267,6 +272,7 @@ async fn bench(project: &Path, frames: u32, hashes: Option<PathBuf>, label: &str
             "prepare_us": summary(&mut prepare),
             "layer_render_us": summary(&mut layer_render),
             "background_prepare_us": summary(&mut background),
+            "prepare_ex_display_us": summary(&mut prepare_ex_display),
             "cursor_prepare_us": summary(&mut cursor_prepare),
             "frame_wall_us": summary(&mut wall),
             "bind_groups_per_frame": counted.0 as f64 / frames_f,

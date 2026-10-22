@@ -9,7 +9,7 @@ permissions:
 
 env:
   BASE_REF: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
-  ROUNDS: "3"
+  ROUNDS: "7"
   FRAMES: "300"
 
 jobs:
