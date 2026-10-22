@@ -1012,6 +1012,7 @@ impl AVAssetReaderDecoder {
             // that frame is the true VFR hold for requests inside a pts hole.
             let mut hold_candidate: Option<(u32, R<cv::ImageBuf>)> = None;
             let mut retry_requests = Vec::new();
+            let reader_count = this.decoders.len();
 
             {
                 let decoder = &mut this.decoders[decoder_idx];
@@ -1217,6 +1218,23 @@ impl AVAssetReaderDecoder {
                     }
                 }
 
+                if !pending_requests.is_empty() && !exit {
+                    eprintln!(
+                        "[avf-trace] {} reader {} ended: state={} iterated={} prev_vended={:?} run_start={:?} pending={:?} min_fallback={} reset={} cache_len={} cache_last={:?} readers={}",
+                        _name,
+                        decoder_idx,
+                        decoder.inner.reader_state(),
+                        frames_iterated,
+                        decoder.prev_vended,
+                        decoder.run_start,
+                        pending_requests.iter().map(|r| r.frame).collect::<Vec<_>>(),
+                        minimum_fallback_frame,
+                        was_reset,
+                        cache.len(),
+                        cache.keys().next_back(),
+                        reader_count,
+                    );
+                }
                 decoder.is_done = true;
             }
 
@@ -1380,6 +1398,7 @@ impl AVAssetReaderDecoder {
                     {
                         let _ = req.sender.send(first.to_decoded_frame());
                     } else {
+                        eprintln!("[avf-trace] {} unfulfilled request {}", _name, req.frame);
                         unfulfilled_count += 1;
                     }
                 }

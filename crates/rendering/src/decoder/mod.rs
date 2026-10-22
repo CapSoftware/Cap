@@ -908,7 +908,15 @@ impl AsyncVideoDecoderHandle {
         let started = tokio::time::Instant::now();
         loop {
             match tokio::time::timeout(Duration::from_millis(timeout_ms), &mut rx).await {
-                Ok(result) => return Ok(result.ok()),
+                Ok(result) => {
+                    if result.is_err() {
+                        eprintln!(
+                            "[avf-trace] request at {adjusted_time} dropped after {} ms",
+                            started.elapsed().as_millis()
+                        );
+                    }
+                    return Ok(result.ok());
+                }
                 Err(_) if deadline == FrameDeadline::Wait => {
                     let waited = started.elapsed();
                     if waited >= EXPORT_STALL_LIMIT {
@@ -927,6 +935,7 @@ impl AsyncVideoDecoderHandle {
                     );
                 }
                 Err(_) => {
+                    eprintln!("[avf-trace] request at {adjusted_time} timed out after {timeout_ms} ms");
                     tracing::warn!(
                         time = adjusted_time,
                         timeout_ms = timeout_ms,

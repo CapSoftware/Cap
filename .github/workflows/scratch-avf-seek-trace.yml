@@ -1,0 +1,46 @@
+name: Scratch AVF seek trace
+
+on:
+  push:
+    branches:
+      - ci/avf-seek-stale-trace
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Trace
+        run: |
+          set +e
+          mkdir -p target/ci-verify
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
+          export CAP_VERIFY_TIER=fast
+          cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --no-run > "$RUNNER_TEMP/build.log" 2>&1
+          echo "build exit=$?"; tail -5 "$RUNNER_TEMP/build.log"
+          run() {
+            local label=$1; shift
+            cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --no-fail-fast --failure-output final --success-output final "$@" > "$RUNNER_TEMP/trace-$label.log" 2>&1
+            echo "== $label exit=$?"
+            grep -a "FAIL seek\|got 0:" "$RUNNER_TEMP/trace-$label.log" | head -12
+            grep -a "avf-trace" "$RUNNER_TEMP/trace-$label.log" | sed 's/^ *//' | cut -c1-400 | sort | uniq -c | sort -rn | head -25
+          }
+          for i in 1 2 3; do run "parallel-$i"; done
+          for i in 1 2; do run "serial-$i" --test-threads 1; done
+          for n in 1 2 3 4 5 6; do (while :; do :; done) & done
+          for i in 1 2; do run "serial-burn-$i" --test-threads 1; done
+          kill $(jobs -p) 2>/dev/null
+          true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trace
+          path: ${{ runner.temp }}/trace-*.log

@@ -664,6 +664,20 @@ impl AVAssetReaderDecoder {
         }
     }
 
+    pub fn reader_state(&self) -> String {
+        match &self.source {
+            ReaderSource::Native { reader, .. } => format!(
+                "{:?} {:?}",
+                reader.status(),
+                reader
+                    .error()
+                    .map(|e| format!("{} {}", e.code(), e.localized_description()))
+            ),
+            #[cfg(feature = "scripted")]
+            ReaderSource::Scripted(_) => "scripted".to_string(),
+        }
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
