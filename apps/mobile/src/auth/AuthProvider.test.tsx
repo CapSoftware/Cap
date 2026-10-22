@@ -87,6 +87,14 @@ const flushMicrotasks = async () => {
 	await Promise.resolve();
 };
 
+const createDeferred = <T,>() => {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((nextResolve) => {
+		resolve = nextResolve;
+	});
+	return { promise, resolve };
+};
+
 const states: Array<{
 	apiKey: string | null;
 	status: string;
@@ -250,5 +258,48 @@ describe("AuthProvider", () => {
 		expect(secureStoreMock.deleteItemAsync).toHaveBeenCalledWith(
 			"cap.mobile.userId",
 		);
+	});
+
+	it("does not restore account data when a refresh finishes after sign-out", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		const staleBootstrap = createDeferred<{
+			activeOrganizationId: string;
+			user: { email: string; name: string };
+		}>();
+		apiMock.bootstrap.mockResolvedValueOnce({
+			activeOrganizationId: "org_123",
+			user: { email: "old@cap.so", name: "Old" },
+		});
+		apiMock.bootstrap.mockReturnValueOnce(staleBootstrap.promise);
+
+		await act(async () => {
+			TestRenderer.create(
+				React.createElement(AuthProvider, null, React.createElement(Probe)),
+			);
+			await flushMicrotasks();
+		});
+		expect(latestAuth?.bootstrap?.user.email).toBe("old@cap.so");
+
+		let refreshPromise: Promise<void> | undefined;
+		await act(async () => {
+			refreshPromise = latestAuth?.refresh();
+			await Promise.resolve();
+		});
+		await act(async () => {
+			await latestAuth?.signOut();
+		});
+		expect(latestAuth?.bootstrap).toBeNull();
+
+		await act(async () => {
+			staleBootstrap.resolve({
+				activeOrganizationId: "org_123",
+				user: { email: "old@cap.so", name: "Old" },
+			});
+			await refreshPromise;
+		});
+		expect(latestAuth?.status).toBe("signedOut");
+		expect(latestAuth?.bootstrap).toBeNull();
 	});
 });
