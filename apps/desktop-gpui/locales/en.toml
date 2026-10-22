@@ -186,6 +186,8 @@ title = "Default project name"
 date_time = "Date & time"
 date_values = "the recording's date"
 mode_values = { text = "\"studio\", \"instant\", or \"screenshot\"", context = "The quoted words are inserted into file names exactly as written; keep them in English." }
+random = "Random"
+random_values = { text = "10 filename-safe hexadecimal characters; use {{random:N}} for 1–32.", context = "{{random:N}} is template syntax typed by the user; keep it exactly as written." }
 recording_mode = "Recording mode"
 recording_mode_values = { text = "\"Studio\", \"Instant\", or \"Screenshot\"", context = "The quoted words are inserted into file names exactly as written; keep them in English." }
 target = "Target"
