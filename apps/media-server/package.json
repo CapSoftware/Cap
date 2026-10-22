@@ -17,7 +17,7 @@
 		"zod": "^3.24.2"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "1.4.3"
 	},
 	"trustedDependencies": [
 		"node-av"

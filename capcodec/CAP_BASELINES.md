@@ -272,7 +272,7 @@ The desktop value comes from `crates/enc-ffmpeg/src/audio/aac.rs` line 33: `OUTP
 
 ## 1. Media server (`apps/media-server`)
 
-Image: `apps/media-server/Dockerfile` uses `FROM oven/bun:1.4.0` plus apt `ffmpeg`, with no version pinned.
+Image: `apps/media-server/Dockerfile` uses `FROM oven/bun:1.4.4` plus apt `ffmpeg`, with no version pinned.
 
 ### 1.1 MS-TRANSCODE: `processVideo` video transcode
 
@@ -1706,7 +1706,7 @@ The production defaults are FPS=60, K=120 and bpp 0.18.
 
 ## 10. Ambiguities and assumptions
 
-- **Media-server ffmpeg version:** `oven/bun:1.4.0` plus apt `ffmpeg` is unpinned. It is probably Debian's 5.1.x but not verified. Verification here used 6.1.1. The x264 presets and the `fps_mode auto` choice of CFR for MP4 are expected to match.
+- **Media-server ffmpeg version:** `oven/bun:1.4.4` plus apt `ffmpeg` is unpinned. It is probably Debian's 5.1.x but not verified. Verification here used 6.1.1. The x264 presets and the `fps_mode auto` choice of CFR for MP4 are expected to match.
 - **Media-server output frame rate:** for VFR WebM input, the output rate is whatever ffmpeg guesses (`r_frame_rate`, often the stream's nominal 30/1 or a 1000/1 time base fallback). The repro uses the raw input rate.
 - **VideoToolbox GOP of 12** comes from the FFmpeg 7.1 source (AVCodecContext `gop_size` default, `vt_defaults`). It is not observed on a Mac. The FFmpeg version linked into the desktop app was not checked.
 - **NVENC, QSV, AMF, Media Foundation and AVFoundation:** B-frames, profile, level, VBV and lookahead not set by Cap come from encoder or preset defaults. These were not observed.

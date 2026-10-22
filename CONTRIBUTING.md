@@ -28,7 +28,7 @@ Before anything else, make sure you have the following installed:
 
 - Node Version 20+
 - Rust 1.88.0+
-- Bun 1.4.0
+- Bun 1.4.4
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
 ### General Setup
