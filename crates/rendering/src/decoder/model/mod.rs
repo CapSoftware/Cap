@@ -1093,6 +1093,8 @@ fn run_suite(decoder: Decoder) {
 #[test]
 fn avassetreader_answers_match_the_reference_model() {
     run_suite(Decoder::Avf);
+    avassetreader_scrubbing_backwards_reuses_the_frames_below_each_seek();
+    avassetreader_stops_reading_only_once_every_request_is_abandoned();
 }
 
 #[test]
@@ -1179,4 +1181,64 @@ fn avassetreader_scrubbing_backwards_reuses_the_frames_below_each_seek() {
         "{} reader starts and seeks for 60 backward scrub steps",
         outcome.starts
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn avassetreader_stops_reading_only_once_every_request_is_abandoned() {
+    let script = Script {
+        time_base: (1, 30),
+        frames: (0..900)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 600 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let registration = scripted::register(script);
+    let path = registration.path().to_path_buf();
+    runtime().block_on(async {
+        let handle = spawn_decoder("model", path, 30, 0.0, false)
+            .await
+            .unwrap()
+            .with_max_fallback_distance(2);
+        registration.set_vend_delay(Duration::from_millis(2));
+        registration.take_vended();
+        let time = |frame: u32| frame as f32 / 30.0;
+
+        let abandoned = tokio::time::timeout(
+            Duration::from_millis(40),
+            handle.get_frame_initial(time(550)),
+        );
+        let batch = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::join!(
+                tokio::time::timeout(
+                    Duration::from_millis(150),
+                    handle.get_frame_initial(time(760)),
+                ),
+                handle.get_frame_initial(time(765)),
+            )
+        };
+        let (abandoned, (dropped, kept)) = tokio::join!(abandoned, batch);
+
+        assert!(abandoned.is_err(), "frame 550 arrived before 40 ms");
+        assert!(dropped.is_err(), "frame 760 arrived before 160 ms");
+        assert_eq!(
+            kept.as_ref().and_then(frame_identity),
+            Some(765),
+            "the open request of a batch whose other request was dropped"
+        );
+        let read_below_keyframe = registration
+            .take_vended()
+            .iter()
+            .filter(|&&index| index < 600)
+            .count();
+        assert!(
+            read_below_keyframe < 300,
+            "{read_below_keyframe} frames read towards frame 550 after its request was dropped at 40 ms"
+        );
+        assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
+    });
 }
