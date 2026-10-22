@@ -712,16 +712,6 @@ pub fn list_display_targets() -> Vec<(DisplayOption, Display)> {
         .collect()
 }
 
-/// Mirrors the picker path of `cap_recording::sources::screen_capture::list_windows`
-/// (i.e. `include_accessory_panels: false`), which collapses to: a non-empty
-/// title, not owned by the Window Server, and at window level 0.
-///
-/// The level check is what actually matters. A raw `Window::list()` on macOS is
-/// dominated by menu-bar extras and status items — Control Centre alone
-/// contributes a dozen `Item-0` windows at level 25 — so without it the picker
-/// is unusable. This is deliberately duplicated rather than imported:
-/// `cap-recording` drags in ffmpeg and the whole encode stack, which this app
-/// has no other reason to build.
 pub fn list_windows() -> Vec<WindowOption> {
     list_window_targets()
         .into_iter()
@@ -754,17 +744,27 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
             // (`app_windows::begin_recording`), so offering one as a target
             // records a hole. Matched by owner pid rather than title or
             // bundle id -- the dev binary is unbundled, and most of our
-            // windows carry no CG title at all. (The shared
-            // `screen_capture::list_windows` has no such filter; the Tauri
-            // main window only escapes it by being a level>0 panel.)
+            // windows carry no CG title at all.
             #[cfg(target_os = "macos")]
             if window.raw_handle().owner_pid() == Some(std::process::id() as i32) {
                 return None;
             }
 
             #[cfg(target_os = "macos")]
-            if window.raw_handle().level() != Some(0) {
-                return None;
+            {
+                let level = window.raw_handle().level();
+                let bundle_identifier = window.raw_handle().bundle_identifier();
+                let is_accessory_application = matches!(level, Some(level) if level > 0)
+                    && window.raw_handle().is_accessory_application();
+                if !cap_recording::sources::screen_capture::is_listable_macos_window(
+                    level,
+                    &app,
+                    bundle_identifier.as_deref(),
+                    false,
+                    is_accessory_application,
+                ) {
+                    return None;
+                }
             }
 
             Some((
