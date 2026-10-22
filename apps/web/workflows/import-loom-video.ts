@@ -15,6 +15,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 import {
 	type ProcessedVideoMetadata,
@@ -263,12 +264,11 @@ async function hasExistingLoomUpload(
 			metadata: video.metadata,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
-		const object = yield* bucket.headObject(payload.rawFileKey);
-		return (object.ContentLength ?? 0) >= MINIMUM_VIDEO_SIZE;
-	}).pipe(
-		Effect.catchAll(() => Effect.succeed(false)),
-		runWorkflowPromise,
-	);
+		return yield* bucket.headObject(payload.rawFileKey).pipe(
+			Effect.map((object) => (object.ContentLength ?? 0) >= MINIMUM_VIDEO_SIZE),
+			Effect.catchIf(isStorageObjectNotFound, () => Effect.succeed(false)),
+		);
+	}).pipe(runWorkflowPromise);
 }
 
 async function waitForRetry(delayMs: number): Promise<void> {
