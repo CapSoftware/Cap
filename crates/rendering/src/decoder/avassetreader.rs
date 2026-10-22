@@ -427,6 +427,7 @@ impl DecoderInstance {
                 self.run_start = None;
             }
             Err(e) => {
+                eprintln!("[avf-proof] reset at {requested_time} failed: {e}");
                 tracing::error!(
                     requested_time = requested_time,
                     error = %e,
@@ -939,6 +940,7 @@ impl AVAssetReaderDecoder {
                 ) {
                     Ok(decoder) => this = Some(decoder),
                     Err(error) => {
+                        eprintln!("[avf-proof] {_name} init at {requested_time} failed: {error}");
                         tracing::warn!(%error, "Failed to initialize video reader on demand");
                         continue;
                     }
@@ -1012,6 +1014,7 @@ impl AVAssetReaderDecoder {
             // that frame is the true VFR hold for requests inside a pts hole.
             let mut hold_candidate: Option<(u32, R<cv::ImageBuf>)> = None;
             let mut retry_requests = Vec::new();
+            let reader_count = this.decoders.len();
 
             {
                 let decoder = &mut this.decoders[decoder_idx];
@@ -1218,6 +1221,14 @@ impl AVAssetReaderDecoder {
                 }
 
                 decoder.is_done = true;
+                if !pending_requests.is_empty() && !exit {
+                    eprintln!(
+                        "[avf-proof] {} reader {} ended: state={} iterated={} prev_vended={:?} pending={:?} reset={} cache_len={} cache_last={:?} readers={}",
+                        _name, decoder_idx, decoder.inner.reader_state(), frames_iterated, decoder.prev_vended,
+                        pending_requests.iter().map(|r| (r.frame, r.retried)).collect::<Vec<_>>(),
+                        was_reset, cache.len(), cache.keys().next_back(), reader_count,
+                    );
+                }
 
                 // A failed reader (a decode error, seen with many decode
                 // sessions on a loaded machine) vends nothing more, and the
@@ -1407,6 +1418,7 @@ impl AVAssetReaderDecoder {
                     {
                         let _ = req.sender.send(first.to_decoded_frame());
                     } else {
+                        eprintln!("[avf-proof] {_name} unfulfilled request {}", req.frame);
                         unfulfilled_count += 1;
                     }
                 }
