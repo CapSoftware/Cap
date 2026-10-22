@@ -138,7 +138,7 @@ pub async fn prewarm_first_frame(
         recording_meta,
         Arc::new(BackgroundTextureCache::default()),
     );
-    let config = ProjectConfiguration::default();
+    let config = Arc::new(ProjectConfiguration::default());
     let cursor_events = CursorEvents::default();
     let mut zoom_timeline = ZoomTransformTimeline::new(
         &[],
