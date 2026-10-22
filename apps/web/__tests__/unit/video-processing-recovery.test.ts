@@ -178,6 +178,47 @@ describe("recoverFailedVideoProcessing", () => {
 		expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
 	});
 
+	it("reserves a failed-import slot while uncertain startups remain protected", async () => {
+		const pending = Array.from({ length: 8 }, (_, index) => ({
+			...candidate,
+			videoId: `pending-${index}`,
+			loomVideoId: `pending-loom-${index}`,
+			phase: "uploading",
+			metadata: {
+				loomImportRun: { runId: `run-${index}`, dispatch: "uncertain" },
+			},
+		}));
+		const failedQuery = makeSelectChain([
+			{ ...candidate, videoId: "failed-video", orgId: "organization-1" },
+		]);
+		mockDb
+			.mockReturnValueOnce(makeSelectChain(pending))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValueOnce(failedQuery)
+			.mockReturnValueOnce(makeSelectChain([{ loomVideoId: "failed-loom" }]))
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValue(makeUpdateChain(1));
+		mockGetLoomImportRunState.mockImplementation(async (receipt) =>
+			receipt ? "unconfirmed" : "inactive",
+		);
+		const { recoverFailedVideoProcessing } = await import(
+			"@/lib/video-processing-recovery"
+		);
+
+		const result = await recoverFailedVideoProcessing();
+
+		expect(failedQuery.limit).toHaveBeenCalledWith(1);
+		expect(result.checked).toBe(8);
+		expect(result.statuses).toEqual({
+			"reconciliation-required": 7,
+			started: 1,
+		});
+		expect(mockStartLoomImportWorkflow).toHaveBeenCalledTimes(1);
+		expect(mockStartLoomImportWorkflow).toHaveBeenCalledWith(
+			expect.objectContaining({ videoId: "failed-video" }),
+		);
+	});
+
 	it("atomically claims and restarts an affected upload", async () => {
 		mockDb
 			.mockReturnValueOnce(makeSelectChain([]))

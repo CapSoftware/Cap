@@ -366,6 +366,11 @@ export async function recoverFailedVideoProcessing({
 		)
 		.slice(0, Math.min(limit, LOOM_IMPORT_RECOVERY_BATCH_SIZE));
 
+	const loomRecoveryBudget = Math.min(limit, LOOM_IMPORT_RECOVERY_BATCH_SIZE);
+	const startupCountWithFailedImport = Math.min(
+		pendingLoomCandidates.length,
+		Math.max(0, loomRecoveryBudget - 1),
+	);
 	const failedLoomUploads = await db()
 		.select({
 			videoId: videos.id,
@@ -387,13 +392,7 @@ export async function recoverFailedVideoProcessing({
 			),
 		)
 		.orderBy(asc(videoUploads.updatedAt))
-		.limit(
-			Math.max(
-				0,
-				Math.min(limit, LOOM_IMPORT_RECOVERY_BATCH_SIZE) -
-					pendingLoomCandidates.length,
-			),
-		);
+		.limit(Math.max(0, loomRecoveryBudget - startupCountWithFailedImport));
 
 	const failedLoomCandidates = (
 		await Promise.all(
@@ -417,13 +416,15 @@ export async function recoverFailedVideoProcessing({
 	).filter((candidate) => candidate !== null);
 
 	const loomCandidates = [
-		...pendingLoomCandidates.map((candidate) => ({
-			...candidate,
-			phase:
-				candidate.phase === "processing"
-					? ("processing" as const)
-					: ("uploading" as const),
-		})),
+		...pendingLoomCandidates
+			.slice(0, Math.max(0, loomRecoveryBudget - failedLoomCandidates.length))
+			.map((candidate) => ({
+				...candidate,
+				phase:
+					candidate.phase === "processing"
+						? ("processing" as const)
+						: ("uploading" as const),
+			})),
 		...failedLoomCandidates.map((candidate) => ({
 			...candidate,
 			phase: "error" as const,
