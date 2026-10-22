@@ -93,6 +93,48 @@ async fn cancelled_mov_preserves_existing_destination() {
 
 #[tokio::test]
 #[ignore = "requires ffmpeg and a wgpu adapter"]
+async fn dropped_export_keeps_temporary_output_owned_by_encoder() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("project.cap");
+    create_project(&project);
+    let output = directory.path().join("export.mov");
+    fs::write(&output, b"existing export").unwrap();
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let task = tokio::spawn(async move {
+        let mut started_tx = Some(started_tx);
+        export(&project, &output, move |_| {
+            if let Some(started_tx) = started_tx.take() {
+                let _ = started_tx.send(());
+            }
+            release_rx.recv().unwrap();
+            false
+        })
+        .await
+    });
+
+    started_rx.await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let temporary_exists = fs::read_dir(directory.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".cap-export-")
+    });
+    release_tx.send(()).unwrap();
+
+    assert!(temporary_exists);
+    assert_eq!(
+        fs::read(directory.path().join("export.mov")).unwrap(),
+        b"existing export"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires ffmpeg and a wgpu adapter"]
 async fn finished_mov_replaces_existing_destination() {
     let directory = tempfile::tempdir().unwrap();
     let project = directory.path().join("project.cap");
