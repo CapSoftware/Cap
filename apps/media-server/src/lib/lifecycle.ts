@@ -30,6 +30,26 @@ export function getIdleTimeoutSeconds(): number {
 		: MAX_IDLE_TIMEOUT_SECONDS;
 }
 
+// A streamed response can stay silent while ffmpeg opens its input, so the
+// idle timeout only comes back once the first bytes are on their way.
+export function restoreIdleTimeoutOnFirstChunk(
+	stream: ReadableStream<Uint8Array>,
+	restore: () => void,
+): ReadableStream<Uint8Array> {
+	let restored = false;
+	return stream.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				if (!restored) {
+					restored = true;
+					restore();
+				}
+				controller.enqueue(chunk);
+			},
+		}),
+	);
+}
+
 type IdleTimeoutServer = {
 	timeout?: (request: Request, seconds: number) => void;
 };

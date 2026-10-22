@@ -6,6 +6,7 @@ import {
 	DRAINING_DETAILS,
 	getIdleTimeoutSeconds,
 	isDraining,
+	restoreIdleTimeoutOnFirstChunk,
 	setRequestIdleTimeout,
 } from "../lib/lifecycle";
 import {
@@ -146,6 +147,9 @@ audio.post("/extract", async (c) => {
 	const { videoUrl, stream: useStreaming } = result.data;
 	if (isDraining()) return drainingResponse(c);
 	setRequestIdleTimeout(c.env, c.req.raw, 0);
+	const restoreIdleTimeout = () =>
+		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
+	let streaming = false;
 
 	try {
 		const hasAudio = await checkHasAudioTrack(videoUrl);
@@ -163,12 +167,16 @@ audio.post("/extract", async (c) => {
 				cleanup();
 			});
 
-			return new Response(stream, {
-				headers: {
-					"Content-Type": "audio/mpeg",
-					"Transfer-Encoding": "chunked",
+			streaming = true;
+			return new Response(
+				restoreIdleTimeoutOnFirstChunk(stream, restoreIdleTimeout),
+				{
+					headers: {
+						"Content-Type": "audio/mpeg",
+						"Transfer-Encoding": "chunked",
+					},
 				},
-			});
+			);
 		}
 
 		const audioData = await extractAudio(videoUrl);
@@ -213,9 +221,7 @@ audio.post("/extract", async (c) => {
 			500,
 		);
 	} finally {
-		// Only the setup above can sit silent; once bytes flow, a dead client
-		// should be reaped again.
-		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
+		if (!streaming) restoreIdleTimeout();
 	}
 });
 
@@ -241,6 +247,9 @@ audio.post("/convert", async (c) => {
 	const { audioUrl, bitrate } = result.data;
 	if (isDraining()) return drainingResponse(c);
 	setRequestIdleTimeout(c.env, c.req.raw, 0);
+	const restoreIdleTimeout = () =>
+		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
+	let streaming = false;
 
 	try {
 		const { stream, cleanup } = extractAudioStream(audioUrl, {
@@ -252,12 +261,16 @@ audio.post("/convert", async (c) => {
 			cleanup();
 		});
 
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "audio/mpeg",
-				"Transfer-Encoding": "chunked",
+		streaming = true;
+		return new Response(
+			restoreIdleTimeoutOnFirstChunk(stream, restoreIdleTimeout),
+			{
+				headers: {
+					"Content-Type": "audio/mpeg",
+					"Transfer-Encoding": "chunked",
+				},
 			},
-		});
+		);
 	} catch (err) {
 		console.error("[audio/convert] Error:", err);
 
@@ -292,9 +305,7 @@ audio.post("/convert", async (c) => {
 			500,
 		);
 	} finally {
-		// Only the setup above can sit silent; once bytes flow, a dead client
-		// should be reaped again.
-		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
+		if (!streaming) restoreIdleTimeout();
 	}
 });
 

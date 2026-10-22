@@ -7,6 +7,7 @@ import {
 	getShutdownGraceMs,
 	isDraining,
 	isIdle,
+	restoreIdleTimeoutOnFirstChunk,
 	setDraining,
 	setRequestIdleTimeout,
 	trackBackgroundTask,
@@ -170,5 +171,37 @@ describe("shutdown handler", () => {
 
 		work.resolve();
 		await task;
+	});
+});
+
+describe("streamed response idle timeout", () => {
+	test("comes back once, on the first chunk, and cancel still reaches the source", async () => {
+		let restores = 0;
+		let cancelled = false;
+		let push: ReadableStreamDefaultController<Uint8Array> | undefined;
+		const source = new ReadableStream<Uint8Array>({
+			start(controller) {
+				push = controller;
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+		const reader = restoreIdleTimeoutOnFirstChunk(source, () => {
+			restores++;
+		}).getReader();
+
+		const first = reader.read();
+		await Bun.sleep(10);
+		expect(restores).toBe(0);
+
+		push?.enqueue(new Uint8Array([1]));
+		expect((await first).value).toEqual(new Uint8Array([1]));
+		push?.enqueue(new Uint8Array([2]));
+		await reader.read();
+		expect(restores).toBe(1);
+
+		await reader.cancel();
+		expect(cancelled).toBe(true);
 	});
 });
