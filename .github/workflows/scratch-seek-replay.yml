@@ -23,12 +23,15 @@ jobs:
           set +e
           mkdir -p target/ci-verify
           ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
-          CAP_VERIFY_CASE='seek/seek-gop/keyframes60/avf' CAP_VERIFY_TIER=fast cargo test --profile ci-verify -p cap-verify --test seek keyframe_seeks -- --nocapture > "$RUNNER_TEMP/replay.log" 2>&1
-          echo "exit=$?"
-          grep -n "FAIL\|pass seek\|stale" "$RUNNER_TEMP/replay.log" | head -20
+          export CAP_VERIFY_TIER=fast
+          for i in 1 2 3 4; do
+            cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --test playback --test export --no-fail-fast --no-capture > "$RUNNER_TEMP/replay-$i.log" 2>&1
+            echo "round $i exit=$?"
+            grep -n "FAIL seek\|FAIL export\|FAIL playback" "$RUNNER_TEMP/replay-$i.log" | head -5
+          done
           true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: replay
-          path: ${{ runner.temp }}/replay.log
+          path: ${{ runner.temp }}/replay-*.log
