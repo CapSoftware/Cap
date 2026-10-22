@@ -1228,6 +1228,7 @@ impl AVAssetReaderDecoder {
                 if !pending_requests.is_empty()
                     && let Some(error) = decoder.inner.failure()
                 {
+                    eprintln!("[avf-proof] {_name} reader {decoder_idx} failed ({error}); retrying {:?}", pending_requests.iter().map(|r| (r.frame, r.retried)).collect::<Vec<_>>());
                     tracing::warn!(
                         decoder_idx,
                         requested_frame,

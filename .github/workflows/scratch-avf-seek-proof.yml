@@ -1,0 +1,64 @@
+name: Scratch AVF seek proof
+
+on:
+  push:
+    branches:
+      - ci/avf-seek-stale-proof
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Proof
+        run: |
+          set +e
+          mkdir -p target/ci-verify
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
+          export CAP_VERIFY_TIER=fast
+          base=$(git merge-base HEAD origin/main)
+          file=crates/rendering/src/decoder/avassetreader.rs
+          use() { if [[ $1 == base ]]; then git show "$base:$file" > "$file"; else git checkout -q HEAD -- "$file"; fi; }
+          model() {
+            cargo test --profile ci-verify -p cap-rendering --lib "$@" > "$RUNNER_TEMP/proof-model-$variant.log" 2>&1
+            echo "== model $variant exit=$?"
+            grep -a "test result\|panicked\|failed reads" "$RUNNER_TEMP/proof-model-$variant.log" | head -8
+          }
+          for variant in base head; do
+            use $variant
+            model decoder::model::avassetreader_answers_stay_exact_when_its_reader_fails
+          done
+          variant=head-all
+          model decoder::
+          cargo test --profile ci-verify -p cap-video-decode --lib > "$RUNNER_TEMP/proof-video-decode.log" 2>&1
+          echo "== video-decode exit=$?"; grep -a "test result" "$RUNNER_TEMP/proof-video-decode.log"
+          for i in 1 2 3 4 5; do
+            for variant in base head; do
+              use $variant
+              cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --no-fail-fast --failure-output final --success-output final > "$RUNNER_TEMP/proof-seek-$variant-$i.log" 2>&1
+              echo "== seek round $i $variant exit=$?"
+              grep -a "FAIL seek\|got 0:" "$RUNNER_TEMP/proof-seek-$variant-$i.log" | sort -u | head -12
+              grep -a "avf-proof" "$RUNNER_TEMP/proof-seek-$variant-$i.log" | sed 's/^ *//' | cut -c1-300 | sort | uniq -c | head -12
+            done
+          done
+          use head
+          cargo nextest run --cargo-profile ci-verify -p cap-verify --test seek --test playback --test export --no-fail-fast --failure-output final --success-output final > "$RUNNER_TEMP/proof-mixed-head.log" 2>&1
+          echo "== mixed head exit=$?"
+          grep -a "FAIL \|got 0:" "$RUNNER_TEMP/proof-mixed-head.log" | sort -u | head -20
+          grep -a "avf-proof" "$RUNNER_TEMP/proof-mixed-head.log" | sed 's/^ *//' | cut -c1-300 | sort | uniq -c | head -12
+          true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proof
+          path: ${{ runner.temp }}/proof-*.log
