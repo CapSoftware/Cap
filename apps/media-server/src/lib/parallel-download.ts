@@ -52,11 +52,19 @@ export function planRanges(
 	};
 }
 
-function parseTotalFromContentRange(value: string | null): number | null {
+function parseContentRange(
+	value: string | null,
+): { start: number; end: number; total: number } | null {
 	const match = value?.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
 	if (!match) return null;
-	const total = Number(match[3]);
-	return Number.isSafeInteger(total) ? total : null;
+	const [start, end, total] = match.slice(1).map(Number) as [
+		number,
+		number,
+		number,
+	];
+	return Number.isSafeInteger(total) && start <= end && end < total
+		? { start, end, total }
+		: null;
 }
 
 async function readInto(
@@ -107,44 +115,54 @@ export async function downloadUrlToPathParallel(
 			written += bytesWritten;
 		}
 	};
-	try {
-		const first = await fetchImpl(url, {
-			headers: { Range: `bytes=0-${partBytes - 1}` },
-			signal: options.signal,
-		});
-		if (!first.ok) {
-			await first.body?.cancel().catch(() => {});
+	const controller = new AbortController();
+	const signal = options.signal
+		? AbortSignal.any([options.signal, controller.signal])
+		: controller.signal;
+	const fetchOk = async (headers?: Record<string, string>) => {
+		const response = await fetchImpl(url, { headers, signal });
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
 			throw new Error(
-				`Failed to download video: ${first.status} ${first.statusText}`,
+				`Failed to download video: ${response.status} ${response.statusText}`,
 			);
 		}
-		const total =
-			first.status === 206
-				? parseTotalFromContentRange(first.headers.get("content-range"))
-				: null;
-		if (total === null) {
+		return response;
+	};
+	try {
+		const first = await fetchOk({ Range: `bytes=0-${partBytes - 1}` });
+		if (first.status !== 206) {
 			const bytes = await readInto(first, write, 0, null);
 			return { bytes, parts: 1, ranged: false };
 		}
+		const range = parseContentRange(first.headers.get("content-range"));
+		if (
+			range === null ||
+			range.start !== 0 ||
+			range.end + 1 < Math.min(partBytes, range.total)
+		) {
+			// A partial reply we can't place or that the server capped below our
+			// part size: start over as one stream rather than keep a fragment.
+			await first.body?.cancel().catch(() => {});
+			const bytes = await readInto(await fetchOk(), write, 0, null);
+			return { bytes, parts: 1, ranged: false };
+		}
+		const { total } = range;
 		if (total > MAX_RANGED_TOTAL_BYTES) {
 			await first.body?.cancel().catch(() => {});
 			throw new Error(`Ranged download reported an invalid size: ${total}`);
 		}
-		const firstBytes = Math.min(partBytes, total);
+		const firstBytes = range.end + 1;
 		const etag = first.headers.get("etag");
 		const ranges = planRanges(total, firstBytes, partBytes);
-		const controller = new AbortController();
-		const signal = options.signal
-			? AbortSignal.any([options.signal, controller.signal])
-			: controller.signal;
 		let next = 0;
 		const worker = async () => {
 			while (next < ranges.count) {
 				signal.throwIfAborted();
-				const range = ranges.at(next++);
+				const part = ranges.at(next++);
 				const response = await fetchImpl(url, {
 					headers: {
-						Range: `bytes=${range.start}-${range.end}`,
+						Range: `bytes=${part.start}-${part.end}`,
 						...(etag ? { "If-Match": etag } : {}),
 					},
 					signal,
@@ -155,12 +173,7 @@ export async function downloadUrlToPathParallel(
 						`Ranged download part failed: ${response.status} ${response.statusText}`,
 					);
 				}
-				await readInto(
-					response,
-					write,
-					range.start,
-					range.end - range.start + 1,
-				);
+				await readInto(response, write, part.start, part.end - part.start + 1);
 			}
 		};
 		const workers = Array.from(

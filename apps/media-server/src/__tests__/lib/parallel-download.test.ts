@@ -26,6 +26,19 @@ beforeAll(async () => {
 				return new Response(payload, { headers: { ETag: '"v1"' } });
 			}
 			rangeRequests++;
+			if (url.pathname === "/no-total" || url.pathname === "/capped") {
+				const end =
+					url.pathname === "/capped" ? 64 * 1024 - 1 : Number(range[2]);
+				return new Response(payload.subarray(0, end + 1), {
+					status: 206,
+					headers: {
+						"Content-Range":
+							url.pathname === "/capped"
+								? `bytes 0-${end}/${payload.length}`
+								: `bytes 0-${end}/*`,
+					},
+				});
+			}
 			if (url.pathname === "/huge") {
 				return new Response(payload.subarray(0, MB), {
 					status: 206,
@@ -123,6 +136,24 @@ describe("parallel download", () => {
 			),
 		).rejects.toThrow("Ranged download part failed: 412");
 	});
+
+	test.each(["no-total", "capped"])(
+		"restarts as one stream when the first range can't be used (%s)",
+		async (name) => {
+			const path = join(dir, `${name}.bin`);
+			const result = await downloadUrlToPathParallel(
+				`http://localhost:${server.port}/${name}`,
+				path,
+				{ concurrency: 4, partBytes: MB },
+			);
+			expect(result).toEqual({
+				bytes: payload.length,
+				parts: 1,
+				ranged: false,
+			});
+			expect(Buffer.compare(await readFile(path), payload)).toBe(0);
+		},
+	);
 
 	test("rejects an absurd Content-Range total before planning parts", async () => {
 		const before = rangeRequests;
