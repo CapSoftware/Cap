@@ -1,4 +1,4 @@
-use cap_project::ProjectConfiguration;
+use crate::ProjectConfiguration;
 use std::io::Read;
 
 #[test]
@@ -67,13 +67,17 @@ fn failed_write_keeps_the_previous_config_and_cleans_up() {
         .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "failed_write_keeps_the_previous_config_and_cleans_up",
+            "config_write_tests::failed_write_keeps_the_previous_config_and_cleans_up",
         ])
         .env(CHILD_PROJECT, project.path())
         .output()
         .unwrap();
 
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{output:?}"
+    );
     assert_eq!(std::fs::read(path).unwrap(), original);
     assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 1);
 }
