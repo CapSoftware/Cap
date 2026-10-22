@@ -1126,8 +1126,6 @@ fn idle_wait_for(timeouts: impl IntoIterator<Item = Duration>) -> Duration {
         .clamp(MIN_IDLE_WAIT, MAX_IDLE_WAIT)
 }
 
-/// Wakes the mixer thread from `park_timeout` when an input channel has a
-/// frame.
 struct ThreadUnpark(std::thread::Thread);
 
 impl std::task::Wake for ThreadUnpark {
