@@ -92,7 +92,7 @@ async function waitFor(assertion: () => void) {
 	throw error;
 }
 
-async function enterSearch(query: string) {
+async function enterSearch(query: string, expectedCounter = "1/2") {
 	const input = container.querySelector<HTMLInputElement>(
 		'input[placeholder="Search transcript"]',
 	);
@@ -106,7 +106,7 @@ async function enterSearch(query: string) {
 		setter?.call(input, query);
 		input.dispatchEvent(new Event("input", { bubbles: true }));
 	});
-	await waitFor(() => expect(container.textContent).toContain("1/2"));
+	await waitFor(() => expect(container.textContent).toContain(expectedCounter));
 	return input;
 }
 
@@ -168,6 +168,29 @@ describe("transcript search navigation", () => {
 		expect(video.currentTime).toBe(3);
 		expect(container.textContent).toContain("2/2");
 
+		await pressEnter(input);
+		expect(video.currentTime).toBe(1);
+		expect(container.textContent).toContain("1/2");
+	});
+
+	it("seeks to the last match when Previous is pressed first", async () => {
+		await enterSearch("match");
+		const previous = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Previous search result"]',
+		);
+		if (!previous) throw new Error("Previous search button missing");
+
+		await act(async () => previous.click());
+		expect(video.currentTime).toBe(3);
+		expect(container.textContent).toContain("2/2");
+	});
+
+	it("seeks to the new first match after changing the query", async () => {
+		const input = await enterSearch("between", "1/1");
+		await pressEnter(input);
+		expect(video.currentTime).toBe(2);
+
+		await enterSearch("match");
 		await pressEnter(input);
 		expect(video.currentTime).toBe(1);
 		expect(container.textContent).toContain("1/2");
