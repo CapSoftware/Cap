@@ -2,6 +2,7 @@ import os from "node:os";
 import { Hono } from "hono";
 import { getSystemResources } from "../lib/job-manager";
 import { getMediaEngineStatus } from "../lib/media-engine";
+import { getVideoEncoderStatus } from "../lib/nvenc-encoder";
 
 const health = new Hono();
 
@@ -25,6 +26,7 @@ health.get("/", (c) => {
 			available: mediaEngine.available,
 			version: mediaEngine.version,
 		},
+		videoEncoder: getVideoEncoderStatus(),
 		system: {
 			...resources,
 			loadAvg5m,

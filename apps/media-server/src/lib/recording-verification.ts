@@ -5,7 +5,7 @@ import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
-import { PROCESS_TIMEOUT_MS } from "./media-common";
+import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
 	fetchMedia,
 	MediaTransferBudgetError,
@@ -890,8 +890,9 @@ async function decodeRecording(
 				"1",
 				"-filter_complex_threads",
 				"1",
+				// FFmpeg's H.264/HEVC decoders are bit-exact across thread counts, so decoded hashes do not depend on this.
 				"-threads",
-				"1",
+				decodeThreadsFromEnv("MEDIA_SERVER_VERIFY_DECODE_THREADS", 1),
 				"-protocol_whitelist",
 				remote ? "http,https,tcp,tls" : "file",
 				"-f",
