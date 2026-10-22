@@ -1,4 +1,9 @@
-import { spaces, spaceVideos, videos } from "@cap/database/schema";
+import {
+	sharedVideos,
+	spaces,
+	spaceVideos,
+	videos,
+} from "@cap/database/schema";
 import { Space, Video } from "@cap/web-domain";
 import { getTableColumns } from "drizzle-orm";
 import type { MySqlTable } from "drizzle-orm/mysql-core";
@@ -28,6 +33,7 @@ let videoOwnerId: string;
 let accessExists: boolean;
 let accessError: boolean;
 let alreadyShared: boolean;
+let organizationShareExists: boolean;
 
 function row(table: MySqlTable, values: Record<string, unknown>) {
 	return Object.values(getTableColumns(table)).map(
@@ -44,8 +50,12 @@ beforeEach(() => {
 	accessExists = true;
 	accessError = false;
 	alreadyShared = false;
+	organizationShareExists = false;
 	mocks.user.mockResolvedValue({ id: "caller" });
 	mocks.query.mockImplementation(async (query: string) => {
+		if (query.startsWith("delete from `shared_videos`")) {
+			organizationShareExists = false;
+		}
 		if (/^(insert|update|delete) /.test(query)) {
 			return { rows: [{ insertId: 0, affectedRows: 1 }] };
 		}
@@ -56,6 +66,17 @@ beforeEach(() => {
 		if (query.includes("from `space_videos`") && alreadyShared) {
 			return {
 				rows: [row(spaceVideos, { id: "share-1", videoId: capId, spaceId })],
+			};
+		}
+		if (query.includes("from `shared_videos`") && organizationShareExists) {
+			return {
+				rows: [
+					row(sharedVideos, {
+						id: "organization-share-1",
+						videoId: capId,
+						organizationId: "org-1",
+					}),
+				],
 			};
 		}
 		if (query.includes("from `organization_members`")) {
@@ -100,9 +121,11 @@ const writes = () =>
 
 describe("sharing Caps to private spaces", () => {
 	it("rejects an organization member outside the space before changing any shares or visibility", async () => {
+		organizationShareExists = true;
 		await expect(
 			shareCap({ capId, spaceIds: [spaceId], public: true }),
 		).resolves.toMatchObject({ success: false });
+		expect(organizationShareExists).toBe(true);
 		expect(writes()).toEqual([]);
 		const accessQuery = mocks.query.mock.calls.find(([query]) =>
 			query.includes("inner join `organizations`"),
