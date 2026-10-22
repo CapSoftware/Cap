@@ -729,6 +729,50 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 		expect(reopened.id).not.toBe(requestId);
 	});
 
+	it.each(["recording", "source mapping"])(
+		"does not complete or notify when a migrated %s disappears",
+		async (missing) => {
+			const { ownerId, organizationId } = await makeOrganization();
+			const requestId = await requestMigration(organizationId, ownerId);
+			const videoId = Video.VideoId.make(id());
+			await db().insert(videos).values({
+				id: videoId,
+				name: "Finished import",
+				ownerId,
+				orgId: organizationId,
+			});
+			await db().insert(importedVideos).values({
+				id: videoId,
+				orgId: organizationId,
+				source: "loom",
+				sourceId: loomId(),
+			});
+			await db().insert(loomMigrationImports).values({ videoId, requestId });
+			if (missing === "recording") {
+				await db().delete(videos).where(eq(videos.id, videoId));
+			} else {
+				await db().delete(importedVideos).where(eq(importedVideos.id, videoId));
+			}
+			signInAs(operatorId);
+			fixture.sendEmail.mockClear();
+			await expect(
+				actions.updateLoomMigrationStatus({
+					requestId,
+					nextStatus: "completed",
+					message: "All done",
+					verified: true,
+					expectedVideoCount: 1,
+					importedVideoCount: 1,
+				}),
+			).rejects.toThrow("missing or changed");
+			const request = await getRequest(requestId);
+			expect(request.status).not.toBe("completed");
+			expect(request.activeOrganizationId).toBe(organizationId);
+			expect(request.completedAt).toBeNull();
+			expect(fixture.sendEmail).not.toHaveBeenCalled();
+		},
+	);
+
 	it("uploads restricted MP4 files to storage and starts processing", async () => {
 		const { ownerId, organizationId } = await makeOrganization({
 			privateByDefault: true,

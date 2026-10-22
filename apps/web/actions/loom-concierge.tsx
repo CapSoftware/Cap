@@ -8,15 +8,17 @@ import {
 } from "@cap/database/emails/loom-migration";
 import { nanoId } from "@cap/database/helpers";
 import {
+	importedVideos,
 	loomMigrationImports,
 	loomMigrationRequests,
 	organizations,
 	users,
+	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
 	getCustomerMigrationRequests,
@@ -31,6 +33,7 @@ import {
 	LoomMigrationError,
 	type LoomMigrationStatus,
 	normalizeMigrationText,
+	validateLoomMigrationInventory,
 	validateOperatorMigrationUpdate,
 } from "@/lib/loom-migration-state";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
@@ -304,31 +307,31 @@ async function saveMigrationStatus({
 			);
 		}
 		if (nextStatus === "completed") {
-			const [unfinishedImport] = await tx
-				.select({ videoId: videoUploads.videoId })
+			const imports = await tx
+				.select({
+					videoId: videos.id,
+					videoOrganizationId: videos.orgId,
+					mappingId: importedVideos.id,
+					mappingOrganizationId: importedVideos.orgId,
+					source: importedVideos.source,
+					phase: videoUploads.phase,
+				})
 				.from(loomMigrationImports)
-				.innerJoin(
+				.leftJoin(videos, eq(videos.id, loomMigrationImports.videoId))
+				.leftJoin(
+					importedVideos,
+					eq(importedVideos.id, loomMigrationImports.videoId),
+				)
+				.leftJoin(
 					videoUploads,
 					eq(videoUploads.videoId, loomMigrationImports.videoId),
 				)
-				.where(
-					and(
-						eq(loomMigrationImports.requestId, requestId),
-						inArray(videoUploads.phase, [
-							"uploading",
-							"processing",
-							"generating_thumbnail",
-							"error",
-						]),
-					),
-				)
-				.limit(1)
+				.where(eq(loomMigrationImports.requestId, requestId))
 				.for("share");
-			if (unfinishedImport) {
-				throw new LoomMigrationError(
-					"Loom imports are still processing or have errors. Resolve them before completion.",
-				);
-			}
+			validateLoomMigrationInventory({
+				organizationId: request.organizationId,
+				imports,
+			});
 		}
 		await tx
 			.update(loomMigrationRequests)
