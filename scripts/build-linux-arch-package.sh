@@ -71,3 +71,6 @@ EOF
 
 cd "$work"
 PKGDEST="$output" makepkg --nodeps --noconfirm
+package="$(PKGDEST="$output" makepkg --packagelist)"
+filename="${package##*/}"
+mv -- "$package" "$output/cap-bin-${filename#*:}"

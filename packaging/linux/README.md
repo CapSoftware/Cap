@@ -33,9 +33,11 @@ This removes any old signature. The host must provide its Wayland client and Pip
 Run the package builder as an ordinary user in an Arch environment with `makepkg` and `bsdtar`:
 
 ```sh
-bash scripts/build-linux-arch-package.sh Cap_0.6.0_amd64.deb ./arch-packages
-sudo pacman -U ./arch-packages/cap-bin-0.6.0-1-x86_64.pkg.tar.zst
+bash scripts/build-linux-arch-package.sh Cap_0.6.2_amd64.deb ./arch-packages
+sudo pacman -U ./arch-packages/cap-bin-0.6.2-1-x86_64.pkg.tar.zst
 ```
+
+The output filename omits the epoch. Package metadata retains version `1:0.6.2-1` in this example, which `pacman` uses for upgrade ordering.
 
 The builder reuses the exact DEB payload, changes the package-format marker, and declares Arch dependencies. It does not strip or rebuild the executables. Release CI uses a pinned Arch container without network access during packaging.
 

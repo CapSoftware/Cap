@@ -127,6 +127,11 @@ test(
 			const metadata = run("bsdtar", ["-xOf", artifact, ".PKGINFO"]);
 			const pkgver = /^pkgver = (.+)$/m.exec(metadata)?.[1];
 			assert.ok(pkgver);
+			assert.match(pkgver, /^1:/);
+			assert.equal(
+				files[0],
+				`cap-bin-${pkgver.replace(/^1:/, "")}-x86_64.pkg.tar.zst`,
+			);
 			packages.push(pkgver);
 			assert.match(metadata, /^arch = x86_64$/m);
 			assert.ok(
