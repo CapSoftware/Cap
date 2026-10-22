@@ -75,6 +75,11 @@ jobs:
             cp target/abperf/examples/per-frame-bench target/abperf/examples/export-cli "$RUNNER_TEMP/bin/$side/"
             cp "$test_bin" "$RUNNER_TEMP/bin/$side/per_frame_caches"
           }
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            mkdir -p target/abperf "$RUNNER_TEMP/bin"
+            ln -sfn "$GITHUB_WORKSPACE/target/native-deps" target/abperf/Frameworks
+            ln -sfn "$GITHUB_WORKSPACE/target/native-deps" "$RUNNER_TEMP/bin/Frameworks"
+          fi
           build base "$BASE_REF"
           build head "$tip"
           git status --short | head

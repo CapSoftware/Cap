@@ -95,8 +95,10 @@ for side in sides:
         calls = int(m.group(1)) if m else None
     else:
         trace = out / f"strace-{side}.txt"
-        proc, _ = run(["strace", "-f", "-qq", "-o", str(trace), "-e", "trace=%stat,access,faccessat,faccessat2", "-P", str(wallpaper)] + cmd)
-        calls = sum(1 for l in trace.read_text().splitlines() if "cap-wallpaper" in l) if trace.exists() else None
+        proc, _ = run(["strace", "-f", "-qq", "-o", str(trace), "-P", str(wallpaper)] + cmd)
+        lines = [l for l in trace.read_text().splitlines() if "cap-wallpaper" in l] if trace.exists() else []
+        (out / f"strace-{side}-calls.txt").write_text("\n".join(sorted({re.sub(r"^\d+\s+", "", l).split("(")[0] for l in lines})) + "\n")
+        calls = sum(1 for l in lines if re.search(r"\b(stat|lstat|newfstatat|statx|access|faccessat2?)\(", l))
     per_frame = f"{calls / (frames + 10):.3f}" if calls is not None else "n/a"
     summary.append(f"- {side}: {calls} calls, {per_frame} per frame")
 summary.append("")
