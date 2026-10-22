@@ -19,8 +19,6 @@ import { handleDomainError } from "../Http/Errors.ts";
 import { Videos } from "../Videos/index.ts";
 import { Extensions } from "./Extensions.ts";
 
-// Each browser's identity.launchWebAuthFlow intercepts redirects to its own
-// synthetic host; the leading label identifies the extension installation.
 const IDENTITY_REDIRECT_HOSTS = [
 	{
 		suffix: ".chromiumapp.org",
@@ -47,7 +45,9 @@ const validateExtensionRedirectUri = (redirectUri: string) =>
 		}
 
 		const extensionId = url.hostname.slice(0, -identityHost.suffix.length);
-		const configuredExtensionId = identityHost.getConfiguredExtensionId()?.toLowerCase();
+		const configuredExtensionId = identityHost
+			.getConfiguredExtensionId()
+			?.toLowerCase();
 
 		if (configuredExtensionId) {
 			if (extensionId !== configuredExtensionId) {
