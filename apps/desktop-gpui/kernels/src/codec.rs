@@ -28,35 +28,33 @@ pub fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub fn flatten_rgba_to_rgb_over_white(rgba: &[u8]) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+    let mut dst = vec![0u8; rgba.len() / 4 * 3];
+    let mut i = 0;
     for px in rgba.chunks_exact(4) {
         let alpha = px[3];
+        let out = &mut dst[i..i + 3];
         if alpha == 255 {
-            rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+            out[0] = px[0];
+            out[1] = px[1];
+            out[2] = px[2];
         } else if alpha == 0 {
-            rgb.extend_from_slice(&[255, 255, 255]);
+            out[0] = 255;
+            out[1] = 255;
+            out[2] = 255;
         } else {
             let a = u32::from(alpha);
             let inv = 255 - a;
-            rgb.extend_from_slice(&[
-                ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8,
-                ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8,
-                ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8,
-            ]);
+            out[0] = ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8;
+            out[1] = ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8;
+            out[2] = ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8;
         }
+        i += 3;
     }
-    rgb
+    dst
 }
 
 pub fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::codecs::png::PngEncoder::new(&mut png).write_image(
-        rgba,
-        width,
-        height,
-        image::ExtendedColorType::Rgba8,
-    )?;
-    Ok(png.into_inner())
+    crate::png::encode(rgba, width, height, image::ExtendedColorType::Rgba8)
 }
 
 pub fn write_png_file(
@@ -246,12 +244,94 @@ mod tests {
         );
     }
 
+    fn extend_flatten_rgba_to_rgb_over_white(rgba: &[u8]) -> Vec<u8> {
+        let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+        for px in rgba.chunks_exact(4) {
+            let alpha = px[3];
+            if alpha == 255 {
+                rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+            } else if alpha == 0 {
+                rgb.extend_from_slice(&[255, 255, 255]);
+            } else {
+                let a = u32::from(alpha);
+                let inv = 255 - a;
+                rgb.extend_from_slice(&[
+                    ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8,
+                    ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8,
+                    ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8,
+                ]);
+            }
+        }
+        rgb
+    }
+
+    fn rgba_with_alpha(pixels: usize, alpha_of: impl Fn(usize) -> u8) -> Vec<u8> {
+        let mut rgba = Vec::with_capacity(pixels * 4);
+        for i in 0..pixels {
+            rgba.extend_from_slice(&[
+                (i & 0xff) as u8,
+                ((i >> 4) & 0xff) as u8,
+                i.wrapping_mul(17) as u8,
+                alpha_of(i),
+            ]);
+        }
+        rgba
+    }
+
+    #[test]
+    fn flatten_rgba_to_rgb_over_white_matches_extend_formula() {
+        assert_eq!(flatten_rgba_to_rgb_over_white(&[1, 2, 3, 255]), [1, 2, 3]);
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&[1, 2, 3, 0]),
+            [255, 255, 255]
+        );
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&[10, 0, 255, 128]),
+            [132, 127, 255]
+        );
+
+        let opaque = rgba_with_alpha(256, |_| 255);
+        let transparent = rgba_with_alpha(256, |_| 0);
+        let mixed = rgba_with_alpha(256, |i| match i % 3 {
+            0 => 0,
+            1 => 255,
+            _ => (i * 17) as u8,
+        });
+        for rgba in [&opaque[..], &transparent[..], &mixed[..]] {
+            assert_eq!(
+                flatten_rgba_to_rgb_over_white(rgba),
+                extend_flatten_rgba_to_rgb_over_white(rgba)
+            );
+        }
+    }
+
     #[test]
     fn png_round_trips_rgba() {
-        let rgba = [10, 20, 30, 40, 50, 60, 70, 255];
-        let png = encode_png_rgba(&rgba, 2, 1).unwrap();
-        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
-        assert_eq!(decoded.as_raw(), &rgba);
+        use image::ImageEncoder as _;
+
+        let samples = [
+            vec![10, 20, 30, 40, 50, 60, 70, 255],
+            (0..=255u8)
+                .flat_map(|value| [value, 255 - value, value.wrapping_mul(17), value])
+                .collect(),
+        ];
+        for (rgba, (width, height)) in samples.into_iter().zip([(2, 1), (16, 16)]) {
+            let png = encode_png_rgba(&rgba, width, height).unwrap();
+            let parallel =
+                crate::png::encode(&rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
+            assert_eq!(png, parallel);
+            let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert_eq!(decoded.dimensions(), (width, height));
+            assert_eq!(decoded.as_raw(), &rgba);
+
+            let mut reference = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut reference)
+                .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+                .unwrap();
+            let reference = image::load_from_memory(&reference).unwrap().to_rgba8();
+            assert_eq!(decoded.as_raw(), reference.as_raw());
+        }
+        assert!(encode_png_rgba(&[0, 0, 0, 0], 2, 1).is_err());
     }
 
     #[test]
