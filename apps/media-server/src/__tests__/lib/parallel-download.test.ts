@@ -26,6 +26,14 @@ beforeAll(async () => {
 				return new Response(payload, { headers: { ETag: '"v1"' } });
 			}
 			rangeRequests++;
+			if (url.pathname === "/huge") {
+				return new Response(payload.subarray(0, MB), {
+					status: 206,
+					headers: {
+						"Content-Range": `bytes 0-${MB - 1}/${Number.MAX_SAFE_INTEGER}`,
+					},
+				});
+			}
 			if (url.pathname === "/changed" && Number(range[1]) > 0) {
 				return new Response("precondition", { status: 412 });
 			}
@@ -71,11 +79,16 @@ describe("parallel download", () => {
 	});
 
 	test("plans contiguous ranges after the first part", () => {
-		expect(planRanges(10, 4, 3)).toEqual([
+		const ranges = planRanges(10, 4, 3);
+		expect(ranges.count).toBe(2);
+		expect([ranges.at(0), ranges.at(1)]).toEqual([
 			{ start: 4, end: 6 },
 			{ start: 7, end: 9 },
 		]);
-		expect(planRanges(4, 4, 3)).toEqual([]);
+		expect(planRanges(4, 4, 3).count).toBe(0);
+		expect(planRanges(Number.MAX_SAFE_INTEGER, MB, MB).count).toBeGreaterThan(
+			1e9,
+		);
 	});
 
 	test("reassembles ranged parts byte for byte", async () => {
@@ -109,6 +122,18 @@ describe("parallel download", () => {
 				{ concurrency: 4, partBytes: MB },
 			),
 		).rejects.toThrow("Ranged download part failed: 412");
+	});
+
+	test("rejects an absurd Content-Range total before planning parts", async () => {
+		const before = rangeRequests;
+		await expect(
+			downloadUrlToPathParallel(
+				`http://localhost:${server.port}/huge`,
+				join(dir, "huge.bin"),
+				{ concurrency: 4, partBytes: MB },
+			),
+		).rejects.toThrow("invalid size");
+		expect(rangeRequests).toBe(before + 1);
 	});
 
 	test("fails when a part comes back short", async () => {

@@ -1,6 +1,9 @@
 import { open } from "node:fs/promises";
 
 const MIN_PART_BYTES = 1024 * 1024;
+// Far above any recording we store (the largest so far is ~47 GB). Anything
+// bigger is a bad Content-Range header, not a real object.
+export const MAX_RANGED_TOTAL_BYTES = 1024 ** 4;
 
 export interface ParallelDownloadOptions {
 	concurrency: number;
@@ -39,12 +42,14 @@ export function planRanges(
 	totalBytes: number,
 	firstPartBytes: number,
 	partBytes: number,
-): Array<{ start: number; end: number }> {
-	const ranges: Array<{ start: number; end: number }> = [];
-	for (let start = firstPartBytes; start < totalBytes; start += partBytes) {
-		ranges.push({ start, end: Math.min(totalBytes, start + partBytes) - 1 });
-	}
-	return ranges;
+): { count: number; at: (index: number) => { start: number; end: number } } {
+	return {
+		count: Math.max(0, Math.ceil((totalBytes - firstPartBytes) / partBytes)),
+		at: (index) => {
+			const start = firstPartBytes + index * partBytes;
+			return { start, end: Math.min(totalBytes, start + partBytes) - 1 };
+		},
+	};
 }
 
 function parseTotalFromContentRange(value: string | null): number | null {
@@ -108,9 +113,9 @@ export async function downloadUrlToPathParallel(
 			signal: options.signal,
 		});
 		if (!first.ok) {
-			const body = await first.text().catch(() => "");
+			await first.body?.cancel().catch(() => {});
 			throw new Error(
-				`Failed to download video: ${first.status} ${first.statusText}; ${body.slice(0, 300)}`,
+				`Failed to download video: ${first.status} ${first.statusText}`,
 			);
 		}
 		const total =
@@ -121,6 +126,10 @@ export async function downloadUrlToPathParallel(
 			const bytes = await readInto(first, write, 0, null);
 			return { bytes, parts: 1, ranged: false };
 		}
+		if (total > MAX_RANGED_TOTAL_BYTES) {
+			await first.body?.cancel().catch(() => {});
+			throw new Error(`Ranged download reported an invalid size: ${total}`);
+		}
 		const firstBytes = Math.min(partBytes, total);
 		const etag = first.headers.get("etag");
 		const ranges = planRanges(total, firstBytes, partBytes);
@@ -130,9 +139,9 @@ export async function downloadUrlToPathParallel(
 			: controller.signal;
 		let next = 0;
 		const worker = async () => {
-			while (next < ranges.length) {
-				const range = ranges[next++];
-				if (!range) return;
+			while (next < ranges.count) {
+				signal.throwIfAborted();
+				const range = ranges.at(next++);
 				const response = await fetchImpl(url, {
 					headers: {
 						Range: `bytes=${range.start}-${range.end}`,
@@ -155,7 +164,7 @@ export async function downloadUrlToPathParallel(
 			}
 		};
 		const workers = Array.from(
-			{ length: Math.max(1, Math.min(options.concurrency - 1, ranges.length)) },
+			{ length: Math.max(1, Math.min(options.concurrency - 1, ranges.count)) },
 			() => worker(),
 		);
 		const firstRead = readInto(first, write, 0, firstBytes);
@@ -166,7 +175,7 @@ export async function downloadUrlToPathParallel(
 			await Promise.allSettled([firstRead, ...workers]);
 			throw error;
 		}
-		return { bytes: total, parts: ranges.length + 1, ranged: true };
+		return { bytes: total, parts: ranges.count + 1, ranged: true };
 	} finally {
 		await handle.close();
 	}
