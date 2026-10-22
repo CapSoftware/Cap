@@ -1958,6 +1958,13 @@ const openStandaloneSidePanel = (tab: chrome.tabs.Tab, windowId: number) => {
 	chrome.sidePanel.open({ windowId }).then(
 		() => {
 			standalonePanelOpen = true;
+			// One recorder at a time: the side panel survives tab switches, so an
+			// in-page panel left open on another tab would show up beside it.
+			void updateSharedUiState((current) =>
+				current.panelOpen
+					? { ...current, panelOpen: false, updatedAt: Date.now() }
+					: current,
+			).catch(() => undefined);
 		},
 		(error) => {
 			console.warn("sidePanel.open failed, using popup window", error);
