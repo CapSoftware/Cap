@@ -35,7 +35,10 @@ fn report(label: &str, samples: &mut [f64]) {
     let mean = samples.iter().sum::<f64>() / n;
     let p50 = samples[(n * 0.50) as usize];
     let p95 = samples[(n * 0.95) as usize];
-    println!("{label}: n={} mean={mean:.2}us p50={p50:.2}us p95={p95:.2}us", samples.len());
+    println!(
+        "{label}: n={} mean={mean:.2}us p50={p50:.2}us p95={p95:.2}us",
+        samples.len()
+    );
 }
 
 fn spawn_producer() -> flume::Receiver<(u32, u32)> {
