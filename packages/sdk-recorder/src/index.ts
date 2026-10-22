@@ -51,9 +51,9 @@ export class CapRecorder {
 
 	constructor(options: RecorderOptions) {
 		this.options = {
-			apiBase: DEFAULT_API_BASE,
-			mode: "fullscreen",
 			...options,
+			apiBase: options.apiBase ?? DEFAULT_API_BASE,
+			mode: options.mode ?? "fullscreen",
 		};
 		this.maxDurationMs = options.maxDurationMs ?? 4 * 60 * 60 * 1000;
 		this.client = new MultipartClient(
