@@ -120,7 +120,7 @@ index de95b7d..a72616d 100644
          });
      }
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index 1d35af1..8d9df4b 100644
+index 1d35af1..4c21cec 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
 @@ -174,6 +174,7 @@ pub(crate) struct MetalRenderer {
@@ -183,7 +183,7 @@ index 1d35af1..8d9df4b 100644
  }
  
  #[cfg(any(test, feature = "test-support"))]
-@@ -2548,6 +2564,315 @@ mod renderer_hardening_tests {
+@@ -2548,6 +2564,316 @@ mod renderer_hardening_tests {
      }
  }
  
@@ -340,6 +340,7 @@ index 1d35af1..8d9df4b 100644
 +            border_color: transparent_black(),
 +            corner_radii: Corners::default(),
 +            border_widths: Edges::default(),
++            fade: Default::default(),
 +        });
 +        primitive(&mut scene, content_mask);
 +        scene.finish();
@@ -499,6 +500,14 @@ index 1d35af1..8d9df4b 100644
  #[cfg(test)]
  mod backdrop_blur_tests {
      use super::*;
+@@ -2583,6 +2909,7 @@ mod backdrop_blur_tests {
+             border_color: transparent_black(),
+             corner_radii: Corners::default(),
+             border_widths: Edges::default(),
++            fade: Default::default(),
+         });
+     }
+ 
 diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
 index e087c0d..53212e2 100644
 --- a/crates/gpui_macos/src/shaders.metal
