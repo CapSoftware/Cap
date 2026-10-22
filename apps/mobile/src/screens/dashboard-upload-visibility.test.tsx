@@ -1791,7 +1791,14 @@ describe("upload and dashboard visibility", () => {
 			authState.value = auth;
 			const DocumentPicker = await import("expo-document-picker");
 			vi.mocked(DocumentPicker.getDocumentAsync).mockResolvedValueOnce({
-				assets: [{ name: "slow.mp4", uri: "file:///tmp/slow.mp4", size: 100 }],
+				assets: [
+					{
+						name: "slow.mp4",
+						uri: "file:///tmp/slow.mp4",
+						size: 100,
+						lastModified: 0,
+					},
+				],
 				canceled: false,
 			});
 			const { runMobileUpload } = await import("@/uploads/runMobileUpload");
