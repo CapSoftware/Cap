@@ -4,6 +4,7 @@ import { canReadStatus, validateMediaServerSecret } from "../lib/auth";
 import {
 	DRAIN_RETRY_AFTER_SECONDS,
 	DRAINING_DETAILS,
+	getIdleTimeoutSeconds,
 	isDraining,
 	setRequestIdleTimeout,
 } from "../lib/lifecycle";
@@ -211,6 +212,10 @@ audio.post("/extract", async (c) => {
 			},
 			500,
 		);
+	} finally {
+		// Only the setup above can sit silent; once bytes flow, a dead client
+		// should be reaped again.
+		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
 	}
 });
 
@@ -286,6 +291,10 @@ audio.post("/convert", async (c) => {
 			},
 			500,
 		);
+	} finally {
+		// Only the setup above can sit silent; once bytes flow, a dead client
+		// should be reaped again.
+		setRequestIdleTimeout(c.env, c.req.raw, getIdleTimeoutSeconds());
 	}
 });
 
