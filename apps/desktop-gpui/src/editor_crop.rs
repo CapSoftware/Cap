@@ -1265,7 +1265,12 @@ impl CropState {
             CropField::Width => real.width = value,
             CropField::Height => real.height = value,
         }
-        let raw = bounds_to_raw(real, self.scale());
+        let mut raw = bounds_to_raw(real, self.scale());
+        if let CropField::Height = field
+            && let Some(ratio) = self.ratio_value()
+        {
+            raw.width = raw.height * ratio;
+        }
         self.set_raw_constraining(raw, ORIGIN_TOP_LEFT);
     }
 
@@ -3923,6 +3928,56 @@ mod tests {
         assert!((real.width - 1512.).abs() <= 6.);
         assert_eq!(real.x, 0.);
         assert_eq!(real.height, 1964.);
+    }
+
+    #[test]
+    fn locked_size_fields_resize_from_the_edited_dimension() {
+        for (ratio, width, height) in [((16, 9), 640., 360.), ((9, 16), 360., 640.)] {
+            let mut state = CropState::new(
+                (1920, 1080),
+                (482., 272.),
+                CropBounds::new(160., 80., 960., 540.),
+            );
+            state.set_aspect(Some(ratio));
+            state.stop_animation();
+            let before = state.real();
+
+            state.set_property(CropField::Height, height);
+            assert_eq!(
+                state.real(),
+                CropBounds::new(before.x, before.y, width, height)
+            );
+
+            state.set_property(CropField::Width, width / 2.);
+            assert_eq!(
+                state.real(),
+                CropBounds::new(before.x, before.y, width / 2., height / 2.)
+            );
+        }
+    }
+
+    #[test]
+    fn locked_height_edits_still_fit_inside_the_source() {
+        let mut state = CropState::new(
+            (1920, 1080),
+            (482., 272.),
+            CropBounds::new(160., 80., 960., 540.),
+        );
+        state.set_aspect(Some((16, 9)));
+        state.stop_animation();
+        state.set_property(CropField::Height, 2160.);
+        assert_eq!(state.real(), CropBounds::new(0., 0., 1920., 1080.));
+    }
+
+    #[test]
+    fn free_height_edits_preserve_width_and_position() {
+        let mut state = CropState::new(
+            (1920, 1080),
+            (482., 272.),
+            CropBounds::new(160., 80., 960., 540.),
+        );
+        state.set_property(CropField::Height, 360.);
+        assert_eq!(state.real(), CropBounds::new(160., 80., 960., 360.));
     }
 
     #[test]
