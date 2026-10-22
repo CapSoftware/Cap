@@ -4621,13 +4621,11 @@ const ZOOM_MAX: f32 = 4.5;
 /// origin before storing it, and throws (leaving the setting alone) when it
 /// does not parse.
 fn origin_of(value: &str) -> Option<String> {
-    let value = value.trim();
-    let (scheme, rest) = value.split_once("://")?;
-    if !matches!(scheme, "http" | "https") || rest.is_empty() {
+    let url = reqwest::Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
-    let authority = rest.split(['/', '?', '#']).next()?;
-    (!authority.is_empty()).then(|| format!("{scheme}://{authority}"))
+    Some(url.origin().ascii_serialization())
 }
 
 /// The preview under the project-name template.
@@ -4682,6 +4680,37 @@ mod tests {
         assert_eq!(origin_of("cap.so"), None);
         assert_eq!(origin_of("ftp://cap.so"), None);
         assert_eq!(origin_of(""), None);
+    }
+
+    #[test]
+    fn invalid_server_authorities_are_rejected_before_saving() {
+        for value in [
+            "https://cap.example.com:invalid",
+            "https://cap.example.com:65536",
+            "https://cap example.com",
+            "http://[::1",
+            "https://user@",
+        ] {
+            assert_eq!(origin_of(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn server_origins_are_normalised_for_api_requests() {
+        for (value, expected) in [
+            ("https://cap.example.com/", "https://cap.example.com"),
+            (
+                "https://user:password@cap.example.com/dashboard?x=1#top",
+                "https://cap.example.com",
+            ),
+            (" HTTPS://CAP.EXAMPLE.COM:443/ ", "https://cap.example.com"),
+            ("http://localhost:3000/path", "http://localhost:3000"),
+            ("http://[::1]:3000/path", "http://[::1]:3000"),
+        ] {
+            let origin = origin_of(value).expect(value);
+            assert_eq!(origin, expected);
+            assert!(reqwest::Url::parse(&format!("{origin}/api/desktop/feedback")).is_ok());
+        }
     }
 
     #[test]
