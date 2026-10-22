@@ -1,0 +1,326 @@
+diff --git a/crates/gpui_macos/src/metal_atlas.rs b/crates/gpui_macos/src/metal_atlas.rs
+index d007abb..6ad0094 100644
+--- a/crates/gpui_macos/src/metal_atlas.rs
++++ b/crates/gpui_macos/src/metal_atlas.rs
+@@ -10,6 +10,9 @@ use metal::Device;
+ use parking_lot::Mutex;
+ use std::borrow::Cow;
+ 
++pub(crate) static AB_TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
++    std::sync::atomic::AtomicU64::new(0);
++
+ pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
+ 
+ impl MetalAtlas {
+@@ -179,6 +182,7 @@ impl MetalAtlasState {
+             metal::MTLStorageMode::Managed
+         });
+         let metal_texture = self.device.new_texture(&texture_descriptor);
++        AB_TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+ 
+         let texture_list = match kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+index 4c21cec..bad150e 100644
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -2584,7 +2584,7 @@ mod surface_alpha_tests {
+     /// Straight-alpha BGRA shaped like a camera cutout (opaque person, soft
+     /// edge, transparent background) with per-texel noise, so any texel or
+     /// filter-weight mismatch between the two paths changes the output.
+-    fn cutout_pixels() -> Vec<u8> {
++    pub(super) fn cutout_pixels() -> Vec<u8> {
+         let mut state = 0x2545_f491_u32;
+         let mut pixels = Vec::with_capacity(WIDTH * HEIGHT * 4);
+         for y in 0..HEIGHT {
+@@ -2607,7 +2607,7 @@ mod surface_alpha_tests {
+         pixels
+     }
+ 
+-    fn surface(pixels: &[u8]) -> CVPixelBuffer {
++    pub(super) fn surface(pixels: &[u8]) -> CVPixelBuffer {
+         let io_surface_properties = CFDictionary::<CFString, CFType>::from_CFType_pairs(&[]);
+         let options = CFDictionary::from_CFType_pairs(&[
+             (
+@@ -2874,6 +2874,281 @@ mod surface_alpha_tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod cutout_ab {
++    use super::surface_alpha_tests::{cutout_pixels, surface};
++    use super::*;
++    use crate::metal_atlas::AB_TEXTURES_CREATED;
++    use core_video::pixel_buffer::CVPixelBuffer;
++    use gpui::{AtlasKey, EdgeFadeParams, PlatformAtlas, RenderImage, RenderImageParams};
++    use std::alloc::{GlobalAlloc, Layout, System};
++    use std::borrow::Cow;
++    use std::sync::atomic::{AtomicU64, Ordering};
++    use std::time::{Duration, Instant};
++
++    static LARGE_ALLOCS: AtomicU64 = AtomicU64::new(0);
++    const LARGE: usize = 64 * 1024;
++
++    struct Counting;
++
++    unsafe impl GlobalAlloc for Counting {
++        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++            if layout.size() >= LARGE {
++                LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++            }
++            unsafe { System.alloc(layout) }
++        }
++        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++            if layout.size() >= LARGE {
++                LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++            }
++            unsafe { System.alloc_zeroed(layout) }
++        }
++        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++            unsafe { System.dealloc(ptr, layout) }
++        }
++        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
++            if new_size >= LARGE {
++                LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++            }
++            unsafe { System.realloc(ptr, layout, new_size) }
++        }
++    }
++
++    #[global_allocator]
++    static GLOBAL: Counting = Counting;
++
++    const FRAMES: usize = 300;
++    const RING: usize = 8;
++
++    fn thread_cpu_ns() -> u64 {
++        let mut time: libc::timespec = unsafe { std::mem::zeroed() };
++        assert_eq!(
++            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
++            0
++        );
++        time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64
++    }
++
++    fn footprint_mb() -> f64 {
++        let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
++        let result = unsafe {
++            libc::proc_pid_rusage(
++                libc::getpid(),
++                libc::RUSAGE_INFO_V2,
++                (&mut info as *mut libc::rusage_info_v2).cast(),
++            )
++        };
++        assert_eq!(result, 0);
++        info.ri_phys_footprint as f64 / 1_048_576.0
++    }
++
++    fn snapshot(buffer: &CVPixelBuffer) -> Arc<RenderImage> {
++        use core_video::pixel_buffer::kCVPixelBufferLock_ReadOnly;
++        let width = buffer.get_width();
++        let height = buffer.get_height();
++        let stride = buffer.get_bytes_per_row();
++        let row_bytes = width * 4;
++        assert_eq!(buffer.lock_base_address(kCVPixelBufferLock_ReadOnly), 0);
++        let base = unsafe { buffer.get_base_address() }.cast::<u8>();
++        let data = unsafe { std::slice::from_raw_parts(base, (height - 1) * stride + row_bytes) };
++        let pixels = if stride == row_bytes {
++            data[..row_bytes * height].to_vec()
++        } else {
++            let mut pixels = Vec::with_capacity(row_bytes * height);
++            for row in data.chunks(stride).take(height) {
++                pixels.extend_from_slice(&row[..row_bytes]);
++            }
++            pixels
++        };
++        assert_eq!(buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly), 0);
++        let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels).unwrap();
++        Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
++            image
++        )]))
++    }
++
++    struct Stats {
++        worker_cpu: Vec<f64>,
++        main_cpu: Vec<f64>,
++        main_wall: Vec<f64>,
++        textures: u64,
++        large_allocs: u64,
++        footprint_delta: f64,
++    }
++
++    fn percentile(values: &[f64], q: f64) -> f64 {
++        let mut sorted = values.to_vec();
++        sorted.sort_by(f64::total_cmp);
++        sorted[((sorted.len() - 1) as f64 * q).round() as usize]
++    }
++
++    fn mean(values: &[f64]) -> f64 {
++        values.iter().sum::<f64>() / values.len() as f64
++    }
++
++    fn run(old: bool, ring: &[CVPixelBuffer], viewport: Size<DevicePixels>) -> Stats {
++        let mut renderer =
++            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())))
++                .unwrap();
++        renderer.update_transparency(true);
++        let atlas = renderer.sprite_atlas().clone();
++        let texture_size = size(
++            DevicePixels(ring[0].get_width() as i32),
++            DevicePixels(ring[0].get_height() as i32),
++        );
++        let bounds = Bounds {
++            origin: point(ScaledPixels(0.), ScaledPixels(0.)),
++            size: size(
++                ScaledPixels(viewport.width.0 as f32),
++                ScaledPixels(viewport.height.0 as f32),
++            ),
++        };
++        let content_mask = ContentMask { bounds };
++        let render = |renderer: &mut MetalRenderer, scene: &mut Scene| {
++            scene.finish();
++            renderer.render_scene(scene, viewport).unwrap();
++        };
++        for _ in 0..30 {
++            let mut scene = Scene::default();
++            render(&mut renderer, &mut scene);
++        }
++        let footprint = footprint_mb();
++        let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++        let large = LARGE_ALLOCS.load(Ordering::Relaxed);
++        let mut stats = Stats {
++            worker_cpu: Vec::with_capacity(FRAMES),
++            main_cpu: Vec::with_capacity(FRAMES),
++            main_wall: Vec::with_capacity(FRAMES),
++            textures: 0,
++            large_allocs: 0,
++            footprint_delta: 0.,
++        };
++        let mut painted: Option<(AtlasKey, Arc<RenderImage>)> = None;
++        let started = Instant::now();
++        for frame in 0..FRAMES {
++            let buffer = &ring[frame % RING];
++            let worker_start = thread_cpu_ns();
++            let image = old.then(|| snapshot(buffer));
++            stats
++                .worker_cpu
++                .push((thread_cpu_ns() - worker_start) as f64 / 1000.);
++
++            let wall = Instant::now();
++            let main_start = thread_cpu_ns();
++            let mut scene = Scene::default();
++            if let Some(image) = image {
++                if let Some((key, previous)) = painted.take() {
++                    atlas.remove(&key);
++                    drop(previous);
++                }
++                let key = AtlasKey::Image(RenderImageParams {
++                    image_id: image.id,
++                    frame_index: 0,
++                });
++                let tile = atlas
++                    .get_or_insert_with(&key, &mut || {
++                        Ok(Some((
++                            texture_size,
++                            Cow::Borrowed(image.as_bytes(0).unwrap()),
++                        )))
++                    })
++                    .unwrap()
++                    .unwrap();
++                scene.insert_primitive(PolychromeSprite {
++                    order: 0,
++                    pad: 0,
++                    grayscale: false.into(),
++                    opacity: 1.,
++                    bounds,
++                    content_mask: content_mask.clone(),
++                    corner_radii: Corners::default(),
++                    fade: EdgeFadeParams::default(),
++                    tile,
++                });
++                painted = Some((key, image));
++            } else {
++                scene.insert_primitive(PaintSurface {
++                    order: 0,
++                    bounds,
++                    content_mask: content_mask.clone(),
++                    corner_radii: Corners::default(),
++                    source_uv: Bounds {
++                        origin: point(0., 0.),
++                        size: size(1., 1.),
++                    },
++                    straight_alpha: true,
++                    opacity: 1.,
++                    image_buffer: buffer.clone(),
++                });
++            }
++            render(&mut renderer, &mut scene);
++            stats
++                .main_cpu
++                .push((thread_cpu_ns() - main_start) as f64 / 1000.);
++            stats.main_wall.push(wall.elapsed().as_secs_f64() * 1e6);
++            let next = Duration::from_secs_f64((frame + 1) as f64 / 30.);
++            std::thread::sleep(next.saturating_sub(started.elapsed()));
++        }
++        stats.textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures;
++        stats.large_allocs = LARGE_ALLOCS.load(Ordering::Relaxed) - large;
++        stats.footprint_delta = footprint_mb() - footprint;
++        if let Some((key, _)) = painted.take() {
++            atlas.remove(&key);
++        }
++        stats
++    }
++
++    #[test]
++    #[ignore]
++    fn cutout_paint_ab_bench() {
++        let Some(device) = metal::Device::system_default() else {
++            println!("AB skipped: no Metal device");
++            return;
++        };
++        println!("AB device={}", device.name());
++        let pixels = cutout_pixels();
++        let ring = (0..RING).map(|_| surface(&pixels)).collect::<Vec<_>>();
++        println!(
++            "| bubble | path | run | worker CPU us/frame | main CPU us/frame mean | main CPU p50 | main CPU p95 | main wall p50 us | atlas textures/frame | allocs >=64KB/frame | footprint delta MB |"
++        );
++        println!("|---|---|---|---|---|---|---|---|---|---|---|");
++        for (label, viewport) in [
++            (
++                "230 pt @2x (818x460)",
++                size(DevicePixels(818), DevicePixels(460)),
++            ),
++            (
++                "600 pt @2x (2134x1200)",
++                size(DevicePixels(2134), DevicePixels(1200)),
++            ),
++        ] {
++            for run_index in 0..3 {
++                for old in [true, false] {
++                    let stats = run(old, &ring, viewport);
++                    println!(
++                        "| {label} | {} | {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.2} | {:.2} | {:.1} |",
++                        if old {
++                            "base (RenderImage)"
++                        } else {
++                            "head (surface)"
++                        },
++                        run_index + 1,
++                        mean(&stats.worker_cpu),
++                        mean(&stats.main_cpu),
++                        percentile(&stats.main_cpu, 0.5),
++                        percentile(&stats.main_cpu, 0.95),
++                        percentile(&stats.main_wall, 0.5),
++                        stats.textures as f64 / FRAMES as f64,
++                        stats.large_allocs as f64 / FRAMES as f64,
++                        stats.footprint_delta,
++                    );
++                }
++            }
++        }
++    }
++}
++
+ #[cfg(test)]
+ mod backdrop_blur_tests {
+     use super::*;

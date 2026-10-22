@@ -1,0 +1,33 @@
+name: Scratch camera cutout surface A/B
+on:
+  push:
+    branches: [ci/camera-cutout-surface-ab]
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-6vcpu-macos-15, blacksmith-6vcpu-macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: ./scripts/prepare-gpui-dependency.sh
+      - name: Parity test
+        working-directory: ../zed-cap
+        run: cargo +1.95.0 test -p gpui_macos --lib surface_alpha_tests -- --nocapture
+      - name: A/B bench
+        working-directory: ../zed-cap
+        shell: bash
+        run: |
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          cargo +1.95.0 test -p gpui_macos --lib --release cutout_ab -- --ignored --nocapture --test-threads=1 | tee "$RUNNER_TEMP/ab.txt"
+          grep '^|' "$RUNNER_TEMP/ab.txt" >> "$GITHUB_STEP_SUMMARY"
