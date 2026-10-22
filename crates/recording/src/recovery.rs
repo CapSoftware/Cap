@@ -2637,7 +2637,9 @@ impl RecoveryManager {
                                     .and_then(|s| s.mic.as_ref())
                                     .and_then(|m| m.device_id.clone()),
                                 gap_summary: None,
-                                digital_silence_ms: None,
+                                digital_silence_ms: original_segment
+                                    .and_then(|s| s.mic.as_ref())
+                                    .and_then(|m| m.digital_silence_ms),
                             })
                         } else {
                             None
@@ -5236,7 +5238,7 @@ mod clean_studio_snapshot_tests {
             start_time: Some(-0.125),
             device_id: Some("benchmark microphone".into()),
             gap_summary: None,
-            digital_silence_ms: None,
+            digital_silence_ms: Some(190_000),
         });
         inner.segments[0].system_audio = Some(AudioMeta {
             path: "content/segments/segment-0/system_audio.m4a".into(),
@@ -5260,6 +5262,7 @@ mod clean_studio_snapshot_tests {
         );
         assert_eq!(mic.start_time, Some(-0.125));
         assert_eq!(mic.device_id.as_deref(), Some("benchmark microphone"));
+        assert_eq!(mic.digital_silence_ms, Some(190_000));
         assert_eq!(
             segment.system_audio.as_ref().unwrap().start_time,
             Some(0.25)

@@ -4615,6 +4615,7 @@ mod tests {
                         video_frame_count: 30,
                         video_timestamp_span: Some((Duration::ZERO, Duration::from_millis(967))),
                         audio_gap_summary: None,
+                        digital_silence_ms: None,
                     },
                     microphone: None,
                     camera: None,
