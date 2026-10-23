@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	isCompleteTranslation,
 	joinTranslationChunks,
+	readCachedTranslation,
 	splitTranslationChunks,
+	withSourceFingerprint,
 } from "@/actions/videos/translation-vtt";
 
 const source = `WEBVTT
@@ -64,5 +66,25 @@ describe("translation VTT completeness", () => {
 		const chunks = splitTranslationChunks(source);
 		if (!chunks) throw new Error("Expected chunks");
 		expect(joinTranslationChunks(source, chunks, ["WEBVTT"])).toBeNull();
+	});
+
+	it("translates a header-only transcript without any chunks", () => {
+		const empty = "WEBVTT\n\n";
+		const chunks = splitTranslationChunks(empty);
+		expect(chunks).toEqual([]);
+		expect(joinTranslationChunks(empty, [], [])).toBe("WEBVTT");
+		expect(isCompleteTranslation(empty, "WEBVTT")).toBe(true);
+	});
+
+	it("reuses a cached translation only for the transcript it was made from", () => {
+		const translated = source.replaceAll("Hello there", "Hola");
+		const cached = withSourceFingerprint(source, translated);
+		if (!cached) throw new Error("Expected cache body");
+
+		expect(readCachedTranslation(source, cached)).toBe(translated);
+		expect(
+			readCachedTranslation(source.replace("See you soon", "Bye"), cached),
+		).toBeNull();
+		expect(readCachedTranslation(source, translated)).toBeNull();
 	});
 });

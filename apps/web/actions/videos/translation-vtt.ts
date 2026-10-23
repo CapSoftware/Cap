@@ -1,11 +1,14 @@
+import { createHash } from "node:crypto";
+
 const MAX_CHUNK_LENGTH = 3_000;
+const SOURCE_FINGERPRINT_PREFIX = "NOTE cap-source-sha256 ";
 
 function splitVtt(content: string): string[] | null {
 	const blocks = content
 		.replace(/\r\n?/g, "\n")
 		.trim()
 		.split(/\n{2,}/);
-	if (!blocks[0]?.startsWith("WEBVTT") || blocks.length < 2) {
+	if (!blocks[0]?.startsWith("WEBVTT")) {
 		return null;
 	}
 	return blocks;
@@ -113,6 +116,30 @@ export function joinTranslationChunks(
 		translatedBlocks.push(...blocks.slice(1));
 	}
 
-	const result = `${sourceBlocks[0]}\n\n${translatedBlocks.join("\n\n")}`;
+	const result = [sourceBlocks[0], ...translatedBlocks].join("\n\n");
 	return isCompleteTranslation(source, result) ? result : null;
+}
+
+function sourceFingerprint(source: string): string {
+	return `${SOURCE_FINGERPRINT_PREFIX}${createHash("sha256").update(source).digest("hex")}`;
+}
+
+export function withSourceFingerprint(
+	source: string,
+	translation: string,
+): string | null {
+	const blocks = splitVtt(translation);
+	if (!blocks) return null;
+	const [header, ...cues] = blocks;
+	return [header, sourceFingerprint(source), ...cues].join("\n\n");
+}
+
+export function readCachedTranslation(
+	source: string,
+	cached: string,
+): string | null {
+	const blocks = splitVtt(cached);
+	if (!blocks || blocks[1] !== sourceFingerprint(source)) return null;
+	const translation = [blocks[0], ...blocks.slice(2)].join("\n\n");
+	return isCompleteTranslation(source, translation) ? translation : null;
 }

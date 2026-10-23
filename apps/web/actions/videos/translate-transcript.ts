@@ -20,7 +20,9 @@ import {
 import {
 	isCompleteTranslation,
 	joinTranslationChunks,
+	readCachedTranslation,
 	splitTranslationChunks,
+	withSourceFingerprint,
 } from "./translation-vtt";
 
 interface TranslateResult {
@@ -101,13 +103,13 @@ export async function translateTranscript(
 			return yield* bucket.getObject(translatedKey);
 		}).pipe(runPromise);
 
-		if (
-			Option.isSome(existingTranslation) &&
-			isCompleteTranslation(originalVtt.value, existingTranslation.value)
-		) {
+		const cachedTranslation = Option.isSome(existingTranslation)
+			? readCachedTranslation(originalVtt.value, existingTranslation.value)
+			: null;
+		if (cachedTranslation) {
 			return {
 				success: true,
-				translatedVtt: existingTranslation.value,
+				translatedVtt: cachedTranslation,
 				message: "Retrieved cached translation",
 			};
 		}
@@ -124,17 +126,23 @@ export async function translateTranscript(
 		return { success: false, message: "Translation failed" };
 	}
 
-	try {
-		await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
+	const cacheBody = withSourceFingerprint(originalVtt.value, translatedVtt);
+	if (cacheBody) {
+		try {
+			await Effect.gen(function* () {
+				const [bucket] = yield* Storage.getAccessForVideo(
+					decodeStorageVideo(video),
+				);
+				yield* bucket.putObject(translatedKey, cacheBody, {
+					contentType: "text/vtt",
+				});
+			}).pipe(runPromise);
+		} catch (error) {
+			console.error(
+				"[translateTranscript] Failed to cache translation:",
+				error,
 			);
-			yield* bucket.putObject(translatedKey, translatedVtt, {
-				contentType: "text/vtt",
-			});
-		}).pipe(runPromise);
-	} catch (error) {
-		console.error("[translateTranscript] Failed to cache translation:", error);
+		}
 	}
 
 	return {
