@@ -58,6 +58,8 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	formatLoomCsvCell,
+	isLoomCsvResultsFile,
+	LOOM_CSV_RESULTS_HEADERS,
 	parseLoomCsvRecords,
 	readLoomCsvCell,
 } from "@/lib/loom-csv";
@@ -197,7 +199,7 @@ function buildResultsCsv(
 ) {
 	const rowsByNumber = new Map(sourceRows.map((row) => [row.rowNumber, row]));
 	const lines = [
-		["row", "loom_video_url", "user_email", "space_name", "status", "error"],
+		LOOM_CSV_RESULTS_HEADERS,
 		...results.map((row) => [
 			String(row.rowNumber),
 			rowsByNumber.get(row.rowNumber)?.loomUrl ?? "",
@@ -217,10 +219,12 @@ function buildResultsCsv(
 function parseCsv(text: string, fileName: string): CsvData {
 	const records = parseLoomCsvRecords(text);
 	const headers = records[0]?.map((header) => header.trim()) ?? [];
-	const rows = records
+	const dataRows = records
 		.slice(1)
-		.filter((row) => row.some((cell) => cell.trim().length > 0))
-		.map((row) => row.map(readLoomCsvCell));
+		.filter((row) => row.some((cell) => cell.trim().length > 0));
+	const rows = isLoomCsvResultsFile(headers)
+		? dataRows.map((row) => row.map(readLoomCsvCell))
+		: dataRows;
 
 	if (headers.length === 0) {
 		throw new Error("No CSV headers found.");

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	formatLoomCsvCell,
+	isLoomCsvResultsFile,
+	LOOM_CSV_RESULTS_HEADERS,
 	parseConciergeLoomCsv,
 	parseLoomCsvRecords,
 	readLoomCsvCell,
@@ -61,16 +63,43 @@ describe("Loom CSV results cells", () => {
 });
 
 describe("Loom CSV results round trip", () => {
-	it("restores neutralized values when a results CSV is imported again", () => {
-		const values = ["@Sales", "+owner@example.com", "-Ops, EU", "=1"];
+	it("restores every value when a results CSV is imported again", () => {
+		const values = [
+			"@Sales",
+			"+owner@example.com",
+			"-Ops, EU",
+			"=1",
+			"'@Sales",
+			"''=1",
+			"'Sales",
+			"O'Brien",
+			"Sales",
+		];
 		const [cells] = parseLoomCsvRecords(
 			`${values.map(formatLoomCsvCell).join(",")}\n`,
 		);
 		expect(cells?.map(readLoomCsvCell)).toEqual(values);
 	});
 
-	it("leaves other leading apostrophes alone", () => {
+	it("leaves apostrophes alone when no formula character follows", () => {
 		expect(readLoomCsvCell("'Sales")).toBe("'Sales");
 		expect(readLoomCsvCell("O'Brien")).toBe("O'Brien");
+	});
+
+	it("recognizes the results CSV layout regardless of column order or case", () => {
+		expect(isLoomCsvResultsFile([...LOOM_CSV_RESULTS_HEADERS])).toBe(true);
+		expect(
+			isLoomCsvResultsFile([
+				"Status",
+				"Error",
+				"Row",
+				"User_Email",
+				"Space_Name",
+				"Loom_Video_URL",
+			]),
+		).toBe(true);
+		expect(
+			isLoomCsvResultsFile(["loom_video_url", "user_email", "space_name"]),
+		).toBe(false);
 	});
 });
