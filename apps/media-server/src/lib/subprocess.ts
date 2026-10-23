@@ -19,6 +19,10 @@ export function unregisterSubprocess(proc: ManagedSubprocess): void {
 	activeSubprocesses.delete(proc.pid);
 }
 
+export function getActiveSubprocessCount(): number {
+	return activeSubprocesses.size;
+}
+
 async function waitForProcessExit(
 	proc: Pick<Subprocess, "exited" | "exitCode">,
 	timeoutMs: number,
