@@ -1,9 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { mkdir, open, readdir, rm, stat } from "node:fs/promises";
+import { open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import {
+	ensureInstanceDir,
+	getInstanceDir,
+	releaseInstanceDir,
+	sweepOrphanedInstanceDirs,
+} from "./temp-files";
 
 const targetSchema = z.object({
 	version: z.literal(1),
@@ -36,44 +42,57 @@ const transfers = new AsyncLocalStorage<TransferContext>();
 const cache = new Map<string, CachedFile>();
 const pendingTransfers = new Map<string, Promise<void>>();
 const cacheBase = join(tmpdir(), "cap-media-download-cache");
-const cacheRoot = join(cacheBase, String(process.pid));
+const cacheRoot = getInstanceDir(cacheBase);
 const CACHE_BYTES = 2 * 1024 ** 3;
 const CACHE_TTL_MS = 30 * 60_000;
 let cacheBytes = 0;
 let lastPruneAt = 0;
 
-async function initializeCache() {
-	await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
-	for (const entry of await readdir(cacheBase, { withFileTypes: true })) {
-		if (
-			!entry.isDirectory() ||
-			!/^\d+$/.test(entry.name) ||
-			entry.name === String(process.pid)
-		)
-			continue;
-		try {
-			process.kill(Number(entry.name), 0);
-		} catch (error) {
-			if (
-				typeof error === "object" &&
-				error !== null &&
-				"code" in error &&
-				error.code === "ESRCH"
-			)
-				await rm(join(cacheBase, entry.name), { recursive: true, force: true });
-		}
+// Pre-instance-dir caches are named after their owner's pid. Only remove one
+// once that process is confirmed gone; an old server sharing this volume during
+// a rolling deploy may still be reading from its cache.
+function isLegacyCacheOrphan(name: string) {
+	if (!/^\d+$/.test(name)) return false;
+	if (name === String(process.pid)) return false;
+	try {
+		process.kill(Number(name), 0);
+		return false;
+	} catch (error) {
+		return (
+			typeof error === "object" &&
+			error !== null &&
+			"code" in error &&
+			error.code === "ESRCH"
+		);
 	}
+}
+
+export function sweepMediaTransferCache(): Promise<number> {
+	return sweepOrphanedInstanceDirs(cacheBase, isLegacyCacheOrphan);
+}
+
+async function initializeCache() {
+	await ensureInstanceDir(cacheBase, 0o700);
+	await sweepMediaTransferCache();
 }
 let cacheReady: Promise<void> | undefined;
 const pruneTimer = setInterval(() => {
 	void pruneCache().catch(() => {});
 }, 60_000);
 pruneTimer.unref?.();
+const sweepTimer = setInterval(() => {
+	void sweepMediaTransferCache().catch(() => {});
+}, 5 * 60_000);
+sweepTimer.unref?.();
 export async function cleanupMediaTransferCache() {
-	await rm(cacheRoot, { recursive: true, force: true }).catch(() => {});
+	await releaseInstanceDir(cacheBase);
 	cache.clear();
 	cacheBytes = 0;
 	cacheReady = undefined;
+}
+
+export function getMediaTransferCacheUsage() {
+	return { bytes: cacheBytes, entries: cache.size };
 }
 
 export function isInternalMediaUrl(input: string): boolean {

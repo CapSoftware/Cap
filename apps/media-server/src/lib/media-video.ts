@@ -13,6 +13,7 @@ import { uploadDriveResumable } from "./drive-resumable-upload";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
+	decodeThreadsFromEnv,
 	normalizeLocalPath,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
@@ -21,6 +22,23 @@ import {
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
 import { fetchMedia, materializeMedia } from "./media-transfer";
+import {
+	buildGpuDecodeInputArgs,
+	buildNvencEncodeArgs,
+	canDecodeOnGpu,
+	fitWithinEven,
+	GPU_DECODE_FORMAT_FILTER,
+	logNvencFallback,
+	type NvencOptions,
+	nvencFallbackReason,
+	nvencOptionsFromEnv,
+	recordNvencAttempt,
+	selectedVideoEncoder,
+} from "./nvenc-encoder";
+import {
+	downloadUrlToPathParallel,
+	parallelDownloadOptionsFromEnv,
+} from "./parallel-download";
 import { readRecordingAudioTail } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
@@ -1252,6 +1270,18 @@ export async function downloadVideoToTemp(
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;
 
+		const parallel = parallelDownloadOptionsFromEnv();
+		if (parallel.concurrency > 1) {
+			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
+				...parallel,
+				signal: combinedSignal,
+			});
+			if (file(tempFile.path).size === 0) {
+				throw new Error("Downloaded video is empty");
+			}
+			return tempFile;
+		}
+
 		const response = await fetchMedia(videoUrl, {
 			signal: combinedSignal,
 		});
@@ -1269,15 +1299,18 @@ export async function downloadVideoToTemp(
 
 		const reader = response.body.getReader();
 		const writer = file(tempFile.path).writer();
+		let writerEnded = false;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
 				writer.write(value);
 			}
+			writerEnded = true;
 			await writer.end();
 		} finally {
 			reader.releaseLock();
+			if (!writerEnded) await Promise.resolve(writer.end()).catch(() => {});
 		}
 
 		if (file(tempFile.path).size === 0) {
@@ -1311,7 +1344,7 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 	return Boolean(metadata.audioCodec && metadata.audioCodec !== "aac");
 }
 
-function getProcessTimeoutMs(
+export function getProcessTimeoutMs(
 	durationSeconds: number,
 	baseTimeoutMs: number,
 ): number {
@@ -1425,10 +1458,11 @@ export function pickMobileSafeH264Level(
 	return { value: 52, ffmpegValue: "5.2" };
 }
 
-async function probeH264Level(
+async function probeVideoStreamEntries(
 	inputPath: string,
+	showEntries: string,
 	abortSignal?: AbortSignal,
-): Promise<number | null> {
+): Promise<string | null> {
 	const proc = registerSubprocess(
 		spawn({
 			cmd: [
@@ -1438,7 +1472,7 @@ async function probeH264Level(
 				"-select_streams",
 				"v:0",
 				"-show_entries",
-				"stream=level",
+				showEntries,
 				"-of",
 				"default=noprint_wrappers=1:nokey=1",
 				inputPath,
@@ -1472,10 +1506,7 @@ async function probeH264Level(
 		);
 		const exitCode = await proc.exited;
 		if (exitCode !== 0) return null;
-
-		const rawLevel = stdout.trim().split(/\s+/)[0] ?? "";
-		const level = Number.parseInt(rawLevel, 10);
-		return Number.isFinite(level) && level > 0 ? level : null;
+		return stdout.trim();
 	} catch {
 		return null;
 	} finally {
@@ -1484,6 +1515,37 @@ async function probeH264Level(
 		}
 		await terminateProcess(proc);
 	}
+}
+
+async function probeH264Level(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=level",
+		abortSignal,
+	);
+	if (stdout === null) return null;
+	const rawLevel = stdout.split(/\s+/)[0] ?? "";
+	const level = Number.parseInt(rawLevel, 10);
+	return Number.isFinite(level) && level > 0 ? level : null;
+}
+
+async function probeVideoRotation(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream_side_data=rotation",
+		abortSignal,
+	);
+	if (stdout === null) return null;
+	const rawRotation = stdout.split(/\s+/)[0] ?? "";
+	if (rawRotation === "") return 0;
+	const rotation = Number.parseFloat(rawRotation);
+	return Number.isFinite(rotation) ? rotation : null;
 }
 
 export async function processVideo(
@@ -1550,38 +1612,170 @@ export async function processVideo(
 			throw err;
 		}
 	}
+	const argsInput: ProcessVideoArgsInput = {
+		inputPath,
+		outputPath: outputTempFile.path,
+		videoCodec: metadata.videoCodec,
+		hasAudio: Boolean(metadata.audioCodec),
+		opts,
+		targetH264Level: targetH264Level.ffmpegValue,
+		normalizeH264Level,
+		videoTranscode,
+		audioTranscode,
+		extraInputArgs,
+		extraOutputArgs,
+		sourceWidth: metadata.width,
+		sourceHeight: metadata.height,
+		// NVENC leaves the CPU free, so decode (and scale) can use every core.
+		decodeThreads: decodeThreadsFromEnv(
+			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
+			selectedVideoEncoder() === "nvenc" ? 0 : 2,
+		),
+	};
+	const totalDurationUs = metadata.duration * 1_000_000;
+	const nvenc =
+		videoTranscode && !normalizeH264Level ? nvencOptionsFromEnv() : null;
+
+	try {
+		if (nvenc) {
+			const gpuDecode = canDecodeOnGpu(
+				metadata.videoCodec,
+				await probeVideoRotation(inputPath, abortSignal),
+				nvenc.gpuDecodeCodecs,
+			);
+			try {
+				await runTranscodeCommand(
+					buildProcessVideoArgs({
+						...argsInput,
+						nvenc: { options: nvenc, gpuDecode },
+					}),
+					outputTempFile.path,
+					totalDurationUs,
+					processTimeoutMs,
+					onProgress,
+					abortSignal,
+				);
+				recordNvencAttempt("process");
+				return outputTempFile;
+			} catch (error) {
+				const reason = nvencFallbackReason(
+					error,
+					abortSignal?.aborted ?? false,
+				);
+				if (reason === null) throw error;
+				recordNvencAttempt("process", reason);
+				logNvencFallback({
+					job: "process",
+					sourceCodec: metadata.videoCodec,
+					gpuDecode,
+					reason,
+				});
+			}
+		}
+
+		await runTranscodeCommand(
+			buildProcessVideoArgs(argsInput),
+			outputTempFile.path,
+			totalDurationUs,
+			processTimeoutMs,
+			onProgress,
+			abortSignal,
+		);
+		return outputTempFile;
+	} catch (err) {
+		await outputTempFile.cleanup();
+		throw err;
+	}
+}
+
+export interface ProcessVideoArgsInput {
+	inputPath: string;
+	outputPath: string;
+	videoCodec: string;
+	hasAudio: boolean;
+	opts: Pick<
+		Required<VideoProcessingOptions>,
+		"maxWidth" | "maxHeight" | "preset" | "crf" | "audioBitrate"
+	>;
+	targetH264Level: string;
+	normalizeH264Level: boolean;
+	videoTranscode: boolean;
+	audioTranscode: boolean;
+	extraInputArgs: string[];
+	extraOutputArgs: string[];
+	decodeThreads: string;
+	sourceWidth?: number;
+	sourceHeight?: number;
+	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
+}
+
+export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
+	const { opts, nvenc } = input;
+	const gpuDecode = Boolean(
+		nvenc?.gpuDecode && input.sourceWidth && input.sourceHeight,
+	);
+	const source = {
+		width: input.sourceWidth ?? 0,
+		height: input.sourceHeight ?? 0,
+	};
+	const cpuScaleFilter = `scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
 		"-threads",
-		"2",
-		...extraInputArgs,
+		input.decodeThreads,
+		...(gpuDecode
+			? buildGpuDecodeInputArgs(
+					input.videoCodec,
+					source,
+					fitWithinEven(
+						source.width,
+						source.height,
+						opts.maxWidth,
+						opts.maxHeight,
+					),
+				)
+			: []),
+		...input.extraInputArgs,
 		"-i",
-		inputPath,
+		input.inputPath,
 	];
 
-	if (normalizeH264Level) {
+	if (input.normalizeH264Level) {
 		ffmpegArgs.push(
 			"-c:v",
 			"copy",
 			"-bsf:v",
-			`h264_metadata=level=${targetH264Level.ffmpegValue}`,
+			`h264_metadata=level=${input.targetH264Level}`,
 		);
-	} else if (videoTranscode) {
-		ffmpegArgs.push(
-			"-c:v",
-			"libx264",
-			"-preset",
-			opts.preset,
-			"-crf",
-			opts.crf.toString(),
-			"-vf",
-			`scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`,
-			"-pix_fmt",
-			"yuv420p",
-			"-level:v",
-			targetH264Level.ffmpegValue,
-		);
-		if (metadata.videoCodec === "vp8" || metadata.videoCodec === "vp9") {
+	} else if (input.videoTranscode) {
+		if (nvenc) {
+			ffmpegArgs.push(
+				...buildNvencEncodeArgs(nvenc.options, opts.crf),
+				...(gpuDecode
+					? ["-vf", GPU_DECODE_FORMAT_FILTER]
+					: ["-vf", cpuScaleFilter, "-pix_fmt", "yuv420p"]),
+			);
+		} else {
+			ffmpegArgs.push(
+				"-c:v",
+				"libx264",
+				"-preset",
+				opts.preset,
+				"-crf",
+				opts.crf.toString(),
+				"-vf",
+				cpuScaleFilter,
+				"-pix_fmt",
+				"yuv420p",
+			);
+		}
+		if (nvenc) {
+			// h264_nvenc refuses to open when the nominal frame rate exceeds the level (browser WebM often reports 1000 fps); libx264 only writes it into the SPS, so tag it the same way.
+			ffmpegArgs.push("-bsf:v", `h264_metadata=level=${input.targetH264Level}`);
+		} else {
+			ffmpegArgs.push("-level:v", input.targetH264Level);
+		}
+		if (input.videoCodec === "vp8" || input.videoCodec === "vp9") {
 			// Reordered B-frames can make MP4 duration exclude the tail of sparse browser captures.
 			ffmpegArgs.push("-bf", "0");
 		}
@@ -1589,8 +1783,8 @@ export async function processVideo(
 		ffmpegArgs.push("-c:v", "copy");
 	}
 
-	if (metadata.audioCodec) {
-		if (audioTranscode) {
+	if (input.hasAudio) {
+		if (input.audioTranscode) {
 			ffmpegArgs.push("-c:a", "aac", "-b:a", opts.audioBitrate);
 		} else {
 			ffmpegArgs.push("-c:a", "copy");
@@ -1602,13 +1796,24 @@ export async function processVideo(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
-		...extraOutputArgs,
+		...input.extraOutputArgs,
 		"-progress",
 		"pipe:2",
 		"-y",
-		outputTempFile.path,
+		input.outputPath,
 	);
+	return ffmpegArgs;
+}
 
+async function runTranscodeCommand(
+	ffmpegArgs: string[],
+	outputPath: string,
+	totalDurationUs: number,
+	processTimeoutMs: number,
+	onProgress?: ProgressCallback,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
 		spawn({
 			cmd: ffmpegArgs,
@@ -1616,7 +1821,6 @@ export async function processVideo(
 			stderr: "pipe",
 		}),
 	);
-	const totalDurationUs = metadata.duration * 1_000_000;
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {
@@ -1670,7 +1874,7 @@ export async function processVideo(
 					);
 				}
 
-				const outputSize = await file(outputTempFile.path).size;
+				const outputSize = await file(outputPath).size;
 				if (outputSize === 0) {
 					throw new Error("FFmpeg produced empty output file");
 				}
@@ -1678,11 +1882,6 @@ export async function processVideo(
 			processTimeoutMs,
 			() => terminateProcess(proc),
 		);
-
-		return outputTempFile;
-	} catch (err) {
-		await outputTempFile.cleanup();
-		throw err;
 	} finally {
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
@@ -2537,6 +2736,13 @@ async function abortMultipartUpload(
 	await response.body?.cancel().catch(() => {});
 }
 
+export function multipartUploadConcurrencyFromEnv(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number.parseInt(env.MEDIA_SERVER_UPLOAD_CONCURRENCY ?? "", 10);
+	return Number.isFinite(value) && value > 0 ? Math.min(value, 16) : 1;
+}
+
 async function uploadFileMultipart(
 	filePath: string,
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
@@ -2564,25 +2770,45 @@ async function uploadFileMultipart(
 			);
 		}
 
-		for (let partNumber = 1; partNumber <= partCount; partNumber++) {
-			const start = (partNumber - 1) * partSize;
-			const end = Math.min(start + partSize, contentLength);
-			const partLength = end - start;
-			const url = await getMultipartPartUrl(
-				target,
-				partNumber,
-				partLength,
-				abortSignal,
-			);
-			const etag = await uploadMultipartPart(
-				url,
-				fileHandle.slice(start, end),
-				partLength,
-				partNumber,
-				abortSignal,
-			);
-			parts.push({ partNumber, etag, size: partLength });
+		const failed = new AbortController();
+		const signal = abortSignal
+			? AbortSignal.any([abortSignal, failed.signal])
+			: failed.signal;
+		let nextPart = 1;
+		const worker = async () => {
+			while (nextPart <= partCount) {
+				const partNumber = nextPart++;
+				const start = (partNumber - 1) * partSize;
+				const end = Math.min(start + partSize, contentLength);
+				const partLength = end - start;
+				const url = await getMultipartPartUrl(
+					target,
+					partNumber,
+					partLength,
+					signal,
+				);
+				const etag = await uploadMultipartPart(
+					url,
+					fileHandle.slice(start, end),
+					partLength,
+					partNumber,
+					signal,
+				);
+				parts.push({ partNumber, etag, size: partLength });
+			}
+		};
+		const workers = Array.from(
+			{ length: Math.min(multipartUploadConcurrencyFromEnv(), partCount) },
+			() => worker(),
+		);
+		try {
+			await Promise.all(workers);
+		} catch (error) {
+			failed.abort();
+			await Promise.allSettled(workers);
+			throw error;
 		}
+		parts.sort((a, b) => a.partNumber - b.partNumber);
 
 		return await completeMultipartUpload(target, parts, abortSignal);
 	} catch (error) {
