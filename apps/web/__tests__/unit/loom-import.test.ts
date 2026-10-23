@@ -1,3 +1,4 @@
+import type { Organisation } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,8 +12,16 @@ const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
 const requireSpaceManagerMock = vi.hoisted(() => vi.fn());
 const requireOrganizationSettingsManagerMock = vi.hoisted(() => vi.fn());
+const getLoomImportRunStateMock = vi.hoisted(() => vi.fn());
+const restoreLoomImportStartErrorMock = vi.hoisted(() => vi.fn());
 const defaultSharing = vi.hoisted(() => ({
 	getNewVideoPublic: vi.fn(),
+}));
+const conciergeMocks = vi.hoisted(() => ({
+	requireMigrationOperator: vi.fn(),
+	reserveConciergeImport: vi.fn(),
+	renewConciergeImport: vi.fn(),
+	releaseConciergeImport: vi.fn(),
 }));
 
 const mockDb = {
@@ -24,7 +33,7 @@ const mockDb = {
 	innerJoin: vi.fn(() => mockDb),
 	leftJoin: vi.fn(() => mockDb),
 	where: whereMock,
-	set: vi.fn(() => mockDb),
+	set: vi.fn((_value: { updatedAt?: Date }) => mockDb),
 	values: valuesMock,
 	transaction: vi.fn((callback) => callback(mockDb)),
 };
@@ -59,6 +68,19 @@ vi.mock("@cap/database/schema", () => ({
 		orgId: "orgId",
 		source: "source",
 		sourceId: "sourceId",
+	},
+	loomMigrationImports: {
+		videoId: "loomMigrationImportVideoId",
+		requestId: "loomMigrationImportRequestId",
+	},
+	loomMigrationRequests: {
+		id: "loomMigrationRequestId",
+		organizationId: "loomMigrationRequestOrganizationId",
+		activeOrganizationId: "loomMigrationRequestActiveOrganizationId",
+		status: "loomMigrationRequestStatus",
+		activeImportLeaseToken: "loomMigrationRequestLeaseToken",
+		activeImportLeaseUntil: "loomMigrationRequestLeaseUntil",
+		queuedVideoCount: "loomMigrationRequestQueuedVideoCount",
 	},
 	organizationMembers: {
 		id: "memberId",
@@ -115,6 +137,9 @@ vi.mock("@cap/database/schema", () => ({
 	},
 	videoUploads: {
 		videoId: "videoId",
+		phase: "phase",
+		rawFileKey: "rawFileKey",
+		updatedAt: "updatedAt",
 	},
 }));
 
@@ -168,6 +193,11 @@ vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	isNull: vi.fn((field: unknown) => ({ field })),
+	isNotNull: vi.fn((field: unknown) => ({ field })),
+	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+		strings,
+		values,
+	})),
 }));
 
 vi.mock("next/cache", () => ({
@@ -205,6 +235,38 @@ vi.mock("@/workflows/import-loom-video", () => ({
 	importLoomVideoWorkflow: Symbol("importLoomVideoWorkflow"),
 }));
 
+vi.mock("@/lib/loom-concierge", () => ({
+	...conciergeMocks,
+	toLoomMigrationResult: async (run: () => Promise<unknown>) => {
+		const { LoomMigrationError } = await import("@/lib/loom-migration-state");
+		try {
+			return { ok: true, value: await run() };
+		} catch (error) {
+			if (error instanceof LoomMigrationError) {
+				return { ok: false, error: error.message };
+			}
+			throw error;
+		}
+	},
+}));
+
+vi.mock("@/lib/org-pro", () => ({
+	isOrganizationOwnerPro: vi.fn(async () => true),
+}));
+
+vi.mock("@/lib/loom-import-start", () => ({
+	getLoomImportRunState: getLoomImportRunStateMock,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE: "Confirmation required",
+	restoreLoomImportStartError: restoreLoomImportStartErrorMock,
+	startLoomImportWorkflow: (payload: unknown) =>
+		startMock(Symbol("workflow"), [payload]),
+	LoomImportStartError: class extends Error {
+		constructor(readonly canRetry: boolean) {
+			super("Loom import startup failed");
+		}
+	},
+}));
+
 import { getCurrentUser } from "@cap/database/auth/session";
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
@@ -236,6 +298,7 @@ describe("importFromLoom", () => {
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
+		getLoomImportRunStateMock.mockResolvedValue("inactive");
 		checkRateLimitMock.mockResolvedValue({ rateLimited: false });
 		getOrganizationAccessMock.mockResolvedValue({
 			id: "org-1",
@@ -259,6 +322,151 @@ describe("importFromLoom", () => {
 			id: "user-123",
 		});
 		vi.stubGlobal("fetch", vi.fn());
+	});
+
+	it("restarts a failed import without creating another video", async () => {
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					videoId: "existing-video",
+					ownerId: "user-123",
+					bucketId: "bucket-1",
+					phase: "error",
+					rawFileKey: null,
+					uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+				},
+			])
+			.mockResolvedValueOnce([{ affectedRows: 1 }]);
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as Organisation.OrganisationId,
+			}),
+		).resolves.toEqual({ success: true, videoId: "existing-video" });
+		expect(mockDb.insert).not.toHaveBeenCalled();
+		expect(startMock).toHaveBeenCalledWith(expect.anything(), [
+			{
+				videoId: "existing-video",
+				userId: "user-123",
+				bucketId: "bucket-1",
+				loomVideoId: "loom-abc1234567",
+				rawFileKey: "user-123/existing-video/raw-upload.mp4",
+				reuseExistingRawUpload: true,
+			},
+		]);
+	});
+
+	it.each([true, false])(
+		"restores a rejected startup without reopening an uncertain dispatch: %s",
+		async (canRetry) => {
+			whereMock
+				.mockResolvedValueOnce([
+					{
+						videoId: "existing-video",
+						ownerId: "user-123",
+						phase: "error",
+						bucketId: null,
+						rawFileKey: null,
+						uploadUpdatedAt: new Date(),
+					},
+				])
+				.mockResolvedValueOnce([{ affectedRows: 1 }]);
+			const { LoomImportStartError } = await import("@/lib/loom-import-start");
+			startMock.mockRejectedValueOnce(
+				new LoomImportStartError(canRetry, new Error()),
+			);
+			const { importFromLoom } = await import("@/actions/loom");
+			expect(
+				await importFromLoom({
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					orgId: "org-1" as never,
+				}),
+			).toMatchObject({ success: false, error: "Loom import startup failed" });
+			if (canRetry) {
+				expect(restoreLoomImportStartErrorMock).toHaveBeenCalledWith(
+					"existing-video",
+					"processing",
+					mockDb.set.mock.calls[0]?.[0].updatedAt,
+					"Loom import startup failed",
+				);
+			} else expect(restoreLoomImportStartErrorMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("holds a failed row while its recorded workflow is still active", async () => {
+		const receipt = { runId: "run-active", dispatch: "accepted" };
+		whereMock.mockResolvedValueOnce([
+			{
+				videoId: "existing-video",
+				ownerId: "user-123",
+				phase: "error",
+				uploadUpdatedAt: new Date(),
+				metadata: { loomImportRun: receipt },
+			},
+		]);
+		getLoomImportRunStateMock.mockResolvedValueOnce("active");
+		const { importFromLoom } = await import("@/actions/loom");
+		expect(
+			await importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+			}),
+		).toMatchObject({ success: false });
+		expect(getLoomImportRunStateMock).toHaveBeenCalledWith(receipt);
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it("reports an unconfirmed dispatch without claiming it again", async () => {
+		whereMock.mockResolvedValueOnce([
+			{
+				videoId: "existing-video",
+				ownerId: "user-123",
+				phase: "error",
+				uploadUpdatedAt: new Date(),
+				metadata: {
+					loomImportRun: { runId: "missing-run", dispatch: "uncertain" },
+				},
+			},
+		]);
+		getLoomImportRunStateMock.mockResolvedValueOnce("unconfirmed");
+		const { importFromLoom } = await import("@/actions/loom");
+		expect(
+			await importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+			}),
+		).toMatchObject({ success: false, error: "Confirmation required" });
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ ownerId: "user-123", phase: "processing", affectedRows: 1 },
+		{ ownerId: "other-user", phase: "error", affectedRows: 1 },
+		{ ownerId: "user-123", phase: "error", affectedRows: 0 },
+	])("does not restart an unclaimed or foreign import: %j", async (row) => {
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					videoId: "existing-video",
+					bucketId: "bucket-1",
+					rawFileKey: null,
+					uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+					...row,
+				},
+			])
+			.mockResolvedValueOnce([{ affectedRows: row.affectedRows }]);
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as Organisation.OrganisationId,
+			}),
+		).resolves.toMatchObject({ success: false });
+		expect(startMock).not.toHaveBeenCalled();
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
 	it("returns direct MP4 URLs for public Loom downloads", async () => {
@@ -498,7 +706,7 @@ describe("importFromLoom", () => {
 			3,
 			expect.objectContaining({
 				id: "video-123",
-				orgId: "org-1",
+				orgId: "org-1" as Organisation.OrganisationId,
 				source: "loom",
 				sourceId: "loom-abc1234567",
 			}),
@@ -1155,5 +1363,201 @@ describe("importFromLoom", () => {
 			"/dashboard/spaces/video-123",
 		);
 		expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard");
+	});
+});
+
+describe("importFromLoomCsvForConcierge", () => {
+	const requestId = "request12345678";
+	const leaseToken = "lease-1";
+	const failedImport = {
+		videoId: "existing-video",
+		ownerId: "user-123",
+		bucketId: "bucket-1",
+		phase: "error",
+		rawFileKey: null,
+		uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+	};
+	const forUpdateMock = vi.fn();
+
+	function withReservation(reservation: unknown) {
+		forUpdateMock.mockResolvedValueOnce([reservation]);
+		return { limit: vi.fn(() => ({ for: forUpdateMock })) };
+	}
+
+	function queueConciergeRowLookups() {
+		whereMock
+			.mockReturnValueOnce(
+				withLimit([
+					{
+						organizationId: "org-1",
+						status: "in_progress",
+						ownerId: "owner-1",
+					},
+				]),
+			)
+			.mockReturnValueOnce(
+				withLimit([{ userId: "user-123", email: "member@example.com" }]),
+			)
+			.mockResolvedValueOnce([failedImport]);
+	}
+
+	async function importConciergeRow() {
+		const { importFromLoomCsvForConcierge } = await import("@/actions/loom");
+		return importFromLoomCsvForConcierge({
+			requestId,
+			rows: [
+				{
+					rowNumber: 2,
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					userEmail: "member@example.com",
+				},
+			],
+		});
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		whereMock.mockReset();
+		valuesMock.mockReset();
+		forUpdateMock.mockReset();
+		mockDb.select.mockReturnValue(mockDb);
+		mockDb.insert.mockReturnValue(mockDb);
+		mockDb.update.mockReturnValue(mockDb);
+		mockDb.from.mockReturnValue(mockDb);
+		mockDb.innerJoin.mockReturnValue(mockDb);
+		mockDb.leftJoin.mockReturnValue(mockDb);
+		mockDb.set.mockReturnValue(mockDb);
+		mockDb.transaction.mockImplementation((callback) => callback(mockDb));
+		valuesMock.mockResolvedValue(undefined);
+		whereMock.mockResolvedValue([]);
+		startMock.mockResolvedValue(undefined);
+		getLoomImportRunStateMock.mockResolvedValue("inactive");
+		conciergeMocks.requireMigrationOperator.mockResolvedValue({
+			id: "operator-1",
+		});
+		conciergeMocks.reserveConciergeImport.mockResolvedValue(leaseToken);
+		conciergeMocks.renewConciergeImport.mockResolvedValue(undefined);
+		conciergeMocks.releaseConciergeImport.mockResolvedValue(undefined);
+	});
+
+	it("records a restarted failed import against the migration request under the lease", async () => {
+		queueConciergeRowLookups();
+		whereMock
+			.mockReturnValueOnce(
+				withReservation({
+					activeOrganizationId: "org-1",
+					leaseToken,
+					leaseUntil: new Date(Date.now() + 60_000),
+				}),
+			)
+			.mockReturnValueOnce(withLimit([]))
+			.mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+		const result = await importConciergeRow();
+
+		expect(result).toMatchObject({
+			ok: true,
+			value: {
+				success: true,
+				importedCount: 1,
+				results: [{ success: true, videoId: "existing-video" }],
+			},
+		});
+		expect(forUpdateMock).toHaveBeenCalledWith("update");
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({ phase: "processing" }),
+		);
+		expect(valuesMock).toHaveBeenCalledWith({
+			videoId: "existing-video",
+			requestId,
+		});
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({ queuedVideoCount: expect.anything() }),
+		);
+		expect(startMock).toHaveBeenCalledWith(expect.anything(), [
+			expect.objectContaining({
+				videoId: "existing-video",
+				reuseExistingRawUpload: true,
+			}),
+		]);
+		expect(conciergeMocks.releaseConciergeImport).toHaveBeenCalledWith(
+			requestId,
+			leaseToken,
+		);
+	});
+
+	it("does not count a failed import twice when it already belongs to the request", async () => {
+		queueConciergeRowLookups();
+		whereMock
+			.mockReturnValueOnce(
+				withReservation({
+					activeOrganizationId: "org-1",
+					leaseToken,
+					leaseUntil: new Date(Date.now() + 60_000),
+				}),
+			)
+			.mockReturnValueOnce(withLimit([{ requestId }]))
+			.mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+		const result = await importConciergeRow();
+
+		expect(result).toMatchObject({ ok: true, value: { importedCount: 1 } });
+		expect(valuesMock).not.toHaveBeenCalled();
+		expect(mockDb.set).not.toHaveBeenCalledWith(
+			expect.objectContaining({ queuedVideoCount: expect.anything() }),
+		);
+		expect(startMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not restart a failed import once the concierge lease has expired", async () => {
+		queueConciergeRowLookups();
+		whereMock.mockReturnValueOnce(
+			withReservation({
+				activeOrganizationId: "org-1",
+				leaseToken: "newer-lease",
+				leaseUntil: new Date(Date.now() + 60_000),
+			}),
+		);
+
+		const result = await importConciergeRow();
+
+		expect(result).toMatchObject({
+			ok: true,
+			value: { success: false, importedCount: 0, failedCount: 1 },
+		});
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it("refuses to restart a failed import that belongs to another migration request", async () => {
+		queueConciergeRowLookups();
+		whereMock
+			.mockReturnValueOnce(
+				withReservation({
+					activeOrganizationId: "org-1",
+					leaseToken,
+					leaseUntil: new Date(Date.now() + 60_000),
+				}),
+			)
+			.mockReturnValueOnce(withLimit([{ requestId: "otherrequest123" }]));
+
+		const result = await importConciergeRow();
+
+		expect(result).toMatchObject({
+			ok: true,
+			value: {
+				success: false,
+				results: [
+					{
+						success: false,
+						error: "This Loom import belongs to another migration request.",
+					},
+				],
+			},
+		});
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
 	});
 });

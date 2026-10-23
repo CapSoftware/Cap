@@ -1329,6 +1329,14 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    pub(crate) fn shortcut_listening(&self) -> bool {
+        self.pages.listening.is_some()
+    }
+
+    pub(crate) fn switch_back_running(&self) -> bool {
+        self.pages.switch_back.is_some()
+    }
+
     /// Leave recording mode without touching the binding. Safe to call when
     /// nothing is recording; every exit path (Escape, a click elsewhere,
     /// another page, the window losing focus or closing) lands here.
@@ -2616,6 +2624,7 @@ impl SettingsWindow {
                             ),
                             self.toggle(
                                 "out-of-process-muxer",
+                                "Out-of-process muxer",
                                 self.settings.out_of_process_muxer,
                                 cx,
                                 |this, cx| {
@@ -2658,14 +2667,20 @@ impl SettingsWindow {
                 "Turn off to close this app and reopen the classic Tauri app in the dev harness. \
                  Recordings and settings are shared.",
             ),
-            self.toggle("enable-gpui-app", checked, cx, |this, cx| {
-                match this.pages.switch_back {
-                    Some(SwitchBack::Running(_)) => this.cancel_switch_back(cx),
-                    // Committed: the classic app is already being brought up.
-                    Some(SwitchBack::WaitingForClassic) => {}
-                    _ => this.start_switch_back(cx),
-                }
-            })
+            self.toggle(
+                "enable-gpui-app",
+                "Use native app",
+                checked,
+                cx,
+                |this, cx| {
+                    match this.pages.switch_back {
+                        Some(SwitchBack::Running(_)) => this.cancel_switch_back(cx),
+                        // Committed: the classic app is already being brought up.
+                        Some(SwitchBack::WaitingForClassic) => {}
+                        _ => this.start_switch_back(cx),
+                    }
+                },
+            )
             .into_any_element(),
         )
     }
@@ -3391,6 +3406,7 @@ impl SettingsWindow {
                 ),
                 self.toggle(
                     "diagnostic-mic",
+                    "Test microphone",
                     self.pages.diagnostic_mic,
                     cx,
                     |this, cx| {
@@ -6988,15 +7004,19 @@ impl SettingsWindow {
                                 (false, true) => "Disabled · Not saved",
                             }),
                     )
-                    .child(
-                        self.toggle(("rule-enabled", index), enabled, cx, move |this, cx| {
+                    .child(self.toggle(
+                        ("rule-enabled", index),
+                        "Enabled",
+                        enabled,
+                        cx,
+                        move |this, cx| {
                             if let Some(rule) = this.pages.automations.rules.get_mut(index) {
                                 rule.enabled = !rule.enabled;
                                 this.automations_persist();
                                 cx.notify();
                             }
-                        }),
-                    ),
+                        },
+                    )),
             )
             .child(
                 div()
@@ -7685,6 +7705,7 @@ impl SettingsWindow {
                                             SharedString::from(format!(
                                                 "action-copy-link-{rule}-{index}"
                                             )),
+                                            "Copy link to clipboard",
                                             copy_link,
                                             cx,
                                             move |this, cx| {
@@ -7717,6 +7738,7 @@ impl SettingsWindow {
                                             SharedString::from(format!(
                                                 "action-open-browser-{rule}-{index}"
                                             )),
+                                            "Open in browser",
                                             open_in_browser,
                                             cx,
                                             move |this, cx| {
@@ -7771,6 +7793,7 @@ impl SettingsWindow {
                                 .gap(px(8.))
                                 .child(self.toggle(
                                     SharedString::from(format!("action-shell-{rule}-{index}")),
+                                    "Run through shell",
                                     use_shell,
                                     cx,
                                     move |this, cx| {
