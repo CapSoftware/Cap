@@ -296,6 +296,7 @@ export async function commitDesktopRecordingAttempt(
 async function advanceDesktopRecordingAttempt(
 	attempt: DesktopRecordingAttempt,
 ): Promise<SourceCommitResult> {
+	const startedAt = performance.now();
 	const current = await getProcessingState(attempt);
 	if (!current || current.attemptId !== attempt.attemptId) return "superseded";
 	if (current.source) return "ready";
@@ -309,24 +310,45 @@ async function advanceDesktopRecordingAttempt(
 	try {
 		const checkpoint = await initializeSourceCommitCheckpoint(attempt);
 		if (!checkpoint) return "superseded";
+		const loadedAt = performance.now();
+		let heartbeatMs = 0;
 		const result = await advanceDesktopRecordingSourceCommit(
 			video,
 			checkpoint,
 			current.verification ?? undefined,
 			async () => {
-				if (!(await heartbeatAttempt(attempt))) {
+				const heartbeatAt = performance.now();
+				const alive = await heartbeatAttempt(attempt);
+				heartbeatMs += performance.now() - heartbeatAt;
+				if (!alive) {
 					throw new Error("Recording source commit lease was superseded");
 				}
 			},
 		);
-		if ("checkpoint" in result) {
-			return (await persistSourceCommitCheckpoint(attempt, result.checkpoint))
-				? "progress"
-				: "superseded";
-		}
-		return (await persistCommittedSource(attempt, result.source))
-			? "ready"
-			: "superseded";
+		const advancedAt = performance.now();
+		const outcome =
+			"checkpoint" in result
+				? (await persistSourceCommitCheckpoint(attempt, result.checkpoint))
+					? "progress"
+					: "superseded"
+				: (await persistCommittedSource(attempt, result.source))
+					? "ready"
+					: "superseded";
+		console.info(
+			JSON.stringify({
+				event: "desktop_source_commit_advance",
+				videoId: attempt.videoId,
+				attemptId: attempt.attemptId,
+				phase: checkpoint.phase,
+				next: "checkpoint" in result ? result.checkpoint.phase : "committed",
+				outcome,
+				loadMs: Math.round(loadedAt - startedAt),
+				heartbeatMs: Math.round(heartbeatMs),
+				advanceMs: Math.round(advancedAt - loadedAt),
+				persistMs: Math.round(performance.now() - advancedAt),
+			}),
+		);
+		return outcome;
 	} catch (error) {
 		const code = getSourceErrorCode(error);
 		if (!code) throw error;

@@ -579,6 +579,35 @@ describe("bounded source commitment steps", () => {
 		expect(mocks.persist).not.toHaveBeenCalled();
 	});
 
+	it("logs the timing of every commit page without storage keys", async () => {
+		mocks.commitSource.mockImplementation(async (_video, checkpoint) =>
+			checkpoint.revision === 1
+				? { source }
+				: advanceCheckpoint(_video, checkpoint),
+		);
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		try {
+			expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+			const events = info.mock.calls
+				.map(([line]) => JSON.parse(String(line)))
+				.filter((event) => event.event === "desktop_source_commit_advance");
+			expect(events).toHaveLength(2);
+			expect(events[0]).toMatchObject({
+				videoId: "video",
+				attemptId: "attempt",
+				outcome: "progress",
+			});
+			expect(events[1]).toMatchObject({ next: "committed", outcome: "ready" });
+			for (const event of events) {
+				for (const key of ["loadMs", "heartbeatMs", "advanceMs", "persistMs"])
+					expect(event[key]).toBeGreaterThanOrEqual(0);
+				expect(JSON.stringify(event)).not.toContain(source.inventoryKey);
+			}
+		} finally {
+			info.mockRestore();
+		}
+	});
+
 	it("includes checkpoint persistence latency in the batch budget", async () => {
 		mocks.commitSource.mockImplementation(advanceCheckpoint);
 		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
