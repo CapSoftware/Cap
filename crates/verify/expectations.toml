@@ -113,40 +113,11 @@ link = ""
 
 
 [[xfail]]
-case = "export/instant-gated-*mic*/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (33.3 ms at 30 fps; 12.6 to 17.2 ms measured with the gate opening between frames)"
-link = ""
-
-[[xfail]]
-case = "export/instant-gated-system-*/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (12.2 to 15.1 ms measured)"
-link = ""
-
-[[xfail]]
 case = "export/instant-gated-system-only/output/mp4/native"
 class = "audio-system"
 flaky = true
 bound = { count = 1, missing = 2, lost = 2 }
 reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early). Bound: at most 2 markers lost, none unexpected"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late after the start gate (14.2 to 15.3 ms measured)"
-link = ""
-
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34], mic-offset-ms = [5, 34], system-minus-mic-ms = [-1, 1] }
-reason = "NEW: the mixer places system audio on the microphone's timeline (system minus mic 0 ms), so it shares the gated mic offset of the sync-mic entry above (13.3 to 15.4 ms measured)"
 link = ""
 
 [[xfail]]
@@ -361,23 +332,3 @@ hosts = ["github-hosted", "local"]
 bound = { count = 1, screen-pictures = 1 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-# Crash safety (crates/verify/tests/crash.rs). Measured on Blacksmith runners
-# (run 38850661948: macos-15 libx264, ubuntu-2404, windows-2025) with the suite
-# merged into main 3ec0c9497; each fix has its own proof branch
-# ci/fixproof-crash-<a|b1|c|ce> (runs 38850662667, 38850661576, 38850663436,
-# 38850662102), which removes exactly its entries. Fixes: #2640 (bug A),
-# #2641 (bug B1), #2643 (bug C), #2644 (bug E).
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "loss-time"
-bound = { count = 1, secs = [2.5, 20.5] }
-reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
-link = "https://github.com/CapSoftware/Cap/pull/2641"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "missing"
-bound = { count = 1 }
-reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2641"

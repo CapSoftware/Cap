@@ -28,6 +28,10 @@ name = "thumbnail_fit"
 harness = false
 
 [[bench]]
+name = "thumbnail_capture"
+harness = false
+
+[[bench]]
 name = "png_encode"
 harness = false
 
