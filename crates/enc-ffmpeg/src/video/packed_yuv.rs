@@ -7,6 +7,7 @@ enum Packed422 {
     Yuyv,
 }
 
+#[cfg(target_arch = "x86_64")]
 struct Job {
     src: *const u8,
     src_stride: usize,
@@ -24,6 +25,7 @@ struct Job {
     nv12: bool,
 }
 
+#[cfg(target_arch = "x86_64")]
 fn positive_linesize(frame: &frame::Video, plane: usize) -> Option<usize> {
     if plane >= frame.planes() {
         return None;
@@ -32,6 +34,7 @@ fn positive_linesize(frame: &frame::Video, plane: usize) -> Option<usize> {
     if raw <= 0 { None } else { Some(raw as usize) }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn covers(stride: usize, row_bytes: usize, height: usize, len: usize) -> bool {
     if row_bytes == 0 || height == 0 {
         return true;
@@ -73,7 +76,7 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = (kind, nv12);
-        return false;
+        false
     }
     #[cfg(target_arch = "x86_64")]
     {
