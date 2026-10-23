@@ -799,26 +799,28 @@ fn harness_item(spec: &str, cx: &App) -> Option<TrayItem> {
 pub use mac::*;
 
 #[cfg(target_os = "macos")]
+mod mac_mode_picker;
+
+#[cfg(target_os = "macos")]
 mod mac {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use gpui::{App, Global};
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject, Sel};
+    use objc2::runtime::{NSObjectProtocol, ProtocolObject, Sel};
     use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
     use objc2_app_kit::{
-        NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent,
-        NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSImage,
-        NSImageSymbolConfiguration, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuPresentationStyle,
-        NSStatusBar, NSStatusBarButton, NSStatusItem, NSStringDrawing, NSTrackingArea,
-        NSTrackingAreaOptions, NSView,
+        NSControlStateValueOff, NSControlStateValueOn, NSEventModifierFlags, NSFont,
+        NSFontAttributeName, NSFontManager, NSFontTraitMask, NSImage, NSMenu, NSMenuDelegate,
+        NSMenuItem, NSMenuPresentationStyle, NSStatusBar, NSStatusBarButton, NSStatusItem,
+        NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
     };
     use objc2_foundation::{
-        MainThreadMarker, NSArray, NSAttributedString, NSData, NSDictionary, NSPoint, NSRect,
-        NSSize, NSString,
+        MainThreadMarker, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString,
     };
-    use std::cell::Cell;
+    use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
 
+    use super::mac_mode_picker::{append_mode_picker, install_key_hook};
     use super::{
         Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem, current_menu_entries,
         handle_item, mode_icon, mode_name, mode_submenu, row_symbol, scan_previous, stop_recording,
@@ -832,15 +834,12 @@ mod mac {
     const ICON_HEIGHT: f64 = 18.0;
     /// Not a menu item: the status button itself, clicked mid-recording.
     const STOP_TAG: isize = -1;
+    const REBUILD_TAG: isize = -2;
 
     thread_local! {
-        /// The live sender, read by the ObjC action. `thread_local` for the
-        /// reason `COLOR_PANEL_TX` is: AppKit only calls the action on the main
-        /// thread, so it needs no lock.
         static TRAY_TX: RefCell<Option<flume::Sender<isize>>> = const { RefCell::new(None) };
-        /// The mode picker's section header plus the selected mode's name --
-        /// the palette delegate swaps one for the other while tracking.
-        static HEADER: RefCell<Option<(Retained<NSMenuItem>, String)>> = const { RefCell::new(None) };
+        static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
+        static REBUILD_PENDING: Cell<bool> = const { Cell::new(false) };
     }
 
     define_class!(
@@ -874,67 +873,22 @@ mod mac {
         unsafe impl NSObjectProtocol for TrayTarget {}
 
         unsafe impl NSMenuDelegate for TrayTarget {
-            /// The palette's highlight, fired from inside menu tracking --
-            /// only AppKit objects may be touched, same rule as the actions
-            /// above.
-            #[unsafe(method(menu:willHighlightItem:))]
-            fn will_highlight(&self, _menu: &NSMenu, item: Option<&NSMenuItem>) {
-                HEADER.with(|slot| {
-                    let Some((header, selected)) = slot.borrow().clone() else {
-                        return;
-                    };
-                    match item {
-                        Some(item) if item.state() != NSControlStateValueOn => {
-                            set_header(&header, &item.title().to_string(), true);
-                        }
-                        _ => set_header(&header, &selected, false),
-                    }
-                });
+            #[unsafe(method(menuWillOpen:))]
+            fn menu_will_open(&self, _menu: &NSMenu) {
+                MENU_OPEN.with(|o| o.set(true));
+            }
+
+            #[unsafe(method(menuDidClose:))]
+            fn menu_did_close(&self, _menu: &NSMenu) {
+                MENU_OPEN.with(|o| o.set(false));
+                if REBUILD_PENDING.with(|p| p.replace(false)) {
+                    post(REBUILD_TAG); // handled by the drain, with a clean borrow
+                }
             }
         }
     );
 
-    /// Swap the section header between the hovered mode (italic) and the
-    /// selected one (plain). An attributed title, once set, overrides the
-    /// plain one -- clearing it is what makes [`NSMenuItem::setTitle`] visible
-    /// again.
-    fn set_header(header: &NSMenuItem, text: &str, italic: bool) {
-        let mtm = MainThreadMarker::new().unwrap();
-        let base =
-            NSFont::systemFontOfSize_weight(11.0, unsafe { objc2_app_kit::NSFontWeightSemibold });
-        let font = if italic {
-            NSFontManager::sharedFontManager(mtm)
-                .convertFont_toHaveTrait(&base, NSFontTraitMask::ItalicFontMask)
-        } else {
-            base
-        };
-        let color = objc2_app_kit::NSColor::labelColor();
-        let attrs = NSDictionary::from_slices(
-            &[unsafe { NSFontAttributeName }, unsafe {
-                objc2_app_kit::NSForegroundColorAttributeName
-            }],
-            &[&*font as &AnyObject, &*color as &AnyObject],
-        );
-        let s = unsafe {
-            NSAttributedString::initWithString_attributes(
-                NSAttributedString::alloc(),
-                &NSString::from_str(text),
-                Some(&attrs),
-            )
-        };
-        header.setAttributedTitle(Some(&s));
-    }
-
-    fn cap_mode_icon_png(mode: Mode) -> Option<Vec<u8>> {
-        let source = match mode {
-            Mode::Studio => include_bytes!("../assets/icons/film-cut.svg").as_slice(),
-            Mode::Instant => include_bytes!("../assets/icons/instant.svg").as_slice(),
-            Mode::Screenshot => include_bytes!("../assets/icons/screenshot.svg").as_slice(),
-        };
-        super::svg_icon_png(source, 90)
-    }
-
-    fn post(tag: isize) {
+    pub(super) fn post(tag: isize) {
         TRAY_TX.with(|tx| {
             if let Some(sender) = tx.borrow().as_ref() {
                 let _ = sender.send(tag);
@@ -965,6 +919,7 @@ mod mac {
             return;
         };
         cx.set_global(tray);
+        install_key_hook();
 
         let (tx, rx) = flume::unbounded::<isize>();
         TRAY_TX.with(|slot| *slot.borrow_mut() = Some(tx));
@@ -974,9 +929,16 @@ mod mac {
         cx.spawn(async move |cx| {
             while let Ok(tag) = rx.recv_async().await {
                 cx.update(|cx| {
-                    if tag == STOP_TAG {
-                        stop_recording(cx);
-                        return;
+                    match tag {
+                        STOP_TAG => {
+                            stop_recording(cx);
+                            return;
+                        }
+                        REBUILD_TAG => {
+                            rebuild(cx);
+                            return;
+                        }
+                        _ => {}
                     }
                     let item = cx.global::<Tray>().actions.get(tag as usize).cloned();
                     match item {
@@ -1100,7 +1062,7 @@ mod mac {
     /// icons live in) -- already a template image. The API only exists on
     /// macOS 11+, and an unknown name comes back nil; both cases leave the
     /// row bare rather than falling back to the raster, which Windows owns.
-    fn symbol_image(name: &str) -> Option<Retained<NSImage>> {
+    pub(super) fn symbol_image(name: &str) -> Option<Retained<NSImage>> {
         if !objc2::available!(macos = 11.0) {
             return None;
         }
@@ -1111,6 +1073,14 @@ mod mac {
     /// (unless a recording is running, in which case the *button* owns the
     /// click -- see [`set_recording`]).
     pub fn rebuild(cx: &mut App) {
+        if MENU_OPEN.with(Cell::get) {
+            REBUILD_PENDING.with(|p| p.set(true));
+            return;
+        }
+        if !cx.has_global::<Tray>() {
+            return;
+        }
+
         if !cx.has_global::<Tray>() {
             return;
         }
@@ -1121,10 +1091,9 @@ mod mac {
         let entries = current_menu_entries(cx, mode, &previous);
 
         let mut actions = Vec::new();
-        let menu = {
-            let tray = cx.global::<Tray>();
-            build_ns_menu(&entries, &tray.target, &mut actions)
-        };
+        let tray = cx.global::<Tray>();
+        let menu = build_ns_menu(&entries, &tray.target, &mut actions);
+        menu.setDelegate(Some(ProtocolObject::from_ref(&*tray.target)));
 
         let tray = cx.global::<Tray>();
         if !tray.recording {
@@ -1147,23 +1116,6 @@ mod mac {
         menu.setAutoenablesItems(false);
 
         for entry in entries {
-            // if let Entry::ModePicker { mode } = entry {
-            //     if objc2::available!(macos = 14.0) {
-            //         let header = NSMenuItem::new(mtm);
-            //         header.setEnabled(false);
-            //         set_header(&header, mode_name(*mode), false);
-            //         HEADER.with(|slot| {
-            //             *slot.borrow_mut() = Some((header.clone(), mode_name(*mode).to_string()));
-            //         });
-            //         menu.addItem(&header);
-            //         menu.addItem(&build_palette_mode_item(*mode, target, actions, mtm));
-            //         menu.addItem(&NSMenuItem::separatorItem(mtm));
-            //     } else {
-            //         let submenu = mode_submenu(*mode);
-            //         menu.addItem(&build_ns_item(&submenu, target, actions, mtm));
-            //     }
-            //     continue;
-            // }
             if let Entry::ModePicker { mode } = entry {
                 if objc2::available!(macos = 14.0) {
                     append_mode_picker(&menu, *mode, actions, mtm);
@@ -1278,49 +1230,6 @@ mod mac {
         }
     }
 
-    fn build_palette_mode_item(
-        selected: Mode,
-        target: &TrayTarget,
-        actions: &mut Vec<TrayItem>,
-        mtm: MainThreadMarker,
-    ) -> Retained<NSMenuItem> {
-        let palette = NSMenu::new(mtm);
-        palette.setAutoenablesItems(false);
-        palette.setPresentationStyle(NSMenuPresentationStyle::Palette);
-        palette.setDelegate(Some(ProtocolObject::from_ref(target)));
-        for mode in [Mode::Instant, Mode::Studio, Mode::Screenshot] {
-            let item = new_menu_item(mode_name(mode), Some(sel!(capTrayMode:)), mtm);
-            unsafe { item.setTarget(Some(target)) };
-            item.setTag(actions.len() as isize);
-            item.setToolTip(Some(&NSString::from_str(mode_name(mode))));
-            item.setState(if mode == selected {
-                NSControlStateValueOn
-            } else {
-                NSControlStateValueOff
-            });
-            let image = cap_mode_icon_png(mode)
-                .as_deref()
-                .and_then(|png| ns_image(png, 30.0))
-                .or_else(|| ns_image(mode_icon(mode), 30.0));
-            if let Some(image) = image {
-                image.setTemplate(true);
-                item.setImage(Some(&image));
-            } else {
-                tracing::warn!(?mode, "palette icon not resolved");
-            }
-            palette.addItem(&item);
-            actions.push(match mode {
-                Mode::Studio => TrayItem::ModeStudio,
-                Mode::Instant => TrayItem::ModeInstant,
-                Mode::Screenshot => TrayItem::ModeScreenshot,
-            });
-        }
-
-        let parent = new_menu_item(mode_name(selected), None, mtm);
-        parent.setSubmenu(Some(&palette));
-        parent
-    }
-
     fn new_menu_item(
         title: &str,
         action: Option<Sel>,
@@ -1431,311 +1340,6 @@ mod mac {
 
     pub fn refresh_menu(cx: &mut App) {
         rebuild(cx);
-    }
-
-    // ---------------------------------------------------------------------------
-    // Mode picker row: title + subtitle on the left, a capsule of three pills on the right
-    // ---------------------------------------------------------------------------
-
-    const PICKER_MODES: [(Mode, TrayItem, &str); 3] = [
-        (Mode::Instant, TrayItem::ModeInstant, "bolt.fill"),
-        (Mode::Studio, TrayItem::ModeStudio, "film"),
-        (Mode::Screenshot, TrayItem::ModeScreenshot, "photo"),
-    ];
-
-    const PICKER_TITLE: &str = "Recording Mode";
-    const PICKER_W: f64 = 300.0;
-    const PICKER_H: f64 = 41.0;
-    const PILL_W: f64 = 38.0;
-    const PILL_H: f64 = 29.0;
-    const PILL_GAP: f64 = 4.0;
-    const CAPSULE_PAD: f64 = 3.0;
-    const RIGHT_INSET: f64 = 10.0;
-    const TITLE_INSET: f64 = 16.0;
-    const LINE_GAP: f64 = 2.0;
-    const SYMBOL_SIZE: f64 = 16.0;
-
-    struct PickerIvars {
-        selected: Cell<usize>,
-        focused: Cell<Option<usize>>,
-        /// Index into `Tray::actions` of the first pill; pill `i` is `tag_base + i`.
-        tag_base: isize,
-    }
-
-    define_class!(
-        // SAFETY: NSView has no extra subclassing requirements; ivars are Cells, no Drop.
-        #[unsafe(super(NSView))]
-        #[name = "CapModePickerView"]
-        #[thread_kind = MainThreadOnly]
-        #[ivars = PickerIvars]
-        struct ModePickerView;
-
-        impl ModePickerView {
-            #[unsafe(method(acceptsFirstMouse:))]
-            fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
-                true
-            }
-
-            #[unsafe(method(viewDidMoveToWindow))]
-            fn view_did_move_to_window(&self) {
-                unsafe {
-                    let _: () = msg_send![super(self), viewDidMoveToWindow];
-                }
-                if let Some(window) = self.window() {
-                    window.setAcceptsMouseMovedEvents(true);
-                }
-            }
-
-            #[unsafe(method(mouseMoved:))]
-            fn mouse_moved(&self, event: &NSEvent) {
-                let hit = self.pill_at(event);
-                if self.ivars().focused.get() != hit {
-                    self.ivars().focused.set(hit);
-                    self.setNeedsDisplay(true);
-                }
-            }
-
-            #[unsafe(method(mouseExited:))]
-            fn mouse_exited(&self, _event: &NSEvent) {
-                self.ivars().focused.set(None);
-                self.setNeedsDisplay(true);
-            }
-
-            #[unsafe(method(mouseDown:))]
-            fn mouse_down(&self, event: &NSEvent) {
-                if let Some(i) = self.pill_at(event) {
-                    // Update the subtitle immediately so the old name never flashes.
-                    self.ivars().focused.set(Some(i));
-                    self.ivars().selected.set(i);
-                    self.setNeedsDisplay(true);
-                }
-            }
-
-            #[unsafe(method(mouseUp:))]
-            fn mouse_up(&self, event: &NSEvent) {
-                if let Some(i) = self.pill_at(event) {
-                    self.choose(i);
-                }
-            }
-
-            #[unsafe(method(drawRect:))]
-            fn draw_rect(&self, _dirty: NSRect) {
-                self.draw_contents();
-            }
-        }
-    );
-
-    impl ModePickerView {
-        fn new(mtm: MainThreadMarker, selected: usize, tag_base: isize) -> Retained<Self> {
-            let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
-                selected: Cell::new(selected),
-                focused: Cell::new(None),
-                tag_base,
-            });
-            let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PICKER_W, PICKER_H));
-            let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
-
-            let options = NSTrackingAreaOptions::MouseMoved
-                | NSTrackingAreaOptions::MouseEnteredAndExited
-                | NSTrackingAreaOptions::ActiveAlways
-                | NSTrackingAreaOptions::InVisibleRect;
-            let area = unsafe {
-                NSTrackingArea::initWithRect_options_owner_userInfo(
-                    NSTrackingArea::alloc(),
-                    NSRect::ZERO,
-                    options,
-                    Some(&this),
-                    None,
-                )
-            };
-            this.addTrackingArea(&area);
-            this
-        }
-
-        // -- geometry ----------------------------------------------------------
-
-        fn capsule_rect(&self) -> NSRect {
-            let n = PICKER_MODES.len() as f64;
-            let w = n * PILL_W + (n - 1.0) * PILL_GAP + 2.0 * CAPSULE_PAD;
-            let h = PILL_H + 2.0 * CAPSULE_PAD;
-            let bounds = self.bounds();
-            NSRect::new(
-                NSPoint::new(
-                    bounds.size.width - RIGHT_INSET - w,
-                    (bounds.size.height - h) / 2.0,
-                ),
-                NSSize::new(w, h),
-            )
-        }
-
-        fn pill_rect(&self, i: usize) -> NSRect {
-            let c = self.capsule_rect();
-            NSRect::new(
-                NSPoint::new(
-                    c.origin.x + CAPSULE_PAD + i as f64 * (PILL_W + PILL_GAP),
-                    c.origin.y + CAPSULE_PAD,
-                ),
-                NSSize::new(PILL_W, PILL_H),
-            )
-        }
-
-        fn pill_at(&self, event: &NSEvent) -> Option<usize> {
-            let p = self.convertPoint_fromView(event.locationInWindow(), None);
-            (0..PICKER_MODES.len()).find(|&i| {
-                let r = self.pill_rect(i);
-                p.x >= r.origin.x - PILL_GAP / 2.0
-                    && p.x <= r.origin.x + r.size.width + PILL_GAP / 2.0
-                    && p.y >= r.origin.y
-                    && p.y <= r.origin.y + r.size.height
-            })
-        }
-
-        // -- actions -----------------------------------------------------------
-
-        fn choose(&self, i: usize) {
-            self.ivars().selected.set(i);
-            self.setNeedsDisplay(true);
-            // Same seam as every other tray action: only post the tag.
-            post(self.ivars().tag_base + i as isize);
-            if let Some(item) = self.enclosingMenuItem() {
-                if let Some(menu) = unsafe { item.menu() } {
-                    menu.cancelTracking();
-                }
-            }
-        }
-
-        // -- drawing -----------------------------------------------------------
-
-        fn draw_contents(&self) {
-            let selected = self.ivars().selected.get();
-            let focused = self.ivars().focused.get();
-            let label = NSColor::labelColor();
-
-            // Title + subtitle.
-            let menu_size = NSFont::menuFontOfSize(0.0).pointSize();
-            let title_font = NSFont::menuFontOfSize(0.0);
-            let shown = focused.unwrap_or(selected);
-            let mut sub_font = NSFont::systemFontOfSize_weight(menu_size - 2.0, unsafe {
-                objc2_app_kit::NSFontWeightSemibold
-            });
-            if shown != selected {
-                sub_font = NSFontManager::sharedFontManager(
-                    MainThreadMarker::new().expect("draw runs on the main thread"),
-                )
-                .convertFont_toHaveTrait(&sub_font, NSFontTraitMask::ItalicFontMask);
-            }
-
-            let title = NSString::from_str(PICKER_TITLE);
-            let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
-            let title_attrs = NSDictionary::from_slices(
-                &[unsafe { NSFontAttributeName }, unsafe {
-                    objc2_app_kit::NSForegroundColorAttributeName
-                }],
-                &[&*title_font as &AnyObject, &*label as &AnyObject],
-            );
-            let secondary = NSColor::secondaryLabelColor();
-            let sub_attrs = NSDictionary::from_slices(
-                &[unsafe { NSFontAttributeName }, unsafe {
-                    objc2_app_kit::NSForegroundColorAttributeName
-                }],
-                &[&*sub_font as &AnyObject, &*secondary as &AnyObject],
-            );
-            let ts = unsafe { title.sizeWithAttributes(Some(&title_attrs)) };
-            let ss = unsafe { subtitle.sizeWithAttributes(Some(&sub_attrs)) };
-            let base_y = (self.bounds().size.height - (ts.height + ss.height + LINE_GAP)) / 2.0;
-            unsafe {
-                subtitle.drawAtPoint_withAttributes(
-                    NSPoint::new(TITLE_INSET, base_y),
-                    Some(&sub_attrs),
-                );
-                title.drawAtPoint_withAttributes(
-                    NSPoint::new(TITLE_INSET, base_y + ss.height + LINE_GAP),
-                    Some(&title_attrs),
-                );
-            }
-
-            // Capsule: radius = half the height gives exact semicircular ends.
-            let cap = self.capsule_rect();
-            label.colorWithAlphaComponent(0.08).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                cap,
-                cap.size.height / 2.0,
-                cap.size.height / 2.0,
-            )
-            .fill();
-
-            for (i, (_, _, symbol)) in PICKER_MODES.iter().enumerate() {
-                let r = self.pill_rect(i);
-                let is_sel = i == selected;
-                let is_hover = focused == Some(i) && !is_sel;
-
-                if is_sel {
-                    NSColor::controlAccentColor().setFill();
-                } else if is_hover {
-                    label.colorWithAlphaComponent(0.14).setFill();
-                }
-                if is_sel || is_hover {
-                    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                        r,
-                        r.size.height / 2.0,
-                        r.size.height / 2.0,
-                    )
-                    .fill();
-                }
-
-                // Icon: a palette-coloured symbol, so the selected one is white.
-                let icon_color = if is_sel {
-                    NSColor::whiteColor()
-                } else {
-                    label.clone()
-                };
-                if let Some(base) = symbol_image(symbol) {
-                    let size_cfg = NSImageSymbolConfiguration::configurationWithPointSize_weight(
-                        SYMBOL_SIZE,
-                        unsafe { objc2_app_kit::NSFontWeightMedium },
-                    );
-                    let color_cfg = NSImageSymbolConfiguration::configurationWithPaletteColors(
-                        &NSArray::from_slice(&[&*icon_color]),
-                    );
-                    let cfg = size_cfg.configurationByApplyingConfiguration(&color_cfg);
-                    if let Some(img) = base.imageWithSymbolConfiguration(&cfg) {
-                        let s = img.size();
-                        img.drawInRect(NSRect::new(
-                            NSPoint::new(
-                                r.origin.x + (r.size.width - s.width) / 2.0,
-                                r.origin.y + (r.size.height - s.height) / 2.0,
-                            ),
-                            s,
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Appends the mode picker row to `menu` and registers one action per pill, so a click
-    /// arrives through the usual tag channel as `ModeInstant` / `ModeStudio` / `ModeScreenshot`.
-    fn append_mode_picker(
-        menu: &NSMenu,
-        selected: Mode,
-        actions: &mut Vec<TrayItem>,
-        mtm: MainThreadMarker,
-    ) -> Retained<NSMenuItem> {
-        let tag_base = actions.len() as isize;
-        actions.extend(PICKER_MODES.iter().map(|(_, item, _)| item.clone()));
-
-        let index = PICKER_MODES
-            .iter()
-            .position(|(m, _, _)| *m == selected)
-            .unwrap_or(0);
-        let view = ModePickerView::new(mtm, index, tag_base);
-
-        let item = NSMenuItem::new(mtm);
-        item.setTitle(&NSString::from_str(PICKER_TITLE)); // also its accessibility title
-        item.setEnabled(true);
-        item.setView(Some(&view));
-        menu.addItem(&item);
-        item
     }
 }
 

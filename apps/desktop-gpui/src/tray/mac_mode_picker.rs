@@ -1,0 +1,473 @@
+//! The mode picker row: a title and subtitle on the left, a capsule of pills on the right.
+//!
+//! Layers (`CALayer`) draw the capsule and pills because only they have continuous
+//! corners; icons are image views above them, and `drawRect:` draws just the text.
+//! Nothing in here touches gpui: a pick only posts a tag through [`post`], the same
+//! seam every other tray action uses.
+
+use std::cell::{Cell, RefCell};
+
+use block2::RcBlock;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::{
+    NSAppearance, NSAppearanceCustomization, NSColor, NSEvent, NSEventType, NSFont,
+    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightMedium, NSFontWeightSemibold,
+    NSForegroundColorAttributeName, NSImageScaling, NSImageSymbolConfiguration, NSImageView,
+    NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
+};
+use objc2_foundation::{MainThreadMarker, NSDictionary, NSPoint, NSRect, NSSize, NSString};
+use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
+
+use super::mac::{post, symbol_image};
+use super::{TrayItem, mode_name};
+use crate::main_window::Mode;
+
+const PICKER_MODES: [(Mode, TrayItem, &str); 3] = [
+    (Mode::Instant, TrayItem::ModeInstant, "bolt.fill"),
+    (Mode::Studio, TrayItem::ModeStudio, "film"),
+    (Mode::Screenshot, TrayItem::ModeScreenshot, "photo"),
+];
+
+const PICKER_TITLE: &str = "Recording Mode";
+const PICKER_W: f64 = 300.0;
+const PICKER_H: f64 = 41.0;
+const PILL_W: f64 = 38.0;
+const PILL_H: f64 = 29.0;
+const PILL_GAP: f64 = 4.0;
+const CAPSULE_PAD: f64 = 3.0;
+const RIGHT_INSET: f64 = 10.0;
+const TITLE_INSET: f64 = 17.0;
+const LINE_GAP: f64 = 2.0;
+const SYMBOL_SIZE: f64 = 17.0;
+const PILL_RADIUS: f64 = 14.0;
+const CAPSULE_RADIUS: f64 = 17.0;
+
+thread_local! {
+    /// The live picker and its menu item, read by the key hook. Set on every rebuild.
+    static PICKER: RefCell<Option<(Retained<NSMenuItem>, Retained<ModePickerView>)>> =
+        const { RefCell::new(None) };
+}
+
+struct PickerIvars {
+    selected: Cell<usize>,
+    focused: Cell<Option<usize>>,
+    /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
+    tag_base: isize,
+    capsule: RefCell<Option<Retained<CALayer>>>,
+    pills: RefCell<Vec<Retained<CALayer>>>,
+    icons: RefCell<Vec<Retained<NSImageView>>>,
+}
+
+define_class!(
+    // SAFETY: NSView has no extra subclassing requirements; ivars have no Drop side effects.
+    #[unsafe(super(NSView))]
+    #[name = "CapModePickerView"]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = PickerIvars]
+    struct ModePickerView;
+
+    impl ModePickerView {
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(viewDidMoveToWindow))]
+        fn view_did_move_to_window(&self) {
+            unsafe {
+                let _: () = msg_send![super(self), viewDidMoveToWindow];
+            }
+            if let Some(window) = self.window() {
+                window.setAcceptsMouseMovedEvents(true);
+            }
+            self.sync();
+        }
+
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn view_did_change_effective_appearance(&self) {
+            unsafe {
+                let _: () = msg_send![super(self), viewDidChangeEffectiveAppearance];
+            }
+            self.sync();
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            let hit = self.pill_at(event);
+            if self.ivars().focused.get() != hit {
+                self.ivars().focused.set(hit);
+                self.refresh();
+            }
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.ivars().focused.set(None);
+            self.refresh();
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            if let Some(i) = self.pill_at(event) {
+                // Update the subtitle immediately so the old name never flashes.
+                self.ivars().focused.set(Some(i));
+                self.ivars().selected.set(i);
+                self.refresh();
+            }
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, event: &NSEvent) {
+            if let Some(i) = self.pill_at(event) {
+                self.choose(i);
+            }
+        }
+
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            self.draw_text();
+        }
+    }
+);
+
+impl ModePickerView {
+    fn new(mtm: MainThreadMarker, selected: usize, tag_base: isize) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
+            selected: Cell::new(selected),
+            focused: Cell::new(None),
+            tag_base,
+            capsule: RefCell::new(None),
+            pills: RefCell::new(Vec::new()),
+            icons: RefCell::new(Vec::new()),
+        });
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PICKER_W, PICKER_H));
+        // Initialise first; everything below touches the live view.
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+
+        this.setWantsLayer(true);
+        let root = this.layer().expect("layer-backed view");
+        let make_layer = |radius: f64| -> Retained<CALayer> {
+            let layer = CALayer::layer();
+            layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+            layer.setCornerRadius(radius);
+            root.addSublayer(&layer);
+            layer
+        };
+        *this.ivars().capsule.borrow_mut() = Some(make_layer(CAPSULE_RADIUS));
+        for _ in PICKER_MODES.iter() {
+            this.ivars()
+                .pills
+                .borrow_mut()
+                .push(make_layer(PILL_RADIUS));
+        }
+
+        for (_, _, symbol) in PICKER_MODES.iter() {
+            let view = NSImageView::new(mtm);
+            if let Some(base) = symbol_image(symbol) {
+                let cfg = NSImageSymbolConfiguration::configurationWithPointSize_weight(
+                    SYMBOL_SIZE,
+                    unsafe { NSFontWeightMedium },
+                );
+                view.setImage(base.imageWithSymbolConfiguration(&cfg).as_deref());
+            }
+            view.setImageScaling(NSImageScaling::ScaleNone);
+            this.addSubview(&view);
+            this.ivars().icons.borrow_mut().push(view);
+        }
+
+        let options = NSTrackingAreaOptions::MouseMoved
+            | NSTrackingAreaOptions::MouseEnteredAndExited
+            | NSTrackingAreaOptions::ActiveAlways
+            | NSTrackingAreaOptions::InVisibleRect;
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                options,
+                Some(&this),
+                None,
+            )
+        };
+        this.addTrackingArea(&area);
+
+        this.sync();
+        this
+    }
+
+    // -- geometry ----------------------------------------------------------
+
+    fn capsule_rect(&self) -> NSRect {
+        let n = PICKER_MODES.len() as f64;
+        let w = n * PILL_W + (n - 1.0) * PILL_GAP + 2.0 * CAPSULE_PAD;
+        let h = PILL_H + 2.0 * CAPSULE_PAD;
+        let bounds = self.bounds();
+        NSRect::new(
+            NSPoint::new(
+                bounds.size.width - RIGHT_INSET - w,
+                (bounds.size.height - h) / 2.0,
+            ),
+            NSSize::new(w, h),
+        )
+    }
+
+    fn pill_rect(&self, i: usize) -> NSRect {
+        let c = self.capsule_rect();
+        NSRect::new(
+            NSPoint::new(
+                c.origin.x + CAPSULE_PAD + i as f64 * (PILL_W + PILL_GAP),
+                c.origin.y + CAPSULE_PAD,
+            ),
+            NSSize::new(PILL_W, PILL_H),
+        )
+    }
+
+    fn pill_at(&self, event: &NSEvent) -> Option<usize> {
+        let p = self.convertPoint_fromView(event.locationInWindow(), None);
+        (0..PICKER_MODES.len()).find(|&i| {
+            let r = self.pill_rect(i);
+            p.x >= r.origin.x - PILL_GAP / 2.0
+                && p.x <= r.origin.x + r.size.width + PILL_GAP / 2.0
+                && p.y >= r.origin.y
+                && p.y <= r.origin.y + r.size.height
+        })
+    }
+
+    // -- state -> visuals --------------------------------------------------
+
+    /// Layers and icons for the current state, then the text.
+    fn refresh(&self) {
+        self.sync();
+        self.setNeedsDisplay(true);
+    }
+
+    /// The only place state becomes layer properties.
+    fn sync(&self) {
+        let selected = self.ivars().selected.get();
+        let focused = self.ivars().focused.get();
+
+        // CGColors don't follow appearance, so resolve the dynamic colours under this
+        // view's appearance. (Deprecated, but it has no block-free replacement.)
+        #[allow(deprecated)]
+        unsafe {
+            NSAppearance::setCurrentAppearance(Some(&self.effectiveAppearance()))
+        };
+
+        let label = NSColor::labelColor();
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+
+        if let Some(cap) = self.ivars().capsule.borrow().as_ref() {
+            cap.setFrame(self.capsule_rect());
+            let color = label.colorWithAlphaComponent(0.08).CGColor();
+            cap.setBackgroundColor(Some(&color));
+        }
+
+        let icons = self.ivars().icons.borrow();
+        for (i, pill) in self.ivars().pills.borrow().iter().enumerate() {
+            let is_sel = i == selected;
+            let is_hover = focused == Some(i) && !is_sel;
+            let fill = if is_sel {
+                NSColor::whiteColor()
+            } else if is_hover {
+                label.colorWithAlphaComponent(0.14)
+            } else {
+                NSColor::clearColor()
+            };
+            let r = self.pill_rect(i);
+            pill.setFrame(r);
+            let color = fill.CGColor();
+            pill.setBackgroundColor(Some(&color));
+
+            if let Some(icon) = icons.get(i) {
+                icon.setFrame(r);
+                let tint = if is_sel {
+                    NSColor::selectedContentBackgroundColor()
+                } else {
+                    label.clone()
+                };
+                icon.setContentTintColor(Some(&tint));
+            }
+        }
+        CATransaction::commit();
+    }
+
+    // -- drawing: text only ------------------------------------------------
+
+    fn draw_text(&self) {
+        let selected = self.ivars().selected.get();
+        let focused = self.ivars().focused.get();
+        let shown = focused.unwrap_or(selected);
+
+        let menu_size = NSFont::menuFontOfSize(0.0).pointSize();
+        let title_font =
+            NSFont::systemFontOfSize_weight(menu_size, unsafe { NSFontWeightSemibold });
+        let mut sub_font = NSFont::systemFontOfSize(menu_size - 2.0);
+        if shown != selected {
+            sub_font = NSFontManager::sharedFontManager(
+                MainThreadMarker::new().expect("draw runs on the main thread"),
+            )
+            .convertFont_toHaveTrait(&sub_font, NSFontTraitMask::ItalicFontMask);
+        }
+
+        let label = NSColor::labelColor();
+        let secondary = NSColor::secondaryLabelColor();
+        let title = NSString::from_str(PICKER_TITLE);
+        let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
+        let title_attrs = NSDictionary::from_slices(
+            &[unsafe { NSFontAttributeName }, unsafe {
+                NSForegroundColorAttributeName
+            }],
+            &[&*title_font as &AnyObject, &*label as &AnyObject],
+        );
+        let sub_attrs = NSDictionary::from_slices(
+            &[unsafe { NSFontAttributeName }, unsafe {
+                NSForegroundColorAttributeName
+            }],
+            &[&*sub_font as &AnyObject, &*secondary as &AnyObject],
+        );
+
+        let ts = unsafe { title.sizeWithAttributes(Some(&title_attrs)) };
+        let ss = unsafe { subtitle.sizeWithAttributes(Some(&sub_attrs)) };
+        let base_y = (self.bounds().size.height - (ts.height + ss.height + LINE_GAP)) / 2.0;
+        unsafe {
+            subtitle
+                .drawAtPoint_withAttributes(NSPoint::new(TITLE_INSET, base_y), Some(&sub_attrs));
+            title.drawAtPoint_withAttributes(
+                NSPoint::new(TITLE_INSET, base_y + ss.height + LINE_GAP),
+                Some(&title_attrs),
+            );
+        }
+    }
+
+    // -- actions -----------------------------------------------------------
+
+    /// Selects pill `i` and posts its tag. Deliberately does not close the menu.
+    fn choose(&self, i: usize) {
+        self.ivars().selected.set(i);
+        self.ivars().focused.set(Some(i));
+        self.refresh();
+        post(self.ivars().tag_base + i as isize);
+    }
+
+    /// Moves keyboard focus one pill. Returns false at either end, so the key falls
+    /// through to the menu and moves to the neighbouring tray menu.
+    fn move_focus(&self, delta: isize) -> bool {
+        let cur = self
+            .ivars()
+            .focused
+            .get()
+            .unwrap_or(self.ivars().selected.get()) as isize;
+        let next = cur + delta;
+        if next < 0 || next >= PICKER_MODES.len() as isize {
+            return false;
+        }
+        self.ivars().focused.set(Some(next as usize));
+        self.refresh();
+        true
+    }
+
+    fn activate_focused(&self) {
+        let i = self
+            .ivars()
+            .focused
+            .get()
+            .unwrap_or(self.ivars().selected.get());
+        self.choose(i);
+    }
+}
+
+/// Appends the mode picker row to `menu` and registers one action per pill, so a click
+/// arrives through the usual tag channel as `ModeInstant` / `ModeStudio` / `ModeScreenshot`.
+pub(super) fn append_mode_picker(
+    menu: &NSMenu,
+    selected: Mode,
+    actions: &mut Vec<TrayItem>,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    let tag_base = actions.len() as isize;
+    actions.extend(PICKER_MODES.iter().map(|(_, item, _)| item.clone()));
+
+    let index = PICKER_MODES
+        .iter()
+        .position(|(m, _, _)| *m == selected)
+        .unwrap_or(0);
+    let view = ModePickerView::new(mtm, index, tag_base);
+
+    let item = NSMenuItem::new(mtm);
+    item.setTitle(&NSString::from_str(PICKER_TITLE)); // also its accessibility title
+    item.setEnabled(true);
+    item.setView(Some(&view));
+    menu.addItem(&item);
+
+    PICKER.with(|p| *p.borrow_mut() = Some((item.clone(), view)));
+    item
+}
+
+// ---------------------------------------------------------------------------
+// Private keyboard hook
+// ---------------------------------------------------------------------------
+
+/// ←/→/Return/Space while the picker row is highlighted. True means consumed.
+fn handle_key(event: &NSEvent) -> bool {
+    PICKER.with(|p| {
+        let p = p.borrow();
+        let Some((item, view)) = p.as_ref() else {
+            return false;
+        };
+        if !item.isHighlighted() {
+            return false;
+        }
+        match event.keyCode() {
+            123 => view.move_focus(-1),
+            124 => view.move_focus(1),
+            36 | 76 | 49 => {
+                view.activate_focused();
+                true
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Wraps `NSPopupMenuWindow -_handleKeyEvent:`. Private API: it does nothing if the
+/// method is missing or has another shape, and it may break on any macOS update.
+pub(super) fn install_key_hook() {
+    let sel = sel!(_handleKeyEvent:);
+    let Some(cls) = AnyClass::get(c"NSPopupMenuWindow") else {
+        return;
+    };
+    let Some(method) = cls.instance_method(sel) else {
+        return;
+    };
+    let enc = unsafe {
+        let p =
+            objc2::ffi::method_getTypeEncoding(method as *const _ as *const objc2::runtime::Imp);
+        if p.is_null() {
+            return;
+        }
+        std::ffi::CStr::from_ptr(p)
+    };
+    if enc.to_bytes() != b"B24@0:8@16" {
+        tracing::warn!(encoding = ?enc, "key hook: unexpected encoding, not installing");
+        return;
+    }
+    let orig = method.implementation();
+
+    let block = RcBlock::new(move |this: *mut AnyObject, event: *mut NSEvent| -> Bool {
+        let ev = unsafe { &*event };
+        if ev.r#type() == NSEventType::KeyDown && handle_key(ev) {
+            return Bool::YES;
+        }
+        let orig: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut NSEvent) -> Bool =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { orig(this, sel, event) }
+    });
+    unsafe {
+        let imp = objc2::ffi::imp_implementationWithBlock(&*block as *const _ as *mut AnyObject);
+        method.set_implementation(std::mem::transmute(imp));
+    }
+    std::mem::forget(block); // the replacement must outlive the process
+    tracing::info!("key hook installed");
+}

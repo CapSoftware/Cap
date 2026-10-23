@@ -239,6 +239,12 @@ objc2-app-kit = { version = "0.3.2", features = [
     "NSWorkspace",
     "NSAccessibility",
 ] }
+objc2-quartz-core = { version = "0.3.2", features = [
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
+objc2-core-graphics = { version = "0.3.2", features = ["CGColor"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = { version = "0.3.2", features = [

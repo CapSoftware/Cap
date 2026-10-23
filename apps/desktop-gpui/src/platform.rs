@@ -1487,7 +1487,7 @@ mod mac {
         ns_window.setLevel(behavior.level);
         tracing::debug!(
             requested = behavior.level,
-            actual = unsafe { ns_window.level() },
+            actual = ns_window.level(),
             "panel level applied"
         );
         if behavior.join_all_spaces {
@@ -1571,7 +1571,7 @@ mod mac {
 
     pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
         native.0.setIgnoresMouseEvents(click_through);
-        unsafe { native.0.ignoresMouseEvents() == click_through }
+        native.0.ignoresMouseEvents() == click_through
     }
 
     /// `orderOut:` -- hide without closing, the way the Tauri main window
@@ -2148,7 +2148,7 @@ mod mac {
     /// Tauri app calls on the recording controls panel.
     pub fn show_window_without_focus(window: &Window) {
         if let Some(ns_window) = ns_window(window) {
-            unsafe { ns_window.orderFrontRegardless() };
+            ns_window.orderFrontRegardless();
             rerun_occlusion_handler_after_show(&ns_window);
         }
     }
@@ -2156,7 +2156,7 @@ mod mac {
     /// The CGWindowID, which is also what `scap_targets::WindowId` wraps on
     /// macOS -- used to exclude our own controls bar from the capture.
     pub fn window_number(window: &Window) -> Option<isize> {
-        ns_window(window).map(|w| unsafe { w.windowNumber() })
+        ns_window(window).map(|w| w.windowNumber())
     }
 
     // -- The open panel ------------------------------------------------------
@@ -2651,10 +2651,10 @@ mod mac {
             "occlusion_raw={:#x} visible={} on_active_space={} alpha={} level={} number={}",
             w.occlusionState().bits(),
             w.isVisible(),
-            unsafe { w.isOnActiveSpace() },
-            unsafe { w.alphaValue() },
-            unsafe { w.level() },
-            unsafe { w.windowNumber() },
+            w.isOnActiveSpace(),
+            w.alphaValue(),
+            w.level(),
+            w.windowNumber(),
         ))
     }
 }
