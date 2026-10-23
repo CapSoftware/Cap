@@ -42,7 +42,7 @@ jobs:
               - 'crates/**'
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
-              - 'scripts/setup.js'
+              - 'scripts/setup*'
               - 'Cargo.toml'
               - 'Cargo.lock'
             gpui:
@@ -273,6 +273,9 @@ jobs:
           target: x86_64-unknown-linux-gnu
           prefix-key: v1-rust-tests
           save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test native dependency setup
+        run: node --test scripts/setup.test.mjs
 
       - name: Run setup
         run: node scripts/setup.js
