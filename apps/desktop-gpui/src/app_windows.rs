@@ -545,6 +545,18 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     })
     .detach();
 
+    let thumbnails = crate::recording::studio_thumbnail_events();
+    cx.spawn(async move |cx| {
+        while thumbnails.recv_async().await.is_ok() {
+            cx.update(|cx| {
+                crate::tray::refresh_previous(cx);
+                refresh_library_after_delete(cx);
+                crate::menus::recheck_pending_quit(cx);
+            });
+        }
+    })
+    .detach();
+
     let mut last_phase = Phase::Idle;
     cx.observe(&session, move |session, cx| {
         let phase = session.read(cx).phase;

@@ -136,9 +136,9 @@ export const Hero = () => {
 					>
 						New
 					</span>
-					<span className="truncate">Cap goes native</span>
+					<span className="truncate">Cap's migration to GPUI</span>
 					<span className="hidden text-white/60 transition-colors duration-200 group-hover:text-white sm:inline">
-						Read about v0.6.1
+						Read the deep dive
 					</span>
 					<ArrowRight className="size-3.5 text-white/70 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-white" />
 				</Link>

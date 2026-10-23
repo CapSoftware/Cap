@@ -12,6 +12,7 @@ hide = "Hide Cap"
 hide_others = "Hide Others"
 quit = "Quit Cap"
 services = "Services"
+settings = "Settings…"
 
 [menu.file]
 close_window = "Close Window"
