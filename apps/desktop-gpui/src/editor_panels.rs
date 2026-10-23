@@ -668,10 +668,6 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-/// The look of one text segment, lifted off it by "Copy Style" on the
-/// timeline. Content, timing, lane, position and layout stay with the target
-/// when it is pasted; the box is rescaled with the font size the same way a
-/// preset does it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
     pub font_family: String,
