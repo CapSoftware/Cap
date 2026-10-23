@@ -56,7 +56,7 @@ import {
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { parseLoomCsvRecords } from "@/lib/loom-csv";
+import { formatLoomCsvCell, parseLoomCsvRecords } from "@/lib/loom-csv";
 import {
 	type LoomImportDestination,
 	loomImportDestinationHref,
@@ -190,13 +190,6 @@ function importErrorMessage(error: unknown) {
 		: "The import request failed for this batch.";
 }
 
-function escapeCsvValue(value: string) {
-	if (/[",\n\r]/.test(value)) {
-		return `"${value.replace(/"/g, '""')}"`;
-	}
-	return value;
-}
-
 function buildResultsCsv(
 	results: LoomCsvImportRowResult[],
 	sourceRows: MappedRow[],
@@ -217,7 +210,7 @@ function buildResultsCsv(
 			row.error ?? "",
 		]),
 	];
-	return `${lines.map((line) => line.map(escapeCsvValue).join(",")).join("\n")}\n`;
+	return `${lines.map((line) => line.map(formatLoomCsvCell).join(",")).join("\n")}\n`;
 }
 
 function parseCsv(text: string, fileName: string): CsvData {

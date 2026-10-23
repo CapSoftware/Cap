@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConciergeLoomCsv } from "@/lib/loom-csv";
+import { formatLoomCsvCell, parseConciergeLoomCsv } from "@/lib/loom-csv";
 
 describe("concierge Loom CSV", () => {
 	it("keeps quoted workspace names and source row numbers", () => {
@@ -23,5 +23,34 @@ describe("concierge Loom CSV", () => {
 		expect(() => parseConciergeLoomCsv("url,email\nlink,person@x.com")).toThrow(
 			"loom_video_url and user_email",
 		);
+	});
+});
+
+describe("Loom CSV results cells", () => {
+	it("keeps plain values unchanged", () => {
+		expect(formatLoomCsvCell("owner@example.com")).toBe("owner@example.com");
+		expect(
+			formatLoomCsvCell("https://www.loom.com/share/0123456789abcdef"),
+		).toBe("https://www.loom.com/share/0123456789abcdef");
+	});
+
+	it("quotes delimiters and doubles embedded quotes", () => {
+		expect(formatLoomCsvCell("Sales, Europe")).toBe('"Sales, Europe"');
+		expect(formatLoomCsvCell('The "A" team')).toBe('"The ""A"" team"');
+	});
+
+	it.each([
+		["=HYPERLINK(1)", "'=HYPERLINK(1)"],
+		["+1", "'+1"],
+		["-1", "'-1"],
+		["@SUM(A1)", "'@SUM(A1)"],
+		["\tTab", "'\tTab"],
+	])("neutralizes the formula prefix in %j", (value, expected) => {
+		expect(formatLoomCsvCell(value)).toBe(expected);
+	});
+
+	it("neutralizes formulas that also need quoting", () => {
+		expect(formatLoomCsvCell("=1,2")).toBe(`"'=1,2"`);
+		expect(formatLoomCsvCell("\r=1")).toBe(`"'\r=1"`);
 	});
 });
