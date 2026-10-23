@@ -778,6 +778,88 @@ mod tests {
     }
 
     #[test]
+    fn blur_matches_triangle_resize_for_full_byte_range() {
+        let levels = [0.5, 1.0, 2.2, 4.0, 7.5, 8.0, 15.9, 16.0, 18.0, 40.0, 100.0];
+        for (width, height) in [(17u32, 19u32), (31, 33), (64, 48)] {
+            let rgba = full_range_rgba(width, height);
+            assert!(rgba.contains(&0) && rgba.contains(&255));
+            for level in levels {
+                assert_blur_matches(&rgba, width, height, (0, 0, width, height), level);
+            }
+        }
+
+        let (frame_width, frame_height) = (80u32, 60u32);
+        let rgba = full_range_rgba(frame_width, frame_height);
+        let region = (3u32, 5u32, 17u32, 13u32);
+        let cropped = copy_region(&rgba, frame_width as usize * 4, region);
+        assert!(cropped.contains(&0) && cropped.contains(&255));
+        for level in levels {
+            assert_blur_matches(&rgba, frame_width, frame_height, region, level);
+        }
+
+        for fill in [0u8, 255u8] {
+            let (width, height) = (32u32, 24u32);
+            let rgba = vec![fill; width as usize * height as usize * 4];
+            for level in [8.0, 16.0, 40.0] {
+                assert_blur_matches(&rgba, width, height, (0, 0, width, height), level);
+            }
+        }
+    }
+
+    fn full_range_rgba(width: u32, height: u32) -> Vec<u8> {
+        (0..width as usize * height as usize)
+            .flat_map(|i| {
+                let channel = (i % 256) as u8;
+                [
+                    channel,
+                    255 - channel,
+                    channel.wrapping_mul(3),
+                    if i % 2 == 0 { 0 } else { 255 },
+                ]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn quantize_channel_matches_clamped_round() {
+        let expected = |value: f32| value.clamp(0.0, 255.0).round() as u8;
+        let mut values = Vec::new();
+        for n in 0..255 {
+            let half = n as f32 + 0.5;
+            values.extend([half.next_down(), half, half.next_up()]);
+        }
+        for n in 0..=255 {
+            let integer = n as f32;
+            values.extend([integer.next_down(), integer, integer.next_up()]);
+        }
+        for value in [
+            0.5,
+            1.5,
+            127.5,
+            254.5,
+            -0.0,
+            -0.1,
+            -0.5,
+            -1.0,
+            -1.5,
+            -127.5,
+            -255.0,
+            -1000.0,
+            f32::NEG_INFINITY,
+            255.5,
+            256.0,
+            256.5,
+            1000.0,
+            f32::INFINITY,
+        ] {
+            values.extend([value.next_down(), value, value.next_up()]);
+        }
+        for value in values {
+            assert_eq!(quantize_channel(value), expected(value), "{value:?}");
+        }
+    }
+
+    #[test]
     fn pixelate_matches_two_nearest_resizes() {
         let (frame_width, frame_height) = (61u32, 47u32);
         let rgba: Vec<u8> = (0..frame_width * frame_height * 4)

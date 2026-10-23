@@ -55,7 +55,7 @@ fn time_call(rgba: &[u8], width: u32, height: u32, level: f64, reference: bool) 
         )
     };
     let elapsed = start.elapsed().as_nanos();
-    black_box(image.unwrap().into_raw().len());
+    black_box(image.unwrap());
     elapsed
 }
 
