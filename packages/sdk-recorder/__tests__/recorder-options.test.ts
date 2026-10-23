@@ -24,6 +24,10 @@ class Stream {
 }
 
 class Encoder {
+	static latest: Encoder;
+	constructor() {
+		Encoder.latest = this;
+	}
 	state = "inactive";
 	ondataavailable: ((event: { data: Blob }) => void) | null = null;
 	onstop: (() => void) | null = null;
@@ -33,7 +37,11 @@ class Encoder {
 	start() {
 		this.state = "recording";
 	}
+	pause() {
+		this.state = "paused";
+	}
 	stop() {
+		if (this.state === "inactive") return;
 		this.state = "inactive";
 		if (!this.onstop) return;
 		this.ondataavailable?.({ data: new Blob(["recording"]) });
@@ -163,3 +171,75 @@ test.each([
 		recorder.destroy();
 	}
 });
+
+test.each([
+	{ paused: false, pendingStop: false },
+	{ paused: true, pendingStop: false },
+	{ paused: false, pendingStop: true },
+	{ paused: true, pendingStop: true },
+])(
+	"saves an ended source with paused=$paused and pendingStop=$pendingStop",
+	async ({ paused, pendingStop }) => {
+		const requests: string[] = [];
+		let uploaded = "";
+		const fetch = mock(async (input: string, init?: RequestInit) => {
+			requests.push(input);
+			if (input.endsWith("/videos/create"))
+				return Response.json({
+					videoId: "test-video",
+					s3Key: "test-key",
+					shareUrl: "https://cap.so/s/test-video",
+					embedUrl: "https://cap.so/embed/test-video",
+				});
+			if (input.endsWith("/initiate"))
+				return Response.json({ uploadId: "test-upload" });
+			if (input.endsWith("/presign-part"))
+				return Response.json({ presignedUrl: "https://upload.invalid/part" });
+			if (input === "https://upload.invalid/part") {
+				uploaded = await new Response(init?.body).text();
+				return new Response(null, { headers: { ETag: "test-etag" } });
+			}
+			if (input.endsWith("/complete")) return Response.json({ success: true });
+			throw new Error(`Unexpected request: ${input}`);
+		});
+		Object.defineProperty(globalThis, "fetch", {
+			configurable: true,
+			value: fetch,
+		});
+		const recorder = new CapRecorder({
+			publicKey: "fixture",
+			mode: "camera",
+			microphone: { enabled: false },
+		});
+		try {
+			await recorder.start();
+			if (paused) recorder.pause();
+			const encoder = Encoder.latest;
+			encoder.ondataavailable?.({ data: new Blob(["recording"]) });
+			encoder.state = "inactive";
+			if (!pendingStop) encoder.onstop?.();
+			let settled = false;
+			const stopping = recorder.stop().then((result) => {
+				settled = true;
+				return result;
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(settled).toBe(!pendingStop);
+			if (pendingStop) {
+				expect(requests).toEqual([]);
+				encoder.ondataavailable?.({ data: new Blob(["final"]) });
+				encoder.onstop?.();
+			}
+			expect(await stopping).toEqual({
+				videoId: "test-video",
+				shareUrl: "https://cap.so/s/test-video",
+				embedUrl: "https://cap.so/embed/test-video",
+			});
+			expect(recorder.phase).toBe("complete");
+			expect(requests).toContain("https://upload.invalid/part");
+			expect(uploaded).toBe(pendingStop ? "recordingfinal" : "recording");
+		} finally {
+			recorder.destroy();
+		}
+	},
+);

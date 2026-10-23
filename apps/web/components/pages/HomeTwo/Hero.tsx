@@ -122,37 +122,37 @@ export const Hero = () => {
 			/>
 			<div className="relative mx-auto flex max-w-[1020px] flex-col items-center text-center">
 				<Link
-					href="/blog/cap-v06"
+					href="/blog/rebuilding-cap-in-gpui"
 					onClick={() =>
 						trackEvent("release_notice_clicked", {
 							source_page: "home_hero",
-							release: "v0.6",
+							release: "v0.6.1",
 						})
 					}
-					className="group mb-7 inline-flex max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
+					className="ht-rise group mb-7 inline-flex [--d:0.2s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
 				>
 					<span
 						className={`${MONO} rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111]`}
 					>
 						New
 					</span>
-					<span className="truncate">Cap v0.6 is here</span>
+					<span className="truncate">Cap's migration to GPUI</span>
 					<span className="hidden text-white/60 transition-colors duration-200 group-hover:text-white sm:inline">
-						See what's new
+						Read the deep dive
 					</span>
 					<ArrowRight className="size-3.5 text-white/70 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-white" />
 				</Link>
 				<HeroHeadline />
 
 				<p
-					className={`${BODY_TEXT} mt-8 max-w-[660px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[19px] md:mt-10`}
+					className={`ht-rise [--d:0.75s] ${BODY_TEXT} mt-8 max-w-[660px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[19px] md:mt-10`}
 				>
-					One open source app for every way you capture your screen. Start free
-					and move to Cap Pro when you need more, whether you work alone, with a
-					small team, or across an entire organization.
+					Record your screen, then share it as a link the moment you stop or
+					polish it in the built-in editor. Trusted by over 80,000 teams and
+					creators, and free to start.
 				</p>
 
-				<div className="mt-9 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+				<div className="ht-rise mt-9 flex flex-col items-stretch gap-3 [--d:0.9s] sm:flex-row sm:items-center">
 					<Link
 						href={downloadHref}
 						onClick={() =>
@@ -207,7 +207,7 @@ export const Hero = () => {
 							cta_location: "under_primary",
 						})
 					}
-					className="group mt-5 inline-flex items-center gap-2 rounded-[6px] text-[14px] text-[rgba(17,17,17,0.55)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-4 focus-visible:ring-offset-[#F8FAFC]"
+					className="ht-rise group mt-5 inline-flex items-center gap-2 rounded-[6px] [--d:1.05s] text-[14px] text-[rgba(17,17,17,0.55)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-4 focus-visible:ring-offset-[#F8FAFC]"
 				>
 					<LoomMark
 						size={13}
@@ -222,7 +222,7 @@ export const Hero = () => {
 					<ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
 				</Link>
 
-				<div className="mt-3 flex items-center gap-2 text-[14px] text-[rgba(17,17,17,0.5)]">
+				<div className="ht-rise mt-3 flex items-center gap-2 text-[14px] text-[rgba(17,17,17,0.5)] [--d:1.15s]">
 					<span>Also available on</span>
 					<span className="flex items-center gap-1">
 						{isWindows || isLinux ? (
