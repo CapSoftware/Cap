@@ -4,11 +4,11 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 lerna-debug.log*
 .deepsec
 
 node_modules
+apps/cli/skill/cap-demo/node_modules/
 dist
 dist-ssr
 *.local
@@ -35,12 +35,11 @@ outputs
 *.sln
 *.sw?
 .turbo
-pnpm-lock.yaml
 .zed
 .output
 .vinxi
+*.config.timestamp_*.js
 native-deps*
-apps/storybook/storybook-static
 .tinyb
 
 **/.tinyb
@@ -49,6 +48,7 @@ apps/storybook/storybook-static
 .cargo/config.toml
 tauri.windows.conf.json
 tauri.macos.conf.json
+tauri.linux.conf.json
 .vercel
 
 # sst
@@ -68,6 +68,7 @@ scripts/releases-backfill-data.txt
 
 # SEO agent state (machine-local, contains sensitive ranking data)
 /seo/
+scripts/seo/
 /docs/
 /.growth-agent/
 
@@ -77,3 +78,5 @@ analysis/
 analysis/plans/
 .ralphy
 tmp/
+
+__pycache__/

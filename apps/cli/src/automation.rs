@@ -211,6 +211,13 @@ impl AutomationHost for CliAutomationHost {
         Ok(())
     }
 
+    fn upload_is_verified(
+        &self,
+        _ctx: &TriggerContext,
+    ) -> impl std::future::Future<Output = Result<bool, String>> + Send {
+        std::future::ready(Ok(false))
+    }
+
     async fn reveal_in_file_manager(&self, ctx: &TriggerContext) -> Result<(), String> {
         let path = ctx
             .image_path
@@ -560,6 +567,65 @@ pub fn list(format: crate::OutputFormat) -> Result<(), String> {
                 }
             }
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_automation::{Action, AutomationRule, MatchMode};
+
+    #[tokio::test]
+    async fn cli_upload_cleanup_retains_media_without_a_verified_receipt() {
+        for trigger in [Trigger::UploadCompleted, Trigger::InstantRecordingFinished] {
+            let temp = tempfile::tempdir().unwrap();
+            let project_path = temp.path().join("owned.cap");
+            std::fs::create_dir(&project_path).unwrap();
+            let media = project_path.join("retained-media.mp4");
+            std::fs::write(&media, b"owned recording must survive").unwrap();
+            let mut actions = Vec::new();
+            if trigger == Trigger::InstantRecordingFinished {
+                actions.push(Action::Upload {
+                    organization_id: None,
+                    copy_link: false,
+                    open_in_browser: false,
+                });
+            }
+            actions.push(Action::DeleteLocalFiles);
+            let store = AutomationsStore {
+                version: 1,
+                rules: vec![AutomationRule {
+                    id: "owned-cleanup".to_string(),
+                    name: "Upload cleanup".to_string(),
+                    enabled: true,
+                    trigger,
+                    match_mode: MatchMode::All,
+                    conditions: vec![],
+                    actions,
+                }],
+            };
+            let ctx = TriggerContext::new()
+                .with_project_path(project_path)
+                .with_share_link("https://cap.test/s/owned".to_string())
+                .with_share_id("owned".to_string());
+            let results = cap_automation::run(&CliAutomationHost, &store, &trigger, &ctx).await;
+            let deletion = results[0].action_results.last().unwrap();
+            assert!(!deletion.success);
+            assert!(
+                deletion
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("remote verification is unavailable")
+            );
+            assert_eq!(
+                std::fs::read(&media).unwrap(),
+                b"owned recording must survive"
+            );
+            if trigger == Trigger::InstantRecordingFinished {
+                assert!(results[0].action_results[0].success);
+            }
         }
     }
 }

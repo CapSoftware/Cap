@@ -74,11 +74,22 @@ impl FormatInfo {
 pub struct Format {
     native: NativeFormat,
     info: FormatInfo,
+    /// Captured when the format is enumerated: the native handle does not
+    /// expose it uniformly across platforms (DirectShow formats lose it once
+    /// the owning `VideoFormat` is dropped).
+    pixel_format: Option<String>,
 }
 
 impl Format {
     pub fn native(&self) -> &NativeFormat {
         &self.native
+    }
+
+    /// The device's native pixel format for this capture format: a fourcc on
+    /// macOS and Linux, the MediaFoundation/DirectShow subtype name on
+    /// Windows. `None` where the platform does not report one.
+    pub fn pixel_format_name(&self) -> Option<String> {
+        self.pixel_format.clone()
     }
 }
 
@@ -147,12 +158,8 @@ impl<'de> serde::Deserialize<'de> for ModelID {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let (vid, pid) = s.split_once(":").unwrap();
-        Ok(ModelID {
-            vid: vid.to_string(),
-            pid: pid.to_string(),
-        })
+        Self::try_from(String::deserialize(deserializer)?)
+            .map_err(|()| serde::de::Error::custom("camera model ID must contain a colon"))
     }
 }
 
@@ -197,6 +204,20 @@ pub enum StartCapturingError {
     Native(String),
 }
 
+/// How the capture session negotiates pixel format and device format.
+/// Only affects macOS; other platforms ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureMode {
+    /// Pin the device's active format and request its native pixel format from
+    /// the output, avoiding conversion overhead.
+    #[default]
+    Native,
+    /// Leave format and pixel-format negotiation entirely to the OS capture
+    /// stack, like a stock AVFoundation app. Costs a conversion but works with
+    /// devices that stall when the native format is forced.
+    Compatibility,
+}
+
 #[derive(Debug)]
 pub struct CapturedFrame {
     native: NativeCapturedFrame,
@@ -221,9 +242,24 @@ impl CameraInfo {
         format: Format,
         callback: impl FnMut(CapturedFrame) + Send + 'static,
     ) -> Result<CaptureHandle, StartCapturingError> {
+        self.start_capturing_with_mode(format, CaptureMode::default(), callback)
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    pub fn start_capturing_with_mode(
+        &self,
+        format: Format,
+        mode: CaptureMode,
+        callback: impl FnMut(CapturedFrame) + Send + 'static,
+    ) -> Result<CaptureHandle, StartCapturingError> {
         Ok(CaptureHandle {
             #[cfg(target_os = "macos")]
-            native: Some(start_capturing_impl(self, format, Box::new(callback))?),
+            native: Some(start_capturing_impl(
+                self,
+                format,
+                mode,
+                Box::new(callback),
+            )?),
             #[cfg(windows)]
             native: Some(start_capturing_impl(self, format, Box::new(callback))?),
             #[cfg(target_os = "linux")]
@@ -250,6 +286,29 @@ impl Drop for CaptureHandle {
     fn drop(&mut self) {
         if let Some(feed) = self.native.take() {
             feed.stop_capturing().ok();
+        }
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod model_id_tests {
+    use super::ModelID;
+    use serde::{Deserialize, de::value::StrDeserializer};
+
+    #[test]
+    fn reads_saved_model_id() {
+        let input = StrDeserializer::<serde::de::value::Error>::new("046d:08e5");
+        assert_eq!(
+            ModelID::deserialize(input).unwrap().to_string(),
+            "046d:08e5"
+        );
+    }
+
+    #[test]
+    fn malformed_model_id_returns_an_error() {
+        for value in ["", "missing-separator"] {
+            let input = StrDeserializer::<serde::de::value::Error>::new(value);
+            assert!(ModelID::deserialize(input).is_err());
         }
     }
 }

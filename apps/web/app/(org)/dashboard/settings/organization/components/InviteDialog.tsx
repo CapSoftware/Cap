@@ -9,6 +9,7 @@ import {
 	DialogTitle,
 	Input,
 	Select,
+	Switch,
 } from "@cap/ui";
 import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -40,6 +41,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 	const { activeOrganization } = useDashboardContext();
 	const [inviteEmails, setInviteEmails] = useState<InviteEmail[]>([]);
 	const [emailInput, setEmailInput] = useState("");
+	const [sendEmailNotifications, setSendEmailNotifications] = useState(true);
 	const emailInputId = useId();
 	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -47,6 +49,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 		if (!isOpen) {
 			setInviteEmails([]);
 			setEmailInput("");
+			setSendEmailNotifications(true);
 		}
 	}, [isOpen]);
 
@@ -106,15 +109,23 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			return await sendOrganizationInvites(
 				emails,
 				activeOrganization.organization.id,
+				"member",
+				{ sendEmailNotifications },
 			);
 		},
 		onSuccess: (result) => {
 			if (result.failedEmails.length > 0) {
 				toast.warning(
-					`Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`,
+					sendEmailNotifications
+						? `Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`
+						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
 				);
 			} else {
-				toast.success("Invites sent successfully");
+				toast.success(
+					sendEmailNotifications
+						? "Invites sent successfully"
+						: "Users added successfully",
+				);
 			}
 			setIsOpen(false);
 			router.refresh();
@@ -215,6 +226,20 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 							</div>
 						))}
 					</div>
+					<div className="flex gap-3 justify-between items-center p-3 mt-4 rounded-lg border border-gray-4 bg-gray-1">
+						<div>
+							<p className="text-sm font-medium text-gray-12">
+								Send invite email
+							</p>
+							<p className="mt-1 text-xs text-gray-10">
+								Turn off to add users without emailing them.
+							</p>
+						</div>
+						<Switch
+							checked={sendEmailNotifications}
+							onCheckedChange={setSendEmailNotifications}
+						/>
+					</div>
 				</div>
 				<DialogFooter className="p-5 border-t border-gray-4">
 					<Button
@@ -237,7 +262,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						data-invite-submit="true"
 						onClick={handleSendInvites}
 					>
-						Send Invites
+						{sendEmailNotifications ? "Send Invites" : "Add Users"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

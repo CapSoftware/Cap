@@ -18,22 +18,26 @@
 		"noEmit": true,
 		"jsx": "preserve",
 		"incremental": true,
+		"noUncheckedSideEffectImports": false,
 		"plugins": [
 			{ "name": "next" },
-			{ "name": "@effect/language-service" },
+			{
+				"name": "@effect/language-service",
+				"ignoreEffectWarningsInTscExitCode": true
+			},
 			{ "name": "workflow" }
 		],
-		"baseUrl": ".",
 		"paths": {
-			"@/app/*": ["app/*"],
-			"@/components/*": ["components/*"],
-			"@/pages/*": ["components/pages/*"],
-			"@/utils/*": ["utils/*"],
-			"@/lib/*": ["lib/*"],
-			"@/actions/*": ["actions/*"],
-			"@/data/*": ["data/*"],
-			"@/services": ["services"],
-			"@/workflows/*": ["workflows/*"]
+			"@/app/*": ["./app/*"],
+			"@/components/*": ["./components/*"],
+			"@/pages/*": ["./components/pages/*"],
+			"@/utils/*": ["./utils/*"],
+			"@/lib/*": ["./lib/*"],
+			"@/actions/*": ["./actions/*"],
+			"@/data/*": ["./data/*"],
+			"@/services": ["./services"],
+			"@/workflows/*": ["./workflows/*"],
+			"hooks/*": ["./hooks/*"]
 		},
 		"types": ["node"]
 	},

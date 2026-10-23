@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Convert WebM to MP4 — free, in your browser",
+	tag: "Tools",
+});
 
 export const metadata: Metadata = {
 	title: "WebM to MP4 Converter — Free Online Video Converter | Cap",
@@ -26,10 +32,10 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap WebM to MP4 Converter — Free Online Video Converter",
+				alt: "Convert WebM to MP4 — free, in your browser",
 			},
 		],
 		locale: "en_US",
@@ -40,7 +46,7 @@ export const metadata: Metadata = {
 		title: "WebM to MP4 Converter — Free Online Video Converter | Cap",
 		description:
 			"Convert WebM to MP4 directly in your browser. No uploads, no installs, 100% private.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/tools/convert/webm-to-mp4",

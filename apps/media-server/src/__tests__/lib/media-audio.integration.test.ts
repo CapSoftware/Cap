@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	checkHasAudioTrack,
@@ -6,10 +8,46 @@ import {
 	extractAudioStream,
 	getActiveProcessCount,
 } from "../../lib/media-audio";
+import * as subprocess from "../../lib/subprocess";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
 const TEST_VIDEO_NO_AUDIO = `file://${join(FIXTURES_DIR, "test-no-audio.mp4")}`;
+
+async function createHlsFixture(): Promise<string> {
+	const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-hls-"));
+	const proc = Bun.spawn({
+		cmd: [
+			"ffmpeg",
+			"-hide_banner",
+			"-loglevel",
+			"error",
+			"-y",
+			"-i",
+			join(FIXTURES_DIR, "test-with-audio.mp4"),
+			"-c",
+			"copy",
+			"-hls_time",
+			"0.25",
+			"-hls_list_size",
+			"0",
+			"-hls_segment_filename",
+			join(dirPath, "segment-%03d.ts"),
+			join(dirPath, "manifest.m3u8"),
+		],
+		stdout: "ignore",
+		stderr: "pipe",
+	});
+	const [stderr, exitCode] = await Promise.all([
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	if (exitCode !== 0) {
+		await rm(dirPath, { recursive: true, force: true });
+		throw new Error(`Failed to create HLS fixture: ${stderr}`);
+	}
+	return dirPath;
+}
 
 async function readStream(stream: ReadableStream<Uint8Array>) {
 	const reader = stream.getReader();
@@ -66,6 +104,110 @@ describe("mediaAudio integration tests", () => {
 			const hasAudio = await checkHasAudioTrack(TEST_VIDEO_NO_AUDIO);
 			expect(hasAudio).toBe(false);
 		});
+
+		test.each([
+			[90, true],
+			[-90, true],
+			[180, true],
+			[90, false],
+		] as const)(
+			"detects audio with display rotation %i and audio=%s",
+			async (rotation, hasAudio) => {
+				const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-rotation-"));
+				const outputPath = join(dirPath, "rotated.mp4");
+				try {
+					const proc = Bun.spawn({
+						cmd: [
+							"ffmpeg",
+							"-v",
+							"error",
+							"-display_rotation",
+							String(rotation),
+							"-i",
+							hasAudio ? TEST_VIDEO_WITH_AUDIO : TEST_VIDEO_NO_AUDIO,
+							"-c",
+							"copy",
+							outputPath,
+						],
+						stdout: "ignore",
+						stderr: "pipe",
+					});
+					const [stderr, exitCode] = await Promise.all([
+						new Response(proc.stderr).text(),
+						proc.exited,
+					]);
+					expect(stderr).toBe("");
+					expect(exitCode).toBe(0);
+					expect(await checkHasAudioTrack(`file://${outputPath}`)).toBe(
+						hasAudio,
+					);
+				} finally {
+					await rm(dirPath, { recursive: true, force: true });
+				}
+			},
+		);
+
+		test("inherits signed queries for relative HLS segments", async () => {
+			const dirPath = await createHlsFixture();
+			const requests: string[] = [];
+			const server = Bun.serve({
+				port: 0,
+				fetch(request) {
+					const url = new URL(request.url);
+					requests.push(`${url.pathname}${url.search}`);
+					if (
+						url.pathname !== "/manifest.m3u8" &&
+						url.searchParams.get("token") !== "signed"
+					) {
+						return new Response("Forbidden", { status: 403 });
+					}
+					return new Response(Bun.file(join(dirPath, url.pathname.slice(1))));
+				},
+			});
+
+			try {
+				const hasAudio = await checkHasAudioTrack(
+					`${server.url}manifest.m3u8?token=signed`,
+				);
+				expect(hasAudio).toBe(true);
+				expect(requests).toContain("/segment-000.ts?token=signed");
+			} finally {
+				await server.stop(true);
+				await rm(dirPath, { recursive: true, force: true });
+			}
+		});
+
+		test("still rejects audio-only inputs without leaking an operation", async () => {
+			const beforeCount = getActiveProcessCount();
+			const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-only-"));
+			const outputPath = join(dirPath, "audio.mp3");
+			try {
+				await Bun.write(outputPath, await extractAudio(TEST_VIDEO_WITH_AUDIO));
+				await expect(
+					checkHasAudioTrack(`file://${outputPath}`),
+				).rejects.toThrow("No video stream found");
+				await waitForAudioOperations(beforeCount);
+			} finally {
+				await rm(dirPath, { recursive: true, force: true });
+			}
+		});
+
+		test("contains upstream failures without leaking the active operation", async () => {
+			const beforeCount = getActiveProcessCount();
+			const server = Bun.serve({
+				port: 0,
+				fetch: () => new Response("Unavailable", { status: 503 }),
+			});
+
+			try {
+				await expect(
+					checkHasAudioTrack(`${server.url}video.mp4`),
+				).rejects.toThrow("FFprobe exited");
+				await waitForAudioOperations(beforeCount);
+			} finally {
+				await server.stop(true);
+			}
+		});
 	});
 
 	describe("extractAudio", () => {
@@ -82,6 +224,69 @@ describe("mediaAudio integration tests", () => {
 	});
 
 	describe("extractAudioStream", () => {
+		test("preserves queued audio when the reader pauses before EOF", async () => {
+			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
+			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const reader = stream.getReader();
+			const chunks: Uint8Array[] = [];
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					chunks.push(value);
+					await Bun.sleep(50);
+				}
+				expect(Buffer.concat(chunks).equals(expected)).toBe(true);
+			} finally {
+				reader.releaseLock();
+				cleanup();
+			}
+		});
+
+		test("drains all encoded bytes when the consumer waits for FFmpeg to exit", async () => {
+			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
+			const registration = spyOn(subprocess, "registerSubprocess");
+			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			try {
+				const proc = registration.mock.calls[0][0];
+				expect(await proc.exited).toBe(0);
+				const actual = await readStream(stream);
+				expect(actual.byteLength).toBe(expected.byteLength);
+				expect(Buffer.from(actual).equals(expected)).toBe(true);
+			} finally {
+				cleanup();
+				registration.mockRestore();
+			}
+		});
+
+		test("errors the stream when FFmpeg cannot extract audio", async () => {
+			const beforeCount = getActiveProcessCount();
+			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_NO_AUDIO);
+			try {
+				await expect(readStream(stream)).rejects.toThrow("FFmpeg exited");
+				await waitForAudioOperations(beforeCount);
+			} finally {
+				cleanup();
+			}
+		});
+
+		test("errors the stream and terminates FFmpeg at the deadline", async () => {
+			const beforeCount = getActiveProcessCount();
+			const registration = spyOn(subprocess, "registerSubprocess");
+			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO, {
+				timeoutMs: 1,
+			});
+			try {
+				await expect(readStream(stream)).rejects.toThrow("timed out");
+				const proc = registration.mock.calls[0][0];
+				expect(await proc.exited).not.toBe(0);
+				await waitForAudioOperations(beforeCount);
+			} finally {
+				cleanup();
+				registration.mockRestore();
+			}
+		});
+
 		test("streams real mp3 data and cleans up its operation", async () => {
 			const beforeCount = getActiveProcessCount();
 			const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);

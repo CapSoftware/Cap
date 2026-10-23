@@ -1,9 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { makePersisted } from "@solid-primitives/storage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, message as showMessage } from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { relaunch } from "@tauri-apps/plugin-process";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
@@ -889,7 +888,7 @@ function ToggleStep(props: { active: boolean }) {
 							{(mode, index) => (
 								<div
 									class={cx(
-										"rounded-full flex items-center justify-center transition-colors duration-300 cursor-pointer hover:brightness-95 border",
+										"rounded-full flex items-center justify-center transition-colors duration-300 hover:brightness-95 border",
 										activeMode() === index()
 											? "bg-gray-7 border-transparent dark:border-gray-6"
 											: "bg-white dark:bg-gray-4 border-gray-5 dark:border-gray-6",
@@ -926,7 +925,7 @@ function ToggleStep(props: { active: boolean }) {
 						{(mode, index) => (
 							<span
 								class={cx(
-									"text-sm font-medium text-center transition-all duration-300 cursor-pointer",
+									"text-sm font-medium text-center transition-all duration-300",
 									activeMode() === index()
 										? "text-gray-12"
 										: "text-gray-9 opacity-50",
@@ -968,7 +967,7 @@ function ShortcutsStep(props: { active: boolean }) {
 		},
 		{
 			title: "Custom Domain",
-			desc: "Use your own domain for shareable links instead of cap.link",
+			desc: "Use your own domain for shareable links instead of cap.so",
 		},
 		{
 			title: "Recording Preferences",
@@ -1076,7 +1075,7 @@ function FaqStep(props: { active: boolean }) {
 						out our{" "}
 						<button
 							type="button"
-							onClick={() => shell.open("https://cap.so/pricing")}
+							onClick={() => shell.open("https://cap.so/pricing?ref=desktop")}
 							class="text-blue-10 hover:text-blue-11 underline underline-offset-2"
 						>
 							pricing plans
@@ -1116,7 +1115,7 @@ function FaqStep(props: { active: boolean }) {
 
 			<button
 				type="button"
-				onClick={() => shell.open("https://cap.so/pricing")}
+				onClick={() => shell.open("https://cap.so/pricing?ref=desktop")}
 				class={cx(
 					"flex items-center gap-1.5 text-[13px] text-blue-10 hover:text-blue-11 transition-all duration-500 delay-200",
 					visible() ? "opacity-100" : "opacity-0",
@@ -1443,7 +1442,7 @@ function InstantMockup(props: { active: boolean }) {
 							<div class="flex items-center gap-2 w-full">
 								<div class="flex-1 flex items-center px-3 py-2 rounded-lg bg-white dark:bg-gray-3 border border-gray-4">
 									<span class="text-[11px] text-gray-11 font-mono">
-										cap.link/m4k92x
+										cap.so/s/m4k92x
 									</span>
 								</div>
 								<div
@@ -1912,7 +1911,7 @@ function StartupOverlay(props: {
 				style={{ transition: "all 600ms cubic-bezier(0.4, 0, 0.2, 1)" }}
 			>
 				<div class="text-center">
-					<div onClick={handleLogoClick} class="cursor-pointer inline-block">
+					<div onClick={handleLogoClick} class="inline-block">
 						<IconCapLogo
 							class={cx(
 								"w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]",
@@ -2008,7 +2007,14 @@ function PermissionsStep(props: {
 			cancelLabel: "No, I still need to add it",
 		});
 		if (shouldRestart) {
-			await relaunch();
+			try {
+				await commands.restartApp();
+			} catch (error) {
+				await showMessage(
+					typeof error === "string" ? error : "Unable to restart Cap safely.",
+					{ title: "Unable to restart Cap", kind: "warning" },
+				);
+			}
 		}
 	};
 

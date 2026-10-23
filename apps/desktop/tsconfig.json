@@ -16,7 +16,7 @@
 		"jsxImportSource": "solid-js",
 		"types": [
 			"vite/client",
-			"vinxi/client",
+			"vinxi/types/client",
 			"@cap/ui-solid/types",
 			"vitest/importMeta",
 			"@webgpu/types"

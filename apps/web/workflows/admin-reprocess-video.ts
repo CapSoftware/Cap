@@ -5,13 +5,19 @@ import {
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { AwsCredentials, Storage } from "@cap/web-backend";
+import { AwsCredentials } from "@cap/web-backend/src/Aws";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { FatalError } from "workflow";
-import { runPromise } from "@/lib/server";
+import { FatalError, sleep } from "workflow";
+import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface AdminReprocessVideoWorkflowPayload {
 	videoId: string;
@@ -40,8 +46,8 @@ interface MediaServerJobBody {
 	inputExtension: string;
 }
 
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
 const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -123,6 +129,14 @@ async function startMediaServerProcessJob(
 		if (shouldRetry && attempt < MEDIA_SERVER_START_MAX_ATTEMPTS - 1) {
 			await waitForRetry(MEDIA_SERVER_START_RETRY_BASE_MS * 2 ** attempt);
 			continue;
+		}
+
+		if (shouldRetry) {
+			throw createMediaServerCapacityError({
+				response,
+				message: errorMessage,
+				videoId: body.videoId,
+			});
 		}
 
 		throw new Error(errorMessage);
@@ -268,7 +282,7 @@ async function processExistingResultOnMediaServer(
 
 	const videoDomain = decodeStorageVideo(video);
 	const [bucket] =
-		await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
+		await Storage.getAccessForVideo(videoDomain).pipe(runWorkflowPromise);
 
 	const resultKey = `${video.ownerId}/${video.id}/result.mp4`;
 	const thumbnailKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
@@ -278,7 +292,7 @@ async function processExistingResultOnMediaServer(
 		.getInternalSignedObjectUrl(resultKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -288,7 +302,7 @@ async function processExistingResultOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -298,7 +312,7 @@ async function processExistingResultOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const previewGifPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -309,7 +323,7 @@ async function processExistingResultOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
@@ -363,27 +377,63 @@ async function processExistingResultOnMediaServer(
 	};
 }
 
-async function saveMetadataAndComplete(
+export async function saveMetadataAndComplete(
 	videoId: string,
 	metadata: { duration: number; width: number; height: number; fps: number },
 ): Promise<void> {
 	"use step";
 
 	const duration = getValidDuration(metadata.duration);
-
-	await db()
-		.update(videos)
-		.set({
-			width: metadata.width,
-			height: metadata.height,
-			fps: metadata.fps,
-			...(duration === undefined ? {} : { duration }),
-		})
-		.where(eq(videos.id, videoId as Video.VideoId));
-
-	await db()
-		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+	if (!video) throw new Error("Video does not exist");
+	const [bucket] = await Storage.getAccessForVideo(decodeStorageVideo(video), {
+		resolvePublishedOutput: false,
+	}).pipe(runWorkflowPromise);
+	const head = await bucket
+		.headObject(`${video.ownerId}/${video.id}/result.mp4`)
+		.pipe(runWorkflowPromise);
+	if (!head.ETag || !head.ContentLength || head.ContentLength <= 0) {
+		throw new Error("Reprocessed recording output is missing or empty");
+	}
+	await db().transaction(async (tx) => {
+		await retireDesktopRecordingJobForOutputReplacement(tx, {
+			videoId: video.id,
+			userId: video.ownerId,
+		});
+		const [lockedVideo] = await tx
+			.select()
+			.from(videos)
+			.where(eq(videos.id, video.id))
+			.for("update");
+		if (
+			!lockedVideo ||
+			lockedVideo.ownerId !== video.ownerId ||
+			lockedVideo.bucket !== video.bucket ||
+			lockedVideo.storageIntegrationId !== video.storageIntegrationId
+		) {
+			throw new Error("Recording storage changed during reprocessing");
+		}
+		const nextMetadata = { ...(lockedVideo.metadata ?? {}) };
+		delete nextMetadata.desktopRecordingUpload;
+		await tx
+			.update(videos)
+			.set({
+				width: metadata.width,
+				height: metadata.height,
+				fps: metadata.fps,
+				metadata: nextMetadata,
+				...(lockedVideo.source.type === "desktopMP4" ||
+				lockedVideo.source.type === "webMP4"
+					? { source: { type: lockedVideo.source.type } }
+					: {}),
+				...(duration === undefined ? {} : { duration }),
+			})
+			.where(eq(videos.id, video.id));
+		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
+	});
 }
 
 async function invalidateResultCache(
@@ -408,7 +458,7 @@ async function invalidateResultCache(
 	try {
 		const cloudfront = new CloudFrontClient({
 			region: serverEnv().CAP_AWS_REGION || "us-east-1",
-			credentials: await runPromise(
+			credentials: await runWorkflowPromise(
 				Effect.map(AwsCredentials, (c) => c.credentials),
 			),
 		});
@@ -460,7 +510,19 @@ export async function adminReprocessVideoWorkflow(
 
 	try {
 		await validateReprocessRequest(videoId);
-		const result = await processExistingResultOnMediaServer(videoId);
+		let result: MediaServerProcessResult;
+		let capacityRetryCount = 0;
+		while (true) {
+			try {
+				result = await processExistingResultOnMediaServer(videoId);
+				break;
+			} catch (error) {
+				if (!isMediaServerCapacityError(error)) throw error;
+				await markReprocessWaitingForCapacity(videoId);
+				await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+				capacityRetryCount++;
+			}
+		}
 		await saveMetadataAndComplete(videoId, result.metadata);
 		await invalidateResultCache(videoId, result.ownerId, result.bucketId);
 
@@ -473,4 +535,17 @@ export async function adminReprocessVideoWorkflow(
 		await setReprocessError(videoId, errorMessage);
 		throw new FatalError(errorMessage);
 	}
+}
+
+async function markReprocessWaitingForCapacity(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			processingMessage: "Queued for video reprocessing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 }

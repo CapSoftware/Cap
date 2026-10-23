@@ -3,8 +3,10 @@ import {
 	type FailedRecording,
 	loadFailedRecordings,
 	loadOverlayTokens,
+	loadSharedRecordingState,
 	loadSharedUiState,
 	registerOverlayToken,
+	saveSharedRecordingState,
 	updateSharedUiState,
 	upsertFailedRecording,
 } from "./storage";
@@ -13,8 +15,11 @@ import {
 // concurrent read-modify-write calls interleave (both read before either
 // writes). The fake reproduces that timing so the tests fail without the
 // per-key write queue in storage.ts.
-const createAsyncStorageArea = () => {
+const createAsyncStorageArea = (
+	getSetDelayMs: (writeIndex: number) => number = () => 0,
+) => {
 	const data = new Map<string, unknown>();
+	let writeIndex = 0;
 	return {
 		get(keys: string[], callback: (items: Record<string, unknown>) => void) {
 			const snapshot: Record<string, unknown> = {};
@@ -24,12 +29,14 @@ const createAsyncStorageArea = () => {
 			setTimeout(() => callback(snapshot), 0);
 		},
 		set(items: Record<string, unknown>, callback: () => void) {
+			const delayMs = getSetDelayMs(writeIndex);
+			writeIndex += 1;
 			setTimeout(() => {
 				for (const [key, value] of Object.entries(items)) {
 					data.set(key, value);
 				}
 				callback();
-			}, 0);
+			}, delayMs);
 		},
 		remove(keys: string[] | string, callback: () => void) {
 			setTimeout(() => {
@@ -112,5 +119,31 @@ describe("storage read-modify-write serialization", () => {
 			"session-a",
 			"session-b",
 		]);
+	});
+
+	it("keeps the newest recording status when an earlier write is slower", async () => {
+		(globalThis as { chrome?: unknown }).chrome = {
+			storage: {
+				local: createAsyncStorageArea(),
+				session: createAsyncStorageArea((writeIndex) =>
+					writeIndex === 0 ? 20 : 0,
+				),
+			},
+		};
+
+		await Promise.all([
+			saveSharedRecordingState({
+				status: { phase: "creating" },
+				plan: null,
+				updatedAt: 1,
+			}),
+			saveSharedRecordingState({
+				status: { phase: "idle" },
+				plan: null,
+				updatedAt: 2,
+			}),
+		]);
+
+		expect((await loadSharedRecordingState())?.status.phase).toBe("idle");
 	});
 });

@@ -1,20 +1,32 @@
 import { ProgressCircle } from "@cap/ui-solid";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ask, save } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import type { ComponentProps } from "solid-js";
-import { createMemo, createSignal, Show, splitProps } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	Show,
+	splitProps,
+} from "solid-js";
 import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
+import {
+	createScreenshotShareLinkFromProjectPath,
+	type ScreenshotExportStatus,
+	screenshotShareStatusText,
+} from "~/routes/screenshot-editor/screenshotExport";
 import { openRecordingFolder } from "~/utils/recording";
+import { createRecordingThumbnail } from "~/utils/recording-thumbnail";
 import {
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindowWithThumbnail,
 	commands,
-	type RecordingMeta,
 	type RecordingMetaWithMetadata,
+	type ScreenshotMetaWithMetadata,
 } from "~/utils/tauri";
 import IconCapLink from "~icons/cap/link";
 import IconCapTrash from "~icons/cap/trash";
@@ -30,7 +42,7 @@ import IconMdiMonitor from "~icons/mdi/monitor";
 import IconPhWarningBold from "~icons/ph/warning-bold";
 
 export type RecordingWithPath = RecordingMetaWithMetadata & { path: string };
-export type ScreenshotWithPath = RecordingMeta & { path: string };
+export type ScreenshotWithPath = ScreenshotMetaWithMetadata & { path: string };
 
 function formatResolution(width?: number, height?: number) {
 	if (!width || !height) return undefined;
@@ -84,6 +96,9 @@ export default function TargetCard(props: TargetCardProps) {
 		"highlightQuery",
 	]);
 	const [imageExists, setImageExists] = createSignal(true);
+	const [isSharingScreenshot, setIsSharingScreenshot] = createSignal(false);
+	const [screenshotShareStatus, setScreenshotShareStatus] =
+		createSignal<ScreenshotExportStatus>("idle");
 
 	const recordingProps = () => {
 		if (local.variant !== "recording") return undefined;
@@ -161,12 +176,13 @@ export default function TargetCard(props: TargetCardProps) {
 		return target ? formatRefreshRate(target.refresh_rate) : undefined;
 	});
 
+	const recordingThumbnail = createRecordingThumbnail(
+		() => recordingTarget()?.path,
+	);
 	const thumbnailSrc = createMemo(() => {
 		const recording = recordingTarget();
 		if (recording) {
-			return `${convertFileSrc(
-				`${recording.path}/screenshots/display.jpg`,
-			)}?t=${Date.now()}`;
+			return recordingThumbnail();
 		}
 		const screenshot = screenshotTarget();
 		if (screenshot) {
@@ -175,6 +191,10 @@ export default function TargetCard(props: TargetCardProps) {
 		const target = displayTarget() ?? windowTarget();
 		if (!target?.thumbnail) return undefined;
 		return `data:image/png;base64,${target.thumbnail}`;
+	});
+	createEffect(() => {
+		thumbnailSrc();
+		setImageExists(true);
 	});
 
 	const appIconSrc = createMemo(() => {
@@ -235,15 +255,10 @@ export default function TargetCard(props: TargetCardProps) {
 		const screenshot = screenshotTarget();
 		if (!screenshot) return;
 		try {
-			const path = await save({
-				defaultPath: `${screenshot.pretty_name}.png`,
-				filters: [
-					{
-						name: "Image",
-						extensions: ["png"],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				`${screenshot.pretty_name}.png`,
+				"png",
+			);
 			if (!path) return;
 			await commands.copyFileToPath(screenshot.path, path);
 			toast.success("Screenshot saved");
@@ -253,13 +268,45 @@ export default function TargetCard(props: TargetCardProps) {
 		}
 	};
 
+	const handleShareScreenshot = async (e: MouseEvent) => {
+		e.stopPropagation();
+		if (isSharingScreenshot()) return;
+
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+
+		setIsSharingScreenshot(true);
+		setScreenshotShareStatus("rendering");
+		const toastId = toast.loading(screenshotShareStatusText("rendering"));
+
+		try {
+			await createScreenshotShareLinkFromProjectPath(
+				screenshot.path,
+				(status) => {
+					setScreenshotShareStatus(status);
+					if (status !== "idle") {
+						toast.loading(screenshotShareStatusText(status), { id: toastId });
+					}
+				},
+			);
+			toast.success("Share link copied to clipboard", { id: toastId });
+		} catch (error) {
+			console.error("Failed to create screenshot share link:", error);
+			const message = error instanceof Error ? error.message : String(error);
+			toast.error(message || "Failed to create share link", { id: toastId });
+		} finally {
+			setIsSharingScreenshot(false);
+			setScreenshotShareStatus("idle");
+		}
+	};
+
 	const handleOpenRecordingEditor = (e: MouseEvent) => {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		commands.showWindow({
-			Editor: { project_path: recording.path },
-		});
+		if (e.currentTarget instanceof HTMLElement) {
+			e.currentTarget.closest("button")?.click();
+		}
 	};
 
 	const handleOpenRecordingLink = (e: MouseEvent) => {
@@ -359,6 +406,11 @@ export default function TargetCard(props: TargetCardProps) {
 				</Show>
 				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
 				<div class="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent pointer-events-none from-black/40" />
+				<Show when={(recordingTarget()?.clip_count ?? 0) > 1}>
+					<div class="absolute left-1 top-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
+						{recordingTarget()?.clip_count} clips
+					</div>
+				</Show>
 				<Show when={recordingFailed() || recordingUploadFailed()}>
 					<div class="absolute inset-0 flex items-center justify-center bg-black/75">
 						<div class="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-red-9/20 text-red-11">
@@ -418,6 +470,34 @@ export default function TargetCard(props: TargetCardProps) {
 								class="flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
 							>
 								<IconLucideSave class="size-3.5" />
+							</div>
+						</Tooltip>
+						<Tooltip
+							content={screenshotShareStatusText(screenshotShareStatus())}
+						>
+							<div
+								role="button"
+								tabIndex={-1}
+								aria-disabled={isSharingScreenshot()}
+								onClick={handleShareScreenshot}
+								class={cx(
+									"flex-1 flex items-center justify-center p-1 rounded-sm hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors",
+									isSharingScreenshot() &&
+										"pointer-events-none opacity-60 hover:bg-transparent",
+								)}
+							>
+								<Show
+									when={isSharingScreenshot()}
+									fallback={<IconCapLink class="size-3.5" />}
+								>
+									<ProgressCircle
+										variant="primary"
+										progress={
+											screenshotShareStatus() === "uploading" ? 0.65 : 0.25
+										}
+										size="xs"
+									/>
+								</Show>
 							</div>
 						</Tooltip>
 					</div>

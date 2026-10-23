@@ -7,8 +7,11 @@ import {
 	createTimelineHistory,
 	createTimelineState,
 	deleteSelectedTimelineSegment,
+	deleteTimelineRanges,
 	dragTimelineDisplaySplitPoint,
 	findNextPlayableTime,
+	findNextPlayableTimeInRanges,
+	findPlayableRangeIndex,
 	getTimelineDisplayDuration,
 	getTimelineDisplaySegments,
 	getTimelineDisplaySplitPoints,
@@ -26,6 +29,7 @@ import {
 	removeTimelineDisplaySplitPoint,
 	selectTimelineSegment,
 	splitTimelineAt,
+	trimTimelineClipEdge,
 	undoTimelineHistory,
 } from "@/lib/video-edits";
 
@@ -125,6 +129,46 @@ describe("video edit specs", () => {
 });
 
 describe("timeline editing", () => {
+	it("deletes transcript ranges as one normalized timeline change", () => {
+		const nextState = deleteTimelineRanges(createTimelineState(10), [
+			{ start: 1.02, end: 1.35 },
+			{ start: 4.1, end: 4.4 },
+			{ start: 4.35, end: 4.7 },
+		]);
+
+		expect(getTimelineKeepRanges(nextState)).toEqual([
+			{ start: 0, end: 1.02 },
+			{ start: 1.35, end: 4.1 },
+			{ start: 4.7, end: 10 },
+		]);
+		expect(nextState.splitPoints).toEqual([1.02, 1.35, 4.1, 4.7]);
+	});
+
+	it("does not allow transcript deletion to remove all playable video", () => {
+		const state = createTimelineState(10);
+		expect(deleteTimelineRanges(state, [{ start: 0, end: 10 }])).toEqual(state);
+	});
+
+	it("stores a batch transcript deletion as one undoable history entry", () => {
+		const initialState = createTimelineState(10);
+		const history = createTimelineHistory(initialState);
+		const deleted = deleteTimelineRanges(initialState, [
+			{ start: 1, end: 1.3 },
+			{ start: 3, end: 3.4 },
+		]);
+		const changedHistory = pushTimelineHistory(history, deleted);
+
+		expect(changedHistory.entries).toHaveLength(2);
+		expect(
+			getTimelineKeepRanges(changedHistory.entries[1] ?? initialState),
+		).toEqual([
+			{ start: 0, end: 1 },
+			{ start: 1.3, end: 3 },
+			{ start: 3.4, end: 10 },
+		]);
+		expect(undoTimelineHistory(changedHistory).index).toBe(0);
+	});
+
 	it("splits, selects, and deletes a segment", () => {
 		const splitState = splitTimelineAt(createTimelineState(10), 4);
 		const firstSegment = getTimelineSegments(splitState)[0];
@@ -178,6 +222,79 @@ describe("timeline editing", () => {
 		).toEqual([{ time: 3, sourceTimes: [3, 7], splitIndices: [0, 1] }]);
 		expect(mapTimelineSourceTimeToDisplayTime(deleted, 7)).toBe(3);
 		expect(mapTimelineDisplayTimeToSourceTime(deleted, 3)).toBe(3);
+	});
+
+	it("preserves display offsets and split indices across trimmed deletions", () => {
+		const state = {
+			...createTimelineState(20),
+			trimStart: 2,
+			trimEnd: 18,
+			splitPoints: [17, 14, 12, 10, 9, 8, 7, 6, 4, 3],
+			deletedRanges: [
+				{ start: 17, end: 19 },
+				{ start: 10, end: 12 },
+				{ start: 6, end: 8 },
+				{ start: 1, end: 3 },
+			],
+			selectedSegmentId: "8:9",
+		};
+
+		expect(
+			getTimelineDisplaySegments(state).map(
+				({ start, end, displayStart, displayEnd, selected }) => ({
+					start,
+					end,
+					displayStart,
+					displayEnd,
+					selected,
+				}),
+			),
+		).toEqual([
+			{ start: 3, end: 4, displayStart: 1, displayEnd: 2, selected: false },
+			{ start: 4, end: 6, displayStart: 2, displayEnd: 4, selected: false },
+			{ start: 8, end: 9, displayStart: 4, displayEnd: 5, selected: true },
+			{ start: 9, end: 10, displayStart: 5, displayEnd: 6, selected: false },
+			{ start: 12, end: 14, displayStart: 6, displayEnd: 8, selected: false },
+			{ start: 14, end: 17, displayStart: 8, displayEnd: 11, selected: false },
+		]);
+		expect(
+			getTimelineDisplaySplitPoints(state).map(
+				({ time, sourceTimes, splitIndices }) => ({
+					time,
+					sourceTimes,
+					splitIndices,
+				}),
+			),
+		).toEqual([
+			{ time: 2, sourceTimes: [4], splitIndices: [1] },
+			{ time: 4, sourceTimes: [6, 8], splitIndices: [2, 3] },
+			{ time: 5, sourceTimes: [9], splitIndices: [4] },
+			{ time: 6, sourceTimes: [10, 12], splitIndices: [5, 6] },
+			{ time: 8, sourceTimes: [14], splitIndices: [7] },
+		]);
+	});
+
+	it("retains nearby split indices when a subminimum segment is omitted", () => {
+		const state = {
+			...createTimelineState(10),
+			splitPoints: [1, 1.001, 2, 3, 7, 8],
+			deletedRanges: [{ start: 3, end: 7 }],
+		};
+
+		expect(
+			getTimelineDisplaySplitPoints(state).map(
+				({ time, sourceTimes, splitIndices }) => ({
+					time,
+					sourceTimes,
+					splitIndices,
+				}),
+			),
+		).toEqual([
+			{ time: 1, sourceTimes: [1], splitIndices: [0, 1] },
+			{ time: 2, sourceTimes: [2], splitIndices: [2] },
+			{ time: 3, sourceTimes: [3, 7], splitIndices: [3, 4] },
+			{ time: 4, sourceTimes: [8], splitIndices: [5] },
+		]);
 	});
 
 	it("removes a collapsed display split by restoring the deleted segment", () => {
@@ -275,6 +392,115 @@ describe("timeline editing", () => {
 		]);
 	});
 
+	it("trims an inner clip from either edge without touching its neighbours", () => {
+		const splitState = splitTimelineAt(createTimelineState(10), 4);
+		const [firstClip, secondClip] = getTimelineDisplaySegments(splitState);
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+
+		const secondTrimmedLeft = trimTimelineClipEdge(
+			splitState,
+			secondClip.id,
+			"start",
+			6,
+		);
+		expect(getTimelineKeepRanges(secondTrimmedLeft)).toEqual([
+			{ start: 0, end: 4 },
+			{ start: 6, end: 10 },
+		]);
+
+		const firstTrimmedRight = trimTimelineClipEdge(
+			splitState,
+			firstClip.id,
+			"end",
+			3,
+		);
+		expect(getTimelineKeepRanges(firstTrimmedRight)).toEqual([
+			{ start: 0, end: 3 },
+			{ start: 4, end: 10 },
+		]);
+	});
+
+	it("never lets a clip edge carve into the adjacent clip", () => {
+		const splitState = splitTimelineAt(createTimelineState(10), 4);
+		const [firstClip, secondClip] = getTimelineDisplaySegments(splitState);
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+
+		// First clip's right edge dragged past its own end stops at the boundary.
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, firstClip.id, "end", 8),
+			),
+		).toEqual([{ start: 0, end: 10 }]);
+
+		// Second clip's left edge dragged before its own start stops at the boundary.
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, secondClip.id, "start", 1),
+			),
+		).toEqual([{ start: 0, end: 10 }]);
+	});
+
+	it("carves (does not un-collapse) when the outer clip already has trimmed-off footage", () => {
+		// Front: delete [0,2] so the first visible clip is source 2-10.
+		const frontDeleted = deleteSelectedTimelineSegment(
+			selectTimelineSegment(
+				splitTimelineAt(createTimelineState(10), 2),
+				getTimelineSegments(splitTimelineAt(createTimelineState(10), 2))[0]
+					?.id ?? "",
+			),
+		);
+		const frontClip = getTimelineDisplaySegments(frontDeleted)[0];
+		if (!frontClip) throw new Error("Expected a leading clip");
+		const frontTrimmed = trimTimelineClipEdge(
+			frontDeleted,
+			frontClip.id,
+			"start",
+			4,
+		);
+		expect(getTimelineKeepRanges(frontTrimmed)).toEqual([
+			{ start: 4, end: 10 },
+		]);
+		// Display stays collapsed (6s), not ballooned back to 10s.
+		expect(getTimelineDisplayDuration(frontTrimmed)).toBe(6);
+
+		// Back: delete [8,10] so the last visible clip is source 0-8.
+		const backDeleted = deleteSelectedTimelineSegment(
+			selectTimelineSegment(
+				splitTimelineAt(createTimelineState(10), 8),
+				getTimelineSegments(splitTimelineAt(createTimelineState(10), 8))[1]
+					?.id ?? "",
+			),
+		);
+		const backSegments = getTimelineDisplaySegments(backDeleted);
+		const backClip = backSegments[backSegments.length - 1];
+		if (!backClip) throw new Error("Expected a trailing clip");
+		const backTrimmed = trimTimelineClipEdge(
+			backDeleted,
+			backClip.id,
+			"end",
+			6,
+		);
+		expect(getTimelineKeepRanges(backTrimmed)).toEqual([{ start: 0, end: 6 }]);
+		expect(getTimelineDisplayDuration(backTrimmed)).toBe(6);
+	});
+
+	it("moves the global in/out point from the outermost clip edges", () => {
+		const splitState = splitTimelineAt(createTimelineState(10), 4);
+		const [firstClip, secondClip] = getTimelineDisplaySegments(splitState);
+		if (!firstClip || !secondClip) throw new Error("Expected two clips");
+
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, firstClip.id, "start", 2),
+			),
+		).toEqual([{ start: 2, end: 10 }]);
+		expect(
+			getTimelineKeepRanges(
+				trimTimelineClipEdge(splitState, secondClip.id, "end", 8),
+			),
+		).toEqual([{ start: 0, end: 8 }]);
+	});
+
 	it("tracks undo and redo state", () => {
 		const initial = createTimelineState(10);
 		const history = createTimelineHistory(initial);
@@ -323,5 +549,19 @@ describe("timeline editing", () => {
 		expect(findNextPlayableTime(1, spec)).toBe(1);
 		expect(findNextPlayableTime(3, spec)).toBe(5);
 		expect(findNextPlayableTime(8.1, spec)).toBeNull();
+	});
+
+	it("finds preview skip targets in normalized ranges without rescanning them", () => {
+		const ranges = Array.from({ length: 1000 }, (_, index) => ({
+			start: index * 2,
+			end: index * 2 + 1,
+		}));
+
+		expect(findNextPlayableTimeInRanges(998.5, ranges)).toBe(998.5);
+		expect(findNextPlayableTimeInRanges(999, ranges)).toBe(1000);
+		expect(findNextPlayableTimeInRanges(1999, ranges)).toBeNull();
+		expect(findNextPlayableTimeInRanges(Number.NaN, ranges)).toBeNull();
+		expect(findPlayableRangeIndex(998.5, ranges)).toBe(499);
+		expect(findPlayableRangeIndex(999, ranges)).toBe(-1);
 	});
 });

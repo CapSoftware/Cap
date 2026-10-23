@@ -11,6 +11,7 @@ import {
 	getActiveProbeOperationCount,
 	withMediaOperation,
 } from "./media-operations";
+import { materializeMedia } from "./media-transfer";
 
 const PROBE_TIMEOUT_MS = 30_000;
 const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
@@ -47,11 +48,12 @@ function isHttpUrl(path: string): boolean {
 
 async function hasHttpNetworkFailure(path: string): Promise<boolean> {
 	try {
-		await probeFetch(path, {
-			method: "HEAD",
+		const response = await probeFetch(path, {
+			headers: { Range: "bytes=0-0" },
 			signal: AbortSignal.timeout(10_000),
 		});
-		return false;
+		await response.body?.cancel();
+		return !response.ok;
 	} catch {
 		return true;
 	}
@@ -118,6 +120,8 @@ async function probeMedia(path: string): Promise<VideoMetadata> {
 }
 
 export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
+	const local = await materializeMedia(videoUrl);
+	if (local) return probeVideoFile(local.path);
 	if (!canAcceptNewProbeOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}

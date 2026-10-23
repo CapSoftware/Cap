@@ -1,6 +1,9 @@
 use crate::{
     SharedPauseState, TaskPool,
-    output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer},
+    output_pipeline::{
+        AudioFrame, AudioMuxer, Muxer, STALL_BUDGET_MS, VideoFrame, VideoMuxer,
+        frame_timing_log_threshold_ms,
+    },
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::{
@@ -17,11 +20,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use std::{
     path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::AtomicBool,
-        mpsc::{SyncSender, sync_channel},
-    },
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::sync_channel},
     thread::JoinHandle,
     time::Duration,
 };
@@ -36,6 +35,15 @@ pub struct FFmpegVideoFrame {
 impl VideoFrame for FFmpegVideoFrame {
     fn timestamp(&self) -> Timestamp {
         self.timestamp
+    }
+
+    fn duplicate(&self) -> Option<Self> {
+        let mut inner = ffmpeg::frame::Video::empty();
+        let status = unsafe { ffmpeg::ffi::av_frame_ref(inner.as_mut_ptr(), self.inner.as_ptr()) };
+        (status >= 0).then_some(Self {
+            inner,
+            timestamp: self.timestamp,
+        })
     }
 }
 
@@ -133,11 +141,24 @@ impl AudioMuxer for Mp4Muxer {
 
 pub struct OggMuxer(OggFile);
 
+/// `write_behind` moves file writes off the caller (an async runtime worker)
+/// onto a dedicated writer thread. Only macOS recordings opt in.
+#[derive(Default)]
+pub struct OggMuxerConfig {
+    pub write_behind: bool,
+}
+
+fn warn_inline_fallback(result: std::io::Result<()>) {
+    if let Err(error) = result {
+        warn!(%error, "Output write-behind unavailable, muxing inline");
+    }
+}
+
 impl Muxer for OggMuxer {
-    type Config = ();
+    type Config = OggMuxerConfig;
 
     async fn setup(
-        _: Self::Config,
+        config: Self::Config,
         output_path: PathBuf,
         _: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
@@ -150,10 +171,13 @@ impl Muxer for OggMuxer {
         let audio_config =
             audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
 
-        Ok(Self(
-            OggFile::init(output_path, |o| OpusEncoder::init(audio_config, o))
-                .map_err(|e| anyhow!("Failed to initialize Opus encoder: {e}"))?,
-        ))
+        let mut file = OggFile::init(output_path, |o| OpusEncoder::init(audio_config, o))
+            .map_err(|e| anyhow!("Failed to initialize Opus encoder: {e}"))?;
+        if config.write_behind {
+            warn_inline_fallback(file.enable_write_behind());
+        }
+
+        Ok(Self(file))
     }
 
     fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -178,6 +202,8 @@ pub struct FragmentedAudioMuxer {
 #[derive(Default)]
 pub struct FragmentedAudioMuxerConfig {
     pub shared_pause_state: Option<SharedPauseState>,
+    /// See [`OggMuxerConfig::write_behind`].
+    pub write_behind: bool,
 }
 
 impl Muxer for FragmentedAudioMuxer {
@@ -197,9 +223,14 @@ impl Muxer for FragmentedAudioMuxer {
         let audio_config =
             audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
 
+        let mut encoder = FragmentedAudioFile::init(output_path, audio_config)
+            .map_err(|e| anyhow!("Failed to initialize fragmented audio encoder: {e}"))?;
+        if config.write_behind {
+            warn_inline_fallback(encoder.enable_write_behind());
+        }
+
         Ok(Self {
-            encoder: FragmentedAudioFile::init(output_path, audio_config)
-                .map_err(|e| anyhow!("Failed to initialize fragmented audio encoder: {e}"))?,
+            encoder,
             pause: config.shared_pause_state,
         })
     }
@@ -400,38 +431,74 @@ impl FrameDropTracker {
     }
 }
 
+fn send_segmented_frame<T>(
+    sender: &flume::Sender<T>,
+    frame: T,
+    frame_drops: &mut FrameDropTracker,
+) -> anyhow::Result<()> {
+    send_segmented_frame_with_timeout(
+        sender,
+        frame,
+        frame_drops,
+        Duration::from_millis(STALL_BUDGET_MS),
+    )
+}
+
+fn send_segmented_frame_with_timeout<T>(
+    sender: &flume::Sender<T>,
+    frame: T,
+    frame_drops: &mut FrameDropTracker,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    match sender.send_timeout(frame, timeout) {
+        Ok(()) => frame_drops.record_frame(),
+        Err(flume::SendTimeoutError::Timeout(_)) => frame_drops.record_drop(),
+        Err(flume::SendTimeoutError::Disconnected(_)) => {
+            return Err(anyhow!("Segmented encoder channel disconnected"));
+        }
+    }
+    Ok(())
+}
+
 struct SegmentedEncoderState {
-    video_tx: SyncSender<Option<(ffmpeg::frame::Video, Duration)>>,
+    video_tx: flume::Sender<Option<(ffmpeg::frame::Video, Duration)>>,
     encoder: Arc<Mutex<SegmentedVideoEncoder>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
 pub struct SegmentedVideoMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
     output_size: Option<(u32, u32)>,
+    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     state: Option<SegmentedEncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
+    strict_finish: bool,
 }
 
 pub struct SegmentedVideoMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
+    pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 impl Default for SegmentedVideoMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
             shared_pause_state: None,
+            segment_tx: None,
         }
     }
 }
@@ -461,19 +528,29 @@ impl Muxer for SegmentedVideoMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         Ok(Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
             output_size: config.output_size,
+            segment_tx: config.segment_tx,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
+            strict_finish: super::core::PipelineBuildScope::current()
+                .is_some_and(|scope| scope.requires_joined_stop()),
         })
     }
 
     fn stop(&mut self) {
+        if self.strict_finish {
+            if let Some(state) = &self.state {
+                let _ = state.video_tx.try_send(None);
+            }
+            return;
+        }
         if let Some(state) = &self.state
             && let Err(e) = state.video_tx.send(None)
         {
@@ -482,6 +559,9 @@ impl Muxer for SegmentedVideoMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        if self.strict_finish {
+            return Ok(self.finish_joined(timestamp));
+        }
         if let Some(mut state) = self.state.take() {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("Segmented encoder channel already closed during finish: {e}");
@@ -561,7 +641,37 @@ impl Muxer for SegmentedVideoMuxer {
     }
 }
 
+fn join_segmented_encoder(handle: Option<JoinHandle<anyhow::Result<()>>>) -> anyhow::Result<()> {
+    match handle {
+        Some(handle) => handle
+            .join()
+            .unwrap_or_else(|_| Err(anyhow!("Segmented encoder thread panicked"))),
+        None => Ok(()),
+    }
+}
+
 impl SegmentedVideoMuxer {
+    fn finish_joined(&mut self, timestamp: Duration) -> anyhow::Result<()> {
+        let Some(mut state) = self.state.take() else {
+            return Ok(());
+        };
+        let _ = state.video_tx.send(None);
+        let thread_error = join_segmented_encoder(state.encoder_handle.take()).err();
+        let finish_error = match state.encoder.lock() {
+            Ok(mut encoder) => encoder
+                .finish_with_timestamp(timestamp)
+                .map_err(anyhow::Error::from)
+                .err(),
+            Err(_) => Some(anyhow!("Segmented encoder state is poisoned")),
+        };
+        self.frame_drops.report_final_stats();
+        match (thread_error, finish_error) {
+            (None, None) => Ok(()),
+            (Some(error), None) | (None, Some(error)) => Err(error),
+            (Some(worker), Some(finish)) => Err(anyhow!("{worker:#}; finalization: {finish:#}")),
+        }
+    }
+
     fn start_encoder(&mut self) -> anyhow::Result<()> {
         let buffer_size = get_muxer_buffer_size();
         debug!(
@@ -570,7 +680,7 @@ impl SegmentedVideoMuxer {
         );
 
         let (video_tx, video_rx) =
-            sync_channel::<Option<(ffmpeg::frame::Video, Duration)>>(buffer_size);
+            flume::bounded::<Option<(ffmpeg::frame::Video, Duration)>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
         let encoder_config = SegmentedVideoEncoderConfig {
@@ -578,80 +688,100 @@ impl SegmentedVideoMuxer {
             preset: self.preset,
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: self.output_size,
+            prefer_videotoolbox_hw_input: false,
         };
 
-        let encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            self.timed_fragments,
+        )?;
+        if let Some(tx) = &self.segment_tx {
+            encoder.set_segment_callback(tx.clone());
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
+        let strict_scope =
+            super::core::PipelineBuildScope::current().filter(|scope| scope.requires_joined_stop());
+        let build_completion =
+            super::core::PipelineBuildScope::current().map(|scope| scope.task_completion());
         let encoder_handle = std::thread::Builder::new()
             .name("segmented-video-encoder".to_string())
             .spawn(move || {
-                if ready_tx.send(Ok(())).is_err() {
-                    return Err(anyhow!("Failed to send ready signal - receiver dropped"));
-                }
-
-                let mut slow_encode_count = 0u32;
-                let mut encode_error_count = 0u32;
-                let mut total_frames = 0u64;
-                const SLOW_THRESHOLD_MS: u128 = 5;
-
-                while let Ok(Some((frame, timestamp))) = video_rx.recv() {
-                    let encode_start = std::time::Instant::now();
-
-                    if let Ok(mut encoder) = encoder_clone.lock()
-                        && let Err(e) = encoder.queue_frame(frame, timestamp)
-                    {
-                        encode_error_count += 1;
-                        if encode_error_count <= 3 {
-                            warn!("Failed to encode frame: {e}");
-                        } else if encode_error_count == 4 {
-                            warn!("Suppressing further encode errors (too many failures)");
-                        }
+                let _build_completion = build_completion;
+                (move || {
+                    if ready_tx.send(Ok(())).is_err() {
+                        return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                     }
 
-                    let encode_elapsed_ms = encode_start.elapsed().as_millis();
+                    let mut slow_encode_count = 0u32;
+                    let mut encode_error_count = 0u32;
+                    let mut total_frames = 0u64;
 
-                    if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                        slow_encode_count += 1;
-                        if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = encode_elapsed_ms,
-                                count = slow_encode_count,
-                                "encoder.queue_frame exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
-                            );
+                    while let Ok(Some((frame, timestamp))) = video_rx.recv() {
+                        let encode_start = std::time::Instant::now();
+
+                        if let Ok(mut encoder) = encoder_clone.lock()
+                            && let Err(e) = encoder.queue_frame(frame, timestamp)
+                        {
+                            if let Some(scope) = &strict_scope {
+                                scope
+                                    .fail_required(format!("Segmented video encoding failed: {e}"));
+                                return Err(anyhow!("Segmented video encoding failed: {e}"));
+                            }
+                            encode_error_count += 1;
+                            if encode_error_count <= 3 {
+                                warn!("Failed to encode frame: {e}");
+                            } else if encode_error_count == 4 {
+                                warn!("Suppressing further encode errors (too many failures)");
+                            }
                         }
+
+                        let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                        if encode_elapsed_ms > slow_threshold_ms {
+                            slow_encode_count += 1;
+                            if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = encode_elapsed_ms,
+                                    count = slow_encode_count,
+                                    "encoder.queue_frame exceeded {}ms threshold",
+                                    slow_threshold_ms
+                                );
+                            }
+                        }
+
+                        total_frames += 1;
                     }
 
-                    total_frames += 1;
-                }
+                    if total_frames > 0 {
+                        debug!(
+                            total_frames = total_frames,
+                            slow_encodes = slow_encode_count,
+                            encode_errors = encode_error_count,
+                            slow_encode_pct = format!(
+                                "{:.1}%",
+                                100.0 * slow_encode_count as f64 / total_frames as f64
+                            ),
+                            "Segmented encoder timing summary"
+                        );
+                    }
 
-                if total_frames > 0 {
-                    debug!(
-                        total_frames = total_frames,
-                        slow_encodes = slow_encode_count,
-                        encode_errors = encode_error_count,
-                        slow_encode_pct = format!(
-                            "{:.1}%",
-                            100.0 * slow_encode_count as f64 / total_frames as f64
-                        ),
-                        "Segmented encoder timing summary"
-                    );
-                }
+                    if encode_error_count > 0 {
+                        warn!(
+                            encode_errors = encode_error_count,
+                            total_frames = total_frames,
+                            "Encoder finished with {} encode errors out of {} frames",
+                            encode_error_count,
+                            total_frames
+                        );
+                    }
 
-                if encode_error_count > 0 {
-                    warn!(
-                        encode_errors = encode_error_count,
-                        total_frames = total_frames,
-                        "Encoder finished with {} encode errors out of {} frames",
-                        encode_error_count,
-                        total_frames
-                    );
-                }
-
-                Ok(())
+                    Ok(())
+                })()
             })?;
 
         ready_rx
@@ -692,22 +822,11 @@ impl VideoMuxer for SegmentedVideoMuxer {
         }
 
         if let Some(state) = &self.state {
-            match state
-                .video_tx
-                .try_send(Some((frame.inner, adjusted_timestamp)))
-            {
-                Ok(()) => {
-                    self.frame_drops.record_frame();
-                }
-                Err(e) => match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
-                        self.frame_drops.record_drop();
-                    }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        trace!("Segmented encoder channel disconnected");
-                    }
-                },
-            }
+            send_segmented_frame(
+                &state.video_tx,
+                Some((frame.inner, adjusted_timestamp)),
+                &mut self.frame_drops,
+            )?;
         }
 
         Ok(())
@@ -729,6 +848,8 @@ pub struct DashSegmentedAudioMuxerConfig {
     pub segment_duration: Duration,
     pub shared_pause_state: Option<SharedPauseState>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    /// See [`OggMuxerConfig::write_behind`].
+    pub write_behind: bool,
 }
 
 impl Default for DashSegmentedAudioMuxerConfig {
@@ -737,6 +858,7 @@ impl Default for DashSegmentedAudioMuxerConfig {
             segment_duration: Duration::from_secs(3),
             shared_pause_state: None,
             segment_tx: None,
+            write_behind: false,
         }
     }
 }
@@ -766,6 +888,9 @@ impl Muxer for DashSegmentedAudioMuxer {
             },
         )
         .map_err(|e| anyhow!("Failed to initialize DASH audio segment encoder: {e}"))?;
+        if config.write_behind {
+            warn_inline_fallback(encoder.enable_write_behind());
+        }
 
         if let Some(tx) = config.segment_tx {
             encoder.set_segment_callback(tx);
@@ -799,5 +924,205 @@ impl AudioMuxer for DashSegmentedAudioMuxer {
         self.encoder
             .queue_frame(frame.inner, adjusted_timestamp)
             .map_err(|e| anyhow!("Failed to queue audio frame: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FFmpegVideoFrame, FrameDropTracker, VideoFrame, send_segmented_frame,
+        send_segmented_frame_with_timeout,
+    };
+    use cap_timestamp::Timestamp;
+    use std::time::Instant;
+
+    mod write_behind_opt_in {
+        use super::super::{
+            DashSegmentedAudioMuxer, DashSegmentedAudioMuxerConfig, FragmentedAudioMuxer,
+            FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig,
+        };
+        use crate::{Muxer, TaskPool};
+        use cap_media_info::AudioInfo;
+        use std::sync::{Arc, atomic::AtomicBool};
+
+        fn audio_info() -> AudioInfo {
+            AudioInfo::new_raw(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                48_000,
+                1,
+            )
+        }
+
+        async fn setup<M: Muxer>(config: M::Config, path: std::path::PathBuf) -> M {
+            M::setup(
+                config,
+                path,
+                None,
+                Some(audio_info()),
+                Arc::new(AtomicBool::new(false)),
+                &mut TaskPool::default(),
+            )
+            .await
+            .unwrap()
+        }
+
+        #[test]
+        fn audio_muxers_write_inline_unless_the_call_site_opts_in() {
+            assert!(!FragmentedAudioMuxerConfig::default().write_behind);
+            assert!(!DashSegmentedAudioMuxerConfig::default().write_behind);
+            assert!(!OggMuxerConfig::default().write_behind);
+        }
+
+        #[tokio::test]
+        async fn audio_muxers_honour_the_write_behind_flag() {
+            ffmpeg::init().unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            for write_behind in [false, true] {
+                let dir = directory.path().join(write_behind.to_string());
+                let fragmented = setup::<FragmentedAudioMuxer>(
+                    FragmentedAudioMuxerConfig {
+                        shared_pause_state: None,
+                        write_behind,
+                    },
+                    dir.join("audio.m4a"),
+                )
+                .await;
+                assert_eq!(fragmented.encoder.is_write_behind(), write_behind);
+
+                let dash = setup::<DashSegmentedAudioMuxer>(
+                    DashSegmentedAudioMuxerConfig {
+                        write_behind,
+                        ..Default::default()
+                    },
+                    dir.join("audio"),
+                )
+                .await;
+                assert_eq!(dash.encoder.is_write_behind(), write_behind);
+
+                let ogg =
+                    setup::<OggMuxer>(OggMuxerConfig { write_behind }, dir.join("audio.ogg")).await;
+                assert_eq!(ogg.0.is_write_behind(), write_behind);
+            }
+        }
+    }
+
+    #[test]
+    fn segmented_encoder_preserves_frames_when_a_full_queue_recovers() {
+        let (sender, receiver) = flume::bounded(1);
+        sender.send(1).unwrap();
+        let consumer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            assert_eq!(receiver.recv().unwrap(), 1);
+            receiver.recv_timeout(std::time::Duration::from_secs(5))
+        });
+        let mut drops = FrameDropTracker::new();
+
+        // Hosted runners can deschedule either thread beyond the production stall budget.
+        // The stalled-queue test below exercises that production deadline separately.
+        send_segmented_frame_with_timeout(
+            &sender,
+            2,
+            &mut drops,
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+
+        assert_eq!(consumer.join().unwrap().unwrap(), 2);
+        assert_eq!(drops.total_frames, 1);
+        assert_eq!(drops.total_drops, 0);
+    }
+
+    #[test]
+    fn segmented_encoder_bounds_waiting_for_a_stalled_queue() {
+        let (sender, _receiver) = flume::bounded(1);
+        sender.send(1).unwrap();
+        let mut drops = FrameDropTracker::new();
+        let started = std::time::Instant::now();
+
+        send_segmented_frame(&sender, 2, &mut drops).unwrap();
+
+        assert!(started.elapsed() >= std::time::Duration::from_millis(50));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(drops.total_frames, 0);
+        assert_eq!(drops.total_drops, 1);
+    }
+
+    #[test]
+    fn segmented_encoder_reports_disconnected_queue() {
+        let (sender, receiver) = flume::bounded(1);
+        drop(receiver);
+        let mut drops = FrameDropTracker::new();
+
+        assert!(send_segmented_frame(&sender, 2, &mut drops).is_err());
+        assert_eq!(drops.total_frames, 0);
+        assert_eq!(drops.total_drops, 0);
+    }
+
+    #[test]
+    fn duplicated_video_frame_reuses_reference_counted_pixel_storage() {
+        let timestamp = Instant::now();
+        let mut inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 16, 12);
+        inner.set_pts(Some(417));
+        inner.data_mut(0)[..4].copy_from_slice(&[11, 22, 33, 44]);
+        let original = FFmpegVideoFrame {
+            inner,
+            timestamp: Timestamp::Instant(timestamp),
+        };
+
+        let duplicate = original.duplicate().expect("reference-counted video frame");
+
+        assert_eq!(
+            duplicate.inner.data(0).as_ptr(),
+            original.inner.data(0).as_ptr()
+        );
+        assert_eq!(duplicate.inner.format(), original.inner.format());
+        assert_eq!(duplicate.inner.width(), original.inner.width());
+        assert_eq!(duplicate.inner.height(), original.inner.height());
+        assert_eq!(duplicate.inner.pts(), Some(417));
+        assert!(matches!(duplicate.timestamp, Timestamp::Instant(value) if value == timestamp));
+        let buffer = unsafe { (*original.inner.as_ptr()).buf[0] };
+        assert!(!buffer.is_null());
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 2);
+
+        drop(original);
+
+        assert_eq!(&duplicate.inner.data(0)[..4], &[11, 22, 33, 44]);
+        let retained = unsafe { (*duplicate.inner.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(retained) }, 1);
+    }
+    #[tokio::test]
+    async fn strict_encoder_join_waits_for_actual_thread_without_blocking_runtime() {
+        let (release, blocked) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            blocked.recv().unwrap();
+            Err(anyhow::anyhow!("encoder queue failed"))
+        });
+        let mut joining =
+            tokio::task::spawn_blocking(move || super::join_segmented_encoder(Some(thread)));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut joining)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        assert!(
+            joining
+                .await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("encoder queue failed")
+        );
+    }
+
+    #[test]
+    fn strict_encoder_join_retains_thread_panic() {
+        let thread = std::thread::spawn(|| -> anyhow::Result<()> { panic!("encoder fault") });
+        assert!(
+            super::join_segmented_encoder(Some(thread))
+                .unwrap_err()
+                .to_string()
+                .contains("panicked")
+        );
     }
 }

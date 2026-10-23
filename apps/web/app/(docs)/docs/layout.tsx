@@ -10,15 +10,15 @@ export default function DocsLayout(props: PropsWithChildren) {
 	const searchIndex = getDocSearchIndex(docsConfig.sidebar);
 
 	return (
-		<div className="min-h-screen bg-white">
+		<div className="min-h-screen bg-gray-1 text-gray-12">
 			<DocsHeader />
 			<DocsSearch searchIndex={searchIndex} />
-			<div className="flex pt-14">
-				<aside className="hidden lg:block w-[260px] shrink-0">
+			<DocsMobileMenu />
+			<div className="mx-auto flex max-w-[1408px] px-4 pt-14 sm:px-6">
+				<aside className="hidden w-[264px] shrink-0 lg:block">
 					<DocsSidebar />
 				</aside>
-				<DocsMobileMenu />
-				<main className="flex-1 min-w-0">{props.children}</main>
+				<main className="min-w-0 flex-1">{props.children}</main>
 			</div>
 		</div>
 	);

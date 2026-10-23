@@ -1,0 +1,25 @@
+[package]
+name = "tauri-nspanel"
+version = "2.0.1"
+authors = ["Victor Aremu <me@victorare.mu>"]
+description = "A plugin for subclassing Tauri's NSWindow to NSPanel"
+edition = "2021"
+rust-version = "1.75"
+exclude = ["/examples"]
+
+[dependencies]
+tauri = { version = "2.0.6" }
+bitflags = "2.6.0"
+
+[target."cfg(target_os = \"macos\")".dependencies]
+block = "0.1.6"
+core-graphics = { version = "0.25.0" }
+core-foundation = { version = "0.10.0" }
+cocoa = { version = "0.26.0" }
+objc = { version = "0.2.7" }
+objc_exception = "0.1.2"
+objc_id = { version = "0.1.1" }
+objc-foundation = { version = "0.1.1" }
+
+[features]
+cargo-clippy = []

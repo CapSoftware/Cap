@@ -14,9 +14,11 @@ export const moveRecordingSpoolToInMemoryBackup = async ({
 	setLocalRecordingStrategy({ mode: "full" });
 
 	let recoveredBlob: Blob | null = null;
+	let recovered = true;
 	try {
 		recoveredBlob = await spool.recoverBlob();
 	} catch (error) {
+		recovered = false;
 		console.error("Failed to recover persisted recording chunk data", error);
 	}
 
@@ -25,4 +27,5 @@ export const moveRecordingSpoolToInMemoryBackup = async ({
 		recoveredBlob ? [recoveredBlob, ...retainedChunks] : retainedChunks,
 		{ mode: "full" },
 	);
+	return recovered;
 };

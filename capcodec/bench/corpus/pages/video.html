@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Big Buck Bunny</title>
+<style>
+html,
+body {
+	margin: 0;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	background: #000;
+	cursor: none;
+}
+video {
+	position: fixed;
+	inset: 0;
+	width: 100vw;
+	height: 100vh;
+	object-fit: cover;
+	background: #000;
+	cursor: none;
+}
+</style>
+<script src="common/cap.js"></script>
+</head>
+<body>
+<video id="video" autoplay muted loop playsinline disablepictureinpicture disableremoteplayback></video>
+<script src="common/video.js"></script>
+</body>
+</html>

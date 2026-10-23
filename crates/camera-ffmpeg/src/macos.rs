@@ -131,12 +131,17 @@ pub fn sample_buf_as_ffmpeg(
 
                 ff_frame
             }
-            "420v" | "420f" => {
+            format @ ("420v" | "420f") => {
                 let mut ff_frame = ffmpeg::frame::Video::new(
                     ffmpeg::format::Pixel::NV12,
                     width as u32,
                     height as u32,
                 );
+                ff_frame.set_color_range(if format == "420f" {
+                    ffmpeg::color::Range::JPEG
+                } else {
+                    ffmpeg::color::Range::MPEG
+                });
 
                 let src_stride = plane0_stride;
                 let dest_stride = ff_frame.stride(0);

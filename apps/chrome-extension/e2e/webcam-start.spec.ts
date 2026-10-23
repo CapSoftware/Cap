@@ -237,6 +237,8 @@ const configureExtension = async (
 							microphone: { enabled: false, deviceId: null },
 							systemAudio: { enabled: false },
 							sounds: { enabled: false },
+							countdown: { enabled: false, seconds: 3 },
+							microphoneWarning: { enabled: false },
 						},
 					},
 					() => resolve(),

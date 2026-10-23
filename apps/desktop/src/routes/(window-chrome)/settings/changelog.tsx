@@ -1,6 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
-import { cx } from "cva";
-import { ErrorBoundary, For, onMount, Show, Suspense } from "solid-js";
+import { ErrorBoundary, For, Show } from "solid-js";
 import { SolidMarkdown } from "solid-markdown";
 
 import { AbsoluteInsetLoader } from "~/components/Loader";
@@ -8,97 +7,80 @@ import { apiClient } from "~/utils/web-api";
 import { SettingsPageContent } from "./Setting";
 
 export default function Page() {
-	console.log("[Changelog] Component mounted");
-
 	const changelog = createQuery(() => {
-		console.log("[Changelog] Creating query");
 		return {
 			queryKey: ["changelog"],
 			queryFn: async () => {
-				console.log("[Changelog] Executing query function");
-				try {
-					const response = await apiClient.desktop.getChangelogPosts({
-						query: { origin: window.location.origin },
-					});
+				const response = await apiClient.desktop.getChangelogPosts({
+					query: { origin: window.location.origin },
+				});
 
-					console.log("[Changelog] Response", response);
-
-					if (response.status !== 200) {
-						console.error("[Changelog] Error status:", response.status);
-						throw new Error("Failed to fetch changelog");
-					}
-					return response.body;
-				} catch (error) {
-					console.error("[Changelog] Error in query:", error);
-					throw error;
+				if (response.status !== 200) {
+					throw new Error("Failed to fetch changelog");
 				}
+				return response.body;
 			},
 		};
 	});
 
-	onMount(() => {
-		console.log("[Changelog] Query state:", {
-			isLoading: changelog.isLoading,
-			isError: changelog.isError,
-			error: changelog.error,
-			data: changelog.data,
-		});
-	});
-
-	const fadeIn = changelog.isLoading;
-
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent class="max-w-none">
-				<Suspense fallback={<AbsoluteInsetLoader />}>
-					<div
-						class={cx(
-							"flex flex-col gap-6 text-sm font-normal",
-							fadeIn && "animate-in fade-in",
-						)}
-					>
-						<ErrorBoundary
-							fallback={(e) => (
+				<Show when={!changelog.isLoading} fallback={<AbsoluteInsetLoader />}>
+					<div class="flex flex-col gap-6 text-sm font-normal">
+						<Show
+							when={!changelog.isError}
+							fallback={
 								<div class="text-(--text-primary) font-medium">
-									{e.toString()}
+									{changelog.error instanceof Error
+										? changelog.error.message
+										: "Failed to fetch changelog"}
 								</div>
-							)}
+							}
 						>
-							<ul class="space-y-8">
-								<For each={changelog.data}>
-									{(entry, i) => (
-										<li class="border-b-2 border-(--gray-200) pb-8 last:border-b-0">
-											<div class="flex mb-2">
-												<Show when={i() === 0}>
-													<div class="bg-(--blue-400) text-(--text-primary) px-2 py-1 rounded-md uppercase font-bold">
-														<span style="color: #fff" class="text-xs">
-															New
-														</span>
-													</div>
-												</Show>
-											</div>
-											<h3 class="text-sm font-semibold tracking-tight text-gray-12 mb-2">
-												{entry.title}
-											</h3>
-											<div class="text-xs leading-relaxed text-gray-10 mb-4">
-												Version {entry.version} -{" "}
-												{new Date(entry.publishedAt).toLocaleDateString()}
-											</div>
-											<SolidMarkdown
-												components={{
-													a: (props) => <a {...props} target="_blank" />,
-												}}
-												class="prose dark:prose-invert prose-sm max-w-none text-(--text-tertiary)"
-											>
-												{entry.content}
-											</SolidMarkdown>
-										</li>
-									)}
-								</For>
-							</ul>
-						</ErrorBoundary>
+							<ErrorBoundary
+								fallback={(error) => (
+									<div class="text-(--text-primary) font-medium">
+										{error instanceof Error ? error.message : String(error)}
+									</div>
+								)}
+							>
+								<ul class="space-y-8">
+									<For each={changelog.data ?? []}>
+										{(entry, i) => (
+											<li class="border-b-2 border-(--gray-200) pb-8 last:border-b-0">
+												<div class="flex mb-2">
+													<Show when={i() === 0}>
+														<div class="bg-(--blue-400) text-(--text-primary) px-2 py-1 rounded-md uppercase font-bold">
+															<span style="color: #fff" class="text-xs">
+																New
+															</span>
+														</div>
+													</Show>
+												</div>
+												<h3 class="text-sm font-semibold tracking-tight text-gray-12 mb-2">
+													{entry.title}
+												</h3>
+												<div class="text-xs leading-relaxed text-gray-10 mb-4">
+													Version {entry.version} -{" "}
+													{new Date(entry.publishedAt).toLocaleDateString()}
+												</div>
+												<SolidMarkdown
+													components={{
+														a: (props) => <a {...props} target="_blank" />,
+													}}
+													class="prose dark:prose-invert prose-sm max-w-none text-(--text-tertiary)"
+												>
+													{entry.content}
+												</SolidMarkdown>
+											</li>
+										)}
+									</For>
+								</ul>
+							</ErrorBoundary>
+						</Show>
 					</div>
-				</Suspense>
+				</Show>
 			</SettingsPageContent>
 		</div>
 	);

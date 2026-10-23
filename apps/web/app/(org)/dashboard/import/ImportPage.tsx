@@ -3,14 +3,22 @@
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
+import {
+	type LoomImportDestination,
+	loomImportPageHref,
+} from "@/lib/loom-import-destination";
 
-export const ImportPage = () => {
+export const ImportPage = ({
+	initialDestination = {},
+}: {
+	initialDestination?: LoomImportDestination;
+}) => {
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
 				<h1 className="text-2xl font-medium text-gray-12">Import</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Import videos from external sources or upload from your device.
+					Import media from external sources or upload from your device.
 				</p>
 			</div>
 
@@ -29,13 +37,13 @@ export const ImportPage = () => {
 							Upload File
 						</p>
 						<p className="text-xs text-left text-gray-10">
-							Upload a video file from your device
+							Upload a video or image file from your device
 						</p>
 					</div>
 				</Link>
 
 				<Link
-					href="/dashboard/import/loom"
+					href={loomImportPageHref(initialDestination, "loom")}
 					className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
 				>
 					<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">

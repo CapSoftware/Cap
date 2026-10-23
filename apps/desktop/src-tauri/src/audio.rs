@@ -1,4 +1,17 @@
-use cap_audio::AudioData;
+use cap_audio::DecodedAudio;
+
+#[path = "recording_start_sound.rs"]
+mod recording_start_sound;
+
+pub use recording_start_sound::StartCue;
+
+pub fn prime_recording_start_sound() -> StartCue {
+    recording_start_sound::prime(AppSounds::StartRecording.get_sound_bytes())
+}
+
+pub async fn play_recording_start_sound(cue: StartCue, gate: cap_recording::RecordingStartGate) {
+    recording_start_sound::play(cue, gate).await;
+}
 
 fn play_audio(bytes: &'static [u8]) {
     use rodio::{Decoder, OutputStream, Sink};
@@ -39,33 +52,44 @@ impl AppSounds {
     }
 }
 
-pub fn get_waveform(audio: &AudioData) -> Vec<f32> {
-    const CHUNK_SIZE: usize = (cap_audio::AudioData::SAMPLE_RATE as usize) / 10; // ~100ms
+pub fn get_waveform(audio: &DecodedAudio) -> Vec<f32> {
+    cap_audio::waveform_peaks(audio.sample_slices(), audio.channels())
+}
 
-    let channels = audio.channels() as usize;
-    let samples = audio.samples();
-    let mut waveform = Vec::new();
+const WAVEFORM_PEAKS_PER_SECOND: f64 = 10.0;
+const WAVEFORM_SILENCE_DB: f32 = -60.0;
 
-    let mut i = 0;
-    while i < samples.len() {
-        let end = (i + CHUNK_SIZE * channels).min(samples.len());
-        let mut sum = 0.0f32;
-        for s in &samples[i..end] {
-            sum += s.abs();
-        }
-        let avg = if end > i { sum / (end - i) as f32 } else { 0.0 };
-        waveform.push(avg);
-        i += CHUNK_SIZE * channels;
+/// Playback reads each track at source time plus its timing repair offset
+/// (`SegmentAudioTimingRepair`), so the peaks are shifted the same way; the
+/// editor then only has to add the user's clip offset.
+pub fn align_waveform_to_playback(peaks: Vec<f32>, timing_offset_secs: f32) -> Vec<f32> {
+    let shift = (f64::from(timing_offset_secs) * WAVEFORM_PEAKS_PER_SECOND).round() as isize;
+    if shift > 0 {
+        peaks.into_iter().skip(shift.unsigned_abs()).collect()
+    } else if shift < 0 {
+        std::iter::repeat_n(WAVEFORM_SILENCE_DB, shift.unsigned_abs())
+            .chain(peaks)
+            .collect()
+    } else {
+        peaks
     }
+}
 
-    // Convert to absolute dBFS (0 dBFS = digital full scale)
-    for v in waveform.iter_mut() {
-        *v = if *v > 0.0 {
-            20.0 * v.log10() // Absolute dBFS relative to 1.0
-        } else {
-            -60.0 // Set silence to -60dBFS instead of -∞ for practical use
-        };
+#[cfg(test)]
+mod waveform_alignment_tests {
+    use super::align_waveform_to_playback;
+
+    #[test]
+    fn shifts_peaks_by_the_timing_repair_offset() {
+        let peaks = vec![-10.0, -20.0, -30.0, -40.0];
+        assert_eq!(
+            align_waveform_to_playback(peaks.clone(), 0.2),
+            vec![-30.0, -40.0]
+        );
+        assert_eq!(
+            align_waveform_to_playback(peaks.clone(), -0.1),
+            vec![-60.0, -10.0, -20.0, -30.0, -40.0]
+        );
+        assert_eq!(align_waveform_to_playback(peaks.clone(), 0.02), peaks);
     }
-
-    waveform
 }

@@ -1,5 +1,9 @@
 import { Route, Router, useCurrentMatches } from "@solidjs/router";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import {
+	focusManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
 	type WebviewWindow,
@@ -22,14 +26,17 @@ import "./styles/theme.css";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
-import { generalSettingsStore } from "./store";
-import { initAnonymousUser } from "./utils/analytics";
+import { authStore, generalSettingsStore } from "./store";
+import { identifyUser, initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
 const SettingsGeneralPage = lazy(
 	() => import("./routes/(window-chrome)/settings/general"),
+);
+const SettingsQualityPage = lazy(
+	() => import("./routes/(window-chrome)/settings/quality"),
 );
 const SettingsRecordingsPage = lazy(
 	() => import("./routes/(window-chrome)/settings/recordings"),
@@ -95,6 +102,7 @@ const TargetSelectOverlayPage = lazy(
 const WindowCaptureOccluderPage = lazy(
 	() => import("./routes/window-capture-occluder"),
 );
+const TeleprompterPage = lazy(() => import("./routes/teleprompter"));
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -123,9 +131,16 @@ export default function App() {
 function Inner() {
 	const currentWindow = getCurrentWebviewWindow();
 	createThemeListener(currentWindow);
+	createHiddenWindowQueryPause(currentWindow);
 
 	onMount(() => {
 		initAnonymousUser();
+		// OpenPanel keeps profileId in memory only (PostHog persisted it), so
+		// sign-in-time identify alone loses attribution after an app restart.
+		void authStore.get().then((auth) => {
+			if (auth?.user_id) identifyUser(auth.user_id);
+		});
+		prewarmFontCaches();
 	});
 
 	return (
@@ -154,16 +169,29 @@ function Inner() {
 						const matches = useCurrentMatches();
 
 						onMount(() => {
+							let autoShow = true;
 							for (const match of matches()) {
-								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+								if (match.route.info?.AUTO_SHOW_WINDOW === false)
+									autoShow = false;
 							}
 
 							if (
-								location.pathname !== "/" &&
-								location.pathname !== "/camera"
+								location.pathname === "/" ||
+								location.pathname === "/camera" ||
+								location.pathname === "/target-select-overlay" ||
+								location.pathname === "/window-capture-occluder"
 							) {
+								return;
+							}
+
+							if (autoShow) {
 								void currentWindow.show();
 								void currentWindow.setFocus();
+							} else {
+								// The route reveals itself after its first themed paint to
+								// avoid a load flash. Safety net so the window is never left
+								// hidden if that self-reveal never runs (e.g. chunk load error).
+								setTimeout(() => void currentWindow.show(), 2000);
 							}
 						});
 
@@ -175,6 +203,7 @@ function Inner() {
 						<Route path="/settings" component={SettingsLayout}>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
+							<Route path="/quality" component={SettingsQualityPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
 							<Route
 								path="/transcription"
@@ -211,7 +240,11 @@ function Inner() {
 					<Route path="/camera" component={CameraPage} />
 					<Route path="/capture-area" component={CaptureAreaPage} />
 					<Route path="/debug" component={DebugPage} />
-					<Route path="/editor" component={EditorPage} />
+					<Route
+						path="/editor"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={EditorPage}
+					/>
 					<Route
 						path="/in-progress-recording"
 						component={InProgressRecordingPage}
@@ -219,7 +252,11 @@ function Inner() {
 					<Route path="/mode-select" component={ModeSelectPage} />
 					<Route path="/notifications" component={NotificationsPage} />
 					<Route path="/recordings-overlay" component={RecordingsOverlayPage} />
-					<Route path="/screenshot-editor" component={ScreenshotEditorPage} />
+					<Route
+						path="/screenshot-editor"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={ScreenshotEditorPage}
+					/>
 					<Route
 						path="/target-select-overlay"
 						component={TargetSelectOverlayPage}
@@ -228,10 +265,67 @@ function Inner() {
 						path="/window-capture-occluder"
 						component={WindowCaptureOccluderPage}
 					/>
+					<Route
+						path="/teleprompter"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={TeleprompterPage}
+					/>
 				</Router>
 			</CapErrorBoundary>
 		</>
 	);
+}
+
+// WebKit resolves the emoji fallback chain lazily on first glyph paint, which
+// can jank the first list/text render containing emoji (e.g. recording
+// titles). Drawing once to an offscreen canvas at idle warms the per-process
+// font caches instead.
+function prewarmFontCaches() {
+	const warm = () => {
+		try {
+			const canvas = document.createElement("canvas");
+			canvas.width = 32;
+			canvas.height = 32;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
+			ctx.font = "16px 'Geist Sans'";
+			ctx.fillText("Ag", 0, 24);
+			ctx.font = "16px system-ui";
+			ctx.fillText("😀", 0, 24);
+		} catch {}
+	};
+
+	if ("requestIdleCallback" in window) requestIdleCallback(warm);
+	else setTimeout(warm, 250);
+}
+
+function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
+	if (currentWindow.label !== "main") return;
+
+	let focusGeneration = 0;
+
+	const unlisteners = [
+		currentWindow.listen("main-window-hidden", () => {
+			focusManager.setFocused(false);
+		}),
+		currentWindow.onFocusChanged((event) => {
+			focusGeneration += 1;
+			if (event.payload) {
+				focusManager.setFocused(undefined);
+				return;
+			}
+
+			const generation = focusGeneration;
+			void currentWindow.isVisible().then((visible) => {
+				if (visible || generation !== focusGeneration) return;
+				focusManager.setFocused(false);
+			});
+		}),
+	];
+
+	onCleanup(() => {
+		for (const unlisten of unlisteners) void unlisten.then((fn) => fn());
+	});
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {

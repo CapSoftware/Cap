@@ -1,3 +1,5 @@
+const IFRAMELY_USER_AGENT_PATTERN = "iframely/";
+
 const SOCIAL_CRAWLER_USER_AGENT_PATTERNS = [
 	"twitterbot",
 	"facebookexternalhit",
@@ -12,6 +14,7 @@ const SOCIAL_CRAWLER_USER_AGENT_PATTERNS = [
 	"pinterestbot",
 	"redditbot",
 	"embedly",
+	IFRAMELY_USER_AGENT_PATTERN,
 ] as const;
 
 export const SOCIAL_REFERRER_DOMAINS = [
@@ -33,4 +36,8 @@ export function isSocialCrawlerUserAgent(userAgent: string) {
 	return SOCIAL_CRAWLER_USER_AGENT_PATTERNS.some((pattern) =>
 		normalizedUserAgent.includes(pattern),
 	);
+}
+
+export function isIframelyCrawlerUserAgent(userAgent: string) {
+	return userAgent.toLowerCase().includes(IFRAMELY_USER_AGENT_PATTERN);
 }

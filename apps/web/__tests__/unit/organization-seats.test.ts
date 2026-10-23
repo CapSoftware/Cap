@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { selectProSeatProvider } from "@/utils/organization";
+import { calculateProSeats, selectProSeatProvider } from "@/utils/organization";
+
+process.env.NEXT_PUBLIC_IS_CAP = "true";
+process.env.NEXT_PUBLIC_WEB_URL = "http://localhost:3000";
+
+describe("organization Pro seat capacity", () => {
+	it("counts an entitled owner even when the membership flag is false", () => {
+		expect(
+			calculateProSeats({
+				inviteQuota: 1,
+				ownerId: "owner",
+				ownerIsPro: true,
+				members: [
+					{
+						id: "owner-membership",
+						userId: "owner",
+						hasProSeat: false,
+					},
+				],
+			}),
+		).toMatchObject({
+			proSeatsUsed: 1,
+			proSeatsRemaining: 0,
+		});
+	});
+});
 
 describe("organization Pro seat provider selection", () => {
 	it("uses an admin's larger active subscription when they manage Pro seats", () => {
@@ -69,5 +94,28 @@ describe("organization Pro seat provider selection", () => {
 				actorCanManageProSeats: true,
 			})?.id,
 		).toBe("owner");
+	});
+
+	it("does not expose seats without an active subscription", () => {
+		const owner = {
+			id: "owner",
+			inviteQuota: 1,
+			stripeSubscriptionId: null,
+			stripeSubscriptionStatus: null,
+		};
+		const actor = {
+			id: "admin",
+			inviteQuota: 1,
+			stripeSubscriptionId: null,
+			stripeSubscriptionStatus: null,
+		};
+
+		expect(
+			selectProSeatProvider({
+				actor,
+				owner,
+				actorCanManageProSeats: true,
+			}),
+		).toBeNull();
 	});
 });

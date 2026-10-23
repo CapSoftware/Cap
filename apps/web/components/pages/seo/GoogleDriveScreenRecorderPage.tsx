@@ -24,6 +24,7 @@ import {
 import Image from "next/image";
 import { type JSX, useState } from "react";
 import { GoogleDriveLogo } from "@/components/icons/GoogleDriveLogo";
+import { PRICING } from "@/data/pricing";
 import { googleDriveScreenRecorderFaqs } from "./google-drive-screen-recorder-faqs";
 
 type ComparisonStatus = "positive" | "negative" | "warning" | "neutral";
@@ -139,7 +140,10 @@ const comparisonTable: {
 		],
 		[
 			"Pricing",
-			{ text: "from $8.16/mo per user", status: "positive" },
+			{
+				text: `from $${PRICING.pro.annualPerMonth}/mo per user`,
+				status: "positive",
+			},
 			{ text: "$18/mo per user", status: "warning" },
 			{ text: "Quote based", status: "warning" },
 		],

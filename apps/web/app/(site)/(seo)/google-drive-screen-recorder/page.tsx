@@ -1,10 +1,16 @@
 import type { Metadata } from "next";
 import { GoogleDriveScreenRecorderPage } from "@/components/pages/seo/GoogleDriveScreenRecorderPage";
 import { googleDriveScreenRecorderFaqs } from "@/components/pages/seo/google-drive-screen-recorder-faqs";
+import { ogImageUrl } from "@/lib/og/url";
 import {
 	createFAQSchema,
 	createSoftwareApplicationSchema,
 } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Record your screen to Google Drive",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -31,7 +37,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Google Drive Screen Recorder",
@@ -45,7 +51,7 @@ export const metadata: Metadata = {
 		title: "Google Drive Screen Recorder | Cap",
 		description:
 			"Connect Google Drive to Cap and store every shareable screen recording in your own Drive, for individuals or whole organizations.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

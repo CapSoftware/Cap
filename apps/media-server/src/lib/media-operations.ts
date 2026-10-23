@@ -1,3 +1,4 @@
+import { hasCriticalMemoryPressure } from "./job-manager";
 import { terminateAllSubprocesses } from "./subprocess";
 
 export interface MediaOperationHandle {
@@ -29,8 +30,19 @@ export function getActiveAudioOperationCount(): number {
 	return count;
 }
 
+export function getMaxConcurrentAudioOperations(): number {
+	return MAX_CONCURRENT_AUDIO_OPERATIONS;
+}
+
+export function getMaxConcurrentProbeOperations(): number {
+	return MAX_CONCURRENT_PROBE_OPERATIONS;
+}
+
 export function canAcceptNewAudioOperation(): boolean {
-	return getActiveAudioOperationCount() < MAX_CONCURRENT_AUDIO_OPERATIONS;
+	return (
+		!hasCriticalMemoryPressure() &&
+		getActiveAudioOperationCount() < MAX_CONCURRENT_AUDIO_OPERATIONS
+	);
 }
 
 export function getActiveProbeOperationCount(): number {
@@ -42,7 +54,10 @@ export function getActiveProbeOperationCount(): number {
 }
 
 export function canAcceptNewProbeOperation(): boolean {
-	return getActiveProbeOperationCount() < MAX_CONCURRENT_PROBE_OPERATIONS;
+	return (
+		!hasCriticalMemoryPressure() &&
+		getActiveProbeOperationCount() < MAX_CONCURRENT_PROBE_OPERATIONS
+	);
 }
 
 export function registerMediaOperation(

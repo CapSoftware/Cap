@@ -27,6 +27,7 @@ interface VideoThumbnailProps {
 	imageStatus: ImageLoadingStatus;
 	setImageStatus: (status: ImageLoadingStatus) => void;
 	hasActiveUpload?: boolean;
+	showPreview?: boolean;
 }
 
 const formatDuration = (durationSecs: number) => {
@@ -87,6 +88,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		imageStatus,
 		setImageStatus,
 		hasActiveUpload = false,
+		showPreview = true,
 	}) => {
 		const thumbnailUrl = useThumnailQuery(videoId, !hasActiveUpload);
 		const containerRef = useRef<HTMLDivElement>(null);
@@ -140,8 +142,11 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 			previewState.videoId === videoId ? previewState.status : "loading";
 		const isPreviewHovered =
 			previewState.videoId === videoId && previewState.hovered;
-		const showPreview =
-			isPreviewHovered && !hasActiveUpload && previewStatus !== "error";
+		const shouldShowPreview =
+			showPreview &&
+			isPreviewHovered &&
+			!hasActiveUpload &&
+			previewStatus !== "error";
 		const setCurrentPreviewStatus = (status: ImageLoadingStatus) => {
 			setPreviewState((state) => ({
 				videoId,
@@ -190,7 +195,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						onError={() => setImageStatus("error")}
 					/>
 				)}
-				{showPreview && (
+				{shouldShowPreview && (
 					<Image
 						key={`${videoId}-preview`}
 						src={getPreviewGifSrc(videoId)}

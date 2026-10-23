@@ -3,7 +3,13 @@ import {
 	ScreenRecorderPage,
 	screenRecorderContent,
 } from "@/components/pages/seo/ScreenRecorderPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Screen recorder for Mac & Windows",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Screen Recorder: High-Quality, User-Friendly, and 100% Free Locally",
@@ -18,7 +24,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Free Screen Recorder",
@@ -33,7 +39,7 @@ export const metadata: Metadata = {
 			"Screen Recorder: High-Quality, User-Friendly, and 100% Free Locally",
 		description:
 			"Cap is a powerful, user-friendly screen recorder and is 100% free locally with no usage limits.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/screen-recorder",
