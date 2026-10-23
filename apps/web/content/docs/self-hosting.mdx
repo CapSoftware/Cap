@@ -23,7 +23,7 @@ docker compose up -d
 That's it! Cap will be available at `http://localhost:3000`.
 
 <Warning title="Secrets are required">
-`docker compose up` stops with an error until `NEXTAUTH_SECRET`, `DATABASE_ENCRYPTION_KEY` and `MEDIA_SERVER_WEBHOOK_SECRET` are set. cap-web and the media server also refuse to start if any of them is left at a publicly known placeholder. Create your `.env` first:
+`docker compose up` stops with an error until `NEXTAUTH_SECRET`, `DATABASE_ENCRYPTION_KEY` and `MEDIA_SERVER_WEBHOOK_SECRET` are set. cap-web and the media server also refuse to start if any of them is left at a publicly known placeholder, including the example values from older compose files. Upgrading an existing install? Read [Upgrading From an Older Release](#upgrading-from-an-older-release) first. Create your `.env` first:
 
 ```bash
 cp .env.self-hosting.example .env
@@ -213,6 +213,32 @@ APPLE_CLIENT_SECRET=your-client-secret-jwt
 
 Apple client-secret JWTs expire, so rotate the secret before its configured
 expiration date.
+
+## Upgrading From an Older Release
+
+<Warning title="Upgrading can stop Cap from starting">
+Older `docker-compose.yml`, `docker-compose.template.yml` and Coolify files shipped fixed example secrets. Starting with this release, **cap-web and the media server refuse to start** if any of these is missing or still set to one of those public example values:
+
+- `NEXTAUTH_SECRET` (cap-web)
+- `DATABASE_ENCRYPTION_KEY` (cap-web)
+- `MEDIA_SERVER_WEBHOOK_SECRET` (cap-web and the media server; it must be the same on both)
+
+With Docker Compose, `docker compose up` stops before starting any container and names the missing variable. Otherwise the container exits on start with `Refusing to start: insecure secrets` (cap-web) or `[media-server] Refusing to start` in its logs.
+</Warning>
+
+If you never changed the example secrets, do this before you pull the new images:
+
+1. Back up MySQL.
+2. Generate a new value for each secret with `openssl rand -hex 32` and put them in the `.env` next to your compose file (or in your platform's variables). Use the same `MEDIA_SERVER_WEBHOOK_SECRET` on cap-web and the media server.
+3. Pull and restart: `docker compose pull && docker compose up -d`.
+
+What changes when you replace each secret:
+
+- `NEXTAUTH_SECRET`: everyone is signed out and signs in again.
+- `MEDIA_SERVER_WEBHOOK_SECRET`: nothing, as long as cap-web and the media server get the same new value.
+- `DATABASE_ENCRYPTION_KEY`: values Cap encrypted with the old key can no longer be read. This covers custom S3 storage settings (organization and desktop), developer app API keys, and connected integrations. After switching keys, re-enter your storage settings and regenerate developer app keys.
+
+If you already set your own values, nothing changes for you.
 
 ## Pinning Image Versions
 
