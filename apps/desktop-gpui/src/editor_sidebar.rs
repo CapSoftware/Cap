@@ -827,6 +827,7 @@ pub struct SidebarState {
     /// state in the source too, not project config.
     pub caption_model: &'static str,
     pub caption_language: &'static str,
+    pub filler_removal_status: Option<Result<String, String>>,
     /// The text panel's Style chip row: 0 is "All", `n` is
     /// `TEXT_PRESET_GROUPS[n - 1]`. Local UI state, like the source's own
     /// signal, so it survives selecting another text segment.
@@ -911,6 +912,7 @@ impl SidebarState {
             menu: None,
             caption_model: "best",
             caption_language: "auto",
+            filler_removal_status: None,
             text_style_group: 0,
             text_anim_edge: false,
             editing_end_pose: false,

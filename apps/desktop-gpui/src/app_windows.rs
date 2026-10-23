@@ -5555,6 +5555,8 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
+    let remove_fillers =
+        std::env::var("CAP_GPUI_AUTO_REMOVE_FILLERS").is_ok_and(|value| value == "1");
     if tab.is_none()
         && select.is_none()
         && canvas.is_none()
@@ -5563,6 +5565,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && camera3d.is_none()
         && add_track.is_none()
         && !generate_zoom
+        && !remove_fillers
     {
         return;
     }
@@ -5594,6 +5597,17 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     if generate_zoom {
         handle
             .update(cx, |view, window, cx| view.generate_auto_zoom(window, cx))
+            .ok();
+    }
+
+    if remove_fillers {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(100))
+            .await;
+        handle
+            .update(cx, |view, window, cx| {
+                view.remove_filler_words_clicked(window, cx)
+            })
             .ok();
     }
 
