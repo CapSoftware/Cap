@@ -570,6 +570,9 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     };
 
     if let Some(canonical_path) = canonical_path {
+        let _thumbnails = crate::recording::hold_studio_thumbnail_writes().ok_or_else(|| {
+            "Timed out waiting for the recording's thumbnail to finish writing".to_string()
+        })?;
         std::fs::remove_dir_all(canonical_path)
             .map_err(|error| format!("Failed to delete recording: {error}"))?;
     }

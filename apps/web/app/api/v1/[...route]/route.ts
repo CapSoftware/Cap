@@ -128,6 +128,7 @@ import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { transcribeVideo } from "@/lib/transcribe";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { isVideoStorageKey } from "@/lib/video-storage-key";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
 	calculateProSeats,
@@ -7038,6 +7039,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"The upload completion state is unavailable",
 							);
 						}
+						if (
+							!isVideoStorageKey(
+								{ id: path.id, ownerId: principal.id },
+								acceptedRawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						if (payload.rawFileKey !== acceptedRawFileKey) {
 							yield* deleteStoredKeyIfPresent(payload.rawFileKey);
 						}
@@ -7094,6 +7106,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (
+							!isVideoStorageKey(
+								{ id: state.id, ownerId: state.ownerId },
+								state.rawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						const processing = yield* Effect.tryPromise(() =>
 							startVideoProcessingWorkflow({
 								videoId: state.id,
