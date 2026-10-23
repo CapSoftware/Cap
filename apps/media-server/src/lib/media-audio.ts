@@ -440,10 +440,12 @@ function openAudioExtractStream(
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	let cleaned = false;
 	let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+	let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
-	const cleanup = () => {
+	const finish = (error?: Error) => {
 		if (cleaned) return;
 		cleaned = true;
+		if (error) streamController?.error(error);
 		if (timeoutId) clearTimeout(timeoutId);
 		if (reader) {
 			try {
@@ -455,22 +457,31 @@ function openAudioExtractStream(
 		unregisterMediaOperation(operation);
 		void terminateProcess(proc);
 	};
+	const cleanup = () => finish(new Error("Audio extraction cancelled"));
 
 	timeoutId = setTimeout(() => {
-		cleanup();
+		finish(new Error(`Operation timed out after ${opts.timeoutMs}ms`));
 	}, opts.timeoutMs);
 
 	void drainStream(proc.stderr as ReadableStream<Uint8Array>);
 
-	proc.exited.then(() => {
-		cleanup();
+	proc.exited.then((exitCode) => {
+		if (cleaned) return;
+		if (exitCode !== 0) {
+			finish(new Error(`FFmpeg exited with code ${exitCode}`));
+			return;
+		}
+		if (timeoutId) clearTimeout(timeoutId);
+		unregisterMediaOperation(operation);
+		void terminateProcess(proc);
 	});
 
 	const originalStream = proc.stdout as ReadableStream<Uint8Array>;
 
 	const stream = new ReadableStream<Uint8Array>(
 		{
-			start() {
+			start(controller) {
+				streamController = controller;
 				reader = originalStream.getReader();
 			},
 			async pull(controller) {
@@ -481,15 +492,18 @@ function openAudioExtractStream(
 
 				try {
 					const { done, value } = await reader.read();
+					if (cleaned) return;
 					if (done) {
+						await proc.exited;
+						if (cleaned) return;
 						controller.close();
-						cleanup();
+						finish();
 					} else {
 						controller.enqueue(value);
 					}
 				} catch (err) {
 					controller.error(err);
-					cleanup();
+					finish();
 				}
 			},
 			cancel() {

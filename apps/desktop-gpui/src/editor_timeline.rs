@@ -316,7 +316,8 @@ impl Transform {
 
     /// `updateZoom(newZoom, origin)` (`ED/context.ts:1389-1403, 1456-1472`):
     /// clamp the zoom into `[MAX_ZOOM_IN, zoomOutLimit]`, then move the
-    /// position so `origin` stays at the same fraction across the viewport.
+    /// position so `origin` stays at the same fraction across the viewport,
+    /// or at its nearest edge when it is outside the viewport.
     ///
     /// The clamp is `Math.max(Math.min(newZoom, zoomOutLimit()), MAX_ZOOM_IN)`
     /// in that order, so on a project shorter than 3 s the *floor* wins and the
@@ -327,7 +328,7 @@ impl Transform {
             .max(MAX_ZOOM_IN);
 
         let visible_origin = origin - self.position;
-        let origin_percentage = (visible_origin / self.zoom).min(1.);
+        let origin_percentage = (visible_origin / self.zoom).clamp(0., 1.);
         let new_visible_origin = zoom * origin_percentage;
         let new_position = origin - new_visible_origin;
 
@@ -3923,6 +3924,19 @@ mod tests {
             "{}",
             transform.position
         );
+    }
+
+    #[test]
+    fn an_origin_before_the_viewport_pins_to_its_left_edge() {
+        let mut transform = Transform {
+            zoom: 10.,
+            position: 20.,
+        };
+
+        transform.update_zoom(20., 5., 100.);
+
+        assert_eq!(transform.zoom, 20.);
+        assert_eq!(transform.position, 5.);
     }
 
     #[test]

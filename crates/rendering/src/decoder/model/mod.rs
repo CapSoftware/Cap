@@ -1095,6 +1095,8 @@ fn avassetreader_answers_match_the_reference_model() {
     // Engine verify runs only this test of the module on macOS.
     avassetreader_answers_stay_exact_when_its_reader_fails();
     run_suite(Decoder::Avf);
+    avassetreader_scrubbing_backwards_reuses_the_frames_below_each_seek();
+    avassetreader_stops_reading_only_once_every_request_is_abandoned();
 }
 
 /// A native reader can fail mid-stream with a decode error and vend nothing
@@ -1199,4 +1201,103 @@ fn ffmpeg_preserves_late_pts_across_playback_and_seeks() {
         );
         assert_eq!(outcome.requests, case.requests.len());
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn avassetreader_scrubbing_backwards_reuses_the_frames_below_each_seek() {
+    let script = Script {
+        time_base: (1, 30),
+        frames: (0..120)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 30 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let case = Case {
+        name: "backward-scrub".into(),
+        seed_index: 0,
+        seed: 0,
+        decoder: Decoder::Avf,
+        mode: Mode::Playback,
+        fps: 30,
+        max_fallback_distance: 2,
+        script,
+        requests: (0..60)
+            .map(|step| Request {
+                time: (118 - step * 2) as f32 / 30.0,
+                initial: true,
+            })
+            .collect(),
+    };
+    let outcome = run_case(&case, &runtime(), false);
+    assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+    assert_eq!(outcome.requests, case.requests.len());
+    assert!(
+        outcome.starts <= 16,
+        "{} reader starts and seeks for 60 backward scrub steps",
+        outcome.starts
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn avassetreader_stops_reading_only_once_every_request_is_abandoned() {
+    let script = Script {
+        time_base: (1, 30),
+        frames: (0..900)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 600 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let registration = scripted::register(script);
+    let path = registration.path().to_path_buf();
+    runtime().block_on(async {
+        let handle = spawn_decoder("model", path, 30, 0.0, false)
+            .await
+            .unwrap()
+            .with_max_fallback_distance(2);
+        registration.set_vend_delay(Duration::from_millis(2));
+        registration.take_vended();
+        let time = |frame: u32| frame as f32 / 30.0;
+
+        let abandoned = tokio::time::timeout(
+            Duration::from_millis(40),
+            handle.get_frame_initial(time(550)),
+        );
+        let batch = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::join!(
+                tokio::time::timeout(
+                    Duration::from_millis(150),
+                    handle.get_frame_initial(time(760)),
+                ),
+                handle.get_frame_initial(time(765)),
+            )
+        };
+        let (abandoned, (dropped, kept)) = tokio::join!(abandoned, batch);
+
+        assert!(abandoned.is_err(), "frame 550 arrived before 40 ms");
+        assert!(dropped.is_err(), "frame 760 arrived before 160 ms");
+        assert_eq!(
+            kept.as_ref().and_then(frame_identity),
+            Some(765),
+            "the open request of a batch whose other request was dropped"
+        );
+        let read_below_keyframe = registration
+            .take_vended()
+            .iter()
+            .filter(|&&index| index < 600)
+            .count();
+        assert!(
+            read_below_keyframe < 450,
+            "{read_below_keyframe} frames read towards frame 550 after its request was dropped at 40 ms"
+        );
+        assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
+    });
 }
