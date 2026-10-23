@@ -2445,7 +2445,12 @@ function objectResponse(
 }
 
 describe("chunked packet-proven verification", () => {
-	async function segmentedRecording(name: string, gop: number) {
+	async function segmentedRecording(
+		name: string,
+		gop: number,
+		frames = 120,
+		segmentSeconds = 0.5,
+	) {
 		const fragments = await mkdtemp(join(directory, `${name}-`));
 		await run([
 			"ffmpeg",
@@ -2456,7 +2461,7 @@ describe("chunked packet-proven verification", () => {
 			"-i",
 			"testsrc2=size=320x180:rate=30",
 			"-frames:v",
-			"120",
+			String(frames),
 			"-c:v",
 			"libx264",
 			"-preset",
@@ -2472,7 +2477,7 @@ describe("chunked packet-proven verification", () => {
 			"-f",
 			"dash",
 			"-seg_duration",
-			"0.5",
+			String(segmentSeconds),
 			"-use_template",
 			"1",
 			"-use_timeline",
@@ -2618,6 +2623,22 @@ describe("chunked packet-proven verification", () => {
 		expect(fallbacks).toHaveLength(1);
 		expect(chunked).toEqual(single);
 		expect(chunked.video.frameCount).toBe(120);
+	});
+
+	test("copies many fragments into one run without piling up stream listeners", async () => {
+		const recording = await segmentedRecording("chunk-many", 6, 240, 0.2);
+		expect(recording.segments.length).toBeGreaterThanOrEqual(30);
+		const warnings: string[] = [];
+		const onWarning = (warning: Error) => warnings.push(warning.name);
+		process.on("warning", onWarning);
+		try {
+			const { single, chunked, fallbacks } = await both(recording);
+			expect(fallbacks).toHaveLength(0);
+			expect(chunked).toEqual(single);
+		} finally {
+			process.off("warning", onWarning);
+		}
+		expect(warnings).not.toContain("MaxListenersExceededWarning");
 	});
 
 	test("still rejects a corrupt recording through the full decode", async () => {

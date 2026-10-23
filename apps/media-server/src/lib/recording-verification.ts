@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, open, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
@@ -723,19 +722,16 @@ async function concatFiles(
 	target: string,
 	signal?: AbortSignal,
 ): Promise<void> {
-	const output = createWriteStream(target);
+	const output = await open(target, "w");
 	try {
 		for (const path of paths) {
 			signal?.throwIfAborted();
-			await pipeline(createReadStream(path), output, {
-				end: false,
-				...(signal ? { signal } : {}),
-			});
+			for await (const chunk of createReadStream(path, { signal })) {
+				await output.write(chunk);
+			}
 		}
 	} finally {
-		await new Promise<void>((resolve, reject) =>
-			output.end((error?: Error | null) => (error ? reject(error) : resolve())),
-		);
+		await output.close();
 	}
 }
 
