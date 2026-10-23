@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
 	isIgnoredTimelineKeyboardTarget,
@@ -28,27 +29,22 @@ describe("resolveTimelineKeyAction", () => {
 	});
 
 	it("steps incrementally on ArrowUp/Down/Left/Right when focused on ARIA slider per accessibility guidelines", () => {
-		// ArrowUp increments slider
 		expect(resolveTimelineKeyAction("ArrowUp", false, 120, false, true)).toEqual({
 			type: "seekDelta",
 			delta: 5,
 		});
-		// ArrowDown decrements slider
 		expect(resolveTimelineKeyAction("ArrowDown", false, 120, false, true)).toEqual({
 			type: "seekDelta",
 			delta: -5,
 		});
-		// ArrowRight increments slider
 		expect(resolveTimelineKeyAction("ArrowRight", false, 120, false, true)).toEqual({
 			type: "seekDelta",
 			delta: 5,
 		});
-		// ArrowLeft decrements slider
 		expect(resolveTimelineKeyAction("ArrowLeft", false, 120, false, true)).toEqual({
 			type: "seekDelta",
 			delta: -5,
 		});
-		// Home/End on slider still jump to extremes
 		expect(resolveTimelineKeyAction("Home", false, 120, false, true)).toEqual({
 			type: "seekTo",
 			time: 0,

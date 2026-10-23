@@ -382,6 +382,14 @@ export function PlayerContent(props: { compactness?: number }) {
 				),
 		},
 		{
+			combo: "Mod+Shift+=",
+			handler: () =>
+				editorState.timeline.transform.updateZoom(
+					editorState.timeline.transform.zoom / 1.1,
+					editorState.playbackTime,
+				),
+		},
+		{
 			combo: "Mod+-",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(

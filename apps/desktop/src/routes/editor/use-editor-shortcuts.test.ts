@@ -35,6 +35,7 @@ describe("useEditorShortcuts: normalizeCombo", () => {
 
 	it("normalizes Mod modifier and special symbols", () => {
 		expect(normalizeCombo(createKeyboardEvent("Equal", { metaKey: true }))).toBe("Mod+=");
+		expect(normalizeCombo(createKeyboardEvent("Equal", { metaKey: true, shiftKey: true }))).toBe("Mod+Shift+=");
 		expect(normalizeCombo(createKeyboardEvent("Minus", { ctrlKey: true }))).toBe("Mod+-");
 		expect(normalizeCombo(createKeyboardEvent("KeyS", { metaKey: true }))).toBe("Mod+S");
 	});
