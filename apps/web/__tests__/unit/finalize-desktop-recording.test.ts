@@ -1177,6 +1177,40 @@ describe("workflow retry lifetime", () => {
 		);
 	});
 
+	it.each([
+		["uses the generation it was started with", "generation", 0],
+		["looks the job up when started without a generation", undefined, 1],
+	])("%s", async (_name, generation, lookups) => {
+		withCurrent({
+			state: "queued",
+			leaseExpiresAt: null,
+			attemptId: null,
+			attemptCount: 0,
+		});
+		mocks.env.mockReturnValue({ WEB_URL: "https://self-hosted.test" });
+		const result = await finalizeDesktopRecordingWorkflow({
+			videoId,
+			userId,
+			generation,
+		});
+		expect(result).toEqual({
+			success: false,
+			reason: "media-server-unconfigured",
+		});
+		expect(mocks.ensure).toHaveBeenCalledTimes(lookups);
+		expect(mocks.defer).toHaveBeenCalledOnce();
+	});
+
+	it("reports a missing media server from the dispatch step without dispatching", async () => {
+		mocks.env.mockReturnValue({ WEB_URL: "https://self-hosted.test" });
+		await expect(startDesktopRecordingJob(fixture)).resolves.toEqual({
+			status: "media-server-unconfigured",
+		});
+		expect(mocks.defer).toHaveBeenCalledOnce();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.sourceUrls).not.toHaveBeenCalled();
+	});
+
 	it("preserves the self-hosted playback fallback without issuing a verified cleanup receipt", async () => {
 		withCurrent({
 			state: "queued",
