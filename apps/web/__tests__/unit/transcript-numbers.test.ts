@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseTranscriptVTT } from "@/app/s/[videoId]/_components/utils/parse-transcript-vtt";
 import {
 	formatTranscriptAsVTT,
 	parseVTT,
@@ -6,7 +7,10 @@ import {
 import { formatToWebVTT } from "@/lib/transcribe-utils";
 import { updateVttEntryText } from "@/lib/transcript-vtt";
 
-describe("numeric transcript captions", () => {
+describe.each([
+	{ name: "embed", parse: parseVTT },
+	{ name: "transcript", parse: parseTranscriptVTT },
+])("$name numeric captions", ({ parse }) => {
 	it("preserves numbers separated into their own caption by a pause", () => {
 		const vtt = formatToWebVTT({
 			words: [
@@ -18,23 +22,23 @@ describe("numeric transcript captions", () => {
 			],
 		});
 
-		expect(parseVTT(vtt).map(({ id, text }) => ({ id, text }))).toEqual([
+		expect(parse(vtt).map(({ id, text }) => ({ id, text }))).toEqual([
 			{ id: 1, text: "The year is" },
 			{ id: 2, text: "2026" },
 			{ id: 3, text: "Next." },
 		]);
-		expect(formatTranscriptAsVTT(parseVTT(vtt))).toContain("\n2026\n");
+		expect(formatTranscriptAsVTT(parse(vtt))).toContain("\n2026\n");
 	});
 
-	it("retains a numeric correction after reparsing the saved transcript", () => {
+	it.each(["0", "007"])("retains a saved correction to %s", (text) => {
 		const original = formatToWebVTT({
 			words: [{ text: "Zero.", start: 0, end: 1000 }],
 		});
-		const saved = updateVttEntryText(original, 1, "0");
+		const saved = updateVttEntryText(original, 1, text);
 
 		expect(saved.updated).toBe(true);
-		expect(parseVTT(saved.content)).toEqual([
-			{ id: 1, text: "0", timestamp: "00:00", startTime: 0 },
+		expect(parse(saved.content)).toMatchObject([
+			{ id: 1, text, timestamp: "00:00", startTime: 0 },
 		]);
 	});
 
@@ -42,8 +46,18 @@ describe("numeric transcript captions", () => {
 		const vtt =
 			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n\n2\n00:00:01.000 --> 00:00:02.000\nHello\n";
 
-		expect(parseVTT(vtt)).toEqual([
+		expect(parse(vtt)).toMatchObject([
 			{ id: 2, timestamp: "00:01", startTime: 1, text: "Hello" },
 		]);
 	});
+});
+
+it("preserves fractional seek and end times when reloading a saved numeric caption", () => {
+	const original = "WEBVTT\n\n1\n00:00:01.500 --> 00:00:02.750\nBond\n";
+	const saved = updateVttEntryText(original, 1, "007");
+
+	expect(saved.updated).toBe(true);
+	expect(parseTranscriptVTT(saved.content)).toEqual([
+		{ id: 1, text: "007", timestamp: "00:01", startTime: 1.5, endTime: 2.75 },
+	]);
 });
