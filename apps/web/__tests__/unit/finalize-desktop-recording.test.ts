@@ -1,5 +1,5 @@
 import type { User, Video } from "@cap/web-domain";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	DesktopRecordingAttempt,
@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
 	put: vi.fn(),
 	databaseRows: vi.fn(),
 	reserveBudget: vi.fn(),
+	storage: vi.fn(),
+	multipartCreate: vi.fn(),
 }));
 vi.mock("@/lib/media-processing-budget", () => ({
 	reserveMediaProcessingBudget: mocks.reserveBudget,
@@ -97,15 +99,7 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 	const { Effect } = await import("effect");
 	return {
 		Storage: {
-			getAccessForVideo: () =>
-				Effect.succeed([
-					{
-						provider: "test",
-						getInternalSignedObjectUrl: (key: string) =>
-							Effect.succeed(`https://storage.test/${key}`),
-						getInternalPresignedPutUrl: mocks.put,
-					},
-				]),
+			getAccessForVideo: () => Effect.sync(mocks.storage),
 		},
 	};
 });
@@ -150,6 +144,19 @@ const fixture: DesktopRecordingAttempt = {
 };
 let current: DesktopRecordingJob | null;
 
+function storageAccess(provider: string, customBucket = false) {
+	return [
+		{
+			provider,
+			getInternalSignedObjectUrl: (key: string) =>
+				Effect.succeed(`https://storage.test/${key}`),
+			getInternalPresignedPutUrl: mocks.put,
+			multipart: { create: mocks.multipartCreate },
+		},
+		customBucket ? Option.some({ id: "bucket" }) : Option.none(),
+	];
+}
+
 function withCurrent(update: Partial<DesktopRecordingJob>) {
 	if (!current) throw new Error("Fixture job disappeared");
 	current = { ...current, ...update };
@@ -157,6 +164,10 @@ function withCurrent(update: Partial<DesktopRecordingJob>) {
 
 beforeEach(() => {
 	mocks.reserveBudget.mockResolvedValue(100_000_000);
+	mocks.storage.mockImplementation(() => storageAccess("test"));
+	mocks.multipartCreate.mockImplementation(() =>
+		Effect.succeed({ UploadId: "upload" }),
+	);
 	mocks.databaseRows.mockResolvedValue([
 		{ id: "video", ownerId: "user", source: { type: "desktopSegments" } },
 	]);
@@ -889,6 +900,57 @@ describe("source commitment and media request compatibility", () => {
 		expect(body.thumbnailPresignedUrl).toContain(
 			"/generation/attempt/screenshot.jpg",
 		);
+	});
+
+	function withSourceBytes(size: number) {
+		mocks.sourceUrls.mockResolvedValue({
+			videoInitUrl: "https://source.test/init.mp4",
+			videoSegmentUrls: ["https://source.test/segment.m4s"],
+			sourceObjects: [
+				{
+					url: "https://source.test/segment.m4s",
+					objectIdentity: '"segment"',
+					size,
+				},
+			],
+		});
+	}
+
+	it("uploads a small Cap storage output with one PUT instead of multipart", async () => {
+		mocks.storage.mockImplementation(() => storageAccess("s3"));
+		withSourceBytes(64 * 1024 * 1024);
+		await startDesktopRecordingJob(fixture);
+		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
+		expect(body.outputUpload).toEqual({
+			type: "put",
+			url: "https://storage.test/user/video/.recording/outputs/generation/attempt.mp4",
+			ifNoneMatch: "*",
+		});
+		expect(mocks.multipartCreate).not.toHaveBeenCalled();
+	});
+
+	it("keeps multipart output uploads for recordings larger than one part", async () => {
+		mocks.storage.mockImplementation(() => storageAccess("s3"));
+		withSourceBytes(64 * 1024 * 1024 + 1);
+		await startDesktopRecordingJob(fixture);
+		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
+		expect(body.outputUpload).toMatchObject({
+			type: "multipart",
+			uploadId: "upload",
+			partSize: 64 * 1024 * 1024,
+			signPartUrl:
+				"https://cap.test/api/webhooks/media-server/multipart/sign-part",
+		});
+		expect(mocks.multipartCreate).toHaveBeenCalledOnce();
+	});
+
+	it("keeps multipart output uploads for small recordings in a custom bucket", async () => {
+		mocks.storage.mockImplementation(() => storageAccess("s3", true));
+		withSourceBytes(1024);
+		await startDesktopRecordingJob(fixture);
+		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
+		expect(body.outputUpload).toMatchObject({ type: "multipart" });
+		expect(mocks.multipartCreate).toHaveBeenCalledOnce();
 	});
 
 	it("reuses a recorded remote job after a step replay instead of submitting another mux", async () => {
