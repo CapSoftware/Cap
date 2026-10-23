@@ -2803,6 +2803,49 @@ describe("ranged remote byte verification", () => {
 		}
 	});
 
+	test("rejects an oversized range body without buffering it whole", async () => {
+		const { server } = rangedServer((start, end) =>
+			start === 1024 * 1024
+				? new Response(payload, {
+						status: 206,
+						headers: {
+							ETag: identity,
+							"Content-Range": `bytes ${start}-${end}/${payload.length}`,
+						},
+					})
+				: null,
+		);
+		try {
+			await expect(verify(server.port)).rejects.toThrow(
+				"Recording object size changed during byte verification",
+			);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
+	test("retries a range whose body ends early", async () => {
+		const { server, ranges } = rangedServer((start, end, attempt) =>
+			start === 2 * 1024 * 1024 && attempt === 1
+				? new Response(payload.slice(start, start + 1000), {
+						status: 206,
+						headers: {
+							ETag: identity,
+							"Content-Range": `bytes ${start}-${end}/${payload.length}`,
+						},
+					})
+				: null,
+		);
+		try {
+			expect((await verify(server.port)).remoteSha256).toBe(sha256);
+			expect(
+				ranges.filter((range) => range.startsWith(`bytes=${2 * 1024 * 1024}-`)),
+			).toHaveLength(2);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
 	test("falls back to one sequential read when storage ignores ranges", async () => {
 		const { server } = rangedServer(
 			() => new Response(payload, { headers: { ETag: identity } }),

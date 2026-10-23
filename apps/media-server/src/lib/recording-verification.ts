@@ -1751,19 +1751,30 @@ async function hashRemoteRecordingRanged(
 					throw new Error(
 						"Recording byte resume range does not match the verified object",
 					);
-				let bytes: Uint8Array;
+				const expected = end - start + 1;
+				const bytes = new Uint8Array(expected);
+				let received = 0;
 				try {
-					bytes = new Uint8Array(await response.arrayBuffer());
-				} catch {
+					for await (const chunk of response.body) {
+						if (received + chunk.byteLength > expected)
+							throw new RecordingVerificationError(
+								"Recording object size changed during byte verification",
+								false,
+							);
+						bytes.set(chunk, received);
+						received += chunk.byteLength;
+					}
+				} catch (error) {
+					if (error instanceof RecordingVerificationError) throw error;
 					throw new RecordingVerificationError(
 						"Recording bytes could not be read completely",
 						true,
 					);
 				}
-				if (bytes.byteLength !== end - start + 1)
+				if (received !== expected)
 					throw new RecordingVerificationError(
-						"Recording object size changed during byte verification",
-						false,
+						"Recording bytes could not be read completely",
+						true,
 					);
 				return bytes;
 			} catch (error) {
