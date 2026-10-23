@@ -15,6 +15,106 @@ use common::{Decoder, Player};
 
 const RES: (u32, u32) = (480, 270);
 
+#[test]
+fn paused_preview_at_timeline_end() {
+    use std::{sync::Arc, time::Duration};
+
+    use cap_editor::{AudioOutput, EditorFrameOutput, EditorInstance};
+    use cap_project::XY;
+    use cap_verify::fixture;
+    use cap_verify::video_code::{FrameMarker, StreamKind};
+
+    let id = "seek/basic/paused-end30/editor";
+    if !report::selected(id) {
+        return;
+    }
+    common::init();
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("preview.cap");
+    let mut spec = catalog::basic(report::tier());
+    spec.segments[0].mic = None;
+    spec.segments[0].system_audio = None;
+    fixture::write_fixture(&spec, &path).unwrap();
+    let project = common::load("basic", path);
+    let mut case = report::Case::new(id);
+    let rt = common::runtime();
+    rt.block_on(async {
+        let (sender, receiver) = flume::unbounded();
+        let (audio, _sink) = AudioOutput::new_offline();
+        let instance = EditorInstance::new_with_audio_output(
+            project.path.clone(),
+            |_| {},
+            Box::new(move |output, _| {
+                if let EditorFrameOutput::Rgba(frame) = output {
+                    let _ = sender.send(frame);
+                }
+            }),
+            None,
+            Arc::new(audio),
+        )
+        .await
+        .unwrap();
+
+        let result = async {
+            for (cuts, requested, expected, expected_source) in [
+                (vec![(0.0, 6.0, 1.0)], 0, 0, 0),
+                (vec![(0.0, 6.0, 1.0)], 180, 179, 179),
+                (vec![(3.0, 4.0, 1.0)], 179, 29, 119),
+                (vec![(3.0, 4.01, 1.0)], 31, 30, 120),
+                (vec![(3.0, 3.01, 1.0)], 1, 0, 90),
+                (vec![(0.0, 31.0 / 30.0, 1.0)], 31, 30, 30),
+                (vec![(0.0, 1.0, 1.0), (3.0, 4.0, 1.0)], 30, 30, 90),
+            ] {
+                let mut config = project.config();
+                common::set_cuts(&mut config, &cuts);
+                let model = project.model(&config);
+                instance.project_config.0.send(config).unwrap();
+                instance
+                    .preview_tx
+                    .send(Some((requested, 30, XY::new(RES.0, RES.1))))
+                    .unwrap();
+                let frame = tokio::time::timeout(Duration::from_secs(10), receiver.recv_async())
+                    .await
+                    .map_err(|_| {
+                        format!("no preview for request {requested}, expected {expected}")
+                    })?
+                    .map_err(|e| e.to_string())?;
+                if frame.frame_number != expected {
+                    return Err(format!(
+                        "request {requested}: got frame {}, expected {expected}",
+                        frame.frame_number
+                    ));
+                }
+                let view = cap_verify::video_code::PackedFrame {
+                    data: &frame.data,
+                    width: frame.width as usize,
+                    height: frame.height as usize,
+                    stride: frame.padded_bytes_per_row as usize,
+                    order: cap_verify::video_code::PixelOrder::Rgba,
+                };
+                let readout = common::read_expecting(&view, &model.expect(expected, 30));
+                for kind in StreamKind::ALL {
+                    let marker = FrameMarker::new(kind, 0, expected_source);
+                    if readout.get(kind).marker() != Some(marker) {
+                        return Err(format!(
+                            "request {requested}: got {:?}, expected {marker:?}",
+                            readout.get(kind)
+                        ));
+                    }
+                }
+                common::check_requests(&mut case, &model, &[expected], &[readout], 30);
+            }
+            Ok::<_, String>(())
+        }
+        .await;
+        instance.dispose().await;
+        if let Err(error) = result {
+            case.problem("error", error);
+        }
+    });
+    report::settle(case).unwrap();
+}
+
 /// One request: output frame and whether it is a seek (vs a follow-on
 /// playback frame).
 type Request = (u32, bool);
