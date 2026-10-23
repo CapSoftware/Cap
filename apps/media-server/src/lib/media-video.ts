@@ -60,7 +60,7 @@ const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 // flat 10-minute budget is enough for typical short recordings but not for a
 // long (e.g. 60+ minute) manifest with 1000+ segments.
 const STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS = 5_000;
-const MAX_STREAMING_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const MAX_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
 const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
@@ -1196,7 +1196,7 @@ function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
 	if (!durationSeconds) return DOWNLOAD_TIMEOUT_MS;
 
 	return Math.min(
-		MAX_STREAMING_DOWNLOAD_TIMEOUT_MS,
+		MAX_DOWNLOAD_TIMEOUT_MS,
 		Math.max(
 			DOWNLOAD_TIMEOUT_MS,
 			Math.ceil(durationSeconds * STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS),
@@ -1294,7 +1294,9 @@ export async function downloadVideoToTemp(
 	);
 
 	try {
-		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+		const timeoutSignal = AbortSignal.timeout(
+			maxBytes === undefined ? DOWNLOAD_TIMEOUT_MS : MAX_DOWNLOAD_TIMEOUT_MS,
+		);
 		const combinedSignal = abortSignal
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;

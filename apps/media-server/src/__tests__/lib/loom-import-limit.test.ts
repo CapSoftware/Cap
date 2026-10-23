@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,6 +67,29 @@ describe("Loom import file size", () => {
 			),
 		).rejects.toThrow("10 GB");
 		expect(cancelled).toBe(true);
+	});
+
+	test.each([
+		["bounded Loom downloads", 16, 30 * 60 * 1000],
+		["ordinary downloads", undefined, 10 * 60 * 1000],
+	])("keeps the expected timeout for %s", async (_, maxBytes, timeoutMs) => {
+		const timeoutSpy = spyOn(AbortSignal, "timeout");
+		stubFetch(async () => new Response(new Uint8Array(16)));
+		try {
+			const result = await downloadVideoToTemp(
+				"https://source.test/video.mp4",
+				".mp4",
+				undefined,
+				maxBytes,
+			);
+			try {
+				expect(timeoutSpy).toHaveBeenCalledWith(timeoutMs);
+			} finally {
+				await result.cleanup();
+			}
+		} finally {
+			timeoutSpy.mockRestore();
+		}
 	});
 
 	test("enforces the import limit when parallel downloads are enabled", async () => {
