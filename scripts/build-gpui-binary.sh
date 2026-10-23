@@ -49,10 +49,18 @@ node "$repo_root/scripts/sync-desktop-versions.mjs"
 
 (
 	cd "$gpui_dir"
+	feature_args=()
+	if [[ "$profile" == "release" && "$target" == *-apple-darwin ]]; then
+		if xcrun metal --version >/dev/null 2>&1; then
+			feature_args=(--no-default-features)
+		else
+			echo "Metal Toolchain not installed; building with runtime-compiled shaders" >&2
+		fi
+	fi
 	if [[ "$profile" == "release" && -n "$requested_target" ]]; then
-		cargo +"$toolchain" build --release --target "$target"
+		cargo +"$toolchain" build --release --target "$target" ${feature_args[@]+"${feature_args[@]}"}
 	elif [[ "$profile" == "release" ]]; then
-		cargo +"$toolchain" build --release
+		cargo +"$toolchain" build --release ${feature_args[@]+"${feature_args[@]}"}
 	elif [[ -n "$requested_target" ]]; then
 		cargo +"$toolchain" build --target "$target"
 	else
