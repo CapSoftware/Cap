@@ -43,6 +43,7 @@ export async function startLoomFileProcessingWorkflow({
 			bucketId: input.bucketId,
 			loomVideoId,
 			reuseExistingRawUpload: true,
+			cleanupRawUpload: true,
 		});
 		return "started";
 	} catch (error) {

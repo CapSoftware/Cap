@@ -60,6 +60,7 @@ describe("large Loom file processing", () => {
 			bucketId: null,
 			loomVideoId: input.loomVideoId,
 			reuseExistingRawUpload: true,
+			cleanupRawUpload: true,
 		});
 		expect(mocks.setError).not.toHaveBeenCalled();
 	});
