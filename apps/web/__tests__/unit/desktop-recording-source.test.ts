@@ -1782,25 +1782,49 @@ describe("source commit page size", () => {
 		);
 	});
 
-	it("reads tree pages larger than it writes, so a newer deployment's commit can be resumed after a rollback", async () => {
+	it("resumes a commit saved with larger tree pages using today's 64-entry writer, as after a rollback", async () => {
 		const reference = await referenceOutput(64);
+		const storage = pagedFixture();
 		mocks.treePageSize = 128;
-		const larger = await referenceOutput(128);
+		const partial = await advanceWithPageSize(
+			128,
+			snapshotCheckpoint(),
+			(checkpoint) => checkpoint.phase === "verify",
+		);
+		expect(partial.source).toBeUndefined();
+		expect(partial.checkpoint.phase).toBe("verify");
 		mocks.treePageSize = undefined;
-		expect(Math.max(...larger.leaves)).toBeGreaterThan(64);
-		expect(larger.output).toEqual(reference.output);
-		expect(larger.checkpoints).toBeLessThan(reference.checkpoints);
-	});
-
-	it("still rejects tree pages above the read limit", async () => {
-		const actual = await vi.importActual<
-			typeof import("@/lib/desktop-recording-source-checkpoint")
-		>("@/lib/desktop-recording-source-checkpoint");
-		expect(actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES).toBe(256);
-		expect(actual.SOURCE_COMMIT_PART_PAGE_SIZE).toBeLessThanOrEqual(
-			actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
+		const resumed = await advanceWithPageSize(64, partial.checkpoint);
+		if (!resumed.source) throw new Error("Resumed commit did not complete");
+		expect(await snapshotOutput(storage, resumed.source)).toEqual(
+			reference.output,
 		);
 	});
+
+	it.each([
+		[256, true],
+		[257, false],
+	] as const)(
+		"reads a commit with %i-entry tree pages only within the read limit",
+		async (size, readable) => {
+			const storage = storageFixture("s3");
+			seedSegments(
+				storage,
+				Array.from({ length: 300 }, (_, index) => index + 1),
+			);
+			mocks.treePageSize = size;
+			const commit = advanceWithPageSize(size, snapshotCheckpoint());
+			if (readable) {
+				const result = await commit;
+				if (!result.source) throw new Error("Commit did not complete");
+				expect(
+					Math.max(...leafSizes(storage, result.source.inventoryKey)),
+				).toBe(size);
+			} else {
+				await expect(commit).rejects.toMatchObject({ code: "source-invalid" });
+			}
+		},
+	);
 
 	it.each([
 		["a custom S3-compatible bucket", "s3", true],
