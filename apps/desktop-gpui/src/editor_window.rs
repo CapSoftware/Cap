@@ -1881,10 +1881,6 @@ struct OpenToolbarMenu {
     state: ui::MenuState,
 }
 
-/// The right-click menu on a text segment: the clip popover's card and rows,
-/// placed by `clip_menu_placement`. `index` is the segment under the pointer;
-/// `indices` is everything the menu acts on, which is the whole selection
-/// when the clicked segment was already part of it.
 struct OpenTextMenu {
     index: usize,
     indices: Vec<usize>,
