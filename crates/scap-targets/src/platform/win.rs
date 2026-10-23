@@ -46,9 +46,8 @@ use windows::{
                 GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect,
                 GetCursorPos, GetIconInfo, GetLayeredWindowAttributes, GetWindow,
                 GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
-                GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO, IsIconic,
-                IsWindow, IsWindowVisible, PrivateExtractIconsW, SendMessageW, WM_GETICON,
-                WS_CHILD,
+                GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindow,
+                IsWindowVisible, PrivateExtractIconsW, SendMessageW, WM_GETICON, WS_CHILD,
                 WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
@@ -353,7 +352,9 @@ impl WindowImpl {
     /// `IsWindow` is the only liveness question that matters here.
     pub fn from_id_direct(id: &WindowIdImpl) -> Option<Self> {
         let hwnd = HWND(id.0 as *mut std::ffi::c_void);
-        unsafe { IsWindow(Some(hwnd)) }.as_bool().then_some(Self(hwnd))
+        unsafe { IsWindow(Some(hwnd)) }
+            .as_bool()
+            .then_some(Self(hwnd))
     }
 
     pub fn inner(&self) -> HWND {
