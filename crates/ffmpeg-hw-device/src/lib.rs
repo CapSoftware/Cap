@@ -1,6 +1,10 @@
 use std::{
     cell::Cell,
     ptr::{null, null_mut},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use ffmpeg::{
@@ -32,6 +36,7 @@ unsafe extern "C" fn get_format(
             }
 
             if *fmt == HW_PIX_FMT.get() {
+                set_software_fallback(ctx, false);
                 return *fmt;
             }
 
@@ -46,13 +51,35 @@ unsafe extern "C" fn get_format(
             hw_pix_fmt = ?HW_PIX_FMT.get(),
             "Hardware decoder setup failed, falling back to software decode"
         );
+        set_software_fallback(ctx, true);
         avcodec_default_get_format(ctx, pix_fmts)
+    }
+}
+
+/// Records `get_format`'s latest choice in the [`HwDevice`] flag that
+/// [`install_get_format`] put in the codec context's `opaque`.
+unsafe fn set_software_fallback(ctx: *mut AVCodecContext, software: bool) {
+    unsafe {
+        if let Some(flag) = (*ctx).opaque.cast::<AtomicBool>().cast_const().as_ref() {
+            flag.store(software, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Points the codec context at [`get_format`] and at the flag it records the
+/// chosen format in. The flag outlives the context as long as the context is
+/// freed before the [`HwDevice`] holding the flag.
+unsafe fn install_get_format(context: *mut AVCodecContext, software_fallback: &Arc<AtomicBool>) {
+    unsafe {
+        (*context).get_format = Some(get_format);
+        (*context).opaque = Arc::as_ptr(software_fallback).cast_mut().cast();
     }
 }
 
 pub struct HwDevice {
     pub device_type: AVHWDeviceType,
     ctx: *mut AVBufferRef,
+    software_fallback: Arc<AtomicBool>,
 }
 
 fn linux_gpu_frames() -> bool {
@@ -61,6 +88,12 @@ fn linux_gpu_frames() -> bool {
 }
 
 impl HwDevice {
+    /// Whether FFmpeg took a software format because the hardware setup
+    /// failed, so the decoder is running on the CPU despite this device.
+    pub fn is_software_fallback(&self) -> bool {
+        self.software_fallback.load(Ordering::Relaxed)
+    }
+
     pub fn get_hwframe(&self, src: &Video) -> Option<Video> {
         // Linux GPU render hosts keep CUDA frames on the device; the renderer
         // copies them device-to-device instead of via system memory.
@@ -141,13 +174,15 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
             HW_PIX_FMT.set((*hw_config).pix_fmt);
 
             let context = self.as_mut_ptr();
+            let software_fallback = Arc::new(AtomicBool::new(false));
 
-            (*context).get_format = Some(get_format);
+            install_get_format(context, &software_fallback);
             (*context).hw_device_ctx = av_buffer_ref(hw_device_ctx);
 
             Ok(HwDevice {
                 device_type,
                 ctx: hw_device_ctx,
+                software_fallback,
             })
         }
     }
@@ -218,17 +253,25 @@ mod tests {
             AVPixelFormat::AV_PIX_FMT_YUV420P,
             AVPixelFormat::AV_PIX_FMT_NONE,
         ];
+        let device = HwDevice {
+            device_type: AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+            ctx: null_mut(),
+            software_fallback: Arc::new(AtomicBool::new(false)),
+        };
         unsafe {
             let mut ctx = avcodec_alloc_context3(null());
+            install_get_format(ctx, &device.software_fallback);
             assert_eq!(
                 get_format(ctx, offered.as_ptr()),
                 AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX
             );
+            assert!(!device.is_software_fallback());
             // FFmpeg drops a hardware format whose setup failed and asks again.
             assert_eq!(
                 get_format(ctx, offered[1..].as_ptr()),
                 AVPixelFormat::AV_PIX_FMT_YUV420P
             );
+            assert!(device.is_software_fallback());
             avcodec_free_context(&mut ctx);
         }
     }
