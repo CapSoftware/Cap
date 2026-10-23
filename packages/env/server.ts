@@ -106,6 +106,12 @@ function createServerEnv() {
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
+			ASSEMBLY_BASE_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Transcription API base URL (eg. https://api.eu.assemblyai.com)",
+				),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
