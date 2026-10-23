@@ -9,6 +9,8 @@ import {
 } from "../../lib/media-video";
 
 const originalFetch = globalThis.fetch;
+const originalDownloadConcurrency =
+	process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY;
 
 function stubFetch(response: () => Promise<Response>) {
 	globalThis.fetch = Object.assign(response, {
@@ -19,6 +21,12 @@ function stubFetch(response: () => Promise<Response>) {
 describe("Loom import file size", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		if (originalDownloadConcurrency === undefined) {
+			delete process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY;
+		} else {
+			process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY =
+				originalDownloadConcurrency;
+		}
 	});
 
 	test("permits exactly the configured boundary", async () => {
@@ -59,6 +67,19 @@ describe("Loom import file size", () => {
 			),
 		).rejects.toThrow("10 GB");
 		expect(cancelled).toBe(true);
+	});
+
+	test("enforces the import limit when parallel downloads are enabled", async () => {
+		process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY = "4";
+		stubFetch(async () => new Response(new Uint8Array(17)));
+		await expect(
+			downloadVideoToTemp(
+				"https://source.test/video.mp4",
+				".mp4",
+				undefined,
+				16,
+			),
+		).rejects.toThrow("10 GB");
 	});
 
 	test("cancels a chunked transfer when it exceeds the limit", async () => {

@@ -324,6 +324,17 @@ impl ExportAudioRenderer {
         {
             return false;
         }
+        // Studio Sound re-reads up to VOICE_PREROLL_SAMPLES before each cut to warm up the
+        // enhancer. The streaming reader only moves forward, so a cut shorter than that
+        // within one clip has to use the in-memory export path instead. An exact split
+        // (nothing removed) keeps the enhancer contiguous and still streams.
+        let studio_sound =
+            project.audio.improve && !project.audio.mute && project.audio.mic_volume_db > -30.0;
+        let min_gap = if studio_sound {
+            (VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES) as f64 / 48_000.0
+        } else {
+            0.0
+        };
         let mut ends = HashMap::new();
         let mut duration = holds.iter().map(|(start, end)| end - start).sum::<f64>();
         if !duration.is_finite() || duration * 48_000.0 >= isize::MAX as f64 / 2.0 {
@@ -344,7 +355,11 @@ impl ExportAudioRenderer {
                 return false;
             }
             if let Some(previous_end) = ends.insert(segment.recording_clip, segment.end)
-                && (!timeline.transitions.is_empty() || segment.start < previous_end)
+                && (!timeline.transitions.is_empty()
+                    || segment.start < previous_end
+                    || (min_gap > 0.0
+                        && segment.start > previous_end
+                        && segment.start < previous_end + min_gap))
             {
                 return false;
             }
@@ -1479,6 +1494,42 @@ mod tests {
     #[test]
     fn clip_volume_matches_preview_in_streaming_exports_and_transitions() {
         assert_bounded_sink_variants(22..26, &[1, 997, 4_800, 48_001]);
+    }
+
+    #[test]
+    fn eligibility_rejects_studio_sound_cuts_shorter_than_voice_preroll() {
+        let mut short_cut = project();
+        short_cut
+            .timeline
+            .as_mut()
+            .unwrap()
+            .segments
+            .push(segment(0, 0.34, 0.36));
+        assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        short_cut.audio.improve = true;
+        assert!(!ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        short_cut.audio.mute = true;
+        assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
+
+        let mut long_cut = project();
+        long_cut.audio.improve = true;
+        long_cut
+            .timeline
+            .as_mut()
+            .unwrap()
+            .segments
+            .push(segment(0, 1.0, 1.5));
+        assert!(ExportAudioRenderer::eligible_sources(&long_cut, 3));
+
+        let mut exact_split = project();
+        exact_split.audio.improve = true;
+        exact_split
+            .timeline
+            .as_mut()
+            .unwrap()
+            .segments
+            .push(segment(0, 0.33, 0.9));
+        assert!(ExportAudioRenderer::eligible_sources(&exact_split, 3));
     }
 
     #[test]

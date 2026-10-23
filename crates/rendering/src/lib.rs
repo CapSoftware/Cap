@@ -96,6 +96,92 @@ pub fn prewarm_fonts() {
     drop(layers::new_font_system());
 }
 
+/// Renders one small RGBA frame and one NV12 frame through the full frame
+/// pipeline with `layers`, then discards them. A fresh process waits on the
+/// driver finishing each pipeline the first time it draws (the first preview
+/// of the first editor took ~50 ms longer than any later one); building
+/// `layers` and drawing once off the hot path moves both costs there.
+pub async fn prewarm_first_frame(
+    shared: SharedWgpuDevice,
+    layers: &mut RendererLayers,
+) -> Result<(), RenderingError> {
+    const SIZE: u32 = 64;
+    let studio_meta = StudioRecordingMeta::SingleSegment {
+        segment: cap_project::SingleSegment {
+            display: cap_project::VideoMeta {
+                path: "prewarm.png".into(),
+                fps: 30,
+                start_time: Some(0.0),
+                device_id: None,
+            },
+            camera: None,
+            audio: None,
+            cursor: None,
+        },
+    };
+    let recording_meta = RecordingMeta {
+        platform: None,
+        project_path: std::env::temp_dir(),
+        pretty_name: "Prewarm".to_string(),
+        sharing: None,
+        inner: cap_project::RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
+        upload: None,
+    };
+    let constants = RenderVideoConstants::from_shared_device(
+        shared,
+        RenderOptions {
+            screen_size: XY::new(SIZE, SIZE),
+            camera_size: None,
+            preserve_screen_alpha: true,
+        },
+        studio_meta,
+        recording_meta,
+        Arc::new(BackgroundTextureCache::default()),
+    );
+    let config = Arc::new(ProjectConfiguration::default());
+    let cursor_events = CursorEvents::default();
+    let mut zoom_timeline = ZoomTransformTimeline::new(
+        &[],
+        None,
+        &cursor_events,
+        config.screen_movement_spring,
+        0.0,
+        None,
+    );
+    zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
+    let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, &config);
+    let mut frame_renderer = FrameRenderer::new(&constants);
+    let pixels = (SIZE * SIZE) as usize;
+    for screen_frame in [
+        DecodedFrame::new(vec![255; pixels * 4], SIZE, SIZE),
+        DecodedFrame::new_nv12(vec![128; pixels * 3 / 2], SIZE, SIZE, SIZE, SIZE),
+    ] {
+        let segment_frames = DecodedSegmentFrames {
+            screen_size: XY::new(SIZE, SIZE),
+            screen_frame: Some(screen_frame),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        let uniforms = ProjectUniforms::new(
+            &constants,
+            &config,
+            0,
+            30,
+            XY::new(base_w, base_h),
+            &cursor_events,
+            &segment_frames,
+            0.0,
+            &zoom_timeline,
+        );
+        frame_renderer
+            .render_immediate(segment_frames, uniforms, &cursor_events, true, layers)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Unique installed font family names, sorted, for the editor's font picker.
 /// Reuses the process-wide font database scan (see [`prewarm_fonts`]).
 /// Dot-prefixed families (macOS-internal UI fonts) are hidden the same way
@@ -729,6 +815,10 @@ pub enum RenderingError {
     BufferMapWaitingFailed,
     #[error(transparent)]
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
+    #[error(
+        "Not enough memory to read back frame {frame_number}. Close other apps or lower the export resolution and try again."
+    )]
+    ReadbackAllocationFailed { frame_number: u32 },
     #[error("Sending frame to channel failed")]
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Sending NV12 frame to channel failed")]
@@ -1158,6 +1248,7 @@ pub async fn render_video_to_channel(
                     }
                 }
                 Ok(None) => in_flight.rendered(current_frame_number, None)?,
+                Err(e @ RenderingError::ReadbackAllocationFailed { .. }) => return Err(e),
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
@@ -1903,6 +1994,7 @@ pub async fn render_video_to_channel_nv12(
                     }
                 }
                 Ok(None) => in_flight.rendered(current_frame_number, None)?,
+                Err(e @ RenderingError::ReadbackAllocationFailed { .. }) => return Err(e),
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
@@ -2102,6 +2194,7 @@ impl InFlightFrame {
         let expected = self.0.take();
         let frame = match flushed.transpose() {
             Ok(frame) => frame,
+            Err(error @ RenderingError::ReadbackAllocationFailed { .. }) => return Err(error),
             Err(error) => {
                 if let Some(frame_number) = expected {
                     tracing::error!(frame_number, %error, "In-flight export frame readback failed");
@@ -6581,6 +6674,7 @@ mod export_order_tests {
     async fn export(
         constants: &RenderVideoConstants,
         screen: AsyncVideoDecoderHandle,
+        rgba: bool,
     ) -> (Result<(), RenderingError>, Vec<u32>) {
         let project = ProjectConfiguration {
             timeline: Some(
@@ -6612,6 +6706,29 @@ mod export_order_tests {
             render_display: true,
         }];
         let recordings = ProjectRecordingsMeta { segments: vec![] };
+        if rgba {
+            let (sender, mut receiver) = mpsc::channel(8);
+            let render = render_video_to_channel(
+                constants,
+                &project,
+                sender,
+                &constants.recording_meta,
+                &constants.meta,
+                segments,
+                FPS,
+                XY::new(SIZE, SIZE),
+                &recordings,
+                None,
+            );
+            let collect = async {
+                let mut order = Vec::new();
+                while let Some((frame, _)) = receiver.recv().await {
+                    order.push(frame.frame_number);
+                }
+                order
+            };
+            return tokio::join!(render, collect);
+        }
         let (sender, mut receiver) = mpsc::channel(8);
         let render = render_video_to_channel_nv12(
             constants,
@@ -6645,6 +6762,16 @@ mod export_order_tests {
         slow_decode: Option<(u32, Duration)>,
         slow_readback: Option<(u32, Duration)>,
     ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
+        run_export_with_allocation_failure(software_path, slow_decode, slow_readback, None, false)
+    }
+
+    fn run_export_with_allocation_failure(
+        software_path: bool,
+        slow_decode: Option<(u32, Duration)>,
+        slow_readback: Option<(u32, Duration)>,
+        allocation_failure: Option<u32>,
+        rgba: bool,
+    ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
         let _one_export_at_a_time = EXPORTS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -6657,14 +6784,18 @@ mod export_order_tests {
                     .build()
                     .expect("runtime")
                     .block_on(async move {
-                        let Some(constants) = constants(software_path).await else {
+                        let Some(mut constants) = constants(software_path).await else {
                             eprintln!("No graphics adapter available for export order test");
                             return None;
                         };
                         if let Some((frame_number, delay)) = slow_readback {
                             frame_pipeline::readback_delay::inject(frame_number, delay);
                         }
-                        Some(export(&constants, scripted_decoder(slow_decode)).await)
+                        if let Some(frame_number) = allocation_failure {
+                            constants.is_software_adapter = true;
+                            frame_pipeline::readback_allocation_failure::inject(frame_number);
+                        }
+                        Some(export(&constants, scripted_decoder(slow_decode), rgba).await)
                     })
             })
             .expect("export thread")
@@ -6675,6 +6806,32 @@ mod export_order_tests {
             started.elapsed()
         );
         result
+    }
+
+    #[test]
+    fn readback_allocation_failure_stops_export_without_retry_or_substitution() {
+        for rgba in [true, false] {
+            for failed_frame in [0, 5, FRAMES - 1] {
+                let Some((result, order)) =
+                    run_export_with_allocation_failure(false, None, None, Some(failed_frame), rgba)
+                else {
+                    return;
+                };
+                assert!(
+                    matches!(
+                        result,
+                        Err(RenderingError::ReadbackAllocationFailed { frame_number })
+                            if frame_number == failed_frame
+                    ),
+                    "rgba={rgba}, failed_frame={failed_frame}: {result:?}"
+                );
+                assert_eq!(
+                    order,
+                    (0..failed_frame).collect::<Vec<_>>(),
+                    "rgba={rgba}, failed_frame={failed_frame}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -6747,6 +6904,18 @@ mod export_order_tests {
                 "software path: {software_path}"
             );
         }
+    }
+
+    #[test]
+    fn in_flight_frame_preserves_readback_allocation_failure() {
+        let mut in_flight = InFlightFrame::default();
+        in_flight.rendered(5, None).unwrap();
+        assert!(matches!(
+            in_flight.drain::<RenderedFrame>(Some(Err(RenderingError::ReadbackAllocationFailed {
+                frame_number: 5,
+            }))),
+            Err(RenderingError::ReadbackAllocationFailed { frame_number: 5 })
+        ));
     }
 
     #[test]

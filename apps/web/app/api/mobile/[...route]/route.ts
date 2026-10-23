@@ -2111,6 +2111,22 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	const id = Comment.CommentId.make(nanoId());
 	const now = new Date();
 	const database = yield* Database;
+	if (parentCommentId) {
+		const [parent] = yield* database.use((db) =>
+			db
+				.select({ id: Db.comments.id })
+				.from(Db.comments)
+				.where(
+					and(
+						eq(Db.comments.id, parentCommentId),
+						eq(Db.comments.videoId, videoId),
+						eq(Db.comments.type, "text"),
+					),
+				)
+				.limit(1),
+		);
+		if (!parent) return yield* Effect.fail(new HttpApiError.NotFound());
+	}
 	yield* database.use((db) =>
 		db.insert(Db.comments).values({
 			id,
@@ -2989,6 +3005,11 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
+								yield* Effect.sync(() => {
+									revalidatePath("/dashboard/caps");
+									revalidatePath("/dashboard/shared-caps");
+									revalidatePath(`/s/${path.id}`);
+								});
 								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),

@@ -42,7 +42,7 @@ jobs:
               - 'crates/**'
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
-              - 'scripts/setup.js'
+              - 'scripts/setup*'
               - 'Cargo.toml'
               - 'Cargo.lock'
             gpui:
@@ -123,6 +123,7 @@ jobs:
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
           __tests__/unit/media-player-store-refs.test.ts
+          __tests__/unit/playback-store.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/summary-editor.test.ts
@@ -272,6 +273,9 @@ jobs:
           target: x86_64-unknown-linux-gnu
           prefix-key: v1-rust-tests
           save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test native dependency setup
+        run: node --test scripts/setup.test.mjs
 
       - name: Run setup
         run: node scripts/setup.js
