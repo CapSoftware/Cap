@@ -119,15 +119,23 @@ const audioEngines = Array.from(
 );
 const idleAudioEngines = [...audioEngines];
 const localAudioQueue: (() => void)[] = [];
-async function withAudioEngine<T>(fn: (engine: Engine) => Promise<T>) {
+async function withAudioEngine<T>(
+	fn: (engine: Engine) => Promise<T>,
+	timeoutMs: number,
+) {
 	while (idleAudioEngines.length === 0) {
 		await new Promise<void>((resolve) => localAudioQueue.push(resolve));
 	}
 	let engine = idleAudioEngines.pop() as Engine;
 	if (!engine.alive) engine = new Engine(ENGINE_BIN, {}, engine.label);
+	const watchdog = setTimeout(() => {
+		console.error(`${engine.label}: audio section timed out, killing engine`);
+		engine.kill("SIGKILL");
+	}, timeoutMs);
 	try {
 		return await fn(engine);
 	} finally {
+		clearTimeout(watchdog);
 		idleAudioEngines.push(engine);
 		localAudioQueue.shift()?.();
 	}
@@ -171,19 +179,23 @@ async function runAudioLocally(job: Job, state: TaskState) {
 		const fetch = await cache.materialize(task.files);
 		const out = join(cache.root, `a${task.section}.aac`);
 		const engineStarted = performance.now();
-		const result = await withAudioEngine((engine) =>
-			engine.request<{
-				first_packet: number;
-				sizes: number[];
-				extradata: string;
-				timings: Record<string, number>;
-			}>("audio", {
-				project: cache.root,
-				fps: task.fps,
-				section: task.range,
-				preroll: task.preroll,
-				out,
-			}),
+		const seconds =
+			(task.range[1] - task.range[0] + task.preroll) / SAMPLE_RATE;
+		const result = await withAudioEngine(
+			(engine) =>
+				engine.request<{
+					first_packet: number;
+					sizes: number[];
+					extradata: string;
+					timings: Record<string, number>;
+				}>("audio", {
+					project: cache.root,
+					fps: task.fps,
+					section: task.range,
+					preroll: task.preroll,
+					out,
+				}),
+			Math.max(60_000, (seconds * 1000) / 3),
 		);
 		const data = new Uint8Array(await Bun.file(out).arrayBuffer());
 		rmSync(out, { force: true });

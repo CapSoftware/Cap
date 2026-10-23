@@ -165,7 +165,7 @@ function replay(sample: Sample) {
 		getInternalSignedObjectUrl: (name: string) =>
 			checked(() => `https://replay.invalid/${name}`),
 	};
-	mocks.storage.mockReturnValue(Effect.succeed([bucket]));
+	mocks.storage.mockReturnValue(Effect.succeed([bucket, Option.none()]));
 	const manifest = (complete: boolean) => {
 		const parsed = readCompletedRecordingManifest(
 			JSON.stringify(sample.manifest),
