@@ -44,6 +44,41 @@ export function normalizeMigrationText(
 	return normalized;
 }
 
+export function validateLoomMigrationInventory({
+	organizationId,
+	imports,
+}: {
+	organizationId: string;
+	imports: ReadonlyArray<{
+		videoId: string | null;
+		videoOrganizationId: string | null;
+		mappingId: string | null;
+		mappingOrganizationId: string | null;
+		source: string | null;
+		phase: string | null;
+	}>;
+}) {
+	if (
+		imports.some(
+			(row) =>
+				!row.videoId ||
+				row.videoOrganizationId !== organizationId ||
+				row.mappingId !== row.videoId ||
+				row.mappingOrganizationId !== organizationId ||
+				row.source !== "loom",
+		)
+	) {
+		throw new LoomMigrationError(
+			"Loom import recordings or source mappings are missing or changed. Re-import missing sources, then use Reconcile deleted recordings for deleted inventory entries. Restore changed mappings before completion.",
+		);
+	}
+	if (imports.some((row) => row.phase !== null && row.phase !== "complete")) {
+		throw new LoomMigrationError(
+			"Loom imports are still processing or have errors. Resolve them before completion.",
+		);
+	}
+}
+
 export function validateOperatorMigrationUpdate({
 	currentStatus,
 	nextStatus,

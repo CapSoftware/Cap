@@ -436,6 +436,7 @@ fn main() {
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
