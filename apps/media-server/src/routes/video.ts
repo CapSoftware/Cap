@@ -66,6 +66,7 @@ import { RecordingTimingError } from "../lib/recording-timing";
 import {
 	hashRecordingFile,
 	isRetryableRecordingVerificationError,
+	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
 	verifyRemuxedRecording,
@@ -146,6 +147,13 @@ const processSchema = z.object({
 	sourcePresignedUrl: z.string().url().optional(),
 	sourceUpload: storageUploadSchema.optional(),
 	outputUpload: storageUploadSchema.optional(),
+	existingOutput: z
+		.object({
+			url: z.string().url(),
+			objectIdentity: z.string().regex(/^"[^"\r\n]+"$/),
+			fileSize: z.number().int().positive().max(LOOM_IMPORT_MAX_BYTES),
+		})
+		.optional(),
 	maxImportBytes: z.literal(LOOM_IMPORT_MAX_BYTES).optional(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
@@ -725,6 +733,21 @@ video.on("POST", ["/process", "/import"], async (c) => {
 		);
 	}
 
+	if (
+		result.data.existingOutput &&
+		(result.data.sourceUpload ||
+			result.data.sourcePresignedUrl ||
+			result.data.outputUpload ||
+			result.data.maxImportBytes !== LOOM_IMPORT_MAX_BYTES)
+	) {
+		return c.json(
+			{
+				error: "Existing output cannot be combined with upload targets",
+				code: "INVALID_REQUEST",
+			},
+			400,
+		);
+	}
 	const capacity = getVideoCapacitySnapshot();
 	const bulkCapacityReached =
 		result.data.priority === "bulk" &&
@@ -1352,13 +1375,32 @@ async function processVideoAsync(
 
 		const inputTempFile = await withJobHeartbeat(jobId, () =>
 			downloadVideoToTemp(
-				videoUrl,
+				options.existingOutput?.url ?? videoUrl,
 				options.inputExtension,
 				abortController.signal,
 				options.maxImportBytes,
 			),
 		);
 		updateJob(jobId, { inputTempFile });
+		if (options.existingOutput) {
+			const existing = options.existingOutput;
+			await withJobHeartbeat(jobId, async () => {
+				await verifyRecording(inputTempFile.path, {
+					requireAudio: false,
+					allowObservedDuration: true,
+					abortSignal: abortController.signal,
+				});
+				await verifyRemoteRecordingBytes(existing.url, {
+					expectedObjectIdentity: existing.objectIdentity,
+					expectedFileSize: existing.fileSize,
+					expectedSha256: await hashRecordingFile(
+						inputTempFile.path,
+						abortController.signal,
+					),
+					abortSignal: abortController.signal,
+				});
+			});
+		}
 
 		const sourcePresignedUrl = options.sourcePresignedUrl;
 		if (sourcePresignedUrl || options.sourceUpload) {
@@ -1397,11 +1439,16 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const { metadata, repairedFile } = await probeWithRepairFallback(
-			inputTempFile.path,
-			isWebm,
-			abortController.signal,
-		);
+		const { metadata, repairedFile } = options.existingOutput
+			? {
+					metadata: await probeVideoFile(inputTempFile.path),
+					repairedFile: null,
+				}
+			: await probeWithRepairFallback(
+					inputTempFile.path,
+					isWebm,
+					abortController.signal,
+				);
 		repairedTempFile = repairedFile;
 		updateJob(jobId, { metadata });
 
@@ -1419,15 +1466,17 @@ async function processVideoAsync(
 		await sendWebhook(job);
 
 		const { outputFile: outputTempFile, lastResortRepairFile: lrrf } =
-			await processWithResilientRetry(
-				processingInputPath,
-				inputTempFile.path,
-				metadata,
-				options,
-				isWebm,
-				jobId,
-				abortController.signal,
-			);
+			options.existingOutput
+				? { outputFile: inputTempFile, lastResortRepairFile: null }
+				: await processWithResilientRetry(
+						processingInputPath,
+						inputTempFile.path,
+						metadata,
+						options,
+						isWebm,
+						jobId,
+						abortController.signal,
+					);
 		lastResortRepairFile = lrrf;
 		updateJob(jobId, { outputTempFile });
 		if (
@@ -1444,19 +1493,21 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const uploadReceipt = options.outputUpload
-			? await uploadFileToStorage(
-					outputTempFile.path,
-					options.outputUpload,
-					"video/mp4",
-					abortController.signal,
-				)
-			: await uploadFileToS3(
-					outputTempFile.path,
-					outputPresignedUrl,
-					"video/mp4",
-					abortController.signal,
-				);
+		const uploadReceipt = options.existingOutput
+			? { objectIdentity: options.existingOutput.objectIdentity }
+			: options.outputUpload
+				? await uploadFileToStorage(
+						outputTempFile.path,
+						options.outputUpload,
+						"video/mp4",
+						abortController.signal,
+					)
+				: await uploadFileToS3(
+						outputTempFile.path,
+						outputPresignedUrl,
+						"video/mp4",
+						abortController.signal,
+					);
 		outputUploaded = true;
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
@@ -1469,20 +1520,29 @@ async function processVideoAsync(
 		}
 
 		if (thumbnailPresignedUrl) {
-			// The uploaded MP4 has not been independently verified, so decode failures must still fail the job.
+			// Only the fully verified reuse path can finish without a decoded preview.
 			const thumbnailData = await generateThumbnail(
 				outputTempFile.path,
 				metadata.duration,
 				{},
 				abortController.signal,
-			);
-			try {
-				await uploadToS3(
-					thumbnailData,
-					thumbnailPresignedUrl,
-					"image/jpeg",
-					abortController.signal,
+			).catch((error) => {
+				abortController.signal.throwIfAborted();
+				if (!options.existingOutput) throw error;
+				console.warn(
+					"Verified Loom output preview could not be generated",
+					error,
 				);
+				return undefined;
+			});
+			try {
+				if (thumbnailData)
+					await uploadToS3(
+						thumbnailData,
+						thumbnailPresignedUrl,
+						"image/jpeg",
+						abortController.signal,
+					);
 			} catch (error) {
 				abortController.signal.throwIfAborted();
 				console.warn(

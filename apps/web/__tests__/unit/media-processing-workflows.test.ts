@@ -437,6 +437,30 @@ describe("media processing workflows", () => {
 		).toHaveLength(1);
 	});
 
+	it.each([
+		[503, { error: "Upstream response unavailable" }],
+		[200, {}],
+	])(
+		"holds an ambiguous HTTP %s worker response without redispatching",
+		async (status, body) => {
+			mocks.rows = [[video]];
+			mocks.fetch.mockImplementation(async (url: string) =>
+				url.startsWith("https://www.loom.com/")
+					? Response.json({ url: "https://cdn.loom.com/original.mp4" })
+					: Response.json(body, { status }),
+			);
+			await expect(importLoomVideoWorkflow(payload)).rejects.toThrow();
+			expect(mocks.dispatch).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({ state: "uncertain" }),
+			);
+			expect(
+				mocks.fetch.mock.calls.filter(([url]) =>
+					url.startsWith("https://worker.example.com/"),
+				),
+			).toHaveLength(1);
+		},
+	);
+
 	it("supports Loom streaming fallbacks without reading a nonexistent raw object", async () => {
 		mocks.fetch.mockImplementation(async (url: string) =>
 			Response.json(

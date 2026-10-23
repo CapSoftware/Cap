@@ -4,6 +4,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Storage } from "@cap/web-backend/src/Storage/index";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
@@ -44,6 +45,7 @@ export async function prepareLoomMultipartUploads({
 }): Promise<{
 	sourceUpload?: LoomMultipartUploadTarget;
 	outputUpload?: LoomMultipartUploadTarget;
+	existingOutput?: { url: string; objectIdentity: string; fileSize: number };
 }> {
 	if (bucket.provider !== "s3") return {};
 	if (!webhookSecret)
@@ -56,6 +58,35 @@ export async function prepareLoomMultipartUploads({
 	}
 	const previous = video.metadata?.loomImportUpload;
 	const outputKey = `${video.ownerId}/${video.id}/result.mp4`;
+	if (
+		previous?.ownerId === video.ownerId &&
+		previous.organizationId === video.orgId &&
+		previous.output.key === outputKey
+	) {
+		const output = await bucket.headObject(outputKey).pipe(
+			Effect.catchIf(isStorageObjectNotFound, () => Effect.succeed(null)),
+			runWorkflowPromise,
+		);
+		if (output) {
+			if (
+				!output.ETag ||
+				!/^"[^"\r\n]+"$/.test(output.ETag) ||
+				!output.ContentLength ||
+				output.ContentLength > LOOM_IMPORT_MAX_BYTES
+			) {
+				throw new Error("Existing Loom output requires storage reconciliation");
+			}
+			return {
+				existingOutput: {
+					url: await bucket
+						.getInternalSignedObjectUrl(outputKey, { expiresIn: 3 * 60 * 60 })
+						.pipe(runWorkflowPromise),
+					objectIdentity: output.ETag,
+					fileSize: output.ContentLength,
+				},
+			};
+		}
+	}
 	if (
 		sourceKey &&
 		(!sourceKey.startsWith(`${video.ownerId}/${video.id}/`) ||

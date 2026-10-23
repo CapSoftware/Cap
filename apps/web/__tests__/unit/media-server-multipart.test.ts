@@ -438,6 +438,25 @@ describe("media-server multipart fencing", () => {
 		expect(mocks.complete).not.toHaveBeenCalled();
 	});
 
+	it("blocks callbacks after a replacement workflow takes ownership", async () => {
+		const { body, row } = loomUpload();
+		mocks.rows = [
+			{
+				...row,
+				metadata: {
+					...row.metadata,
+					loomImportRun: { runId: "replacement-run", dispatch: "accepted" },
+				},
+			},
+		];
+		expect((await request("sign-part", body)).status).toBe(409);
+		expect((await request("complete", body)).status).toBe(409);
+		expect((await request("abort", body)).status).toBe(409);
+		expect(mocks.signPart).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.abort).not.toHaveBeenCalled();
+	});
+
 	it("accepts exactly 10 GB and rejects a further multipart part", async () => {
 		const { body } = loomUpload();
 		const parts = Array.from({ length: 160 }, (_, index) => ({

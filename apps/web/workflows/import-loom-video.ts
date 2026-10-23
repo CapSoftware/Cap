@@ -332,6 +332,20 @@ async function hasExistingLoomUpload(
 			metadata: video.metadata,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
+		const previous = video.metadata?.loomImportUpload;
+		if (
+			previous?.ownerId === video.ownerId &&
+			previous.organizationId === video.orgId &&
+			previous.output.key === `${video.ownerId}/${video.id}/result.mp4`
+		) {
+			const savedOutput = yield* bucket.headObject(previous.output.key).pipe(
+				Effect.map(
+					(object) => (object.ContentLength ?? 0) >= MINIMUM_VIDEO_SIZE,
+				),
+				Effect.catchIf(isStorageObjectNotFound, () => Effect.succeed(false)),
+			);
+			if (savedOutput) return true;
+		}
 		return yield* bucket.headObject(payload.rawFileKey).pipe(
 			Effect.map((object) => (object.ContentLength ?? 0) >= MINIMUM_VIDEO_SIZE),
 			Effect.catchIf(isStorageObjectNotFound, () => Effect.succeed(false)),
@@ -354,6 +368,7 @@ async function startMediaServerProcessJob(
 		sourcePresignedUrl?: string;
 		sourceUpload?: LoomMultipartUploadTarget;
 		outputUpload?: LoomMultipartUploadTarget;
+		existingOutput?: { url: string; objectIdentity: string; fileSize: number };
 		maxImportBytes: number;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
@@ -386,18 +401,22 @@ async function startMediaServerProcessJob(
 		});
 
 		if (response.ok) {
-			const { jobId } = (await response.json()) as { jobId: string };
+			const accepted: unknown = await response.json();
+			if (
+				typeof accepted !== "object" ||
+				accepted === null ||
+				!("jobId" in accepted) ||
+				typeof accepted.jobId !== "string" ||
+				!accepted.jobId
+			) {
+				throw new Error("Loom worker acceptance requires job reconciliation");
+			}
+			const jobId = accepted.jobId;
 			await recordDispatch("accepted", jobId).catch((error) => {
 				console.error("Could not record accepted Loom media dispatch", error);
 			});
 			return jobId;
 		}
-		if (
-			(response.status >= 400 && response.status < 500) ||
-			response.status === 503
-		)
-			await recordDispatch("rejected");
-
 		const errorData = (await response.json().catch(() => ({}))) as {
 			error?: string;
 			code?: string;
@@ -408,9 +427,9 @@ async function startMediaServerProcessJob(
 			errorData.details ||
 			"Video processing failed to start";
 		const shouldRetry =
-			response.status === 503 &&
-			(errorData.code === "SERVER_BUSY" ||
-				errorMessage.includes("Server is busy"));
+			response.status === 503 && errorData.code === "SERVER_BUSY";
+		if ((response.status >= 400 && response.status < 500) || shouldRetry)
+			await recordDispatch("rejected");
 
 		if (shouldRetry && attempt < MEDIA_SERVER_START_MAX_ATTEMPTS - 1) {
 			await waitForRetry(MEDIA_SERVER_START_RETRY_BASE_MS * 2 ** attempt);
@@ -460,6 +479,7 @@ async function processVideoOnMediaServer(
 		previewGifPresignedUrl,
 		sourceUpload,
 		outputUpload,
+		existingOutput,
 		abortUploads,
 	} = await Effect.gen(function* () {
 		const [video] = yield* Effect.promise(() =>
@@ -538,17 +558,18 @@ async function processVideoOnMediaServer(
 		);
 
 		return {
-			rawVideoUrl,
-			sourcePresignedUrl: multipart.sourceUpload
-				? undefined
-				: sourcePresignedUrl,
+			rawVideoUrl: multipart.existingOutput?.url ?? rawVideoUrl,
+			sourcePresignedUrl:
+				multipart.sourceUpload || multipart.existingOutput
+					? undefined
+					: sourcePresignedUrl,
 			outputPresignedUrl,
 			thumbnailPresignedUrl,
 			previewGifPresignedUrl,
 			...multipart,
 			abortUploads: async () => {
 				await Promise.all(
-					Object.values(multipart)
+					[multipart.sourceUpload, multipart.outputUpload]
 						.filter(
 							(upload): upload is LoomMultipartUploadTarget =>
 								upload !== undefined,
@@ -593,6 +614,7 @@ async function processVideoOnMediaServer(
 				sourcePresignedUrl,
 				sourceUpload,
 				outputUpload,
+				existingOutput,
 				maxImportBytes: LOOM_IMPORT_MAX_BYTES,
 				outputPresignedUrl,
 				thumbnailPresignedUrl,

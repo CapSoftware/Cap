@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
 	where: vi.fn(),
 	create: vi.fn(),
 	abort: vi.fn(),
+	head: vi.fn(),
+	get: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -44,6 +46,8 @@ function input(): Input {
 		video,
 		bucket: {
 			provider: "s3",
+			headObject: mocks.head,
+			getInternalSignedObjectUrl: mocks.get,
 			multipart: { create: mocks.create, abort: mocks.abort },
 		} as unknown as Input["bucket"],
 		attemptId: "run:0",
@@ -62,6 +66,10 @@ describe("Loom multipart upload preparation", () => {
 			Effect.succeed({ UploadId: `upload:${key}` }),
 		);
 		mocks.abort.mockReturnValue(Effect.void);
+		mocks.head.mockReturnValue(Effect.fail({ name: "NotFound" }));
+		mocks.get.mockReturnValue(
+			Effect.succeed("https://storage.example.com/result.mp4"),
+		);
 	});
 
 	it("prepares original and output parts for files up to 10 GB", async () => {
@@ -105,6 +113,42 @@ describe("Loom multipart upload preparation", () => {
 		expect(result.sourceUpload?.uploadId).toBe("source-id");
 		expect(result.outputUpload?.uploadId).toBe("output-id");
 		expect(mocks.create).not.toHaveBeenCalled();
+		expect(mocks.where).not.toHaveBeenCalled();
+	});
+
+	it("reuses an identity-bound saved output without reserving or overwriting objects", async () => {
+		const args = input();
+		args.video = {
+			...video,
+			metadata: {
+				...video.metadata,
+				loomImportUpload: {
+					attemptId: "run:0",
+					ownerId: "owner",
+					organizationId: "organization",
+					output: {
+						key: "owner/video/result.mp4",
+						uploadId: "completed-upload",
+					},
+				},
+			},
+		};
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ContentLength: 4096, ETag: '"saved-output"' }),
+		);
+		const result = await prepareLoomMultipartUploads({
+			...args,
+			attemptId: "run:1",
+		});
+		expect(result).toEqual({
+			existingOutput: {
+				url: "https://storage.example.com/result.mp4",
+				objectIdentity: '"saved-output"',
+				fileSize: 4096,
+			},
+		});
+		expect(mocks.create).not.toHaveBeenCalled();
+		expect(mocks.abort).not.toHaveBeenCalled();
 		expect(mocks.where).not.toHaveBeenCalled();
 	});
 

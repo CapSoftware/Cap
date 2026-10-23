@@ -1163,6 +1163,81 @@ describe("media routes real-world integration tests", () => {
 		30_000,
 	);
 
+	test("recovers a saved output after preview failure without overwriting it", async () => {
+		const thumbnail = spyOn(mediaVideo, "generateThumbnail").mockRejectedValue(
+			new Error("Thumbnail decode interrupted"),
+		);
+		const jobs: string[] = [];
+		try {
+			const body = {
+				videoId: "saved-loom-output",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("saved-output.mp4"),
+				thumbnailPresignedUrl: uploadUrl("saved-output.jpg"),
+				inputExtension: ".mp4",
+				maxImportBytes: 10 * 1024 ** 3,
+			};
+			const first = await app.fetch(mediaPostRequest("/video/process", body));
+			const firstJobId = ((await first.json()) as { jobId: string }).jobId;
+			jobs.push(firstJobId);
+			expect((await waitForTerminalJob(firstJobId)).phase).toBe("error");
+			const original = Uint8Array.from(
+				uploadedBytes("/uploads/saved-output.mp4"),
+			);
+			const second = await app.fetch(
+				mediaPostRequest("/video/process", {
+					...body,
+					existingOutput: {
+						url: uploadUrl("saved-output.mp4"),
+						objectIdentity: objectIdentity(original),
+						fileSize: original.byteLength,
+					},
+				}),
+			);
+			expect(second.status).toBe(200);
+			const secondJobId = ((await second.json()) as { jobId: string }).jobId;
+			jobs.push(secondJobId);
+			expect((await waitForTerminalJob(secondJobId)).phase).toBe("complete");
+			expect(uploadRequests.filter((path) => path.endsWith(".mp4"))).toEqual([
+				"/uploads/saved-output.mp4",
+			]);
+			expect(uploadedBytes("/uploads/saved-output.mp4")).toEqual(original);
+		} finally {
+			thumbnail.mockRestore();
+			for (const jobId of jobs) deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("holds a saved output whose storage identity changed without overwriting it", async () => {
+		const original = new Uint8Array(
+			await Bun.file(TEST_VIDEO_WITH_AUDIO).arrayBuffer(),
+		);
+		uploadedArtifacts.set("/uploads/changed-output.mp4", original);
+		const response = await app.fetch(
+			mediaPostRequest("/video/process", {
+				videoId: "changed-output",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("changed-output.mp4"),
+				maxImportBytes: 10 * 1024 ** 3,
+				existingOutput: {
+					url: uploadUrl("changed-output.mp4"),
+					objectIdentity: '"previous-identity"',
+					fileSize: original.byteLength,
+				},
+			}),
+		);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			expect((await waitForTerminalJob(jobId)).phase).toBe("error");
+			expect(uploadRequests).toHaveLength(0);
+			expect(uploadedBytes("/uploads/changed-output.mp4")).toEqual(original);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
 	test("still fails processing when the video output cannot be uploaded", async () => {
 		uploadFailures.set("/uploads/failed-output.mp4", 403);
 		const response = await app.fetch(

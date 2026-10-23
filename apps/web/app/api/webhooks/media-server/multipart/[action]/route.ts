@@ -98,6 +98,10 @@ async function getMultipartContext(
 			fenced ||
 			!receipt ||
 			receipt.attemptId !== payload.loomImportAttemptId ||
+			(video.metadata?.loomImportRun &&
+				!receipt.attemptId.startsWith(
+					`${video.metadata.loomImportRun.runId}:`,
+				)) ||
 			receipt.ownerId !== video.ownerId ||
 			receipt.organizationId !== video.orgId ||
 			!upload ||
