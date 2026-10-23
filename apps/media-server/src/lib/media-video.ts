@@ -1769,7 +1769,12 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 				"yuv420p",
 			);
 		}
-		ffmpegArgs.push("-level:v", input.targetH264Level);
+		if (nvenc) {
+			// h264_nvenc refuses to open when the nominal frame rate exceeds the level (browser WebM often reports 1000 fps); libx264 only writes it into the SPS, so tag it the same way.
+			ffmpegArgs.push("-bsf:v", `h264_metadata=level=${input.targetH264Level}`);
+		} else {
+			ffmpegArgs.push("-level:v", input.targetH264Level);
+		}
 		if (input.videoCodec === "vp8" || input.videoCodec === "vp9") {
 			// Reordered B-frames can make MP4 duration exclude the tail of sparse browser captures.
 			ffmpegArgs.push("-bf", "0");
