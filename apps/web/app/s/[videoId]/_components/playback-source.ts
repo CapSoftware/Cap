@@ -4,6 +4,7 @@ export type ResolvedPlaybackSource = {
 	url: string;
 	type: "mp4" | "raw";
 	supportsCrossOrigin: boolean;
+	fromInitialUrl?: true;
 };
 
 type ProbeResult = {
@@ -185,6 +186,7 @@ export async function resolvePlaybackSource({
 				url: initialResult.url,
 				type: "mp4",
 				supportsCrossOrigin: enableCrossOrigin,
+				fromInitialUrl: true,
 			};
 		}
 		if (
