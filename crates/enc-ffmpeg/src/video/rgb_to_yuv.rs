@@ -4,27 +4,41 @@ use ffmpeg::frame;
 // 16.16 BT.709, full range RGB to limited YUV. The luma row sums to 56284
 // (219/255) and each chroma row sums to 0, so a grey pixel stays on the
 // limited-range axis (black 16/128/128, white 235/128/128).
+#[cfg(any(target_arch = "x86_64", test))]
 const Y_R: i32 = 11_966;
+#[cfg(any(target_arch = "x86_64", test))]
 const Y_G: i32 = 40_254;
+#[cfg(any(target_arch = "x86_64", test))]
 const Y_B: i32 = 4_064;
+#[cfg(any(target_arch = "x86_64", test))]
 const CB_R: i32 = -6_596;
+#[cfg(any(target_arch = "x86_64", test))]
 const CB_G: i32 = -22_189;
+#[cfg(any(target_arch = "x86_64", test))]
 const CB_B: i32 = 28_785;
+#[cfg(any(target_arch = "x86_64", test))]
 const CR_R: i32 = 28_785;
+#[cfg(any(target_arch = "x86_64", test))]
 const CR_G: i32 = -26_145;
+#[cfg(any(target_arch = "x86_64", test))]
 const CR_B: i32 = -2_640;
+#[cfg(any(target_arch = "x86_64", test))]
 const ROUND: i32 = 1 << 15;
 
+#[cfg(any(target_arch = "x86_64", test))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ChannelOrder {
     Bgr,
     Rgb,
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
 struct Job {
     src: *const u8,
     src_stride: usize,
+    #[cfg(target_arch = "x86_64")]
     width: usize,
+    #[cfg(target_arch = "x86_64")]
     height: usize,
     order: ChannelOrder,
     y: *mut u8,
@@ -38,11 +52,13 @@ struct Job {
     nv12: bool,
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
 fn luma(r: i32, g: i32, b: i32) -> u8 {
     let y = (Y_R * r + Y_G * g + Y_B * b + ROUND) >> 16;
     (16 + y).clamp(16, 235) as u8
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
 fn chroma_from_sum(r_sum: i32, g_sum: i32, b_sum: i32, n: i32) -> (u8, u8) {
     let shift = 16 + n.trailing_zeros();
     let bias = n << 15;
@@ -54,6 +70,7 @@ fn chroma_from_sum(r_sum: i32, g_sum: i32, b_sum: i32, n: i32) -> (u8, u8) {
     )
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
 unsafe fn load_rgb(job: &Job, x: usize, y: usize) -> (i32, i32, i32) {
     unsafe {
         let pixel = job.src.add(y * job.src_stride + x * 4);
@@ -67,6 +84,7 @@ unsafe fn load_rgb(job: &Job, x: usize, y: usize) -> (i32, i32, i32) {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
 unsafe fn store_chroma(job: &Job, cx: usize, cy: usize, cb: u8, cr: u8) {
     unsafe {
         if job.nv12 {
@@ -81,6 +99,7 @@ unsafe fn store_chroma(job: &Job, cx: usize, cy: usize, cb: u8, cr: u8) {
 }
 
 /// `x0` and `y0` are even. `x1` and `y1` are exclusive.
+#[cfg(any(target_arch = "x86_64", test))]
 unsafe fn convert_range(job: &Job, x0: usize, x1: usize, y0: usize, y1: usize) {
     unsafe {
         let mut y = y0;
@@ -125,6 +144,7 @@ fn avx2_runtime() -> bool {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", test))]
 fn execute(job: &Job) {
     #[cfg(target_arch = "x86_64")]
     {
@@ -165,11 +185,19 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     if src.width() != dst.width() || src.height() != dst.height() {
         return false;
     }
+    #[cfg(any(target_arch = "x86_64", test))]
     let order = match src.format() {
         Pixel::BGRA | Pixel::BGRZ => ChannelOrder::Bgr,
         Pixel::RGBA | Pixel::RGBZ => ChannelOrder::Rgb,
         _ => return false,
     };
+    #[cfg(not(any(target_arch = "x86_64", test)))]
+    if !matches!(
+        src.format(),
+        Pixel::BGRA | Pixel::BGRZ | Pixel::RGBA | Pixel::RGBZ
+    ) {
+        return false;
+    }
     let nv12 = match dst.format() {
         Pixel::YUV420P => false,
         Pixel::NV12 => true,
@@ -222,37 +250,44 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
         }
         (u_stride, v_stride, 0)
     };
+    #[cfg(not(any(target_arch = "x86_64", test)))]
+    let _ = (u_stride, v_stride, uv_stride);
 
-    let src_ptr = src.data(0).as_ptr();
-    let y_ptr = dst.data_mut(0).as_mut_ptr();
-    let (u_ptr, v_ptr, uv_ptr) = if nv12 {
-        (
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            dst.data_mut(1).as_mut_ptr(),
-        )
-    } else {
-        let u_ptr = dst.data_mut(1).as_mut_ptr();
-        let v_ptr = dst.data_mut(2).as_mut_ptr();
-        (u_ptr, v_ptr, std::ptr::null_mut())
-    };
+    #[cfg(any(target_arch = "x86_64", test))]
+    {
+        let src_ptr = src.data(0).as_ptr();
+        let y_ptr = dst.data_mut(0).as_mut_ptr();
+        let (u_ptr, v_ptr, uv_ptr) = if nv12 {
+            (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                dst.data_mut(1).as_mut_ptr(),
+            )
+        } else {
+            let u_ptr = dst.data_mut(1).as_mut_ptr();
+            let v_ptr = dst.data_mut(2).as_mut_ptr();
+            (u_ptr, v_ptr, std::ptr::null_mut())
+        };
 
-    execute(&Job {
-        src: src_ptr,
-        src_stride,
-        width,
-        height,
-        order,
-        y: y_ptr,
-        y_stride,
-        u: u_ptr,
-        u_stride,
-        v: v_ptr,
-        v_stride,
-        uv: uv_ptr,
-        uv_stride,
-        nv12,
-    });
+        execute(&Job {
+            src: src_ptr,
+            src_stride,
+            #[cfg(target_arch = "x86_64")]
+            width,
+            #[cfg(target_arch = "x86_64")]
+            height,
+            order,
+            y: y_ptr,
+            y_stride,
+            u: u_ptr,
+            u_stride,
+            v: v_ptr,
+            v_stride,
+            uv: uv_ptr,
+            uv_stride,
+            nv12,
+        });
+    }
     true
 }
 
@@ -575,7 +610,9 @@ mod tests {
         let job = Job {
             src: src.data.as_ptr(),
             src_stride: src.stride,
+            #[cfg(target_arch = "x86_64")]
             width,
+            #[cfg(target_arch = "x86_64")]
             height,
             order,
             y: y_plane.data.as_mut_ptr(),
