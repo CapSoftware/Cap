@@ -19,6 +19,7 @@ import {
 	type DesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
 import { runPromise } from "@/lib/server";
+import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
 
 type ReuploadedVideo = Pick<
 	Video.Video,
@@ -90,12 +91,10 @@ export async function prepareDesktopReupload(
 }
 
 export async function invalidateReuploadedVideo(video: ReuploadedVideo) {
-	if (
-		Option.isSome(video.bucketId) ||
-		Option.isSome(video.storageIntegrationId)
-	)
-		return;
-	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	if (Option.isSome(video.storageIntegrationId)) return;
+	const distributionId = getVideoCloudFrontDistributionId(
+		Option.getOrNull(video.bucketId),
+	);
 	if (!distributionId) return;
 	const client = new CloudFrontClient({
 		region: serverEnv().CAP_AWS_REGION || "us-east-1",

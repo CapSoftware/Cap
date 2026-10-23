@@ -16,6 +16,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -443,9 +444,7 @@ async function invalidateResultCache(
 ): Promise<void> {
 	"use step";
 
-	if (bucketId) return;
-
-	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	const distributionId = getVideoCloudFrontDistributionId(bucketId);
 	if (!distributionId) return;
 
 	const basePath = `/${ownerId}/${videoId}`;

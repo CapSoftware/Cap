@@ -178,6 +178,24 @@ describe("content transfer planning", () => {
 		expect(
 			getContentTransferStorageBlockReason({
 				...input,
+				bucketId: "cap-tokyo",
+				bucketOwnerId: null,
+				bucketOrganizationId: null,
+			}),
+		).toBeNull();
+		expect(
+			getContentTransferStorageBlockReason({ ...input, bucketOwnerId: null }),
+		).toBe("The storage bucket is missing");
+		expect(
+			getContentTransferStorageBlockReason({
+				...input,
+				bucketId: "cap-tokyo",
+				storageIntegrationId: "drive",
+			}),
+		).toBe("The Cap has conflicting storage assignments");
+		expect(
+			getContentTransferStorageBlockReason({
+				...input,
 				bucketOrganizationId: null,
 			}),
 		).toBe("The Cap uses a personal storage bucket owned by another user");
