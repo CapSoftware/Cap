@@ -1358,6 +1358,7 @@ fn control_thread_offline(
         HEADLESS_SAMPLE_RATE,
         HEADLESS_CHANNELS,
     );
+    let cache = PlaybackAudioCache::default();
     while let Ok(msg) = control_rx.recv() {
         match msg {
             ControlMsg::Refresh {
@@ -1373,6 +1374,7 @@ fn control_thread_offline(
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!(%error, "Could not update offline audio playback");
                 }
@@ -1390,6 +1392,7 @@ fn control_thread_offline(
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 )
                 .inspect_err(|e| error!("Failed to install offline audio source: {e}"))
                 .is_ok();
