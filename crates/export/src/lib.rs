@@ -167,6 +167,12 @@ impl ExporterBuilder {
         let output_path = self
             .output_path
             .unwrap_or_else(|| recording_meta.output_path());
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
+        }
+
         let streaming_output = prepare_streaming_output(
             &output_path,
             cancellation.is_some() && ExportAudioRenderer::eligible(&project_config, studio_meta),
@@ -233,11 +239,6 @@ impl ExporterBuilder {
             for segment in &segments {
                 segment.decoders.prefer_sequential_access();
             }
-        }
-
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
         }
 
         Ok(ExporterBase {
