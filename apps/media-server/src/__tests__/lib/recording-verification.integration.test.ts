@@ -1960,10 +1960,6 @@ async function decoderPids(input: string): Promise<number[]> {
 		.map((line) => Number.parseInt(line.trim(), 10));
 }
 
-function expectExited(pid: number) {
-	expect(() => process.kill(pid, 0)).toThrow();
-}
-
 describe("recording timing metadata lifetime", () => {
 	test.each(["cancel", "timeout"])(
 		"joins a stalled raw terminal-duration read after %s",
@@ -2373,15 +2369,13 @@ describe("recording verification lifetime", () => {
 					(error: unknown) => error,
 				);
 				await request;
-				const pids = await decoderPids(input);
-				expect(pids.length).toBe(1);
 				if (cause === "cancel") controller.abort();
 				const error = await outcome;
 				expect(error).toBeInstanceOf(Error);
 				expect((error as Error).message).toContain(
 					cause === "cancel" ? "cancelled" : "timed out",
 				);
-				for (const pid of pids) expectExited(pid);
+				expect(await decoderPids(input)).toEqual([]);
 			} finally {
 				controller.abort();
 				await server.stop(true);
@@ -2943,8 +2937,6 @@ describe("remote recording object identity", () => {
 					(error: unknown) => error,
 				);
 				await decoding;
-				const pids = await decoderPids(input);
-				expect(pids.length).toBe(1);
 				if (cause === "cancel") controller.abort();
 				const error = await outcome;
 				expect(error).toBeInstanceOf(Error);
@@ -2955,7 +2947,7 @@ describe("remote recording object identity", () => {
 				expect(isRetryableRecordingVerificationError(error)).toBe(
 					cause === "timeout",
 				);
-				for (const pid of pids) expectExited(pid);
+				expect(await decoderPids(input)).toEqual([]);
 			} finally {
 				controller.abort();
 				await server.stop(true);

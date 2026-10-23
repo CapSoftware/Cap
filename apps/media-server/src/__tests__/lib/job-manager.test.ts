@@ -156,8 +156,10 @@ describe("durable recording workers", () => {
 		const sending = sendWebhook(job);
 		updateJob(job.jobId, { phase: "complete", progress: 100 });
 		expect(sendWebhook(job)).toBe(sending);
+		// The URL policy check runs before fetch, so wait for the request to start.
+		while (!release) await Bun.sleep(1);
 		const started = performance.now();
-		release?.(new Response(null, { status: 503 }));
+		release(new Response(null, { status: 503 }));
 		await sending;
 		expect(performance.now() - started).toBeLessThan(400);
 		expect(maximumInFlight).toBe(1);

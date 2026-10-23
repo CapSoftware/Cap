@@ -51,6 +51,9 @@ services:
     restart: unless-stopped
     environment:
       PORT: 3456
+      S3_INTERNAL_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_URL:-http://localhost:9000}
+      MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3456/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
