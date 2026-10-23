@@ -1178,8 +1178,8 @@ fn avassetreader_switches_to_software_only_when_its_reader_stops_answering() {
     };
     let runtime = runtime();
     let time = |frame: u32| frame as f32 / 30.0;
-    let slow_vend = Duration::from_millis(300);
-    let deadline_ms = 50;
+    let slow_vend = Duration::from_millis(1500);
+    let deadline_ms = 250;
 
     let registration = scripted::register(script.clone());
     let path = registration.path().to_path_buf();
@@ -1206,7 +1206,7 @@ fn avassetreader_switches_to_software_only_when_its_reader_stops_answering() {
             frame += 1;
             assert_eq!(
                 handle
-                    .get_frame(time(frame))
+                    .get_frame_initial(time(frame))
                     .await
                     .as_ref()
                     .and_then(frame_identity),
@@ -1222,14 +1222,32 @@ fn avassetreader_switches_to_software_only_when_its_reader_stops_answering() {
         }
 
         registration.set_vend_delay(slow_vend);
-        for _ in 0..MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
+        for round in 1..=MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
             frame += 1;
-            handle
-                .get_frame_with_timeout(time(frame), deadline_ms, 2, FrameDeadline::Drop)
-                .await
-                .unwrap();
+            let request =
+                handle.get_frame_with_timeout(time(frame), deadline_ms, 2, FrameDeadline::Drop);
+            if round < MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
+                assert!(
+                    matches!(request.await, Ok(None)),
+                    "stalled round {round}: request {frame} beat a {deadline_ms} ms deadline"
+                );
+                assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
+                continue;
+            }
+            // The reader is still inside the vend it started with the slow
+            // delay in round 1, so lifting the delay now lets only the
+            // software decoder answer this request within its deadline.
+            let lift_delay = async {
+                tokio::time::sleep(Duration::from_millis(deadline_ms / 2)).await;
+                registration.set_vend_delay(Duration::ZERO);
+            };
+            let (answered, ()) = tokio::join!(request, lift_delay);
+            assert_eq!(
+                answered.unwrap().as_ref().and_then(frame_identity),
+                Some(frame),
+                "the request that switched to software decoding"
+            );
         }
-        registration.set_vend_delay(Duration::ZERO);
         assert_eq!(handle.decoder_type(), DecoderType::FFmpegSoftware);
         assert_eq!(
             handle.fallback_reason(),
