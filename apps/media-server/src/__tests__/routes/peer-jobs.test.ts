@@ -17,7 +17,7 @@ const peerRequests: {
 	peerLookup: string | null;
 	secret: string | null;
 }[] = [];
-let respond: (request: Request) => Response = () =>
+let respond: (request: Request) => Response | Promise<Response> = () =>
 	new Response("not found", { status: 404 });
 let peer: ReturnType<typeof Bun.serve>;
 let missingPeer: ReturnType<typeof Bun.serve>;
@@ -115,6 +115,23 @@ describe("peer job lookup", () => {
 		const response = await app.fetch(statusRequest("job-rejected"));
 		expect(response.status).toBe(404);
 	});
+
+	test("waits for an owner that delivers its webhook before confirming a cancel", async () => {
+		respond = async (request) => {
+			if (request.method !== "POST")
+				return new Response("not found", { status: 404 });
+			await Bun.sleep(2_500);
+			return Response.json({ success: true, jobId: "job-slow-cancel" });
+		};
+		const response = await app.fetch(
+			new Request("http://localhost/video/process/job-slow-cancel/cancel", {
+				method: "POST",
+				headers: { "x-media-server-secret": SECRET },
+			}),
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json()).success).toBe(true);
+	}, 10_000);
 
 	test("cancels a job on the peer that owns it", async () => {
 		respond = (request) =>

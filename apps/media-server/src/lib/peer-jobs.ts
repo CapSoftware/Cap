@@ -1,5 +1,7 @@
 const PEER_LOOKUP_HEADER = "x-cap-peer-lookup";
-const PEER_TIMEOUT_MS = 2_000;
+const PEER_STATUS_TIMEOUT_MS = 2_000;
+// The owner replies to a cancel only after delivering its webhook (up to three 5 s attempts).
+const PEER_CANCEL_TIMEOUT_MS = 30_000;
 
 // Jobs live in the memory of the instance that runs them. Behind a load
 // balancer a status or cancel request can land on another instance, so it asks
@@ -32,7 +34,10 @@ export async function findJobOnPeer(
 	const peers = mediaServerPeers();
 	if (!secret || peers.length === 0) return null;
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), PEER_TIMEOUT_MS);
+	const timeout = setTimeout(
+		() => controller.abort(),
+		method === "POST" ? PEER_CANCEL_TIMEOUT_MS : PEER_STATUS_TIMEOUT_MS,
+	);
 	try {
 		return await Promise.any(
 			peers.map(async (peer) => {
