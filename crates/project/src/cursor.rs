@@ -129,12 +129,19 @@ impl CursorEvents {
         }
 
         let last_move_time = self.moves.last().map(|event| event.time_ms).unwrap_or(0.0);
+        let final_segment = segments.last().unwrap();
+        let last_confirmed_time = self
+            .clicks
+            .iter()
+            .filter(|click| click.cursor_id == final_segment.id)
+            .map(|click| click.time_ms)
+            .fold(last_move_time, f64::max);
 
         for i in 0..segments.len() {
             let end_time = if i + 1 < segments.len() {
                 segments[i + 1].start_time
             } else {
-                last_move_time
+                last_confirmed_time
             };
 
             let duration = (end_time - segments[i].start_time).max(0.0);
@@ -518,6 +525,23 @@ mod tests {
                 move_event(1500.0, "pointer"),
             ],
             clicks: vec![click_event(400.0, "ibeam")],
+        };
+
+        events.stabilize_short_lived_cursor_shapes(
+            Some(&pointer_ids),
+            SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+        );
+
+        assert_eq!(events.moves[1].cursor_id, "ibeam");
+        assert_eq!(events.clicks[0].cursor_id, "ibeam");
+    }
+
+    #[test]
+    fn final_shape_is_preserved_when_a_later_click_confirms_its_duration() {
+        let pointer_ids = HashSet::from(["pointer".to_string()]);
+        let mut events = CursorEvents {
+            moves: vec![move_event(0.0, "pointer"), move_event(1500.0, "ibeam")],
+            clicks: vec![click_event(2700.0, "ibeam")],
         };
 
         events.stabilize_short_lived_cursor_shapes(

@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
@@ -12,11 +13,13 @@ const LEGACY_AI_SUMMARY_FALLBACK =
 	"The AI was unable to generate a proper summary for this content.";
 
 export async function POST(
-	_request: Request,
+	request: Request,
 	props: RouteContext<"/api/videos/[videoId]/retry-ai">,
 ) {
 	try {
-		const user = await getCurrentUser();
+		const user = isCrossSiteCookieWrite(request)
+			? null
+			: await getCurrentUser();
 		if (!user) {
 			return Response.json({ error: "Unauthorized" }, { status: 401 });
 		}
