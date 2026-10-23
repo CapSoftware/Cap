@@ -3872,7 +3872,7 @@ impl EditorWindow {
         )
     }
 
-    fn timeline_mouse_down(
+    pub(crate) fn timeline_mouse_down(
         &mut self,
         event: &MouseDownEvent,
         ruler: bool,
@@ -3895,7 +3895,7 @@ impl EditorWindow {
         cx.notify();
     }
 
-    fn timeline_mouse_move(
+    pub(crate) fn timeline_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
         window: &mut Window,
@@ -3944,7 +3944,7 @@ impl EditorWindow {
     /// dispose())`) and to end a ruler scrub. It runs after the timeline's own
     /// handler -- gpui bubbles child to parent -- so a press released *outside*
     /// the timeline is dropped rather than seeking.
-    fn window_mouse_up(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn window_mouse_up(&mut self, cx: &mut Context<Self>) {
         if self.scrub.take().is_some() {
             cx.notify();
         }
