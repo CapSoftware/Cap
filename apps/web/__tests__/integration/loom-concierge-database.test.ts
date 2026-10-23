@@ -789,22 +789,18 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 		const retainedVideoId = Video.VideoId.make(id());
 		const deletedVideoId = Video.VideoId.make(id());
 		const otherDeletedVideoId = Video.VideoId.make(id());
-		await db()
-			.insert(videos)
-			.values({
-				id: retainedVideoId,
-				name: "Retained",
-				ownerId,
-				orgId: organizationId,
-			});
-		await db()
-			.insert(importedVideos)
-			.values({
-				id: retainedVideoId,
-				orgId: organizationId,
-				source: "loom",
-				sourceId: loomId(),
-			});
+		await db().insert(videos).values({
+			id: retainedVideoId,
+			name: "Retained",
+			ownerId,
+			orgId: organizationId,
+		});
+		await db().insert(importedVideos).values({
+			id: retainedVideoId,
+			orgId: organizationId,
+			source: "loom",
+			sourceId: loomId(),
+		});
 		await db()
 			.insert(loomMigrationImports)
 			.values([
