@@ -22,6 +22,7 @@ hide = "Cap ausblenden"
 hide_others = "Andere ausblenden"
 quit = "Cap beenden"
 services = "Dienste"
+settings = "Einstellungen…"
 
 [menu.file]
 close_window = "Fenster schließen"

@@ -22,6 +22,7 @@ hide = "Cap छिपाएँ"
 hide_others = "अन्य छिपाएँ"
 quit = "Cap से बाहर निकलें"
 services = "सेवाएँ"
+settings = "सेटिंग्स…"
 
 [menu.file]
 close_window = "विंडो बंद करें"
