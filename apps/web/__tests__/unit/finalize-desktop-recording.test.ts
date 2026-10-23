@@ -105,6 +105,7 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 });
 
 import {
+	commitAndStartDesktopRecordingAttempt,
 	commitDesktopRecordingAttempt,
 	finalizeDesktopRecordingWorkflow,
 	pollDesktopRecordingAttempt,
@@ -659,6 +660,73 @@ describe("bounded source commitment steps", () => {
 			info.mockRestore();
 			now.mockRestore();
 		}
+	});
+
+	it("dispatches in the same step when the commit finishes inside its batch budget", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockResolvedValue({ source });
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		expect(mocks.persist).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("returns the accepted job without committing or dispatching again when the combined step is retried", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockResolvedValue({ source });
+		mocks.attach.mockImplementation(
+			async ({ remoteJobId }: { remoteJobId: string }) => {
+				withCurrent({ remoteJobId });
+				return true;
+			},
+		);
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		expect(mocks.commitSource).toHaveBeenCalledOnce();
+		expect(mocks.persist).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.sourceUrls).toHaveBeenCalledOnce();
+	});
+
+	it("leaves dispatch to its own step after a slow commit", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockImplementation(async () => {
+			vi.setSystemTime(Date.now() + 15_000);
+			return { source };
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({ committed: "ready" });
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("does not dispatch while the source commit is still in progress", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
+			vi.setSystemTime(Date.now() + 15_000);
+			return advanceCheckpoint(_video, checkpoint);
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({ committed: "progress" });
+		expect(mocks.fetch).not.toHaveBeenCalled();
 	});
 
 	it("includes checkpoint persistence latency in the batch budget", async () => {
