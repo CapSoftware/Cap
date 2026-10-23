@@ -15,6 +15,7 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
+import { s3CompatibleClientOptions } from "@cap/utils/s3";
 import {
 	type GoogleDriveIntegrationConfig,
 	getGoogleDriveAccessToken,
@@ -436,6 +437,7 @@ export async function testOrganizationS3Config(input: S3ConfigInput) {
 			accessKeyId: credentials.accessKeyId,
 			secretAccessKey: credentials.secretAccessKey,
 		},
+		...s3CompatibleClientOptions(input.endpoint),
 	});
 
 	try {

@@ -219,10 +219,11 @@ const S3_FIELDS: [(&str, &str); 5] = [
     ("Region", "us-east-1"),
 ];
 
-const S3_PROVIDERS: [(&str, &str); 5] = [
+const S3_PROVIDERS: [(&str, &str); 6] = [
     ("aws", "AWS S3"),
     ("cloudflare", "Cloudflare R2"),
     ("supabase", "Supabase"),
+    ("neon", "Neon"),
     ("minio", "MinIO"),
     ("other", "Other S3-Compatible"),
 ];

@@ -194,7 +194,7 @@ LOOM IMPORT (CAP PRO):
 
 CUSTOM S3 BUCKET:
 - Bring your own storage: configure in the desktop app under Settings > Integrations
-- Supported providers: Amazon S3, Cloudflare R2, Supabase Storage, MinIO, DigitalOcean Spaces, Backblaze B2, any S3-compatible service
+- Supported providers: Amazon S3, Cloudflare R2, Supabase Storage, Neon Object Storage, MinIO, DigitalOcean Spaces, Backblaze B2, any S3-compatible service
 - Configuration: Access Key ID, Secret Access Key, Bucket Name, Region, Endpoint URL (for non-AWS)
 - Credentials are encrypted and stored securely
 - Videos uploaded to your bucket instead of Cap cloud
