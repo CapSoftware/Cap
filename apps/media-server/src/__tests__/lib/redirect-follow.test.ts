@@ -23,9 +23,9 @@ describe("redirects to a private address", () => {
 
 	function privateRedirectServer() {
 		let secretHits = 0;
-		const server = Bun.serve({
+		const server: ReturnType<typeof Bun.serve> = Bun.serve({
 			port: 0,
-			fetch(request) {
+			fetch(request): Response {
 				const url = new URL(request.url);
 				if (url.pathname === "/secret") {
 					secretHits += 1;
