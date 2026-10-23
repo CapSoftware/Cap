@@ -30,7 +30,7 @@ export function HomeTwoPage() {
 		>
 			<HomeTwoSchema />
 			<DiscordLinkPreview />
-			<div className="px-2.5 pb-2.5 pt-[68px] sm:px-4 sm:pb-4 lg:pt-[76px]">
+			<div className="px-2.5 pb-2.5 pt-[68px] sm:px-5 sm:pb-4 lg:px-8 lg:pt-[76px]">
 				<div
 					className={`${CARD_RADIUS} shadow-[0_0_0_1px_rgba(17,17,17,0.045)]`}
 					style={grainBg(CREAM)}
