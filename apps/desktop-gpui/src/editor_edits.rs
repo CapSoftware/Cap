@@ -198,6 +198,13 @@ impl ProjectHistory {
     pub fn resume(&mut self, config: &ProjectConfiguration) {
         self.paused = self.paused.saturating_sub(1);
         if self.paused == 0 && std::mem::take(&mut self.dirty) {
+            let current = &self.entries[self.entries.len() - self.count - 1];
+            if matches!(
+                (serde_json::to_value(current), serde_json::to_value(config)),
+                (Ok(before), Ok(after)) if before == after
+            ) {
+                return;
+            }
             self.record(config);
         }
     }
@@ -2993,6 +3000,34 @@ mod tests {
         clean.resume(&with_zoom_count(0));
         assert_eq!(clean.depth(), 1);
         assert!(!clean.can_undo());
+    }
+
+    #[test]
+    fn a_drag_returning_to_its_start_keeps_undo_and_redo_unchanged() {
+        let initial = ProjectConfiguration::default();
+        let mut moved = initial.clone();
+        moved.background.padding += 1.0;
+        let mut future = initial.clone();
+        future.background.padding += 2.0;
+        let mut history = ProjectHistory::new(initial.clone());
+        history.pause();
+        history.record(&moved);
+        history.record(&initial);
+        history.resume(&initial);
+        assert_eq!(history.depth(), 1);
+        assert!(!history.can_undo());
+
+        history.record(&future);
+        history.undo();
+        history.pause();
+        history.record(&moved);
+        history.record(&initial);
+        history.resume(&initial);
+        assert!(history.can_redo());
+        assert_eq!(
+            history.redo().unwrap().background.padding,
+            future.background.padding
+        );
     }
 
     #[test]
