@@ -718,11 +718,19 @@ async function collectDecoderLines(
 	take(pending + decoder.decode());
 }
 
-async function concatFiles(paths: string[], target: string): Promise<void> {
+async function concatFiles(
+	paths: string[],
+	target: string,
+	signal?: AbortSignal,
+): Promise<void> {
 	const output = createWriteStream(target);
 	try {
 		for (const path of paths) {
-			await pipeline(createReadStream(path), output, { end: false });
+			signal?.throwIfAborted();
+			await pipeline(createReadStream(path), output, {
+				end: false,
+				...(signal ? { signal } : {}),
+			});
 		}
 	} finally {
 		await new Promise<void>((resolve, reject) =>
@@ -971,7 +979,11 @@ async function decodePacketProvenChunks(
 	try {
 		await Promise.all(
 			groups.map((group, index) =>
-				concatFiles([source.init, ...group], chunkPaths[index]),
+				concatFiles(
+					[source.init, ...group],
+					chunkPaths[index],
+					options.abortSignal,
+				),
 			),
 		);
 		const jobs = [

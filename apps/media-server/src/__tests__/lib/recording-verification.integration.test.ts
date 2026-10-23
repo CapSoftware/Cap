@@ -2614,7 +2614,8 @@ describe("chunked packet-proven verification", () => {
 	test("falls back to one full decode when fragments do not start on keyframes", async () => {
 		const recording = await misalignedRecording("chunk-misaligned");
 		expect(recording.segments.length).toBeGreaterThanOrEqual(6);
-		const { single, chunked } = await both(recording);
+		const { single, chunked, fallbacks } = await both(recording);
+		expect(fallbacks).toHaveLength(1);
 		expect(chunked).toEqual(single);
 		expect(chunked.video.frameCount).toBe(120);
 	});
@@ -2695,7 +2696,7 @@ describe("ranged remote byte verification", () => {
 		return { server, ranges };
 	}
 
-	async function verify(port: number) {
+	async function verify(port: number | undefined) {
 		return verifyRemoteRecordingBytes(
 			`http://127.0.0.1:${port}/recording.mp4`,
 			{
