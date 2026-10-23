@@ -687,6 +687,58 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
+	test("uploads mux previews only after the recording output is verified", async () => {
+		const body = {
+			...fencedMuxRequest("mux-previews"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("complete");
+			expect(uploadRequests[0]).toBe("/uploads/mux-previews.mp4");
+			expect([...uploadRequests].sort()).toEqual([
+				"/uploads/mux-previews.gif",
+				"/uploads/mux-previews.jpg",
+				"/uploads/mux-previews.mp4",
+			]);
+			expect(
+				uploadedBytes("/uploads/mux-previews.jpg").byteLength,
+			).toBeGreaterThan(0);
+			expect(
+				uploadedBytes("/uploads/mux-previews.gif").byteLength,
+			).toBeGreaterThan(0);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("skips mux previews when the recording output upload fails", async () => {
+		uploadFailures.set("/uploads/mux-previews-failed.mp4", 403);
+		const body = {
+			...fencedMuxRequest("mux-previews-failed"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews-failed.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews-failed.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(uploadRequests).toEqual(["/uploads/mux-previews-failed.mp4"]);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
 	test("runs optional audio correction on the local verified file after publication and retains success if it fails", async () => {
 		let observed: () => void = () => {};
 		const observations: Record<string, unknown>[] = [];

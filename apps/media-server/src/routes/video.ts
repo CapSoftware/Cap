@@ -2801,6 +2801,7 @@ async function muxSegmentsAsync(
 		? new Map(context.sourceObjects.map((source) => [source.url, source]))
 		: undefined;
 	const startedAt = Date.now();
+	let previewAssets: Promise<PreviewAssets> | undefined;
 
 	try {
 		if (!beginRecordingProcessing(jobId, SEGMENTED_RECORDING_TIMEOUT_MS))
@@ -3008,6 +3009,17 @@ async function muxSegmentsAsync(
 			durationMs: Date.now() - startedAt,
 			resources: getSystemResources(),
 		});
+		const outputReadyAt = Date.now();
+		// The result is final here, so render previews while the upload and its
+		// remote check run; they are still only uploaded once the recording passes.
+		previewAssets = renderPreviewAssets(
+			resultPath,
+			localVerified.video.duration,
+			Boolean(thumbnailPresignedUrl),
+			Boolean(previewGifPresignedUrl),
+			abortController.signal,
+			videoId,
+		);
 
 		let metadata = await withJobHeartbeat(jobId, () =>
 			probeVideoFile(resultPath),
@@ -3125,18 +3137,14 @@ async function muxSegmentsAsync(
 			sendCurrentJobWebhook(jobId);
 		}
 
-		const assetDuration = metadata?.duration ?? 0;
+		const uploadedAt = Date.now();
 		await withJobHeartbeat(jobId, async () => {
-			if (thumbnailPresignedUrl) {
+			const assets = await previewAssets;
+			abortController.signal.throwIfAborted();
+			if (thumbnailPresignedUrl && assets?.thumbnail) {
 				try {
-					const thumbnailData = await generateThumbnail(
-						resultPath,
-						assetDuration,
-						{},
-						abortController.signal,
-					);
 					await uploadToS3(
-						thumbnailData,
+						assets.thumbnail,
 						thumbnailPresignedUrl,
 						"image/jpeg",
 						abortController.signal,
@@ -3149,14 +3157,22 @@ async function muxSegmentsAsync(
 					);
 				}
 			}
-
-			await generateAndUploadPreviewGif(
-				resultPath,
-				assetDuration,
-				previewGifPresignedUrl,
-				abortController.signal,
-				"mux-segments",
-			);
+			if (previewGifPresignedUrl && assets?.previewGif) {
+				try {
+					await uploadFileToS3(
+						assets.previewGif.path,
+						previewGifPresignedUrl,
+						"image/gif",
+						abortController.signal,
+					);
+				} catch (previewErr) {
+					abortController.signal.throwIfAborted();
+					console.warn(
+						"[mux-segments] Preview GIF generation failed:",
+						previewErr,
+					);
+				}
+			}
 		});
 
 		abortController.signal.throwIfAborted();
@@ -3171,6 +3187,8 @@ async function muxSegmentsAsync(
 			jobId,
 			videoId,
 			durationMs: Date.now() - startedAt,
+			uploadMs: uploadedAt - outputReadyAt,
+			previewMs: Date.now() - uploadedAt,
 			metadata,
 			resources: getSystemResources(),
 		});
@@ -3229,9 +3247,46 @@ async function muxSegmentsAsync(
 		sendCurrentJobWebhook(jobId);
 	} finally {
 		if (processingTimeout) clearTimeout(processingTimeout);
+		await (await previewAssets)?.previewGif?.cleanup();
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});
 		releaseWorkDir();
 	}
+}
+
+interface PreviewAssets {
+	thumbnail: Uint8Array | null;
+	previewGif: TempFileHandle | null;
+}
+
+// Never rejects: a failed preview only costs the asset, and the caller checks for abort.
+async function renderPreviewAssets(
+	resultPath: string,
+	duration: number,
+	thumbnail: boolean,
+	previewGif: boolean,
+	signal: AbortSignal,
+	videoId: string,
+): Promise<PreviewAssets> {
+	const [thumbnailResult, previewGifResult] = await Promise.allSettled([
+		thumbnail ? generateThumbnail(resultPath, duration, {}, signal) : null,
+		previewGif ? generatePreviewGif(resultPath, duration, {}, signal) : null,
+	]);
+	if (thumbnailResult.status === "rejected" && !signal.aborted)
+		console.warn(
+			`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+			thumbnailResult.reason,
+		);
+	if (previewGifResult.status === "rejected" && !signal.aborted)
+		console.warn(
+			"[mux-segments] Preview GIF generation failed:",
+			previewGifResult.reason,
+		);
+	return {
+		thumbnail:
+			thumbnailResult.status === "fulfilled" ? thumbnailResult.value : null,
+		previewGif:
+			previewGifResult.status === "fulfilled" ? previewGifResult.value : null,
+	};
 }
 
 export default video;
