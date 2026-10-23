@@ -459,6 +459,16 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
         }
+        if crate::store::GeneralSettings::load().macbook_notch_overlay
+            && completed.meta.display_notch().is_some()
+            && matches!(
+                capture_target,
+                ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
+            )
+            && let Err(error) = enable_notch_overlay(&project_path)
+        {
+            tracing::warn!(%error, "Could not apply the notch overlay preference");
+        }
         Ok::<_, anyhow::Error>(completed)
     })
     .await
@@ -1554,6 +1564,34 @@ fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
         serde_json::to_value(crate::store::studio_sound_isolation())?,
     );
     let temp = path.with_extension(format!("studio-sound-{}.tmp", crate::store::new_uuid_v4()));
+    let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
+        .and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+fn enable_notch_overlay(project_path: &std::path::Path) -> std::io::Result<()> {
+    let path = project_path.join("project-config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let object = config.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Project configuration is not an object",
+        )
+    })?;
+    let background = object
+        .entry("background")
+        .or_insert_with(|| serde_json::json!({}));
+    let background = background.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Background configuration is not an object",
+        )
+    })?;
+    background.insert("notch".into(), serde_json::json!({ "enabled": true }));
+    let temp = path.with_extension(format!("notch-{}.tmp", crate::store::new_uuid_v4()));
     let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
         .and_then(|()| std::fs::rename(&temp, path));
     if result.is_err() {
@@ -3531,6 +3569,26 @@ mod tests {
             assert_eq!(written, expected);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn notch_overlay_is_enabled_without_touching_other_settings() {
+        let dir = temp_project("notch-overlay");
+        let path = dir.join("project-config.json");
+        let mut original =
+            serde_json::to_value(cap_project::ProjectConfiguration::default()).unwrap();
+        original["background"]["future"] = 7.into();
+        original["futureProjectSetting"] = true.into();
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+
+        enable_notch_overlay(&dir).unwrap();
+
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["background"]["future"], 7);
+        assert_eq!(written["futureProjectSetting"], true);
+        let parsed: cap_project::ProjectConfiguration = serde_json::from_value(written).unwrap();
+        assert!(parsed.background.notch.is_some_and(|notch| notch.enabled));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A config written by a build that predates `backgroundBlur` (or one that
