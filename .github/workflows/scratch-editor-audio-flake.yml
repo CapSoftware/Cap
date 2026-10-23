@@ -1,0 +1,42 @@
+name: scratch editor audio flake diag
+on:
+  push:
+    branches: [ci-scratch/editor-audio-flake-diag]
+permissions:
+  contents: read
+jobs:
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-sync
+          save-cache: false
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+      - name: Instrument
+        run: python3 .github/scratch/instrument.py ${{ matrix.variant }} && git diff
+      - name: Build
+        run: cargo test --locked -p cap-editor --lib --no-run
+      - name: Two tests, 200 iterations
+        run: .github/scratch/loop.sh "${{ matrix.variant }} two-tests" 200 0 two
+      - name: Two tests under simulated memory pressure, 30 iterations
+        run: .github/scratch/loop.sh "${{ matrix.variant }} two-tests+pressure" 30 1 two
+      - name: Full audio filter (CI condition), 15 iterations
+        run: .github/scratch/loop.sh "${{ matrix.variant }} audio-filter" 15 0 all
+      - name: Full audio filter under simulated memory pressure, 5 iterations
+        run: .github/scratch/loop.sh "${{ matrix.variant }} audio-filter+pressure" 5 1 all
