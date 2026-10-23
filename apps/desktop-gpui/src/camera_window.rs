@@ -1012,6 +1012,7 @@ struct CameraPreviewView {
     reveal_started: Option<Instant>,
     loading_started: Option<Instant>,
     loading_fade_started: Option<Instant>,
+    loading_redraw: camera_loading::LoadingRedraw,
     retained_invalidated: bool,
     selection_revision: u64,
     frame_revision: Option<u64>,
@@ -1118,6 +1119,7 @@ impl CameraPreviewView {
             reveal_started: None,
             loading_started: None,
             loading_fade_started: None,
+            loading_redraw: camera_loading::LoadingRedraw::default(),
             retained_invalidated: false,
             selection_revision: 0,
             frame_revision: None,
@@ -1338,7 +1340,12 @@ impl Render for CameraPreviewView {
 
         if let Some((started, opacity, animate)) = loading {
             container = container.child(camera_loading::camera_loading(
-                started, radius, opacity, animate, !has_issue,
+                started,
+                radius,
+                opacity,
+                animate,
+                !has_issue,
+                self.loading_redraw.clone(),
             ));
         }
 

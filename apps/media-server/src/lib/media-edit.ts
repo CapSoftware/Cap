@@ -1,6 +1,15 @@
 import { writeFile } from "node:fs/promises";
 import { file, spawn } from "bun";
+import { FfmpegExitError, ffmpegErrorLines } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
+import {
+	buildNvencEncodeArgs,
+	logNvencFallback,
+	type NvencOptions,
+	nvencFallbackReason,
+	nvencOptionsFromEnv,
+	recordNvencAttempt,
+} from "./nvenc-encoder";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { createTempFile, type TempFileHandle } from "./temp-files";
 
@@ -24,6 +33,7 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_OUTPUT_FPS = 30;
 const MAX_TRANSCODE_RANGES_PER_BATCH = 4;
+const EDIT_CRF = 18;
 
 function roundTime(value: number) {
 	return Math.round(value * 1000) / 1000;
@@ -37,7 +47,7 @@ function getTotalRangeDuration(ranges: EditRange[]) {
 	return ranges.reduce((total, range) => total + getRangeDuration(range), 0);
 }
 
-function getTimeoutMs(ranges: EditRange[]) {
+export function getTimeoutMs(ranges: EditRange[]) {
 	const durationMs = getTotalRangeDuration(ranges) * 20_000;
 	return Math.min(MAX_TIMEOUT_MS, Math.max(DEFAULT_TIMEOUT_MS, durationMs));
 }
@@ -154,6 +164,7 @@ export function buildTranscodeEditArgs(
 	outputPath: string,
 	hasAudio: boolean,
 	fps = DEFAULT_OUTPUT_FPS,
+	nvenc: NvencOptions | null = null,
 ) {
 	if (ranges.length === 0 || ranges.length > MAX_TRANSCODE_RANGES_PER_BATCH) {
 		throw new Error(
@@ -187,12 +198,9 @@ export function buildTranscodeEditArgs(
 		[...filters, concat].join(";"),
 		"-map",
 		"[v]",
-		"-c:v",
-		"libx264",
-		"-preset",
-		"fast",
-		"-crf",
-		"18",
+		...(nvenc
+			? buildNvencEncodeArgs(nvenc, EDIT_CRF)
+			: ["-c:v", "libx264", "-preset", "fast", "-crf", String(EDIT_CRF)]),
 		"-pix_fmt",
 		"yuv420p",
 		"-enc_time_base:v",
@@ -319,8 +327,9 @@ async function runFfmpegCommand(
 				]);
 
 				if (exitCode !== 0) {
-					throw new Error(
+					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrText.slice(-2000)}`,
+						ffmpegErrorLines(stderrText),
 					);
 				}
 			})(),
@@ -398,6 +407,7 @@ async function renderTranscodedEdit(
 	hasAudio: boolean,
 	fps: number | undefined,
 	timeoutMs: number,
+	nvenc: NvencOptions | null,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ) {
@@ -411,7 +421,14 @@ async function renderTranscodedEdit(
 			const batchFile = await createTempFile(".mp4");
 			batchFiles.push(batchFile);
 			await runFfmpegCommand(
-				buildTranscodeEditArgs(inputPath, batch, batchFile.path, hasAudio, fps),
+				buildTranscodeEditArgs(
+					inputPath,
+					batch,
+					batchFile.path,
+					hasAudio,
+					fps,
+					nvenc,
+				),
 				getRemainingTimeoutMs(startedAt, timeoutMs),
 				abortSignal,
 			);
@@ -456,14 +473,36 @@ export async function renderEditedVideo({
 	}
 
 	const timeoutMs = getTimeoutMs(normalizedRanges);
+	const render = (nvenc: NvencOptions | null) =>
+		renderTranscodedEdit(
+			inputPath,
+			normalizedRanges,
+			Boolean(metadata.audioCodec),
+			metadata.fps,
+			timeoutMs,
+			nvenc,
+			onProgress,
+			abortSignal,
+		);
 
-	return await renderTranscodedEdit(
-		inputPath,
-		normalizedRanges,
-		Boolean(metadata.audioCodec),
-		metadata.fps,
-		timeoutMs,
-		onProgress,
-		abortSignal,
-	);
+	const nvenc = nvencOptionsFromEnv();
+	if (nvenc) {
+		try {
+			const outputFile = await render(nvenc);
+			recordNvencAttempt("edit");
+			return outputFile;
+		} catch (error) {
+			const reason = nvencFallbackReason(error, abortSignal?.aborted ?? false);
+			if (reason === null) throw error;
+			recordNvencAttempt("edit", reason);
+			logNvencFallback({
+				job: "edit",
+				sourceCodec: metadata.videoCodec,
+				gpuDecode: false,
+				reason,
+			});
+		}
+	}
+
+	return await render(null);
 }
