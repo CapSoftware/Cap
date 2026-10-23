@@ -1,59 +1,66 @@
 "use client";
 
 import { classNames } from "@cap/utils/helpers";
-import Image from "next/image";
 import { useRef } from "react";
-import { BAND, GRAIN } from "./theme";
+import { BAND } from "./theme";
 import { useInView, usePageVisible } from "./visibility";
 
+/**
+ * The desktop app's welcome screen sky
+ * (apps/desktop-gpui/src/onboarding_window.rs, `welcome_sky`) over the
+ * landing page's clouds: light rays behind and in front of them, a sun in
+ * the top right, moving film grain, and an entrance that lifts a pale wash
+ * off it all.
+ */
+
 const ART = {
-	cumulusA: { src: "/backgrounds/clouds/cumulus-a.webp", w: 896, h: 387 },
-	cumulusB: { src: "/backgrounds/clouds/cumulus-b.webp", w: 760, h: 360 },
-	tuft: { src: "/backgrounds/clouds/tuft-a.webp", w: 600, h: 300 },
-	bank: { src: "/backgrounds/clouds/bank-a.webp", w: 864, h: 241 },
-	wisp: { src: "/backgrounds/clouds/wisp-a.webp", w: 860, h: 203 },
+	cumulusA: { src: "/backgrounds/clouds/cumulus-a.webp", aspect: 387 / 896 },
+	cumulusB: { src: "/backgrounds/clouds/cumulus-b.webp", aspect: 360 / 760 },
+	tuft: { src: "/backgrounds/clouds/tuft-a.webp", aspect: 300 / 600 },
+	bank: { src: "/backgrounds/clouds/bank-a.webp", aspect: 241 / 864 },
+	wisp: { src: "/backgrounds/clouds/wisp-a.webp", aspect: 203 / 860 },
 } as const;
 
 type Art = keyof typeof ART;
-
-type CloudSpec = {
+/** `drift` is seconds per crossing and `offset` how far into it a cloud
+ * starts, so they never line up. Far clouds sit behind the mist. */
+type Cloud = {
 	art: Art;
 	top: string;
 	width: number;
 	opacity: number;
 	drift: number;
 	offset: number;
-	bob: number;
-	near?: boolean;
+	far?: boolean;
 };
 
-const CLOUDS: CloudSpec[] = [
+const CLOUDS: Cloud[] = [
 	{
 		art: "wisp",
 		top: "4%",
 		width: 300,
-		opacity: 0.62,
+		opacity: 0.55,
 		drift: 280,
 		offset: -100,
-		bob: 19,
+		far: true,
 	},
 	{
 		art: "tuft",
 		top: "2%",
 		width: 210,
-		opacity: 0.62,
+		opacity: 0.55,
 		drift: 250,
 		offset: -210,
-		bob: 23,
+		far: true,
 	},
 	{
 		art: "bank",
 		top: "11%",
 		width: 340,
-		opacity: 0.6,
+		opacity: 0.5,
 		drift: 300,
 		offset: -40,
-		bob: 20,
+		far: true,
 	},
 	{
 		art: "cumulusB",
@@ -62,7 +69,6 @@ const CLOUDS: CloudSpec[] = [
 		opacity: 0.86,
 		drift: 210,
 		offset: -150,
-		bob: 21,
 	},
 	{
 		art: "tuft",
@@ -71,7 +77,6 @@ const CLOUDS: CloudSpec[] = [
 		opacity: 0.82,
 		drift: 220,
 		offset: -30,
-		bob: 25,
 	},
 	{
 		art: "cumulusA",
@@ -80,8 +85,6 @@ const CLOUDS: CloudSpec[] = [
 		opacity: 0.97,
 		drift: 175,
 		offset: -115,
-		bob: 27,
-		near: true,
 	},
 	{
 		art: "bank",
@@ -90,8 +93,6 @@ const CLOUDS: CloudSpec[] = [
 		opacity: 0.94,
 		drift: 185,
 		offset: -60,
-		bob: 29,
-		near: true,
 	},
 	{
 		art: "wisp",
@@ -100,46 +101,39 @@ const CLOUDS: CloudSpec[] = [
 		opacity: 0.82,
 		drift: 230,
 		offset: -190,
-		bob: 24,
 	},
 ];
 
-const Cloud = ({ spec }: { spec: CloudSpec }) => {
-	const art = ART[spec.art];
-	const height = Math.round((art.h / art.w) * spec.width);
-	return (
-		<div
-			className="ht-cloud"
-			style={{
-				top: spec.top,
-				width: spec.width,
-				height,
-				opacity: spec.opacity,
-				animationDuration: `${spec.drift}s`,
-				animationDelay: `${spec.offset}s`,
-			}}
-		>
-			<Image
-				src={art.src}
-				alt=""
-				width={spec.width}
-				height={height}
-				unoptimized
-				draggable={false}
-				priority={spec.near}
-				loading="eager"
-				fetchPriority={spec.near ? "high" : "low"}
-				className="ht-cloud-bob block select-none"
-				style={{ animationDuration: `${spec.bob}s` }}
-			/>
-		</div>
-	);
-};
+const CloudSprite = ({ cloud }: { cloud: Cloud }) => (
+	// The track is the sky plus the cloud's own width, so each one crosses
+	// from fully off the left edge to fully off the right.
+	<div
+		className="ht-cloud"
+		style={{
+			top: cloud.top,
+			left: -cloud.width,
+			width: `calc(100% + ${cloud.width}px)`,
+			opacity: cloud.opacity,
+			animationDuration: `${cloud.drift}s`,
+			animationDelay: `${cloud.offset}s`,
+		}}
+	>
+		{/* biome-ignore lint/performance/noImgElement: decorative art on a CSS track */}
+		<img
+			src={ART[cloud.art].src}
+			alt=""
+			width={cloud.width}
+			height={Math.round(cloud.width * ART[cloud.art].aspect)}
+			draggable={false}
+			decoding="async"
+			className="block select-none"
+		/>
+	</div>
+);
 
 const SKY = [
-	"radial-gradient(36% 32% at 70% 2%, rgba(255,224,192,0.8) 0%, rgba(255,224,192,0) 70%)",
 	"radial-gradient(80% 42% at 50% 74%, rgba(255,240,224,0.5) 0%, rgba(255,240,224,0) 72%)",
-	`linear-gradient(180deg, #C8DDF6 0%, #D9E7F8 34%, #E6EDF6 66%, ${BAND} 100%)`,
+	`linear-gradient(180deg, #A3BFEA 0%, #C8DBF4 34%, #E2EAF5 64%, ${BAND} 92%)`,
 ].join(",");
 
 export const HeroSky = ({ className }: { className?: string }) => {
@@ -152,62 +146,176 @@ export const HeroSky = ({ className }: { className?: string }) => {
 			ref={rootRef}
 			aria-hidden="true"
 			className={classNames(
-				"pointer-events-none absolute inset-0 overflow-hidden",
+				"ht-sky pointer-events-none absolute inset-0 overflow-hidden",
 				className ?? "rounded-t-[24px]",
 				drifting ? "" : "ht-sky-idle",
 			)}
-			style={{
-				backgroundColor: BAND,
-				backgroundImage: SKY,
-			}}
+			style={{ backgroundColor: BAND, backgroundImage: SKY }}
 		>
 			<style href="ht-hero-sky" precedence="default">
 				{CSS}
 			</style>
-			<div className="ht-cloud-track">
-				{CLOUDS.map((spec) => (
-					<Cloud key={`${spec.art}-${spec.top}`} spec={spec} />
+			<div className="ht-light">
+				<div className="ht-rays ht-rays-far" />
+			</div>
+			<div className="ht-clouds">
+				{CLOUDS.filter((cloud) => cloud.far).map((cloud) => (
+					<CloudSprite key={`${cloud.art}-${cloud.top}`} cloud={cloud} />
+				))}
+				<div className="ht-mist" />
+				{CLOUDS.filter((cloud) => !cloud.far).map((cloud) => (
+					<CloudSprite key={`${cloud.art}-${cloud.top}`} cloud={cloud} />
 				))}
 			</div>
-			<div
-				className="absolute inset-0"
-				style={{ backgroundImage: GRAIN, backgroundSize: "200px 200px" }}
-			/>
+			<div className="ht-vignette" />
+			<div className="ht-light">
+				<div className="ht-sun" />
+				<div className="ht-rays ht-rays-near" />
+			</div>
+			<div className="ht-ground" />
+			<div className="ht-grain" />
+			<div className="ht-wash" />
 		</div>
 	);
 };
 
 const CSS = `
-.ht-cloud-track {
-	position: absolute;
-	inset: 0;
-	-webkit-mask-image: linear-gradient(180deg, #000 0%, #000 62%, rgba(0,0,0,0) 96%);
-	mask-image: linear-gradient(180deg, #000 0%, #000 62%, rgba(0,0,0,0) 96%);
-}
 .ht-cloud {
 	position: absolute;
-	left: 0;
 	will-change: transform;
-	animation-name: ht-cloud-drift;
-	animation-timing-function: linear;
-	animation-iteration-count: infinite;
-}
-.ht-cloud-bob {
-	animation-name: ht-cloud-bob;
-	animation-timing-function: ease-in-out;
-	animation-iteration-count: infinite;
-	animation-direction: alternate;
+	animation: ht-cloud-drift linear infinite;
 }
 @keyframes ht-cloud-drift {
-	from { transform: translate3d(-100%, 0, 0); }
-	to { transform: translate3d(100vw, 0, 0); }
+	from { transform: translate3d(0, 0, 0); }
+	to { transform: translate3d(100%, 0, 0); }
 }
-@keyframes ht-cloud-bob {
-	from { transform: translate3d(0, -5px, 0); }
-	to { transform: translate3d(0, 5px, 0); }
+
+/* Clouds and light arrive after the wash starts lifting. */
+.ht-clouds, .ht-light {
+	position: absolute;
+	inset: 0;
+	animation: ht-fade-in 2.2s cubic-bezier(0.4, 0, 0.2, 1) 0.25s both;
 }
-.ht-sky-idle .ht-cloud, .ht-sky-idle .ht-cloud-bob { animation-play-state: paused; }
+.ht-light { animation-duration: 2.8s; animation-delay: 0.45s; }
+.ht-clouds {
+	-webkit-mask-image: linear-gradient(180deg, #000 0%, #000 60%, transparent 94%);
+	mask-image: linear-gradient(180deg, #000 0%, #000 60%, transparent 94%);
+}
+@keyframes ht-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.ht-mist {
+	position: absolute;
+	left: -10%;
+	top: 0;
+	width: 120%;
+	height: 150%;
+	background:
+		radial-gradient(66.7% 15% at 41.7% 35%, rgba(255,255,255,0.28) 0%, rgba(244,248,253,0.12) 50%, rgba(244,248,253,0) 100%),
+		radial-gradient(66.7% 15% at 62.5% 56%, rgba(255,255,255,0.22) 0%, rgba(244,248,253,0.1) 50%, rgba(244,248,253,0) 100%);
+	animation: ht-mist 44s ease-in-out infinite alternate;
+}
+@keyframes ht-mist {
+	from { transform: translate3d(-20px, 0, 0); }
+	to { transform: translate3d(20px, 0, 0); }
+}
+
+/* Shafts fan down and to the left from just above the top right corner,
+   baked from the welcome screen's blurred SVGs (a live SVG filter on a
+   stretched background can drop its blur when Chrome re-rasterises it).
+   Each layer sways and breathes on its own period so they never line up. */
+.ht-rays {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -40px;
+	right: -40px;
+	background-size: 100% 100%;
+	background-repeat: no-repeat;
+}
+.ht-rays-far {
+	background-image: url(/backgrounds/hero/rays-far.webp);
+	opacity: 0.75;
+	animation: ht-sway-far 16s ease-in-out infinite alternate,
+		ht-breathe 10s ease-in-out infinite alternate;
+}
+.ht-rays-near {
+	background-image: url(/backgrounds/hero/rays-near.webp);
+	opacity: 0.7;
+	animation: ht-sway-near 21s ease-in-out -4s infinite alternate,
+		ht-breathe 13s ease-in-out -6s infinite alternate;
+}
+@keyframes ht-sway-far {
+	from { transform: translate3d(-14px, 0, 0); }
+	to { transform: translate3d(14px, 0, 0); }
+}
+@keyframes ht-sway-near {
+	from { transform: translate3d(18px, 0, 0); }
+	to { transform: translate3d(-18px, 0, 0); }
+}
+@keyframes ht-breathe {
+	from { opacity: 0.62; }
+	to { opacity: 1; }
+}
+
+.ht-sun {
+	position: absolute;
+	left: 84%;
+	top: -6%;
+	width: 75%;
+	aspect-ratio: 1;
+	transform: translate(-50%, -50%);
+	background: radial-gradient(closest-side, rgba(255,248,236,0.95) 0%, rgba(255,227,196,0.5) 35%, rgba(255,227,196,0) 100%);
+	animation: ht-sun 9s ease-in-out infinite alternate;
+}
+@keyframes ht-sun { from { opacity: 0.8; } to { opacity: 1; } }
+
+/* Darkens the top corners only; the bottom has to meet the band cleanly. */
+.ht-vignette {
+	position: absolute;
+	inset: 0;
+	background: radial-gradient(75% 75% at 50% 50%, rgba(52,80,122,0) 50%, rgba(52,80,122,0.14) 100%);
+	-webkit-mask-image: linear-gradient(180deg, #000 0%, #000 35%, transparent 75%);
+	mask-image: linear-gradient(180deg, #000 0%, #000 35%, transparent 75%);
+}
+.ht-ground {
+	position: absolute;
+	inset: auto 0 0 0;
+	height: 28%;
+	background: linear-gradient(180deg, ${BAND}00 0%, ${BAND} 100%);
+}
+
+/* Film grain, jumping to a new offset 12 times a second. */
+.ht-grain {
+	position: absolute;
+	inset: -200px;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.12'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='260' height='260' filter='url(%23n)'/%3E%3C/svg%3E");
+	background-size: 260px 260px;
+	animation: ht-grain 0.84s steps(1, end) infinite;
+}
+@keyframes ht-grain {
+	0% { transform: translate3d(0, 0, 0); }
+	10% { transform: translate3d(-97px, 61px, 0); }
+	20% { transform: translate3d(43px, -128px, 0); }
+	30% { transform: translate3d(-151px, -22px, 0); }
+	40% { transform: translate3d(118px, 87px, 0); }
+	50% { transform: translate3d(-36px, 143px, 0); }
+	60% { transform: translate3d(71px, -59px, 0); }
+	70% { transform: translate3d(-122px, -114px, 0); }
+	80% { transform: translate3d(160px, 19px, 0); }
+	90% { transform: translate3d(-64px, 102px, 0); }
+}
+
+.ht-wash {
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(180deg, #F6F8FB 0%, #F6F8FB 60%, ${BAND} 100%);
+	animation: ht-wash 1.9s cubic-bezier(0.4, 0, 0.2, 1) 0.05s both;
+}
+@keyframes ht-wash { from { opacity: 1; } to { opacity: 0; } }
+
+.ht-sky-idle *, .ht-sky-idle *::before { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
-	.ht-cloud, .ht-cloud-bob { animation-play-state: paused; }
+	.ht-sky * { animation: none !important; }
+	.ht-wash { opacity: 0; }
 }
 `;

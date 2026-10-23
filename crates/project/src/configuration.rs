@@ -1824,6 +1824,15 @@ where
     Ok(by_segment.into_values().collect())
 }
 
+fn deserialize_scene_segments<'de, D>(deserializer: D) -> Result<Vec<SceneSegment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut segments = Vec::<SceneSegment>::deserialize(deserializer)?;
+    segments.sort_by(|left, right| left.start.total_cmp(&right.start));
+    Ok(segments)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -1835,7 +1844,7 @@ pub struct TimelineConfiguration {
     )]
     pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_segments")]
     pub scene_segments: Vec<SceneSegment>,
     #[serde(default)]
     pub mask_segments: Vec<MaskSegment>,
@@ -1969,14 +1978,15 @@ impl TimelineConfiguration {
             return windows;
         }
         windows.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(windows.len());
-        for window in windows {
-            match merged.last_mut() {
-                Some(last) if window.0 <= last.1 => last.1 = last.1.max(window.1),
-                _ => merged.push(window),
+        windows.dedup_by(|next, previous| {
+            if next.0 <= previous.1 {
+                previous.1 = previous.1.max(next.1);
+                true
+            } else {
+                false
             }
-        }
-        merged
+        });
+        windows
     }
 
     /// Total output seconds inserted by fullscreen text holds.
@@ -3858,6 +3868,25 @@ mod tests {
         assert_eq!(frozen, 2.0);
         let (after, _) = timeline.get_segment_time(6.5).unwrap();
         assert_eq!(after, 2.5);
+    }
+
+    #[test]
+    fn fullscreen_holds_merge_unsorted_nested_and_touching_windows() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![
+            fullscreen_text(8.0, 9.0),
+            fullscreen_text(4.0, 6.0),
+            fullscreen_text(3.0, 4.0),
+            fullscreen_text(2.0, 5.0),
+            fullscreen_text(6.0, 7.0),
+            fullscreen_text(1.0, 1.0),
+            fullscreen_text(10.0, 9.0),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(2.0, 7.0), (8.0, 9.0)]);
+        assert_eq!(timeline.held_duration(), 6.0);
+        assert_eq!(timeline.text_segments[0].start, 8.0);
+        assert_eq!(timeline.text_segments[3].end, 5.0);
     }
 
     #[test]

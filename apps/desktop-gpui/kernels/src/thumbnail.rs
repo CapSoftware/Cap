@@ -62,6 +62,8 @@ pub fn fit_centered(image: &RgbaImage, target_width: u32, target_height: u32) ->
 // `image::imageops::resize(.., FilterType::Lanczos3)`, so the output is
 // byte-identical; only the loop order changes, so whole blocks of a row stay in
 // registers and vectorize instead of one generic `get_pixel` per tap.
+// Kept out of line so inlining it doesn't slow `fit_centered`'s no-resize paths.
+#[inline(never)]
 fn resize_lanczos3(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
     let source_row = image.width() as usize * 4;
     let mut vertical = vec![0f32; source_row * height as usize];
@@ -74,25 +76,49 @@ fn resize_lanczos3(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
 
     let columns = lanczos3_taps(image.width(), width);
     let mut resized = RgbaImage::new(width, height);
-    for (output, row) in resized
-        .chunks_exact_mut(width as usize * 4)
-        .zip(vertical.chunks_exact(source_row))
+    let output_row = width as usize * 4;
+    let mut outputs = resized.chunks_exact_mut(output_row * HORIZONTAL_ROWS);
+    let mut inputs = vertical.chunks_exact(source_row * HORIZONTAL_ROWS);
+    for (output, input) in outputs.by_ref().zip(inputs.by_ref()) {
+        horizontal_pass::<HORIZONTAL_ROWS>(output, input, &columns);
+    }
+    for (output, input) in outputs
+        .into_remainder()
+        .chunks_exact_mut(output_row)
+        .zip(inputs.remainder().chunks_exact(source_row))
     {
-        for (pixel, taps) in output.chunks_exact_mut(4).zip(&columns) {
-            let mut sum = [0f32; 4];
-            for (index, weight) in taps.weights.iter().enumerate() {
-                let start = (taps.start + index) * 4;
-                for (channel, &value) in sum.iter_mut().zip(&row[start..start + 4]) {
+        horizontal_pass::<1>(output, input, &columns);
+    }
+    resized
+}
+
+// Each pixel's sum is one chain of dependent additions, so ROWS rows that
+// share the same taps run side by side to keep the adders busy.
+fn horizontal_pass<const ROWS: usize>(output: &mut [u8], input: &[f32], columns: &[Taps]) {
+    let output_row = output.len() / ROWS;
+    let source_row = input.len() / ROWS;
+    let rows: [&[[f32; 4]]; ROWS] =
+        std::array::from_fn(|row| input[row * source_row..][..source_row].as_chunks().0);
+    for (column, taps) in columns.iter().enumerate() {
+        let windows = rows.map(|row| &row[taps.start..taps.start + taps.weights.len()]);
+        let mut sums = [[0f32; 4]; ROWS];
+        for (index, &weight) in taps.weights.iter().enumerate() {
+            for (sum, window) in sums.iter_mut().zip(&windows) {
+                for (channel, &value) in sum.iter_mut().zip(&window[index]) {
                     *channel += value * weight;
                 }
             }
+        }
+        for (row, sum) in sums.iter().enumerate() {
+            let pixel = &mut output[row * output_row + column * 4..][..4];
             for (channel, value) in pixel.iter_mut().zip(sum) {
                 *channel = value.clamp(0.0, 255.0).round() as u8;
             }
         }
     }
-    resized
 }
+
+const HORIZONTAL_ROWS: usize = 8;
 
 fn vertical_pass(vertical: &mut [f32], pixels: &[u8], rows: &[Taps], source_row: usize) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -345,6 +371,8 @@ mod tests {
             (1920, 1080, 320, 180),
             (1366, 768, 320, 180),
             (777, 1333, 104, 180),
+            (1920, 1080, 319, 179),
+            (2560, 1440, 320, 13),
             (321, 181, 320, 180),
             (320, 400, 320, 180),
             (100, 60, 320, 180),

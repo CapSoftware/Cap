@@ -71,6 +71,69 @@ pub const THUMBNAIL_STALE_TIME: Duration = Duration::from_secs(10);
 /// idle timeout is the deadline that branch would have used anyway.
 pub const PREWARM_DELAY: Duration = Duration::from_millis(250);
 
+/// A ScreenCaptureKit request that has not answered by now is treated as hung.
+/// A healthy 320x180 thumbnail or shareable-content read takes milliseconds.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long thumbnail captures stay paused after one hangs. A hung
+/// `SCScreenshotManager` request cannot be cancelled and keeps macOS's capture
+/// session (and the purple indicator) open in `replayd`, so retrying on every
+/// picker poll would only pile up more of them:
+/// https://github.com/CapSoftware/Cap/issues/2339
+const CAPTURE_HANG_PAUSE: Duration = Duration::from_secs(5 * 60);
+
+static CAPTURE_PAUSE: CapturePause = CapturePause::new();
+
+pub fn captures_paused() -> bool {
+    CAPTURE_PAUSE.active_at(std::time::Instant::now())
+}
+
+struct CapturePause(std::sync::Mutex<Option<std::time::Instant>>);
+
+impl CapturePause {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    fn active_at(&self, now: std::time::Instant) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some_and(|until| now < until)
+    }
+
+    fn start_at(&self, now: std::time::Instant) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now + CAPTURE_HANG_PAUSE);
+    }
+}
+
+/// `None` when `future` outlives `limit`, which also starts `pause`. The
+/// dropped request may still be pending inside ScreenCaptureKit; this only
+/// stops the sweep from waiting on it forever.
+async fn within_capture_timeout<T>(
+    what: &'static str,
+    limit: Duration,
+    pause: &CapturePause,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    match tokio::time::timeout(limit, future).await {
+        Ok(value) => Some(value),
+        Err(_) => {
+            tracing::warn!(
+                what,
+                timeout_ms = limit.as_millis() as u64,
+                pause_secs = CAPTURE_HANG_PAUSE.as_secs(),
+                "thumbnail capture did not answer; pausing thumbnail captures"
+            );
+            pause.start_at(std::time::Instant::now());
+            None
+        }
+    }
+}
+
 /// A card's images. Both halves are optional and independent: a window can have
 /// an icon and no thumbnail (capture refused) or the reverse (no bundle icon).
 #[derive(Clone, Default)]
@@ -461,7 +524,10 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     let joined = tokio::task::spawn_blocking(move || {
-        match tokio::runtime::Builder::new_current_thread().build() {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+        {
             Ok(runtime) => runtime.block_on(make()),
             Err(error) => tracing::error!("could not start the thumbnail runtime: {error}"),
         }
@@ -496,14 +562,34 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
         return;
     }
 
-    let Some(content) = shareable_content().await else {
+    let Some(Some(content)) = within_capture_timeout(
+        "shareable content",
+        CAPTURE_TIMEOUT,
+        &CAPTURE_PAUSE,
+        shareable_content(),
+    )
+    .await
+    else {
         return;
     };
 
     let total = targets.len();
     let mut captured = 0usize;
     for (option, display) in targets {
-        let Some(rgba) = capture_display_thumbnail(&display, content.retained()).await else {
+        if captures_paused() {
+            return;
+        }
+        let Some(capture) = within_capture_timeout(
+            "display thumbnail",
+            CAPTURE_TIMEOUT,
+            &CAPTURE_PAUSE,
+            capture_display_thumbnail(&display, content.retained()),
+        )
+        .await
+        else {
+            return;
+        };
+        let Some(rgba) = capture else {
             tracing::debug!(id = %option.id, "display thumbnail capture missed");
             continue;
         };
@@ -534,14 +620,32 @@ async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
         return;
     }
 
-    let Some(content) = shareable_content().await else {
+    let Some(Some(content)) = within_capture_timeout(
+        "shareable content",
+        CAPTURE_TIMEOUT,
+        &CAPTURE_PAUSE,
+        shareable_content(),
+    )
+    .await
+    else {
         return;
     };
 
     for (option, window) in targets {
-        let image = capture_window_thumbnail(&window, content.retained())
-            .await
-            .map(crate::library::rgba_to_render_image);
+        if captures_paused() {
+            return;
+        }
+        let Some(capture) = within_capture_timeout(
+            "window thumbnail",
+            CAPTURE_TIMEOUT,
+            &CAPTURE_PAUSE,
+            capture_window_thumbnail(&window, content.retained()),
+        )
+        .await
+        else {
+            return;
+        };
+        let image = capture.map(crate::library::rgba_to_render_image);
         let app_icon = window.app_icon().filter(|bytes| !bytes.is_empty());
         if image.is_some() {
             captured += 1;
@@ -1426,5 +1530,46 @@ mod tests {
             let _ = tx.send("captured");
         }));
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!["captured"]);
+    }
+
+    #[test]
+    fn a_hung_capture_times_out_inside_a_sweep_and_pauses_captures() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let pause = Arc::new(CapturePause::new());
+        let sweep_pause = pause.clone();
+        let (tx, rx) = flume::unbounded();
+        runtime.block_on(run_capture(move || async move {
+            let hung = within_capture_timeout(
+                "test capture",
+                Duration::from_millis(20),
+                &sweep_pause,
+                std::future::pending::<()>(),
+            )
+            .await;
+            let answered = within_capture_timeout(
+                "test capture",
+                Duration::from_secs(5),
+                &sweep_pause,
+                async { 7 },
+            )
+            .await;
+            let _ = tx.send((hung, answered));
+        }));
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![(None, Some(7))]);
+        assert!(pause.active_at(std::time::Instant::now()));
+    }
+
+    #[test]
+    fn capture_pause_lasts_for_the_hang_pause() {
+        let pause = CapturePause::new();
+        let now = std::time::Instant::now();
+        assert!(!pause.active_at(now));
+        pause.start_at(now);
+        assert!(pause.active_at(now));
+        assert!(pause.active_at(now + CAPTURE_HANG_PAUSE.saturating_sub(Duration::from_millis(1))));
+        assert!(!pause.active_at(now + CAPTURE_HANG_PAUSE));
     }
 }

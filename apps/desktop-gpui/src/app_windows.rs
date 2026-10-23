@@ -69,8 +69,7 @@ pub(crate) fn display_work_area(
         let bounds = scap_targets::Display::from_id(&id)
             .as_ref()
             .and_then(capture_display_bounds)?;
-        let primary_height = cx.primary_display()?.bounds().size.height;
-        Some(global_macos_work_area(available, bounds, primary_height))
+        Some(global_macos_work_area(available, bounds))
     }
     #[cfg(not(target_os = "macos"))]
     Some(available)
@@ -147,13 +146,12 @@ fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixe
 fn global_macos_work_area(
     mut available: Bounds<Pixels>,
     display: Bounds<Pixels>,
-    primary_height: Pixels,
 ) -> Bounds<Pixels> {
-    // GPUI's macOS work area uses local x but includes the AppKit screen y.
-    // Windows opened without a display ID need primary-display coordinates.
-    let appkit_origin_y = primary_height - display.origin.y - display.size.height;
-    available.origin.x += display.origin.x;
-    available.origin.y += display.origin.y - appkit_origin_y;
+    // GPUI's macOS work area is relative to its own display's top-left corner
+    // (`visible_bounds` in gpui_macos). Windows opened without a display ID need
+    // primary-display coordinates, so a display above or below the primary one
+    // has to carry its global origin across.
+    available.origin += display.origin;
     available
 }
 
@@ -1856,6 +1854,14 @@ fn pinned_window_resolution_matches(
     requested.is_none_or(|requested| resolved.is_some_and(|resolved| requested == resolved))
 }
 
+/// An area screenshot never inherits a selection: re-arming one over an open
+/// Area picker (the Screenshot Area hotkey or tray item while a recording-mode
+/// area is drawn) reopens the overlays empty instead of keeping that crop.
+/// https://github.com/CapSoftware/Cap/issues/2432
+fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, recording_mode: Mode) -> bool {
+    armed != Some(mode) || (mode == TargetType::Area && recording_mode == Mode::Screenshot)
+}
+
 pub(crate) fn reject_unavailable_window(cx: &mut App) {
     dismiss_target_overlays(cx);
     RecordingSession::global(cx).update(cx, |session, cx| {
@@ -1972,8 +1978,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     }
 
     let select = TargetSelect::global(cx);
-    let mode_changed = select.read(cx).mode != Some(request.mode);
-    if mode_changed {
+    if reopens_overlays(select.read(cx).mode, request.mode, request.recording_mode) {
         close_overlay_windows(cx);
     }
 
@@ -6349,23 +6354,6 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
-/// Repaint the bar between its once-a-second ticks -- the mic meter updates at
-/// up to ~20Hz and the bar is never the active window.
-pub fn refresh_controls_window(cx: &mut App) {
-    let level_db = crate::feeds::Feeds::global(cx).read(cx).mic_level_db;
-    if let Some(handle) = cx.global::<AppWindows>().controls {
-        handle
-            .update(cx, |controls, window, cx| {
-                if !controls.level_bar_moves(level_db, window.scale_factor()) {
-                    return;
-                }
-                cx.notify();
-                window.refresh();
-            })
-            .ok();
-    }
-}
-
 fn camera_window_number(cx: &mut App) -> Option<isize> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
@@ -6877,11 +6865,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_work_area_preserves_horizontal_and_vertical_display_origins() {
-        for (display_origin, appkit_y) in [
-            (point(px(-1440.), px(0.)), 180.),
-            (point(px(1920.), px(0.)), 180.),
-            (point(px(0.), px(-900.)), 1080.),
-            (point(px(0.), px(1080.)), -900.),
+        for display_origin in [
+            point(px(-1440.), px(0.)),
+            point(px(1920.), px(0.)),
+            point(px(0.), px(-900.)),
+            point(px(0.), px(1080.)),
+            point(px(1691.), px(-1080.)),
         ] {
             let display = Bounds {
                 origin: display_origin,
@@ -6889,11 +6878,10 @@ mod tests {
             };
             let available = global_macos_work_area(
                 Bounds {
-                    origin: point(px(0.), px(appkit_y + 25.)),
+                    origin: point(px(0.), px(25.)),
                     size: size(px(1440.), px(825.)),
                 },
                 display,
-                px(1080.),
             );
             assert_eq!(available.origin, display_origin + point(px(0.), px(25.)));
             assert_eq!(available.size, size(px(1440.), px(825.)));
@@ -7712,6 +7700,42 @@ mod tests {
         assert!(!pinned_window_resolution_matches(
             Some(&selected),
             Some(&other)
+        ));
+    }
+
+    #[test]
+    fn area_screenshots_reopen_the_overlays_instead_of_inheriting_a_selection() {
+        assert!(reopens_overlays(None, TargetType::Area, Mode::Screenshot));
+        assert!(reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Screenshot
+        ));
+
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Instant
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Display,
+            Mode::Screenshot
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Window),
+            TargetType::Window,
+            Mode::Screenshot
         ));
     }
 

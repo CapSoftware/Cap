@@ -38,3 +38,11 @@ harness = false
 [[bench]]
 name = "screenshot_alpha"
 harness = false
+
+[[bench]]
+name = "frame_unpad"
+harness = false
+
+[[bench]]
+name = "screenshot_mask"
+harness = false
