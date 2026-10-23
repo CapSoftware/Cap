@@ -1656,12 +1656,6 @@ fn active_readback_byte_len(
         .filter(|&active_bytes| active_bytes > 0 && active_bytes <= mapped_bytes)
 }
 
-fn allocate_readback(active_bytes: usize, frame_number: u32) -> Result<Vec<u8>, RenderingError> {
-    let mut data = Vec::new();
-    reserve_readback(&mut data, active_bytes, frame_number)?;
-    Ok(data)
-}
-
 fn reserve_readback(
     data: &mut Vec<u8>,
     active_bytes: usize,
@@ -2398,7 +2392,8 @@ mod readback_output_tests {
 
     #[test]
     fn readback_allocation_reserves_frame_and_metadata_without_changing_length() {
-        let data = allocate_readback(8_294_400, 7).expect("readback allocation");
+        let mut data = Vec::new();
+        reserve_readback(&mut data, 8_294_400, 7).expect("readback allocation");
         assert!(data.is_empty());
         assert!(data.capacity() >= 8_294_424);
     }
@@ -2407,7 +2402,7 @@ mod readback_output_tests {
     fn readback_allocation_overflow_is_terminal() {
         for active_bytes in [usize::MAX, usize::MAX - 24] {
             assert!(matches!(
-                allocate_readback(active_bytes, 7),
+                reserve_readback(&mut Vec::new(), active_bytes, 7),
                 Err(RenderingError::ReadbackAllocationFailed { frame_number: 7 })
             ));
         }
