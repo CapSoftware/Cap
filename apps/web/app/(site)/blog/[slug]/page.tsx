@@ -4,11 +4,13 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
+import remarkGfm from "remark-gfm";
 import { AuthorByline } from "@/components/blog/AuthorByline";
 import { BlogTemplate } from "@/components/blog/BlogTemplate";
 import { getPostComponents } from "@/components/blog/post-components";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { ogImageUrl } from "@/lib/og/url";
+import { parseAuthors } from "@/utils/authors";
 import { getBlogPosts } from "@/utils/blog";
 import {
 	getInteractiveBlogContent,
@@ -37,11 +39,13 @@ export async function generateMetadata(
 		publishedAt: publishedTime,
 		description,
 		image,
+		video,
 	} = post.metadata as {
 		title: string;
 		publishedAt: string;
 		description: string;
 		image?: string;
+		video?: string;
 	};
 	// Posts with real cover art keep it; everything else gets the branded
 	// dynamic OG image.
@@ -64,6 +68,18 @@ export async function generateMetadata(
 					url: ogImage,
 				},
 			],
+			// Discord, iMessage and Telegram play a silent looping MP4
+			// from og:video; X and LinkedIn ignore it and use the image.
+			...(video && {
+				videos: [
+					{
+						url: `${buildEnv.NEXT_PUBLIC_WEB_URL}${video}`,
+						type: "video/mp4",
+						width: 1200,
+						height: 630,
+					},
+				],
+			}),
 		},
 		twitter: {
 			card: "summary_large_image",
@@ -88,11 +104,18 @@ export default async function PostPage(props: PostProps) {
 	}
 
 	const readingTime = calculateReadingTime(post.content);
+	// `layout: feature` in the frontmatter swaps the cover image for a larger
+	// title, the description as a subtitle and the authors up top.
+	const feature = (post.metadata as { layout?: string }).layout === "feature";
+	const publishedAt = parseISO(
+		(post.metadata as { publishedAt?: string }).publishedAt ||
+			new Date().toISOString(),
+	);
 
 	return (
 		<>
 			<article className="px-5 py-24 mx-auto md:py-40 prose">
-				{post.metadata.image && (
+				{post.metadata.image && !feature && (
 					<div className="relative mb-6 h-[200px] sm:h-[280px] md:h-[345px] w-full rounded-lg overflow-hidden">
 						<Image
 							className="object-contain m-0 w-full sm:object-cover"
@@ -106,28 +129,62 @@ export default async function PostPage(props: PostProps) {
 				)}
 
 				<div className="wrapper">
-					<header>
-						<h1 className="mb-2 font-semibold">{post.metadata.title}</h1>
-						<p className="space-x-1 text-xs text-gray-12">
-							<span>
-								{format(
-									parseISO(
-										(post.metadata as any).publishedAt ||
-											new Date().toISOString(),
-									),
-									"MMMM dd, yyyy",
-								)}
-							</span>
-							<span>—</span>
-							<span>{readingTime} min read</span>
-						</p>
-					</header>
-					<hr className="my-6" />
+					{feature ? (
+						<header className="not-prose">
+							<h1 className="m-0 text-[40px] font-semibold leading-[1.06] tracking-[-0.03em] text-gray-12 sm:text-[56px]">
+								{post.metadata.title}
+							</h1>
+							<div className="mt-4 max-w-[34rem] text-[19px] leading-[1.5] text-gray-10 sm:text-[21px]">
+								{post.metadata.description}
+							</div>
+							<div className="mt-8 flex flex-wrap items-center justify-between gap-4">
+								<div className="flex items-center gap-2.5">
+									{parseAuthors(
+										"author" in post.metadata ? post.metadata.author : "",
+									).map((author) => (
+										<span
+											key={author.handle}
+											className="flex items-center gap-2.5"
+										>
+											<Image
+												src={author.image}
+												alt=""
+												width={28}
+												height={28}
+												className="m-0 size-7 rounded-full object-cover"
+											/>
+											<span className="text-[14px] font-medium text-gray-12">
+												{author.name}
+											</span>
+										</span>
+									))}
+								</div>
+								<span className="text-[14px] text-gray-10">
+									{format(publishedAt, "MMM d, yyyy")} · {readingTime} min read
+								</span>
+							</div>
+						</header>
+					) : (
+						<header>
+							<h1 className="mb-2 font-semibold">{post.metadata.title}</h1>
+							<p className="space-x-1 text-xs text-gray-12">
+								<span>{format(publishedAt, "MMMM dd, yyyy")}</span>
+								<span>—</span>
+								<span>{readingTime} min read</span>
+							</p>
+						</header>
+					)}
+					<hr className={feature ? "my-10" : "my-6"} />
 					<MDXRemote
 						source={post.content}
 						components={getPostComponents(post.slug)}
+						options={
+							feature
+								? { mdxOptions: { remarkPlugins: [remarkGfm] } }
+								: undefined
+						}
 					/>
-					{"author" in post.metadata && post.metadata.author && (
+					{!feature && "author" in post.metadata && post.metadata.author && (
 						<AuthorByline authors={post.metadata.author} />
 					)}
 					<Share
