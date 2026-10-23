@@ -14,6 +14,8 @@ import {
 
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_LONG_RECORDING_METADATA_BYTES = 1024 * 1024 * 1024;
+// A long budget covers many reads; one allocation for a single header box stays bounded.
+const MAX_SINGLE_METADATA_READ_BYTES = 256 * 1024 * 1024;
 // Sample tables grow with a recording's length; reads stream through a fixed cache.
 const METADATA_BYTES_PER_FILE_BYTE = 1 / 64;
 const MAX_RANGE_BYTES = 1024 * 1024;
@@ -521,6 +523,12 @@ export async function readRecordingVideoTiming(
 		) {
 			throw new RecordingTimingError(
 				"Invalid recording timing byte range",
+				false,
+			);
+		}
+		if (end - start > MAX_SINGLE_METADATA_READ_BYTES) {
+			throw new RecordingTimingError(
+				`Recording timing metadata exceeds its read budget (one ${megabytes(end - start)} MB read)`,
 				false,
 			);
 		}
