@@ -22,7 +22,8 @@ use cap_recording::{
     AudioFrame, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
     ChannelVideoSourceConfig, OutputPipeline,
     ffmpeg::{
-        FFmpegVideoFrame, Mp4Muxer, OggMuxer, SegmentedVideoMuxer, SegmentedVideoMuxerConfig,
+        FFmpegVideoFrame, Mp4Muxer, OggMuxer, OggMuxerConfig, SegmentedVideoMuxer,
+        SegmentedVideoMuxerConfig,
     },
 };
 use cap_timestamp::{Timestamp, Timestamps};
@@ -767,7 +768,7 @@ async fn run_audio_case(case: AudioCase) -> Result<String, String> {
     let pipeline = OutputPipeline::builder(out_path.clone())
         .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, rx))
         .with_timestamps(timestamps)
-        .build::<OggMuxer>(())
+        .build::<OggMuxer>(OggMuxerConfig::default())
         .await
         .map_err(|e| format!("pipeline build: {e}"))?;
 
@@ -996,7 +997,7 @@ async fn run_system_audio_case(case: SystemAudioCase) -> Result<String, String> 
         .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, rx))
         .with_timestamps(timestamps)
         .with_audio_anchor(AudioAnchor::PipelineEpoch)
-        .build::<OggMuxer>(())
+        .build::<OggMuxer>(OggMuxerConfig::default())
         .await
         .map_err(|e| format!("pipeline build: {e}"))?;
 
@@ -1078,14 +1079,14 @@ async fn run_mic_with_system_audio_case() -> Result<String, String> {
     let mic_pipeline = OutputPipeline::builder(mic_path.clone())
         .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, mic_rx))
         .with_timestamps(timestamps)
-        .build::<OggMuxer>(())
+        .build::<OggMuxer>(OggMuxerConfig::default())
         .await
         .map_err(|e| format!("mic pipeline build: {e}"))?;
     let sys_pipeline = OutputPipeline::builder(sys_path.clone())
         .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(info, sys_rx))
         .with_timestamps(timestamps)
         .with_audio_anchor(AudioAnchor::PipelineEpoch)
-        .build::<OggMuxer>(())
+        .build::<OggMuxer>(OggMuxerConfig::default())
         .await
         .map_err(|e| format!("system pipeline build: {e}"))?;
 
