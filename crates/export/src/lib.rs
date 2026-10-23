@@ -501,7 +501,13 @@ impl ExporterBase {
                 .finish(&self.segments)
                 .map_err(|error| error.to_string())?,
         );
-        self.streaming_output = prepare_streaming_output(&self.output_path, true);
+        // The first attempt staged its output, so the restart must too: if
+        // something created the destination meanwhile, writing in place
+        // would truncate it.
+        self.streaming_output = Some(
+            prepare_streaming_output(&self.output_path, true)
+                .ok_or("Could not stage the export output to restart on the software encoder")?,
+        );
         self.audio_cancellation = Some(control);
         Ok(())
     }
