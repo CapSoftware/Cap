@@ -381,41 +381,60 @@ export async function proveRecordingPackets(
 	const before = await Promise.all(
 		paths.map((path) => lstat(path, { bigint: true })),
 	);
-	const sourceTiming = await readRecordingVideoTiming(videoPath, {
-		abortSignal: signal,
-		timeoutMs: 45 * 60_000,
-	});
-	if (sourceTiming.terminalPacketCount !== 1)
-		throw new Error("Tied terminal samples require decoded source evidence");
-	const sourceVideo = await readTrack(videoPath, "video", signal);
-	const outputVideo = await readTrack(outputPath, "video", signal);
-	if (JSON.stringify(sourceVideo) !== JSON.stringify(outputVideo))
-		throw new RecordingPacketMismatchError(
-			"Recording encoded video does not preserve the source",
-		);
-	if (audioPath) {
-		const { tail: sourceTail, ...sourceAudio } = await readTrack(
-			audioPath,
-			"audio",
-			signal,
-		);
-		const { tail: outputTail, ...outputAudio } = await readTrack(
-			outputPath,
-			"audio",
-			signal,
-		);
-		if (JSON.stringify(sourceAudio) !== JSON.stringify(outputAudio))
+	// Every read below is independent and the files are pinned by `before`, so
+	// run them together and still check their results in the original order.
+	const reads = new AbortController();
+	const readSignal = AbortSignal.any([signal, reads.signal]);
+	const settled = <T>(promise: Promise<T>) => {
+		promise.catch(() => {});
+		return promise;
+	};
+	const timingOptions = { abortSignal: readSignal, timeoutMs: 45 * 60_000 };
+	const sourceTimingRead = settled(
+		readRecordingVideoTiming(videoPath, timingOptions),
+	);
+	const sourceVideoRead = settled(readTrack(videoPath, "video", readSignal));
+	const outputVideoRead = settled(readTrack(outputPath, "video", readSignal));
+	const sourceAudioRead = audioPath
+		? settled(readTrack(audioPath, "audio", readSignal))
+		: null;
+	const outputAudioRead = audioPath
+		? settled(readTrack(outputPath, "audio", readSignal))
+		: null;
+	const outputTimingRead = settled(
+		readRecordingVideoTiming(outputPath, timingOptions),
+	);
+	let sourceTiming: Awaited<typeof sourceTimingRead>;
+	let outputTiming: Awaited<typeof outputTimingRead>;
+	let sourceVideo: Awaited<typeof sourceVideoRead>;
+	let outputVideo: Awaited<typeof outputVideoRead>;
+	try {
+		sourceTiming = await sourceTimingRead;
+		if (sourceTiming.terminalPacketCount !== 1)
+			throw new Error("Tied terminal samples require decoded source evidence");
+		sourceVideo = await sourceVideoRead;
+		outputVideo = await outputVideoRead;
+		if (JSON.stringify(sourceVideo) !== JSON.stringify(outputVideo))
 			throw new RecordingPacketMismatchError(
-				"Recording encoded audio does not preserve the source",
+				"Recording encoded video does not preserve the source",
 			);
-		// MP4 edit-list rounding can change the reported AAC tail without changing decoded samples.
-		if (sourceTail?.duration !== outputTail?.duration)
-			throw new Error("Recording audio tail requires decoded source evidence");
+		if (sourceAudioRead && outputAudioRead) {
+			const { tail: sourceTail, ...sourceAudio } = await sourceAudioRead;
+			const { tail: outputTail, ...outputAudio } = await outputAudioRead;
+			if (JSON.stringify(sourceAudio) !== JSON.stringify(outputAudio))
+				throw new RecordingPacketMismatchError(
+					"Recording encoded audio does not preserve the source",
+				);
+			// MP4 edit-list rounding can change the reported AAC tail without changing decoded samples.
+			if (sourceTail?.duration !== outputTail?.duration)
+				throw new Error(
+					"Recording audio tail requires decoded source evidence",
+				);
+		}
+		outputTiming = await outputTimingRead;
+	} finally {
+		reads.abort();
 	}
-	const outputTiming = await readRecordingVideoTiming(outputPath, {
-		abortSignal: signal,
-		timeoutMs: 45 * 60_000,
-	});
 	const normalizeTiming = (timing: typeof sourceTiming) => ({
 		packets: timing.packetTimelineSha256,
 		terminalPackets: timing.terminalPacketCount,

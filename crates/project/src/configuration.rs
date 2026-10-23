@@ -13,6 +13,9 @@ use specta::Type;
 
 use crate::DisplayNotch;
 
+#[cfg(test)]
+mod style_resolution_tests;
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AspectRatio {
@@ -2836,16 +2839,40 @@ impl ProjectConfiguration {
     }
 
     pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let Some(timeline) = &self.timeline else {
+            return Cow::Borrowed(self);
+        };
+        let mut selected: [Option<&StyleSegment>; 3] = [None; 3];
+        for segment in &timeline.style_segments {
+            if !segment.is_active_at(time) {
+                continue;
+            }
+            for (current, present) in selected.iter_mut().zip([
+                segment.overrides.background.is_some(),
+                segment.overrides.camera.is_some(),
+                segment.overrides.cursor.is_some(),
+            ]) {
+                if present
+                    && current.is_none_or(|previous| {
+                        segment.track > previous.track
+                            || (segment.track == previous.track && segment.start >= previous.start)
+                    })
+                {
+                    *current = Some(segment);
+                }
+            }
+        }
+        let [background, camera, cursor] = selected;
         let mut configuration = Cow::Borrowed(self);
         if let Some(background) =
-            self.style_override_at(time, |overrides| overrides.background.as_ref())
+            background.and_then(|segment| segment.overrides.background.as_ref())
         {
             configuration.to_mut().background = background.clone();
         }
-        if let Some(camera) = self.style_override_at(time, |overrides| overrides.camera.as_ref()) {
+        if let Some(camera) = camera.and_then(|segment| segment.overrides.camera.as_ref()) {
             configuration.to_mut().camera = camera.clone();
         }
-        if let Some(cursor) = self.style_override_at(time, |overrides| overrides.cursor.as_ref()) {
+        if let Some(cursor) = cursor.and_then(|segment| segment.overrides.cursor.as_ref()) {
             configuration.to_mut().cursor = cursor.clone();
         }
         configuration

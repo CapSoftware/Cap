@@ -134,7 +134,7 @@ const comparisonTable: {
 		],
 		[
 			"Open source",
-			{ text: "Yes, MIT licensed", status: "positive" },
+			{ text: "Yes, AGPLv3 and MIT crates", status: "positive" },
 			{ text: "No", status: "negative" },
 			{ text: "No", status: "negative" },
 		],

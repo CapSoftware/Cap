@@ -20,22 +20,26 @@ function boundIdleConnections<T extends HttpAgent>(agent: T) {
 	return agent;
 }
 
-export const s3ConnectionPool = Effect.acquireRelease(
-	Effect.sync(() => {
-		const options = {
-			keepAlive: true,
-			maxSockets: 50,
-			maxTotalSockets: 128,
-			maxFreeSockets: 8,
-		};
-		return {
-			httpAgent: boundIdleConnections(new HttpAgent(options)),
-			httpsAgent: boundIdleConnections(new HttpsAgent(options)),
-		};
-	}),
-	(pool) =>
+const makeS3ConnectionPool = (maxFreeSockets: number) =>
+	Effect.acquireRelease(
 		Effect.sync(() => {
-			pool.httpAgent.destroy();
-			pool.httpsAgent.destroy();
+			const options = {
+				keepAlive: true,
+				maxSockets: 50,
+				maxTotalSockets: 128,
+				maxFreeSockets,
+			};
+			return {
+				httpAgent: boundIdleConnections(new HttpAgent(options)),
+				httpsAgent: boundIdleConnections(new HttpsAgent(options)),
+			};
 		}),
-);
+		(pool) =>
+			Effect.sync(() => {
+				pool.httpAgent.destroy();
+				pool.httpsAgent.destroy();
+			}),
+	);
+
+export const s3ConnectionPool = makeS3ConnectionPool(8);
+export const defaultBucketS3ConnectionPool = makeS3ConnectionPool(32);
