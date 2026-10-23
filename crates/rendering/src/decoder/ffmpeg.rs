@@ -1158,9 +1158,7 @@ impl FfmpegDecoder {
             );
         }
 
-        // A failed hardware setup falls back to software inside FFmpeg, which
-        // only shows once the first frame has been decoded.
-        let decoder_type = if frames.is_hardware_accelerated() {
+        let decoder_type = if is_hw {
             DecoderType::FFmpegHardware
         } else {
             DecoderType::FFmpegSoftware

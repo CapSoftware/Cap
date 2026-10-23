@@ -16,7 +16,7 @@ use specta::Type;
 use std::{
     path::PathBuf,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -169,7 +169,6 @@ impl ExportCompression {
 #[derive(Clone, Default)]
 struct ExportNv12Mode {
     stop_after_frames_sent: Option<u32>,
-    software_encoder: bool,
     record_first_queued_ms_since_pipeline: Option<Arc<AtomicU64>>,
     nv12_render_startup_breakdown_ms:
         Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
@@ -295,7 +294,6 @@ impl Mp4ExportSettings {
             |_| true,
             ExportNv12Mode {
                 stop_after_frames_sent: Some(1),
-                software_encoder: false,
                 record_first_queued_ms_since_pipeline: Some(first_ms_enc),
                 nv12_render_startup_breakdown_ms: Some(breakdown_enc),
             },
@@ -328,64 +326,7 @@ impl Mp4ExportSettings {
         output_size: (u32, u32),
         fps: u32,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
-        mut mode: ExportNv12Mode,
-    ) -> Result<PathBuf, String> {
-        let on_progress = Arc::new(Mutex::new(on_progress));
-        let user_cancellation = base
-            .audio_cancellation
-            .as_ref()
-            .map(|control| control.user.clone());
-        loop {
-            let progress = on_progress.clone();
-            let hardware_encoder_failed = Arc::new(AtomicBool::new(false));
-            let result = self
-                .export_nv12_attempt(
-                    &mut base,
-                    output_size,
-                    fps,
-                    move |frame| {
-                        let mut on_progress =
-                            progress.lock().unwrap_or_else(PoisonError::into_inner);
-                        (*on_progress)(frame)
-                    },
-                    mode.clone(),
-                    hardware_encoder_failed.clone(),
-                )
-                .await;
-            // A hardware encoder can fail mid-stream when the media engine is
-            // busy or resets. The MP4 cannot switch codecs partway, so the
-            // export starts over once with the software encoder.
-            match result {
-                Err(error)
-                    if restart_on_software_encoder(
-                        mode.software_encoder,
-                        base.sample_timing.is_some(),
-                        hardware_encoder_failed.load(Ordering::Relaxed),
-                        user_cancellation
-                            .as_ref()
-                            .is_some_and(|cancel| cancel.load(Ordering::Relaxed)),
-                    ) =>
-                {
-                    warn!(
-                        %error,
-                        "Hardware video encoder failed during export, restarting with the software encoder"
-                    );
-                    base.reopen_streaming(user_cancellation.clone()).await?;
-                    mode.software_encoder = true;
-                }
-                result => return result,
-            }
-        }
-    }
-
-    async fn export_nv12_attempt(
-        self,
-        base: &mut ExporterBase,
-        output_size: (u32, u32),
-        fps: u32,
-        on_progress: impl FnMut(u32) -> bool + Send + 'static,
         mode: ExportNv12Mode,
-        hardware_encoder_failed: Arc<AtomicBool>,
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
         let sample_timing = base.sample_timing.clone();
@@ -438,9 +379,6 @@ impl Mp4ExportSettings {
         let has_audio = has_recording_audio || !music.is_empty();
 
         let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;
-        let software_encoder = mode.software_encoder;
-        #[cfg(feature = "test-hooks")]
-        let injected_failure_at = base.video_encoder_failure_at.filter(|_| !software_encoder);
         let nv12_render_startup_breakdown_ms = mode.nv12_render_startup_breakdown_ms;
 
         let project_for_audio = base.project_config.clone();
@@ -463,7 +401,6 @@ impl Mp4ExportSettings {
             }
             #[cfg(target_os = "macos")]
             let want_hw_input = !self.optimize_filesize
-                && !software_encoder
                 && matches!(
                     first_frame.as_ref().map(|frame| &frame.payload),
                     Some(ExportFramePayload::Surface(_))
@@ -505,8 +442,6 @@ impl Mp4ExportSettings {
                         .with_external_conversion();
                     let builder = if self.optimize_filesize {
                         builder.with_crf(self.compression.crf_value())
-                    } else if software_encoder {
-                        builder.with_encoder_priority_override(&["libx264"])
                     } else {
                         builder
                     };
@@ -530,17 +465,8 @@ impl Mp4ExportSettings {
                 encoder.video_mut().set_packet_stats(timing.packet_stats());
             }
 
-            let hardware_video = encoder.video().is_hardware();
-            // The injected failure stands in for a hardware encoder's.
-            #[cfg(feature = "test-hooks")]
-            let hardware_video = hardware_video || injected_failure_at.is_some();
-            let video_failure = |error: String| {
-                video_encoder_failure(hardware_video, &hardware_encoder_failed, error)
-            };
-
             info!(
                 zero_copy_input = encoder_is_hw,
-                hardware_video,
                 "Created MP4File encoder (NV12, export settings)"
             );
 
@@ -609,7 +535,7 @@ impl Mp4ExportSettings {
                                 &mut converted_frame,
                                 Duration::MAX,
                             )
-                            .map_err(|err| video_failure(err.to_string()))?;
+                            .map_err(|err| err.to_string())?;
                     }
                     #[cfg(target_os = "macos")]
                     ExportFramePayload::Surface(surface) => {
@@ -619,7 +545,7 @@ impl Mp4ExportSettings {
                                     .video_encoder()
                                     .wrap_videotoolbox_pixel_buffer(surface.as_pixel_buffer_ptr())
                             }
-                            .map_err(|err| video_failure(err.to_string()))?;
+                            .map_err(|err| err.to_string())?;
                             frame.set_pts(Some(input.frame_number as i64));
                             encoder
                                 .queue_video_frame_reusable(
@@ -627,7 +553,7 @@ impl Mp4ExportSettings {
                                     &mut converted_frame,
                                     Duration::MAX,
                                 )
-                                .map_err(|err| video_failure(err.to_string()))?;
+                                .map_err(|err| err.to_string())?;
                         } else {
                             fill_nv12_frame_from_surface(
                                 &mut reusable_frame,
@@ -645,7 +571,7 @@ impl Mp4ExportSettings {
                                     &mut converted_frame,
                                     Duration::MAX,
                                 )
-                                .map_err(|err| video_failure(err.to_string()))?;
+                                .map_err(|err| err.to_string())?;
                         }
                     }
                 }
@@ -653,13 +579,6 @@ impl Mp4ExportSettings {
                     worker.write_ready(&mut encoder)?;
                 }
                 encoded_frames += 1;
-                #[cfg(feature = "test-hooks")]
-                if injected_failure_at == Some(encoded_frames) {
-                    return Err(video_failure(
-                        cap_enc_ffmpeg::h264::QueueFrameError::Encode(ffmpeg::Error::External)
-                            .to_string(),
-                    ));
-                }
                 if let Some(timing) = &sample_timing {
                     timing.record_frame(input.timeline_frame);
                 }
@@ -698,7 +617,7 @@ impl Mp4ExportSettings {
                 .map_err(|e| format!("Failed to finish encoding: {e}"))?;
 
             if let Err(e) = res.video_finish {
-                return Err(video_failure(format!("Video encoding failed: {e}")));
+                return Err(Mp4PipelineError::Failure(format!("Video encoding failed: {e}")));
             }
             if let Err(e) = res.audio_finish {
                 return Err(Mp4PipelineError::Failure(format!("Audio encoding failed: {e}")));
@@ -814,27 +733,6 @@ impl Mp4ExportSettings {
 
         Ok(output_path)
     }
-}
-
-/// A video encoder error that fails this export attempt. A hardware
-/// encoder's error also sets `restart`, so the export starts over on libx264.
-fn video_encoder_failure(hardware: bool, restart: &AtomicBool, error: String) -> Mp4PipelineError {
-    if hardware {
-        restart.store(true, Ordering::Relaxed);
-    }
-    Mp4PipelineError::Failure(error)
-}
-
-/// Whether a failed attempt starts over on the software encoder: after a
-/// hardware encoder error, once, and not for size-estimate samples or a
-/// cancelled export.
-fn restart_on_software_encoder(
-    attempt_was_software: bool,
-    sampled: bool,
-    hardware_encoder_failed: bool,
-    cancelled: bool,
-) -> bool {
-    hardware_encoder_failed && !attempt_was_software && !sampled && !cancelled
 }
 
 enum ExportFramePayload {
@@ -1707,40 +1605,6 @@ async fn export_render_to_channel(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hardware_encoder_errors_restart_on_software() {
-        let queue = cap_enc_ffmpeg::h264::QueueFrameError::Encode(ffmpeg::Error::External);
-        let flush = format!("Video encoding failed: {}", ffmpeg::Error::External);
-        for error in [queue.to_string(), flush] {
-            let restart = AtomicBool::new(false);
-            let failure = video_encoder_failure(true, &restart, error.clone());
-            assert_eq!(failure.message(), error);
-            assert!(restart_on_software_encoder(
-                false,
-                false,
-                restart.load(Ordering::Relaxed),
-                false
-            ));
-        }
-    }
-
-    #[test]
-    fn software_encoder_errors_do_not_restart() {
-        let restart = AtomicBool::new(false);
-        let error = cap_enc_ffmpeg::h264::QueueFrameError::Encode(ffmpeg::Error::External);
-        video_encoder_failure(false, &restart, error.to_string());
-        assert!(!restart_on_software_encoder(
-            false,
-            false,
-            restart.load(Ordering::Relaxed),
-            false
-        ));
-        // Already on libx264, a size-estimate sample, or cancelled.
-        assert!(!restart_on_software_encoder(true, false, true, false));
-        assert!(!restart_on_software_encoder(false, true, true, false));
-        assert!(!restart_on_software_encoder(false, false, true, true));
-    }
 
     fn sum_samples(sample_rate: u64, fps: u64, frames: u64) -> u64 {
         (0..frames)
