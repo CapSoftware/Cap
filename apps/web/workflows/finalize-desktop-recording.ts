@@ -4,6 +4,7 @@ import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
+import { Option } from "effect";
 import { sleep } from "workflow";
 import { z } from "zod";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
@@ -83,6 +84,9 @@ const COMPLETION_POLL_INTERVAL_MS = 15_000;
 const ATTEMPT_MAX_DURATION_MS = 6 * 60 * 60 * 1_000;
 const PRESIGNED_EXPIRES_SECONDS = 6 * 60 * 60;
 const MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
+// A remux is about as large as its source, so a source that fits in one part is
+// uploaded with one PUT instead of sign-part + PUT + complete round trips.
+const SINGLE_PUT_OUTPUT_MAX_SOURCE_BYTES = MULTIPART_OUTPUT_PART_SIZE_BYTES;
 const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 32;
 const SOURCE_COMMIT_BATCH_DURATION_MS = 15_000;
 const TRANSCRIPTION_QUEUE_MAX_ATTEMPTS = 12;
@@ -359,11 +363,13 @@ async function completeWithoutMediaServerIfUnavailable(
 async function buildDesktopSegmentsOutput({
 	video,
 	attempt,
+	sourceBytes,
 }: {
 	video: typeof videos.$inferSelect;
 	attempt: DesktopRecordingAttemptFence;
+	sourceBytes: number;
 }) {
-	const [bucket] = await Storage.getAccessForVideo(
+	const [bucket, customBucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
 	const outputKey = getDesktopRecordingOutputKey(
@@ -393,7 +399,11 @@ async function buildDesktopSegmentsOutput({
 		url: outputPresignedUrl,
 		ifNoneMatch: "*",
 	};
-	if (bucket.provider === "s3" && webhookSecret) {
+	const singlePut =
+		bucket.provider === "s3" &&
+		Option.isNone(customBucket) &&
+		sourceBytes <= SINGLE_PUT_OUTPUT_MAX_SOURCE_BYTES;
+	if (bucket.provider === "s3" && webhookSecret && !singlePut) {
 		const multipart = await bucket.multipart
 			.create(outputKey, { ContentType: "video/mp4" })
 			.pipe(runWorkflowPromise);
@@ -500,16 +510,17 @@ export async function startDesktopRecordingJob(
 		}
 		throw error;
 	});
+	const sourceBytes = urls.sourceObjects.reduce(
+		(total, object) => total + object.size,
+		0,
+	);
 	let downloadBudgetBytes: number;
 	try {
 		downloadBudgetBytes = await reserveMediaProcessingBudget({
 			videoId: current.videoId,
 			generation: current.generation,
 			attemptId: attempt.attemptId,
-			sourceBytes: urls.sourceObjects.reduce(
-				(total, object) => total + object.size,
-				0,
-			),
+			sourceBytes,
 		});
 	} catch (error) {
 		if (error instanceof MediaProcessingBudgetError) {
@@ -577,7 +588,7 @@ export async function startDesktopRecordingJob(
 			audioLevels: true,
 			...context,
 			...urls,
-			...(await buildDesktopSegmentsOutput({ video, attempt })),
+			...(await buildDesktopSegmentsOutput({ video, attempt, sourceBytes })),
 			manifestSha256: current.source.manifestSha256,
 		};
 	}
