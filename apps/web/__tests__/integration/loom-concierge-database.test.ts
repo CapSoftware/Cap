@@ -256,6 +256,11 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 			(...args: Parameters<typeof rawActions.updateLoomMigrationStatus>) =>
 				rawActions.updateLoomMigrationStatus(...args),
 		),
+		reconcileLoomMigrationInventory: unwrapped(
+			(
+				...args: Parameters<typeof rawActions.reconcileLoomMigrationInventory>
+			) => rawActions.reconcileLoomMigrationInventory(...args),
+		),
 	};
 	const loom = {
 		importFromLoomCsvForConcierge: unwrapped(
@@ -772,6 +777,80 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 			expect(fixture.sendEmail).not.toHaveBeenCalled();
 		},
 	);
+
+	it("reconciles only deleted inventory entries in the selected request", async () => {
+		const { ownerId, organizationId } = await makeOrganization();
+		const requestId = await requestMigration(organizationId, ownerId);
+		const other = await makeOrganization();
+		const otherRequestId = await requestMigration(
+			other.organizationId,
+			other.ownerId,
+		);
+		const retainedVideoId = Video.VideoId.make(id());
+		const deletedVideoId = Video.VideoId.make(id());
+		const otherDeletedVideoId = Video.VideoId.make(id());
+		await db()
+			.insert(videos)
+			.values({
+				id: retainedVideoId,
+				name: "Retained",
+				ownerId,
+				orgId: organizationId,
+			});
+		await db()
+			.insert(importedVideos)
+			.values({
+				id: retainedVideoId,
+				orgId: organizationId,
+				source: "loom",
+				sourceId: loomId(),
+			});
+		await db()
+			.insert(loomMigrationImports)
+			.values([
+				{ videoId: retainedVideoId, requestId },
+				{ videoId: deletedVideoId, requestId },
+				{ videoId: otherDeletedVideoId, requestId: otherRequestId },
+			]);
+		signInAs(ownerId);
+		await expect(
+			actions.reconcileLoomMigrationInventory({ requestId, verified: true }),
+		).rejects.toThrow();
+		signInAs(operatorId);
+		await expect(
+			actions.reconcileLoomMigrationInventory({ requestId, verified: false }),
+		).rejects.toThrow("source list first");
+		fixture.sendEmail.mockClear();
+		await expect(
+			actions.reconcileLoomMigrationInventory({ requestId, verified: true }),
+		).resolves.toEqual({ removedCount: 1, hasMore: false });
+		expect(
+			await db()
+				.select({ videoId: loomMigrationImports.videoId })
+				.from(loomMigrationImports)
+				.where(eq(loomMigrationImports.requestId, requestId)),
+		).toEqual([{ videoId: retainedVideoId }]);
+		expect(
+			await db()
+				.select({ videoId: loomMigrationImports.videoId })
+				.from(loomMigrationImports)
+				.where(eq(loomMigrationImports.requestId, otherRequestId)),
+		).toEqual([{ videoId: otherDeletedVideoId }]);
+		expect(
+			await db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(eq(videos.id, retainedVideoId)),
+		).toHaveLength(1);
+		expect(
+			await db()
+				.select({ id: importedVideos.id })
+				.from(importedVideos)
+				.where(eq(importedVideos.id, retainedVideoId)),
+		).toHaveLength(1);
+		expect((await getRequest(requestId)).status).not.toBe("completed");
+		expect(fixture.sendEmail).not.toHaveBeenCalled();
+	});
 
 	it("uploads restricted MP4 files to storage and starts processing", async () => {
 		const { ownerId, organizationId } = await makeOrganization({

@@ -69,7 +69,7 @@ export function validateLoomMigrationInventory({
 		)
 	) {
 		throw new LoomMigrationError(
-			"Loom import recordings or source mappings are missing or changed. Reconcile the destination library before completion.",
+			"Loom import recordings or source mappings are missing or changed. Re-import missing sources, then use Reconcile deleted recordings for deleted inventory entries. Restore changed mappings before completion.",
 		);
 	}
 	if (imports.some((row) => row.phase !== null && row.phase !== "complete")) {

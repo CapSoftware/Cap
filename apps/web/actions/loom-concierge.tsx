@@ -28,6 +28,7 @@ import {
 	requireProCustomerMigrationAccess,
 	toLoomMigrationResult,
 } from "@/lib/loom-concierge";
+import { reconcileMissingLoomMigrationImports } from "@/lib/loom-migration-inventory";
 import {
 	LOOM_MIGRATION_STATUS_LABELS,
 	LoomMigrationError,
@@ -247,6 +248,17 @@ export async function updateLoomMigrationStatus(
 	input: LoomMigrationStatusInput,
 ) {
 	return toLoomMigrationResult(() => saveMigrationStatus(input));
+}
+
+export async function reconcileLoomMigrationInventory(input: {
+	requestId: string;
+	verified: boolean;
+}) {
+	return toLoomMigrationResult(async () => {
+		const result = await reconcileMissingLoomMigrationImports(input);
+		refreshMigrationPages();
+		return result;
+	});
 }
 
 async function saveMigrationStatus({
