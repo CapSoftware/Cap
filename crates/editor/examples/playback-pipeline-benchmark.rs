@@ -423,6 +423,7 @@ async fn run_full_pipeline_benchmark(
     recordings: &ProjectRecordingsMeta,
     config: PipelineBenchmarkConfig,
 ) -> PipelineTimings {
+    let project = &Arc::new(project.clone());
     let PipelineBenchmarkConfig {
         fps,
         frame_count,
@@ -617,6 +618,7 @@ async fn run_scrubbing_benchmark(
     resolution_base: XY<u32>,
     force_ffmpeg: bool,
 ) -> PipelineTimings {
+    let project = &Arc::new(project.clone());
     let mut timings = PipelineTimings::default();
 
     let render_constants = match RenderVideoConstants::new(

@@ -7,6 +7,11 @@ const mocks = vi.hoisted(() => ({
 	audioInitExists: false,
 	storageUnavailable: false,
 	denied: false,
+	defaultBucket: false,
+	source: { type: "desktopSegments" } as {
+		type: "desktopSegments" | "desktopMP4";
+		outputKey?: string;
+	},
 	sign: vi.fn(),
 	read: vi.fn(),
 	dispose: async () => {},
@@ -23,6 +28,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 	const { Context, Effect, Option } = await import("effect");
 	const { Policy, Storage: StorageDomain } = await import("@cap/web-domain");
 	const bucket = {
+		provider: "s3",
 		getObject: () =>
 			Effect.sync(() => {
 				mocks.read();
@@ -48,7 +54,11 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 			effect: import("effect").Effect.Effect<A, E, R>,
 		) => effect,
 		Storage: Object.assign(Context.GenericTag("PlaylistTestStorage"), {
-			getAccessForVideo: () => Effect.succeed([bucket, false] as const),
+			getAccessForVideo: () =>
+				Effect.succeed([
+					bucket,
+					mocks.defaultBucket ? Option.none() : Option.some({}),
+				] as const),
 		}),
 		Videos: Object.assign(Context.GenericTag("PlaylistTestVideos"), {
 			testService: {
@@ -60,7 +70,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 									{
 										id: "recording",
 										ownerId: "owner",
-										source: { type: "desktopSegments" },
+										source: mocks.source,
 									},
 								]),
 							),
@@ -121,6 +131,8 @@ describe("Instant playlist readiness API", () => {
 		mocks.audioInitExists = false;
 		mocks.storageUnavailable = false;
 		mocks.denied = false;
+		mocks.defaultBucket = false;
+		mocks.source = { type: "desktopSegments" };
 	});
 	afterAll(() => mocks.dispose());
 
@@ -170,4 +182,20 @@ describe("Instant playlist readiness API", () => {
 		expect((await request()).status).toBe(401);
 		expect(mocks.read).not.toHaveBeenCalled();
 	});
+
+	it.each(["custom", "default"] as const)(
+		"redirects a published MP4 in a %s bucket to its retained storage key",
+		async (bucket) => {
+			mocks.defaultBucket = bucket === "default";
+			mocks.source = {
+				type: "desktopMP4",
+				outputKey: "owner/recording/.recording/outputs/generation/result.mp4",
+			};
+			const response = await request("mp4", "");
+			expect(response.status).toBe(302);
+			expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
+				mocks.source.outputKey,
+			);
+		},
+	);
 });
