@@ -321,6 +321,7 @@ mod tests {
         // The five later tabs, the colour-grade section and the eight segment
         // panels each name their own glyphs.
         include_str!("editor_tabs.rs"),
+        include_str!("editor_clean_up.rs"),
         // The cursor tab's style picker and ripple section live one directory
         // down, and the ripple field names its own glyph.
         include_str!("editor_sidebar/cursor.rs"),

@@ -32,9 +32,9 @@ pub use editor::{
     finish_renderer_layers_creation, start_renderer_layers_creation,
 };
 pub use editor_instance::{
-    AudioLoader, EditorInstance, EditorStartupInputs, EditorState, SegmentAudioTimingRepair,
-    SegmentMedia, create_segments, create_segments_without_audio, initial_clip_configuration,
-    segment_audio_timing_repairs,
+    AudioLoader, EditorInstance, EditorStartupInputs, EditorState, MAX_PLAYBACK_RATE,
+    MIN_PLAYBACK_RATE, SegmentAudioTimingRepair, SegmentMedia, create_segments,
+    create_segments_without_audio, initial_clip_configuration, segment_audio_timing_repairs,
 };
 pub use export_audio::{
     ExportAudioError, ExportAudioPreparation, ExportAudioRenderer, ExportAudioValidation,

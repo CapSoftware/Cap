@@ -117,6 +117,7 @@ fn audible_spec_with_duration(duration_secs: usize) -> PlaySpec {
         duration_secs: duration_secs as f64,
         start_playhead_secs: 0.0,
         playhead_rx,
+        playback_rate: watch::channel(1.0).1,
     }
 }
 
@@ -554,7 +555,7 @@ async fn healthy_stream_stale_stop_preserves_ordinary_replacement_after_preparin
     drain_source_commands(&mut state.active, &state.commands);
     let active = state.active.as_mut().unwrap();
     assert_eq!(active.generation, 51);
-    assert!(matches!(active.buffer, ActiveSourceBuffer::Ordinary(_)));
+    assert!(matches!(active.buffer, ActiveSourceBuffer::Ordinary(_, _)));
     let before = active.buffer.current_playhead_secs();
     render_source_block(active, &mut [0.0; 1024], 0.0);
     assert!(active.buffer.current_playhead_secs() > before);

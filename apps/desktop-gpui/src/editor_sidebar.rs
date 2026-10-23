@@ -232,9 +232,9 @@ const UNPLACED_NOTCH: NotchConfiguration = NotchConfiguration {
 // Pure model
 // ---------------------------------------------------------------------------
 
-/// The six tabs of the rail (`:596-621`). `hotkeys` is commented out at `:620`
-/// and its dead `KTabs.Content` still exists at `:1053-1061`; it is not a tab
-/// here either.
+/// The six tabs of the rail (`:596-621`), plus Clean Up, which the Tauri app
+/// does not have. `hotkeys` is commented out at `:620` and its dead
+/// `KTabs.Content` still exists at `:1053-1061`; it is not a tab here either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarTab {
     Background,
@@ -242,16 +242,18 @@ pub enum SidebarTab {
     Audio,
     Cursor,
     Keyboard,
+    CleanUp,
     Captions,
 }
 
 impl SidebarTab {
-    pub const ALL: [SidebarTab; 6] = [
+    pub const ALL: [SidebarTab; 7] = [
         Self::Background,
         Self::Camera,
         Self::Audio,
         Self::Cursor,
         Self::Keyboard,
+        Self::CleanUp,
         Self::Captions,
     ];
 
@@ -262,6 +264,7 @@ impl SidebarTab {
             Self::Audio => "icons/audio-on.svg",
             Self::Cursor => "icons/cursor.svg",
             Self::Keyboard => "icons/keyboard.svg",
+            Self::CleanUp => "icons/scissors.svg",
             Self::Captions => "icons/message-bubble.svg",
         }
     }
@@ -276,6 +279,7 @@ impl SidebarTab {
             Self::Audio => "Audio",
             Self::Cursor => "Cursor",
             Self::Keyboard => "Keyboard",
+            Self::CleanUp => "Clean Up",
             Self::Captions => "Captions",
         }
     }
@@ -697,6 +701,7 @@ pub enum SliderKey {
     Cursor(CursorSlider),
     Caption(CaptionSlider),
     Keyboard(KeyboardSlider),
+    CleanUp(crate::clean_up::SilenceParameter),
     Panel(PanelSlider, usize),
 }
 
@@ -1201,6 +1206,7 @@ impl EditorWindow {
             SliderKey::Cursor(slider) => slider.limits(),
             SliderKey::Caption(slider) => slider.limits(),
             SliderKey::Keyboard(slider) => slider.limits(),
+            SliderKey::CleanUp(parameter) => parameter.limits(),
             SliderKey::Panel(slider, index) => self.panel_slider_limits(slider, index),
         }
     }
@@ -1230,6 +1236,7 @@ impl EditorWindow {
             SliderKey::Cursor(slider) => slider.read(&project),
             SliderKey::Caption(slider) => slider.read(&project),
             SliderKey::Keyboard(slider) => slider.read(&project),
+            SliderKey::CleanUp(parameter) => parameter.read(&self.clean_up.settings),
             SliderKey::Panel(slider, index) => self.panel_slider_value(slider, index),
         }
     }
@@ -1261,6 +1268,9 @@ impl EditorWindow {
             SliderKey::Cursor(slider) => self.apply_cursor_slider(slider, value, window, cx),
             SliderKey::Caption(slider) => self.apply_caption_slider(slider, value, window, cx),
             SliderKey::Keyboard(slider) => self.apply_keyboard_slider(slider, value, window, cx),
+            SliderKey::CleanUp(parameter) => {
+                self.set_clean_up_parameter(parameter, value, window, cx)
+            }
             SliderKey::Panel(slider, index) => {
                 self.apply_panel_slider(slider, index, value, window, cx)
             }
@@ -2583,6 +2593,7 @@ impl EditorWindow {
             SidebarTab::Audio => self.render_audio_tab(cx),
             SidebarTab::Cursor => self.render_cursor_tab(cx),
             SidebarTab::Keyboard => self.render_keyboard_tab(cx),
+            SidebarTab::CleanUp => self.render_clean_up_tab(cx),
             SidebarTab::Captions => self.render_captions_tab(cx),
         };
 

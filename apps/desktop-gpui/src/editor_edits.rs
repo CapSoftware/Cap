@@ -1223,6 +1223,62 @@ pub fn delete_clip_segments(timeline: &mut TimelineConfiguration, indices: &[usi
     deleted
 }
 
+pub fn cut_clip_source_range(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    source_start: f64,
+    source_end: f64,
+) -> bool {
+    let Some(segment) = timeline.segments.get(index).cloned() else {
+        return false;
+    };
+    if !segment.timescale.is_finite() || segment.timescale <= 0.0 {
+        return false;
+    }
+    let start = source_start.max(segment.start);
+    let end = source_end.min(segment.end);
+    if !start.is_finite() || !end.is_finite() || end <= start {
+        return false;
+    }
+    let removes_head = start <= segment.start;
+    let removes_tail = end >= segment.end;
+    if removes_head && removes_tail {
+        return delete_clip_segments(timeline, &[index]);
+    }
+
+    let offsets = editor_timeline::clip_timeline_offsets(timeline);
+    let clip_start = offsets.get(index).copied().unwrap_or(0.0);
+    let cut_start = clip_start + (start - segment.start) / segment.timescale;
+    let cut_end = clip_start + (end - segment.start) / segment.timescale;
+    let holds = timeline.hold_windows();
+    let output_cut_start = effective_to_output_end(&holds, cut_start);
+    let output_cut_end = effective_to_output_end(&holds, cut_end);
+
+    if removes_head {
+        timeline.segments[index].start = end;
+    } else if removes_tail {
+        timeline.segments[index].end = start;
+    } else {
+        let mut tail = segment;
+        tail.start = end;
+        timeline.segments[index].end = start;
+        timeline.segments.insert(index + 1, tail);
+        for transition in timeline.transitions.iter_mut() {
+            if transition.segment_index as usize > index {
+                transition.segment_index += 1;
+            }
+        }
+    }
+
+    ripple_delete_output_tracks(
+        timeline,
+        output_cut_start,
+        output_cut_end,
+        (output_cut_end - output_cut_start).max(cut_end - cut_start),
+    );
+    true
+}
+
 pub(crate) fn effective_to_output_end(holds: &[(f64, f64)], effective: f64) -> f64 {
     let mut output = effective;
     for (start, finish) in holds {

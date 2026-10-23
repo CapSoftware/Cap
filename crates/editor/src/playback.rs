@@ -129,6 +129,19 @@ fn precision_sleep_sync(deadline: Instant) {
     }
 }
 
+fn rate_adjusted_frame_deadline(
+    start: Instant,
+    frame_duration: Duration,
+    frame_offset: f64,
+    rate: f64,
+) -> Instant {
+    start + frame_duration.mul_f64(frame_offset).div_f64(rate)
+}
+
+fn frames_elapsed_at_rate(elapsed: Duration, fps: f64, rate: f64) -> u32 {
+    (elapsed.as_secs_f64() * fps * rate).floor() as u32
+}
+
 fn valid_playback_duration(duration: f64) -> Option<f64> {
     (duration.is_finite() && duration > 0.0).then_some(duration)
 }
@@ -155,7 +168,19 @@ pub struct Playback {
     pub segment_medias: Arc<Vec<SegmentMedia>>,
     pub music: crate::audio::MusicTracks,
     pub audio_output: Arc<AudioOutput>,
+    pub playback_rate: watch::Receiver<f64>,
     pub telemetry: Option<PlaybackTelemetry>,
+}
+
+fn sanitize_playback_rate(rate: f64) -> f64 {
+    if rate.is_finite() {
+        rate.clamp(
+            crate::editor_instance::MIN_PLAYBACK_RATE,
+            crate::editor_instance::MAX_PLAYBACK_RATE,
+        )
+    } else {
+        1.0
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1333,6 +1358,7 @@ impl Playback {
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
                     playhead_rx: audio_playhead_rx.clone(),
+                    playback_rate: self.playback_rate.clone(),
                 })
             };
             let mut has_audio = audio_generation.is_some();
@@ -1357,6 +1383,13 @@ impl Playback {
             diagnostic.stage("playing");
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
+            // Adopted preparing audio has no stretcher, so the clock stays at 1x
+            // until playback hands off to the ordinary audio source.
+            let mut current_rate = if adopted.is_some() {
+                1.0
+            } else {
+                sanitize_playback_rate(*self.playback_rate.borrow_and_update())
+            };
 
             let mut transitioned_audio = None;
             let mut last_adopted_frame = None;
@@ -1395,6 +1428,7 @@ impl Playback {
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
                         playhead_rx: audio_playhead_rx.clone(),
+                        playback_rate: self.playback_rate.clone(),
                     });
                     let started = runtime.block_on(async {
                         tokio::select! {
@@ -1409,6 +1443,7 @@ impl Playback {
                     audio_generation = Some(ticket.generation());
                     transitioned_audio = Some(ticket);
                     has_audio = true;
+                    current_rate = sanitize_playback_rate(*self.playback_rate.borrow_and_update());
                     clock_anchor_frame = frame_number;
                     start = Instant::now();
                 }
@@ -1429,6 +1464,21 @@ impl Playback {
                     }
                     frame_number = target;
                     let _ = playback_position_tx.send(target);
+                }
+
+                if adopted.is_none() && self.playback_rate.has_changed().unwrap_or(false) {
+                    let next_rate = sanitize_playback_rate(*self.playback_rate.borrow_and_update());
+                    if next_rate != current_rate {
+                        current_rate = next_rate;
+                        clock_anchor_frame = frame_number;
+                        start = Instant::now();
+                    }
+                }
+                // Above 1x the renderer is expected to miss deadlines, so keep
+                // the starvation-boost prefetch runway instead of thrashing the
+                // smaller steady-state buffer.
+                if current_rate > 1.0 {
+                    boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                 }
                 let limit_now = refresh_prefetch_limit(
                     &prefetch_frame_limit,
@@ -1478,6 +1528,7 @@ impl Playback {
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
+                                playback_rate: self.playback_rate.clone(),
                             },
                             generation,
                         );
@@ -1492,7 +1543,8 @@ impl Playback {
                 }
 
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
-                let next_deadline = start + frame_duration.mul_f64(frame_offset);
+                let next_deadline =
+                    rate_adjusted_frame_deadline(start, frame_duration, frame_offset, current_rate);
 
                 if adopted.is_none() {
                     precision_sleep_sync(next_deadline);
@@ -1508,7 +1560,7 @@ impl Playback {
                     Instant::now().saturating_duration_since(next_deadline)
                 };
                 if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
-                    let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
+                    let frames_behind = frames_elapsed_at_rate(overshoot, fps_f64, current_rate);
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
                     frame_number += skip;
@@ -1525,7 +1577,12 @@ impl Playback {
                     );
                     let _ = frame_request_tx.send((seek_generation, frame_number));
                     let _ = playback_position_tx.send(frame_number);
-                    if let Some(telemetry) = &self.telemetry {
+                    // Above 1x the renderer is expected to miss some wall-clock
+                    // deadlines by design; only the 1x case signals a genuine
+                    // render stall worth telemetry.
+                    if current_rate <= 1.0
+                        && let Some(telemetry) = &self.telemetry
+                    {
                         telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
                             frame_number: skipped_from,
                             skipped: skip,
@@ -1983,8 +2040,8 @@ impl Playback {
                     break 'playback;
                 }
 
-                let expected_frame =
-                    clock_anchor_frame + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+                let expected_frame = clock_anchor_frame
+                    + frames_elapsed_at_rate(start.elapsed(), fps_f64, current_rate);
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
@@ -2010,7 +2067,9 @@ impl Playback {
                     );
                     let _ = frame_request_tx.send((seek_generation, frame_number));
                     let _ = playback_position_tx.send(frame_number);
-                    if let Some(telemetry) = &self.telemetry {
+                    if current_rate <= 1.0
+                        && let Some(telemetry) = &self.telemetry
+                    {
                         telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
                             frame_number: skipped_from,
                             skipped,
@@ -2412,5 +2471,52 @@ mod tests {
         assert_eq!(cache.cache.len(), 2);
         assert_eq!(cache.cache_bytes, 20);
         assert!(cache.get(1).is_none());
+    }
+
+    #[test]
+    fn rate_adjusted_deadline_runs_the_wall_clock_rate_times_faster() {
+        let start = Instant::now();
+        let frame_duration = Duration::from_secs_f64(1.0 / 30.0);
+        let epsilon = Duration::from_micros(1);
+
+        let assert_close = |deadline: Instant, expected: Instant| {
+            let diff = deadline
+                .saturating_duration_since(expected)
+                .max(expected.saturating_duration_since(deadline));
+            assert!(diff < epsilon, "expected {expected:?}, got {deadline:?}");
+        };
+
+        let normal = rate_adjusted_frame_deadline(start, frame_duration, 30.0, 1.0);
+        assert_close(normal, start + Duration::from_secs(1));
+
+        let double_speed = rate_adjusted_frame_deadline(start, frame_duration, 30.0, 2.0);
+        assert_close(double_speed, start + Duration::from_millis(500));
+
+        let half_speed = rate_adjusted_frame_deadline(start, frame_duration, 30.0, 0.5);
+        assert_close(half_speed, start + Duration::from_secs(2));
+    }
+
+    #[test]
+    fn frames_elapsed_scales_linearly_with_rate() {
+        let one_second = Duration::from_secs(1);
+        assert_eq!(frames_elapsed_at_rate(one_second, 30.0, 1.0), 30);
+        assert_eq!(frames_elapsed_at_rate(one_second, 30.0, 2.0), 60);
+        assert_eq!(frames_elapsed_at_rate(one_second, 30.0, 0.5), 15);
+        assert_eq!(frames_elapsed_at_rate(Duration::ZERO, 30.0, 4.0), 0);
+    }
+
+    #[test]
+    fn playback_rate_is_clamped_to_the_documented_range() {
+        assert_eq!(sanitize_playback_rate(1.0), 1.0);
+        assert_eq!(
+            sanitize_playback_rate(0.1),
+            crate::editor_instance::MIN_PLAYBACK_RATE
+        );
+        assert_eq!(
+            sanitize_playback_rate(10.0),
+            crate::editor_instance::MAX_PLAYBACK_RATE
+        );
+        assert_eq!(sanitize_playback_rate(f64::NAN), 1.0);
+        assert_eq!(sanitize_playback_rate(f64::INFINITY), 1.0);
     }
 }
