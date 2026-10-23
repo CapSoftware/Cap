@@ -85,6 +85,30 @@ function createServerEnv() {
 			OIDC_CLIENT_SECRET: z.string().optional(),
 			OIDC_NAME: z.string().optional(),
 
+			/// Reverse-proxy (trusted header) auth
+			// Sign in via an authenticating reverse proxy (e.g. OpenHost). Set all
+			// three values to enable. SECURITY: keep the origin private; the proxy
+			// must strip client-sent trust/secret headers and set both only after auth.
+			TRUSTED_PROXY_AUTH_HEADER: z
+				.string()
+				.optional()
+				.describe(
+					"Header an authenticating reverse proxy sets to 'true' on owner-authenticated requests (e.g. 'x-openhost-is-owner'). Unset disables the provider.",
+				),
+			TRUSTED_PROXY_AUTH_EMAIL: z
+				.string()
+				.email()
+				.optional()
+				.describe(
+					"Email of the Cap account to sign in when the trusted header is present.",
+				),
+			TRUSTED_PROXY_AUTH_SECRET: z
+				.string()
+				.optional()
+				.describe(
+					"Required to enable trusted-proxy auth: a non-blank shared secret the proxy must send as 'x-trusted-proxy-secret'. Unset or blank disables the provider. Keep this server-side, never in browser code.",
+				),
+
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",
