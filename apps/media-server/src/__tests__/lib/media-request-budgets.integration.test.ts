@@ -125,14 +125,14 @@ describe("media request budgets", () => {
 			return new Response(bytes);
 		});
 		const originalSpawn = childProcess.spawn;
-		const decoder = spyOn(childProcess, "spawn").mockImplementation(
-			(...args: Parameters<typeof childProcess.spawn>) =>
-				originalSpawn(
-					process.execPath,
-					["-e", "setTimeout(() => {}, 2000)"],
-					args[2],
-				),
-		);
+		const decoder = spyOn(childProcess, "spawn").mockImplementation(((
+			...args: Parameters<typeof childProcess.spawn>
+		) =>
+			originalSpawn(
+				process.execPath,
+				["-e", "setTimeout(() => {}, 2000)"],
+				args[2],
+			)) as typeof childProcess.spawn);
 		const startedAt = performance.now();
 		try {
 			await expect(
