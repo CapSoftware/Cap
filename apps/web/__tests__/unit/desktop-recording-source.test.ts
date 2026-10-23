@@ -25,6 +25,9 @@ vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 		get SOURCE_COMMIT_PAGE_SIZE() {
 			return mocks.pageSize ?? actual.SOURCE_COMMIT_PAGE_SIZE;
 		},
+		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
+			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
+		},
 	};
 });
 vi.mock("@/lib/workflow-runtime", async () => {
@@ -1390,9 +1393,12 @@ describe("large desktop recording snapshots", () => {
 		).toBe(8 * 1024 ** 3);
 	});
 
-	it.each(["s3", "googleDrive"])(
+	it.each([
+		["s3", 64],
+		["googleDrive", 16],
+	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
-		async (provider) => {
+		async (provider, page) => {
 			const storage = storageFixture(provider);
 			seedSegments(
 				storage,
@@ -1410,14 +1416,14 @@ describe("large desktop recording snapshots", () => {
 				checkpoint,
 			);
 			if (!("checkpoint" in copied)) throw new Error("Unexpected completion");
-			expect(copied.checkpoint.cursor).toBe(64);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(64);
+			expect(copied.checkpoint.cursor).toBe(page);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(page);
 			const replay = await advanceDesktopRecordingSourceCommit(
 				video,
 				checkpoint,
 			);
 			if (!("checkpoint" in replay)) throw new Error("Unexpected completion");
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(64);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(page);
 			expect(replay.checkpoint.snapshotId).toBe(checkpoint.snapshotId);
 			const source = await finishSnapshot(video, replay.checkpoint);
 			const urls = await buildDesktopRecordingSourceUrls(video, source);
@@ -1760,15 +1766,39 @@ describe("source commit page size", () => {
 		};
 	}
 
-	it("uses 64-entry pages, which the leaf schema already accepts", async () => {
+	it("uses 64-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
 		const actual = await vi.importActual<
 			typeof import("@/lib/desktop-recording-source-checkpoint")
 		>("@/lib/desktop-recording-source-checkpoint");
-		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(64);
-		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBeLessThanOrEqual(
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(64);
+		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
 			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
 		);
 	});
+
+	it.each([
+		["a custom S3-compatible bucket", "s3", true],
+		["Google Drive", "googleDrive", false],
+	] as const)(
+		"keeps 16-entry checkpoints for %s",
+		async (_, provider, customBucket) => {
+			pagedFixture(provider, customBucket);
+			mocks.pageSize = undefined;
+			let checkpoint = snapshotCheckpoint();
+			let checkpoints = 0;
+			while (true) {
+				const result = await advanceDesktopRecordingSourceCommit(
+					recording(),
+					checkpoint,
+				);
+				checkpoints++;
+				if ("source" in result) break;
+				checkpoint = result.checkpoint;
+			}
+			expect(checkpoints).toBe(2 + 3 * Math.ceil((segmentCount + 3) / 16));
+		},
+	);
 
 	it("commits more than 64 objects with the same inventory and receipts as 16-entry pages", async () => {
 		const legacy = await referenceOutput(16);
@@ -1874,6 +1904,9 @@ describe("source commit page size", () => {
 			expect(peak.head).toBe(expected);
 			const source = await finishSnapshot(recording(), planned.checkpoint);
 			expect(peak.copy).toBe(expected);
+			// Each copy/verify worker checks the copy and its original together, so the
+			// bound is on objects in flight; requests peak at two per object.
+			expect(peak.head).toBeLessThanOrEqual(expected * 2);
 			expect(readInventory(storage, source.inventoryKey).objects).toHaveLength(
 				segmentCount + 3,
 			);

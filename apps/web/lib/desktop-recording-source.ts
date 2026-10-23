@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
 	type DesktopRecordingSourceCheckpoint,
 	desktopRecordingSourceCheckpointSchema,
+	SOURCE_COMMIT_AWS_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
 	SOURCE_COMMIT_PAGE_SIZE,
 	SOURCE_COMMIT_PART_BATCH_SIZE,
@@ -201,6 +202,7 @@ type SourceContext = {
 	prefix: string;
 	run: SourceRun;
 	concurrency: number;
+	pageSize: number;
 };
 type TreeKind = "plan" | "objects" | "parts";
 
@@ -261,10 +263,16 @@ const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
 const SOURCE_COMMIT_CONCURRENCY = 8;
 const SOURCE_COMMIT_AWS_CONCURRENCY = 32;
 
-function sourceConcurrency([bucket, customBucket]: RecordingStorageAccess) {
+function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
 	return bucket.provider === "s3" && Option.isNone(customBucket)
-		? SOURCE_COMMIT_AWS_CONCURRENCY
-		: SOURCE_COMMIT_CONCURRENCY;
+		? {
+				concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
+				pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
+			}
+		: {
+				concurrency: SOURCE_COMMIT_CONCURRENCY,
+				pageSize: SOURCE_COMMIT_PAGE_SIZE,
+			};
 }
 
 function invalidSource(message: string): never {
@@ -940,6 +948,7 @@ export async function prepareDesktopRecordingSegments(
 		run,
 		prefix: sourcePrefix(video).slice(0, -1),
 		concurrency: SOURCE_COMMIT_CONCURRENCY,
+		pageSize: SOURCE_COMMIT_PAGE_SIZE,
 	};
 	const unique = [
 		...new Map(
@@ -1171,7 +1180,7 @@ async function advanceSourceSnapshot(
 			invalidSource("Recording source plan cursor is incomplete");
 		const end = Math.min(
 			plan.objectCount,
-			checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE,
+			checkpoint.cursor + context.pageSize,
 		);
 		const originals = await mapBounded(
 			Array.from(
@@ -1217,7 +1226,7 @@ async function advanceSourceSnapshot(
 			scope,
 			originalObjectSchema,
 			checkpoint.cursor,
-			Math.min(plan.objectCount, checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE),
+			Math.min(plan.objectCount, checkpoint.cursor + context.pageSize),
 		);
 		const large =
 			context.bucket.provider === "s3"
@@ -1281,7 +1290,7 @@ async function advanceSourceSnapshot(
 	if (checkpoint.phase === "verify") {
 		const end = Math.min(
 			plan.objectCount,
-			checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE,
+			checkpoint.cursor + context.pageSize,
 		);
 		const [originals, objects] = await Promise.all([
 			readTree(
@@ -1451,7 +1460,7 @@ export async function advanceDesktopRecordingSourceCommit(
 				bucket: access[0],
 				run,
 				prefix: `${sourcePrefix(video)}${parsed.generation}/${parsed.snapshotId}`,
-				concurrency: sourceConcurrency(access),
+				...sourceLimits(access),
 			},
 			parsed,
 			verification,
@@ -1549,7 +1558,7 @@ export async function buildDesktopRecordingSourceUrls(
 						bucket,
 						run,
 						prefix: sourcePrefix(video).slice(0, -1),
-						concurrency: sourceConcurrency(access),
+						...sourceLimits(access),
 					},
 					inventory.roots,
 					"objects",
