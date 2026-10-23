@@ -766,7 +766,7 @@ mod tests {
         let zoom = ZoomTransformTimeline::from_project(project, &cursor, 6.0, size);
         let uniforms = ProjectUniforms::new(
             constants,
-            project,
+            &std::sync::Arc::new(project.clone()),
             (frames.segment_time * 60.0).round() as u32,
             60,
             size,

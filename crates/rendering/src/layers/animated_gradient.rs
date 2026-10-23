@@ -398,7 +398,7 @@ mod tests {
     }
 
     fn test_uniforms(constants: &RenderVideoConstants, frame: u32) -> ProjectUniforms {
-        let project = ProjectConfiguration::default();
+        let project = std::sync::Arc::new(ProjectConfiguration::default());
         let cursor = CursorEvents::default();
         let frames = DecodedSegmentFrames {
             screen_size: constants.options.screen_size,

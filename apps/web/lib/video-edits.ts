@@ -520,8 +520,17 @@ export function getTimelineDisplaySegments(
 	const normalized = normalizeTimelineState(state);
 	const keepRanges = getTimelineKeepRanges(normalized);
 	const segments: VideoTimelineDisplaySegment[] = [];
+	let deletedRangeIndex = 0;
+	let deletedBefore = 0;
 
 	for (const range of keepRanges) {
+		let deletedRange = normalized.deletedRanges[deletedRangeIndex];
+		while (deletedRange && deletedRange.end <= range.start + EPSILON) {
+			deletedBefore += deletedRange.end - deletedRange.start;
+			deletedRangeIndex++;
+			deletedRange = normalized.deletedRanges[deletedRangeIndex];
+		}
+
 		const boundaries = [
 			range.start,
 			...normalized.splitPoints.filter(
@@ -536,11 +545,8 @@ export function getTimelineDisplaySegments(
 			if (end - start < MIN_RANGE_DURATION) continue;
 
 			const id = getSegmentId(start, end);
-			const displayStart = mapTimelineSourceTimeToDisplayTime(
-				normalized,
-				start,
-			);
-			const displayEnd = mapTimelineSourceTimeToDisplayTime(normalized, end);
+			const displayStart = roundEditTime(Math.max(0, start - deletedBefore));
+			const displayEnd = roundEditTime(Math.max(0, end - deletedBefore));
 			if (displayEnd - displayStart < MIN_RANGE_DURATION) continue;
 
 			segments.push({
@@ -565,6 +571,7 @@ export function getTimelineDisplaySplitPoints(
 	const segments = getTimelineDisplaySegments(normalized);
 	const sortedSplitPoints = [...normalized.splitPoints].sort((a, b) => a - b);
 	const markers: VideoTimelineDisplaySplitPoint[] = [];
+	let splitIndex = 0;
 
 	for (let index = 0; index < segments.length - 1; index++) {
 		const current = segments[index];
@@ -576,11 +583,17 @@ export function getTimelineDisplaySplitPoints(
 			sourceTimes.push(next.start);
 		}
 
-		const splitIndices = sortedSplitPoints.flatMap((point, splitIndex) =>
-			sourceTimes.some((sourceTime) => Math.abs(point - sourceTime) <= EPSILON)
-				? [splitIndex]
-				: [],
-		);
+		const splitIndices: number[] = [];
+		for (const sourceTime of sourceTimes) {
+			let point = sortedSplitPoints[splitIndex];
+			while (point !== undefined && point - sourceTime <= EPSILON) {
+				if (Math.abs(point - sourceTime) <= EPSILON) {
+					splitIndices.push(splitIndex);
+				}
+				splitIndex++;
+				point = sortedSplitPoints[splitIndex];
+			}
+		}
 		const time = current.displayEnd;
 		markers.push({
 			id: `${roundEditTime(time)}:${sourceTimes.map(roundEditTime).join(":")}`,
