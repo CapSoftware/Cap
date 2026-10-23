@@ -173,6 +173,7 @@ pub struct SourceClockState {
     detect_skipped_frames: bool,
     pending_lag_ns: Option<i64>,
     skip_confirmed: bool,
+    off_source_time: bool,
     skip_count: u64,
     snap_count: u64,
     hard_reset_count: u64,
@@ -192,6 +193,7 @@ impl SourceClockState {
             detect_skipped_frames: false,
             pending_lag_ns: None,
             skip_confirmed: false,
+            off_source_time: false,
             skip_count: 0,
             snap_count: 0,
             hard_reset_count: 0,
@@ -236,6 +238,14 @@ impl SourceClockState {
 
     pub fn lag_pending(&self) -> bool {
         self.pending_lag_ns.is_some()
+    }
+
+    /// Whether the last frame was stamped a quarter frame or more away from
+    /// its own source time: a pending skip, or a frame the cadence moved a
+    /// display refresh early or late. Only tracked with
+    /// `detecting_skipped_frames`.
+    pub fn off_source_time(&self) -> bool {
+        self.off_source_time
     }
 
     pub fn snap_count(&self) -> u64 {
@@ -358,6 +368,8 @@ impl SourceClockState {
             outcome = SourceClockOutcome::FirstFrame;
         }
         self.next_expected_ns = Some(ts_ns.saturating_add(duration_ns));
+        self.off_source_time =
+            self.detect_skipped_frames && abs_diff_u64(ts_ns, raw_ns) >= frame_duration_ns / 4;
 
         let mut output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
         if smooth {
@@ -387,8 +399,13 @@ impl SourceClockState {
         pending_lag_ns: Option<i64>,
         skip_confirmed: bool,
     ) -> bool {
-        let half_frame_ns = duration_ns / 2;
-        if !self.detect_skipped_frames || half_frame_ns == 0 || lag_ns < half_frame_ns {
+        // A quarter frame, not half: at 30 fps on a 60 Hz display (or 60 fps
+        // at 120 Hz) a delivery that moves one refresh later lags by exactly
+        // half a frame, so with a half-frame bound tick rounding decided
+        // whether the ladder followed the source or kept every later frame a
+        // refresh before its capture time.
+        let min_lag_ns = duration_ns / 4;
+        if !self.detect_skipped_frames || min_lag_ns == 0 || lag_ns < min_lag_ns {
             return false;
         }
         if skip_confirmed
@@ -407,6 +424,7 @@ impl SourceClockState {
         self.last_cadence_output_ns = None;
         self.pending_lag_ns = None;
         self.skip_confirmed = false;
+        self.off_source_time = false;
     }
 }
 
@@ -1134,6 +1152,38 @@ mod tests {
         assert_eq!(state.skip_count(), 2);
         let last = raws.len() - 1;
         assert!((raws[last] as u64).abs_diff(output[last]) < 1_000_000);
+    }
+
+    #[test]
+    fn frames_moved_a_display_refresh_are_off_source_time() {
+        let refresh = |n: i64| n * 1_000_000_000 / 60;
+        let frame_ns = 33_333_333;
+        for (slip, label) in [(-1, "early"), (1, "late")] {
+            let mut state = skip_tracking();
+            let mut off = Vec::new();
+            for frame in 0..12i64 {
+                // A slip one refresh later lags the cadence by a hair under
+                // half a frame, as rounded mach ticks do on the runners.
+                let slipped = refresh(slip) - i64::from(slip > 0) * 1_000;
+                let raw = refresh(2 * frame) + if frame >= 6 { slipped } else { 0 };
+                state.remap_ns(raw, raw + 20_000_000, frame_ns, true);
+                off.push(state.off_source_time());
+            }
+            assert!(off[..6].iter().all(|off| !off), "{label}: {off:?}");
+            assert!(off[6], "{label}: {off:?}");
+            if slip > 0 {
+                assert!(off[8..].iter().all(|off| !off), "{label}: {off:?}");
+            }
+        }
+
+        let mut rng = TestRng(0x0FF);
+        let mut state = skip_tracking();
+        for frame in 0..300i64 {
+            let jitter = ((rng.next_f64() * 2.0 - 1.0) * 0.2 * frame_ns as f64) as i64;
+            let raw = frame * frame_ns as i64 + if frame > 0 { jitter } else { 0 };
+            state.remap_ns(raw, raw + 20_000_000, frame_ns, true);
+            assert!(!state.off_source_time(), "frame {frame}");
+        }
     }
 
     #[test]

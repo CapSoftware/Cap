@@ -761,6 +761,7 @@ pub(crate) struct AudioTimestampGenerator {
 }
 
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
+const ANCHOR_DEFERRAL_LIMIT_SECS: f64 = 3.0;
 #[cfg(not(target_os = "linux"))]
 const STALE_CAPTURE_SECS: f64 = 1.0;
 // A capture-time step this long since the previous frame means the source went
@@ -1391,8 +1392,14 @@ impl VideoDriftTracker {
     }
 
     // The anchor freezes its frame's source time into every later timestamp, so
-    // it must not land on a frame the source clock still holds a slot behind a
-    // skip; the next frame settles onto the real source time.
+    // it must not land on a frame the source clock stamped off its capture time:
+    // one held a slot behind a skip, or one the cadence moved a display refresh
+    // early or late (at 30 fps on a 60 Hz display one refresh is half a frame;
+    // a frozen refresh left the rest of the screen track early in real-capture
+    // runs 39955181207 and 39995941411). The next frame on its
+    // capture time takes the anchor; past ANCHOR_DEFERRAL_LIMIT_SECS the anchor
+    // is taken regardless, so a source the cadence keeps off its capture time
+    // still anchors.
     fn defer_anchor(&mut self, deferred: bool) {
         self.anchor_deferred = deferred;
     }
@@ -1435,7 +1442,9 @@ impl VideoDriftTracker {
         let max_allowed_secs = wall_clock_secs + VIDEO_WALL_CLOCK_TOLERANCE_SECS;
 
         if self.anchor.is_none()
-            && (self.anchor_deferred || wall_clock_secs < 2.0 || camera_secs < 2.0)
+            && ((self.anchor_deferred && wall_clock_secs < ANCHOR_DEFERRAL_LIMIT_SECS)
+                || wall_clock_secs < 2.0
+                || camera_secs < 2.0)
         {
             let result_secs = camera_secs.min(max_allowed_secs);
             if result_secs < camera_secs {
@@ -3664,7 +3673,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             "Timeline resync detected (anomaly collapsed jump); wall-clock anchor covers the gap"
                         );
                     }
-                    drift_tracker.defer_anchor(source_clock.lag_pending());
+                    drift_tracker.defer_anchor(source_clock.lag_pending() || source_clock.off_source_time());
                     drift_tracker.waited_for_frame(waited_for_frame);
                     let duration = calculate_video_timestamp(
                         &mut drift_tracker,
@@ -3807,7 +3816,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
 
                         let resynced = anomaly_tracker.take_resync_flag();
-                        drift_tracker.defer_anchor(source_clock.lag_pending());
+                        drift_tracker.defer_anchor(source_clock.lag_pending() || source_clock.off_source_time());
                         drift_tracker.waited_for_frame(false);
                         let duration = calculate_video_timestamp(
                             &mut drift_tracker,
@@ -5397,7 +5406,7 @@ mod tests {
                             wall,
                         )
                         .unwrap();
-                    drift.defer_anchor(source.lag_pending());
+                    drift.defer_anchor(source.lag_pending() || source.off_source_time());
                     calculate_video_timestamp(
                         &mut drift,
                         timestamp,
@@ -5472,6 +5481,32 @@ mod tests {
                     assert!(
                         (offset - reference_offset).abs() < 0.5,
                         "skip {start}+{dropped}: settled offset {offset:.3}ms vs {reference_offset:.3}ms"
+                    );
+                    for pair in output.windows(2) {
+                        assert!(pair[1] > pair[0]);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn refresh_off_anchor_frame_defers_anchor_to_source_time() {
+            let reference = source_frames(420, &[]);
+            let reference_offset =
+                settled_offset_ms(&reference, &mux_chain(&reference, video_source()));
+            // One 120 Hz refresh is half a 60 fps frame: a frame delivered a
+            // refresh early is stamped late, and one delivered a hair under a
+            // refresh late is stamped early.
+            for shift_ns in [-8_333_333i64, 8_333_000] {
+                for start in 118..124 {
+                    let mut frames = reference.clone();
+                    frames[start] =
+                        Duration::from_nanos((frames[start].as_nanos() as i64 + shift_ns) as u64);
+                    let output = mux_chain(&frames, video_source());
+                    let offset = settled_offset_ms(&frames, &output);
+                    assert!(
+                        (offset - reference_offset).abs() < 0.5,
+                        "frame {start} shifted {shift_ns}ns: settled offset {offset:.3}ms vs {reference_offset:.3}ms"
                     );
                     for pair in output.windows(2) {
                         assert!(pair[1] > pair[0]);
@@ -6162,7 +6197,7 @@ mod tests {
                         wall,
                     )
                     .unwrap();
-                drift.defer_anchor(source.lag_pending());
+                drift.defer_anchor(source.lag_pending() || source.off_source_time());
                 let pts = calculate_video_timestamp(
                     &mut drift,
                     timestamp,
