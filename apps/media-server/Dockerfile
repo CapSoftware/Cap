@@ -1,7 +1,7 @@
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.0 AS operator
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ffmpeg \
+	&& apt-get install -y --no-install-recommends ffmpeg util-linux \
 	&& rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -11,6 +11,21 @@ RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/src ./src
 COPY apps/media-server/capcodec.md ./capcodec.md
+
+COPY scripts/recording-ownership-preflight.ts ./scripts/
+COPY scripts/lib/recording-ownership-preflight.ts scripts/lib/ownership-preflight-download.ts ./scripts/lib/
+COPY packages/utils/package.json ./node_modules/@cap/utils/package.json
+COPY packages/utils/src/recording-ownership-preflight.ts ./node_modules/@cap/utils/src/recording-ownership-preflight.ts
+COPY apps/media-server/recording-ownership-preflight /usr/local/bin/recording-ownership-preflight
+RUN mkdir -p apps/media-server \
+	&& ln -s ../../src apps/media-server/src \
+	&& chmod -R a+rX src scripts node_modules/@cap/utils \
+	&& chmod a+r package.json bun.lock capcodec.md \
+	&& chmod 755 /usr/local/bin/recording-ownership-preflight
+
+RUN bun --no-env-file test src/__tests__/lib/ownership-preflight-package.test.ts
+
+FROM operator AS release
 
 RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
 	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \

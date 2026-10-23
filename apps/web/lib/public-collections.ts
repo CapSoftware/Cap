@@ -394,7 +394,7 @@ function isOrgLevelFolder(collection: PublicCollection) {
 	);
 }
 
-async function getPublicCollectionVideos(
+export async function getPublicCollectionVideos(
 	collection: PublicCollection,
 	page: number,
 	verifiedPasswordHashes: readonly string[],

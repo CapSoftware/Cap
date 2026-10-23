@@ -176,14 +176,18 @@ export const createS3BucketAccess = Effect.gen(function* () {
 			).pipe(Effect.withSpan("getSignedObjectUrl")),
 		getInternalSignedObjectUrl: (
 			key: string,
-			signingArgs?: RequestPresigningArguments,
+			signingArgs?: RequestPresigningArguments & { versionId?: string },
 		) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
 					Effect.map((client) =>
 						S3Presigner.getSignedUrl(
 							client,
-							new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+							new S3.GetObjectCommand({
+								Bucket: provider.bucket,
+								Key: key,
+								VersionId: signingArgs?.versionId,
+							}),
 							signingArgs ?? {
 								expiresIn: DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS,
 							},

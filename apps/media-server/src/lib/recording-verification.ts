@@ -454,15 +454,33 @@ async function hashDecodedStream(stream: Readable): Promise<{
 	return { bytes, sha256: hash.digest("hex") };
 }
 
-async function spawnRecordingDecoder(args: string[], contentPipes: number) {
-	const child = spawn("ffmpeg", args, {
-		stdio: [
-			"ignore",
-			"pipe",
-			"pipe",
-			...Array<"pipe">(contentPipes).fill("pipe"),
-		],
-	});
+async function spawnRecordingDecoder(
+	args: string[],
+	contentPipes: number,
+	preflight = false,
+) {
+	const child = spawn(
+		preflight ? "prlimit" : "ffmpeg",
+		preflight
+			? [
+					"--as=2147483648",
+					"--cpu=86400",
+					"--nofile=64",
+					"--",
+					"ffmpeg",
+					...args,
+				]
+			: args,
+		{
+			...(preflight ? { env: { PATH: process.env.PATH, LANG: "C" } } : {}),
+			stdio: [
+				"ignore",
+				"pipe",
+				"pipe",
+				...Array<"pipe">(contentPipes).fill("pipe"),
+			],
+		},
+	);
 	const exited = new Promise<number>((resolve, reject) => {
 		child.once("error", reject);
 		child.once("close", (code) => resolve(code ?? -1));
@@ -1246,12 +1264,22 @@ export async function verifyRecording(
 	return decodeRecording(input, options);
 }
 
+export async function verifyOwnershipPreflightRecording(
+	input: string,
+	options: RecordingVerificationOptions,
+) {
+	if (process.platform !== "linux" || !isAbsolute(input))
+		throw new Error("Ownership preflight requires local Linux verification");
+	return decodeRecording(input, options, undefined, undefined, undefined, true);
+}
+
 async function decodeRecording(
 	input: string,
 	options: RecordingVerificationOptions,
 	objectIdentity?: string,
 	sourceAudioInput?: string | null,
 	packetProof?: Awaited<ReturnType<typeof proveRecordingPackets>>,
+	preflight = false,
 ): Promise<RecordingVerificationResult> {
 	const startedAt = performance.now();
 	const timeoutMs = options.timeoutMs ?? PROCESS_TIMEOUT_MS;
@@ -1264,7 +1292,12 @@ async function decodeRecording(
 			!packetProof &&
 			sourceAudioInput === undefined) ||
 		!positiveNumber(timeoutMs) ||
-		timeoutMs > (packetProof ? MAX_LOCAL_VERIFICATION_MS : PROCESS_TIMEOUT_MS)
+		timeoutMs >
+			(preflight
+				? 24 * 60 * 60_000
+				: packetProof
+					? MAX_LOCAL_VERIFICATION_MS
+					: PROCESS_TIMEOUT_MS)
 	) {
 		throw new Error("Invalid recording verification budget or duration");
 	}
@@ -1407,6 +1440,7 @@ async function decodeRecording(
 				decodeThreadsFromEnv("MEDIA_SERVER_VERIFY_DECODE_THREADS", 1),
 				"-protocol_whitelist",
 				remote ? "http,https,tcp,tls" : "file",
+				...(preflight ? ["-enable_drefs", "0", "-use_absolute_path", "0"] : []),
 				"-f",
 				"mov",
 				...(objectIdentity
@@ -1483,6 +1517,7 @@ async function decodeRecording(
 							]),
 			],
 			streamDecodedContent ? (hashAudio ? 2 : 1) : 0,
+			preflight,
 		),
 	);
 	let failure: Error | undefined;
