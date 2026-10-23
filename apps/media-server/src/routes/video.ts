@@ -42,6 +42,7 @@ import {
 	setRequestIdleTimeout,
 	trackBackgroundTask,
 } from "../lib/lifecycle";
+import { logReason } from "../lib/log-redaction";
 import { PROCESS_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "../lib/media-common";
 import {
 	getTimeoutMs as getEditRenderTimeoutMs,
@@ -111,6 +112,7 @@ const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
+const MUX_FAILURE_LOG_LENGTH = 1_000;
 const SEGMENT_DOWNLOAD_MAX_ATTEMPTS = 3;
 const SEGMENT_DOWNLOAD_RETRY_BASE_MS = 250;
 const JOB_TRANSFER_ALLOWANCE_MS = 2 * UPLOAD_TIMEOUT_MS;
@@ -2144,10 +2146,20 @@ video.post("/verify-recording", async (c) => {
 				["complete", "error", "cancelled"].includes(current.phase)
 			)
 				return;
+			const errorCode = classifySourceError(error);
+			logVideoEvent("recording_verification_failed", {
+				jobId,
+				videoId: body.videoId,
+				phase: "error",
+				errorCode,
+				retryable: errorCode === "processing-unavailable",
+				stage: "transfer",
+				reason: logReason(error),
+			});
 			updateJob(jobId, {
 				phase: "error",
 				error: "Recording transfer could not complete",
-				errorCode: classifySourceError(error),
+				errorCode,
 			});
 			sendCurrentJobWebhook(jobId);
 		}),
@@ -2162,21 +2174,35 @@ async function verifyUploadedRecordingAsync(
 	const abortController = new AbortController();
 	if (!updateJob(jobId, { abortController, phase: "processing", progress: 0 }))
 		return;
+	let stage = "probe";
+	let cause: unknown;
+	let mismatch: Record<string, unknown> | undefined;
 	try {
 		const metadata = await probeVideo(body.videoUrl).catch((error: unknown) => {
 			if (error instanceof MediaTransferBudgetError) throw error;
+			cause = error;
 			throw new Error(RECORDING_VERIFICATION_RETRY_ERROR);
 		});
+		stage = "metadata";
 		if (
 			metadata.fileSize !== body.fileSize ||
 			(body.duration !== undefined &&
 				!isDurationClose(metadata.duration, body.duration)) ||
 			(body.requiredAudio && !metadata.audioCodec)
 		) {
+			mismatch = {
+				expectedFileSize: body.fileSize,
+				actualFileSize: metadata.fileSize,
+				expectedDuration: body.duration,
+				actualDuration: metadata.duration,
+				requiredAudio: body.requiredAudio,
+				audioCodec: metadata.audioCodec,
+			};
 			throw new Error(
 				"Uploaded recording does not match the completed local file",
 			);
 		}
+		stage = "decode";
 		if (
 			!beginRecordingVerification(
 				jobId,
@@ -2200,6 +2226,7 @@ async function verifyUploadedRecordingAsync(
 				}),
 			),
 		);
+		stage = "identity";
 		if (verified.fileSize !== body.fileSize)
 			throw new Error("Verified recording size does not match the local file");
 		if (body.generation && !verified.remoteSha256)
@@ -2237,15 +2264,27 @@ async function verifyUploadedRecordingAsync(
 			(error instanceof Error &&
 				(error.message === VIDEO_MEMORY_PRESSURE_ERROR ||
 					error.message === RECORDING_VERIFICATION_RETRY_ERROR));
+		const phase =
+			!retryable && abortController.signal.aborted ? "cancelled" : "error";
+		const errorCode = retryable
+			? "processing-unavailable"
+			: classifySourceError(error);
+		logVideoEvent("recording_verification_failed", {
+			jobId,
+			videoId: body.videoId,
+			phase,
+			errorCode,
+			retryable: errorCode === "processing-unavailable",
+			stage,
+			reason: logReason(cause ?? error),
+			...(mismatch && { mismatch }),
+		});
 		updateJob(jobId, {
-			phase:
-				!retryable && abortController.signal.aborted ? "cancelled" : "error",
+			phase,
 			error: retryable
 				? RECORDING_VERIFICATION_RETRY_ERROR
 				: "Uploaded recording content could not be verified; retain the local recording",
-			errorCode: retryable
-				? "processing-unavailable"
-				: classifySourceError(error),
+			errorCode,
 		});
 	}
 	const job = getJob(jobId);
@@ -2822,6 +2861,22 @@ async function downloadSegmentsBatchTracked(
 	return outputPaths;
 }
 
+function muxFailureErrorCode(
+	error: unknown,
+	stageErrorCode: RecordingErrorCode,
+): RecordingErrorCode {
+	if (error instanceof MediaTransferBudgetError)
+		return "processing-budget-exhausted";
+	if (error instanceof MediaDownloadError) return error.errorCode;
+	if (
+		isRetryableRecordingVerificationError(error) ||
+		isBusyError(error) ||
+		isTimeoutError(error)
+	)
+		return "processing-unavailable";
+	return stageErrorCode;
+}
+
 function sendCurrentJobWebhook(jobId: string): void {
 	const job = getJob(jobId);
 	if (!job) {
@@ -3261,7 +3316,8 @@ async function muxSegmentsAsync(
 			jobId,
 			videoId,
 			durationMs: Date.now() - startedAt,
-			error: error instanceof Error ? error.message : String(error),
+			errorCode: muxFailureErrorCode(error, errorCode),
+			error: logReason(error, MUX_FAILURE_LOG_LENGTH),
 			resources: getSystemResources(),
 		});
 		if (!outputUploadStarted) {
@@ -3278,16 +3334,7 @@ async function muxSegmentsAsync(
 				abortController.signal.aborted && !isBusyError(error)
 					? "cancelled"
 					: "error",
-			errorCode:
-				error instanceof MediaTransferBudgetError
-					? "processing-budget-exhausted"
-					: error instanceof MediaDownloadError
-						? error.errorCode
-						: isRetryableRecordingVerificationError(error) ||
-								isBusyError(error) ||
-								isTimeoutError(error)
-							? "processing-unavailable"
-							: errorCode,
+			errorCode: muxFailureErrorCode(error, errorCode),
 			error: isRetryableRecordingVerificationError(error)
 				? "Recording verification temporarily unavailable (503)"
 				: error instanceof Error
