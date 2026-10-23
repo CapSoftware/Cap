@@ -46,11 +46,15 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 
 	/** Pull `currentTime`/`duration` off the element and notify time subscribers. */
 	const sample = (force = false) => {
+		let durationChanged = false;
 		if (element && isFiniteDuration(element.duration)) {
-			duration = element.duration;
+			if (duration !== element.duration) {
+				duration = element.duration;
+				durationChanged = true;
+			}
 		}
 		const next = element?.currentTime ?? time;
-		if (next === time && !force) return;
+		if (next === time && !force && !durationChanged) return;
 		time = next;
 		emitTime();
 	};
@@ -174,8 +178,12 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 	const getPlaying = () => playing;
 
 	const setFallbackDuration = (next: number | null) => {
-		fallback = normalizeDuration(next);
+		const nextFallback = normalizeDuration(next);
+		const durationChanged =
+			!isFiniteDuration(duration) && fallback !== nextFallback;
+		fallback = nextFallback;
 		if (!isFiniteDuration(duration)) duration = fallback;
+		if (durationChanged) emitTime();
 	};
 
 	const seek = (target: number) => {
