@@ -10,27 +10,6 @@ This is the app that ships as **Cap**, from 0.6.1 on. The Tauri app in
 The main recording window uses a fixed 330×432 layout with device controls
 and recording and screenshot browsers. The expanded view is no longer available.
 
-## Remove filler words
-
-Open the editor's Captions tab, select English, then choose **Remove Filler
-Words**. If word-timed captions are missing, Cap generates them locally using
-the selected downloaded model. Cleanup preserves the caption visibility setting
-and original media. All cuts form one undo step.
-
-The action removes whole `um`, `uh`, `uhm`, `er` and `erm` hesitation tokens,
-including drawn-out forms, repeated or retimed clips, and ripples timed overlays.
-Audio analysis keeps detected pauses after fillers rather than treating the next
-word's onset as the filler end. In noisy audio it retains the existing timings.
-Words near transition handles or held frames are skipped and reported. Invalid or
-overlapping word timings leave the project unchanged. Review playback after
-cleanup: transcript-based detection can miss hesitations or misidentify speech.
-The resulting clips remain editable: trim clip handles to recover a boundary,
-or split and delete a missed filler. Undo restores the complete cleanup in one step.
-
-For an isolated verification run, `CAP_GPUI_AUTO_SIDEBAR=captions` and
-`CAP_GPUI_AUTO_REMOVE_FILLERS=1` invoke the same action after the editor loads.
-Use a separate app-data directory, store and copied project as described below.
-
 ## Running it
 
 ```sh
