@@ -1365,15 +1365,19 @@ async function processVideoAsync(
 			updateJob(jobId, { message: "Saving original video..." });
 			await sendWebhook(job);
 			await withJobHeartbeat(jobId, () =>
-				uploadFileToStorage(
-					inputTempFile.path,
-					options.sourceUpload ?? {
-						type: "put",
-						url: sourcePresignedUrl as string,
-					},
-					"video/mp4",
-					abortController.signal,
-				),
+				options.sourceUpload
+					? uploadFileToStorage(
+							inputTempFile.path,
+							options.sourceUpload,
+							"video/mp4",
+							abortController.signal,
+						)
+					: uploadFileToS3(
+							inputTempFile.path,
+							sourcePresignedUrl as string,
+							"video/mp4",
+							abortController.signal,
+						),
 			);
 			sourceUploaded = true;
 		}
@@ -1440,12 +1444,19 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const uploadReceipt = await uploadFileToStorage(
-			outputTempFile.path,
-			options.outputUpload ?? { type: "put", url: outputPresignedUrl },
-			"video/mp4",
-			abortController.signal,
-		);
+		const uploadReceipt = options.outputUpload
+			? await uploadFileToStorage(
+					outputTempFile.path,
+					options.outputUpload,
+					"video/mp4",
+					abortController.signal,
+				)
+			: await uploadFileToS3(
+					outputTempFile.path,
+					outputPresignedUrl,
+					"video/mp4",
+					abortController.signal,
+				);
 		outputUploaded = true;
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
