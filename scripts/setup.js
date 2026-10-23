@@ -71,9 +71,9 @@ async function main() {
 
 		if (!(await fileExists(nativeDepsTarPath))) {
 			console.log(`Downloading ${nativeDepsTar}`);
-			const nativeDepsBytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
-				.then((r) => r.blob())
-				.then((b) => b.arrayBuffer());
+			const nativeDepsBytes = await downloadBytes(
+				`${NATIVE_DEPS_URL}/${nativeDepsTar}`,
+			);
 			await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
 			console.log("Downloaded native deps");
 			downloadedNativeDeps = true;
@@ -148,9 +148,7 @@ async function main() {
 		const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
 		const ffmpegZipPath = path.join(targetDir, ffmpegZip);
 		if (!(await fileExists(ffmpegZipPath))) {
-			const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
-				.then((r) => r.blob())
-				.then((b) => b.arrayBuffer());
+			const ffmpegZipBytes = await downloadBytes(FFMPEG_ZIP_URL);
 			await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
 			console.log(`Downloaded ${ffmpegZip}`);
 			downloadedFfmpeg = true;
@@ -273,9 +271,9 @@ async function main() {
 			let downloadedNativeDeps = false;
 			if (!(await fileExists(nativeDepsTarPath))) {
 				console.log(`Downloading ${nativeDepsTar}`);
-				const bytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
-					.then((r) => r.blob())
-					.then((b) => b.arrayBuffer());
+				const bytes = await downloadBytes(
+					`${NATIVE_DEPS_URL}/${nativeDepsTar}`,
+				);
 				await fs.writeFile(nativeDepsTarPath, Buffer.from(bytes));
 				console.log("Downloaded native deps");
 				downloadedNativeDeps = true;
@@ -441,9 +439,7 @@ async function setupMacOSOnnxRuntime() {
 
 	if (!(await fileExists(archivePath))) {
 		console.log(`Downloading ${asset.name}`);
-		const bytes = await fetch(url)
-			.then((r) => r.blob())
-			.then((b) => b.arrayBuffer());
+		const bytes = await downloadBytes(url);
 		await fs.writeFile(archivePath, Buffer.from(bytes));
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
@@ -495,9 +491,7 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(archivePath))) {
 		console.log(`Downloading ${asset.name}`);
-		const bytes = await fetch(url)
-			.then((r) => r.blob())
-			.then((b) => b.arrayBuffer());
+		const bytes = await downloadBytes(url);
 		await fs.writeFile(archivePath, Buffer.from(bytes));
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
@@ -704,6 +698,13 @@ async function signMacOSDylib(filePath) {
 	await exec(
 		`codesign ${keychain} ${timestamp} -s "${signId}" -f "${filePath}"`,
 	);
+}
+
+async function downloadBytes(url) {
+	const response = await fetch(url);
+	if (!response.ok)
+		throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+	return response.arrayBuffer();
 }
 
 async function fileExists(path) {

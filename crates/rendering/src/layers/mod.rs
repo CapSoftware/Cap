@@ -76,6 +76,54 @@ pub fn new_font_system() -> glyphon::FontSystem {
     result
 }
 
+/// Bind groups for full-frame passes that sample one of the render session's
+/// two textures. Each is keyed by the uniform buffer and source view it binds,
+/// so it is built once per pairing instead of once per frame.
+#[derive(Default)]
+pub struct SourceBindGroups {
+    entries: Vec<(wgpu::Buffer, wgpu::TextureView, wgpu::BindGroup)>,
+    #[cfg(test)]
+    created: usize,
+}
+
+impl SourceBindGroups {
+    pub fn get_or_create(
+        &mut self,
+        buffer: &wgpu::Buffer,
+        view: &wgpu::TextureView,
+        create: impl FnOnce() -> wgpu::BindGroup,
+    ) -> &wgpu::BindGroup {
+        let index = match self
+            .entries
+            .iter()
+            .position(|(cached_buffer, cached_view, _)| {
+                cached_buffer == buffer && cached_view == view
+            }) {
+            Some(index) => index,
+            None => {
+                #[cfg(test)]
+                {
+                    self.created += 1;
+                }
+                self.entries.push((buffer.clone(), view.clone(), create()));
+                self.entries.len() - 1
+            }
+        };
+        &self.entries[index].2
+    }
+
+    /// Drops entries for views the session no longer owns, so a resized
+    /// session's old textures are released.
+    pub fn retain_views(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.entries.retain(|(_, view, _)| views.contains(&view));
+    }
+
+    #[cfg(test)]
+    pub fn created(&self) -> usize {
+        self.created
+    }
+}
+
 pub use animated_gradient::*;
 pub use background::*;
 pub use blur::*;
