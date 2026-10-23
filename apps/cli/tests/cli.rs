@@ -706,6 +706,27 @@ fn project_config_get_without_file_returns_default() {
 }
 
 #[test]
+fn project_config_commands_reject_directories_without_recordings() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("not-a-recording.cap");
+    std::fs::create_dir(&project).unwrap();
+
+    for command in ["get", "set"] {
+        let mut args = vec!["project", "config", command, project.to_str().unwrap()];
+        if command == "set" {
+            args.extend(["--settings-json", "{}"]);
+        }
+        args.push("--json");
+
+        let output = run(&args);
+        assert!(!output.status.success(), "{command} unexpectedly succeeded");
+        assert!(parse_json(&output)["error"].is_string());
+    }
+
+    assert!(!project.join("project-config.json").exists());
+}
+
+#[test]
 fn export_missing_project_emits_json_error_event() {
     let output = run(&["export", "/this/path/does/not/exist.cap", "--progress-json"]);
     assert!(!output.status.success());

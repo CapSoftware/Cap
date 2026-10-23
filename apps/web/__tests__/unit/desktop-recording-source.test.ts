@@ -7,11 +7,29 @@ import { z } from "zod";
 import type { DesktopRecordingSourceCheckpoint } from "@/lib/desktop-recording-source-checkpoint";
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
 
-const mocks = vi.hoisted(() => ({ storage: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	storage: vi.fn(),
+	pageSize: undefined as number | undefined,
+}));
 
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: { getAccessForVideo: mocks.storage },
 }));
+vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
+	const actual =
+		await importOriginal<
+			typeof import("@/lib/desktop-recording-source-checkpoint")
+		>();
+	return {
+		...actual,
+		get SOURCE_COMMIT_PAGE_SIZE() {
+			return mocks.pageSize ?? actual.SOURCE_COMMIT_PAGE_SIZE;
+		},
+		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
+			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
+		},
+	};
+});
 vi.mock("@/lib/workflow-runtime", async () => {
 	const { Effect } = await import("effect");
 	return { runWorkflowPromise: Effect.runPromise };
@@ -99,7 +117,7 @@ function recording(source: VideoRow["source"] = { type: "desktopSegments" }) {
 	return { id: "owned-video", ownerId: "owned-user", source } as VideoRow;
 }
 
-function storageFixture(provider = "s3") {
+function storageFixture(provider = "s3", customBucket = false) {
 	const objects = new Map<string, StoredObject>();
 	const uploads = new Map<
 		string,
@@ -311,7 +329,12 @@ function storageFixture(provider = "s3") {
 			),
 		},
 	};
-	mocks.storage.mockReturnValue(Effect.succeed([bucket]));
+	mocks.storage.mockReturnValue(
+		Effect.succeed([
+			bucket,
+			customBucket ? Option.some({ id: "custom-bucket" }) : Option.none(),
+		]),
+	);
 	return { bucket, objects, uploads, seed, object };
 }
 
@@ -422,6 +445,7 @@ function seedSegments(
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.pageSize = undefined;
 });
 
 describe("recording source preparation during upload", () => {
@@ -1369,13 +1393,16 @@ describe("large desktop recording snapshots", () => {
 		).toBe(8 * 1024 ** 3);
 	});
 
-	it.each(["s3", "googleDrive"])(
+	it.each([
+		["s3", 64],
+		["googleDrive", 16],
+	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
-		async (provider) => {
+		async (provider, page) => {
 			const storage = storageFixture(provider);
 			seedSegments(
 				storage,
-				Array.from({ length: 33 }, (_, index) => index + 1),
+				Array.from({ length: 129 }, (_, index) => index + 1),
 				false,
 			);
 			const video = recording();
@@ -1389,19 +1416,19 @@ describe("large desktop recording snapshots", () => {
 				checkpoint,
 			);
 			if (!("checkpoint" in copied)) throw new Error("Unexpected completion");
-			expect(copied.checkpoint.cursor).toBe(16);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(16);
+			expect(copied.checkpoint.cursor).toBe(page);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(page);
 			const replay = await advanceDesktopRecordingSourceCommit(
 				video,
 				checkpoint,
 			);
 			if (!("checkpoint" in replay)) throw new Error("Unexpected completion");
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(16);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(page);
 			expect(replay.checkpoint.snapshotId).toBe(checkpoint.snapshotId);
 			const source = await finishSnapshot(video, replay.checkpoint);
 			const urls = await buildDesktopRecordingSourceUrls(video, source);
-			expect(urls.sourceObjects).toHaveLength(34);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(34);
+			expect(urls.sourceObjects).toHaveLength(130);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(130);
 			expect(JSON.stringify(replay.checkpoint).length).toBeLessThan(5_000);
 		},
 	);
@@ -1625,6 +1652,266 @@ describe("large desktop recording snapshots", () => {
 		).toBe(false);
 		expect(storage.uploads.size).toBe(1);
 	});
+});
+
+describe("source commit page size", () => {
+	const segmentCount = 130;
+
+	function pagedFixture(provider = "s3", customBucket = false) {
+		const storage = storageFixture(provider, customBucket);
+		seedSegments(
+			storage,
+			Array.from({ length: segmentCount }, (_, index) => index + 1),
+		);
+		return storage;
+	}
+
+	async function advanceWithPageSize(
+		pageSize: number,
+		checkpoint: DesktopRecordingSourceCheckpoint,
+		done: (checkpoint: DesktopRecordingSourceCheckpoint) => boolean = () =>
+			false,
+	) {
+		mocks.pageSize = pageSize;
+		let checkpoints = 0;
+		while (!done(checkpoint)) {
+			const result = await advanceDesktopRecordingSourceCommit(
+				recording(),
+				checkpoint,
+			);
+			checkpoints++;
+			if ("source" in result)
+				return { source: result.source, checkpoint, checkpoints };
+			checkpoint = result.checkpoint;
+		}
+		return { source: undefined, checkpoint, checkpoints };
+	}
+
+	function leafSizes(
+		storage: ReturnType<typeof storageFixture>,
+		inventoryKey: string,
+	) {
+		const page = z.discriminatedUnion("type", [
+			z.object({ type: z.literal("leaf"), entries: z.array(z.unknown()) }),
+			z.object({
+				type: z.literal("branch"),
+				children: z.array(z.object({ key: z.string() })),
+			}),
+		]);
+		const sizes = (key: string): number[] => {
+			const node = page.parse(JSON.parse(storage.object(key).body ?? ""));
+			return node.type === "leaf"
+				? [node.entries.length]
+				: node.children.flatMap((child) => sizes(child.key));
+		};
+		return z
+			.object({ roots: z.array(z.object({ key: z.string() })) })
+			.parse(JSON.parse(storage.object(inventoryKey).body ?? ""))
+			.roots.flatMap((root) => sizes(root.key));
+	}
+
+	async function snapshotOutput(
+		storage: ReturnType<typeof storageFixture>,
+		source: Awaited<ReturnType<typeof commitDesktopRecordingSource>>,
+	) {
+		const objects = readInventory(storage, source.inventoryKey).objects.map(
+			(object) => {
+				const copy = storage.object(object.key);
+				expect(copy.identity).toBe(object.objectIdentity);
+				const receiptKey = object.key.replace(
+					/\/(video|audio)\/\d+\.(mp4|m4s)$/,
+					"/receipt.json",
+				);
+				expect(JSON.parse(storage.object(receiptKey).body ?? "")).toEqual(
+					object,
+				);
+				return {
+					key: object.key.replace(/\/copies\/(\d+)\/[0-9a-f-]{36}\//, "/$1/"),
+					originalKey: object.originalKey,
+					originalIdentity: object.originalIdentity,
+					size: object.size,
+					track: object.track,
+					index: object.index,
+					body: copy.body,
+				};
+			},
+		);
+		const urls = await buildDesktopRecordingSourceUrls(recording(), source);
+		return {
+			source: {
+				kind: source.kind,
+				manifestSha256: source.manifestSha256,
+				requiredAudio: source.requiredAudio,
+			},
+			objects,
+			urls: {
+				sourceObjects: urls.sourceObjects.map(({ size }) => size),
+				videoSegments: urls.videoSegmentUrls.length,
+				audioSegments: urls.audioSegmentUrls.length,
+				videoInit: urls.videoInitUrl !== undefined,
+				audioInit: urls.audioInitUrl !== undefined,
+			},
+			copies: storage.bucket.copyObject.mock.calls.length,
+		};
+	}
+
+	async function referenceOutput(pageSize: number) {
+		const storage = pagedFixture();
+		const result = await advanceWithPageSize(pageSize, snapshotCheckpoint());
+		if (!result.source) throw new Error("Snapshot did not complete");
+		return {
+			output: await snapshotOutput(storage, result.source),
+			checkpoints: result.checkpoints,
+			leaves: leafSizes(storage, result.source.inventoryKey),
+		};
+	}
+
+	it("uses 64-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
+		const actual = await vi.importActual<
+			typeof import("@/lib/desktop-recording-source-checkpoint")
+		>("@/lib/desktop-recording-source-checkpoint");
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(64);
+		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
+			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
+		);
+	});
+
+	it.each([
+		["a custom S3-compatible bucket", "s3", true],
+		["Google Drive", "googleDrive", false],
+	] as const)(
+		"keeps 16-entry checkpoints for %s",
+		async (_, provider, customBucket) => {
+			pagedFixture(provider, customBucket);
+			mocks.pageSize = undefined;
+			let checkpoint = snapshotCheckpoint();
+			let checkpoints = 0;
+			while (true) {
+				const result = await advanceDesktopRecordingSourceCommit(
+					recording(),
+					checkpoint,
+				);
+				checkpoints++;
+				if ("source" in result) break;
+				checkpoint = result.checkpoint;
+			}
+			expect(checkpoints).toBe(2 + 3 * Math.ceil((segmentCount + 3) / 16));
+		},
+	);
+
+	it("commits more than 64 objects with the same inventory and receipts as 16-entry pages", async () => {
+		const legacy = await referenceOutput(16);
+		vi.clearAllMocks();
+		const current = await referenceOutput(64);
+		const objectCount = segmentCount + 3;
+		expect(current.output.objects).toHaveLength(objectCount);
+		expect(current.output).toEqual(legacy.output);
+		expect(current.output.copies).toBe(objectCount);
+		expect(legacy.checkpoints).toBe(2 + 3 * Math.ceil(objectCount / 16));
+		expect(current.checkpoints).toBe(2 + 3 * Math.ceil(objectCount / 64));
+		expect(legacy.leaves.every((size) => size <= 16)).toBe(true);
+		expect(current.leaves).toEqual([64, 64, objectCount - 128]);
+	});
+
+	for (const [from, to] of [
+		[16, 64],
+		[64, 16],
+	] as const) {
+		it.each(["enumerate", "copy", "verify"] as const)(
+			`resumes a %s checkpoint saved with ${from}-entry pages after switching to ${to}`,
+			async (phase) => {
+				const reference = await referenceOutput(64);
+				vi.clearAllMocks();
+				const storage = pagedFixture();
+				const saved = await advanceWithPageSize(
+					from,
+					snapshotCheckpoint(),
+					(checkpoint) =>
+						checkpoint.phase === phase && checkpoint.cursor === 64,
+				);
+				expect(saved.source).toBeUndefined();
+				const next = await advanceDesktopRecordingSourceCommit(
+					recording(),
+					saved.checkpoint,
+				);
+				if (!("checkpoint" in next)) throw new Error("Unexpected completion");
+				expect(next.checkpoint).toMatchObject({
+					phase,
+					cursor: 64 + from,
+					plan: saved.checkpoint.plan,
+					snapshotId: saved.checkpoint.snapshotId,
+				});
+				const resumed = await advanceWithPageSize(to, next.checkpoint);
+				if (!resumed.source) throw new Error("Snapshot did not complete");
+				expect(await snapshotOutput(storage, resumed.source)).toEqual(
+					reference.output,
+				);
+				const leaves = leafSizes(storage, resumed.source.inventoryKey);
+				expect(leaves.reduce((total, size) => total + size, 0)).toBe(
+					segmentCount + 3,
+				);
+				if (phase !== "verify") expect(new Set(leaves).size).toBeGreaterThan(1);
+			},
+		);
+	}
+
+	it.each([
+		["Cap's AWS bucket", "s3", false, 32],
+		["a custom S3-compatible bucket", "s3", true, 8],
+		["Google Drive", "googleDrive", false, 8],
+	] as const)(
+		"bounds parallel storage requests for %s",
+		async (_, provider, customBucket, expected) => {
+			const storage = pagedFixture(provider, customBucket);
+			const active = { head: 0, copy: 0 };
+			const peak = { head: 0, copy: 0 };
+			const track = <A, E>(
+				name: "head" | "copy",
+				effect: Effect.Effect<A, E>,
+			) =>
+				Effect.suspend(() => {
+					active[name]++;
+					peak[name] = Math.max(peak[name], active[name]);
+					return Effect.sleep("1 millis").pipe(
+						Effect.zipRight(effect),
+						Effect.ensuring(
+							Effect.sync(() => {
+								active[name]--;
+							}),
+						),
+					);
+				});
+			const head = storage.bucket.headObject.getMockImplementation();
+			const copy = storage.bucket.copyObject.getMockImplementation();
+			if (!head || !copy) throw new Error("Missing storage fixture");
+			const enumerate = await advanceToPhase(
+				recording(),
+				snapshotCheckpoint(),
+				"enumerate",
+			);
+			storage.bucket.headObject.mockImplementation((key) =>
+				track("head", head(key)),
+			);
+			storage.bucket.copyObject.mockImplementation((source, target, options) =>
+				track("copy", copy(source, target, options)),
+			);
+			const planned = await advanceDesktopRecordingSourceCommit(
+				recording(),
+				enumerate,
+			);
+			if (!("checkpoint" in planned)) throw new Error("Unexpected completion");
+			expect(peak.head).toBe(expected);
+			const source = await finishSnapshot(recording(), planned.checkpoint);
+			expect(peak.copy).toBe(expected);
+			// Each copy/verify worker checks the copy and its original together, so the
+			// bound is on objects in flight; requests peak at two per object.
+			expect(peak.head).toBeLessThanOrEqual(expected * 2);
+			expect(readInventory(storage, source.inventoryKey).objects).toHaveLength(
+				segmentCount + 3,
+			);
+		},
+	);
 });
 
 describe("committed source access", () => {
