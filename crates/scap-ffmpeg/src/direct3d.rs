@@ -38,8 +38,13 @@ fn wrap_mapped_frame(
 
     unsafe {
         let opaque = Box::into_raw(Box::new(mapped)).cast::<c_void>();
-        let buffer =
-            ffmpeg::ffi::av_buffer_create(data, size, Some(release_mapped_frame), opaque, 0);
+        let buffer = ffmpeg::ffi::av_buffer_create(
+            data,
+            size,
+            Some(release_mapped_frame),
+            opaque,
+            ffmpeg::ffi::AV_BUFFER_FLAG_READONLY,
+        );
 
         if buffer.is_null() {
             drop(Box::from_raw(opaque.cast::<MappedFrame>()));
