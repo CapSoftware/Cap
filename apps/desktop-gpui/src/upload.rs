@@ -23,6 +23,7 @@ mod verify_tests;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
+const DRIVE_CHUNK_ALIGNMENT: u64 = 256 * 1024;
 const MAX_SEGMENT_UPLOADS: usize = 6;
 const SEGMENT_URL_PREFETCH: u32 = 20;
 const SEGMENT_UPLOAD_ATTEMPTS: u32 = 3;
@@ -2447,7 +2448,8 @@ fn read_chunk(path: &Path, offset: u64, size: usize) -> Result<Vec<u8>, AuthApiE
 }
 
 fn chunk_size_for(file_size: u64) -> u64 {
-    (file_size / 100).clamp(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE)
+    let size = (file_size / 100).clamp(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE);
+    size / DRIVE_CHUNK_ALIGNMENT * DRIVE_CHUNK_ALIGNMENT
 }
 
 fn md5_base64(bytes: &[u8]) -> String {
@@ -2860,6 +2862,28 @@ mod tests {
         // wrong side of the clamp).
         assert_eq!(chunk_size_for(MAX_CHUNK_SIZE * 200), MAX_CHUNK_SIZE);
         assert_eq!(chunk_size_for(MIN_CHUNK_SIZE * 50), MIN_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn chunk_sizes_satisfy_drive_resumable_alignment() {
+        for file_size in [
+            1,
+            MIN_CHUNK_SIZE * 100,
+            MIN_CHUNK_SIZE * 100 + 100,
+            600 * 1024 * 1024,
+            1024 * 1024 * 1024,
+            MAX_CHUNK_SIZE * 100 - 100,
+            MAX_CHUNK_SIZE * 100,
+            MAX_CHUNK_SIZE * 200,
+        ] {
+            let chunk_size = chunk_size_for(file_size);
+            assert!((MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size));
+            assert_eq!(
+                chunk_size % (256 * 1024),
+                0,
+                "Drive requires aligned intermediate chunks for a {file_size}-byte export"
+            );
+        }
     }
 
     #[test]

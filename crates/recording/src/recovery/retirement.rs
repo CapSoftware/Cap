@@ -1,5 +1,7 @@
+#[cfg(unix)]
+use std::fs::File;
 use std::{
-    fs::{self, File},
+    fs,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -7,7 +9,7 @@ use std::{
 use super::{
     RECOVERY_PUBLICATION, RECOVERY_PUBLICATION_RECEIPT, RecoveryError, RecoveryLock,
     RecoveryPublication, RecoveryPublicationStampVersion, read_recovery_publication,
-    recovery_publication_segments_stamp, recovery_publication_state,
+    recovery_publication_segments_stamp, recovery_publication_state_for_version,
     recovery_publication_workspace, reject_recovery_link,
 };
 
@@ -35,14 +37,7 @@ impl RecoveryLease {
             receipt: read_recovery_publication(&workspace.join(RECOVERY_PUBLICATION_RECEIPT))?,
         };
         retirement.validate()?;
-        sync_directories(&project.join("content/segments"))?;
-        for directory in [
-            project.join("content"),
-            project.to_path_buf(),
-            workspace.to_path_buf(),
-        ] {
-            File::open(directory)?.sync_all()?;
-        }
+        sync_publication(project, workspace)?;
         *self.retirement.lock().map_err(|_| {
             RecoveryError::Validation("Original media retirement lease poisoned".into())
         })? = Some(retirement);
@@ -55,7 +50,7 @@ impl Drop for RecoveryLease {
         if self
             .lock
             .as_ref()
-            .is_none_or(|lock| lock.owner_pid != unsafe { libc::getpid() })
+            .is_none_or(|lock| !lock.owned_by_this_process())
         {
             return;
         }
@@ -77,6 +72,37 @@ impl Drop for RecoveryLease {
     }
 }
 
+/// Removes the original media backup of a publication whose lock was never
+/// shared with a preparing reader, after the same durability barrier and
+/// receipt checks the shared lease uses.
+pub(super) fn retire_unread_originals(
+    project: &Path,
+    workspace: &Path,
+) -> Result<(), RecoveryError> {
+    let retirement = OriginalMediaRetirement {
+        project: project.canonicalize()?,
+        workspace: workspace.canonicalize()?,
+        receipt: read_recovery_publication(&workspace.join(RECOVERY_PUBLICATION_RECEIPT))?,
+    };
+    retirement.validate()?;
+    sync_publication(project, workspace)?;
+    retirement.remove_originals()
+}
+
+/// The durability barrier before a backup goes: the published tree and the
+/// directories its renames touched.
+fn sync_publication(project: &Path, workspace: &Path) -> Result<(), RecoveryError> {
+    sync_directories(&project.join("content/segments"))?;
+    for directory in [
+        project.join("content"),
+        project.to_path_buf(),
+        workspace.to_path_buf(),
+    ] {
+        sync_directory(&directory)?;
+    }
+    Ok(())
+}
+
 struct OriginalMediaRetirement {
     project: PathBuf,
     workspace: PathBuf,
@@ -87,8 +113,16 @@ impl OriginalMediaRetirement {
     fn validate(&self) -> Result<(), RecoveryError> {
         reject_recovery_link(&self.project.symlink_metadata()?)?;
         let receipt: RecoveryPublication = serde_json::from_slice(&self.receipt)?;
-        if receipt.version != 2
-            || receipt.project != self.project
+        let version = match receipt.version {
+            2 => RecoveryPublicationStampVersion::V2,
+            3 => RecoveryPublicationStampVersion::V3,
+            _ => {
+                return Err(RecoveryError::Validation(
+                    "Original media retirement receipt changed".into(),
+                ));
+            }
+        };
+        if receipt.project != self.project
             || recovery_publication_workspace(&self.project, &receipt.workspace)? != self.workspace
             || read_recovery_publication(&self.workspace.join(RECOVERY_PUBLICATION_RECEIPT))?
                 != self.receipt
@@ -106,14 +140,14 @@ impl OriginalMediaRetirement {
                 ));
             }
         }
-        let published = recovery_publication_state(&self.project)?;
+        let published = recovery_publication_state_for_version(&self.project, version)?;
         if published.segments.is_none()
             || published.meta.is_none()
             || published.segments != receipt.staged.segments
             || published.meta != receipt.staged.meta
             || recovery_publication_segments_stamp(
                 &self.workspace.join("original-segments"),
-                RecoveryPublicationStampVersion::V2,
+                version,
             )? != receipt.original.segments
         {
             return Err(RecoveryError::Validation(
@@ -125,8 +159,8 @@ impl OriginalMediaRetirement {
 
     fn remove_originals(&self) -> Result<(), RecoveryError> {
         self.validate()?;
-        fs::remove_dir_all(self.workspace.join("original-segments"))?;
-        File::open(&self.workspace)?.sync_all()?;
+        remove_backup(&self.workspace.join("original-segments"))?;
+        sync_directory(&self.workspace)?;
         tracing::info!(path = %self.workspace.display(), "Retired original media after final preparing reader closed");
         Ok(())
     }
@@ -142,8 +176,48 @@ fn sync_directories(path: &Path) -> Result<(), RecoveryError> {
             sync_directories(&entry.path())?;
         }
     }
-    File::open(path)?.sync_all()?;
+    sync_directory(path)?;
     Ok(())
+}
+
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()
+    }
+    // A directory can't be opened as a plain file on Windows. NTFS journals the
+    // renames that published the recording, and the published files themselves
+    // were flushed before publication.
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+fn remove_backup(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        // Antivirus and the search indexer briefly open new files without
+        // delete sharing; give them a moment rather than keeping the backup.
+        let mut attempt = 0;
+        loop {
+            match fs::remove_dir_all(path) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if attempt < 4 => {
+                    attempt += 1;
+                    tracing::debug!(%error, attempt, "Original media backup busy; retrying removal");
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::remove_dir_all(path)
+    }
 }
 
 #[cfg(test)]
@@ -283,6 +357,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn replacing_backup_with_a_link_preserves_the_link_target() {
         let (_temporary, project, workspace) = fixture();

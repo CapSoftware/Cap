@@ -205,14 +205,10 @@ fn map_captions_to_edited_timeline(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<MappedCaption> {
-    let sanitized: Vec<CaptionSegment> = raw_segments
-        .iter()
-        .map(clamp_caption_segment_words)
-        .collect();
-
     if timeline.segments.is_empty() || recording_durations.is_empty() {
-        return sanitized
-            .into_iter()
+        return raw_segments
+            .iter()
+            .map(clamp_caption_segment_words)
             .map(|segment| MappedCaption {
                 id: segment.id,
                 start: f64::from(segment.start),
@@ -238,16 +234,38 @@ fn map_captions_to_edited_timeline(
 
     let mut result = Vec::new();
 
-    for caption in &sanitized {
+    for caption in raw_segments {
         let mut mapped_caption_segments: Vec<MappedCaption> = Vec::new();
+        let word_bounds = if caption.words.is_empty() {
+            None
+        } else {
+            caption.words.iter().try_fold(
+                (f64::INFINITY, f64::NEG_INFINITY),
+                |(start, end), word| {
+                    let word_start = f64::from(word.start);
+                    let word_end = f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION));
+                    if word_start.is_nan() || word_end.is_nan() {
+                        None
+                    } else {
+                        Some((start.min(word_start), end.max(word_end)))
+                    }
+                },
+            )
+        };
 
         for mapping in &mappings {
             if !caption.words.is_empty() {
+                if let Some((word_start, word_end)) = word_bounds
+                    && (word_end <= mapping.source_start || word_start >= mapping.source_end)
+                {
+                    continue;
+                }
+
                 let mut mapped_words = Vec::new();
                 for word in &caption.words {
                     let Some((start, end)) = map_time_range_within_mapping(
                         f64::from(word.start),
-                        f64::from(word.end),
+                        f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION)),
                         mapping,
                     ) else {
                         continue;
@@ -425,6 +443,9 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
 }
 
 #[cfg(test)]
+mod projection_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::CaptionsData;
@@ -566,6 +587,111 @@ mod tests {
         assert_eq!(
             project.timeline.as_ref().unwrap().caption_segments[0].end,
             1.0
+        );
+    }
+
+    #[test]
+    fn unsorted_words_outside_caption_bounds_keep_both_clip_projections() {
+        let timeline = project(true, 0.0, 0.5).timeline.unwrap();
+        let captions = [CaptionSegment {
+            id: "unsorted".into(),
+            start: 0.0,
+            end: 0.5,
+            text: "parent".into(),
+            words: vec![
+                CaptionWord {
+                    text: "late-first".into(),
+                    start: 4.0,
+                    end: 4.5,
+                },
+                CaptionWord {
+                    text: "second-clip".into(),
+                    start: 7.0,
+                    end: 7.5,
+                },
+                CaptionWord {
+                    text: "early-last".into(),
+                    start: 1.0,
+                    end: 1.5,
+                },
+            ],
+        }];
+
+        let track = derive_caption_track_segments(&captions, &timeline, &[10.0]);
+        assert_eq!(track.len(), 2);
+        assert_eq!(track[0].id, "unsorted::edl0");
+        assert_eq!(track[0].start, 4.0);
+        assert_eq!(track[0].end, 1.5);
+        assert_eq!(track[0].text, "late-first early-last");
+        assert_eq!(
+            track[0]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("late-first", 4.0, 4.5), ("early-last", 1.0, 1.5)]
+        );
+        assert_eq!(track[1].id, "unsorted::edl1");
+        assert_eq!(track[1].start, 6.0);
+        assert_eq!(track[1].end, 6.5);
+        assert_eq!(track[1].text, "second-clip");
+        assert_eq!(
+            track[1]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("second-clip", 6.0, 6.5)]
+        );
+    }
+
+    #[test]
+    fn nan_word_timestamp_keeps_the_existing_mapping_path() {
+        let timeline = project(true, 0.0, 0.5).timeline.unwrap();
+        let captions = [CaptionSegment {
+            id: "nan".into(),
+            start: 0.0,
+            end: 0.5,
+            text: "parent".into(),
+            words: vec![
+                CaptionWord {
+                    text: "nan-start".into(),
+                    start: f32::NAN,
+                    end: 1.0,
+                },
+                CaptionWord {
+                    text: "second-clip".into(),
+                    start: 7.0,
+                    end: 7.5,
+                },
+            ],
+        }];
+
+        let track = derive_caption_track_segments(&captions, &timeline, &[10.0]);
+        assert_eq!(track.len(), 2);
+        assert_eq!(track[0].id, "nan::edl0");
+        assert_eq!(track[0].start, 0.0);
+        assert_eq!(track[0].end, 1.0);
+        assert_eq!(track[0].text, "nan-start");
+        assert_eq!(
+            track[0]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("nan-start", 0.0, 1.0)]
+        );
+        assert_eq!(track[1].id, "nan::edl1");
+        assert_eq!(track[1].start, 6.0);
+        assert_eq!(track[1].end, 6.5);
+        assert_eq!(track[1].text, "second-clip");
+        assert_eq!(
+            track[1]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("second-clip", 6.0, 6.5)]
         );
     }
 }

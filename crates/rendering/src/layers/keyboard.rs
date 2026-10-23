@@ -912,16 +912,24 @@ mod gpu_tests {
         let mut zoom = ZoomTransformTimeline::from_project(&project, &cursor, 60.0, size);
         zoom.ensure_precomputed_until(60.0);
         let mut uniforms = ProjectUniforms::new(
-            constants, &project, 0, FPS, size, &cursor, &frames, 60.0, &zoom,
+            constants,
+            &std::sync::Arc::new(project),
+            0,
+            FPS,
+            size,
+            &cursor,
+            &frames,
+            60.0,
+            &zoom,
         );
         uniforms.output_size = (size.x, size.y);
-        uniforms.project.keyboard = Some(KeyboardData {
+        std::sync::Arc::make_mut(&mut uniforms.project).keyboard = Some(KeyboardData {
             settings: KeyboardSettings {
                 enabled: true,
                 ..Default::default()
             },
         });
-        uniforms.project.timeline = Some(TimelineConfiguration {
+        std::sync::Arc::make_mut(&mut uniforms.project).timeline = Some(TimelineConfiguration {
             segments: vec![],
             transitions: vec![],
             zoom_segments: vec![],
@@ -1062,7 +1070,13 @@ mod gpu_tests {
             |layer: &mut KeyboardLayer, size: XY<u32>, edit: fn(&mut KeyboardSettings)| {
                 let mut uniforms = uniforms(&constants, &segments, size);
                 uniforms.frame_number = 96;
-                edit(&mut uniforms.project.keyboard.as_mut().unwrap().settings);
+                edit(
+                    &mut std::sync::Arc::make_mut(&mut uniforms.project)
+                        .keyboard
+                        .as_mut()
+                        .unwrap()
+                        .settings,
+                );
                 layer.prepare(&uniforms, &frames, size, &constants, None);
                 assert!(layer.has_content());
                 render_pixels(&constants, layer, size)

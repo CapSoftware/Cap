@@ -43,6 +43,7 @@ mod feeds;
 mod hotkeys;
 mod import;
 mod installer;
+mod jpeg_thumbnail;
 mod library;
 mod main_window;
 mod media_access;
@@ -60,6 +61,7 @@ mod picker_benchmark;
 mod picker_ui_benchmark;
 mod platform;
 mod presets;
+mod project_save;
 mod recording;
 mod screenshot;
 mod screenshot_annotations;
@@ -268,6 +270,14 @@ fn main() {
         }
     }
 
+    // The AppImage CLI launcher re-enters the AppImage with `--cap-cli`; hand
+    // it to the bundled CLI before logging, single-instance or the GUI start.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = cap_cli_install::appimage::dispatch_cli() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+
     let _log_guard = init_logging();
 
     single_instance::acquire();
@@ -427,6 +437,7 @@ fn main() {
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both

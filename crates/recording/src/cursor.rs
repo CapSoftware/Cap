@@ -530,6 +530,7 @@ pub fn spawn_cursor_recorder(
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
         let mut last_cursor_image = None;
+        let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -582,18 +583,34 @@ pub fn spawn_cursor_recorder(
             );
             let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
                 last_cursor_id.clone()
-            } else if let Some(data) = get_cursor_data() {
-                let cursor_id = cursor_id_for_image(
-                    data,
-                    &mut response,
-                    &cursors_dir,
-                    writer.as_ref(),
-                    &mut last_cursor_image,
-                );
-                last_cursor_id = Some(cursor_id.clone());
-                Some(cursor_id)
             } else {
-                last_cursor_id.clone()
+                // While the pointer moves the shape rarely changes, so compare
+                // the raw bitmap first and build the TIFF only for a new shape.
+                let known = last_cursor_id
+                    .is_some()
+                    .then_some(last_cursor_fingerprint.as_ref())
+                    .flatten();
+                match sample_cursor(known) {
+                    CursorSample::Unchanged => last_cursor_id.clone(),
+                    CursorSample::Read {
+                        fingerprint,
+                        data: Some(data),
+                    } => {
+                        let cursor_id = cursor_id_for_image(
+                            data,
+                            &mut response,
+                            &cursors_dir,
+                            writer.as_ref(),
+                            &mut last_cursor_image,
+                        );
+                        last_cursor_id = Some(cursor_id.clone());
+                        // Only a registered image may short-circuit later ticks;
+                        // a failed decode or save keeps retrying.
+                        last_cursor_fingerprint = last_cursor_image.as_ref().and(fingerprint);
+                        Some(cursor_id)
+                    }
+                    CursorSample::Read { data: None, .. } => last_cursor_id.clone(),
+                }
             };
 
             let Some(cursor_id) = cursor_id else {
@@ -797,21 +814,108 @@ struct CursorData {
     shape: Option<CursorShape>,
 }
 
+/// Cheap enough to take every tick (~0.1 ms against ~0.4 ms for the TIFF),
+/// and changes whenever the TIFF would, since both come from the same image.
 #[cfg(target_os = "macos")]
-fn get_cursor_data() -> Option<CursorData> {
+#[derive(PartialEq)]
+struct CursorFingerprint {
+    pixels: Vec<u8>,
+    bitmap: (usize, usize, usize),
+    size: (u64, u64),
+    hotspot: (u64, u64),
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(PartialEq)]
+struct CursorFingerprint;
+
+enum CursorSample {
+    /// The cursor still matches the fingerprint of the last registered image.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Unchanged,
+    Read {
+        fingerprint: Option<CursorFingerprint>,
+        data: Option<CursorData>,
+    },
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sample_cursor(_known: Option<&CursorFingerprint>) -> CursorSample {
+    CursorSample::Read {
+        fingerprint: None,
+        data: get_cursor_data(),
+    }
+}
+
+/// One read of the current cursor per tick: its fingerprint, and its encoded
+/// image only when that fingerprint differs from `known`, both from the same
+/// `NSCursor` so a shape change between two reads can't pair them wrongly.
+#[cfg(target_os = "macos")]
+fn sample_cursor(known: Option<&CursorFingerprint>) -> CursorSample {
     use objc::rc::autoreleasepool;
     use objc2::{ClassType, msg_send, rc::Retained};
     use objc2_app_kit::NSCursor;
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().or_else(|| {
+        let Some(cursor) = NSCursor::currentSystemCursor().or_else(|| {
             let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
             cursor
-        })?;
-
-        macos_cursor_data(&cursor)
+        }) else {
+            return CursorSample::Read {
+                fingerprint: None,
+                data: None,
+            };
+        };
+        let fingerprint = macos_cursor_fingerprint(&cursor);
+        if fingerprint.is_some() && fingerprint.as_ref() == known {
+            return CursorSample::Unchanged;
+        }
+        CursorSample::Read {
+            data: macos_cursor_data(&cursor),
+            fingerprint,
+        }
     })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_fingerprint(cursor: &objc2_app_kit::NSCursor) -> Option<CursorFingerprint> {
+    use core_graphics::image::CGImageRef;
+    use foreign_types_shared::ForeignTypeRef;
+    use objc::{sel, sel_impl};
+    use objc2::{msg_send, rc::Retained};
+    use objc2_app_kit::NSImage;
+
+    unsafe {
+        let image: Option<Retained<NSImage>> = msg_send![cursor, image];
+        let image = image?;
+        let size = image.size();
+        let hotspot = cursor.hotSpot();
+        let image_ptr = Retained::as_ptr(&image) as *mut objc::runtime::Object;
+        let nil = std::ptr::null_mut::<objc::runtime::Object>();
+        // `CGImageForProposedRect:context:hints:` returns an autoreleased
+        // CGImageRef, valid for the caller's autorelease pool.
+        let cg_image: *mut std::ffi::c_void = objc::msg_send![
+            image_ptr,
+            CGImageForProposedRect: std::ptr::null_mut::<std::ffi::c_void>()
+            context: nil
+            hints: nil
+        ];
+        if cg_image.is_null() {
+            return None;
+        }
+        let cg_image = CGImageRef::from_ptr(cg_image.cast());
+        Some(CursorFingerprint {
+            pixels: cg_image.data().bytes().to_vec(),
+            bitmap: (
+                cg_image.width(),
+                cg_image.height(),
+                cg_image.bytes_per_row(),
+            ),
+            size: (size.width.to_bits(), size.height.to_bits()),
+            hotspot: (hotspot.x.to_bits(), hotspot.y.to_bits()),
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -847,7 +951,7 @@ fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod macos_cursor_tests {
-    use super::macos_cursor_data;
+    use super::{macos_cursor_data, macos_cursor_fingerprint};
     use objc2::{AllocAnyThread, class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_app_kit::{NSCursor, NSImage};
 
@@ -862,6 +966,35 @@ mod macos_cursor_tests {
         let image = unsafe { NSImage::initWithSize(NSImage::alloc(), Default::default()) };
         let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
         assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    fn cursor_with(color: [u8; 4]) -> Retained<NSCursor> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba(color))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let data: Retained<AnyObject> = unsafe {
+            msg_send![class!(NSData), dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(), length: png.len()]
+        };
+        let image: Retained<NSImage> = unsafe { msg_send![NSImage::alloc(), initWithData: &*data] };
+        NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default())
+    }
+
+    #[test]
+    fn the_fingerprint_tells_cursor_shapes_apart_without_encoding_them() {
+        let arrow = macos_cursor_fingerprint(&cursor_with([20, 40, 80, 255])).unwrap();
+        let same = macos_cursor_fingerprint(&cursor_with([20, 40, 80, 255])).unwrap();
+        let recolored = macos_cursor_fingerprint(&cursor_with([200, 40, 80, 255])).unwrap();
+        assert!(arrow == same);
+        assert!(arrow != recolored);
+        assert!(!arrow.pixels.is_empty());
+    }
+
+    #[test]
+    fn a_cursor_without_an_image_has_no_fingerprint() {
+        let cursor = unsafe { NSCursor::new() };
+        assert!(macos_cursor_fingerprint(&cursor).is_none());
     }
 
     #[test]
