@@ -7,7 +7,7 @@ pub use windows_version::WindowsVersion;
 use std::{
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::RecvError,
     },
     time::{Duration, Instant},
@@ -27,7 +27,8 @@ use windows::{
             Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
-                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_CREATE_DEVICE_FLAG,
+                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_MAP_WRITE,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
                 D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
@@ -75,9 +76,8 @@ impl PixelFormat {
 const STAGING_POOL_SIZE: usize = 3;
 const STAGING_POOL_LIMIT: usize = STAGING_POOL_SIZE + 1;
 const STAGING_PADDING_ROWS: u32 = 1;
-const READBACK_RETRY_INTERVAL: Duration = Duration::from_micros(250);
-const READBACK_MISS_FALLBACK: u32 = 2;
-const READBACK_BLOCKING_COOLDOWN_FRAMES: u32 = 150;
+const READBACK_RETRY_INTERVAL: Duration = Duration::from_micros(100);
+const READBACK_SPIN_BUDGET: Duration = Duration::from_millis(4);
 
 struct CallbackActivity {
     active: Mutex<usize>,
@@ -186,8 +186,6 @@ pub struct StagingTexturePool {
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     pixel_format: PixelFormat,
-    readback_misses: AtomicU32,
-    blocking_frames: AtomicU32,
 }
 
 impl StagingTexturePool {
@@ -204,33 +202,6 @@ impl StagingTexturePool {
             d3d_device,
             d3d_context,
             pixel_format,
-            readback_misses: AtomicU32::new(0),
-            blocking_frames: AtomicU32::new(0),
-        }
-    }
-
-    fn take_blocking_readback(&self) -> bool {
-        self.blocking_frames
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-    }
-
-    fn reset_readback_misses(&self) {
-        self.readback_misses.store(0, Ordering::Relaxed);
-    }
-
-    fn note_readback_miss(&self) {
-        let misses = self.readback_misses.fetch_add(1, Ordering::Relaxed) + 1;
-        if misses == READBACK_MISS_FALLBACK {
-            self.readback_misses.store(0, Ordering::Relaxed);
-            self.blocking_frames
-                .store(READBACK_BLOCKING_COOLDOWN_FRAMES, Ordering::Relaxed);
-            tracing::warn!(
-                cooldown_frames = READBACK_BLOCKING_COOLDOWN_FRAMES,
-                "GPU readback missed its deadline twice in a row; blocking for a cooldown instead of duplicating frames"
-            );
         }
     }
 
@@ -502,9 +473,27 @@ fn create_d3d_device_on_pinned_adapter(
 
 fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device, bool)> {
     let mut device = None;
-    let flags = D3D11_CREATE_DEVICE_FLAG::default();
+    let video_flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    let basic_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
-    match create_d3d_device_on_pinned_adapter(flags, &mut device) {
+    match create_d3d_device_on_pinned_adapter(video_flags, &mut device) {
+        Ok(description) => {
+            tracing::info!(
+                adapter = %description,
+                "scap-direct3d: D3D11 device created on pinned hardware adapter with video support"
+            );
+            let device = device.ok_or_else(windows::core::Error::from_win32)?;
+            return Ok((device, false));
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "scap-direct3d: video-support device creation failed on pinned adapter, retrying without it"
+            );
+        }
+    }
+
+    match create_d3d_device_on_pinned_adapter(basic_flags, &mut device) {
         Ok(description) => {
             tracing::info!(
                 adapter = %description,
@@ -521,13 +510,13 @@ fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device
         }
     }
 
-    let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
+    let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, basic_flags, &mut device);
 
     match result {
         Ok(()) => Ok((device.ok_or_else(windows::core::Error::from_win32)?, false)),
         Err(e) if e.code() == DXGI_ERROR_UNSUPPORTED => {
             tracing::info!("Hardware D3D11 device unavailable, attempting WARP fallback");
-            create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device)?;
+            create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, basic_flags, &mut device)?;
             Ok((device.ok_or_else(windows::core::Error::from_win32)?, true))
         }
         Err(e) => Err(e),
@@ -988,35 +977,21 @@ impl Frame {
         })
     }
 
-    /// Copies the frame into a staging texture and maps it without waiting for the GPU copy
-    /// (`D3D11_MAP_FLAG_DO_NOT_WAIT`). Returns [`ReadbackError::NotReady`] when the copy has not
-    /// completed within `budget`, so the caller can reuse the previous frame instead of stalling
-    /// its thread behind the GPU.
+    /// Copies the frame into a staging texture and maps it within `budget`. The default polls
+    /// `DO_NOT_WAIT` until the copy completes or the budget expires; the caller can reuse the
+    /// previous frame on `NotReady`. Set `CAP_READBACK_BLOCKING` to block in `Map` instead, which is
+    /// faster when the copy consistently finishes quickly but removes the deadline.
     pub fn map_readback(&self, budget: Duration) -> Result<MappedFrame, ReadbackError> {
+        let blocking = std::env::var_os("CAP_READBACK_BLOCKING").is_some();
         let lease = self.staging_pool.acquire(self.width, self.height)?;
         self.copy_into_staging(&lease);
 
-        // A GPU that cannot meet the deadline consistently would otherwise freeze the recording on
-        // repeated duplicates. After two consecutive misses, block for a cooldown so the encoder
-        // keeps receiving fresh frames at the slower readback rate, then probe the deadline again.
-        if self.staging_pool.take_blocking_readback() {
-            let mapped = self.map_staging(lease, None)?;
-            self.staging_pool.reset_readback_misses();
-            return Ok(mapped);
+        if blocking {
+            return self.map_staging_hybrid(lease);
         }
 
         let deadline = Instant::now().checked_add(budget);
-        match self.map_staging(lease, deadline) {
-            Ok(mapped) => {
-                self.staging_pool.reset_readback_misses();
-                Ok(mapped)
-            }
-            Err(ReadbackError::NotReady) => {
-                self.staging_pool.note_readback_miss();
-                Err(ReadbackError::NotReady)
-            }
-            Err(error) => Err(error),
-        }
+        self.map_staging(lease, deadline)
     }
 
     fn copy_into_staging(&self, lease: &StagingLease) {
@@ -1052,6 +1027,7 @@ impl Frame {
         let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
 
         if let Some(deadline) = deadline {
+            let started = Instant::now();
             loop {
                 match unsafe {
                     self.d3d_context.Map(
@@ -1068,9 +1044,14 @@ impl Frame {
                         if now >= deadline {
                             return Err(ReadbackError::NotReady);
                         }
-                        std::thread::sleep(
-                            READBACK_RETRY_INTERVAL.min(deadline.saturating_duration_since(now)),
-                        );
+                        if now.duration_since(started) < READBACK_SPIN_BUDGET {
+                            std::hint::spin_loop();
+                        } else {
+                            std::thread::sleep(
+                                READBACK_RETRY_INTERVAL
+                                    .min(deadline.saturating_duration_since(now)),
+                            );
+                        }
                     }
                     Err(error) => return Err(error.into()),
                 }
@@ -1087,7 +1068,15 @@ impl Frame {
             }
         }
 
-        Ok(MappedFrame {
+        Ok(self.mapped_frame(lease, mapped_resource))
+    }
+
+    fn mapped_frame(
+        &self,
+        lease: StagingLease,
+        mapped_resource: D3D11_MAPPED_SUBRESOURCE,
+    ) -> MappedFrame {
+        MappedFrame {
             lease,
             d3d_context: self.d3d_context.clone(),
             data: mapped_resource.pData as *mut u8,
@@ -1095,7 +1084,35 @@ impl Frame {
             width: self.width,
             height: self.height,
             pixel_format: self.pixel_format,
-        })
+        }
+    }
+
+    fn map_staging_hybrid(&self, lease: StagingLease) -> Result<MappedFrame, ReadbackError> {
+        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+
+        match unsafe {
+            self.d3d_context.Map(
+                &lease.texture,
+                0,
+                D3D11_MAP_READ,
+                D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                Some(&mut mapped_resource),
+            )
+        } {
+            Ok(()) => {}
+            Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING => unsafe {
+                self.d3d_context.Map(
+                    &lease.texture,
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(&mut mapped_resource),
+                )?;
+            },
+            Err(error) => return Err(error.into()),
+        }
+
+        Ok(self.mapped_frame(lease, mapped_resource))
     }
 }
 

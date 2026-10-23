@@ -1,6 +1,6 @@
-//! Windows/macOS capture demo. On Windows, `--bench [--seconds N]` A/Bs the old two-transfer
-//! readback against the staging ring + `DO_NOT_WAIT` + zero-copy path on live frames. WGC only
-//! produces frames while the captured content changes, so keep something moving during the run.
+//! Windows/macOS capture demo. On Windows, `--bench [--seconds N] [--path both|old|new|none]`
+//! measures the old two-transfer readback against the zero-copy staging ring on live frames. WGC
+//! only produces frames while the captured content changes, so keep something moving during the run.
 
 #[tokio::main]
 pub async fn main() {
@@ -9,7 +9,11 @@ pub async fn main() {
         use scap_direct3d::*;
         use scap_targets::Display;
         use std::{
-            sync::mpsc,
+            sync::{
+                Arc,
+                atomic::{AtomicU64, Ordering},
+                mpsc,
+            },
             time::{Duration, Instant},
         };
 
@@ -22,26 +26,46 @@ pub async fn main() {
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(15.0)
             .clamp(1.0, 120.0);
+        let path = args
+            .iter()
+            .position(|arg| arg == "--path")
+            .and_then(|index| args.get(index + 1))
+            .cloned()
+            .unwrap_or_else(|| "both".to_string());
+        if !matches!(path.as_str(), "both" | "old" | "new" | "none") {
+            eprintln!("invalid --path {path}; expected both, old, new, or none");
+            std::process::exit(2);
+        }
 
         let display = Display::primary();
+        let capture_fps = 60;
+        let min_update_interval = Settings::can_min_update_interval()
+            .ok()
+            .filter(|supported| *supported)
+            .map(|_| Duration::from_secs_f64(1.0 / capture_fps as f64));
         let frame_sender = bench.then(|| {
             let (tx, rx) = mpsc::sync_channel::<Frame>(4);
             (tx, rx)
         });
+        let callback_drops = Arc::new(AtomicU64::new(0));
 
         let frame_tx = frame_sender.as_ref().map(|(tx, _)| tx.clone());
+        let callback_drops_tx = callback_drops.clone();
         let mut capturer = Capturer::new(
             display.raw_handle().try_as_capture_item().unwrap(),
             Settings {
                 is_border_required: Some(true),
                 is_cursor_capture_enabled: Some(true),
                 pixel_format: PixelFormat::R8G8B8A8Unorm,
-                fps: Some(60),
+                fps: Some(capture_fps),
+                min_update_interval,
                 ..Default::default()
             },
             move |frame| {
                 if let Some(tx) = &frame_tx {
-                    let _ = tx.try_send(frame);
+                    if tx.try_send(frame).is_err() {
+                        callback_drops_tx.fetch_add(1, Ordering::Relaxed);
+                    }
                     return Ok(());
                 }
 
@@ -67,7 +91,7 @@ pub async fn main() {
         capturer.start().unwrap();
 
         if let Some((_, frame_rx)) = frame_sender {
-            readback_benchmark(&display, frame_rx, seconds);
+            readback_benchmark(&display, frame_rx, seconds, &path, &callback_drops);
         } else {
             std::thread::sleep(Duration::from_secs(3));
         }
@@ -76,7 +100,13 @@ pub async fn main() {
 
         std::thread::sleep(Duration::from_secs(1));
 
-        fn readback_benchmark(display: &Display, frame_rx: mpsc::Receiver<Frame>, seconds: f64) {
+        fn readback_benchmark(
+            display: &Display,
+            frame_rx: mpsc::Receiver<Frame>,
+            seconds: f64,
+            path: &str,
+            callback_drops: &Arc<AtomicU64>,
+        ) {
             use scap_ffmpeg::AsFFmpeg;
 
             let size = display.physical_size().unwrap();
@@ -87,12 +117,16 @@ pub async fn main() {
             let mut old = Samples::default();
             let mut new = Samples::default();
             let mut old_frame = None;
+            let mut frames_seen = 0u64;
+            let run_old_path = path != "new" && path != "none";
+            let run_new_path = path != "old" && path != "none";
             let started = Instant::now();
 
             while started.elapsed() < Duration::from_secs_f64(seconds) {
                 let Ok(frame) = frame_rx.recv_timeout(Duration::from_secs(1)) else {
                     break;
                 };
+                frames_seen += 1;
 
                 let mut run_old = || {
                     let started = Instant::now();
@@ -135,17 +169,24 @@ pub async fn main() {
                     }
                 };
 
-                let old_first = old.count.is_multiple_of(2);
-                let (old_elapsed, new_elapsed) = if old_first {
-                    (run_old(), run_new())
-                } else {
-                    let new_elapsed = run_new();
-                    (run_old(), new_elapsed)
+                let (old_elapsed, new_elapsed) = match path {
+                    "old" => (run_old(), None),
+                    "new" => (None, run_new()),
+                    "none" => (None, None),
+                    _ => {
+                        let old_first = old.count.is_multiple_of(2);
+                        if old_first {
+                            (run_old(), run_new())
+                        } else {
+                            let new_elapsed = run_new();
+                            (run_old(), new_elapsed)
+                        }
+                    }
                 };
 
                 if let Some(elapsed) = old_elapsed {
                     old.record(elapsed);
-                } else {
+                } else if run_old_path {
                     old.failures += 1;
                 }
 
@@ -157,20 +198,22 @@ pub async fn main() {
                             new.record(elapsed);
                         }
                     }
-                    None => new.failures += 1,
+                    None if run_new_path => new.failures += 1,
+                    None => {}
                 }
             }
 
             println!(
-                "{}x{} RGBA ({:.1} MiB/frame), {seconds:.0}s",
+                "{}x{} RGBA ({:.1} MiB/frame), {seconds:.0}s, path={path}, callback_drops={}, source_frames={frames_seen}",
                 size.width(),
                 size.height(),
-                frame_bytes as f64 / (1024.0 * 1024.0)
+                frame_bytes as f64 / (1024.0 * 1024.0),
+                callback_drops.load(Ordering::Relaxed)
             );
             println!("old (blocking two-transfer path): {old}");
-            println!("new (ring + DO_NOT_WAIT + zero copy): {new}");
+            println!("new (ring + probe/block zero copy): {new}");
             println!(
-                "{{\"old\":{},\"new\":{},\"frame_bytes\":{frame_bytes}}}",
+                "{{\"old\":{},\"new\":{},\"source_frames\":{frames_seen},\"frame_bytes\":{frame_bytes}}}",
                 old.json(),
                 new.json()
             );

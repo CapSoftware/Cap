@@ -10,7 +10,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tracing::debug;
+use tracing::{debug, warn};
 use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
@@ -249,14 +249,9 @@ impl H264Encoder {
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
     ) -> Result<Self, NewVideoEncoderError> {
-        let transform =
+        let devices =
             EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
-                .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
-                .first()
-                .cloned()
-                .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?
-                .create_transform()
-                .map_err(NewVideoEncoderError::EncoderTransform)?;
+                .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?;
 
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
@@ -286,107 +281,57 @@ impl H264Encoder {
                 .map_err(NewVideoEncoderError::DeviceManager)?
         };
 
-        let event_generator: IMFMediaEventGenerator = transform
-            .cast()
-            .map_err(NewVideoEncoderError::EventGenerator)?;
-        let attributes = unsafe {
-            transform
-                .GetAttributes()
-                .map_err(NewVideoEncoderError::EventGenerator)?
-        };
-        unsafe {
-            attributes
-                .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
+        let configure = |transform: &IMFTransform| -> Result<
+            (IMFMediaEventGenerator, u32, u32, IMFMediaType),
+            NewVideoEncoderError,
+        > {
+            let event_generator: IMFMediaEventGenerator = transform
+                .cast()
                 .map_err(NewVideoEncoderError::EventGenerator)?;
-            attributes
-                .SetUINT32(
-                    &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-                    enable_hardware_transforms as u32,
-                )
-                .map_err(NewVideoEncoderError::EventGenerator)?;
-        };
 
-        let mut number_of_input_streams = 0;
-        let mut number_of_output_streams = 0;
-        unsafe {
-            transform
-                .GetStreamCount(&mut number_of_input_streams, &mut number_of_output_streams)
-                .map_err(NewVideoEncoderError::EventGenerator)?
-        };
-        let (input_stream_ids, output_stream_ids) = {
-            let mut input_stream_ids = vec![0u32; number_of_input_streams as usize];
-            let mut output_stream_ids = vec![0u32; number_of_output_streams as usize];
-            let result =
-                unsafe { transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids) };
-            match result {
-                Ok(_) => {}
-                Err(error) => {
-                    if error.code() == E_NOTIMPL {
-                        for i in 0..number_of_input_streams {
-                            input_stream_ids[i as usize] = i;
+            let mut number_of_input_streams = 0;
+            let mut number_of_output_streams = 0;
+            unsafe {
+                transform
+                    .GetStreamCount(&mut number_of_input_streams, &mut number_of_output_streams)
+                    .map_err(NewVideoEncoderError::EventGenerator)?
+            };
+            let (input_stream_ids, output_stream_ids) = {
+                let mut input_stream_ids = vec![0u32; number_of_input_streams as usize];
+                let mut output_stream_ids = vec![0u32; number_of_output_streams as usize];
+                let result = unsafe {
+                    transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids)
+                };
+                match result {
+                    Ok(_) => {}
+                    Err(error) => {
+                        if error.code() == E_NOTIMPL {
+                            for i in 0..number_of_input_streams {
+                                input_stream_ids[i as usize] = i;
+                            }
+                            for i in 0..number_of_output_streams {
+                                output_stream_ids[i as usize] = i;
+                            }
+                        } else {
+                            return Err(NewVideoEncoderError::ConfigureStreams(error));
                         }
-                        for i in 0..number_of_output_streams {
-                            output_stream_ids[i as usize] = i;
-                        }
-                    } else {
-                        return Err(NewVideoEncoderError::ConfigureStreams(error));
                     }
                 }
-            }
-            (input_stream_ids, output_stream_ids)
-        };
-        let input_stream_id = input_stream_ids[0];
-        let output_stream_id = output_stream_ids[0];
+                (input_stream_ids, output_stream_ids)
+            };
+            let input_stream_id = input_stream_ids[0];
+            let output_stream_id = output_stream_ids[0];
 
-        unsafe {
-            let temp = media_device_manager.clone();
-            transform
-                .ProcessMessage(
-                    MFT_MESSAGE_SET_D3D_MANAGER,
-                    std::mem::transmute::<IMFDXGIDeviceManager, usize>(temp),
-                )
-                .map_err(NewVideoEncoderError::EncoderTransform)?;
-        };
-
-        let output_type = (|| unsafe {
-            let output_type = MFCreateMediaType()?;
-            let attributes: IMFAttributes = output_type.cast()?;
-            output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-            output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
-            output_type.SetUINT32(
-                &MF_MT_MAX_KEYFRAME_SPACING,
-                frame_rate.saturating_mul(MUXED_KEYFRAME_INTERVAL_SECS),
-            )?;
-            MFSetAttributeSize(
-                &attributes,
-                &MF_MT_FRAME_SIZE,
-                output_resolution.Width as u32,
-                output_resolution.Height as u32,
-            )?;
-            MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
-            MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
-            output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-            transform.SetOutputType(output_stream_id, &output_type, 0)?;
-            Ok(output_type)
-        })()
-        .map_err(NewVideoEncoderError::OutputType)?;
-
-        let input_type: Option<IMFMediaType> = (|| unsafe {
-            let mut count = 0;
-            loop {
-                let result = transform.GetInputAvailableType(input_stream_id, count);
-                if let Err(error) = &result
-                    && error.code() == MF_E_NO_MORE_TYPES
-                {
-                    break Ok(None);
-                }
-
-                let input_type = result?;
-                let attributes: IMFAttributes = input_type.cast()?;
-                input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            let output_type = (|| unsafe {
+                let output_type = MFCreateMediaType()?;
+                let attributes: IMFAttributes = output_type.cast()?;
+                output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+                output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
+                output_type.SetUINT32(
+                    &MF_MT_MAX_KEYFRAME_SPACING,
+                    frame_rate.saturating_mul(MUXED_KEYFRAME_INTERVAL_SECS),
+                )?;
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,
@@ -394,47 +339,167 @@ impl H264Encoder {
                     output_resolution.Height as u32,
                 )?;
                 MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
-                let result = transform.SetInputType(
-                    input_stream_id,
-                    &input_type,
-                    MFT_SET_TYPE_TEST_ONLY.0 as u32,
-                );
-                if let Err(error) = &result
-                    && error.code() == MF_E_INVALIDMEDIATYPE
-                {
-                    count += 1;
+                MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+                output_type
+                    .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+                output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                transform.SetOutputType(output_stream_id, &output_type, 0)?;
+                transform.GetOutputCurrentType(output_stream_id)
+            })()
+            .map_err(NewVideoEncoderError::OutputType)?;
+
+            let input_type: Option<IMFMediaType> = (|| unsafe {
+                let mut count = 0;
+                loop {
+                    let result = transform.GetInputAvailableType(input_stream_id, count);
+                    if let Err(error) = &result
+                        && error.code() == MF_E_NO_MORE_TYPES
+                    {
+                        break Ok(None);
+                    }
+
+                    let input_type = result?;
+                    let attributes: IMFAttributes = input_type.cast()?;
+                    input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+                    MFSetAttributeSize(
+                        &attributes,
+                        &MF_MT_FRAME_SIZE,
+                        output_resolution.Width as u32,
+                        output_resolution.Height as u32,
+                    )?;
+                    MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
+                    let result = transform.SetInputType(
+                        input_stream_id,
+                        &input_type,
+                        MFT_SET_TYPE_TEST_ONLY.0 as u32,
+                    );
+                    if let Err(error) = &result
+                        && error.code() == MF_E_INVALIDMEDIATYPE
+                    {
+                        count += 1;
+                        continue;
+                    }
+                    result?;
+                    break Ok(Some(input_type));
+                }
+            })()
+            .map_err(NewVideoEncoderError::InputType)?;
+            if let Some(input_type) = input_type {
+                unsafe { transform.SetInputType(input_stream_id, &input_type, 0) }
+                    .map_err(NewVideoEncoderError::InputType)?;
+            } else {
+                return Err(NewVideoEncoderError::InputType(Error::new(
+                    MF_E_TRANSFORM_TYPE_NOT_SET,
+                    "No suitable input type found! Try a different set of encoding settings.",
+                )));
+            }
+
+            Ok((
+                event_generator,
+                input_stream_id,
+                output_stream_id,
+                output_type,
+            ))
+        };
+
+        let mut last_error = None;
+        for device in &devices {
+            let candidate = match device.create_transform() {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    warn!(
+                        device = device.display_name(),
+                        %error,
+                        "Media Foundation encoder activation failed; trying the next MFT"
+                    );
+                    last_error = Some(NewVideoEncoderError::EncoderTransform(error));
                     continue;
                 }
-                result?;
-                break Ok(Some(input_type));
+            };
+            let attributes = match unsafe { candidate.GetAttributes() } {
+                Ok(attributes) => attributes,
+                Err(error) => {
+                    warn!(
+                        device = device.display_name(),
+                        %error,
+                        "Media Foundation encoder attributes unavailable; trying the next MFT"
+                    );
+                    last_error = Some(NewVideoEncoderError::EncoderTransform(error));
+                    continue;
+                }
+            };
+            let configured = unsafe {
+                attributes
+                    .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
+                    .and_then(|_| {
+                        attributes.SetUINT32(
+                            &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+                            enable_hardware_transforms as u32,
+                        )
+                    })
+            };
+            if let Err(error) = configured {
+                warn!(
+                    device = device.display_name(),
+                    %error,
+                    "Media Foundation encoder configuration failed; trying the next MFT"
+                );
+                last_error = Some(NewVideoEncoderError::EncoderTransform(error));
+                continue;
             }
-        })()
-        .map_err(NewVideoEncoderError::InputType)?;
-        if let Some(input_type) = input_type {
-            unsafe { transform.SetInputType(input_stream_id, &input_type, 0) }
-                .map_err(NewVideoEncoderError::InputType)?;
-        } else {
-            return Err(NewVideoEncoderError::InputType(Error::new(
-                MF_E_TRANSFORM_TYPE_NOT_SET,
-                "No suitable input type found! Try a different set of encoding settings.",
-            )));
+            let attached = unsafe {
+                candidate.ProcessMessage(
+                    MFT_MESSAGE_SET_D3D_MANAGER,
+                    std::mem::transmute::<IMFDXGIDeviceManager, usize>(
+                        media_device_manager.clone(),
+                    ),
+                )
+            };
+            match attached {
+                Ok(()) => match configure(&candidate) {
+                    Ok((event_generator, input_stream_id, output_stream_id, output_type)) => {
+                        tracing::info!(
+                            device = device.display_name(),
+                            "Selected Media Foundation encoder MFT"
+                        );
+                        return Ok(Self {
+                            _d3d_device: d3d_device.clone(),
+                            _media_device_manager: media_device_manager,
+                            _device_manager_reset_token: device_manager_reset_token,
+
+                            video_processor,
+
+                            transform: candidate,
+                            event_generator,
+                            input_stream_id,
+                            output_stream_id,
+                            bitrate,
+
+                            output_type,
+                        });
+                    }
+                    Err(error) => {
+                        warn!(
+                            device = device.display_name(),
+                            %error,
+                            "Media Foundation encoder type setup failed; trying the next MFT"
+                        );
+                        last_error = Some(error);
+                    }
+                },
+                Err(error) => {
+                    warn!(
+                        device = device.display_name(),
+                        %error,
+                        "Media Foundation encoder rejected the D3D manager; trying the next MFT"
+                    );
+                    last_error = Some(NewVideoEncoderError::EncoderTransform(error));
+                }
+            }
         }
 
-        Ok(Self {
-            _d3d_device: d3d_device.clone(),
-            _media_device_manager: media_device_manager,
-            _device_manager_reset_token: device_manager_reset_token,
-
-            video_processor,
-
-            transform,
-            event_generator,
-            input_stream_id,
-            output_stream_id,
-            bitrate,
-
-            output_type,
-        })
+        Err(last_error.unwrap_or(NewVideoEncoderError::NoVideoEncoderDevice))
     }
 
     pub fn new_with_scaled_output(

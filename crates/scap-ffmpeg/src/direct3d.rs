@@ -5,9 +5,8 @@ use std::time::Duration;
 
 pub type AsFFmpegError = ReadbackError;
 
-/// Half a frame interval at 60 fps. A 4K GPU-to-CPU copy completes well inside it on PCIe, so a
-/// frame that misses the deadline means the GPU is busy; the caller reuses the previous frame
-/// rather than stalling the encoder thread behind `Map`.
+/// Readback deadline. The default polls within it; `CAP_READBACK_BLOCKING` opts into an
+/// unbounded `Map` when the copy is known to finish quickly.
 const READBACK_BUDGET: Duration = Duration::from_millis(8);
 
 impl super::AsFFmpeg for scap_direct3d::Frame {
