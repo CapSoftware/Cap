@@ -13,11 +13,15 @@
 //! foreground task drains that channel and dispatches with a clean borrow.
 //! Same seam the editor's overlay panels use for AppKit callbacks.
 //!
-//! Menu strings, order and separators are byte-identical to `build_tray_menu`.
+//! Labels mirror `build_tray_menu`, except on macOS where the mode group
+//! names the current mode and its section header follows the palette's
+//! highlight in italic; the grouping is [`build_menu`]'s own.
 //! "Upload Logs" renders disabled because the log-upload path does not exist
 //! here.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use gpui::{App, Global};
 
@@ -80,19 +84,119 @@ pub enum TrayItem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     Separator,
+    ModePicker {
+        mode: Mode,
+    },
     Item {
         title: String,
         item: Option<TrayItem>,
         enabled: bool,
-        /// A 32x32 PNG, already cover-cropped. `IconMenuItem`'s image.
+        /// The row's image: a cover-cropped 32x32 photo thumbnail for
+        /// Previous, a rasterised vector glyph anywhere else. `IconMenuItem`'s
+        /// image -- Windows draws it; macOS draws `row_symbol`'s SF Symbol
+        /// instead (photos aside).
         icon: Option<Vec<u8>>,
     },
     Submenu {
         title: String,
         enabled: bool,
         items: Vec<Entry>,
+        /// The header's glyph, rasterised at [`ROW_ICON_SIZE`] -- the raster
+        /// Windows draws; macOS draws `PREVIOUS_SYMBOL` instead.
+        icon: Option<Vec<u8>>,
+    },
+    /// A non-interactive group label: an `NSMenu` section header on macOS 14+.
+    SectionHeader {
+        title: String,
     },
 }
+
+/// The glyphs the action rows carry, keyed for [`menu_icon`] -- the same files
+/// their in-app counterparts use. macOS prefers `row_symbol` over these;
+/// Windows draws them.
+const ROW_ICON_SOURCES: &[(&str, &[u8])] = &[
+    (
+        "display",
+        include_bytes!("../assets/icons/screen.svg") as &[u8],
+    ),
+    (
+        "window",
+        include_bytes!("../assets/icons/window.svg") as &[u8],
+    ),
+    ("area", include_bytes!("../assets/icons/area.svg") as &[u8]),
+    (
+        "screenshot",
+        include_bytes!("../assets/icons/screenshot.svg") as &[u8],
+    ),
+    (
+        "import",
+        include_bytes!("../assets/icons/import.svg") as &[u8],
+    ),
+    (
+        "settings",
+        include_bytes!("../assets/icons/settings.svg") as &[u8],
+    ),
+    (
+        "previous",
+        include_bytes!("../assets/icons/clock.svg") as &[u8],
+    ),
+];
+
+/// `Entry::Item`'s `icon` size, and the raster size of every row glyph.
+const ROW_ICON_SIZE: u32 = 32;
+
+/// An SVG rendered to a `size`×`size` PNG, scaled to fit and centred -- the
+/// conversion `cap_mode_icon_png` makes at 90 for the palette, shared with the
+/// menu rows at [`ROW_ICON_SIZE`]. Only the alpha survives a template tint.
+fn svg_icon_png(source: &[u8], size: u32) -> Option<Vec<u8>> {
+    let tree = resvg::usvg::Tree::from_data(source, &resvg::usvg::Options::default()).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
+    let bounds = tree.size();
+    let scale = (size as f32 / bounds.width()).min(size as f32 / bounds.height());
+    let transform = resvg::tiny_skia::Transform::from_translate(
+        (size as f32 - bounds.width() * scale) / 2.0,
+        (size as f32 - bounds.height() * scale) / 2.0,
+    )
+    .pre_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    pixmap.encode_png().ok()
+}
+
+/// A row glyph as a PNG, rasterised once: a menu rebuild is cheap, seven SVG
+/// renders are not.
+fn menu_icon(name: &str) -> Option<Vec<u8>> {
+    static ICONS: LazyLock<HashMap<&'static str, Vec<u8>>> = LazyLock::new(|| {
+        ROW_ICON_SOURCES
+            .iter()
+            .filter_map(|(name, svg)| Some((*name, svg_icon_png(svg, ROW_ICON_SIZE)?)))
+            .collect()
+    });
+    ICONS.get(name).cloned()
+}
+
+/// The SF Symbol the macOS menu draws for an action row, keyed by its action;
+/// Windows renders [`Entry::Item`]'s raster instead. Rows outside this list
+/// (the chrome rows, the mode rows of the pre-14 menu) stay bare on both.
+#[cfg(target_os = "macos")]
+fn row_symbol(item: &TrayItem) -> Option<&'static str> {
+    match item {
+        TrayItem::RecordDisplay => Some("display"),
+        TrayItem::RecordWindow => Some(if objc2::available!(macos = 26.0) {
+            "interface.window"
+        } else {
+            "macwindow"
+        }),
+        TrayItem::RecordArea => Some("rectangle.dashed"),
+        TrayItem::TakeScreenshot => Some("camera.on.rectangle"),
+        TrayItem::ImportMedia => Some("square.and.arrow.down"),
+        TrayItem::OpenSettings => Some("gear"),
+        _ => None,
+    }
+}
+
+/// The Previous submenu's header glyph, macOS side.
+#[cfg(target_os = "macos")]
+const PREVIOUS_SYMBOL: &str = "clock.arrow.circlepath";
 
 impl Entry {
     fn item(title: impl Into<String>, item: TrayItem) -> Self {
@@ -101,6 +205,16 @@ impl Entry {
             item: Some(item),
             enabled: true,
             icon: None,
+        }
+    }
+
+    /// An enabled row carrying one of the [`ROW_ICON_SOURCES`] glyphs.
+    fn icon_item(title: impl Into<String>, item: TrayItem, icon: &str) -> Self {
+        Self::Item {
+            title: title.into(),
+            item: Some(item),
+            enabled: true,
+            icon: menu_icon(icon),
         }
     }
 
@@ -243,12 +357,14 @@ fn previous_submenu(previous: &[PreviousItem]) -> Entry {
         return Entry::Submenu {
             title: "Previous".into(),
             enabled: false,
+            icon: menu_icon("previous"),
             items: vec![Entry::disabled("No recent items")],
         };
     }
     Entry::Submenu {
         title: "Previous".into(),
         enabled: true,
+        icon: menu_icon("previous"),
         items: previous
             .iter()
             .map(|item| Entry::Item {
@@ -262,6 +378,14 @@ fn previous_submenu(previous: &[PreviousItem]) -> Entry {
                 icon: item.thumbnail.clone(),
             })
             .collect(),
+    }
+}
+
+fn mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Studio => "Studio",
+        Mode::Instant => "Instant",
+        Mode::Screenshot => "Screenshot",
     }
 }
 
@@ -283,8 +407,9 @@ fn mode_submenu(mode: Mode) -> Entry {
         )
     };
     Entry::Submenu {
-        title: "Select Mode".into(),
+        title: "Recording Mode".into(),
         enabled: true,
+        icon: None,
         items: vec![
             label(Mode::Studio, "Studio"),
             label(Mode::Instant, "Instant"),
@@ -295,26 +420,59 @@ fn mode_submenu(mode: Mode) -> Entry {
 
 /// `build_tray_menu`, minus the onboarding-minimal branch.
 pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<Entry> {
-    let mut entries = vec![Entry::item("Open Main Window", TrayItem::OpenCap)];
+    let mut entries = Vec::new();
 
-    if mode == Mode::Screenshot {
-        entries.push(Entry::item("Screenshot Display", TrayItem::RecordDisplay));
-        entries.push(Entry::item("Screenshot Window", TrayItem::RecordWindow));
-        entries.push(Entry::item("Screenshot Area", TrayItem::RecordArea));
+    entries.push(Entry::item("Open Main Window", TrayItem::OpenCap));
+    entries.push(Entry::Separator);
+    if cfg!(target_os = "macos") {
+        entries.push(Entry::ModePicker { mode });
+        entries.push(Entry::Separator);
     } else {
-        entries.push(Entry::item("Record Display", TrayItem::RecordDisplay));
-        entries.push(Entry::item("Record Window", TrayItem::RecordWindow));
-        entries.push(Entry::item("Record Area", TrayItem::RecordArea));
-        entries.push(Entry::item("Take a Screenshot", TrayItem::TakeScreenshot));
+        entries.push(mode_submenu(mode));
+        entries.push(Entry::Separator);
     }
 
-    entries.push(Entry::item("Import Media...", TrayItem::ImportMedia));
+    if mode == Mode::Screenshot {
+        entries.push(Entry::icon_item(
+            "Screenshot Display",
+            TrayItem::RecordDisplay,
+            "display",
+        ));
+        entries.push(Entry::icon_item(
+            "Screenshot Window",
+            TrayItem::RecordWindow,
+            "window",
+        ));
+        entries.push(Entry::icon_item(
+            "Screenshot Area",
+            TrayItem::RecordArea,
+            "area",
+        ));
+    } else {
+        entries.push(Entry::icon_item(
+            "Record Display",
+            TrayItem::RecordDisplay,
+            "display",
+        ));
+        entries.push(Entry::icon_item(
+            "Record Window",
+            TrayItem::RecordWindow,
+            "window",
+        ));
+        entries.push(Entry::icon_item(
+            "Record Area",
+            TrayItem::RecordArea,
+            "area",
+        ));
+        entries.push(Entry::icon_item(
+            "Take a Screenshot",
+            TrayItem::TakeScreenshot,
+            "screenshot",
+        ));
+    }
 
     entries.push(Entry::Separator);
-    entries.push(mode_submenu(mode));
     entries.push(previous_submenu(previous));
-    entries.push(Entry::Separator);
-
     entries.push(Entry::item(
         "View all recordings",
         TrayItem::ViewAllRecordings,
@@ -323,14 +481,32 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
         "View all screenshots",
         TrayItem::ViewAllScreenshots,
     ));
-    entries.push(Entry::item("Settings", TrayItem::OpenSettings));
 
     entries.push(Entry::Separator);
+    entries.push(Entry::icon_item(
+        "Import Media…",
+        TrayItem::ImportMedia,
+        "import",
+    ));
+    entries.push(Entry::icon_item(
+        "Settings…",
+        TrayItem::OpenSettings,
+        "settings",
+    ));
     // `logging::upload_log_file` needs the auth token and the HTTP client,
     // neither of which this app has.
     entries.push(Entry::disabled("Upload Logs"));
-    entries.push(Entry::disabled(format!("Cap v{version}")));
-    entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+    entries.push(Entry::Separator);
+
+    if cfg!(target_os = "macos") {
+        entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+        entries.push(Entry::SectionHeader {
+            title: format!("Cap v{version}"),
+        });
+    } else {
+        entries.push(Entry::disabled(format!("Cap v{version}")));
+        entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+    }
 
     entries
 }
@@ -421,7 +597,7 @@ fn set_mode(mode: Mode, cx: &mut App) {
 }
 
 /// `handle_previous_item_click`.
-fn open_previous_item(path: PathBuf, cx: &mut App) {
+pub(crate) fn open_previous_item(path: PathBuf, cx: &mut App) {
     use cap_project::{RecordingMeta, RecordingMetaInner};
 
     let screenshots_dir = library::screenshots_dir();
@@ -494,13 +670,23 @@ fn stop_recording(cx: &mut App) {
 
 /// A flat, greppable rendering of the menu -- what the verification run diffs
 /// against `build_tray_menu`. Submenu rows are indented two spaces; a disabled
-/// row is suffixed with ` [disabled]`; a row with a thumbnail with ` [icon]`.
+/// row is suffixed with ` [disabled]`; a row with an image with ` [icon]`;
+/// a section header with ` [section]`.
 pub fn describe_menu(entries: &[Entry]) -> String {
     fn walk(entries: &[Entry], depth: usize, out: &mut String) {
         for entry in entries {
             let pad = "  ".repeat(depth);
             match entry {
                 Entry::Separator => out.push_str(&format!("{pad}---\n")),
+                Entry::ModePicker { mode } => {
+                    out.push_str(&format!("{pad}{}\n", mode_name(*mode)));
+                    for name in ["Studio", "Instant", "Screenshot"] {
+                        out.push_str(&format!("{}{name}\n", "  ".repeat(depth + 1)));
+                    }
+                }
+                Entry::SectionHeader { title } => {
+                    out.push_str(&format!("{pad}{title} [section]\n"));
+                }
                 Entry::Item {
                     title,
                     enabled,
@@ -515,10 +701,12 @@ pub fn describe_menu(entries: &[Entry]) -> String {
                     title,
                     enabled,
                     items,
+                    icon,
                 } => {
                     out.push_str(&format!(
-                        "{pad}{title}{}\n",
-                        if *enabled { "" } else { " [disabled]" }
+                        "{pad}{title}{}{}\n",
+                        if *enabled { "" } else { " [disabled]" },
+                        if icon.is_some() { " [icon]" } else { "" }
                     ));
                     walk(items, depth + 1, out);
                 }
@@ -611,18 +799,29 @@ fn harness_item(spec: &str, cx: &App) -> Option<TrayItem> {
 pub use mac::*;
 
 #[cfg(target_os = "macos")]
+mod mac_mode_picker;
+
+#[cfg(target_os = "macos")]
 mod mac {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use gpui::{App, Global};
-    use objc2::rc::Id;
-    use objc2::runtime::{AnyObject, Sel};
-    use objc2::{ClassType, DeclaredClass, class, msg_send, msg_send_id, sel};
-    use objc2_foundation::NSString;
+    use objc2::rc::Retained;
+    use objc2::runtime::{NSObjectProtocol, ProtocolObject, Sel};
+    use objc2::{AnyThread, MainThreadOnly, define_class, msg_send, sel};
+    use objc2_app_kit::{
+        NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate,
+        NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem,
+    };
+    use objc2_foundation::{
+        MainThreadMarker, NSData, NSString,
+    };
 
+
+    use super::mac_mode_picker::{append_mode_picker, install_key_hook};
     use super::{
-        Entry, PreviousItem, STOP_ICON, TrayItem, current_menu_entries, handle_item, mode_icon,
-        scan_previous, stop_recording,
+        Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem, current_menu_entries,
+        handle_item, mode_icon, mode_submenu, row_symbol, scan_previous, stop_recording,
     };
     use crate::main_window::Mode;
 
@@ -633,49 +832,61 @@ mod mac {
     const ICON_HEIGHT: f64 = 18.0;
     /// Not a menu item: the status button itself, clicked mid-recording.
     const STOP_TAG: isize = -1;
+    const REBUILD_TAG: isize = -2;
 
     thread_local! {
-        /// The live sender, read by the ObjC action. `thread_local` for the
-        /// reason `COLOR_PANEL_TX` is: AppKit only calls the action on the main
-        /// thread, so it needs no lock.
         static TRAY_TX: RefCell<Option<flume::Sender<isize>>> = const { RefCell::new(None) };
+        static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
+        static REBUILD_PENDING: Cell<bool> = const { Cell::new(false) };
     }
 
-    objc2::declare_class!(
-        /// The receiver for every tray action. No ivars: the tag identifies the
-        /// item and the sender lives in the thread-local above.
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements; this class has no ivars or Drop.
+        #[unsafe(super(objc2::runtime::NSObject))]
+        #[name = "CapGpuiTrayTarget"]
+        #[thread_kind = MainThreadOnly]
         struct TrayTarget;
 
-        unsafe impl ClassType for TrayTarget {
-            type Super = objc2::runtime::NSObject;
-            type Mutability = objc2::mutability::InteriorMutable;
-            const NAME: &'static str = "CapGpuiTrayTarget";
-        }
-
-        impl DeclaredClass for TrayTarget {}
-
-        unsafe impl TrayTarget {
+        impl TrayTarget {
             /// Fires inside AppKit's menu-tracking run loop. Touching gpui here
             /// is what "RefCell already borrowed" looks like, so it only posts
             /// the tag.
-            #[method(capTrayItem:)]
-            fn tray_item(&self, sender: *mut AnyObject) {
-                if sender.is_null() {
-                    return;
-                }
-                let tag: isize = unsafe { msg_send![sender, tag] };
-                post(tag);
+            #[unsafe(method(capTrayItem:))]
+            fn tray_item(&self, sender: &NSMenuItem) {
+                post(sender.tag());
+            }
+
+            #[unsafe(method(capTrayMode:))]
+            fn tray_mode(&self, sender: &NSMenuItem) {
+                post(sender.tag());
             }
 
             /// The status button's action while a recording is running.
-            #[method(capTrayStop:)]
-            fn tray_stop(&self, _sender: *mut AnyObject) {
+            #[unsafe(method(capTrayStop:))]
+            fn tray_stop(&self, _sender: &NSStatusBarButton) {
                 post(STOP_TAG);
+            }
+        }
+
+        unsafe impl NSObjectProtocol for TrayTarget {}
+
+        unsafe impl NSMenuDelegate for TrayTarget {
+            #[unsafe(method(menuWillOpen:))]
+            fn menu_will_open(&self, _menu: &NSMenu) {
+                MENU_OPEN.with(|o| o.set(true));
+            }
+
+            #[unsafe(method(menuDidClose:))]
+            fn menu_did_close(&self, _menu: &NSMenu) {
+                MENU_OPEN.with(|o| o.set(false));
+                if REBUILD_PENDING.with(|p| p.replace(false)) {
+                    post(REBUILD_TAG); // handled by the drain, with a clean borrow
+                }
             }
         }
     );
 
-    fn post(tag: isize) {
+    pub(super) fn post(tag: isize) {
         TRAY_TX.with(|tx| {
             if let Some(sender) = tx.borrow().as_ref() {
                 let _ = sender.send(tag);
@@ -684,11 +895,11 @@ mod mac {
     }
 
     struct Tray {
-        status_item: Id<AnyObject>,
-        target: Id<TrayTarget>,
+        status_item: Retained<NSStatusItem>,
+        target: Retained<TrayTarget>,
         /// Retained so the menu can be detached (recording) and reattached
         /// (stopped) without rebuilding it.
-        menu: Option<Id<AnyObject>>,
+        menu: Option<Retained<NSMenu>>,
         /// Tag -> item, rebuilt with the menu. The index *is* the tag.
         actions: Vec<TrayItem>,
         mode: Mode,
@@ -706,6 +917,7 @@ mod mac {
             return;
         };
         cx.set_global(tray);
+        install_key_hook();
 
         let (tx, rx) = flume::unbounded::<isize>();
         TRAY_TX.with(|slot| *slot.borrow_mut() = Some(tx));
@@ -715,9 +927,16 @@ mod mac {
         cx.spawn(async move |cx| {
             while let Ok(tag) = rx.recv_async().await {
                 cx.update(|cx| {
-                    if tag == STOP_TAG {
-                        stop_recording(cx);
-                        return;
+                    match tag {
+                        STOP_TAG => {
+                            stop_recording(cx);
+                            return;
+                        }
+                        REBUILD_TAG => {
+                            rebuild(cx);
+                            return;
+                        }
+                        _ => {}
                     }
                     let item = cx.global::<Tray>().actions.get(tag as usize).cloned();
                     match item {
@@ -748,77 +967,62 @@ mod mac {
     }
 
     fn create_status_item() -> Option<Tray> {
-        unsafe {
-            let status_bar: *mut AnyObject = msg_send![class!(NSStatusBar), systemStatusBar];
-            if status_bar.is_null() {
-                return None;
-            }
-            let raw: *mut AnyObject =
-                msg_send![status_bar, statusItemWithLength: NS_VARIABLE_STATUS_ITEM_LENGTH];
-            // `statusItemWithLength:` hands back an autoreleased object owned
-            // by the status bar; retain it for as long as we hold it, and never
-            // release it -- removing a status item is what makes it disappear
-            // from the menu bar, and this one lives for the process.
-            let status_item = Id::retain(raw)?;
-            let target: Id<TrayTarget> = msg_send_id![TrayTarget::alloc(), init];
+        let mtm = MainThreadMarker::new()?;
+        let status_item =
+            NSStatusBar::systemStatusBar().statusItemWithLength(NS_VARIABLE_STATUS_ITEM_LENGTH);
+        let target: Retained<TrayTarget> = unsafe { msg_send![TrayTarget::alloc(mtm), init] };
 
-            let mode = Mode::from_store();
-            let tray = Tray {
-                status_item,
-                target,
-                menu: None,
-                actions: Vec::new(),
-                mode,
-                previous: Vec::new(),
-                recording: false,
-            };
-            set_button_image(&tray, mode_icon(mode));
-            let button: *mut AnyObject = msg_send![&*tray.status_item, button];
-            let visible: bool = msg_send![&*tray.status_item, isVisible];
-            let frame: objc2_foundation::NSRect = if button.is_null() {
+        let mode = Mode::from_store();
+        let tray = Tray {
+            status_item,
+            target,
+            menu: None,
+            actions: Vec::new(),
+            mode,
+            previous: Vec::new(),
+            recording: false,
+        };
+        set_button_image(&tray, mode_icon(mode));
+        let button = tray.status_item.button(mtm);
+        let frame = button.as_ref().map_or_else(
+            || {
                 objc2_foundation::NSRect::new(
-                    objc2_foundation::NSPoint::new(0., 0.),
-                    objc2_foundation::NSSize::new(0., 0.),
+                    objc2_foundation::NSPoint::new(0.0, 0.0),
+                    objc2_foundation::NSSize::new(0.0, 0.0),
                 )
-            } else {
-                msg_send![button, frame]
-            };
-            tracing::info!(
-                has_button = !button.is_null(),
-                visible,
-                width = frame.size.width,
-                height = frame.size.height,
-                ?mode,
-                "status item created"
-            );
-            Some(tray)
-        }
+            },
+            |button| button.frame(),
+        );
+        tracing::info!(
+            has_button = button.is_some(),
+            visible = tray.status_item.isVisible(),
+            width = frame.size.width,
+            height = frame.size.height,
+            ?mode,
+            "status item created"
+        );
+        Some(tray)
     }
 
     /// `set_icon_for_ns_status_item_button`: an 18pt-tall template image on the
     /// status item's button.
     fn set_button_image(tray: &Tray, png: &[u8]) {
-        unsafe {
-            let button: *mut AnyObject = msg_send![&*tray.status_item, button];
-            if button.is_null() {
-                return;
-            }
-            let Some(image) = ns_image(png, ICON_HEIGHT) else {
-                return;
-            };
-            let _: () = msg_send![button, setImage: &*image];
-            // `icon_as_template(cfg!(target_os = "macos"))` in `create_tray`.
-            let _: () = msg_send![&*image, setTemplate: true];
-            // The verification seam. A machine with a full menu bar parks
-            // overflow status items behind the notch, where they cannot be
-            // photographed -- so which icon is on the button is logged, keyed
-            // by the asset's byte length (each of the four differs).
-            tracing::info!(
-                icon = icon_name(png),
-                bytes = png.len(),
-                "status item icon set"
-            );
-        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(button) = tray.status_item.button(mtm) else {
+            return;
+        };
+        let Some(image) = ns_image(png, ICON_HEIGHT) else {
+            return;
+        };
+        button.setImage(Some(&image));
+        image.setTemplate(true);
+        tracing::info!(
+            icon = icon_name(png),
+            bytes = png.len(),
+            "status item icon set"
+        );
     }
 
     fn icon_name(png: &[u8]) -> &'static str {
@@ -839,35 +1043,42 @@ mod mac {
 
     /// An `NSImage` from PNG bytes, scaled to `height` points with its aspect
     /// preserved -- the conversion muda and tray-icon both do.
-    fn ns_image(png: &[u8], height: f64) -> Option<Id<AnyObject>> {
-        unsafe {
-            let data: *mut AnyObject = msg_send![
-                class!(NSData),
-                dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(),
-                length: png.len(),
-            ];
-            if data.is_null() {
-                return None;
-            }
-            let alloc: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let raw: *mut AnyObject = msg_send![alloc, initWithData: data];
-            let image = Id::from_raw(raw)?;
-            let size: objc2_foundation::NSSize = msg_send![&*image, size];
-            if size.height > 0.0 {
-                let width = size.width / (size.height / height);
-                let _: () = msg_send![
-                    &*image,
-                    setSize: objc2_foundation::NSSize::new(width, height)
-                ];
-            }
-            Some(image)
+    fn ns_image(bytes: &[u8], height: f64) -> Option<Retained<NSImage>> {
+        let data = NSData::with_bytes(bytes);
+        let image = NSImage::initWithData(NSImage::alloc(), &data)?;
+        let size = image.size();
+        if size.height > 0.0 {
+            image.setSize(objc2_foundation::NSSize::new(
+                size.width / (size.height / height),
+                height,
+            ));
         }
+        Some(image)
+    }
+
+    /// An SF Symbol at the size the system serves it (15-20pt, the range menu
+    /// icons live in) -- already a template image. The API only exists on
+    /// macOS 11+, and an unknown name comes back nil; both cases leave the
+    /// row bare rather than falling back to the raster, which Windows owns.
+    pub(super) fn symbol_image(name: &str) -> Option<Retained<NSImage>> {
+        if !objc2::available!(macos = 11.0) {
+            return None;
+        }
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
     }
 
     /// Rebuild the menu from the current mode and Previous cache, and attach it
     /// (unless a recording is running, in which case the *button* owns the
     /// click -- see [`set_recording`]).
     pub fn rebuild(cx: &mut App) {
+        if MENU_OPEN.with(Cell::get) {
+            REBUILD_PENDING.with(|p| p.set(true));
+            return;
+        }
+        if !cx.has_global::<Tray>() {
+            return;
+        }
+
         if !cx.has_global::<Tray>() {
             return;
         }
@@ -878,17 +1089,13 @@ mod mac {
         let entries = current_menu_entries(cx, mode, &previous);
 
         let mut actions = Vec::new();
-        let menu = {
-            let tray = cx.global::<Tray>();
-            build_ns_menu(&entries, &tray.target, &mut actions)
-        };
+        let tray = cx.global::<Tray>();
+        let menu = build_ns_menu(&entries, &tray.target, &mut actions);
+        menu.setDelegate(Some(ProtocolObject::from_ref(&*tray.target)));
 
-        let recording = cx.global::<Tray>().recording;
-        unsafe {
-            if !recording {
-                let tray = cx.global::<Tray>();
-                let _: () = msg_send![&*tray.status_item, setMenu: &*menu];
-            }
+        let tray = cx.global::<Tray>();
+        if !tray.recording {
+            tray.status_item.setMenu(Some(&menu));
         }
 
         let tray = cx.global_mut::<Tray>();
@@ -900,82 +1107,137 @@ mod mac {
         entries: &[Entry],
         target: &TrayTarget,
         actions: &mut Vec<TrayItem>,
-    ) -> Id<AnyObject> {
-        unsafe {
-            let alloc: *mut AnyObject = msg_send![class!(NSMenu), alloc];
-            let raw: *mut AnyObject = msg_send![alloc, init];
-            let menu = Id::from_raw(raw).expect("NSMenu init returned nil");
-            // Without this AppKit decides an item's enabled state from whether
-            // its target responds to the action -- which ours always does, so
-            // the four deliberately-disabled rows would come back enabled.
-            let _: () = msg_send![&*menu, setAutoenablesItems: false];
+    ) -> Retained<NSMenu> {
+        let mtm =
+            MainThreadMarker::new().expect("tray menu construction must run on the main thread");
+        let menu = NSMenu::new(mtm);
+        menu.setAutoenablesItems(false);
 
-            for entry in entries {
-                let item = build_ns_item(entry, target, actions);
-                let _: () = msg_send![&*menu, addItem: &*item];
+        for entry in entries {
+            if let Entry::ModePicker { mode } = entry {
+                if objc2::available!(macos = 14.0) {
+                    append_mode_picker(&menu, *mode, actions, mtm);
+                } else {
+                    let submenu = mode_submenu(*mode);
+                    menu.addItem(&build_ns_item(&submenu, target, actions, mtm));
+                }
+                continue;
             }
-            menu
+            let item = build_ns_item(entry, target, actions, mtm);
+            menu.addItem(&item);
         }
+
+        menu
     }
 
     fn build_ns_item(
         entry: &Entry,
         target: &TrayTarget,
         actions: &mut Vec<TrayItem>,
-    ) -> Id<AnyObject> {
-        unsafe {
-            match entry {
-                Entry::Separator => {
-                    let raw: *mut AnyObject = msg_send![class!(NSMenuItem), separatorItem];
-                    Id::retain(raw).expect("separatorItem returned nil")
+        mtm: MainThreadMarker,
+    ) -> Retained<NSMenuItem> {
+        match entry {
+            Entry::Separator => NSMenuItem::separatorItem(mtm),
+            Entry::ModePicker { mode } => {
+                let submenu = mode_submenu(*mode);
+                build_ns_item(&submenu, target, actions, mtm)
+            }
+            Entry::Item {
+                title,
+                item,
+                enabled,
+                icon,
+            } => {
+                let menu_item = new_menu_item(title, Some(sel!(capTrayItem:)), mtm);
+                unsafe { menu_item.setTarget(Some(target)) };
+                menu_item.setEnabled(*enabled && item.is_some());
+                if let Some(item) = item {
+                    menu_item.setTag(actions.len() as isize);
+                    actions.push(item.clone());
                 }
-                Entry::Item {
-                    title,
-                    item,
-                    enabled,
-                    icon,
-                } => {
-                    let menu_item = new_menu_item(title, sel!(capTrayItem:));
-                    let _: () = msg_send![&*menu_item, setTarget: target];
-                    let _: () = msg_send![&*menu_item, setEnabled: *enabled && item.is_some()];
-                    if let Some(item) = item {
-                        let tag = actions.len() as isize;
-                        let _: () = msg_send![&*menu_item, setTag: tag];
-                        actions.push(item.clone());
+                if *item == Some(TrayItem::OpenSettings) {
+                    menu_item.setKeyEquivalent(&NSString::from_str(","));
+                    menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+                }
+                // Previous's rows are photo thumbnails; every other iconed row
+                // is an SF Symbol, template-tinted by the menu. Windows draws
+                // `icon`'s raster instead.
+                let photo = matches!(item, Some(TrayItem::PreviousItem(_)));
+                let image = if photo {
+                    let image = icon
+                        .as_deref()
+                        .and_then(|bytes| ns_image(bytes, ICON_HEIGHT));
+                    if image.is_none() {
+                        tracing::warn!(%title, "no thumbnail for a previous row");
                     }
-                    if let Some(icon) = icon
-                        && let Some(image) = ns_image(icon, ICON_HEIGHT)
-                    {
-                        let _: () = msg_send![&*menu_item, setImage: &*image];
+                    image
+                } else if let Some(symbol) = item.as_ref().and_then(row_symbol) {
+                    let image = symbol_image(symbol);
+                    if image.is_none() {
+                        tracing::warn!(%title, symbol, "SF Symbol not resolved");
                     }
+                    image
+                } else {
+                    None
+                };
+
+                if let Some(image) = image {
+                    image.setTemplate(!photo);
+                    menu_item.setImage(Some(&image));
+
+                    if objc2::available!(macos = 27.0) {
+                        // NSMenuItemImageVisibility: automatic = 0, visible = 1, hidden = 2
+                        let _: () =
+                            unsafe { msg_send![&*menu_item, setPreferredImageVisibility: 1isize] };
+                    }
+                }
+                menu_item
+            }
+            Entry::SectionHeader { title } => {
+                if objc2::available!(macos = 14.0) {
+                    NSMenuItem::sectionHeaderWithTitle(&NSString::from_str(title), mtm)
+                } else {
+                    let menu_item = NSMenuItem::new(mtm);
+                    menu_item.setTitle(&NSString::from_str(title));
+                    menu_item.setEnabled(false);
                     menu_item
                 }
-                Entry::Submenu {
-                    title,
-                    enabled,
-                    items,
-                } => {
-                    let menu_item = new_menu_item(title, sel!(capTrayItem:));
-                    let submenu = build_ns_menu(items, target, actions);
-                    let _: () = msg_send![&*menu_item, setSubmenu: &*submenu];
-                    let _: () = msg_send![&*menu_item, setEnabled: *enabled];
-                    menu_item
+            }
+            Entry::Submenu {
+                title,
+                enabled,
+                items,
+                ..
+            } => {
+                let menu_item = new_menu_item(title, Some(sel!(capTrayItem:)), mtm);
+                unsafe { menu_item.setTarget(Some(target)) };
+                let submenu = build_ns_menu(items, target, actions);
+                menu_item.setSubmenu(Some(&submenu));
+                // Only Previous carries a header glyph; its own rows keep
+                // their photos, its header gets the symbol Windows draws the
+                // raster for.
+                if title == "Previous"
+                    && let Some(image) = symbol_image(PREVIOUS_SYMBOL)
+                {
+                    image.setTemplate(true);
+                    menu_item.setImage(Some(&image));
                 }
+                menu_item.setEnabled(*enabled);
+                menu_item
             }
         }
     }
 
-    fn new_menu_item(title: &str, action: Sel) -> Id<AnyObject> {
-        unsafe {
-            let alloc: *mut AnyObject = msg_send![class!(NSMenuItem), alloc];
-            let raw: *mut AnyObject = msg_send![
-                alloc,
-                initWithTitle: &*NSString::from_str(title),
-                action: action,
-                keyEquivalent: &*NSString::from_str(""),
-            ];
-            Id::from_raw(raw).expect("NSMenuItem init returned nil")
-        }
+    fn new_menu_item(
+        title: &str,
+        action: Option<Sel>,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSMenuItem> {
+        let item = NSMenuItem::new(mtm);
+        item.setTitle(&NSString::from_str(title));
+        unsafe { item.setAction(action) };
+        item.setKeyEquivalent(&NSString::from_str(""));
+        item
     }
 
     /// `RecordingStarted` / `RecordingStopped`.
@@ -991,27 +1253,24 @@ mod mac {
         }
         cx.global_mut::<Tray>().recording = recording;
         let tray = cx.global::<Tray>();
-        unsafe {
-            let button: *mut AnyObject = msg_send![&*tray.status_item, button];
-            if recording {
-                let _: () =
-                    msg_send![&*tray.status_item, setMenu: std::ptr::null_mut::<AnyObject>()];
-                if !button.is_null() {
-                    let _: () = msg_send![button, setTarget: &*tray.target];
-                    let _: () = msg_send![button, setAction: Some(sel!(capTrayStop:))];
-                }
-                set_button_image(tray, STOP_ICON);
-            } else {
-                if !button.is_null() {
-                    let _: () = msg_send![button, setAction: None::<Sel>];
-                    let _: () = msg_send![button, setTarget: std::ptr::null_mut::<AnyObject>()];
-                }
-                if let Some(menu) = &tray.menu {
-                    let _: () = msg_send![&*tray.status_item, setMenu: &**menu];
-                }
-                let icon = mode_icon(tray.mode);
-                set_button_image(tray, icon);
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let button = tray.status_item.button(mtm);
+        if recording {
+            tray.status_item.setMenu(None);
+            if let Some(button) = button {
+                unsafe { button.setTarget(Some(&*tray.target)) };
+                unsafe { button.setAction(Some(sel!(capTrayStop:))) };
             }
+            set_button_image(tray, STOP_ICON);
+        } else {
+            if let Some(button) = button {
+                unsafe { button.setAction(None) };
+                unsafe { button.setTarget(None) };
+            }
+            tray.status_item.setMenu(tray.menu.as_deref());
+            set_button_image(tray, mode_icon(tray.mode));
         }
         tracing::info!(recording, "tray recording state");
     }
@@ -1318,6 +1577,8 @@ mod tests {
             .iter()
             .map(|entry| match entry {
                 Entry::Separator => "-".to_string(),
+                Entry::ModePicker { mode } => mode_name(*mode).to_string(),
+                Entry::SectionHeader { title } => title.clone(),
                 Entry::Item { title, .. } => title.clone(),
                 Entry::Submenu { title, .. } => title.clone(),
             })
@@ -1336,28 +1597,37 @@ mod tests {
     #[test]
     fn menu_matches_build_tray_menu() {
         let menu = build_menu(Mode::Studio, &[], "0.1.0");
-        assert_eq!(
-            titles(&menu),
-            vec![
-                "Open Main Window",
-                "Record Display",
-                "Record Window",
-                "Record Area",
-                "Take a Screenshot",
-                "Import Media...",
-                "-",
-                "Select Mode",
-                "Previous",
-                "-",
-                "View all recordings",
-                "View all screenshots",
-                "Settings",
-                "-",
-                "Upload Logs",
-                "Cap v0.1.0",
-                "Quit Cap",
-            ]
-        );
+        // macOS renders the group as a section header naming the current
+        // mode; the `mode_submenu` other platforms get keeps its group label.
+        let mode_label = if cfg!(target_os = "macos") {
+            "Studio"
+        } else {
+            "Recording Mode"
+        };
+        let mut expected = vec!["Open Main Window", "-", mode_label, "-"];
+        expected.extend([
+            "Record Display",
+            "Record Window",
+            "Record Area",
+            "Take a Screenshot",
+            "-",
+            "Previous",
+            "View all recordings",
+            "View all screenshots",
+            "-",
+            "Import Media…",
+            "Settings…",
+            "Upload Logs",
+            "-",
+        ]);
+        // The version row is a section header below Quit on macOS and a
+        // disabled row above it everywhere else.
+        if cfg!(target_os = "macos") {
+            expected.extend(["Quit Cap", "Cap v0.1.0"]);
+        } else {
+            expected.extend(["Cap v0.1.0", "Quit Cap"]);
+        }
+        assert_eq!(titles(&menu), expected);
     }
 
     /// Screenshot mode relabels the three target rows and drops "Take a
@@ -1370,11 +1640,11 @@ mod tests {
             &titles[..6],
             &[
                 "Open Main Window",
+                "-",
+                mode_label,
+                "-",
                 "Screenshot Display",
                 "Screenshot Window",
-                "Screenshot Area",
-                "Import Media...",
-                "-",
             ]
         );
         assert!(!titles.iter().any(|title| title == "Take a Screenshot"));
@@ -1397,7 +1667,7 @@ mod tests {
             ),
         ] {
             let Entry::Submenu { items, .. } = mode_submenu(mode) else {
-                panic!("Select Mode is a submenu");
+                panic!("the mode picker is a submenu");
             };
             assert_eq!(titles(&items), expected.to_vec());
         }
@@ -1409,6 +1679,7 @@ mod tests {
             title,
             enabled,
             items,
+            ..
         } = previous_submenu(&[])
         else {
             panic!("Previous is a submenu");
@@ -1466,6 +1737,13 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(disabled, vec!["Upload Logs", "Cap v0.1.0"]);
+        assert_eq!(
+            disabled,
+            if cfg!(target_os = "macos") {
+                vec!["Upload Logs"]
+            } else {
+                vec!["Upload Logs", "Cap v0.1.0"]
+            }
+        );
     }
 }

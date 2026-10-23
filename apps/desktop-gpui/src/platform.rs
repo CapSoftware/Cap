@@ -641,15 +641,163 @@ mod mac {
     }
 
     use gpui::Window;
-    use objc2::rc::Id;
+    use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, Sel};
-    use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
+    use objc2_app_kit::{
+        NSApplication, NSDocumentController, NSMenu, NSMenuItem, NSView, NSWindow,
+        NSWindowCollectionBehavior,
+    };
+    use objc2_foundation::{NSObjectNSKeyValueCoding, NSString};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{ForcedAppearance, MaterialKind, PanelBehavior};
 
     static NATIVE_QUIT_REQUESTS: std::sync::OnceLock<super::NativeQuitRequests> =
         std::sync::OnceLock::new();
+
+    /// Rows of `menus::build_menus`' Cap and File menus. Both menus are built
+    /// from that model in this order, so the positions are fixed.
+    const APP_MENU: isize = 0;
+    const ABOUT_ROW: isize = 0;
+    const UPDATE_ROW: isize = 1;
+    const PREFERENCES_ROW: isize = 3;
+    const FILE_MENU: isize = 1;
+    const OPEN_RECENT_ROW: isize = 1;
+
+    pub fn patch_standard_application_menu() {
+        use objc2::{exception, msg_send, runtime::AnyObject, sel};
+        use std::panic::AssertUnwindSafe;
+
+        let Some(main_thread) = objc2_foundation::MainThreadMarker::new() else {
+            tracing::error!("Cannot patch the application menu off the main thread");
+            return;
+        };
+        let app = NSApplication::sharedApplication(main_thread);
+        let Some(main_menu) = app.mainMenu() else {
+            tracing::warn!("GPUI did not install an application menu");
+            return;
+        };
+        let Some(app_menu) = main_menu
+            .itemAtIndex(APP_MENU)
+            .and_then(|item| item.submenu())
+        else {
+            return;
+        };
+        // gpui's `validateMenuItem:` answers only "is this action available?",
+        // which is always yes for Cap's global listeners -- so AppKit's
+        // auto-enable pass overwrites `MenuItem::Action`'s `disabled` every
+        // time the menu opens. The model's enabled state has to be
+        // authoritative instead, as it already is for the tray menu and for
+        // muda.
+        app_menu.setAutoenablesItems(false);
+
+        if let Some(about) = app_menu.itemAtIndex(ABOUT_ROW) {
+            unsafe {
+                about.setAction(Some(sel!(orderFrontStandardAboutPanel:)));
+                about.setTarget(None);
+                about.setAllowsAutomaticKeyEquivalentLocalization(true);
+            }
+        }
+        if let Some(preferences) = app_menu.itemAtIndex(PREFERENCES_ROW) {
+            preferences.setAllowsAutomaticKeyEquivalentLocalization(true);
+        }
+        if let Some(quit) = app_menu
+            .numberOfItems()
+            .checked_sub(1)
+            .and_then(|index| app_menu.itemAtIndex(index))
+        {
+            unsafe {
+                quit.setAction(Some(sel!(terminate:)));
+                quit.setTarget(None);
+                quit.setAllowsAutomaticKeyEquivalentLocalization(true);
+            }
+        }
+
+        let Some(file_menu) = main_menu
+            .itemAtIndex(FILE_MENU)
+            .and_then(|item| item.submenu())
+        else {
+            return;
+        };
+        let has_recent_menu = file_menu.itemAtIndex(OPEN_RECENT_ROW).is_some_and(|item| {
+            item.title()
+                .isEqualToString(&NSString::from_str("Open Recent"))
+        });
+        if has_recent_menu {
+            return;
+        }
+
+        let recent_menu = NSMenu::new(main_thread);
+        recent_menu.setTitle(&NSString::from_str("Open Recent"));
+        let name = NSString::from_str("NSRecentDocumentsMenu");
+        let key = NSString::from_str("menuName");
+        let registered = exception::catch(AssertUnwindSafe(|| {
+            unsafe { recent_menu.setValue_forKey(Some(&*name as &AnyObject), &key) };
+        }));
+        if let Err(error) = registered {
+            tracing::warn!("Could not register Open Recent menu name: {error:?}");
+        }
+
+        let clear_item = NSMenuItem::new(main_thread);
+        clear_item.setTitle(&NSString::from_str("Clear Menu"));
+        unsafe { clear_item.setAction(Some(sel!(clearRecentDocuments:))) };
+        recent_menu.addItem(&clear_item);
+
+        let recent_item = NSMenuItem::new(main_thread);
+        recent_item.setTitle(&NSString::from_str("Open Recent"));
+        recent_item.setSubmenu(Some(&recent_menu));
+        file_menu.insertItem_atIndex(&recent_item, OPEN_RECENT_ROW);
+
+        let controller = NSDocumentController::sharedDocumentController(main_thread);
+        let can_install_menu: bool =
+            unsafe { msg_send![&*controller, respondsToSelector: sel!(_installOpenRecentMenus)] };
+        if can_install_menu {
+            unsafe {
+                let _: () = msg_send![&*controller, _installOpenRecentMenus];
+            }
+        } else {
+            tracing::warn!("NSDocumentController cannot install the Open Recent menu");
+        }
+    }
+
+    /// Rewrites the Check for Update row in place. A menu item edited this way
+    /// keeps whatever menu the user has open on screen; reinstalling the menu
+    /// bar for every download-percentage tick would close it.
+    pub fn set_update_menu_item(title: &str, badge: Option<&str>, enabled: bool) {
+        use objc2::runtime::AnyClass;
+        use objc2_app_kit::NSMenuItemBadge;
+        use objc2_foundation::MainThreadMarker;
+
+        let Some(main_thread) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(item) = update_menu_item(main_thread) else {
+            tracing::warn!("The update row is missing from the application menu");
+            return;
+        };
+        item.setTitle(&NSString::from_str(title));
+        item.setEnabled(enabled);
+
+        // `NSMenuItemBadge` and `setBadge:` are macOS 14+, and objc2's class
+        // lookup panics when the class is absent.
+        if AnyClass::get(c"NSMenuItemBadge").is_none() {
+            return;
+        }
+        let badge = badge.map(|text| {
+            NSMenuItemBadge::initWithString(main_thread.alloc(), &NSString::from_str(text))
+        });
+        item.setBadge(badge.as_deref());
+    }
+
+    fn update_menu_item(
+        main_thread: objc2_foundation::MainThreadMarker,
+    ) -> Option<Retained<NSMenuItem>> {
+        NSApplication::sharedApplication(main_thread)
+            .mainMenu()?
+            .itemAtIndex(APP_MENU)?
+            .submenu()?
+            .itemAtIndex(UPDATE_ROW)
+    }
 
     unsafe extern "C-unwind" fn application_should_terminate(
         _: &AnyObject,
@@ -682,7 +830,7 @@ mod mac {
                 .as_ref()
                 .ok_or("Application delegate is unavailable")?;
             let delegate_class = delegate.class();
-            if delegate_class.name() != "GPUIApplicationDelegate" {
+            if delegate_class.name() != c"GPUIApplicationDelegate" {
                 return Err("Native Quit requires the owned GPUI application delegate".into());
             }
             let selector = sel!(applicationShouldTerminate:);
@@ -697,12 +845,12 @@ mod mac {
                 unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
                 Imp,
             >(application_should_terminate);
-            if !objc2::runtime::Bool::from_raw(ffi::class_addMethod(
+            if !ffi::class_addMethod(
                 delegate_class as *const _ as *mut _,
-                selector.as_ptr(),
-                Some(implementation),
+                selector,
+                implementation,
                 c"Q@:@".as_ptr(),
-            ))
+            )
             .as_bool()
             {
                 return Err("Could not install the native Quit handler".into());
@@ -856,12 +1004,12 @@ mod mac {
         // `NSGlassEffectView` exists only on macOS 26+; its absence is what
         // sends `macos-window-material.ts` down the vibrancy branch.
         if material_override.as_deref() != Some("vibrancy")
-            && let Some(glass_class) = AnyClass::get("NSGlassEffectView")
+            && let Some(glass_class) = AnyClass::get(c"NSGlassEffectView")
         {
             unsafe {
                 let glass: *mut AnyObject = msg_send![glass_class, alloc];
                 let glass: *mut AnyObject = msg_send![glass, initWithFrame: bounds];
-                if let Some(glass) = Id::from_raw(glass) {
+                if let Some(glass) = Retained::from_raw(glass) {
                     set_clip_radius(radius);
                     let identifier = NSString::from_str(LIQUID_GLASS_IDENTIFIER);
                     let _: () = msg_send![&*glass, setIdentifier: &*identifier];
@@ -878,7 +1026,7 @@ mod mac {
                     let _: () = msg_send![
                         &*content_view,
                         addSubview: &*glass,
-                        positioned: NSWindowOrderingMode::NSWindowBelow,
+                        positioned: NSWindowOrderingMode::Below,
                         relativeTo: std::ptr::null_mut::<AnyObject>(),
                     ];
                     return Some(MaterialKind::LiquidGlass);
@@ -897,12 +1045,12 @@ mod mac {
             vibrancy.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
             vibrancy.setState(NSVisualEffectState::FollowsWindowActiveState);
             vibrancy.setAutoresizingMask(
-                NSAutoresizingMaskOptions::NSViewWidthSizable
-                    | NSAutoresizingMaskOptions::NSViewHeightSizable,
+                NSAutoresizingMaskOptions::ViewWidthSizable
+                    | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
             content_view.addSubview_positioned_relativeTo(
                 &vibrancy,
-                NSWindowOrderingMode::NSWindowBelow,
+                NSWindowOrderingMode::Below,
                 None,
             );
         }
@@ -951,7 +1099,7 @@ mod mac {
         use objc2::ffi::class_addMethod;
         use objc2_foundation::NSRect;
 
-        unsafe extern "C" fn constrain_shim(
+        unsafe extern "C-unwind" fn constrain_shim(
             _this: *mut AnyObject,
             _sel: Sel,
             frame: NSRect,
@@ -961,22 +1109,30 @@ mod mac {
         }
 
         for name in ["GPUIWindow", "GPUIPanel"] {
-            let Some(class) = objc2::runtime::AnyClass::get(name) else {
+            let Some(class) = objc2::runtime::AnyClass::get(match name {
+                "GPUIWindow" => c"GPUIWindow",
+                "GPUIPanel" => c"GPUIPanel",
+                _ => continue,
+            }) else {
                 continue;
             };
             let added = unsafe {
                 class_addMethod(
-                    (class as *const objc2::runtime::AnyClass as *mut objc2::ffi::objc_class)
-                        .cast(),
-                    objc2::sel!(constrainFrameRect:toScreen:).as_ptr(),
-                    Some(std::mem::transmute::<
-                        unsafe extern "C" fn(*mut AnyObject, Sel, NSRect, *mut AnyObject) -> NSRect,
-                        unsafe extern "C" fn(),
-                    >(constrain_shim)),
+                    (class as *const objc2::runtime::AnyClass).cast_mut(),
+                    objc2::sel!(constrainFrameRect:toScreen:),
+                    std::mem::transmute::<
+                        unsafe extern "C-unwind" fn(
+                            *mut AnyObject,
+                            Sel,
+                            NSRect,
+                            *mut AnyObject,
+                        ) -> NSRect,
+                        objc2::runtime::Imp,
+                    >(constrain_shim),
                     c"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@".as_ptr(),
                 )
             };
-            if objc2::runtime::Bool::from_raw(added).as_bool() {
+            if added.as_bool() {
                 tracing::info!("installed frame-constraint shim on {name}");
             }
         }
@@ -1049,7 +1205,7 @@ mod mac {
 
     /// A retained `NSWindow` that can outlive a `&Window` borrow -- what
     /// [`place_overlay_panel`] operates on.
-    pub struct NativeWindow(Id<NSWindow>);
+    pub struct NativeWindow(Retained<NSWindow>);
 
     /// The retained `NSWindow` behind a gpui window, for AppKit calls that
     /// must run *outside* any gpui update (see [`place_overlay_panel`]).
@@ -1306,7 +1462,7 @@ mod mac {
     }
 
     /// The `NSWindow` behind a gpui window.
-    pub fn ns_window(window: &Window) -> Option<Id<NSWindow>> {
+    pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
         // Fully qualified: `Window` also has an inherent `window_handle()`
         // returning gpui's own `AnyWindowHandle`.
         let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -1331,7 +1487,7 @@ mod mac {
         ns_window.setLevel(behavior.level);
         tracing::debug!(
             requested = behavior.level,
-            actual = unsafe { ns_window.level() },
+            actual = ns_window.level(),
             "panel level applied"
         );
         if behavior.join_all_spaces {
@@ -1415,7 +1571,7 @@ mod mac {
 
     pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
         native.0.setIgnoresMouseEvents(click_through);
-        unsafe { native.0.ignoresMouseEvents() == click_through }
+        native.0.ignoresMouseEvents() == click_through
     }
 
     /// `orderOut:` -- hide without closing, the way the Tauri main window
@@ -1513,7 +1669,7 @@ mod mac {
 
         static SOURCE: OnceLock<usize> = OnceLock::new();
         *SOURCE.get_or_init(|| {
-            let Some(mut builder) = ClassBuilder::new("CapFileDragSource", NSObject::class())
+            let Some(mut builder) = ClassBuilder::new(c"CapFileDragSource", NSObject::class())
             else {
                 return 0;
             };
@@ -1529,7 +1685,7 @@ mod mac {
                         ) -> usize,
                 );
             }
-            if let Some(protocol) = AnyProtocol::get("NSDraggingSource") {
+            if let Some(protocol) = AnyProtocol::get(c"NSDraggingSource") {
                 builder.add_protocol(protocol);
             }
             let class = builder.register();
@@ -1676,7 +1832,7 @@ mod mac {
         use objc2::{class, msg_send};
         use objc2_foundation::NSString;
         unsafe {
-            let mut image: Option<Id<AnyObject>> = None;
+            let mut image: Option<Retained<AnyObject>> = None;
 
             let cap_app = NSString::from_str("/Applications/Cap.app");
             let exists: bool = {
@@ -1688,7 +1844,7 @@ mod mac {
                 if !workspace.is_null() {
                     let raw: *mut AnyObject = msg_send![workspace, iconForFile: &*cap_app];
                     // `iconForFile:` is autoreleased; retain for the setter.
-                    image = Id::retain(raw);
+                    image = Retained::retain(raw);
                     if let Some(image) = &image {
                         // The workspace icon's nominal size is small (32pt);
                         // the reps go up to 1024. Ask for dock resolution.
@@ -1709,7 +1865,7 @@ mod mac {
                 if !data.is_null() {
                     let alloc: *mut AnyObject = msg_send![class!(NSImage), alloc];
                     let raw: *mut AnyObject = msg_send![alloc, initWithData: data];
-                    image = Id::from_raw(raw);
+                    image = Retained::from_raw(raw);
                 }
             }
 
@@ -1992,7 +2148,7 @@ mod mac {
     /// Tauri app calls on the recording controls panel.
     pub fn show_window_without_focus(window: &Window) {
         if let Some(ns_window) = ns_window(window) {
-            unsafe { ns_window.orderFrontRegardless() };
+            ns_window.orderFrontRegardless();
             rerun_occlusion_handler_after_show(&ns_window);
         }
     }
@@ -2000,7 +2156,7 @@ mod mac {
     /// The CGWindowID, which is also what `scap_targets::WindowId` wraps on
     /// macOS -- used to exclude our own controls bar from the capture.
     pub fn window_number(window: &Window) -> Option<isize> {
-        ns_window(window).map(|w| unsafe { w.windowNumber() })
+        ns_window(window).map(|w| w.windowNumber())
     }
 
     // -- The open panel ------------------------------------------------------
@@ -2044,11 +2200,11 @@ mod mac {
             let _: () = msg_send![panel, setCanCreateDirectories: true];
             let _: () = msg_send![panel, setNameFieldStringValue: &*NSString::from_str(suggested)];
             if !extensions.is_empty() {
-                let types: Vec<Id<NSString>> = extensions
+                let types: Vec<Retained<NSString>> = extensions
                     .iter()
                     .map(|extension| NSString::from_str(extension))
                     .collect();
-                let types = NSArray::from_vec(types);
+                let types = NSArray::from_retained_slice(&types);
                 let _: () = msg_send![panel, setAllowedFileTypes: &*types];
             }
             let response: isize = msg_send![panel, runModal];
@@ -2116,7 +2272,7 @@ mod mac {
             let data = NSData::with_bytes(bytes);
             let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
             let image: *mut AnyObject = msg_send![image, initWithData: &*data];
-            let image = Id::from_raw(image).ok_or("Failed to load image")?;
+            let image = Retained::from_raw(image).ok_or("Failed to load image")?;
             let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: &*image];
             let _: isize = msg_send![pasteboard, clearContents];
             let ok: Bool = msg_send![pasteboard, writeObjects: objects];
@@ -2141,11 +2297,11 @@ mod mac {
             let _: () = msg_send![panel, setCanChooseDirectories: false];
             let _: () = msg_send![panel, setAllowsMultipleSelection: false];
 
-            let types: Vec<Id<NSString>> = extensions
+            let types: Vec<Retained<NSString>> = extensions
                 .iter()
                 .map(|extension| NSString::from_str(extension))
                 .collect();
-            let types = NSArray::from_vec(types);
+            let types = NSArray::from_retained_slice(&types);
             let _: () = msg_send![panel, setAllowedFileTypes: &*types];
 
             // `NSModalResponseOK`.
@@ -2186,7 +2342,7 @@ mod mac {
         cancel: &str,
         warning: bool,
     ) -> bool {
-        use objc2::{class, msg_send, msg_send_id};
+        use objc2::{class, msg_send};
         use objc2_foundation::NSString;
 
         /// `NSAlertStyle`: `Warning = 0`, `Informational = 1`. `NSUInteger`,
@@ -2199,7 +2355,7 @@ mod mac {
         const NS_ALERT_FIRST_BUTTON_RETURN: isize = 1000;
 
         unsafe {
-            let alert: Id<AnyObject> = msg_send_id![class!(NSAlert), new];
+            let alert: Retained<AnyObject> = msg_send![class!(NSAlert), new];
             let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(title)];
             let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(message)];
             let _: () = msg_send![
@@ -2222,13 +2378,13 @@ mod mac {
     }
 
     pub fn alert_dialog(title: &str, message: &str) {
-        use objc2::{class, msg_send, msg_send_id};
+        use objc2::{class, msg_send};
         use objc2_foundation::NSString;
 
         const NS_ALERT_STYLE_INFORMATIONAL: usize = 1;
 
         unsafe {
-            let alert: Id<AnyObject> = msg_send_id![class!(NSAlert), new];
+            let alert: Retained<AnyObject> = msg_send![class!(NSAlert), new];
             let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(title)];
             let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(message)];
             let _: () = msg_send![&*alert, setAlertStyle: NS_ALERT_STYLE_INFORMATIONAL];
@@ -2485,48 +2641,6 @@ mod mac {
         }
     }
 
-    // -- The About panel ------------------------------------------------------
-
-    /// `PredefinedMenuItem::about(.., AboutMetadata { name, version, .. })`,
-    /// which on macOS is `orderFrontStandardAboutPanelWithOptions:`.
-    ///
-    /// The Tauri metadata also carries `copyright` and `publisher` from
-    /// `tauri.conf.json` -- neither key exists in that file, so both are `None`
-    /// there and there is nothing to pass here either.
-    ///
-    /// Spins no modal run loop of its own (the panel is an ordinary window), but
-    /// ordering a window front re-enters gpui's window callbacks, so it keeps
-    /// the [`place_overlay_panel`] rule: call it from a task, never inside an
-    /// update.
-    pub fn show_about_panel(name: &str, version: &str) {
-        use objc2::{class, msg_send};
-        use objc2_foundation::{NSArray, NSString};
-
-        unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            if app.is_null() {
-                return;
-            }
-            // `dictionaryWithObjects:forKeys:` rather than a typed
-            // `NSDictionary` constructor, for the reason
-            // [`desktop_picture_path`] gives: the typed binding needs another
-            // objc2-app-kit/foundation feature, and the rule here is that those
-            // versions stay pinned to gpui's.
-            let values =
-                NSArray::from_vec(vec![NSString::from_str(name), NSString::from_str(version)]);
-            let keys = NSArray::from_vec(vec![
-                NSString::from_str("ApplicationName"),
-                NSString::from_str("ApplicationVersion"),
-            ]);
-            let options: *mut AnyObject = msg_send![
-                class!(NSDictionary),
-                dictionaryWithObjects: &*values,
-                forKeys: &*keys,
-            ];
-            let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
-        }
-    }
-
     /// One-line diagnostic of everything AppKit weighs into occlusion
     /// visibility -- how the macOS 26 display-link failure was diagnosed; keep
     /// it for the next platform mystery.
@@ -2537,10 +2651,10 @@ mod mac {
             "occlusion_raw={:#x} visible={} on_active_space={} alpha={} level={} number={}",
             w.occlusionState().bits(),
             w.isVisible(),
-            unsafe { w.isOnActiveSpace() },
-            unsafe { w.alphaValue() },
-            unsafe { w.level() },
-            unsafe { w.windowNumber() },
+            w.isOnActiveSpace(),
+            w.alphaValue(),
+            w.level(),
+            w.windowNumber(),
         ))
     }
 }
@@ -2840,7 +2954,6 @@ mod stub {
     pub fn activation_policy() -> isize {
         -1
     }
-    pub fn show_about_panel(_name: &str, _version: &str) {}
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

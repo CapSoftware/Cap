@@ -7,8 +7,9 @@
 //! Tauri app decides between Regular and Accessory from exactly the set of
 //! windows ⌘W changes.
 //!
-//! The menu itself is [`build_menus`], a byte-for-byte transcription of
-//! `build_macos_app_menu` (`apps/desktop/src-tauri/src/lib.rs:479-566`). gpui
+//! The menu itself is [`build_menus`], the GPUI model for the native menu bar.
+//! macOS standard menu items are upgraded in `platform` after GPUI installs it.
+//! gpui
 //! builds the real `NSMenu` from it and takes each item's key equivalent from
 //! the *keymap*, so an action with no `KeyBinding` renders without a shortcut
 //! and an action with no live handler renders disabled
@@ -37,6 +38,68 @@ use crate::{
 /// submenu to and what the About/Hide/Quit labels interpolate.
 pub const APP_NAME: &str = "Cap";
 
+struct MenuRegistration(UpdateRow);
+
+impl Global for MenuRegistration {}
+
+/// What the Check for Update row currently says. Download progress only moves
+/// the badge, and only macOS applies it without rebuilding the menu bar, so a
+/// percentage tick never touches the menu on the other platforms.
+#[derive(Clone, PartialEq)]
+struct UpdateRow {
+    title: &'static str,
+    enabled: bool,
+    badge: Option<String>,
+}
+
+const CHECK_TITLE: &str = "Check for Update";
+const CHECKING_TITLE: &str = "Checking for Update…";
+const DOWNLOAD_TITLE: &str = "Download update…";
+const RESTART_TITLE: &str = "Restart to update…";
+
+impl UpdateRow {
+    fn of(status: &crate::updates::UpdateStatus) -> Self {
+        use crate::updates::UpdateStatus;
+
+        let title = match status {
+            UpdateStatus::Idle => CHECK_TITLE,
+            UpdateStatus::Checking => CHECKING_TITLE,
+            UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => DOWNLOAD_TITLE,
+            UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => RESTART_TITLE,
+        };
+        Self {
+            title,
+            enabled: !matches!(status, UpdateStatus::Checking),
+            badge: update_menu_badge(status),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn update_menu_badge(status: &crate::updates::UpdateStatus) -> Option<String> {
+    use crate::updates::UpdateStatus;
+
+    match status {
+        UpdateStatus::Downloading {
+            version,
+            fraction: Some(fraction),
+        } => Some(format!(
+            "v{version} · {}%",
+            (fraction * 100.0).round() as u32
+        )),
+        UpdateStatus::Downloading { version, .. }
+        | UpdateStatus::Ready { version }
+        | UpdateStatus::Installing { version }
+        | UpdateStatus::Installed { version, .. } => Some(format!("v{version}")),
+        UpdateStatus::Idle | UpdateStatus::Checking => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn update_menu_badge(_: &crate::updates::UpdateStatus) -> Option<String> {
+    None
+}
+
 /// `env!("CARGO_PKG_VERSION")`, exactly as `build_tray_menu` spells it -- this
 /// crate's version, which is the gpui app's own (0.1.x) rather than the
 /// shipping desktop app's. Noted as a deviation in the report: there is no
@@ -50,12 +113,29 @@ actions!(
     [
         /// `PredefinedMenuItem::about` -- `orderFrontStandardAboutPanel`.
         About,
+        /// Manually check for or install a Cap update.
+        CheckForUpdate,
         /// `PredefinedMenuItem::hide` -- ⌘H.
         HideSelf,
         /// `PredefinedMenuItem::hide_others` -- ⌥⌘H.
         HideOthers,
         /// The Cap menu's explicit Quit item -- ⌘Q.
         Quit,
+        /// Open General settings from the application menu.
+        Preferences,
+        /// Choose a Cap recording to open.
+        OpenFile,
+        /// Import a video or image into the library.
+        ImportMedia,
+        /// Open the Changelog from the Help menu.
+        Changelog,
+        HelpDashboard,
+        HelpDocs,
+        HelpFaq,
+        HelpSelfHosting,
+        HelpCenter,
+        HelpStatus,
+        HelpDiscord,
         /// `PredefinedMenuItem::close_window` -- ⌘W. Present twice in the
         /// Tauri menu (File and Window), one action either way.
         CloseWindow,
@@ -79,6 +159,7 @@ pub fn init(cx: &mut App) {
     // `on_key_down` project-undo). A global binding here would shadow both.
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", Preferences, None),
         KeyBinding::new("cmd-h", HideSelf, None),
         KeyBinding::new("alt-cmd-h", HideOthers, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
@@ -86,16 +167,49 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
     ]);
 
-    cx.on_action(|_: &About, cx: &mut App| {
-        // Ordering a window front re-enters gpui's window callbacks, so it runs
-        // from a task with no borrow held (`platform::place_overlay_panel`'s
-        // rule).
-        cx.spawn(async move |_| platform::show_about_panel(APP_NAME, app_version()))
-            .detach();
+    cx.on_action(|_: &CheckForUpdate, cx: &mut App| {
+        crate::updates::check_manually(cx);
     });
     cx.on_action(|_: &HideSelf, cx: &mut App| cx.hide());
     cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
     cx.on_action(|_: &Quit, cx: &mut App| quit(cx));
+    cx.on_action(|_: &Preferences, cx: &mut App| {
+        cx.defer(|cx| app_windows::open_settings(crate::settings_window::Page::General, cx));
+    });
+    cx.on_action(|_: &OpenFile, cx: &mut App| {
+        let (files, directories) = if cfg!(target_os = "macos") {
+            (true, false)
+        } else {
+            (false, true)
+        };
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files,
+            directories,
+            multiple: false,
+            prompt: Some("Open Recording".into()),
+        });
+        cx.spawn(async move |cx| {
+            if let Ok(Ok(Some(paths))) = paths.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                cx.update(|cx| crate::tray::open_previous_item(path, cx));
+            }
+        })
+        .detach();
+    });
+    cx.on_action(|_: &ImportMedia, cx: &mut App| {
+        crate::import::pick_and_import_media(cx);
+    });
+    cx.on_action(|_: &Changelog, cx: &mut App| {
+        app_windows::open_settings(crate::settings_window::Page::Changelog, cx)
+    });
+    cx.on_action(|_: &HelpDashboard, cx: &mut App| cx.open_url("https://cap.so/dashboard"));
+    cx.on_action(|_: &HelpDocs, cx: &mut App| cx.open_url("https://cap.so/docs"));
+    cx.on_action(|_: &HelpFaq, cx: &mut App| cx.open_url("https://cap.so/faq"));
+    cx.on_action(|_: &HelpSelfHosting, cx: &mut App| cx.open_url("https://cap.so/self-hosting"));
+    cx.on_action(|_: &HelpCenter, cx: &mut App| cx.open_url("https://help.cap.so/"));
+    cx.on_action(|_: &HelpStatus, cx: &mut App| cx.open_url("https://cap.openstatus.dev/"));
+    cx.on_action(|_: &HelpDiscord, cx: &mut App| cx.open_url("https://cap.link/discord"));
     cx.on_action(|_: &CloseWindow, cx: &mut App| close_key_window(cx));
     cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
     cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
@@ -110,20 +224,46 @@ pub fn init(cx: &mut App) {
         with_key_native(cx, platform::toggle_fullscreen_native)
     });
 
-    cx.set_menus(build_menus());
+    cx.set_global(MenuRegistration(UpdateRow::of(&crate::updates::status(cx))));
+    install_menus(cx);
 }
 
-/// The menu bar model.
-///
-/// One-to-one with `build_macos_app_menu`, including the empty Help submenu
-/// (`Submenu::with_id_and_items(.., HELP_SUBMENU_ID, "Help", true, &[])`).
-pub fn build_menus() -> Vec<Menu> {
+pub(crate) fn refresh_update_menu(cx: &mut App) {
+    if !cx.has_global::<MenuRegistration>() {
+        return;
+    }
+
+    let row = UpdateRow::of(&crate::updates::status(cx));
+    if cx.global::<MenuRegistration>().0 == row {
+        return;
+    }
+    cx.global_mut::<MenuRegistration>().0 = row.clone();
+
+    #[cfg(target_os = "macos")]
+    platform::set_update_menu_item(row.title, row.badge.as_deref(), row.enabled);
+    #[cfg(not(target_os = "macos"))]
+    install_menus(cx);
+}
+
+fn install_menus(cx: &mut App) {
+    let update_status = crate::updates::status(cx);
+    cx.set_menus(build_menus(&update_status));
+    #[cfg(target_os = "macos")]
+    platform::patch_standard_application_menu();
+}
+
+/// The menu bar hierarchy and app-specific destinations.
+fn build_menus(update_status: &crate::updates::UpdateStatus) -> Vec<Menu> {
+    let update_row = UpdateRow::of(update_status);
     vec![
         Menu {
             name: APP_NAME.into(),
             disabled: false,
             items: vec![
                 MenuItem::action(format!("About {APP_NAME}"), About),
+                MenuItem::action(update_row.title, CheckForUpdate).disabled(!update_row.enabled),
+                MenuItem::separator(),
+                MenuItem::action("Preferences…", Preferences),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
@@ -136,7 +276,12 @@ pub fn build_menus() -> Vec<Menu> {
         Menu {
             name: "File".into(),
             disabled: false,
-            items: vec![MenuItem::action("Close Window", CloseWindow)],
+            items: vec![
+                MenuItem::action("Open File…", OpenFile),
+                MenuItem::action("Import Media…", ImportMedia),
+                MenuItem::separator(),
+                MenuItem::action("Close Window", CloseWindow),
+            ],
         },
         Menu {
             name: "Edit".into(),
@@ -180,7 +325,17 @@ pub fn build_menus() -> Vec<Menu> {
         Menu {
             name: "Help".into(),
             disabled: false,
-            items: vec![],
+            items: vec![
+                MenuItem::action("Changelog", Changelog),
+                MenuItem::separator(),
+                MenuItem::action("Dashboard", HelpDashboard),
+                MenuItem::action("Documentation", HelpDocs),
+                MenuItem::action("FAQ", HelpFaq),
+                MenuItem::action("Self-hosting", HelpSelfHosting),
+                MenuItem::action("Help Center", HelpCenter),
+                MenuItem::action("System Status", HelpStatus),
+                MenuItem::action("Join Discord Community", HelpDiscord),
+            ],
         },
     ]
 }
@@ -880,8 +1035,7 @@ mod tests {
         assert!(gate.pending.is_none());
     }
 
-    /// The menu bar, transcribed from `build_macos_app_menu`. Separators are
-    /// spelled `"-"` so the ordering is checked too.
+    /// Separators are spelled `"-"` so the ordering is checked too.
     fn describe(menu: &Menu) -> (String, Vec<String>) {
         let items = menu
             .items
@@ -897,8 +1051,17 @@ mod tests {
     }
 
     #[test]
-    fn menu_bar_matches_the_tauri_structure() {
-        let menus: Vec<_> = build_menus().iter().map(describe).collect();
+    fn menu_bar_includes_native_and_cap_destinations() {
+        let menus: Vec<_> = build_menus(&crate::updates::UpdateStatus::Idle)
+            .iter()
+            .map(describe)
+            .collect();
+        let expected_file_items = vec![
+            "Open File…".into(),
+            "Import Media…".into(),
+            "-".into(),
+            "Close Window".into(),
+        ];
         assert_eq!(
             menus,
             vec![
@@ -906,6 +1069,9 @@ mod tests {
                     "Cap".to_string(),
                     vec![
                         "About Cap".to_string(),
+                        "Check for Update".into(),
+                        "-".into(),
+                        "Preferences…".into(),
                         "-".into(),
                         "Services".into(),
                         "-".into(),
@@ -915,7 +1081,7 @@ mod tests {
                         "Quit Cap".into(),
                     ]
                 ),
-                ("File".into(), vec!["Close Window".into()]),
+                ("File".into(), expected_file_items,),
                 (
                     "Edit".into(),
                     vec![
@@ -938,9 +1104,115 @@ mod tests {
                         "Close Window".into(),
                     ]
                 ),
-                ("Help".into(), vec![]),
+                (
+                    "Help".into(),
+                    vec![
+                        "Changelog".into(),
+                        "-".into(),
+                        "Dashboard".into(),
+                        "Documentation".into(),
+                        "FAQ".into(),
+                        "Self-hosting".into(),
+                        "Help Center".into(),
+                        "System Status".into(),
+                        "Join Discord Community".into(),
+                    ],
+                ),
             ]
         );
+    }
+
+    /// The row is the second item of the App menu (`menu_bar_...` pins that
+    /// order); it greys out for the duration of a check so a second click
+    /// cannot fire another one.
+    #[test]
+    fn the_update_row_greys_out_while_checking() {
+        fn row(status: &crate::updates::UpdateStatus) -> (String, bool) {
+            let menus = build_menus(status);
+            match &menus[0].items[1] {
+                MenuItem::Action { name, disabled, .. } => (name.to_string(), *disabled),
+                _ => panic!("the update row is an action"),
+            }
+        }
+
+        assert_eq!(
+            row(&crate::updates::UpdateStatus::Idle),
+            ("Check for Update".to_string(), false)
+        );
+        assert_eq!(
+            row(&crate::updates::UpdateStatus::Checking),
+            ("Checking for Update…".to_string(), true)
+        );
+    }
+
+    /// The version lives only in the badge, and a percentage tick changes
+    /// nothing else -- that is what keeps a download from reinstalling the
+    /// menu bar on every progress event.
+    #[test]
+    fn the_update_row_keeps_the_version_out_of_the_title() {
+        use crate::updates::UpdateStatus;
+        use semver::Version;
+
+        let version = Version::parse("0.4.0").unwrap();
+        let downloading = |fraction| UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction,
+        };
+
+        let cold = UpdateRow::of(&downloading(None));
+        let warm = UpdateRow::of(&downloading(Some(0.42)));
+        assert_eq!(cold.title, "Download update…");
+        assert!(cold.enabled);
+        assert_eq!(warm.title, cold.title);
+
+        let ready = UpdateRow::of(&UpdateStatus::Ready {
+            version: version.clone(),
+        });
+        let installed = UpdateRow::of(&UpdateStatus::Installed {
+            version: version.clone(),
+            executable: std::path::PathBuf::from("/Applications/Cap.app"),
+        });
+        assert_eq!(ready.title, "Restart to update…");
+        assert_eq!(installed.title, ready.title);
+        assert_eq!(installed.badge, ready.badge);
+
+        let installing = UpdateRow::of(&UpdateStatus::Installing {
+            version: version.clone(),
+        });
+        assert_eq!(installing.title, cold.title);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_update_badge_shows_the_version_and_live_progress() {
+        use crate::updates::UpdateStatus;
+        use semver::Version;
+
+        let version = Version::parse("0.4.0").unwrap();
+        let badge = |status| UpdateRow::of(&status).badge;
+
+        assert_eq!(
+            badge(UpdateStatus::Downloading {
+                version: version.clone(),
+                fraction: None,
+            }),
+            Some("v0.4.0".to_string())
+        );
+        assert_eq!(
+            badge(UpdateStatus::Downloading {
+                version: version.clone(),
+                fraction: Some(0.42),
+            }),
+            Some("v0.4.0 · 42%".to_string())
+        );
+        assert_eq!(
+            badge(UpdateStatus::Ready {
+                version: version.clone(),
+            }),
+            Some("v0.4.0".to_string())
+        );
+        assert_eq!(badge(UpdateStatus::Idle), None);
+        assert_eq!(badge(UpdateStatus::Checking), None);
     }
 
     /// `sync_macos_dock_visibility`'s three branches.

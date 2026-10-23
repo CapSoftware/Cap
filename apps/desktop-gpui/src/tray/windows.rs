@@ -155,6 +155,7 @@ fn build_native_item(
 ) -> anyhow::Result<Box<dyn IsMenuItem>> {
     match entry {
         Entry::Separator => Ok(Box::new(PredefinedMenuItem::separator())),
+        Entry::ModePicker { mode } => build_native_item(&super::mode_submenu(*mode), actions),
         Entry::Item {
             title,
             item,
@@ -185,10 +186,14 @@ fn build_native_item(
             }
             Ok(native_item)
         }
+        Entry::SectionHeader { title } => {
+            Ok(Box::new(MenuItem::new(menu_text(title), false, None)))
+        }
         Entry::Submenu {
             title,
             enabled,
             items,
+            ..
         } => {
             let submenu = Submenu::new(menu_text(title), *enabled);
             for entry in items {

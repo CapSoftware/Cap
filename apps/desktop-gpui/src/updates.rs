@@ -21,6 +21,7 @@ const BUSY_MESSAGE: &str =
 pub(crate) enum UpdateStatus {
     #[default]
     Idle,
+    Checking,
     Downloading {
         version: Version,
         fraction: Option<f32>,
@@ -173,6 +174,7 @@ fn set_status(status: UpdateStatus, cx: &mut App) {
     }
     scheduler.status = status;
     crate::app_windows::refresh_settings(cx);
+    crate::menus::refresh_update_menu(cx);
 }
 
 pub(crate) fn check_manually(cx: &mut App) {
@@ -196,7 +198,7 @@ pub(crate) fn check_manually(cx: &mut App) {
             .detach();
             return;
         }
-        UpdateStatus::Idle => {}
+        UpdateStatus::Idle | UpdateStatus::Checking => {}
     }
 
     let scheduler = cx.global_mut::<UpdateScheduler>();
@@ -221,7 +223,7 @@ pub(crate) fn update_channel_changed(channel: UpdateChannel, cx: &mut App) {
 fn channel_switch_drops_pending_package(status: &UpdateStatus) -> bool {
     matches!(
         status,
-        UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+        UpdateStatus::Checking | UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
     )
 }
 
@@ -313,7 +315,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             if let Some(next_channel) = request.channel {
                 channel = next_channel;
                 ignored_version = None;
-                let _ = cx.update(drop_pending_update_from_previous_channel);
+                cx.update(drop_pending_update_from_previous_channel);
             }
 
             let manual = request.manual;
@@ -333,6 +335,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 continue;
             }
 
+            cx.update(|cx| set_status(UpdateStatus::Checking, cx));
+
             let result = match cx
                 .update(|cx| gpui_tokio::Tokio::spawn(cx, available_release(channel)))
                 .await
@@ -351,12 +355,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 channel_changed || (!manual && scheduler.pending.manual)
             });
             if superseded {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 continue;
             }
 
             let release = match result {
                 Ok(Some(release)) => release,
                 Ok(None) => {
+                    cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                     if manual {
                         crate::platform::activate_app();
                         crate::platform::alert_dialog(
@@ -368,6 +374,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                     continue;
                 }
                 Err(error) => {
+                    cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                     tracing::warn!("update check failed: {error}");
                     if manual {
                         crate::platform::activate_app();
@@ -382,6 +389,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             };
 
             if !manual && ignored_version.as_ref() == Some(&release.version) {
+                cx.update(|cx| set_status(UpdateStatus::Idle, cx));
                 continue;
             }
 
@@ -408,6 +416,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 delay = Some(Duration::ZERO);
                 continue;
             }
+
+            cx.update(|cx| set_status(UpdateStatus::Idle, cx));
 
             crate::platform::activate_app();
             let accepted = crate::platform::confirm_dialog(

@@ -4706,6 +4706,8 @@ fn open_editor_window(
         return None;
     }
 
+    cx.add_recent_document(&project_path);
+
     if let Some(window_id) = cx
         .global::<AppWindows>()
         .editors
@@ -6579,6 +6581,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         return;
     };
     let key = editor_key(&bundle);
+
+    cx.add_recent_document(&bundle);
 
     if let Some(handle) = cx
         .global::<AppWindows>()
