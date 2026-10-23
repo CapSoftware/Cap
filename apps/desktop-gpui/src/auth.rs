@@ -345,19 +345,7 @@ pub async fn authed_request_with(
     path: &str,
     body: Option<Value>,
 ) -> Result<reqwest::Response, AuthApiError> {
-    let (server, token) = if let Ok(context) = UPLOAD_REQUEST.try_with(Clone::clone) {
-        let token = context.credentials()?;
-        (context.server_url, token)
-    } else {
-        let auth = store::auth_snapshot();
-        (
-            server_url(),
-            auth.token.ok_or(AuthApiError::InvalidAuthentication)?,
-        )
-    };
-    let url = format!("{server}{path}");
-    let mut request = client.request(method, url);
-    request = apply_desktop_headers(request).bearer_auth(token);
+    let mut request = authed_request_builder(client, method, path)?;
     if let Some(body) = body {
         request = request
             .header("Content-Type", "application/json")
@@ -374,6 +362,25 @@ pub async fn authed_request_with(
         return Err(AuthApiError::InvalidAuthentication);
     }
     Ok(response)
+}
+
+pub(crate) fn authed_request_builder(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    path: &str,
+) -> Result<reqwest::RequestBuilder, AuthApiError> {
+    let (server, token) = if let Ok(context) = UPLOAD_REQUEST.try_with(Clone::clone) {
+        let token = context.credentials()?;
+        (context.server_url, token)
+    } else {
+        let auth = store::auth_snapshot();
+        (
+            server_url(),
+            auth.token.ok_or(AuthApiError::InvalidAuthentication)?,
+        )
+    };
+    let url = format!("{server}{path}");
+    Ok(apply_desktop_headers(client.request(method, url)).bearer_auth(token))
 }
 
 pub fn process_auth_data(params: AuthParams) -> Result<(), String> {

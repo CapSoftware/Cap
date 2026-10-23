@@ -462,6 +462,10 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		body: Parameters<S3BucketAccess["putObject"]>[1],
 		fields?: Parameters<S3BucketAccess["putObject"]>[2],
 	) => mapStorageError(s3.putObject(key, body, fields)).pipe(Effect.asVoid),
+	putProbeObject: (key: string, body: Uint8Array) =>
+		mapStorageError(
+			s3.putObject(key, body, { contentType: "application/octet-stream" }),
+		).pipe(Effect.asVoid),
 	copyObject: (
 		source: string,
 		key: string,
@@ -809,6 +813,56 @@ const makeGoogleDriveAccess = ({
 			),
 	};
 
+	const putObject = (
+		key: string,
+		body: string | Uint8Array | ArrayBuffer,
+		fields?: { contentType?: string; contentLength?: number },
+		probe = false,
+	) =>
+		Effect.gen(function* () {
+			const contentType = fields?.contentType ?? "application/octet-stream";
+			const contentLength =
+				fields?.contentLength ??
+				(typeof body === "string"
+					? new TextEncoder().encode(body).byteLength
+					: body.byteLength);
+			const uploadUrl = yield* createGoogleDriveResumableUpload(
+				repo,
+				config,
+				{
+					integrationId,
+					ownerId,
+					videoId: probe ? null : parseObjectKeyVideoId(key),
+					skipRecordingFolders: probe,
+					key,
+					contentType,
+					contentLength,
+				},
+				tokenStore,
+			).pipe(mapStorageError);
+			const uploadBody =
+				body instanceof Uint8Array ? new Uint8Array(body).buffer : body;
+			const response = yield* Effect.tryPromise({
+				try: () =>
+					fetch(uploadUrl, {
+						method: "PUT",
+						headers: getGoogleDriveUploadHeaders(contentType, contentLength),
+						body: uploadBody,
+					}),
+				catch: (cause) => new StorageDomain.StorageError({ cause }),
+			});
+			if (!response.ok) {
+				return yield* Effect.fail(
+					new StorageDomain.StorageError({
+						cause: new Error(`Google Drive upload failed: ${response.status}`),
+					}),
+				);
+			}
+			yield* mapStorageError(
+				repo.markObjectComplete(integrationId, key, contentLength),
+			);
+		});
+
 	return {
 		provider: "googleDrive" as const,
 		bucketName: "google-drive",
@@ -904,54 +958,9 @@ const makeGoogleDriveAccess = ({
 			key: string,
 			body: string | Uint8Array | ArrayBuffer,
 			fields?: { contentType?: string; contentLength?: number },
-		) =>
-			Effect.gen(function* () {
-				const contentType = fields?.contentType ?? "application/octet-stream";
-				const contentLength =
-					fields?.contentLength ??
-					(typeof body === "string"
-						? new TextEncoder().encode(body).byteLength
-						: body.byteLength);
-				const uploadUrl = yield* createGoogleDriveResumableUpload(
-					repo,
-					config,
-					{
-						integrationId,
-						ownerId,
-						videoId: parseVideoIdFromObjectKey(key).pipe(
-							Option.map((id) => id as Video.VideoId),
-							Option.getOrNull,
-						),
-						key,
-						contentType,
-						contentLength,
-					},
-					tokenStore,
-				).pipe(mapStorageError);
-				const uploadBody =
-					body instanceof Uint8Array ? new Uint8Array(body).buffer : body;
-				const response = yield* Effect.tryPromise({
-					try: () =>
-						fetch(uploadUrl, {
-							method: "PUT",
-							headers: getGoogleDriveUploadHeaders(contentType, contentLength),
-							body: uploadBody,
-						}),
-					catch: (cause) => new StorageDomain.StorageError({ cause }),
-				});
-				if (!response.ok) {
-					return yield* Effect.fail(
-						new StorageDomain.StorageError({
-							cause: new Error(
-								`Google Drive upload failed: ${response.status}`,
-							),
-						}),
-					);
-				}
-				yield* mapStorageError(
-					repo.markObjectComplete(integrationId, key, contentLength),
-				);
-			}),
+		) => putObject(key, body, fields),
+		putProbeObject: (key: string, body: Uint8Array) =>
+			putObject(key, body, undefined, true),
 		copyObject,
 		copyObjectForRecording,
 		deleteObject,

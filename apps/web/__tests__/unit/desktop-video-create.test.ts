@@ -500,6 +500,7 @@ describe("GET /create", () => {
 
 		const body = await response.json();
 		expect(body.id).toBeTruthy();
+		expect(body.organizationId).toBe(orgValues?.id);
 	});
 
 	it("does not provision when the user already belongs to an org", async () => {
@@ -633,6 +634,7 @@ describe("GET /create", () => {
 		);
 
 		expect(response.status).toBe(200);
+		expect((await response.json()).organizationId).toBe("org-1");
 		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
@@ -660,6 +662,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create?orgId=org-2");
 
 		expect(response.status).toBe(200);
+		expect((await response.json()).organizationId).toBe("org-2");
 		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({

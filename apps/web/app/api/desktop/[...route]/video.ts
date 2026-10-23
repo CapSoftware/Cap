@@ -21,6 +21,10 @@ import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { after } from "next/server";
 import { z } from "zod";
+import {
+	mergeUserOrganizationSelections,
+	selectDesktopRecordingOrganization,
+} from "@/lib/desktop-recording-organization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
@@ -34,28 +38,6 @@ import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
-
-type UserOrganizationSelection = {
-	id: Organisation.OrganisationId;
-	name: string;
-	createdAt: Date;
-};
-
-function mergeUserOrganizationSelections(
-	...rowSets: UserOrganizationSelection[][]
-) {
-	const organizationsById = new Map<string, UserOrganizationSelection>();
-
-	for (const rows of rowSets) {
-		for (const row of rows) {
-			organizationsById.set(row.id, row);
-		}
-	}
-
-	return Array.from(organizationsById.values())
-		.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-		.map(({ createdAt, ...organization }) => organization);
-}
 
 app.get("/new-id", (c) => c.json({ id: nanoId() }));
 
@@ -239,35 +221,22 @@ app.get(
 				userOrganizations.push({ id: organizationId, name: "My Organization" });
 			}
 
-			const userOrgIds = userOrganizations.map((org) => org.id);
-
-			let videoOrgId: Organisation.OrganisationId;
-			// Desktop persists orgId in settings and keeps sending it after the
-			// user leaves the org, so an unknown orgId falls back to the
-			// default/first org below instead of hard-failing every upload.
-			if (orgId && userOrgIds.includes(orgId)) {
-				videoOrgId = orgId;
-			} else if (user.defaultOrgId) {
-				// User's defaultOrgId is no longer valid, switch to first available org
-				if (!userOrgIds.includes(user.defaultOrgId)) {
-					if (!userOrganizations[0])
-						return c.json({ error: "no_valid_org" }, { status: 403 });
-
-					videoOrgId = userOrganizations[0].id;
-
-					// Update user's defaultOrgId to the new valid org
-					await db()
-						.update(users)
-						.set({
-							defaultOrgId: videoOrgId,
-						})
-						.where(eq(users.id, user.id));
-				} else videoOrgId = user.defaultOrgId;
-			} else {
-				// No orgId provided and no defaultOrgId, use first available org
-				if (!userOrganizations[0])
-					return c.json({ error: "no_valid_org" }, { status: 403 });
-				videoOrgId = userOrganizations[0].id;
+			const videoOrgId = selectDesktopRecordingOrganization(
+				userOrganizations,
+				orgId,
+				user.defaultOrgId,
+			);
+			if (!videoOrgId)
+				return c.json({ error: "no_valid_org" }, { status: 403 });
+			if (
+				orgId !== videoOrgId &&
+				user.defaultOrgId &&
+				!userOrganizations.some((org) => org.id === user.defaultOrgId)
+			) {
+				await db()
+					.update(users)
+					.set({ defaultOrgId: videoOrgId })
+					.where(eq(users.id, user.id));
 			}
 
 			const idToUse = Video.VideoId.make(
@@ -391,6 +360,7 @@ app.get(
 
 			return c.json({
 				id: idToUse,
+				organizationId: videoOrgId,
 				// All deprecated
 				user_id: user.id,
 				aws_region: "n/a",

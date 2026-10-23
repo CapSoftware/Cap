@@ -107,7 +107,7 @@ impl FrameDropTracker {
 type VideoFrameItem = Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>;
 
 struct EncoderState {
-    video_tx: std::sync::mpsc::SyncSender<VideoFrameItem>,
+    video_tx: flume::Sender<VideoFrameItem>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
@@ -205,11 +205,11 @@ impl Muxer for OutOfProcessFragmentedM4SMuxer {
                 std::thread::sleep(Duration::from_millis(50));
                 match state.video_tx.try_send(None) {
                     Ok(()) => return,
-                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                    Err(flume::TrySendError::Disconnected(_)) => {
                         trace!("OOP M4S encoder channel closed during stop retry");
                         return;
                     }
-                    Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                    Err(flume::TrySendError::Full(_)) => {}
                 }
             }
             warn!(
@@ -261,7 +261,7 @@ impl OutOfProcessFragmentedM4SMuxer {
         let bin_path =
             resolve_muxer_binary().with_context(|| "cap-muxer binary not found for OOP muxer")?;
 
-        let (video_tx, video_rx) = std::sync::mpsc::sync_channel::<VideoFrameItem>(buffer_size);
+        let (video_tx, video_rx) = flume::bounded::<VideoFrameItem>(buffer_size);
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<anyhow::Result<()>>(1);
 
         let base_path = self.base_path.clone();
@@ -659,18 +659,18 @@ impl VideoMuxer for OutOfProcessFragmentedM4SMuxer {
         }
 
         if let Some(state) = &self.state {
-            match state
-                .video_tx
-                .try_send(Some((frame.sample_buf, adjusted_timestamp)))
-            {
+            match state.video_tx.send_timeout(
+                Some((frame.sample_buf, adjusted_timestamp)),
+                Duration::from_millis(super::core::STALL_BUDGET_MS),
+            ) {
                 Ok(()) => {
                     self.frame_drops.record_frame();
                 }
                 Err(e) => match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
+                    flume::SendTimeoutError::Timeout(_) => {
                         self.frame_drops.record_drop();
                     }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
+                    flume::SendTimeoutError::Disconnected(_) => {
                         return Err(anyhow!("OOP M4S encoder channel disconnected"));
                     }
                 },

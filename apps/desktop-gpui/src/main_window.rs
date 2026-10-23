@@ -3501,6 +3501,26 @@ impl MainWindow {
     /// 8px from the window edges (`mx-2`).
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let upload_health = crate::network_health::indicator().map(|health| {
+            let color = if health.failed {
+                theme.red_11
+            } else if health.limited {
+                theme.amber_11
+            } else {
+                theme.gray_11
+            };
+            div()
+                .id("upload-health")
+                .tab_index(0)
+                .flex_shrink_0()
+                .text_size(px(9.))
+                .text_color(color)
+                .cursor_pointer()
+                .child(health.label)
+                .tooltip(move |_, cx| ui::Tooltip::new(&theme, health.tooltip.clone()).view(cx))
+                .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                .on_click(cx.listener(|_, _, _, cx| crate::network_health::request(cx, true)))
+        });
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
@@ -3545,6 +3565,7 @@ impl MainWindow {
             .gap(px(4.))
             .mx(px(8.))
             .min_w_0()
+            .children(upload_health)
             .child(
                 icon_button("help", "icons/circle-help.svg", 16.).on_click(cx.listener(
                     |_, _, _window, cx| {

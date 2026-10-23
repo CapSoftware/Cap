@@ -46,7 +46,21 @@ pub fn arm_from_env(cx: &mut App) {
                     tracing::warn!("snapshot: window handle missing");
                     return None;
                 };
-                match handle.update(cx, |_, window, _| crate::platform::window_number(window)) {
+                match handle.update(cx, |_, window, _| {
+                    #[cfg(target_os = "linux")]
+                    {
+                        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+                            RawWindowHandle::Xlib(handle) => isize::try_from(handle.window).ok(),
+                            RawWindowHandle::Xcb(handle) => {
+                                isize::try_from(handle.window.get()).ok()
+                            }
+                            _ => None,
+                        }
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    crate::platform::window_number(window)
+                }) {
                     Ok(number) => number,
                     Err(error) => {
                         tracing::warn!("snapshot: onboarding update failed: {error}");

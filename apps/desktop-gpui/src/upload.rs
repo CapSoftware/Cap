@@ -42,6 +42,14 @@ struct SignedUploadTarget {
     headers: HashMap<String, String>,
 }
 
+#[derive(Deserialize)]
+struct CreatedVideo {
+    #[serde(flatten)]
+    config: S3UploadMeta,
+    #[serde(default, rename = "organizationId")]
+    organization_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UploadResult {
     Success(String),
@@ -233,7 +241,7 @@ pub async fn prepare_instant_upload(
     camera_only: bool,
     project_name: String,
     organization_id: Option<String>,
-) -> Result<VideoUploadInfo, String> {
+) -> Result<(VideoUploadInfo, Option<String>), String> {
     if store_auth_missing() {
         return Err("Please sign in to use instant recording".to_string());
     }
@@ -260,11 +268,14 @@ pub async fn prepare_instant_upload(
         error => format!("Could not create the shareable link: {error}"),
     })?;
 
-    Ok(VideoUploadInfo {
-        id: config.id.clone(),
-        link: format!("{}/s/{}", auth::server_url(), config.id),
-        config,
-    })
+    Ok((
+        VideoUploadInfo {
+            id: config.config.id.clone(),
+            link: format!("{}/s/{}", auth::server_url(), config.config.id),
+            config: config.config,
+        },
+        config.organization_id,
+    ))
 }
 
 pub(crate) fn start_instant_upload(
@@ -1421,6 +1432,7 @@ async fn create_or_get_video(
         "desktopMP4",
     )
     .await
+    .map(|created| created.config)
 }
 
 async fn create_or_get_video_with_mode(
@@ -1430,7 +1442,7 @@ async fn create_or_get_video_with_mode(
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
     recording_mode: &str,
-) -> Result<S3UploadMeta, AuthApiError> {
+) -> Result<CreatedVideo, AuthApiError> {
     let mut path = format!(
         "/api/desktop/video/create?recordingMode={}",
         urlencoding(recording_mode)
@@ -1472,7 +1484,7 @@ async fn create_or_get_video_with_mode(
         .text()
         .await
         .map_err(|error| AuthApiError::Other(format!("Failed to read response body: {error}")))?;
-    serde_json::from_str::<S3UploadMeta>(&text)
+    serde_json::from_str::<CreatedVideo>(&text)
         .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
 }
 
@@ -2504,6 +2516,19 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn created_video_accepts_legacy_and_organization_bound_responses() {
+        for organization in [None, Some("org-recording")] {
+            let mut response = json!({ "id": "video-recording" });
+            if let Some(id) = organization {
+                response["organizationId"] = json!(id);
+            }
+            let created: CreatedVideo = serde_json::from_value(response).unwrap();
+            assert_eq!(created.config.id, "video-recording");
+            assert_eq!(created.organization_id.as_deref(), organization);
+        }
+    }
 
     #[tokio::test]
     async fn presigned_transfer_errors_never_expose_secret_urls() {
