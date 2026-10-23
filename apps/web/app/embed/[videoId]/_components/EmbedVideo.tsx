@@ -11,6 +11,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -234,10 +235,8 @@ export const EmbedVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 		}
 
-		useEffect(() => {
-			if (!videoRef.current) return;
-			const player = videoRef.current;
-			const handleLoadedMetadata = () => {
+		const handleLoadedMetadata = useCallback(
+			(player: HTMLVideoElement) => {
 				setLongestDuration(player.duration);
 
 				// Once only. HLS level switches and source swaps fire this again, and
@@ -253,18 +252,14 @@ export const EmbedVideo = forwardRef<
 				} catch (error) {
 					console.warn("Failed to seek embed to start time", error);
 				}
-			};
+			},
+			[startTime],
+		);
 
-			if (player.readyState >= 1) {
-				handleLoadedMetadata();
-			} else {
-				player.addEventListener("loadedmetadata", handleLoadedMetadata);
-			}
-
-			return () => {
-				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			};
-		}, [startTime]);
+		useEffect(() => {
+			const player = videoRef.current;
+			if (player && player.readyState >= 1) handleLoadedMetadata(player);
+		}, [handleLoadedMetadata]);
 
 		return (
 			<>
@@ -274,6 +269,11 @@ export const EmbedVideo = forwardRef<
 					onPlayCapture={() => setIsPlaying(true)}
 					onPauseCapture={() => setIsPlaying(false)}
 					onEndedCapture={() => setIsPlaying(false)}
+					onLoadedMetadataCapture={(event) => {
+						if (event.target instanceof HTMLVideoElement) {
+							handleLoadedMetadata(event.target);
+						}
+					}}
 				>
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay

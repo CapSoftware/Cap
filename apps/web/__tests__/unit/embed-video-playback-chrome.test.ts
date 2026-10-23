@@ -26,9 +26,12 @@ import {
 } from "@/lib/share-branding";
 
 const dynamicImports = vi.hoisted(() => [] as Promise<unknown>[]);
+const dynamicControl = vi.hoisted(() => ({
+	gate: null as Promise<void> | null,
+}));
 
 vi.mock("next/dynamic", async () => {
-	const { createElement } = await import("react");
+	const { createElement, useEffect, useState } = await import("react");
 	return {
 		default: (
 			loader: () => Promise<
@@ -41,7 +44,26 @@ vi.mock("next/dynamic", async () => {
 					Loaded = "default" in module ? module.default : module;
 				}),
 			);
-			return (props: object) => (Loaded ? createElement(Loaded, props) : null);
+			return (props: object) => {
+				const [Player, setPlayer] = useState<ComponentType<object> | null>(
+					() => (dynamicControl.gate ? null : Loaded),
+				);
+				useEffect(() => {
+					let cancelled = false;
+					const pendingLoad = async () => {
+						await dynamicControl.gate;
+						const module = await loader();
+						if (!cancelled) {
+							setPlayer(() => ("default" in module ? module.default : module));
+						}
+					};
+					void pendingLoad();
+					return () => {
+						cancelled = true;
+					};
+				}, []);
+				return Player ? createElement(Player, props) : null;
+			};
 		},
 	};
 });
@@ -208,8 +230,52 @@ describe("EmbedVideo playback chrome", () => {
 	});
 
 	afterEach(() => {
+		dynamicControl.gate = null;
 		document.body.replaceChildren();
 	});
+
+	it.each([{ type: "desktopMP4" } as const, { type: "MediaConvert" } as const])(
+		"seeks and updates chrome when the $type player loads after mount",
+		async (source) => {
+			let release = () => {};
+			dynamicControl.gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+			await act(async () => {
+				root.render(
+					createElement(EmbedVideo, { ...createProps(source), startTime: 15 }),
+				);
+			});
+			expect(container.querySelector("video")).toBeNull();
+			expectChromeVisible(container);
+			await act(async () => {
+				release();
+				await dynamicControl.gate;
+			});
+			const video = container.querySelector("video");
+			if (!video) throw new Error("Player did not load");
+			Object.defineProperty(video, "duration", { value: 60 });
+			await act(async () => {
+				video.dispatchEvent(new Event("loadedmetadata"));
+			});
+			expect(video.currentTime).toBe(15);
+			await act(async () => {
+				video.dispatchEvent(new Event("play"));
+			});
+			expectChromeHidden(container);
+			video.currentTime = 25;
+			await act(async () => {
+				video.dispatchEvent(new Event("pause"));
+				video.dispatchEvent(new Event("loadedmetadata"));
+			});
+			expectChromeVisible(container);
+			expect(video.currentTime).toBe(25);
+			await act(async () => root.unmount());
+		},
+	);
 
 	afterAll(() => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
