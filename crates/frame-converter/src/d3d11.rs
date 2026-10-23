@@ -310,6 +310,11 @@ struct StagingTextures {
     output: ID3D11Texture2D,
 }
 
+struct StagingPool {
+    free: Vec<StagingTextures>,
+    created: usize,
+}
+
 struct StagingLease<'a> {
     converter: &'a D3D11Converter,
     staging: Option<StagingTextures>,
@@ -328,15 +333,16 @@ impl std::ops::Deref for StagingLease<'_> {
 impl Drop for StagingLease<'_> {
     fn drop(&mut self) {
         if let Some(staging) = self.staging.take() {
-            self.converter.staging_free.lock().push(staging);
+            self.converter.staging_pool.lock().free.push(staging);
             self.converter.staging_available.notify_one();
         }
     }
 }
 
 pub struct D3D11Converter {
+    device: ID3D11Device,
     resources: Mutex<D3D11Resources>,
-    staging_free: Mutex<Vec<StagingTextures>>,
+    staging_pool: Mutex<StagingPool>,
     staging_available: Condvar,
     input_format: Pixel,
     output_format: Pixel,
@@ -638,29 +644,7 @@ impl D3D11Converter {
         let input_view = create_input_view(&video_device, &enumerator, &input_texture)?;
         let output_view = create_output_view(&video_device, &enumerator, &output_texture)?;
 
-        let mut staging_free = Vec::with_capacity(STAGING_RING_DEPTH);
-        for _ in 0..STAGING_RING_DEPTH {
-            staging_free.push(StagingTextures {
-                input: create_texture(
-                    &device,
-                    config.input_width,
-                    config.input_height,
-                    input_dxgi,
-                    D3D11_USAGE_STAGING,
-                    0,
-                    D3D11_CPU_ACCESS_WRITE.0 as u32,
-                )?,
-                output: create_texture(
-                    &device,
-                    config.output_width,
-                    config.output_height,
-                    output_dxgi,
-                    D3D11_USAGE_STAGING,
-                    0,
-                    D3D11_CPU_ACCESS_READ.0 as u32,
-                )?,
-            });
-        }
+        let staging_device = device.clone();
 
         if input_shared_handle.is_some() && output_shared_handle.is_some() {
             tracing::info!("D3D11 converter created with shared texture handles enabled");
@@ -697,8 +681,12 @@ impl D3D11Converter {
         );
 
         Ok(Self {
+            device: staging_device,
             resources: Mutex::new(resources),
-            staging_free: Mutex::new(staging_free),
+            staging_pool: Mutex::new(StagingPool {
+                free: Vec::new(),
+                created: 0,
+            }),
             staging_available: Condvar::new(),
             input_format: config.input_format,
             output_format: config.output_format,
@@ -713,16 +701,58 @@ impl D3D11Converter {
         })
     }
 
-    fn acquire_staging(&self) -> StagingLease<'_> {
-        let mut free = self.staging_free.lock();
-        while free.is_empty() {
-            self.staging_available.wait(&mut free);
-        }
+    fn acquire_staging(&self) -> Result<StagingLease<'_>, ConvertError> {
+        let mut pool = self.staging_pool.lock();
+        loop {
+            if let Some(staging) = pool.free.pop() {
+                return Ok(StagingLease {
+                    converter: self,
+                    staging: Some(staging),
+                });
+            }
 
-        StagingLease {
-            converter: self,
-            staging: free.pop(),
+            if pool.created < STAGING_RING_DEPTH {
+                pool.created += 1;
+                drop(pool);
+                return match self.create_staging_pair() {
+                    Ok(staging) => Ok(StagingLease {
+                        converter: self,
+                        staging: Some(staging),
+                    }),
+                    Err(error) => {
+                        let mut pool = self.staging_pool.lock();
+                        pool.created -= 1;
+                        self.staging_available.notify_one();
+                        Err(error)
+                    }
+                };
+            }
+
+            self.staging_available.wait(&mut pool);
         }
+    }
+
+    fn create_staging_pair(&self) -> Result<StagingTextures, ConvertError> {
+        Ok(StagingTextures {
+            input: create_texture(
+                &self.device,
+                self.input_width,
+                self.input_height,
+                pixel_to_dxgi(self.input_format)?,
+                D3D11_USAGE_STAGING,
+                0,
+                D3D11_CPU_ACCESS_WRITE.0 as u32,
+            )?,
+            output: create_texture(
+                &self.device,
+                self.output_width,
+                self.output_height,
+                pixel_to_dxgi(self.output_format)?,
+                D3D11_USAGE_STAGING,
+                0,
+                D3D11_CPU_ACCESS_READ.0 as u32,
+            )?,
+        })
     }
 
     pub fn gpu_info(&self) -> &GpuInfo {
@@ -737,6 +767,8 @@ impl D3D11Converter {
         self.resources.lock().output_shared_handle
     }
 
+    /// Returns the current output texture. When this converter is shared by a pool, every
+    /// conversion reuses the texture; external readers must synchronize with pool activity.
     pub fn output_texture(&self) -> ID3D11Texture2D {
         self.resources.lock().output_texture.clone()
     }
@@ -812,7 +844,7 @@ impl FrameConverter for D3D11Converter {
         }
 
         let pts = input.pts();
-        let staging = self.acquire_staging();
+        let staging = self.acquire_staging()?;
 
         let (input_ptr, input_pitch) = {
             let resources = self.resources.lock();
