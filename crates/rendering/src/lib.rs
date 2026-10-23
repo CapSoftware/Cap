@@ -5328,6 +5328,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn color_components_parse_rgb_hex_with_either_case_and_optional_hash() {
+        for hex in ["#4785FF", "4785ff", "#4785ff"] {
+            assert_eq!(parse_color_component(hex, 0), 71.0 / 255.0);
+            assert_eq!(parse_color_component(hex, 1), 133.0 / 255.0);
+            assert_eq!(parse_color_component(hex, 2), 1.0);
+        }
+    }
+
+    #[test]
+    fn color_components_fall_back_for_unsupported_hex_formats() {
+        for hex in ["", "#abc", "#abcd", "#12345678", " #123456 ", "#GGHHII"] {
+            for index in 0..3 {
+                assert_eq!(parse_color_component(hex, index), 1.0, "{hex:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn color_components_fall_back_for_six_byte_unicode_colors() {
+        for hex in ["#白色", "白色", "#a白bc", "#ab白c", "#abc白", "#💙ab"] {
+            for index in 0..3 {
+                assert_eq!(parse_color_component(hex, index), 1.0, "{hex:?}");
+            }
+        }
+    }
+
+    #[test]
     fn camera_blur_output_rejects_missing_pending_and_failed_masks() {
         use cap_camera_effects::{BlurFailure, BlurMaskStatus, BlurMode, BlurOutputStatus};
 
@@ -9213,7 +9240,7 @@ fn blur_mode_from_config(
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {
     let color = hex_color.trim_start_matches('#');
 
-    if color.len() == 6 {
+    if color.len() == 6 && color.is_ascii() {
         let start = index * 2;
         if let Ok(value) = u8::from_str_radix(&color[start..start + 2], 16) {
             return value as f32 / 255.0;
