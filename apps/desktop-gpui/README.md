@@ -3,6 +3,10 @@
 Cap's desktop app, rewritten in [gpui](https://www.gpui.rs/). No Tauri, no
 webview — the whole UI is drawn by gpui and every pixel is Rust.
 
+This is the app that ships as **Cap**, from 0.6.1 on. The Tauri app in
+`apps/desktop` last shipped in 0.6.0 and is kept only for the dev harness; see
+[Shipping and updates](#shipping-and-updates).
+
 The main recording window uses a fixed 330×432 layout with device controls
 and recording and screenshot browsers. The expanded view is no longer available.
 
@@ -16,12 +20,22 @@ cargo run
 `RUST_LOG=cap_gpui=debug cargo run` for logs — note the filter is `cap_gpui`
 (the binary), not `cap_desktop_gpui` (the package).
 
-The first build takes a few minutes and about 8 GB of `target/`: gpui pulls its
-own revisions of the wgpu and font stacks. Rebuilds after that are seconds —
-the dependencies build at `opt-level = 2` and so, since the editor landed, does
-the app crate: the editor's per-frame pixel conversion is 30ms unoptimised and
-0.92ms optimised, which is the difference between a 33fps preview and a 60fps
-one (see the editor's measurements below).
+The first build takes about 11 minutes and 6.4 GB of `target/`: gpui pulls its
+own revisions of the wgpu and font stacks. After that, an edit rebuilds only
+the app crate, at `opt-level = 0` and incrementally, in about 22s with plain
+`cargo build` or the dev loop below; the app crate's incremental cache is about
+1.6 GB of `target/debug/incremental`. Dependencies build at `opt-level = 2`.
+The app crate and its dependencies carry line-table debug info, so breakpoints
+and backtraces keep their lines; for locals in a debugger, build with
+`--config 'profile.dev.package.cap-desktop-gpui.debug=true'`.
+
+Loops over pixels or samples live in `kernels/` (`cap-gpui-kernels`,
+`opt-level = 3`): unoptimised, the editor's frame conversion alone costs 42.7ms
+a frame against 1.0ms, a 23fps preview instead of a 60fps one. That includes
+generic dependency calls over large data — `imageops::resize`, image encoders,
+`serde_json::from_reader`, `md5` — because a generic compiles into the crate
+that instantiates it, at that crate's opt-level. Put the call in `kernels/`
+behind a plain-slice function and call that from the app.
 
 ### The dev loop
 
@@ -48,13 +62,8 @@ waits out an in-flight recording rather than truncating it (the state file
 doubles as that handshake — `dev.sh` will not kill the app while it reads
 `"recording":true`).
 
-The loop exports `CARGO_INCREMENTAL=1`, overriding this profile's
-`incremental = false` for its own builds only: a warm rebuild drops from ~41s
-to ~3s for a metadata-only change and ~23s for an edit to a 4k-line module.
-The costs are the ones the profile comment warns about, scoped down: a few GB
-of `target/debug/incremental` (delete it to reclaim), and a one-off app-crate
-rebuild when switching between `./dev.sh` and a plain `cargo build`, whose
-flags differ.
+The loop runs a plain `cargo build`, so it shares every artifact with one run
+by hand: switching between `./dev.sh` and `cargo build` rebuilds nothing.
 
 ### Why it is a separate workspace
 
@@ -67,6 +76,80 @@ and CI completely untouched.
 `rust-toolchain.toml` pins `stable` rather than the root's 1.88.0, because
 gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). The
 nearest toolchain file wins, so the Tauri app is unaffected.
+
+## Shipping and updates
+
+### How Cap is packaged
+
+`tauri.conf.json` in this directory is a **packaging** config only — nothing
+here links the Tauri runtime. `scripts/bundle-gpui.mjs` builds `cap-gpui`
+(`scripts/build-gpui-binary.sh release <target>`), stages it as the main
+binary `Cap`/`Cap.exe`, and runs `tauri bundle` against this crate
+(`TAURI_APP_PATH`). Reusing the bundler keeps every artifact byte-compatible
+with what installed copies of the Tauri app already update through:
+
+- the same identity (`Cap`, `so.cap.desktop`, main binary `Cap`), so the macOS
+  bundle, the NSIS uninstall key and install folder, and the `cap` deb package
+  are the ones already on disk, and permissions and data carry over;
+- the same updater artifacts — `Cap.app.tar.gz`, the NSIS `-setup.exe`, the
+  deb and the AppImage — signed with the same updater key and published under
+  the platform names (`darwin-aarch64`, `windows-x86_64`, `linux-x86_64-deb`,
+  …) every existing install already polls.
+
+The update to 0.6.1 is therefore installed by the Tauri updater of whatever
+build the user has; it simply lands this app in place.
+
+The bundle carries `cap-muxer` and `cap-cli` only: `cap-exporter` was a
+byte-identical copy of `cap-cli`, and the self-test now runs `cap-cli`
+directly. Release sidecars are built without debug info and stripped.
+
+After `tauri bundle`, the release shrinks every artifact without changing a
+byte of what gets installed:
+
+- `scripts/finalize-linux-gpui-packages.mjs` drops the WebKitGTK and GTK
+  dependencies the Tauri CLI always adds, links the duplicate
+  `libonnxruntime.so` to its `.so.1`, recompresses the deb with a 192 MiB xz
+  window and the RPM with zstd level 22, and re-signs both.
+- `scripts/finalize-linux-appimage.mjs` (`webview: false`) prunes the AppImage
+  to the libraries its binaries actually load.
+- `scripts/finalize-macos-packages.mjs` recompresses `Cap.app.tar.gz` with
+  zopfli (still plain gzip for every updater) and converts the disk image to
+  LZMA, keeping the original if conversion or signing fails.
+- `packaging/windows/installer-hooks.nsh` gives the NSIS installer a 128 MB
+  LZMA window, so `cap-cli.exe` compresses against `Cap.exe`. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
+deletes the Tauri-era `cap-gpui.exe`, `cap-exporter.exe` and Rive assets an
+update in place would otherwise leave behind.
+
+### The native updater
+
+`src/updates.rs` checks the CrabNebula endpoint on the same cadence the
+Tauri app used, and `src/installer.rs` does the rest without Tauri:
+
+1. **Download** streams the artifact to
+   `<cache>/so.cap.desktop/updates/cap/<version>/` and verifies its minisign
+   signature *while* it downloads (`minisign_verify::StreamVerifier`), so a
+   200 MB update never sits in memory. A verified file is reused on the next
+   attempt instead of being fetched again; anything that fails verification is
+   deleted.
+2. **Install** checks the file's format, then: on macOS unpacks the
+   `.app.tar.gz` beside the running bundle and swaps it in with two renames
+   (asking for an administrator password only when the folder is not
+   writable); on Windows starts the NSIS installer with `/P /R /UPDATE` and
+   quits; on Linux installs the deb through `pkexec dpkg -i` or replaces the
+   AppImage in place.
+3. **Relaunch** waits for this process to exit and reopens the new build.
+
+Progress shows in the settings sidebar footer, and the update never installs
+while a recording, export, upload, import or transcription is running.
+
+### The Tauri app
+
+Releases no longer build the Tauri app. 0.6.0 was its last version, and the
+website's [all versions](https://cap.so/download/versions) page keeps it
+downloadable. In a debug build started from `target/`, Settings → Experimental
+still has the **Cap GPUI** switch that hands the session back to the Tauri
+app running under `bun run dev:desktop`, through the dev supervisor
+(`store::request_classic_reopen` and `cap-classic.pending`).
 
 ## What is implemented
 
@@ -898,9 +981,9 @@ is read off the `Report` line instead.
 Sidecar resolution (`resolve_selftest_binary`), in order, with
 `CAP_GPUI_SELFTEST_BIN` winning over all of it:
 
-1. Next to the running executable — `cap-exporter`, `cap-exporter-<triple>`,
-   then `cap`. This is where the sidecar sits for an app-staged build and
-   where a dev `cargo build` leaves the CLI.
+1. Next to the running executable — `cap-cli`, `cap-cli-<triple>`, then
+   `cap`. This is where the sidecar sits in a packaged build and where a dev
+   `cargo build` leaves the CLI.
 2. `../Resources` and `../MacOS` relative to it, the two places Tauri puts an
    `externalBin` inside a bundle.
 3. `/Applications/Cap.app/Contents/{Resources,MacOS}`. The gpui dev binary is
@@ -956,14 +1039,14 @@ Settings-specific deviations:
 | **No auth, so the free-plan variant** | There is no auth store here (same gap as the main window's plan badge), so the profile row shows the signed-out "Click to sign in" state and does nothing when clicked, and the Cap Pro section renders as it does for a free user: Instant Mode quality pinned to 720p, the other tiers inert. In the Tauri app clicking a locked tier raises an upgrade toast. `instantModeMaxResolution` is therefore displayed but never written. |
 | **Selects are in-window menus** | `SelectSettingItem` and the excluded-windows Add button pop a real `NSMenu` via `Menu.popup()`. `ui::Menu` draws a menu-shaped panel at the pointer (which is where `popup()` with no argument puts it), with the same check marks, the same click-away dismiss, and the `KSelect` keyboard contract on top: arrows, Home/End, Enter, Escape. It does not flip or shift to stay inside the window, so a menu opened near the right edge is clipped by it — as it was before the consolidation. |
 | **Text fields commit on the button, not on Return** | The project-name template and the server URL are `ui::TextInput::settings` — the same field as the search, differing only in its fills. Both are drafts committed by Save / Update, which is the Tauri card's own shape: neither `<input>` there binds `onKeyDown`, so Return does nothing in either app. Escape reverts to what is stored. The recordings folder is *not* a text field in either app — `pickRecordingsFolder` opens an `NSOpenPanel` and the path is a readout. |
-| **The project-name preview is literal-only** | `commands.formatProjectName` understands `{moment:<format>}` and custom `{date:...}`/`{time:...}` formats through a moment-to-chrono translation. The preview here substitutes the six literal placeholders the card documents and leaves anything else alone — which is also what an unknown placeholder does there. |
+| **The project-name preview is literal-only** | `commands.formatProjectName` understands `{moment:<format>}` and custom `{date:...}`/`{time:...}` formats through a moment-to-chrono translation. The preview here substitutes the documented placeholders and leaves any unsupported placeholder alone. `{random}` and `{random:N}` generate 10 or 1–32 lowercase hexadecimal characters in the recording name; the GPUI preview does not generate random values. |
 | **Theme tiles keep a fixed height** | `aspect-[5/3]` has no gpui equivalent, so the three previews are 93px tall, the height they have at the window's default 782 width. Widen the window and they stay 93. |
 | **`AccentColor` is macOS blue** | `--macos-settings-accent: AccentColor` resolves to the user's system accent; gpui exposes no query for it, so the checked toggles and the selected sidebar icon use `#007aff`. A user on a non-blue accent sees blue here and their own colour in the shipping app. |
 | **No toggle bevel** | `.cap-toggle` carries `box-shadow: inset 0 1px 2px rgba(0,0,0,0.16)`; there is no inset-shadow hook in this gpui rev, so `ui::Toggle`'s track is flat on every surface. |
 | **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
 | **Several settings persist without a consumer** | `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel write the same store keys as Tauri; the machinery that would obey them is not built yet. Theme is applied. |
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
-| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (kept in lockstep with the Tauri app, 0.6.0), not `getVersion()`; "Check for updates" is drawn in its disabled state because there is no updater. |
+| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (kept in lockstep with the Tauri app by `scripts/sync-desktop-versions.mjs`), not `getVersion()`. "Check for updates" runs the native updater and shows its download progress in place. |
 
 ## Mode select
 
@@ -1315,9 +1398,10 @@ crate at `opt-level = 0` the same conversion measures **30.1ms**, the pump
 becomes convert-bound at 33 fps and the bounded channel drops **45 %** of the
 renderer's frames (`playback fps=33.0 frames=523 dropped=423 …
 convert_avg=30149us`). Nothing about the architecture changes — it is a
-3MB-per-frame per-pixel loop compiled without optimisation. `Cargo.toml` now
-carries `[profile.dev.package.cap-desktop-gpui] opt-level = 2` so a dev build
-shows the editor at its real speed; it costs about seven seconds a build.
+3MB-per-frame per-pixel loop compiled without optimisation. The loop now lives
+in `kernels/` (`cap_gpui_kernels::frame::unpad_rgba_to_bgra`), built at
+`opt-level = 3`, so a dev build shows the editor at its real speed while the
+app crate itself stays unoptimised (see [Running it](#running-it)).
 
 Reliability, same binary:
 
@@ -1761,7 +1845,7 @@ its baseline values, every drag and delete having been undone.
 | **Clips cannot be reordered, and their body drag does nothing** | The clip body's 4px drag is a **crossfade-duration** drag, not a move (`TL/ClipTrack.tsx:849-945`) — it grows the incoming transition and selects it. Transitions have no drawn affordance in this rev (E3 renders their effect on the boxes but not the handle or the marker), so the press only ever selects. Reordering exists in the shipping app but **not on the timeline**: it is the Clips layout mode's list (`ClipsSidebar.tsx:650`, behind the header's Clips button), which is its own unit. |
 | **The 3D track's split is not reproduced** | `splitCamera3DSegment` rebuilds both halves' nine pose tracks around the pose the segment held at the cut (`ED/context.ts:640-676`), which needs the keyframe evaluator. Splitting a 3D segment is refused rather than done wrongly; every other track's split is real. |
 | **Only the zoom track creates by click** | The mask, text and audio tracks also add a segment when their empty lane is clicked (`TL/MaskTrack.tsx:120-184` and siblings), each with its own gap-finding placement and default segment. Those are creation flows for objects the sidebar has to configure; the zoom track's is here because its ghost was already drawn. The sidebar now configures all four, so the remaining three are a timeline-side gap rather than a dependency — each needs its own gap-finding placement and default segment, and the mask track's also has to seed a rect on the canvas. |
-| **A no-op drag records no undo entry** | The source pushes a history entry on *every* `resume`, because the tracked memo re-runs when `pauseCount` changes — so a click that selected and never moved leaves a duplicate snapshot behind, and the first undo after one appears to do nothing. Here the resume only records when something actually changed during the bracket. |
+| **A no-op drag records no undo entry** | The source pushes a history entry on *every* `resume`, because the tracked memo re-runs when `pauseCount` changes — so a click that selected and never moved leaves a duplicate snapshot behind, and the first undo after one appears to do nothing. Here the resume only records when the project ends up different from where the bracket started, so a drag that comes back to its starting value records nothing either. |
 | **No context menus** | Right-clicking a segment opens a real `Menu.popup()` with "Select all" and "Delete" (`TL/ZoomTrack.tsx:544-595`), and the zoom track's own dev-only "Generate zoom segments from clicks". None is reproduced. |
 | **No double-click fill** | Double-clicking a zoom or scene handle expands the segment as far as it can go in that direction (`fillStart`/`fillEnd`, `TL/ZoomTrack.tsx:353-399`). gpui delivers `click_count`, but the behaviour is not wired. |
 | **`normalizeClipTransitions` is a no-op** | `onHandleReleased` re-clamps every transition against its clips after a trim; here `effective_transition` already clamps on every read, so the stored value is left alone. The viewport half of `onHandleReleased` — pulling the transform back when a trim shortens the project out from under it — *is* reproduced. |
@@ -1908,7 +1992,6 @@ steps and side effects are the call site's.
 | | Uppercase / Active Word Highlight (+ Highlight Color, Style) | toggles, then a hex field and a select | — | `captions.settings.{uppercase,activeWordHighlight,highlightColor,highlightStyle}` |
 | | Background Settings → Color / Opacity | hex field + swatch, slider | 0–100 / 1 `%` | `captions.settings.{backgroundColor,backgroundOpacity}` |
 | | Position / Animation / Font Weight | three selects | — | `captions.settings.{position,fontWeight}`, `{fade,linger,wordTransition}Duration` |
-| | Export Options → Export with Subtitles | toggle | — | `captions.settings.exportWithSubtitles` |
 
 Two things in these tabs are honest dead ends rather than key paths, and both
 say so in the UI:

@@ -6,6 +6,11 @@
 //! awake, so audio starts within one callback period of the playback clock
 //! rather than after a device wake that could take seconds. The stream is
 //! rebuilt only when the default output device changes or the stream errors.
+//!
+//! On the built-in output, which restarts instantly, a stream left without a
+//! source for [`IDLE_PAUSE_AFTER`] is paused rather than rendering silence
+//! indefinitely, and the next play or prewarm restarts it in place. External,
+//! wireless and display outputs keep running.
 
 use std::{
     sync::{
@@ -28,7 +33,7 @@ use cpal::{
 use tokio::sync::watch;
 use tracing::{error, info};
 
-use crate::audio::{AudioSegment, MusicTracks, PrerenderedAudioBuffer};
+use crate::audio::{AudioSegment, MusicTracks, PlaybackAudioCache, PrerenderedAudioBuffer};
 use crate::preparing_audio::{
     PreparingAudioBuffer, PreparingAudioOutputHandle, PreparingAudioOutputSnapshot,
     PreparingAudioSources,
@@ -45,6 +50,10 @@ const SOURCE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const PLAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Bound on waiting for the initial pre-render window (normally a few ms).
 const PRERENDER_READY_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a stream may render silence before it is paused. Long enough to
+/// cover the pauses of an active editing session, so play-pause-play stays on
+/// the already running stream.
+const IDLE_PAUSE_AFTER: Duration = Duration::from_secs(15);
 
 pub struct PlaySpec {
     pub segments: Vec<AudioSegment>,
@@ -65,6 +74,8 @@ enum ControlMsg {
     Retire(Box<dyn Send>),
     Realign(Box<dyn FnOnce() + Send>),
     EnsureStream,
+    HoldAwake,
+    ReleaseAwake,
     Play {
         spec: Box<PlaySpec>,
         generation: u64,
@@ -391,10 +402,21 @@ impl AudioOutput {
         }
     }
 
-    /// Opens the output stream ahead of the first play so even the first
-    /// press doesn't wait on the device (Bluetooth wake, etc.). Non-blocking.
+    /// Opens (or restarts an idle-paused) output stream ahead of the first
+    /// play so even the first press doesn't wait on the device (Bluetooth
+    /// wake, etc.). Non-blocking.
     pub fn prewarm(&self) {
         let _ = self.control_tx.send(ControlMsg::EnsureStream);
+    }
+
+    /// Opens the output stream and keeps it running, never idle-paused, until
+    /// the returned hold is dropped. For playback paths that start audio
+    /// without a warmup to hide a stream restart behind.
+    pub(crate) fn hold_awake(&self) -> AudioOutputAwakeHold {
+        let _ = self.control_tx.send(ControlMsg::HoldAwake);
+        AudioOutputAwakeHold {
+            control_tx: self.control_tx.clone(),
+        }
     }
 
     /// Starts playing `spec` on the shared stream. Blocks until the live
@@ -506,6 +528,16 @@ impl Drop for AudioOutput {
     }
 }
 
+pub(crate) struct AudioOutputAwakeHold {
+    control_tx: std_mpsc::Sender<ControlMsg>,
+}
+
+impl Drop for AudioOutputAwakeHold {
+    fn drop(&mut self) {
+        let _ = self.control_tx.send(ControlMsg::ReleaseAwake);
+    }
+}
+
 /// Per-playback state owned by the audio callback.
 struct ActiveSource<T: FromSampleBytes> {
     generation: u64,
@@ -558,7 +590,8 @@ enum SourceCommand<T: FromSampleBytes> {
 /// The type-erased face of a running stream. The closures capture the typed
 /// channel to the callback, chosen by the device's sample format at build.
 struct TypedStreamHandle {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
+    source_active: Arc<AtomicBool>,
     #[allow(clippy::type_complexity)]
     install: Box<dyn Fn(Box<PlaySpec>, u64, SourceAcknowledgement) -> Result<(), String>>,
     install_progressive: Box<InstallProgressiveAudio>,
@@ -568,14 +601,87 @@ struct TypedStreamHandle {
 struct StreamState {
     device_name: Option<String>,
     failed: Arc<AtomicBool>,
+    supports_idle_pause: bool,
+    paused: bool,
     handle: TypedStreamHandle,
+}
+
+impl StreamState {
+    fn idle_pausable(&self) -> bool {
+        self.supports_idle_pause && !self.paused
+    }
+}
+
+struct IdleTimer {
+    last_activity: Instant,
+}
+
+impl IdleTimer {
+    fn new(now: Instant) -> Self {
+        Self { last_activity: now }
+    }
+
+    fn touch(&mut self, now: Instant) {
+        self.last_activity = now;
+    }
+
+    fn remaining(&self, now: Instant) -> Duration {
+        IDLE_PAUSE_AFTER.saturating_sub(now.saturating_duration_since(self.last_activity))
+    }
+
+    fn should_pause(&mut self, now: Instant, source_active: bool) -> bool {
+        if source_active {
+            self.touch(now);
+            return false;
+        }
+        self.remaining(now).is_zero()
+    }
+}
+
+fn pause_idle_stream(state: &mut Option<StreamState>) {
+    let Some(stream) = state.as_mut() else {
+        return;
+    };
+    match stream.handle.stream.pause() {
+        Ok(()) => {
+            stream.paused = true;
+            info!("Paused idle audio output stream");
+        }
+        Err(error) => {
+            error!(%error, "Failed to pause idle audio output stream; closing it");
+            *state = None;
+        }
+    }
 }
 
 fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
     // cpal streams aren't Send; this thread owns the stream for its lifetime.
     let mut state: Option<StreamState> = None;
+    let mut idle = IdleTimer::new(Instant::now());
+    let mut awake_holds = 0usize;
 
-    while let Ok(msg) = control_rx.recv() {
+    loop {
+        let msg = if state.as_ref().is_some_and(StreamState::idle_pausable) {
+            match control_rx.recv_timeout(idle.remaining(Instant::now())) {
+                Ok(msg) => msg,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    let keep_running = awake_holds > 0
+                        || state.as_ref().is_some_and(|stream| {
+                            stream.handle.source_active.load(Ordering::Acquire)
+                        });
+                    if idle.should_pause(Instant::now(), keep_running) {
+                        pause_idle_stream(&mut state);
+                    }
+                    continue;
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match control_rx.recv() {
+                Ok(msg) => msg,
+                Err(_) => break,
+            }
+        };
         match msg {
             ControlMsg::Refresh {
                 spec,
@@ -596,6 +702,11 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
             ControlMsg::EnsureStream => {
                 ensure_stream(&mut state);
             }
+            ControlMsg::HoldAwake => {
+                awake_holds += 1;
+                ensure_stream(&mut state);
+            }
+            ControlMsg::ReleaseAwake => awake_holds = awake_holds.saturating_sub(1),
             ControlMsg::Play {
                 spec,
                 generation,
@@ -663,6 +774,7 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
             ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
         }
+        idle.touch(Instant::now());
     }
 
     info!("Audio output thread finished");
@@ -763,6 +875,23 @@ fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
 }
 
+/// Re-anchors the audio on the video playhead when they drift apart.
+fn sync_video_playhead<T: FromSampleBytes + cpal::FromSample<f32>>(
+    audio: &mut PrerenderedAudioBuffer<T>,
+    playhead_rx: &mut watch::Receiver<f64>,
+    latency_secs: f64,
+) {
+    if playhead_rx.has_changed().unwrap_or(false) {
+        let video_playhead = *playhead_rx.borrow_and_update();
+        let audible_playhead = audio.current_audible_playhead(latency_secs);
+        let drift = (video_playhead - audible_playhead).abs();
+
+        if drift > 0.04 {
+            audio.set_playhead(video_playhead + latency_secs);
+        }
+    }
+}
+
 /// Renders one output block from the active source: applies the video
 /// playhead sync policy, fills the buffer and acknowledges the first
 /// consumed block. Shared by the live cpal callback and the headless sink so
@@ -782,15 +911,7 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
     match &mut source.buffer {
         ActiveSourceBuffer::Ordinary(audio) => {
-            if source.playhead_rx.has_changed().unwrap_or(false) {
-                let video_playhead = *source.playhead_rx.borrow_and_update();
-                let audible_playhead = audio.current_audible_playhead(latency_secs);
-                let drift = (video_playhead - audible_playhead).abs();
-
-                if drift > 0.04 {
-                    audio.set_playhead(video_playhead + latency_secs);
-                }
-            }
+            sync_video_playhead(audio, &mut source.playhead_rx, latency_secs);
             audio.fill(buffer);
         }
         ActiveSourceBuffer::Preparing(audio) => {
@@ -829,6 +950,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     output_info: AudioInfo,
     use_device_latency_hint: bool,
     install_tx: &std_mpsc::Sender<SourceCommand<T>>,
+    cache: &PlaybackAudioCache,
 ) -> Result<(), String> {
     let preparing_request = ack.preparing_request();
     if preparing_request
@@ -888,13 +1010,14 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(..)) {
         PrerenderedAudioBuffer::<T>::bounded(segments, music, &project, output_info, start_playhead)
     } else {
-        PrerenderedAudioBuffer::<T>::new(
+        PrerenderedAudioBuffer::<T>::new_cached(
             segments,
             music,
             &project,
             output_info,
             duration_secs,
             start_playhead,
+            cache,
         )
     };
     if !matches!(ack, SourceAcknowledgement::Refresh(..)) {
@@ -1013,6 +1136,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
 
     let (source_tx, source_rx) = std_mpsc::channel::<SourceCommand<f32>>();
     let stop = Arc::new(AtomicBool::new(false));
+    let cache = PlaybackAudioCache::default();
 
     let pump = {
         let stop = stop.clone();
@@ -1070,11 +1194,12 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!(%error, "Could not update headless audio playback");
                 }
             }
-            ControlMsg::EnsureStream => {}
+            ControlMsg::EnsureStream | ControlMsg::HoldAwake | ControlMsg::ReleaseAwake => {}
             ControlMsg::Play {
                 spec,
                 generation,
@@ -1089,6 +1214,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                         output_info,
                         false,
                         &source_tx,
+                        &cache,
                     ) {
                         Ok(()) => ack_rx.recv_timeout(SOURCE_ACK_TIMEOUT).is_ok(),
                         Err(e) => {
@@ -1114,6 +1240,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     output_info,
                     false,
                     &source_tx,
+                    &cache,
                 ) {
                     error!("Failed to install preparing headless audio source: {error}");
                     request.complete(false);
@@ -1162,6 +1289,132 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
     info!("Headless audio output thread finished");
 }
 
+/// A sink with no device and no clock, for verification harnesses: the
+/// caller pulls every block, and each pull first waits until the samples it
+/// reads are rendered, so the PCM depends only on the sequence of plays,
+/// seeks and pulls, never on render speed. Sources are built by the same
+/// `install_source` as the device and headless sinks.
+#[cfg(feature = "test-hooks")]
+pub struct OfflineAudioSink {
+    source_rx: std_mpsc::Receiver<SourceCommand<f32>>,
+    active: Option<ActiveSource<f32>>,
+}
+
+#[cfg(feature = "test-hooks")]
+impl AudioOutput {
+    /// Output at [`HEADLESS_SAMPLE_RATE`] / [`HEADLESS_CHANNELS`] whose blocks
+    /// are pulled through the returned sink. `play` returns once the source
+    /// is installed.
+    pub fn new_offline() -> (Self, OfflineAudioSink) {
+        let (control_tx, control_rx) = std_mpsc::channel();
+        let (source_tx, source_rx) = std_mpsc::channel();
+        if let Err(e) = std::thread::Builder::new()
+            .name("cap-audio-offline".into())
+            .spawn(move || control_thread_offline(control_rx, source_tx))
+        {
+            error!("Failed to spawn offline audio output thread: {e}");
+        }
+        (
+            Self {
+                control_tx,
+                next_generation: AtomicU64::new(0),
+            },
+            OfflineAudioSink {
+                source_rx,
+                active: None,
+            },
+        )
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+impl OfflineAudioSink {
+    /// Renders the next interleaved block. Returns false (and silence) when
+    /// no source is installed or its samples did not render within
+    /// `timeout`.
+    pub fn pull(&mut self, block: &mut [f32], timeout: Duration) -> bool {
+        drain_source_commands(&mut self.active, &self.source_rx);
+        let Some(source) = self.active.as_mut() else {
+            block.fill(0.0);
+            return false;
+        };
+        let mut rendered = true;
+        if let ActiveSourceBuffer::Ordinary(audio) = &mut source.buffer {
+            sync_video_playhead(audio, &mut source.playhead_rx, 0.0);
+            rendered = audio.wait_until_rendered(block.len(), timeout);
+        }
+        render_source_block(source, block, 0.0);
+        rendered
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn control_thread_offline(
+    control_rx: std_mpsc::Receiver<ControlMsg>,
+    source_tx: std_mpsc::Sender<SourceCommand<f32>>,
+) {
+    let output_info = AudioInfo::new_raw(
+        AudioData::SAMPLE_FORMAT,
+        HEADLESS_SAMPLE_RATE,
+        HEADLESS_CHANNELS,
+    );
+    let cache = PlaybackAudioCache::default();
+    while let Ok(msg) = control_rx.recv() {
+        match msg {
+            ControlMsg::Refresh {
+                spec,
+                generation,
+                revision,
+                retire_tx,
+            } => {
+                if let Err(error) = install_source::<f32>(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Refresh(retire_tx, revision),
+                    output_info,
+                    false,
+                    &source_tx,
+                    &cache,
+                ) {
+                    error!(%error, "Could not update offline audio playback");
+                }
+            }
+            ControlMsg::Play {
+                spec,
+                generation,
+                result_tx,
+            } => {
+                let (ack_tx, _ack_rx) = std_mpsc::channel();
+                let ok = install_source::<f32>(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Ordinary(ack_tx),
+                    output_info,
+                    false,
+                    &source_tx,
+                    &cache,
+                )
+                .inspect_err(|e| error!("Failed to install offline audio source: {e}"))
+                .is_ok();
+                let _ = result_tx.send(ok);
+            }
+            ControlMsg::PreparePlayback { request, .. } => request.complete(false),
+            ControlMsg::PrepareProgressivePlayback { installation, .. } => {
+                installation.request.complete(false)
+            }
+            ControlMsg::StopPlayback { generation } => {
+                let _ = source_tx.send(SourceCommand::Remove {
+                    generation: Some(generation),
+                });
+            }
+            ControlMsg::EnsureStream | ControlMsg::HoldAwake | ControlMsg::ReleaseAwake => {}
+            ControlMsg::Retire(source) => drop(source),
+            ControlMsg::Realign(realign) => realign(),
+            ControlMsg::Shutdown => break,
+        }
+    }
+}
+
 fn handle_play(state: &mut Option<StreamState>, spec: Box<PlaySpec>, generation: u64) -> bool {
     if !ensure_stream(state) {
         return false;
@@ -1199,9 +1452,18 @@ fn ensure_stream(state: &mut Option<StreamState>) -> bool {
     };
     let device_name = device.name().ok();
 
-    if let Some(s) = state.as_ref() {
+    if let Some(s) = state.as_mut() {
         if !s.failed.load(Ordering::Acquire) && s.device_name == device_name {
-            return true;
+            if !s.paused {
+                return true;
+            }
+            match s.handle.stream.play() {
+                Ok(()) => {
+                    s.paused = false;
+                    return true;
+                }
+                Err(e) => error!("Failed to resume audio output stream: {e}"),
+            }
         }
         info!("Rebuilding audio output stream (device changed or stream failed)");
     }
@@ -1235,6 +1497,8 @@ fn ensure_stream(state: &mut Option<StreamState>) -> bool {
             *state = Some(StreamState {
                 device_name,
                 failed,
+                supports_idle_pause: cap_audio::default_output_supports_idle_pause(),
+                paused: false,
                 handle,
             });
             true
@@ -1269,13 +1533,16 @@ where
     config.channels = output_info.channels as u16;
 
     let (source_tx, source_rx) = std_mpsc::channel::<SourceCommand<T>>();
+    let source_active = Arc::new(AtomicBool::new(false));
 
     let mut active: Option<ActiveSource<T>> = None;
+    let callback_source_active = source_active.clone();
     let stream = device
         .build_output_stream(
             &config,
             move |buffer: &mut [T], info| {
                 drain_source_commands(&mut active, &source_rx);
+                callback_source_active.store(active.is_some(), Ordering::Release);
 
                 let Some(source) = active.as_mut() else {
                     buffer.fill(T::EQUILIBRIUM);
@@ -1308,9 +1575,18 @@ where
         .map_err(|e| format!("Failed to start audio output stream: {e}"))?;
 
     let install_tx = source_tx.clone();
+    let cache = PlaybackAudioCache::default();
     let install = Box::new(
         move |spec: Box<PlaySpec>, generation: u64, ack: SourceAcknowledgement| {
-            install_source::<T>(spec, generation, ack, output_info, true, &install_tx)
+            install_source::<T>(
+                spec,
+                generation,
+                ack,
+                output_info,
+                true,
+                &install_tx,
+                &cache,
+            )
         },
     );
 
@@ -1334,7 +1610,8 @@ where
     });
 
     Ok(TypedStreamHandle {
-        _stream: stream,
+        stream,
+        source_active,
         install,
         install_progressive,
         remove,
@@ -1377,12 +1654,44 @@ mod tests {
             output_info,
             use_device_latency_hint,
             &install_tx,
+            &PlaybackAudioCache::default(),
         )
         .unwrap();
         let SourceCommand::Install(source) = install_rx.recv().unwrap() else {
             panic!("expected installed audio source");
         };
         (*source, playhead_tx)
+    }
+
+    #[test]
+    fn idle_timer_pauses_only_after_a_quiet_grace_period() {
+        let start = Instant::now();
+        let mut idle = IdleTimer::new(start);
+
+        assert_eq!(idle.remaining(start), IDLE_PAUSE_AFTER);
+        assert!(!idle.should_pause(start + IDLE_PAUSE_AFTER / 2, false));
+        assert!(idle.should_pause(start + IDLE_PAUSE_AFTER, false));
+
+        idle.touch(start + IDLE_PAUSE_AFTER);
+        assert!(!idle.should_pause(start + IDLE_PAUSE_AFTER * 3 / 2, false));
+        assert_eq!(
+            idle.remaining(start + IDLE_PAUSE_AFTER * 3 / 2),
+            IDLE_PAUSE_AFTER / 2
+        );
+        assert!(idle.should_pause(start + IDLE_PAUSE_AFTER * 2, false));
+    }
+
+    #[test]
+    fn idle_timer_never_pauses_while_a_source_is_playing() {
+        let start = Instant::now();
+        let mut idle = IdleTimer::new(start);
+        let playing_until = start + IDLE_PAUSE_AFTER * 4;
+
+        assert!(!idle.should_pause(start + IDLE_PAUSE_AFTER, true));
+        assert!(!idle.should_pause(playing_until, true));
+        assert_eq!(idle.remaining(playing_until), IDLE_PAUSE_AFTER);
+        assert!(!idle.should_pause(playing_until + IDLE_PAUSE_AFTER / 2, false));
+        assert!(idle.should_pause(playing_until + IDLE_PAUSE_AFTER, false));
     }
 
     #[cfg(target_os = "linux")]

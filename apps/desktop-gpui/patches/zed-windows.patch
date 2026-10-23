@@ -1,8 +1,8 @@
 diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
-index 62386997f5ef..d49ec1836eae 100644
+index 6238699..d49ec18 100644
 --- a/crates/gpui_windows/src/directx_atlas.rs
 +++ b/crates/gpui_windows/src/directx_atlas.rs
-@@ -108,6 +108,15 @@
+@@ -108,6 +108,15 @@ impl PlatformAtlas for DirectXAtlas {
              AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
              AtlasTextureKind::Subpixel => &mut lock.subpixel_textures,
          };
@@ -18,7 +18,7 @@ index 62386997f5ef..d49ec1836eae 100644
  
          let Some(texture_slot) = textures.textures.get_mut(id.index as usize) else {
              return;
-@@ -116,7 +125,13 @@
+@@ -116,7 +125,13 @@ impl PlatformAtlas for DirectXAtlas {
          if let Some(mut texture) = texture_slot.take() {
              texture.allocator.deallocate(tile.tile_id.into());
              texture.decrement_ref_count();
@@ -33,11 +33,10 @@ index 62386997f5ef..d49ec1836eae 100644
                  textures.free_list.push(texture.id.index as usize);
              } else {
                  *texture_slot = Some(texture);
-@@ -417,4 +432,36 @@
+@@ -417,4 +432,36 @@ mod tests {
          let tile_b = insert_tile(&atlas, &big_key_b, big);
          assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
      }
--}
 +
 +    #[test]
 +    fn test_reuses_one_unreferenced_polychrome_texture() {
@@ -70,12 +69,12 @@ index 62386997f5ef..d49ec1836eae 100644
 +            1
 +        );
 +    }
-+}
+ }
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 8a350682e239..35b504e0fb09 100644
+index 8a35068..35b504e 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
-@@ -1983,3 +1983,41 @@
+@@ -1983,3 +1983,41 @@ mod dxgi {
          ))
      }
  }
@@ -117,11 +116,65 @@ index 8a350682e239..35b504e0fb09 100644
 +        }
 +    }
 +}
+diff --git a/crates/gpui_windows/src/display.rs b/crates/gpui_windows/src/display.rs
+index bb75bf7..edaa793 100644
+--- a/crates/gpui_windows/src/display.rs
++++ b/crates/gpui_windows/src/display.rs
+@@ -122,6 +122,17 @@ impl WindowsDisplay {
+             .collect()
+     }
+ 
++    pub fn from_bounds(bounds: Bounds<Pixels>) -> Option<Self> {
++        available_monitors()
++            .into_iter()
++            .filter_map(|handle| WindowsDisplay::new(Self::display_id_for_monitor(handle)))
++            .find(|display| display.check_given_bounds(bounds))
++    }
++
++    pub fn scale_factor(&self) -> f32 {
++        self.scale_factor
++    }
++
+     pub fn physical_bounds(&self) -> Bounds<DevicePixels> {
+         self.physical_bounds
+     }
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index b293763bd9ed..07e584557093 100644
+index b293763..44f5505 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -714,6 +714,18 @@
+@@ -129,25 +129,13 @@ impl WindowsWindowInner {
+             self.state.scale_factor.get(),
+         );
+         self.state.origin.set(origin);
+-        let size = self.state.logical_size.get();
+-        let center_x = origin.x.as_f32() + size.width.as_f32() / 2.;
+-        let center_y = origin.y.as_f32() + size.height.as_f32() / 2.;
+-        let monitor_bounds = self.state.display.get().bounds();
+-        if center_x < monitor_bounds.left().as_f32()
+-            || center_x > monitor_bounds.right().as_f32()
+-            || center_y < monitor_bounds.top().as_f32()
+-            || center_y > monitor_bounds.bottom().as_f32()
++        let monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
++        if !monitor.is_invalid()
++            && self.state.display.get().handle != monitor
++            && let Some(display) =
++                WindowsDisplay::new(WindowsDisplay::display_id_for_monitor(monitor))
+         {
+-            // center of the window may have moved to another monitor
+-            let monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
+-            // minimize the window can trigger this event too, in this case,
+-            // monitor is invalid, we do nothing.
+-            if !monitor.is_invalid() && self.state.display.get().handle != monitor {
+-                // we will get the same monitor if we only have one
+-                self.state.display.set(WindowsDisplay::new(
+-                    WindowsDisplay::display_id_for_monitor(monitor),
+-                )?);
+-            }
++            self.state.display.set(display);
+         }
+         if let Some(mut callback) = self.state.callbacks.moved.take() {
+             callback();
+@@ -714,6 +702,18 @@ impl WindowsWindowInner {
              return None;
          }
  
@@ -140,7 +193,7 @@ index b293763bd9ed..07e584557093 100644
          unsafe {
              let params = lparam.0 as *mut NCCALCSIZE_PARAMS;
              let saved_top = (*params).rgrc[0].top;
-@@ -844,20 +856,12 @@
+@@ -844,20 +844,12 @@ impl WindowsWindowInner {
                      .context("unable to set maximized window position after dpi has changed")
                      .log_err();
                  }
@@ -161,13 +214,26 @@ index b293763bd9ed..07e584557093 100644
              unsafe {
                  SetWindowPos(
                      handle,
-@@ -871,6 +875,21 @@
-                 .context("unable to set window position after dpi has changed")
-                 .log_err();
+@@ -873,6 +865,36 @@ impl WindowsWindowInner {
              }
-+        }
-+
+         }
+ 
 +        // SetWindowPos can omit a final WM_SIZE; its outer bounds also include native captions.
++        let monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
++        if !monitor.is_invalid()
++            && let Some(display) =
++                WindowsDisplay::new(WindowsDisplay::display_id_for_monitor(monitor))
++        {
++            self.state.display.set(display);
++        }
++        let mut client_origin = POINT::default();
++        if unsafe { ClientToScreen(handle, &mut client_origin) }.as_bool() {
++            self.state.origin.set(logical_point(
++                client_origin.x as f32,
++                client_origin.y as f32,
++                self.state.scale_factor.get(),
++            ));
++        }
 +        let mut client_rect = RECT::default();
 +        if !unsafe { IsIconic(handle) }.as_bool()
 +            && unsafe { GetClientRect(handle, &mut client_rect) }
@@ -180,10 +246,12 @@ index b293763bd9ed..07e584557093 100644
 +                DevicePixels((client_rect.bottom - client_rect.top).max(1)),
 +            );
 +            self.handle_size_change(device_size, self.state.scale_factor.get(), true);
-         }
- 
++        }
++
          Some(0)
-@@ -1650,6 +1669,32 @@
+     }
+ 
+@@ -1650,6 +1672,32 @@ pub(crate) fn current_capslock() -> Capslock {
      Capslock { on }
  }
  
@@ -216,7 +284,7 @@ index b293763bd9ed..07e584557093 100644
  // there is some additional non-visible space when talking about window
  // borders on Windows:
  // - SM_CXSIZEFRAME: The resize handle.
-@@ -1688,3 +1733,40 @@
+@@ -1688,3 +1736,40 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -258,15 +326,13 @@ index b293763bd9ed..07e584557093 100644
 +    }
 +}
 diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
-index 483f03993855..78b1adad2ea6 100644
+index 483f039..78b1ada 100644
 --- a/crates/gpui_windows/src/shaders.hlsl
 +++ b/crates/gpui_windows/src/shaders.hlsl
-@@ -34,6 +34,17 @@
-     float right;
-     float bottom;
+@@ -36,6 +36,17 @@ struct Edges {
      float left;
-+};
-+
+ };
+ 
 +struct EdgeFadeParams {
 +    float top_y;
 +    float bottom_y;
@@ -276,14 +342,15 @@ index 483f03993855..78b1adad2ea6 100644
 +    float right_x;
 +    float band_left;
 +    float band_right;
- };
- 
++};
++
  struct Hsla {
-@@ -92,6 +103,23 @@
- 
+     float h;
+     float s;
+@@ -93,6 +104,23 @@ struct TransformationMatrix {
  static const float M_PI_F = 3.141592653f;
  static const float3 GRAYSCALE_FACTORS = float3(0.2126f, 0.7152f, 0.0722f);
-+
+ 
 +float edge_fade_alpha(float2 position, EdgeFadeParams fade) {
 +    float ramp = 1.0;
 +    if (fade.band_top > 0.0) {
@@ -300,10 +367,11 @@ index 483f03993855..78b1adad2ea6 100644
 +    }
 +    return ramp * ramp;
 +}
- 
++
  float4 to_device_position_impl(float2 position) {
      float2 device_position = position / global_viewport_size * float2(2.0, -2.0) + float2(-1.0, 1.0);
-@@ -502,6 +530,7 @@
+     return float4(device_position, 0., 1.);
+@@ -502,6 +530,7 @@ struct Quad {
      Hsla border_color;
      Corners corner_radii;
      Edges border_widths;
@@ -311,7 +379,7 @@ index 483f03993855..78b1adad2ea6 100644
  };
  
  struct QuadVertexOutput {
-@@ -554,6 +583,8 @@
+@@ -554,6 +583,8 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
      Quad quad = quads[input.quad_id];
      float4 background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
      input.background_solid, input.background_color0, input.background_color1);
@@ -320,7 +388,7 @@ index 483f03993855..78b1adad2ea6 100644
  
      bool unrounded = quad.corner_radii.top_left == 0.0 &&
          quad.corner_radii.top_right == 0.0 &&
-@@ -661,6 +692,7 @@
+@@ -661,6 +692,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
      float4 color = background_color;
      if (border_sdf < antialias_threshold) {
          float4 border_color = input.border_color;
@@ -328,7 +396,7 @@ index 483f03993855..78b1adad2ea6 100644
          // Dashed border logic when border_style == 1
          if (quad.border_style == 1) {
              // Position along the perimeter in "dash space", where each dash
-@@ -1209,6 +1241,7 @@
+@@ -1209,6 +1241,7 @@ struct PolychromeSprite {
      Bounds bounds;
      Bounds content_mask;
      Corners corner_radii;
@@ -336,7 +404,7 @@ index 483f03993855..78b1adad2ea6 100644
      AtlasTile tile;
  };
  
-@@ -1253,6 +1286,6 @@
+@@ -1253,6 +1286,6 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
          float3 grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
          color = float4(grayscale, sample.a);
      }
@@ -345,10 +413,10 @@ index 483f03993855..78b1adad2ea6 100644
      return color;
  }
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 49a935bafe42..c0bbefae0955 100644
+index 49a935b..8fdd318 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -93,6 +93,7 @@
+@@ -93,6 +93,7 @@ pub(crate) struct WindowsWindowInner {
      system_settings: WindowsSystemSettings,
      pub(crate) handle: AnyWindowHandle,
      pub(crate) hide_title_bar: bool,
@@ -356,7 +424,7 @@ index 49a935bafe42..c0bbefae0955 100644
      pub(crate) is_movable: bool,
      pub(crate) is_resizable: bool,
      pub(crate) is_minimizable: bool,
-@@ -213,7 +214,11 @@
+@@ -213,7 +214,11 @@ impl WindowsWindowState {
          };
          (
              calculate_client_rect(
@@ -369,7 +437,7 @@ index 49a935bafe42..c0bbefae0955 100644
                  &self.border_offset,
                  self.scale_factor.get(),
              ),
-@@ -263,6 +268,7 @@
+@@ -263,6 +268,7 @@ impl WindowsWindowInner {
              state,
              handle: context.handle,
              hide_title_bar: context.hide_title_bar,
@@ -377,7 +445,17 @@ index 49a935bafe42..c0bbefae0955 100644
              is_movable: context.is_movable,
              is_resizable: context.is_resizable,
              is_minimizable: context.is_minimizable,
-@@ -386,6 +392,7 @@
+@@ -342,6 +348,9 @@ impl WindowsWindowInner {
+         let Some(open_status) = self.state.initial_placement.take() else {
+             return Ok(());
+         };
++        if unsafe { IsWindowVisible(self.hwnd) }.as_bool() {
++            return Ok(());
++        }
+         match open_status.state {
+             WindowOpenState::Maximized => unsafe {
+                 SetWindowPlacement(self.hwnd, &open_status.placement)
+@@ -386,6 +395,7 @@ struct WindowCreateContext {
      inner: Option<Result<Rc<WindowsWindowInner>>>,
      handle: AnyWindowHandle,
      hide_title_bar: bool,
@@ -385,18 +463,18 @@ index 49a935bafe42..c0bbefae0955 100644
      display: WindowsDisplay,
      is_movable: bool,
      is_resizable: bool,
-@@ -403,6 +410,10 @@
-     directx_devices: DirectXDevices,
-     invalidate_devices: Arc<AtomicBool>,
+@@ -405,6 +415,10 @@ struct WindowCreateContext {
      parent_hwnd: Option<HWND>,
-+}
-+
-+fn custom_frame_enabled(normal_window: bool, transparent_titlebar: Option<bool>) -> bool {
-+    normal_window && transparent_titlebar == Some(true)
  }
  
++fn custom_frame_enabled(normal_window: bool, transparent_titlebar: Option<bool>) -> bool {
++    normal_window && transparent_titlebar == Some(true)
++}
++
  impl WindowsWindow {
-@@ -450,6 +461,13 @@
+     pub(crate) fn new(
+         handle: AnyWindowHandle,
+@@ -450,6 +464,13 @@ impl WindowsWindow {
              .as_ref()
              .map(|titlebar| titlebar.appears_transparent)
              .unwrap_or(true);
@@ -410,7 +488,7 @@ index 49a935bafe42..c0bbefae0955 100644
          let window_name = HSTRING::from(
              params
                  .titlebar
-@@ -460,9 +478,14 @@
+@@ -460,9 +481,14 @@ impl WindowsWindow {
          );
  
          let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
@@ -426,7 +504,7 @@ index 49a935bafe42..c0bbefae0955 100644
  
              if params.is_resizable {
                  dwstyle |= WS_THICKFRAME | WS_MAXIMIZEBOX;
-@@ -480,6 +503,9 @@
+@@ -480,6 +506,9 @@ impl WindowsWindow {
  
              (dwexstyle, dwstyle)
          };
@@ -436,7 +514,24 @@ index 49a935bafe42..c0bbefae0955 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -497,6 +523,7 @@
+@@ -490,13 +519,24 @@ impl WindowsWindow {
+         } else {
+             None
+         }
++        .or_else(|| WindowsDisplay::from_bounds(params.bounds))
+         .or_else(WindowsDisplay::primary_monitor)
+         .context("failed to find any monitor")?;
++        let initial_bounds = if display.check_given_bounds(params.bounds) {
++            params.bounds
++        } else {
++            display.default_bounds()
++        };
++        let initial_physical = initial_bounds.to_device_pixels(display.scale_factor());
++        let creation_origin = display.physical_bounds().origin;
++        let creation_width = initial_physical.size.width.0.max(1);
++        let creation_height = initial_physical.size.height.0.max(1);
+         let appearance = system_appearance().unwrap_or_default();
+         let mut context = WindowCreateContext {
              inner: None,
              handle,
              hide_title_bar,
@@ -444,7 +539,22 @@ index 49a935bafe42..c0bbefae0955 100644
              display,
              is_movable: params.is_movable,
              is_resizable: params.is_resizable,
-@@ -548,6 +575,7 @@
+@@ -521,10 +561,10 @@ impl WindowsWindow {
+                 WINDOW_CLASS_NAME,
+                 &window_name,
+                 dwstyle,
+-                CW_USEDEFAULT,
+-                CW_USEDEFAULT,
+-                CW_USEDEFAULT,
+-                CW_USEDEFAULT,
++                creation_origin.x.0,
++                creation_origin.y.0,
++                creation_width,
++                creation_height,
+                 parent_hwnd,
+                 None,
+                 Some(hinstance.into()),
+@@ -548,10 +588,22 @@ impl WindowsWindow {
              params.bounds,
              this.state.scale_factor.get(),
              &this.state.border_offset,
@@ -452,7 +562,22 @@ index 49a935bafe42..c0bbefae0955 100644
          )?;
          if params.show {
              unsafe { SetWindowPlacement(hwnd, &placement)? };
-@@ -618,8 +646,36 @@
+         } else {
++            let client = calculate_client_rect(
++                translate_rect(
++                    placement.rcNormalPosition,
++                    workspace_offset(hwnd, display, this.state.scale_factor.get()),
++                    1,
++                ),
++                &this.state.border_offset,
++                this.state.scale_factor.get(),
++            );
++            this.state.origin.set(client.origin);
++            this.state.logical_size.set(client.size);
+             this.state.initial_placement.set(Some(WindowOpenStatus {
+                 placement,
+                 state: WindowOpenState::Windowed,
+@@ -618,8 +670,36 @@ impl PlatformWindow for WindowsWindow {
  
      fn resize(&mut self, size: Size<Pixels>) {
          let hwnd = self.0.hwnd;
@@ -491,7 +616,7 @@ index 49a935bafe42..c0bbefae0955 100644
  
          self.0
              .executor
-@@ -628,13 +684,42 @@
+@@ -628,11 +708,11 @@ impl PlatformWindow for WindowsWindow {
                      SetWindowPos(
                          hwnd,
                          None,
@@ -505,12 +630,11 @@ index 49a935bafe42..c0bbefae0955 100644
 +                        flags,
                      )
                      .context("unable to set window content size")
-+                    .log_err();
-+                }
-+            })
-+            .detach();
-+    }
-+
+                     .log_err();
+@@ -641,6 +721,35 @@ impl PlatformWindow for WindowsWindow {
+             .detach();
+     }
+ 
 +    fn start_window_move(&self) {
 +        if !self.is_movable {
 +            return;
@@ -534,10 +658,16 @@ index 49a935bafe42..c0bbefae0955 100644
 +                        LPARAM(position as isize),
 +                    )
 +                    .context("unable to start window move")
-                     .log_err();
-                 }
-             })
-@@ -1508,6 +1593,7 @@
++                    .log_err();
++                }
++            })
++            .detach();
++    }
++
+     fn scale_factor(&self) -> f32 {
+         self.state.scale_factor.get()
+     }
+@@ -1508,6 +1617,7 @@ fn retrieve_window_placement(
      initial_bounds: Bounds<Pixels>,
      scale_factor: f32,
      border_offset: &WindowBorderOffset,
@@ -545,7 +675,7 @@ index 49a935bafe42..c0bbefae0955 100644
  ) -> Result<WINDOWPLACEMENT> {
      let mut placement = WINDOWPLACEMENT {
          length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-@@ -1521,8 +1607,71 @@
+@@ -1521,10 +1631,73 @@ fn retrieve_window_placement(
          display.default_bounds()
      };
      let bounds = bounds.to_device_pixels(scale_factor);
@@ -561,8 +691,8 @@ index 49a935bafe42..c0bbefae0955 100644
 +    placement.rcNormalPosition =
 +        translate_rect(rect, workspace_offset(hwnd, display, scale_factor), -1);
      Ok(placement)
-+}
-+
+ }
+ 
 +fn is_tool_window(hwnd: HWND) -> bool {
 +    unsafe { get_window_long(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 }
 +}
@@ -615,10 +745,12 @@ index 49a935bafe42..c0bbefae0955 100644
 +        right: left + width,
 +        bottom: top + height,
 +    }
- }
- 
++}
++
  fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) {
-@@ -1609,9 +1758,89 @@
+     let mut version = unsafe { std::mem::zeroed() };
+     let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
+@@ -1609,9 +1782,89 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
  
  #[cfg(test)]
  mod tests {

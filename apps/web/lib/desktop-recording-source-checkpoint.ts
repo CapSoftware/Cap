@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const SOURCE_COMMIT_PAGE_SIZE = 16;
+// Cap's own AWS bucket answers fast enough to finish 4x larger pages well inside a step's deadline.
+export const SOURCE_COMMIT_AWS_PAGE_SIZE = 64;
 export const SOURCE_COMMIT_PART_BATCH_SIZE = 4;
 export const SOURCE_COMMIT_PART_PAGE_SIZE = 64;
 export const SOURCE_COMMIT_MAX_OBJECTS = 100_002;

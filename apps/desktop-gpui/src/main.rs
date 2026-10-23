@@ -13,19 +13,24 @@ mod camera_bench;
 mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
+mod camera_loading;
 mod camera_window;
 mod controls_window;
 mod deeplink;
 mod dev_restore;
 mod devices;
 mod diagnostics;
+mod doodle;
+mod draw_bench;
 mod editor_audio;
+mod editor_bench;
 mod editor_canvas;
 mod editor_clips;
 mod editor_color;
 mod editor_crop;
 mod editor_edits;
 mod editor_export;
+mod editor_hover_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
@@ -37,12 +42,17 @@ mod editor_window;
 mod feeds;
 mod hotkeys;
 mod import;
+mod installer;
+mod jpeg_thumbnail;
 mod library;
 mod main_window;
+mod media_access;
 mod menus;
 mod mode_select_window;
 mod onboarding_audio;
+mod onboarding_doodles;
 mod onboarding_window;
+mod permission_guide;
 mod permissions;
 mod permissions_ui;
 #[cfg(test)]
@@ -51,16 +61,21 @@ mod picker_benchmark;
 mod picker_ui_benchmark;
 mod platform;
 mod presets;
+mod project_save;
 mod recording;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
 mod screenshot_editor;
 mod screenshot_export;
+mod script_text;
 mod session;
 mod settings_pages;
 mod settings_window;
+mod sign_in;
 mod single_instance;
+#[cfg(debug_assertions)]
+mod snapshot;
 mod store;
 mod target_overlay;
 mod target_thumbnails;
@@ -77,7 +92,7 @@ use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
 const MAIN_WINDOW_WIDTH: f32 = 330.;
-const MAIN_WINDOW_HEIGHT: f32 = 432.;
+const MAIN_WINDOW_HEIGHT: f32 = 435.;
 
 /// The corner radius the native material is clipped to. `radius = 16` for
 /// material `"panel"` on both visual systems in
@@ -145,7 +160,7 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // matches nothing.
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "cap_gpui=info".into())
+            .unwrap_or_else(|_| "warn,cap_gpui=info,wgpu_core=error,wgpu_hal=error".into())
     };
 
     let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
@@ -219,11 +234,20 @@ fn create_log_appender(
     }
 }
 
-#[cfg(target_os = "windows")]
-fn windows_runtime() -> tokio::runtime::Runtime {
+/// Stack for every thread that renders, decodes, encodes or runs camera
+/// effects. Render and export futures are generic over this crate's closures,
+/// so they compile at this crate's dev opt-level and need far more stack than
+/// Rust's 2 MiB default: the export estimate overflowed a 2 MiB tokio worker
+/// on macOS (2026-10-10). Only address space is reserved; pages are committed
+/// as the thread actually uses them.
+pub(crate) const MEDIA_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+/// gpui_tokio's own runtime keeps tokio's 2 MiB worker stacks; this one
+/// matches the Tauri app's runtime on every platform.
+fn app_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
-        .thread_stack_size(16 * 1024 * 1024)
+        .thread_stack_size(MEDIA_THREAD_STACK_SIZE)
         .enable_all()
         .build()
         .expect("Failed to initialize Tokio")
@@ -246,11 +270,23 @@ fn main() {
         }
     }
 
+    // The AppImage CLI launcher re-enters the AppImage with `--cap-cli`; hand
+    // it to the bundled CLI before logging, single-instance or the GUI start.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = cap_cli_install::appimage::dispatch_cli() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+
     let _log_guard = init_logging();
 
     single_instance::acquire();
-    store::mark_handoff_session();
+    if cfg!(debug_assertions) {
+        store::mark_handoff_session();
+    }
 
+    #[cfg(target_os = "macos")]
+    platform::install_appkit_exception_guards();
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
         if argument.contains("token") || argument.contains("api_key") {
@@ -269,16 +305,11 @@ fn main() {
             crate::deeplink::submit_deep_link(&url);
         }
     });
-    #[cfg(target_os = "windows")]
-    let runtime = windows_runtime();
-    #[cfg(target_os = "windows")]
+    let runtime = app_runtime();
     let runtime_handle = runtime.handle().clone();
 
     app.run(move |cx: &mut App| {
-        #[cfg(target_os = "windows")]
         gpui_tokio::init_from_handle(cx, runtime_handle);
-        #[cfg(not(target_os = "windows"))]
-        gpui_tokio::init(cx);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
@@ -298,9 +329,12 @@ fn main() {
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
         crate::theme::init(cx);
+        platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);
+        crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
+        crate::media_access::MediaAccess::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
         let dev_restore = dev_restore::load();
@@ -309,6 +343,13 @@ fn main() {
             .as_ref()
             .and_then(|restore| restore.main_window_bounds(main_size, cx))
             .unwrap_or_else(|| Bounds::centered(None, main_size, cx));
+        // A first run always lands in onboarding, and these two flags are a
+        // store read rather than the gate's TCC queries -- so the main window
+        // starts hidden instead of flashing up before onboarding replaces it.
+        // Linux keeps the gate: its main window tracks retained visibility.
+        let first_run = cfg!(not(target_os = "linux"))
+            && (!crate::store::has_completed_startup()
+                || !crate::store::has_completed_onboarding());
         let window_handle = cx
             .open_window(
                 WindowOptions {
@@ -354,6 +395,8 @@ fn main() {
                     },
                     is_resizable: false,
                     is_minimizable: cfg!(target_os = "windows"),
+                    focus: !first_run,
+                    show: !first_run,
                     ..Default::default()
                 },
                 {
@@ -367,10 +410,12 @@ fn main() {
             return;
         };
 
-        cx.on_app_quit(|_| async {
-            crate::store::clear_handoff_marker();
-        })
-        .detach();
+        if cfg!(debug_assertions) {
+            cx.on_app_quit(|_| async {
+                crate::store::clear_handoff_marker();
+            })
+            .detach();
+        }
 
         app_windows::init(window_handle, session, cx);
         #[cfg(target_os = "macos")]
@@ -392,6 +437,7 @@ fn main() {
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
@@ -409,17 +455,21 @@ fn main() {
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
         // the gate runs off-main and onboarding opens a beat after the main
-        // window instead of holding it back.
-        cx.spawn(async move |cx| {
-            let show_onboarding = cx
-                .background_executor()
-                .spawn(async { crate::store::should_show_onboarding() })
-                .await;
-            if show_onboarding {
-                cx.update(app_windows::open_onboarding);
-            }
-        })
-        .detach();
+        // window instead of holding it back. A first run skips the gate.
+        if first_run {
+            app_windows::open_onboarding(cx);
+        } else {
+            cx.spawn(async move |cx| {
+                let show_onboarding = cx
+                    .background_executor()
+                    .spawn(async { crate::store::should_show_onboarding() })
+                    .await;
+                if show_onboarding {
+                    cx.update(app_windows::open_onboarding);
+                }
+            })
+            .detach();
+        }
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
         // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
@@ -523,10 +573,16 @@ fn main() {
         .detach();
         #[cfg(target_os = "windows")]
         cx.spawn(async move |_| {
-            if let Some(native) = native_main
-                && let Err(error) = platform::install_main_window_frame_policy(&native)
-            {
+            let Some(native) = native_main else {
+                return;
+            };
+            if let Err(error) = platform::install_main_window_frame_policy(&native) {
                 tracing::warn!(%error, "could not install Main window frame policy");
+            }
+            if let Err(error) =
+                platform::install_session_end_handler(&native, crate::store::clear_handoff_marker)
+            {
+                tracing::warn!(%error, "could not install the Windows session end handler");
             }
         })
         .detach();
@@ -571,6 +627,8 @@ fn main() {
         }
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
+        #[cfg(debug_assertions)]
+        snapshot::arm_from_env(cx);
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead
@@ -700,12 +758,15 @@ fn main() {
             cx.activate(true);
         }
     });
-    #[cfg(target_os = "windows")]
     runtime.shutdown_background();
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(all(
+    test,
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 mod runtime_tests {
+    #[cfg(target_os = "windows")]
     fn current_stack_size() -> usize {
         let (mut low, mut high) = (0, 0);
         unsafe {
@@ -714,20 +775,41 @@ mod runtime_tests {
         high.saturating_sub(low)
     }
 
+    #[cfg(target_os = "macos")]
+    fn current_stack_size() -> usize {
+        unsafe { libc::pthread_get_stacksize_np(libc::pthread_self()) }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn current_stack_size() -> usize {
+        unsafe {
+            let mut attr = std::mem::zeroed::<libc::pthread_attr_t>();
+            assert_eq!(libc::pthread_getattr_np(libc::pthread_self(), &mut attr), 0);
+            let mut address = std::ptr::null_mut();
+            let mut size = 0;
+            assert_eq!(
+                libc::pthread_attr_getstack(&attr, &mut address, &mut size),
+                0
+            );
+            libc::pthread_attr_destroy(&mut attr);
+            size
+        }
+    }
+
     #[test]
-    fn media_workers_and_blocking_tasks_have_large_windows_stacks() {
-        let runtime = super::windows_runtime();
+    fn media_workers_and_blocking_tasks_have_large_stacks() {
+        let runtime = super::app_runtime();
         runtime.block_on(async {
             let worker_size = tokio::spawn(async { current_stack_size() }).await.unwrap();
             let blocking_size = tokio::task::spawn_blocking(current_stack_size)
                 .await
                 .unwrap();
             assert!(
-                worker_size >= 16 * 1024 * 1024,
+                worker_size >= super::MEDIA_THREAD_STACK_SIZE,
                 "worker stack: {worker_size}"
             );
             assert!(
-                blocking_size >= 16 * 1024 * 1024,
+                blocking_size >= super::MEDIA_THREAD_STACK_SIZE,
                 "blocking stack: {blocking_size}"
             );
         });

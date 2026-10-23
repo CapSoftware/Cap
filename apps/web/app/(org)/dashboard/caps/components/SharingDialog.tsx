@@ -115,6 +115,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const inviteViewer = useMutation({
 		mutationFn: () => inviteVideoViewer(capId, viewerEmail),
 		onSuccess: async (result) => {
+			if (!result.success) {
+				toast.error(result.error);
+				return;
+			}
 			await viewerGrants.refetch();
 			router.refresh();
 			setViewerEmail("");
@@ -473,6 +477,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										type="email"
 										placeholder="viewer@example.com"
 										value={viewerEmail}
+										disabled={inviteViewer.isPending}
 										onChange={(event) => setViewerEmail(event.target.value)}
 									/>
 									<Button

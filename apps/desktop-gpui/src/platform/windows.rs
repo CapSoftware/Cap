@@ -17,6 +17,8 @@ use super::{ForcedAppearance, MaterialKind, PanelBehavior};
 
 mod capture_exclusion;
 mod hidden_frame;
+mod session_end;
+mod url_scheme;
 
 #[derive(Clone, Copy)]
 pub struct NativeWindow(isize);
@@ -66,6 +68,13 @@ pub fn native_window(window: &Window) -> Option<NativeWindow> {
 
 pub fn install_main_window_frame_policy(native: &NativeWindow) -> std::io::Result<()> {
     hidden_frame::install(native.hwnd())
+}
+
+pub fn install_session_end_handler(
+    native: &NativeWindow,
+    on_session_end: fn(),
+) -> std::io::Result<()> {
+    session_end::install(native.hwnd(), on_session_end)
 }
 
 #[link(name = "dwmapi")]
@@ -311,21 +320,35 @@ fn window_physical_frame(native: &NativeWindow) -> Option<Rect> {
     }
 }
 
-fn set_physical_frame(native: &NativeWindow, rect: Rect) {
+fn apply_physical_frame(hwnd: HWND, insert_after: HWND, rect: Rect, flags: u32) {
     if !rect.is_valid() {
         return;
     }
+    let x = rect.x.round() as i32;
+    let y = rect.y.round() as i32;
+    let width = rect.width.round() as i32;
+    let height = rect.height.round() as i32;
     unsafe {
-        SetWindowPos(
-            native.hwnd(),
-            HWND_TOP,
-            rect.x.round() as i32,
-            rect.y.round() as i32,
-            rect.width.round() as i32,
-            rect.height.round() as i32,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_ASYNCWINDOWPOS,
-        );
+        SetWindowPos(hwnd, insert_after, x, y, width, height, flags);
+        let mut actual = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut actual) != 0
+            && (actual.left != x
+                || actual.top != y
+                || actual.right - actual.left != width
+                || actual.bottom - actual.top != height)
+        {
+            SetWindowPos(hwnd, insert_after, x, y, width, height, flags);
+        }
     }
+}
+
+fn set_physical_frame(native: &NativeWindow, rect: Rect) {
+    apply_physical_frame(native.hwnd(), HWND_TOP, rect, SWP_NOACTIVATE | SWP_NOZORDER);
 }
 
 pub fn window_frame(native: &NativeWindow) -> (f64, f64, f64, f64) {
@@ -377,20 +400,12 @@ pub fn place_overlay_panel(
     let physical = select_logical_display(logical, &displays, true)
         .map(|display| logical_to_physical(logical, display))
         .unwrap_or(logical);
-    if !physical.is_valid() {
-        return;
-    }
-    unsafe {
-        SetWindowPos(
-            native.hwnd(),
-            HWND_TOPMOST,
-            physical.x.round() as i32,
-            physical.y.round() as i32,
-            physical.width.round() as i32,
-            physical.height.round() as i32,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
-        );
-    }
+    apply_physical_frame(
+        native.hwnd(),
+        HWND_TOPMOST,
+        physical,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
 }
 
 pub fn apply_panel_behavior(window: &Window, behavior: PanelBehavior) {
@@ -605,7 +620,9 @@ pub fn focus_capture_target_window(id: &scap_targets::WindowId) -> bool {
     }
 }
 
-pub fn install_url_scheme_handler() {}
+pub fn install_url_scheme_handler() {
+    url_scheme::install();
+}
 
 pub fn set_dock_icon(_png: &[u8]) {}
 
@@ -643,7 +660,27 @@ pub fn copy_image_bytes_to_clipboard(bytes: &[u8], _cx: &gpui::App) -> Result<()
 }
 
 pub fn desktop_picture_path() -> Option<PathBuf> {
-    None
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETDESKWALLPAPER, SystemParametersInfoW,
+    };
+
+    let mut buffer = vec![0u16; 32_768];
+    let success = unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            buffer.len() as u32,
+            buffer.as_mut_ptr().cast(),
+            0,
+        )
+    };
+    if success == 0 {
+        tracing::warn!(error = %std::io::Error::last_os_error(), "failed to read desktop wallpaper path");
+        return None;
+    }
+    let length = buffer.iter().position(|character| *character == 0)?;
+    (length > 0).then(|| PathBuf::from(OsString::from_wide(&buffer[..length])))
 }
 
 pub fn set_activation_policy(_regular: bool) -> bool {
@@ -708,4 +745,20 @@ mod tests {
         ));
         assert!(!overlap_is_visible(to_rect(0., 0., 0., 100.), monitor));
     }
+}
+
+pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
+    false
+}
+
+pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+    None
+}
+
+pub fn system_settings_frontmost() -> bool {
+    false
+}
+
+pub fn window_is_closable(_window: &Window) -> bool {
+    false
 }

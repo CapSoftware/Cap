@@ -149,12 +149,22 @@ fn resolve_background_top(
     adjusted_top.clamp(0.0, max_top)
 }
 
+#[derive(PartialEq)]
+struct ShapedKeyboardText {
+    text: String,
+    font_size: u32,
+    wrap_width: u32,
+    family: Family<'static>,
+    weight: Weight,
+}
+
 pub struct KeyboardLayer {
     font_system: FontSystem,
     swash_cache: SwashCache,
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
     text_buffer: Buffer,
+    shaped: Option<ShapedKeyboardText>,
     viewport: Viewport,
     background_pipeline: wgpu::RenderPipeline,
     background_bind_group: wgpu::BindGroup,
@@ -267,6 +277,7 @@ impl KeyboardLayer {
             text_atlas,
             text_renderer,
             text_buffer,
+            shaped: None,
             viewport,
             background_pipeline,
             background_bind_group,
@@ -398,11 +409,7 @@ impl KeyboardLayer {
 
         let font_size_base = active.segment.font_size_override.unwrap_or(settings.size) as f32;
         let font_size = font_size_base * (height as f32 / 1080.0);
-        let metrics = Metrics::new(font_size, font_size * 1.2);
-
-        let mut updated_buffer = Buffer::new(&mut self.font_system, metrics);
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
-        updated_buffer.set_size(&mut self.font_system, Some(wrap_width), None);
 
         let font_family = match settings.font.as_str() {
             "System Serif" => Family::Serif,
@@ -426,17 +433,30 @@ impl KeyboardLayer {
             (text_alpha * 255.0) as u8,
         );
 
-        let attrs = Attrs::new().family(font_family).weight(weight).color(color);
-        updated_buffer.set_text(
-            &mut self.font_system,
-            &visible_text,
-            &attrs,
-            Shaping::Advanced,
-        );
+        let shaped = ShapedKeyboardText {
+            text: visible_text,
+            font_size: font_size.to_bits(),
+            wrap_width: wrap_width.to_bits(),
+            family: font_family,
+            weight,
+        };
+        if self.shaped.as_ref() != Some(&shaped) {
+            let metrics = Metrics::new(font_size, font_size * 1.2);
+            let mut buffer = Buffer::new(&mut self.font_system, metrics);
+            buffer.set_size(&mut self.font_system, Some(wrap_width), None);
+            buffer.set_text(
+                &mut self.font_system,
+                &shaped.text,
+                &Attrs::new().family(font_family).weight(weight),
+                Shaping::Advanced,
+            );
+            self.text_buffer = buffer;
+            self.shaped = Some(shaped);
+        }
 
         let mut layout_width: f32 = 0.0;
         let mut layout_height: f32 = 0.0;
-        for run in glyphon::cosmic_text::LayoutRunIter::new(&updated_buffer) {
+        for run in glyphon::cosmic_text::LayoutRunIter::new(&self.text_buffer) {
             layout_width = layout_width.max(run.line_w);
             layout_height = layout_height.max(run.line_top + run.line_height);
         }
@@ -485,7 +505,6 @@ impl KeyboardLayer {
             bottom: (text_top + text_height + 2.0).ceil() as i32,
         };
 
-        self.text_buffer = updated_buffer;
         self.viewport.update(queue, Resolution { width, height });
 
         let text_areas = vec![TextArea {
@@ -568,7 +587,7 @@ impl KeyboardLayer {
         self.has_content
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_content {
             return;
         }
@@ -814,5 +833,332 @@ mod tests {
         );
 
         assert_eq!(resolved_top, 720.0);
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    use cap_project::{
+        CursorEvents, KeyPressDisplay, KeyboardData, KeyboardSettings, KeyboardTrackSegment,
+        ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+        TimelineConfiguration, XY,
+    };
+
+    use super::KeyboardLayer;
+    use crate::{
+        DecodedSegmentFrames, ProjectUniforms, RenderOptions, RenderVideoConstants,
+        ZoomTransformTimeline,
+    };
+
+    const FPS: u32 = 60;
+
+    fn constants(size: XY<u32>) -> RenderVideoConstants {
+        let meta: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "display": { "path": "synthetic.mp4", "fps": FPS }
+        }))
+        .unwrap();
+        let recording = RecordingMeta {
+            platform: None,
+            project_path: Default::default(),
+            pretty_name: "Keyboard overlay test".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(meta.clone())),
+            upload: None,
+        };
+        pollster::block_on(RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording,
+            meta,
+        ))
+        .unwrap()
+    }
+
+    fn typed_segment(id: &str, start: f64, text: &str, key_gap_ms: f64) -> KeyboardTrackSegment {
+        let keys = text
+            .chars()
+            .enumerate()
+            .map(|(index, key)| KeyPressDisplay {
+                key: key.to_string(),
+                time_offset: index as f64 * key_gap_ms,
+            })
+            .collect::<Vec<_>>();
+        KeyboardTrackSegment {
+            id: id.to_string(),
+            start,
+            end: start + keys.len() as f64 * key_gap_ms / 1000.0 + 0.8,
+            display_text: text.to_string(),
+            keys,
+            fade_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+            uppercase_override: None,
+        }
+    }
+
+    fn uniforms(
+        constants: &RenderVideoConstants,
+        segments: &[KeyboardTrackSegment],
+        size: XY<u32>,
+    ) -> ProjectUniforms {
+        let project = ProjectConfiguration::default();
+        let cursor = CursorEvents::default();
+        let frames = frames(size);
+        let mut zoom = ZoomTransformTimeline::from_project(&project, &cursor, 60.0, size);
+        zoom.ensure_precomputed_until(60.0);
+        let mut uniforms = ProjectUniforms::new(
+            constants,
+            &std::sync::Arc::new(project),
+            0,
+            FPS,
+            size,
+            &cursor,
+            &frames,
+            60.0,
+            &zoom,
+        );
+        uniforms.output_size = (size.x, size.y);
+        std::sync::Arc::make_mut(&mut uniforms.project).keyboard = Some(KeyboardData {
+            settings: KeyboardSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        });
+        std::sync::Arc::make_mut(&mut uniforms.project).timeline = Some(TimelineConfiguration {
+            segments: vec![],
+            transitions: vec![],
+            zoom_segments: vec![],
+            scene_segments: vec![],
+            mask_segments: vec![],
+            text_segments: vec![],
+            caption_segments: vec![],
+            keyboard_segments: segments.to_vec(),
+            audio_segments: vec![],
+            style_segments: vec![],
+            image_segments: vec![],
+            camera3d_segments: vec![],
+        });
+        uniforms
+    }
+
+    fn frames(size: XY<u32>) -> DecodedSegmentFrames {
+        DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: None,
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        }
+    }
+
+    fn render_pixels(
+        constants: &RenderVideoConstants,
+        layer: &KeyboardLayer,
+        size: XY<u32>,
+    ) -> Vec<u8> {
+        let device = &constants.device;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Keyboard Test Target"),
+            size: wgpu::Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Keyboard Test Readback"),
+            size: u64::from(size.x * size.y * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Keyboard Test Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            layer.render(&mut pass);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size.x * 4),
+                    rows_per_image: Some(size.y),
+                },
+            },
+            wgpu::Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            },
+        );
+        constants.queue.submit([encoder.finish()]);
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait).unwrap();
+        let pixels = readback.slice(..).get_mapped_range().to_vec();
+        readback.unmap();
+        pixels
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn every_frame_of_a_typed_segment_renders_like_a_fresh_layer() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let segments = [typed_segment("typed", 0.2, "git push", 90.0)];
+        let mut uniforms = uniforms(&constants, &segments, size);
+        let frames = frames(size);
+        let mut reused = KeyboardLayer::new(&constants.device, &constants.queue);
+        let mut drawn_frames = 0;
+        for frame in 0..((segments[0].end + 0.2) * FPS as f64) as u32 {
+            uniforms.frame_number = frame;
+            reused.prepare(&uniforms, &frames, size, &constants, None);
+            let mut fresh = KeyboardLayer::new(&constants.device, &constants.queue);
+            fresh.prepare(&uniforms, &frames, size, &constants, None);
+            assert_eq!(reused.has_content(), fresh.has_content(), "frame {frame}");
+            let pixels = render_pixels(&constants, &reused, size);
+            assert_eq!(
+                pixels,
+                render_pixels(&constants, &fresh, size),
+                "frame {frame}"
+            );
+            drawn_frames += usize::from(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        }
+        assert!(drawn_frames > 40);
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layer_follows_font_and_output_size_changes() {
+        type Edit = (&'static str, XY<u32>, fn(&mut KeyboardSettings));
+        let base_size = XY::new(512, 288);
+        let constants = constants(base_size);
+        let segments = [typed_segment("typed", 0.2, "git push origin main", 60.0)];
+        let frames = frames(base_size);
+        let prepare =
+            |layer: &mut KeyboardLayer, size: XY<u32>, edit: fn(&mut KeyboardSettings)| {
+                let mut uniforms = uniforms(&constants, &segments, size);
+                uniforms.frame_number = 96;
+                edit(
+                    &mut std::sync::Arc::make_mut(&mut uniforms.project)
+                        .keyboard
+                        .as_mut()
+                        .unwrap()
+                        .settings,
+                );
+                layer.prepare(&uniforms, &frames, size, &constants, None);
+                assert!(layer.has_content());
+                render_pixels(&constants, layer, size)
+            };
+        let unchanged: fn(&mut KeyboardSettings) = |_| {};
+        let edits: [Edit; 5] = [
+            ("font size", base_size, |settings| settings.size = 70),
+            ("font family", base_size, |settings| {
+                settings.font = "System Monospace".to_string()
+            }),
+            ("font weight", base_size, |settings| {
+                settings.font_weight = 700
+            }),
+            ("output height", XY::new(512, 216), unchanged),
+            ("output width", XY::new(128, 288), unchanged),
+        ];
+        let base_pixels = prepare(
+            &mut KeyboardLayer::new(&constants.device, &constants.queue),
+            base_size,
+            unchanged,
+        );
+
+        for (name, size, edit) in edits {
+            let expected = prepare(
+                &mut KeyboardLayer::new(&constants.device, &constants.queue),
+                size,
+                edit,
+            );
+            assert!(
+                expected != base_pixels,
+                "{name} edit should change the output"
+            );
+
+            let mut reused = KeyboardLayer::new(&constants.device, &constants.queue);
+            prepare(&mut reused, base_size, unchanged);
+            assert!(
+                prepare(&mut reused, size, edit) == expected,
+                "{name} edit reused a stale layout"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn benchmark_keyboard_layer_prepare() {
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let mut segments = Vec::new();
+        let mut start = 0.5;
+        for (index, text) in ["cargo test --release", "git status", "npm run dev"]
+            .iter()
+            .enumerate()
+        {
+            let segment = typed_segment(&format!("typed-{index}"), start, text, 120.0);
+            start = segment.end + 0.5;
+            segments.push(segment);
+        }
+        let mut uniforms = uniforms(&constants, &segments, size);
+        let frames = frames(size);
+        let total_frames = (start * FPS as f64) as u32;
+        let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+
+        let mut samples = Vec::new();
+        for pass in 0..4 {
+            for frame in 0..total_frames {
+                uniforms.frame_number = frame;
+                let started = std::time::Instant::now();
+                layer.prepare(&uniforms, &frames, size, &constants, None);
+                let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                if pass > 0 && layer.has_content() {
+                    samples.push(elapsed);
+                }
+            }
+        }
+        constants.device.poll(wgpu::PollType::Wait).unwrap();
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "keyboard layer prepare ({} visible frames): p50 {:.1} us, p95 {:.1} us, mean {:.1} us",
+            samples.len(),
+            samples[samples.len() / 2],
+            samples[samples.len() * 95 / 100],
+            samples.iter().sum::<f64>() / samples.len() as f64,
+        );
     }
 }

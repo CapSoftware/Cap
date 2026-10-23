@@ -1,0 +1,4 @@
+interface:
+  display_name: "Building Cap"
+  short_description: "Isolated worktrees and recorded Cap pull requests"
+  default_prompt: "Use $building to implement this Cap feature in an isolated worktree and prepare a verified pull request with an ELI5 and Cap recording."

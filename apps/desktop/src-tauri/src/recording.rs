@@ -4,10 +4,10 @@ use cap_media_info::ffmpeg_sample_format_for;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    CameraShape, CornerStyle, CursorClickEvent, GlideDirection, InstantRecordingMeta,
+    MultipleSegments, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration,
+    TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
 #[cfg(target_os = "macos")]
 use cap_recording::SendableShareableContent;
@@ -1867,6 +1867,7 @@ pub fn format_project_name<'a>(
         static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
         static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
         static ref MOMENT_REGEX: Regex = Regex::new(r"\{moment(?::([^}]+))?\}").unwrap();
+        static ref RANDOM_REGEX: Regex = Regex::new(r"\{random(?::(\d+))?\}").unwrap();
         static ref AC: aho_corasick::AhoCorasick = {
             aho_corasick::AhoCorasick::new([
                 "{recording_mode}",
@@ -1878,6 +1879,19 @@ pub fn format_project_name<'a>(
         };
     }
     let haystack = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
+    let haystack = RANDOM_REGEX.replace_all(haystack, |caps: &regex::Captures| {
+        let length = match caps.get(1) {
+            Some(value) => match value.as_str().parse::<usize>() {
+                Ok(length) => length,
+                Err(_) => return caps.get(0).unwrap().as_str().to_owned(),
+            },
+            None => 10,
+        };
+        if !(1..=32).contains(&length) {
+            return caps.get(0).unwrap().as_str().to_owned();
+        }
+        uuid::Uuid::new_v4().simple().to_string()[..length].to_owned()
+    });
 
     // Get recording mode information
     let (recording_mode, mode) = match recording_mode {
@@ -1888,7 +1902,7 @@ pub fn format_project_name<'a>(
 
     let result = AC
         .try_replace_all(
-            haystack,
+            &haystack,
             &[recording_mode, mode, target_kind, &truncated_target_name],
         )
         .expect("AhoCorasick replace should never fail with default configuration");
@@ -6700,6 +6714,7 @@ fn apply_recording_camera_preview_state(
         CameraPreviewShape::Round => {
             config.camera.shape = CameraShape::Square;
             config.camera.rounding = 100.0;
+            config.camera.rounding_type = CornerStyle::Rounded;
         }
         CameraPreviewShape::Square => {
             config.camera.shape = CameraShape::Square;
@@ -7074,7 +7089,47 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone as _;
     use tempfile::tempdir;
+
+    #[test]
+    fn project_name_random_placeholder_is_filename_safe_and_sized() {
+        let name = format_project_name(
+            Some("{random}-{random:16}-{random:0}"),
+            "Example Window",
+            "Window",
+            RecordingMode::Studio,
+            None,
+        );
+        let parts = name.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts[0].len(), 10);
+        assert_eq!(parts[1].len(), 16);
+        assert!(
+            parts[..2]
+                .iter()
+                .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
+        );
+        assert_eq!(parts[2], "{random:0}");
+    }
+
+    #[test]
+    fn project_name_preserves_random_placeholder_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        let name = format_project_name(
+            None,
+            "Implement {random} placeholder",
+            "Window",
+            RecordingMode::Studio,
+            Some(timestamp),
+        );
+
+        assert!(name.contains("Implement {random} placeholder"));
+    }
 
     #[test]
     fn requested_microphone_absence_is_an_error_not_an_empty_track() {
@@ -10177,6 +10232,19 @@ mod preparing_presentation_parity_tests {
         ProjectConfiguration::default()
     }
 
+    fn preparing_static_projection(
+        preset: &ProjectConfiguration,
+        target: &ScreenCaptureTarget,
+        stopped: &TimelineConfiguration,
+    ) -> ProjectConfiguration {
+        let mut snapshot = preparing_presentation_snapshot(Some(preset), Some(target)).unwrap();
+        apply_recording_camera_preview_state(
+            &mut snapshot,
+            &crate::camera::CameraPreviewState::default(),
+        );
+        crate::editor_preparing::project_from_preparing_presentation(&snapshot, stopped)
+    }
+
     fn ordinary_static_projection(
         preset: &ProjectConfiguration,
         target: &ScreenCaptureTarget,
@@ -10210,10 +10278,8 @@ mod preparing_presentation_parity_tests {
                 mass: 1.0,
             };
             let original = value(&preset);
-            let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
             let stopped = recording_timeline(one_segment(6.0), Vec::new());
-            let projected =
-                crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+            let projected = preparing_static_projection(&preset, &target, &stopped);
             let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
             assert_eq!(value(&projected), value(&ordinary));
             assert_eq!(value(&preset), original);
@@ -10265,12 +10331,8 @@ mod preparing_presentation_parity_tests {
                     damping: 22.0,
                     mass: 0.8,
                 };
-                let snapshot =
-                    preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
                 let stopped = recording_timeline(one_segment(6.0), Vec::new());
-                let projected = crate::editor_preparing::project_from_preparing_presentation(
-                    &snapshot, &stopped,
-                );
+                let projected = preparing_static_projection(&preset, &target, &stopped);
                 assert_eq!(
                     value(&projected),
                     value(&ordinary_static_projection(
@@ -10353,10 +10415,8 @@ mod preparing_presentation_parity_tests {
         }))
         .unwrap();
         preset.timeline = Some(recording_timeline(one_segment(2.0), vec![old_zoom]));
-        let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
         let stopped = recording_timeline(one_segment(6.0), Vec::new());
-        let projected =
-            crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+        let projected = preparing_static_projection(&preset, &target, &stopped);
         let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
         assert_eq!(value(&projected), value(&ordinary));
         let timeline = projected.timeline.as_ref().unwrap();
@@ -10372,7 +10432,7 @@ mod preparing_presentation_parity_tests {
     }
 
     #[test]
-    fn ordinary_late_camera_state_changes_only_the_three_existing_camera_fields() {
+    fn ordinary_late_camera_state_preserves_unrelated_camera_fields() {
         for (shape, expected_shape, rounding) in [
             (CameraPreviewShape::Round, CameraShape::Square, 100.0),
             (CameraPreviewShape::Square, CameraShape::Square, 25.0),
@@ -10389,6 +10449,9 @@ mod preparing_presentation_parity_tests {
                 let mut expected = config.clone();
                 expected.camera.shape = expected_shape;
                 expected.camera.rounding = rounding;
+                if shape == CameraPreviewShape::Round {
+                    expected.camera.rounding_type = CornerStyle::Rounded;
+                }
                 expected.camera.background_blur.mode = blur;
                 apply_recording_camera_preview_state(
                     &mut config,

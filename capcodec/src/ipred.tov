@@ -1,0 +1,1262 @@
+import {
+  AV_LEFT, AV_TL, AV_TOP, AV_TR, C_DC, C_H, C_PLANE, C_V, I16_DC, I16_H, I16_PLANE, I16_V, I4_DC, I4_DDL, I4_DDR, I4_H,
+  I4_HD, I4_HU, I4_V, I4_VL, I4_VR, chromaModeAvailable, gather4, gather8, mode16Available, modeAvailable, modeMask, pred16,
+  pred4, pred8, predChroma,
+} from "./intra"
+import {
+  T16_HI, T16_LO, T32_HI, T32_LO, T64_HI, T64_LO, h4x4, sa8d, sa8dMax, sa8dMax2, satd16, satd4, satd8,
+} from "./satd"
+
+export const COST_NA = 1 << 30
+
+const VH = 0
+const DT = 16
+const HT = 32
+const DL = 96
+const DR = 112
+const VE = 128
+const VO = 144
+const HQ = 160
+const HQ8 = 176
+const VA = 192
+const HU = 208
+const HU8 = 224
+export const T8_SIZE = 240
+
+const ROW8: int[] = [
+  VH, VH, VH, VH, VH, VH, VH, VH,
+  HT, HT + 8, HT + 16, HT + 24, HT + 32, HT + 40, HT + 48, HT + 56,
+  DT, DT, DT, DT, DT, DT, DT, DT,
+  DL, DL + 1, DL + 2, DL + 3, DL + 4, DL + 5, DL + 6, DL + 7,
+  DR + 7, DR + 6, DR + 5, DR + 4, DR + 3, DR + 2, DR + 1, DR,
+  VE + 4, VO + 3, VE + 3, VO + 2, VE + 2, VO + 1, VE + 1, VO,
+  HQ8 + 6, HQ8 + 4, HQ8 + 2, HQ + 8, HQ + 6, HQ + 4, HQ + 2, HQ,
+  VA, DL, VA + 1, DL + 1, VA + 2, DL + 2, VA + 3, DL + 3,
+  HU, HU + 2, HU + 4, HU + 6, HU + 8, HU8 + 2, HU8 + 4, HU8 + 6,
+]
+
+function lowpass(x: u8x16, xm: u8x16, xp: u8x16): u8x16 {
+  return x.avg(xm.avg(xp) - ((xm ^ xp) & u8x16.splat(1)))
+}
+
+export function blocks4(dst: Uint8Array, src: Uint8Array, so: int, ss: int) {
+  for (let by = 0; by < 4; by++) {
+    const o = so + by * 4 * ss
+    const r0 = i32x4.bitcast(u8x16.load(src, o))
+    const r1 = i32x4.bitcast(u8x16.load(src, o + ss))
+    const r2 = i32x4.bitcast(u8x16.load(src, o + 2 * ss))
+    const r3 = i32x4.bitcast(u8x16.load(src, o + 3 * ss))
+    const t0 = i32x4.shuffle(r0, r1, [0, 4, 1, 5])
+    const t1 = i32x4.shuffle(r2, r3, [0, 4, 1, 5])
+    const t2 = i32x4.shuffle(r0, r1, [2, 6, 3, 7])
+    const t3 = i32x4.shuffle(r2, r3, [2, 6, 3, 7])
+    u8x16.bitcast(i32x4.shuffle(t0, t1, [0, 1, 4, 5])).store(dst, by * 64)
+    u8x16.bitcast(i32x4.shuffle(t0, t1, [2, 3, 6, 7])).store(dst, by * 64 + 16)
+    u8x16.bitcast(i32x4.shuffle(t2, t3, [0, 1, 4, 5])).store(dst, by * 64 + 32)
+    u8x16.bitcast(i32x4.shuffle(t2, t3, [2, 3, 6, 7])).store(dst, by * 64 + 48)
+  }
+}
+
+export function unblocks4(dst: Uint8Array, d: int, ds: int, blk: Uint8Array) {
+  for (let by = 0; by < 4; by++) {
+    const b0 = i32x4.bitcast(u8x16.load(blk, by * 64))
+    const b1 = i32x4.bitcast(u8x16.load(blk, by * 64 + 16))
+    const b2 = i32x4.bitcast(u8x16.load(blk, by * 64 + 32))
+    const b3 = i32x4.bitcast(u8x16.load(blk, by * 64 + 48))
+    const t0 = i32x4.shuffle(b0, b1, [0, 4, 1, 5])
+    const t1 = i32x4.shuffle(b2, b3, [0, 4, 1, 5])
+    const t2 = i32x4.shuffle(b0, b1, [2, 6, 3, 7])
+    const t3 = i32x4.shuffle(b2, b3, [2, 6, 3, 7])
+    const o = d + by * 4 * ds
+    u8x16.bitcast(i32x4.shuffle(t0, t1, [0, 1, 4, 5])).store(dst, o)
+    u8x16.bitcast(i32x4.shuffle(t0, t1, [2, 3, 6, 7])).store(dst, o + ds)
+    u8x16.bitcast(i32x4.shuffle(t2, t3, [0, 1, 4, 5])).store(dst, o + 2 * ds)
+    u8x16.bitcast(i32x4.shuffle(t2, t3, [2, 3, 6, 7])).store(dst, o + 3 * ds)
+  }
+}
+
+export function edge4m(xb: Uint8Array, p: Uint8Array, stride: int, x: int, y: int, av: int, rb: Uint8Array, r: int) {
+  const bx = r & 3
+  const by = r >> 2
+  let v = u8x16.splat(0)
+  if (by > 0) {
+    const up = u8x16.load(rb, (r - 4) * 16)
+    v = (av & AV_TR) !== 0 ?
+      u8x16.shuffle(up, u8x16.load(rb, (r - 3) * 16), [0, 0, 0, 0, 0, 0, 12, 13, 14, 15, 28, 29, 30, 31, 31, 31]) :
+      up.swizzle([0, 0, 0, 0, 0, 0, 12, 13, 14, 15, 15, 15, 15, 15, 15, 15])
+    v = v.withLane(5, bx > 0 ? rb[(r - 5) * 16 + 15]! : p[(y - 1) * stride + x - 1]!)
+  } else if ((av & AV_TOP) !== 0) {
+    const t = u8x16.load(p, (y - 1) * stride + x - 6)
+    v = (av & AV_TR) !== 0 ? t.swizzle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 13, 13]) :
+      t.swizzle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 9, 9, 9, 9])
+  }
+  if (bx > 0) {
+    v = u8x16.shuffle(v, u8x16.load(rb, (r - 1) * 16), [31, 31, 27, 23, 19, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+  } else if ((av & AV_LEFT) !== 0) {
+    const o = y * stride + x - 1
+    const l3 = p[o + 3 * stride]!
+    v = v.withLane(4, p[o]!).withLane(3, p[o + stride]!).withLane(2, p[o + 2 * stride]!).withLane(1, l3).withLane(0, l3)
+  }
+  v.store(xb, 0)
+}
+
+export function edge4(xb: Uint8Array, p: Uint8Array, stride: int, x: int, y: int, av: int) {
+  let v = u8x16.splat(0)
+  if ((av & AV_TOP) !== 0) {
+    const t = u8x16.load(p, (y - 1) * stride + x - 6)
+    v = (av & AV_TR) !== 0 ? t.swizzle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 13, 13]) :
+      t.swizzle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 9, 9, 9, 9])
+  }
+  if ((av & AV_LEFT) !== 0) {
+    const o = y * stride + x - 1
+    const l3 = p[o + 3 * stride]!
+    v = v.withLane(4, p[o]!).withLane(3, p[o + stride]!).withLane(2, p[o + 2 * stride]!).withLane(1, l3).withLane(0, l3)
+  }
+  v.store(xb, 0)
+}
+
+function dc4(xb: Uint8Array, av: int): int {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const st = int(xb[6]!) + int(xb[7]!) + int(xb[8]!) + int(xb[9]!)
+  const sl = int(xb[1]!) + int(xb[2]!) + int(xb[3]!) + int(xb[4]!)
+  if (top && left) return (st + sl + 4) >> 3
+  if (top) return (st + 2) >> 2
+  if (left) return (sl + 2) >> 2
+  return 128
+}
+
+export function pred4v(xb: Uint8Array, mode: int, av: int): u8x16 {
+  const x = u8x16.load(xb, 0)
+  if (mode === I4_V) return x.swizzle([6, 7, 8, 9, 6, 7, 8, 9, 6, 7, 8, 9, 6, 7, 8, 9])
+  if (mode === I4_H) return x.swizzle([4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1])
+  if (mode === I4_DC) return u8x16.splat(dc4(xb, av))
+  const xp = x.swizzle([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15])
+  const f = lowpass(x, x.swizzle([0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]), xp)
+  const a = x.avg(xp)
+  if (mode === I4_DDL) return u8x16.shuffle(f, a, [7, 8, 9, 10, 8, 9, 10, 11, 9, 10, 11, 12, 10, 11, 12, 13])
+  if (mode === I4_DDR) return u8x16.shuffle(f, a, [5, 6, 7, 8, 4, 5, 6, 7, 3, 4, 5, 6, 2, 3, 4, 5])
+  if (mode === I4_VR) return u8x16.shuffle(f, a, [21, 22, 23, 24, 5, 6, 7, 8, 4, 21, 22, 23, 3, 5, 6, 7])
+  if (mode === I4_HD) return u8x16.shuffle(f, a, [20, 5, 6, 7, 19, 4, 20, 5, 18, 3, 19, 4, 17, 2, 18, 3])
+  if (mode === I4_VL) return u8x16.shuffle(f, a, [22, 23, 24, 25, 7, 8, 9, 10, 23, 24, 25, 26, 8, 9, 10, 11])
+  return u8x16.shuffle(f, a, [19, 3, 18, 2, 18, 2, 17, 1, 17, 1, 16, 16, 16, 16, 16, 16])
+}
+
+const DUP4_01 = [0, 1, 0, 1, 2, 3, 2, 3, 4, 5, 4, 5, 6, 7, 6, 7, 16, 17, 16, 17, 18, 19, 18, 19, 20, 21, 20, 21, 22, 23, 22, 23]
+const DUP4_23 = [
+  8, 9, 8, 9, 10, 11, 10, 11, 12, 13, 12, 13, 14, 15, 14, 15, 24, 25, 24, 25, 26, 27, 26, 27, 28, 29, 28, 29, 30, 31, 30, 31,
+]
+const HMUL4 = i8x32(
+  1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1,
+)
+const SWAP_DW = [2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13]
+const SWAP_QW = [4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11]
+const EVEN16 = i16x16(-1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0)
+const PRED_VH = [6, 7, 8, 9, 6, 7, 8, 9, 6, 7, 8, 9, 6, 7, 8, 9, 20, 20, 20, 20, 19, 19, 19, 19, 18, 18, 18, 18, 17, 17, 17, 17]
+const PRED_DDL_DDR = [
+  7, 8, 9, 10, 8, 9, 10, 11, 9, 10, 11, 12, 10, 11, 12, 13, 21, 22, 23, 24, 20, 21, 22, 23, 19, 20, 21, 22, 18, 19, 20, 21,
+]
+const PRED_VR_HD = [
+  37, 38, 39, 40, 5, 6, 7, 8, 4, 37, 38, 39, 3, 5, 6, 7, 52, 21, 22, 23, 51, 20, 52, 21, 50, 19, 51, 20, 49, 18, 50, 19,
+]
+const PRED_VL_HU = [
+  38, 39, 40, 41, 7, 8, 9, 10, 39, 40, 41, 42, 8, 9, 10, 11, 51, 19, 50, 18, 50, 18, 49, 17, 49, 17, 48, 48, 48, 48, 48, 48,
+]
+const NEXT32 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 31]
+const PREV32 = [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+
+function i4NaCosts(): Int32Array {
+  const t = new Int32Array(256)
+  for (let av = 0; av < 16; av++) {
+    for (let m = 0; m < 16; m++) t[av * 16 + m] = m < 9 && modeAvailable(m, av) ? 0 : COST_NA
+  }
+  return t
+}
+
+const I4_NA = i4NaCosts()
+const HEAD_MODES = i32x4(0, 1, 2, -1)
+const DIR_MODES = i32x8(3, 4, 5, 6, 7, 8, -1, -1)
+export const I4_BEST_MODE = 12
+export const I4_BEST_COST = 13
+
+function absMax4(v: i16x16): i16x16 {
+  const s = v.swizzle(SWAP_DW)
+  const h = i16x16.select(i16x16(-1, -1, 0, 0, -1, -1, 0, 0, -1, -1, 0, 0, -1, -1, 0, 0), v + s, s - v).abs()
+  return h.max(h.swizzle(SWAP_QW))
+}
+
+function satd4Pair(s01: i16x16, s23: i16x16, p: u8x32): i16x16 {
+  const r01 = s01 - u8x32.madd(p.swizzle(DUP4_01), HMUL4)
+  const r23 = s23 - u8x32.madd(p.swizzle(DUP4_23), HMUL4)
+  return absMax4(r01 + r23) + absMax4(r01 - r23)
+}
+
+export function i4Costs(
+  costs: Int32Array, src: Uint8Array, so: int, xb: Uint8Array, av: int, pb: Uint8Array, pm: int, bias: int,
+) {
+  // pmaddubsw takes the first horizontal butterfly of the source and of each prediction from duplicated pixel pairs,
+  // and the residual's is their difference. The last vertical stage folds into |a + b| + |a - b| = 2 * max(|a|, |b|);
+  // each half of a pair's sum holds one mode and adds the 16 coefficients' magnitudes, at most 16 * 4 * 255 < 32768
+  // (Cauchy-Schwarz with Parseval). The DC prediction's first butterfly is 2 * dc in the even lanes of every row, so its
+  // residual rows 0 - 2 and 1 - 3 are the source's. The choice is the first cheapest of V, H and DC with the most
+  // probable mode's bias; a directional mode replaces it only when strictly cheaper, all of them where that choice costs
+  // more than 0, else the most probable mode alone if directional, and none (nor their costs) where its bias can't win.
+  // Lanes 9 and 10 of the directional costs repeat VL and HU and are masked like unavailable modes.
+  const s = u8x16.load(src, so)
+  const sd = u8x32.concat(s, s)
+  const s01 = u8x32.madd(sd.swizzle(DUP4_01), HMUL4)
+  const s23 = u8x32.madd(sd.swizzle(DUP4_23), HMUL4)
+  const x = u8x16.load(xb, 0)
+  const x2 = u8x32.concat(x, x)
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const e = u8x16.sadParts(x.swizzle([6, 7, 8, 9, 6, 7, 8, 9, 1, 2, 3, 4, 1, 2, 3, 4]), u8x16.splat(0))
+  const st2 = int(e.lane(0))
+  const sl2 = int(e.lane(2))
+  const dc = top && left ? (st2 + sl2 + 8) >> 4 : top ? (st2 + 4) >> 3 : left ? (sl2 + 4) >> 3 : 128
+  const pvh = x2.swizzle(PRED_VH)
+  pvh.store(pb, I4_V * 16)
+  u8x16.splat(dc).store(pb, I4_DC * 16)
+  const m1 = satd4Pair(s01, s23, pvh)
+  const m2 = absMax4(s01 + s23 - (i16x16.splat(4 * dc) & EVEN16)) + absMax4(s01 - s23)
+  const t = i16x16.madd(i16x16.hadd(m1, m2), i16x16.splat(1))
+  const r = (i32x8.hadd(t, t).low() >> 1).max(i32x4.load(I4_NA, av * 16)) -
+    (i32x4.splat(pm).eq(HEAD_MODES) & i32x4.splat(bias))
+  r.store(costs, 0)
+  const r1 = r.min(r.swizzle([2, 3, 0, 1]))
+  const rm = r1.min(r1.swizzle([1, 0, 3, 2]))
+  let bc = int(rm.lane(0))
+  let bm = Math.ctz32(r.eq(rm).mask())
+  if (bc > 0 || (pm > I4_DC && bc > -bias)) {
+    const xp = x2.swizzle(NEXT32)
+    const xm = x2.swizzle(PREV32)
+    const f = x2.avg(xm.avg(xp) - ((xm ^ xp) & u8x32.splat(1)))
+    const a = x2.avg(xp)
+    const p34 = u8x32.shuffle(f, a, PRED_DDL_DDR)
+    const p56 = u8x32.shuffle(f, a, PRED_VR_HD)
+    const p78 = u8x32.shuffle(f, a, PRED_VL_HU)
+    p34.store(pb, I4_DDL * 16)
+    p56.store(pb, I4_VR * 16)
+    p78.store(pb, I4_VL * 16)
+    const m3 = satd4Pair(s01, s23, p34)
+    const m4 = satd4Pair(s01, s23, p56)
+    const m5 = satd4Pair(s01, s23, p78)
+    const k = i16x16.hadd(i16x16.hadd(m3, m4), i16x16.hadd(m5, m5))
+    const rd = (i16x16.madd(k, i16x16.splat(1)) >> 1).max(i32x8.load(I4_NA, av * 16 + I4_DDL)) -
+      (i32x8.splat(pm).eq(DIR_MODES) & i32x8.splat(bias))
+    rd.store(costs, I4_DDL)
+    if (bc > 0) {
+      const d1 = rd.min(rd.swizzle([4, 5, 6, 7, 0, 1, 2, 3]))
+      const d2 = d1.min(d1.swizzle([2, 3, 0, 1, 6, 7, 4, 5]))
+      const dm = d2.min(d2.swizzle([1, 0, 3, 2, 5, 4, 7, 6]))
+      const md = int(dm.lane(0))
+      if (md < bc) {
+        bc = md
+        bm = I4_DDL + Math.ctz32(rd.eq(dm).mask())
+      }
+    } else {
+      const c = costs[pm]!
+      if (c < bc) {
+        bc = c
+        bm = pm
+      }
+    }
+  }
+  costs[I4_BEST_MODE] = bm
+  costs[I4_BEST_COST] = bc
+}
+
+const SHIFT1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+const SHIFT2 = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+
+export function unblocks8(dst: Uint8Array, d: int, ds: int, blk: Uint8Array) {
+  for (let k = 0; k < 8; k++) {
+    const b = (k >> 2) * 128 + (k & 3) * 16
+    const l = i64x2.bitcast(u8x16.load(blk, b))
+    const r = i64x2.bitcast(u8x16.load(blk, b + 64))
+    const o = d + ((k >> 2) * 8 + (k & 3) * 2) * ds
+    u8x16.bitcast(i64x2.shuffle(l, r, [0, 2])).store(dst, o)
+    u8x16.bitcast(i64x2.shuffle(l, r, [1, 3])).store(dst, o + ds)
+  }
+}
+
+export function edge8m(t: Uint8Array, p: Uint8Array, stride: int, x: int, y: int, av: int, rb: Uint8Array, b8: int) {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const tl = (av & AV_TL) !== 0
+  const zero = u8x16.splat(0)
+  let c: int = 0
+  if (tl) c = b8 === 3 ? int(rb[63]!) : int(p[(y - 1) * stride + x - 1]!)
+  let tv = u8x16.splat(c)
+  if (top) {
+    const tr = (av & AV_TR) !== 0
+    if (b8 < 2) {
+      const v = u8x16.load(p, (y - 1) * stride + x)
+      tv = tr ? v : v.swizzle([0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7])
+    } else {
+      const v = u8x16.load(rb, (b8 - 2) * 64 + 48)
+      tv = tr ? u8x16.shuffle(v, u8x16.load(rb, 112), [8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31]) :
+        v.swizzle([8, 9, 10, 11, 12, 13, 14, 15, 15, 15, 15, 15, 15, 15, 15, 15])
+    }
+  }
+  let lv = u8x16.splat(c)
+  if (left) {
+    if ((b8 & 1) === 0) {
+      const o = y * stride + x - 1
+      lv = lv.withLane(0, p[o]!).withLane(1, p[o + stride]!).withLane(2, p[o + 2 * stride]!).withLane(3, p[o + 3 * stride]!)
+        .withLane(4, p[o + 4 * stride]!).withLane(5, p[o + 5 * stride]!).withLane(6, p[o + 6 * stride]!).withLane(7, p[o + 7 * stride]!)
+    } else {
+      const b = (b8 - 1) * 64
+      const s01 = u8x16.shuffle(u8x16.load(rb, b), u8x16.load(rb, b + 16), [7, 15, 23, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+      const s23 = u8x16.shuffle(u8x16.load(rb, b + 32), u8x16.load(rb, b + 48), [7, 15, 23, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+      lv = u8x16.shuffle(s01, s23, [0, 1, 2, 3, 16, 17, 18, 19, 0, 0, 0, 0, 0, 0, 0, 0]).withLane(8, c)
+    }
+  }
+  const r0 = u8x16.shuffle(lv, tv, [7, 7, 6, 5, 4, 3, 2, 1, 0, 8, 16, 17, 18, 19, 20, 21])
+  const r1 = u8x16.shuffle(tv, zero, [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 16, 16, 16, 16, 16])
+  let f0 = lowpass(u8x16.shuffle(r0, r1, SHIFT1), r0, u8x16.shuffle(r0, r1, SHIFT2))
+  const f1 = lowpass(u8x16.shuffle(r1, zero, SHIFT1), r1, u8x16.shuffle(r1, zero, SHIFT2))
+  if (!tl) {
+    if (top) f0 = f0.withLane(9, u8((3 * int(tv.lane(0)) + int(tv.lane(1)) + 2) >> 2))
+    if (left) f0 = f0.withLane(7, u8((3 * int(lv.lane(0)) + int(lv.lane(1)) + 2) >> 2))
+  }
+  const xa = u8x16.shuffle(f0, zero, [16, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
+  const xb = u8x16.shuffle(f0, f1, [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 24, 26, 27, 28, 29])
+  const xc = u8x16.shuffle(f1, zero, [14, 15, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16])
+  const x1a = u8x16.shuffle(xa, xb, SHIFT1)
+  const x2a = u8x16.shuffle(xa, xb, SHIFT2)
+  const x1b = u8x16.shuffle(xb, xc, SHIFT1)
+  const x2b = u8x16.shuffle(xb, xc, SHIFT2)
+  const ft0 = lowpass(x1a, xa, x2a)
+  const ft1 = lowpass(x1b, xb, x2b)
+  const at0 = x1a.avg(x2a)
+  const at1 = x1b.avg(x2b)
+  const vh = u8x16.shuffle(f0, f1, [9, 10, 11, 12, 13, 14, 15, 16, 7, 6, 5, 4, 3, 2, 1, 0])
+  vh.store(t, VH)
+  const sp = u8x16.sadParts(vh, zero)
+  let dc = 128
+  if (top && left) {
+    dc = (int(sp.lane(0)) + int(sp.lane(2)) + 8) >> 4
+  } else if (top) {
+    dc = (int(sp.lane(0)) + 4) >> 3
+  } else if (left) {
+    dc = (int(sp.lane(2)) + 4) >> 3
+  }
+  u8x16.splat(dc).store(t, DT)
+  f0.swizzle([7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6]).store(t, HT)
+  f0.swizzle([5, 5, 5, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4]).store(t, HT + 16)
+  f0.swizzle([3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2]).store(t, HT + 32)
+  f0.swizzle([1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]).store(t, HT + 48)
+  u8x16.shuffle(ft0, ft1, [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]).store(t, DL)
+  u8x16.shuffle(ft0, ft1, SHIFT2).store(t, DR)
+  const a2 = u8x16.shuffle(at0, at1, SHIFT2)
+  u8x16.shuffle(ft0, a2, [2, 4, 6, 8, 23, 24, 25, 26, 27, 28, 29, 30, 30, 30, 30, 30]).store(t, VE)
+  u8x16.shuffle(ft0, ft1, [3, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17, 17, 17, 17]).store(t, VO)
+  const hq = u8x16.shuffle(ft0, at0, [17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23, 8, 24, 9])
+  hq.store(t, HQ)
+  const hq1 = u8x16.shuffle(ft0, ft1, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25])
+  u8x16.shuffle(hq, hq1, [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]).store(t, HQ8)
+  u8x16.shuffle(at0, at1, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]).store(t, VA)
+  const hu = u8x16.shuffle(ft0, at0, [23, 7, 22, 6, 21, 5, 20, 4, 19, 3, 18, 2, 17, 1, 16, 16])
+  hu.store(t, HU)
+  u8x16.shuffle(hu, at0, [8, 9, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16, 16, 16, 16, 16]).store(t, HU8)
+}
+
+function sa8dT(a: Uint8Array, ao: int, as: int, t: Uint8Array, m: int): int {
+  const k = m * 8
+  const r0 = i16x8.loadU8(a, ao) - i16x8.loadU8(t, ROW8[k]!)
+  const r1 = i16x8.loadU8(a, ao + as) - i16x8.loadU8(t, ROW8[k + 1]!)
+  const r2 = i16x8.loadU8(a, ao + 2 * as) - i16x8.loadU8(t, ROW8[k + 2]!)
+  const r3 = i16x8.loadU8(a, ao + 3 * as) - i16x8.loadU8(t, ROW8[k + 3]!)
+  const r4 = i16x8.loadU8(a, ao + 4 * as) - i16x8.loadU8(t, ROW8[k + 4]!)
+  const r5 = i16x8.loadU8(a, ao + 5 * as) - i16x8.loadU8(t, ROW8[k + 5]!)
+  const r6 = i16x8.loadU8(a, ao + 6 * as) - i16x8.loadU8(t, ROW8[k + 6]!)
+  const r7 = i16x8.loadU8(a, ao + 7 * as) - i16x8.loadU8(t, ROW8[k + 7]!)
+  return (sa8dMax(r0, r1, r2, r3, r4, r5, r6, r7).sum() + 1) >> 1
+}
+
+export function i8SrcCosts(costs: Int32Array, a: Uint8Array, ao: int, as: int, t: Uint8Array, av: int) {
+  const r0 = i16x8.loadU8(a, ao)
+  const r1 = i16x8.loadU8(a, ao + as)
+  const r2 = i16x8.loadU8(a, ao + 2 * as)
+  const r3 = i16x8.loadU8(a, ao + 3 * as)
+  const r4 = i16x8.loadU8(a, ao + 4 * as)
+  const r5 = i16x8.loadU8(a, ao + 5 * as)
+  const r6 = i16x8.loadU8(a, ao + 6 * as)
+  const r7 = i16x8.loadU8(a, ao + 7 * as)
+  const a0 = r0 + r1
+  const a1 = r0 - r1
+  const a2 = r2 + r3
+  const a3 = r2 - r3
+  const a4 = r4 + r5
+  const a5 = r4 - r5
+  const a6 = r6 + r7
+  const a7 = r6 - r7
+  const b0 = a0 + a2
+  const b1 = a1 + a3
+  const b2 = a0 - a2
+  const b3 = a1 - a3
+  const b4 = a4 + a6
+  const b5 = a5 + a7
+  const b6 = a4 - a6
+  const b7 = a5 - a7
+  const c0 = b0 + b4
+  const c1 = b1 + b5
+  const c2 = b2 + b6
+  const c3 = b3 + b7
+  const c4 = b0 - b4
+  const c5 = b1 - b5
+  const c6 = b2 - b6
+  const c7 = b3 - b7
+  const t0 = i16x8.shuffle(c0, c1, T16_LO)
+  const t1 = i16x8.shuffle(c0, c1, T16_HI)
+  const t2 = i16x8.shuffle(c2, c3, T16_LO)
+  const t3 = i16x8.shuffle(c2, c3, T16_HI)
+  const t4 = i16x8.shuffle(c4, c5, T16_LO)
+  const t5 = i16x8.shuffle(c4, c5, T16_HI)
+  const t6 = i16x8.shuffle(c6, c7, T16_LO)
+  const t7 = i16x8.shuffle(c6, c7, T16_HI)
+  const u0 = i16x8.shuffle(t0, t2, T32_LO)
+  const u1 = i16x8.shuffle(t0, t2, T32_HI)
+  const u2 = i16x8.shuffle(t1, t3, T32_LO)
+  const u3 = i16x8.shuffle(t1, t3, T32_HI)
+  const u4 = i16x8.shuffle(t4, t6, T32_LO)
+  const u5 = i16x8.shuffle(t4, t6, T32_HI)
+  const u6 = i16x8.shuffle(t5, t7, T32_LO)
+  const u7 = i16x8.shuffle(t5, t7, T32_HI)
+  const v0 = i16x8.shuffle(u0, u4, T64_LO)
+  const v1 = i16x8.shuffle(u0, u4, T64_HI)
+  const v2 = i16x8.shuffle(u1, u5, T64_LO)
+  const v3 = i16x8.shuffle(u1, u5, T64_HI)
+  const v4 = i16x8.shuffle(u2, u6, T64_LO)
+  const v5 = i16x8.shuffle(u2, u6, T64_HI)
+  const v6 = i16x8.shuffle(u3, u7, T64_LO)
+  const v7 = i16x8.shuffle(u3, u7, T64_HI)
+  const e0 = v0 + v1
+  const e1 = v0 - v1
+  const e2 = v2 + v3
+  const e3 = v2 - v3
+  const e4 = v4 + v5
+  const e5 = v4 - v5
+  const e6 = v6 + v7
+  const e7 = v6 - v7
+  const f0 = e0 + e2
+  const f1 = e1 + e3
+  const f2 = e0 - e2
+  const f3 = e1 - e3
+  const f4 = e4 + e6
+  const f5 = e5 + e7
+  const f6 = e4 - e6
+  const f7 = e5 - e7
+  // Lane i of g0 is the first coefficient of row i, and twice lane i of half is the sum of row i's |coefficients|
+  // (|a + b| + |a - b| = 2 * max(|a|, |b|)); V and DC change only row 0, and H only the first coefficient of each row.
+  const half = u16x8.bitcast(f0.abs().max(f4.abs()) + f1.abs().max(f5.abs()) + f2.abs().max(f6.abs()) + f3.abs().max(f7.abs()))
+  const g0 = f0 + f4
+  const e = h8x2(i16x16.concat(c0 - (i16x8.loadU8(t, VH) << 3), i16x8.loadU8(t, VH + 8)))
+  const r = u32x4.hadd(
+    u32x4.hadd(u16x8.bitcast(e.low().abs()).addPairs(), u16x8.bitcast((g0 - (e.high() << 3)).abs()).addPairs()),
+    u32x4.hadd(u16x8.bitcast(g0.abs()).addPairs(), half.addPairs()),
+  )
+  const all = 2 * int(r.lane(3))
+  const row0 = 2 * int(half.lane(0))
+  const dc0 = int(g0.lane(0))
+  const dcp = dc0 - 64 * int(t[DT]!)
+  if ((av & AV_TOP) !== 0) costs[I4_V] = (int(r.lane(0)) - row0 + all + 2) >> 2
+  if ((av & AV_LEFT) !== 0) costs[I4_H] = (int(r.lane(1)) - int(r.lane(2)) + all + 2) >> 2
+  costs[I4_DC] = ((dcp < 0 ? -dcp : dcp) - (dc0 < 0 ? -dc0 : dc0) + all + 2) >> 2
+}
+
+export function i8Cost(src: Uint8Array, so: int, ss: int, t: Uint8Array, mode: int): int {
+  return sa8dT(src, so, ss, t, mode)
+}
+
+function h8x2(v: i16x16): i16x16 {
+  const u = h4x4(v)
+  const r = u.swizzle([4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11])
+  return i16x16.select(i16x16(-1, -1, -1, -1, 0, 0, 0, 0, -1, -1, -1, -1, 0, 0, 0, 0), u + r, r - u)
+}
+
+function diff2(a: Uint8Array, ao: int, t: Uint8Array, pa: int, pb: int): i16x16 {
+  const s = i16x8.loadU8(a, ao)
+  return i16x16.concat(s, s) - i16x16.concat(i16x8.loadU8(t, pa), i16x8.loadU8(t, pb))
+}
+
+export function i8Cost2(costs: Int32Array, src: Uint8Array, so: int, ss: int, t: Uint8Array, ma: int, mb: int) {
+  const ka = ma * 8
+  const kb = mb * 8
+  const r0 = diff2(src, so, t, ROW8[ka]!, ROW8[kb]!)
+  const r1 = diff2(src, so + ss, t, ROW8[ka + 1]!, ROW8[kb + 1]!)
+  const r2 = diff2(src, so + 2 * ss, t, ROW8[ka + 2]!, ROW8[kb + 2]!)
+  const r3 = diff2(src, so + 3 * ss, t, ROW8[ka + 3]!, ROW8[kb + 3]!)
+  const r4 = diff2(src, so + 4 * ss, t, ROW8[ka + 4]!, ROW8[kb + 4]!)
+  const r5 = diff2(src, so + 5 * ss, t, ROW8[ka + 5]!, ROW8[kb + 5]!)
+  const r6 = diff2(src, so + 6 * ss, t, ROW8[ka + 6]!, ROW8[kb + 6]!)
+  const r7 = diff2(src, so + 7 * ss, t, ROW8[ka + 7]!, ROW8[kb + 7]!)
+  const s = sa8dMax2(r0, r1, r2, r3, r4, r5, r6, r7).addPairs()
+  const h = u32x4.hadd(s.low(), s.high())
+  const r = u32x4.hadd(h, h)
+  costs[ma] = (int(r.lane(0)) + 1) >> 1
+  costs[mb] = (int(r.lane(1)) + 1) >> 1
+}
+
+export function pred8v(dst: Uint8Array, dO: int, t: Uint8Array, mode: int) {
+  const k = mode * 8
+  for (let y = 0; y < 8; y += 2) {
+    u8x16.packSat(i16x8.loadU8(t, ROW8[k + y]!), i16x8.loadU8(t, ROW8[k + y + 1]!)).store(dst, dO + y * 8)
+  }
+}
+
+export function pred16v(dst: Uint8Array, dO: int, ds: int, p: Uint8Array, stride: int, x: int, y: int, mode: int, av: int) {
+  if (mode === I16_V) {
+    const v = u8x16.load(p, (y - 1) * stride + x)
+    for (let j = 0; j < 16; j++) v.store(dst, dO + j * ds)
+    return
+  }
+  if (mode === I16_H) {
+    for (let j = 0; j < 16; j++) u8x16.splat(p[(y + j) * stride + x - 1]!).store(dst, dO + j * ds)
+    return
+  }
+  if (mode === I16_DC) {
+    const top = (av & AV_TOP) !== 0
+    const left = (av & AV_LEFT) !== 0
+    let sum = 0
+    if (top) sum += u8x16.sad(u8x16.load(p, (y - 1) * stride + x), u8x16.splat(0))
+    if (left) {
+      for (let j = 0; j < 16; j++) sum += int(p[(y + j) * stride + x - 1]!)
+    }
+    let dc = 128
+    if (top && left) {
+      dc = (sum + 16) >> 5
+    } else if (top || left) {
+      dc = (sum + 8) >> 4
+    }
+    const v = u8x16.splat(dc)
+    for (let j = 0; j < 16; j++) v.store(dst, dO + j * ds)
+    return
+  }
+  const to = (y - 1) * stride + x
+  const hd = i16x8.loadU8(p, to + 8) - i16x8.loadU8(p, to - 1).swizzle([7, 6, 5, 4, 3, 2, 1, 0])
+  const hh = i16x8.madd(hd, i16x8(1, 2, 3, 4, 5, 6, 7, 8)).sum()
+  let vv = 0
+  for (let k = 0; k < 8; k++) {
+    vv += (k + 1) * (int(p[(y + 8 + k) * stride + x - 1]!) - int(p[(y + 6 - k) * stride + x - 1]!))
+  }
+  const a = 16 * (int(p[(y + 15) * stride + x - 1]!) + int(p[to + 15]!))
+  const b = (5 * hh + 32) >> 6
+  const c = (5 * vv + 32) >> 6
+  const bl = i16x8(-7, -6, -5, -4, -3, -2, -1, 0) * i16x8.splat(b)
+  const bh = i16x8(1, 2, 3, 4, 5, 6, 7, 8) * i16x8.splat(b)
+  for (let j = 0; j < 16; j++) {
+    const base = i16x8.splat(a + c * (j - 7) + 16)
+    u8x16.packSat((base + bl) >> 5, (base + bh) >> 5).store(dst, dO + j * ds)
+  }
+}
+
+function dcQuad(p: Uint8Array, stride: int, x: int, y: int, bx: int, by: int, top: bool, left: bool): int {
+  let st = 0
+  let sl = 0
+  if (top) {
+    const o = (y - 1) * stride + x + bx * 4
+    for (let i = 0; i < 4; i++) st += int(p[o + i]!)
+  }
+  if (left) {
+    for (let j = 0; j < 4; j++) sl += int(p[(y + by * 4 + j) * stride + x - 1]!)
+  }
+  if (bx === by) {
+    if (top && left) return (st + sl + 4) >> 3
+    if (left) return (sl + 2) >> 2
+    if (top) return (st + 2) >> 2
+  } else if (bx === 1) {
+    if (top) return (st + 2) >> 2
+    if (left) return (sl + 2) >> 2
+  } else {
+    if (left) return (sl + 2) >> 2
+    if (top) return (st + 2) >> 2
+  }
+  return 128
+}
+
+export function predChromaV(dst: Uint8Array, dO: int, ds: int, p: Uint8Array, stride: int, x: int, y: int, mode: int, av: int) {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  if (mode === C_V) {
+    const b = u8x16.loadLow(p, (y - 1) * stride + x)
+    for (let j = 0; j < 8; j++) b.storeLow(dst, dO + j * ds)
+    return
+  }
+  if (mode === C_H) {
+    for (let j = 0; j < 8; j++) u8x16.splat(p[(y + j) * stride + x - 1]!).storeLow(dst, dO + j * ds)
+    return
+  }
+  if (mode === C_DC) {
+    const d00 = dcQuad(p, stride, x, y, 0, 0, top, left)
+    const d10 = dcQuad(p, stride, x, y, 1, 0, top, left)
+    const d01 = dcQuad(p, stride, x, y, 0, 1, top, left)
+    const d11 = dcQuad(p, stride, x, y, 1, 1, top, left)
+    const r0 = i16x8(d00, d00, d00, d00, d10, d10, d10, d10)
+    const r1 = i16x8(d01, d01, d01, d01, d11, d11, d11, d11)
+    const b = u8x16.packSat(r0, r1)
+    for (let j = 0; j < 4; j++) b.storeLow(dst, dO + j * ds)
+    const c = b.swizzle([8, 9, 10, 11, 12, 13, 14, 15, 8, 9, 10, 11, 12, 13, 14, 15])
+    for (let j = 4; j < 8; j++) c.storeLow(dst, dO + j * ds)
+    return
+  }
+  const to = (y - 1) * stride + x
+  let hh = 0
+  let vv = 0
+  for (let k = 0; k < 4; k++) {
+    hh += (k + 1) * (int(p[to + 4 + k]!) - int(p[to + 2 - k]!))
+    vv += (k + 1) * (int(p[(y + 4 + k) * stride + x - 1]!) - int(p[(y + 2 - k) * stride + x - 1]!))
+  }
+  const a = 16 * (int(p[(y + 7) * stride + x - 1]!) + int(p[to + 7]!))
+  const b = (34 * hh + 32) >> 6
+  const c = (34 * vv + 32) >> 6
+  const bx = i16x8(-3, -2, -1, 0, 1, 2, 3, 4) * i16x8.splat(b)
+  for (let j = 0; j < 8; j++) {
+    const r = (i16x8.splat(a + c * (j - 3) + 16) + bx) >> 5
+    r.storeU8(dst, dO + j * ds)
+  }
+}
+
+export function i16Satd(costs: Int32Array, s: Uint8Array, so: int, ss: int, p: Uint8Array, stride: int, x: int, y: int, av: int) {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const m0 = i16x16(-1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0)
+  const zero = i16x16.splat(0)
+  const to = (y - 1) * stride + x
+  let tv = zero
+  let sum = 0
+  if (top) {
+    tv = h4x4(i16x16.loadU8(p, to)) * i16x16.splat(4)
+    sum += u8x16.sad(u8x16.load(p, to), u8x16.splat(0))
+  }
+  if (left) {
+    for (let j = 0; j < 16; j++) sum += int(p[(y + j) * stride + x - 1]!)
+  }
+  let dc = 128
+  if (top && left) {
+    dc = (sum + 16) >> 5
+  } else if (top || left) {
+    dc = (sum + 8) >> 4
+  }
+  const dcv = i16x16.splat(16 * dc) & m0
+  let accV = u16x16.splat(0)
+  let accH = u16x16.splat(0)
+  let accD = u16x16.splat(0)
+  for (let by = 0; by < 16; by += 4) {
+    const o = so + by * ss
+    const r0 = i16x16.loadU8(s, o)
+    const r1 = i16x16.loadU8(s, o + ss)
+    const r2 = i16x16.loadU8(s, o + 2 * ss)
+    const r3 = i16x16.loadU8(s, o + 3 * ss)
+    const s01 = r0 + r1
+    const m01 = r0 - r1
+    const s23 = r2 + r3
+    const m23 = r2 - r3
+    const h0 = h4x4(s01 + s23)
+    const h1 = h4x4(s01 - s23)
+    const h2 = h4x4(m01 + m23)
+    const h3 = h4x4(m01 - m23)
+    const rest = h1.abs() + h2.abs() + h3.abs()
+    accD += u16x16.bitcast((h0 - dcv).abs() + rest)
+    if (top) accV += u16x16.bitcast((h0 - tv).abs() + rest)
+    if (left) {
+      const lo = (y + by) * stride + x - 1
+      const l0 = int(p[lo]!)
+      const l1 = int(p[lo + stride]!)
+      const l2 = int(p[lo + 2 * stride]!)
+      const l3 = int(p[lo + 3 * stride]!)
+      const e0 = i16x16.splat(4 * (l0 + l1 + l2 + l3)) & m0
+      const e1 = i16x16.splat(4 * (l0 + l1 - l2 - l3)) & m0
+      const e2 = i16x16.splat(4 * (l0 - l1 + l2 - l3)) & m0
+      const e3 = i16x16.splat(4 * (l0 - l1 - l2 + l3)) & m0
+      accH += u16x16.bitcast((h0 - e0).abs() + (h1 - e1).abs() + (h2 - e2).abs() + (h3 - e3).abs())
+    }
+  }
+  costs[I16_V] = accV.sum() >> 1
+  costs[I16_H] = accH.sum() >> 1
+  costs[I16_DC] = accD.sum() >> 1
+}
+
+export function i16PlaneSatd(s: Uint8Array, so: int, ss: int, p: Uint8Array, stride: int, x: int, y: int): int {
+  const zero = i16x16.splat(0)
+  const hi = i16x16.splat(255)
+  const to = (y - 1) * stride + x
+  const hd = i16x8.loadU8(p, to + 8) - i16x8.loadU8(p, to - 1).swizzle([7, 6, 5, 4, 3, 2, 1, 0])
+  const hh = i16x8.madd(hd, i16x8(1, 2, 3, 4, 5, 6, 7, 8)).sum()
+  let vv = 0
+  for (let k = 0; k < 8; k++) {
+    vv += (k + 1) * (int(p[(y + 8 + k) * stride + x - 1]!) - int(p[(y + 6 - k) * stride + x - 1]!))
+  }
+  const pa = 16 * (int(p[(y + 15) * stride + x - 1]!) + int(p[to + 15]!)) + 16
+  const pc = (5 * vv + 32) >> 6
+  const pb = i16x16(-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8) * i16x16.splat((5 * hh + 32) >> 6)
+  let acc = u16x16.splat(0)
+  for (let by = 0; by < 16; by += 4) {
+    const o = so + by * ss
+    const base = pa + pc * (by - 7)
+    const d0 = i16x16.loadU8(s, o) - ((i16x16.splat(base) + pb) >> 5).max(zero).min(hi)
+    const d1 = i16x16.loadU8(s, o + ss) - ((i16x16.splat(base + pc) + pb) >> 5).max(zero).min(hi)
+    const d2 = i16x16.loadU8(s, o + 2 * ss) - ((i16x16.splat(base + 2 * pc) + pb) >> 5).max(zero).min(hi)
+    const d3 = i16x16.loadU8(s, o + 3 * ss) - ((i16x16.splat(base + 3 * pc) + pb) >> 5).max(zero).min(hi)
+    const t01 = d0 + d1
+    const u01 = d0 - d1
+    const t23 = d2 + d3
+    const u23 = d2 - d3
+    acc += u16x16.bitcast(h4x4(t01 + t23).abs() + h4x4(t01 - t23).abs() + h4x4(u01 + u23).abs() + h4x4(u01 - u23).abs())
+  }
+  return acc.sum() >> 1
+}
+
+export const UV_TOP = 128
+export const UV_LEFT = 144
+export const UV_DC = 160
+export const UV_SIZE = 176
+
+function dcQuads(st0: int, st1: int, sl0: int, sl1: int, top: bool, left: bool): int {
+  if (top && left) {
+    return ((st0 + sl0 + 4) >> 3) | (((st1 + 2) >> 2) << 8) | (((sl1 + 2) >> 2) << 16) | (((st1 + sl1 + 4) >> 3) << 24)
+  }
+  if (top) {
+    const d0 = (st0 + 2) >> 2
+    const d1 = (st1 + 2) >> 2
+    return d0 | (d1 << 8) | (d0 << 16) | (d1 << 24)
+  }
+  if (left) {
+    const d0 = (sl0 + 2) >> 2
+    const d1 = (sl1 + 2) >> 2
+    return d0 | (d0 << 8) | (d1 << 16) | (d1 << 24)
+  }
+  return 0x80808080
+}
+
+export function chromaSatd(costs: Int32Array, su: Uint8Array, sv: Uint8Array, so: int, ss: int, pu: Uint8Array, pv: Uint8Array, stride: int, x: int, y: int, av: int, uv: Uint8Array) {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const m0 = i16x16(-1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0)
+  const zero = i16x16.splat(0)
+  // Exactly 8 bytes per row: on the rightmost macroblock a 16-byte load reaches into the next macroblock row's
+  // source, which another wavefront worker may be writing.
+  for (let j = 0; j < 8; j++) {
+    u8x16.packSat(i16x8.loadU8(su, so + j * ss), i16x8.loadU8(sv, so + j * ss)).store(uv, j * 16)
+  }
+  let tv = zero
+  let stU0 = 0
+  let stU1 = 0
+  let stV0 = 0
+  let stV1 = 0
+  if (top) {
+    const to = (y - 1) * stride + x
+    u8x16.shuffle(u8x16.load(pu, to), u8x16.load(pv, to), [0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23]).store(uv, 128)
+    const ht = h4x4(i16x16.loadU8(uv, 128))
+    stU0 = ht.lane(0)
+    stU1 = ht.lane(4)
+    stV0 = ht.lane(8)
+    stV1 = ht.lane(12)
+    tv = ht * i16x16.splat(4)
+  }
+  let hl = zero
+  if (left) {
+    const lo = y * stride + x - 1
+    const lv = i16x16(
+      int(pu[lo]!), int(pu[lo + stride]!), int(pu[lo + 2 * stride]!), int(pu[lo + 3 * stride]!),
+      int(pu[lo + 4 * stride]!), int(pu[lo + 5 * stride]!), int(pu[lo + 6 * stride]!), int(pu[lo + 7 * stride]!),
+      int(pv[lo]!), int(pv[lo + stride]!), int(pv[lo + 2 * stride]!), int(pv[lo + 3 * stride]!),
+      int(pv[lo + 4 * stride]!), int(pv[lo + 5 * stride]!), int(pv[lo + 6 * stride]!), int(pv[lo + 7 * stride]!),
+    )
+    u8x16.packSat(lv.low(), lv.high()).store(uv, UV_LEFT)
+    hl = h4x4(lv)
+  }
+  const dU = dcQuads(stU0, stU1, hl.lane(0), hl.lane(4), top, left)
+  const dV = dcQuads(stV0, stV1, hl.lane(8), hl.lane(12), top, left)
+  u8x16.bitcast(i32x4(dU, dV, 0, 0)).store(uv, UV_DC)
+  const hl4 = hl * i16x16.splat(4)
+  let accV = u16x16.splat(0)
+  let accH = u16x16.splat(0)
+  let accD = u16x16.splat(0)
+  for (let g = 0; g < 2; g++) {
+    const r0 = i16x16.loadU8(uv, g * 64)
+    const r1 = i16x16.loadU8(uv, g * 64 + 16)
+    const r2 = i16x16.loadU8(uv, g * 64 + 32)
+    const r3 = i16x16.loadU8(uv, g * 64 + 48)
+    const s01 = r0 + r1
+    const m01 = r0 - r1
+    const s23 = r2 + r3
+    const m23 = r2 - r3
+    const h0 = h4x4(s01 + s23)
+    const h1 = h4x4(s01 - s23)
+    const h2 = h4x4(m01 + m23)
+    const h3 = h4x4(m01 - m23)
+    const rest = h1.abs() + h2.abs() + h3.abs()
+    const sh = g * 16
+    const dc = i16x16(
+      16 * ((dU >> sh) & 255), 0, 0, 0, 16 * ((dU >> (sh + 8)) & 255), 0, 0, 0,
+      16 * ((dV >> sh) & 255), 0, 0, 0, 16 * ((dV >> (sh + 8)) & 255), 0, 0, 0,
+    )
+    accD += u16x16.bitcast((h0 - dc).abs() + rest)
+    if (top) accV += u16x16.bitcast((h0 - tv).abs() + rest)
+    if (left) {
+      let e0 = zero
+      let e1 = zero
+      let e2 = zero
+      let e3 = zero
+      if (g === 0) {
+        e0 = hl4.swizzle([0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8]) & m0
+        e1 = hl4.swizzle([2, 2, 2, 2, 2, 2, 2, 2, 10, 10, 10, 10, 10, 10, 10, 10]) & m0
+        e2 = hl4.swizzle([1, 1, 1, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9, 9, 9]) & m0
+        e3 = hl4.swizzle([3, 3, 3, 3, 3, 3, 3, 3, 11, 11, 11, 11, 11, 11, 11, 11]) & m0
+      } else {
+        e0 = hl4.swizzle([4, 4, 4, 4, 4, 4, 4, 4, 12, 12, 12, 12, 12, 12, 12, 12]) & m0
+        e1 = hl4.swizzle([6, 6, 6, 6, 6, 6, 6, 6, 14, 14, 14, 14, 14, 14, 14, 14]) & m0
+        e2 = hl4.swizzle([5, 5, 5, 5, 5, 5, 5, 5, 13, 13, 13, 13, 13, 13, 13, 13]) & m0
+        e3 = hl4.swizzle([7, 7, 7, 7, 7, 7, 7, 7, 15, 15, 15, 15, 15, 15, 15, 15]) & m0
+      }
+      accH += u16x16.bitcast((h0 - e0).abs() + (h1 - e1).abs() + (h2 - e2).abs() + (h3 - e3).abs())
+    }
+  }
+  const d = accD.addPairs()
+  const h = accH.addPairs()
+  const v = accV.addPairs()
+  const dv = d.low() + d.high()
+  const vv = v.low() + v.high()
+  const r = u32x4.hadd(u32x4.hadd(dv, h.low() + h.high()), u32x4.hadd(vv, vv))
+  costs[C_DC] = int(r.lane(0)) >> 1
+  costs[C_H] = int(r.lane(1)) >> 1
+  costs[C_V] = int(r.lane(2)) >> 1
+}
+
+const PLANE_REV = [0, 1, 2, 3, 2, 1, 0, 7, 8, 9, 10, 11, 10, 9, 8, 15]
+const PLANE_W = i16x16(0, 0, 0, 0, 1, 2, 3, 4, 0, 0, 0, 0, 1, 2, 3, 4)
+const PLANE_X = i16x16(-3, -2, -1, 0, 1, 2, 3, 4, -3, -2, -1, 0, 1, 2, 3, 4)
+
+// Both planes at once from the rows, edges and DC quads chromaSatd left in `uv` (U in the low 8 lanes, V in the
+// high 8). The plane's first row and its per-row step go to `pl` for predChromaUv; i16 lanes wrap as the scalar
+// definition's sums do when it splats them, so stepping a row at a time gives the same lanes.
+export function chromaPlaneSatd(uv: Uint8Array, pu: Uint8Array, pv: Uint8Array, stride: int, x: int, y: int, pl: Int16Array): int {
+  const tl = (y - 1) * stride + x - 1
+  const t = i16x16.loadU8(uv, UV_TOP)
+  const l = i16x16.loadU8(uv, UV_LEFT)
+  const cu = int(pu[tl]!)
+  const cv = int(pv[tl]!)
+  const dh = t - t.swizzle(PLANE_REV).withLane(7, cu).withLane(15, cv)
+  const dv = l - l.swizzle(PLANE_REV).withLane(7, cu).withLane(15, cv)
+  const hv = i32x8.hadd(i16x16.madd(dh, PLANE_W), i16x16.madd(dv, PLANE_W))
+  const bu = (34 * int(hv.lane(1)) + 32) >> 6
+  const bv = (34 * int(hv.lane(3)) + 32) >> 6
+  const ccu = (34 * int(hv.lane(5)) + 32) >> 6
+  const ccv = (34 * int(hv.lane(7)) + 32) >> 6
+  const rowU = 16 * (int(l.lane(7)) + int(t.lane(7))) + 16 - 3 * ccu
+  const rowV = 16 * (int(l.lane(15)) + int(t.lane(15))) + 16 - 3 * ccv
+  const c = i16x16.concat(i16x8.splat(ccu), i16x8.splat(ccv))
+  const p0 = i16x16.concat(i16x8.splat(rowU), i16x8.splat(rowV)) + PLANE_X * i16x16.concat(i16x8.splat(bu), i16x8.splat(bv))
+  p0.store(pl, 0)
+  c.store(pl, 16)
+  const zero = i16x16.splat(0)
+  const hi = i16x16.splat(255)
+  let p = p0
+  let acc = u16x16.splat(0)
+  for (let by = 0; by < 128; by += 64) {
+    const d0 = i16x16.loadU8(uv, by) - (p >> 5).max(zero).min(hi)
+    p += c
+    const d1 = i16x16.loadU8(uv, by + 16) - (p >> 5).max(zero).min(hi)
+    p += c
+    const d2 = i16x16.loadU8(uv, by + 32) - (p >> 5).max(zero).min(hi)
+    p += c
+    const d3 = i16x16.loadU8(uv, by + 48) - (p >> 5).max(zero).min(hi)
+    p += c
+    const t01 = d0 + d1
+    const u01 = d0 - d1
+    const t23 = d2 + d3
+    const u23 = d2 - d3
+    acc += u16x16.bitcast(h4x4(t01 + t23).abs() + h4x4(t01 - t23).abs() + h4x4(u01 + u23).abs() + h4x4(u01 - u23).abs())
+  }
+  return acc.sum() >> 1
+}
+
+// U's 8x8 prediction at dO and V's at dO + 64, from what chromaSatd (and, for the plane, chromaPlaneSatd) of the
+// same macroblock left in `uv` and `pl`.
+export function predChromaUv(dst: Uint8Array, dO: int, uv: Uint8Array, pl: Int16Array, mode: int) {
+  if (mode === C_DC) {
+    const d = u8x16.load(uv, UV_DC)
+    const ut = d.swizzle([0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1])
+    const ub = d.swizzle([2, 2, 2, 2, 3, 3, 3, 3, 2, 2, 2, 2, 3, 3, 3, 3])
+    const vt = d.swizzle([4, 4, 4, 4, 5, 5, 5, 5, 4, 4, 4, 4, 5, 5, 5, 5])
+    const vb = d.swizzle([6, 6, 6, 6, 7, 7, 7, 7, 6, 6, 6, 6, 7, 7, 7, 7])
+    ut.store(dst, dO)
+    ut.store(dst, dO + 16)
+    ub.store(dst, dO + 32)
+    ub.store(dst, dO + 48)
+    vt.store(dst, dO + 64)
+    vt.store(dst, dO + 80)
+    vb.store(dst, dO + 96)
+    vb.store(dst, dO + 112)
+    return
+  }
+  if (mode === C_H) {
+    const l = u8x16.load(uv, UV_LEFT)
+    l.swizzle([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]).store(dst, dO)
+    l.swizzle([2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3]).store(dst, dO + 16)
+    l.swizzle([4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5]).store(dst, dO + 32)
+    l.swizzle([6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7]).store(dst, dO + 48)
+    l.swizzle([8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9]).store(dst, dO + 64)
+    l.swizzle([10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11]).store(dst, dO + 80)
+    l.swizzle([12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13]).store(dst, dO + 96)
+    l.swizzle([14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15]).store(dst, dO + 112)
+    return
+  }
+  if (mode === C_V) {
+    const t = u8x16.load(uv, UV_TOP)
+    const u = t.swizzle([0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7])
+    const v = t.swizzle([8, 9, 10, 11, 12, 13, 14, 15, 8, 9, 10, 11, 12, 13, 14, 15])
+    for (let k = 0; k < 64; k += 16) {
+      u.store(dst, dO + k)
+      v.store(dst, dO + 64 + k)
+    }
+    return
+  }
+  const c = i16x16.load(pl, 16)
+  let p = i16x16.load(pl, 0)
+  for (let k = 0; k < 64; k += 16) {
+    const r0 = p >> 5
+    p += c
+    const r1 = p >> 5
+    p += c
+    u8x16.packSat(r0.low(), r1.low()).store(dst, dO + k)
+    u8x16.packSat(r0.high(), r1.high()).store(dst, dO + 64 + k)
+  }
+}
+
+function pixels(seed: int, n: int): Uint8Array {
+  let out: u8[] = []
+  let x = seed
+  for (let i = 0; i < n; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    const v = i % 9 === 0 ? 255 : i % 13 === 0 ? 0 : (x >> 9) & 255
+    out.push(u8(v))
+  }
+  return new Uint8Array(out)
+}
+
+function same(a: Uint8Array, ao: int, as: int, b: Uint8Array, bo: int, bs: int, n: int): int {
+  let bad = 0
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      if (a[ao + y * as + x]! !== b[bo + y * bs + x]!) bad++
+    }
+  }
+  return bad
+}
+
+function decide4(c: Int32Array, pm: int, bias: int, out: Int32Array) {
+  let bm = I4_V
+  let bc = c[I4_V]! - (pm === I4_V ? bias : 0)
+  for (let m = I4_H; m <= I4_DC; m++) {
+    const v = c[m]! - (pm === m ? bias : 0)
+    if (v < bc) {
+      bc = v
+      bm = m
+    }
+  }
+  if (bc > 0) {
+    for (let m = I4_DDL; m < 9; m++) {
+      const v = c[m]! - (pm === m ? bias : 0)
+      if (v < bc) {
+        bc = v
+        bm = m
+      }
+    }
+  } else if (pm > I4_DC && bc > -bias && c[pm]! - bias < bc) {
+    bc = c[pm]! - bias
+    bm = pm
+  }
+  out[0] = bm
+  out[1] = bc
+}
+
+const BIASES: int[] = [0, 1, 6, 24, 90, 400]
+
+function decideBad(costs: Int32Array, want: Int32Array, ref: Int32Array, blk: Uint8Array, bo: int, xb: Uint8Array, av: int, pb: Uint8Array, seed: int): int {
+  let bad = 0
+  for (let k = 0; k < 18; k++) {
+    const pm = (seed * 5 + av * 3 + k) % 9
+    const bias = BIASES[(seed + k) % BIASES.length]!
+    i4Costs(costs, blk, bo, xb, av, pb, pm, bias)
+    decide4(want, pm, bias, ref)
+    if (costs[I4_BEST_MODE]! !== ref[0]! || costs[I4_BEST_COST]! !== ref[1]!) bad++
+  }
+  return bad
+}
+
+test("vector intra predictions and mode costs match the scalar ones for every mode and neighbour availability", () => {
+  let bad = 0
+  const stride = 48
+  const e = new Int32Array(32)
+  const f = new Int32Array(32)
+  const xb = new Uint8Array(16)
+  const pb = new Uint8Array(144)
+  const t = new Uint8Array(T8_SIZE)
+  const a = new Uint8Array(256)
+  const b = new Uint8Array(256)
+  const costs = new Int32Array(16)
+  const want = new Int32Array(9)
+  const ref = new Int32Array(2)
+  const blk = new Uint8Array(256)
+  const uv = new Uint8Array(UV_SIZE)
+  const pl = new Int16Array(32)
+  const c2 = new Uint8Array(128)
+  for (let seed = 1; seed <= 120; seed++) {
+    const p = pixels(seed, stride * 40)
+    if (seed % 4 === 0) {
+      for (let i = 0; i < stride * 40; i++) p[i] = 100 + (int(p[i]!) & 7)
+    }
+    const src = pixels(seed * 7 + 3, stride * 40)
+    const x = 8 + (seed % 3) * 4
+    const y = 8 + (seed % 5)
+    for (let av = 0; av < 16; av++) {
+      gather4(e, p, stride, x, y, av)
+      edge4(xb, p, stride, x, y, av)
+      blocks4(blk, src, y * stride + x - (seed % 4) * 4, stride)
+      const bo = (seed % 4) * 16
+      i4Costs(costs, blk, bo, xb, av, pb, I4_HU, 1)
+      for (let m = 0; m < 9; m++) {
+        const got = costs[m]! + (m === I4_HU ? 1 : 0)
+        want[m] = COST_NA
+        if (!modeAvailable(m, av)) {
+          if (got !== COST_NA) bad++
+          continue
+        }
+        pred4(a, 0, 4, e, m, av)
+        pred4v(xb, m, av).store(b, 0)
+        bad += same(a, 0, 4, b, 0, 4, 4)
+        bad += same(a, 0, 4, pb, m * 16, 4, 4)
+        want[m] = satd4(src, y * stride + x, stride, a, 0, 4)
+        if (got !== want[m]!) bad++
+      }
+      bad += decideBad(costs, want, ref, blk, bo, xb, av, pb, seed)
+      i4Costs(costs, blk, bo, xb, av, pb, I4_DC, 0)
+      for (let m = 0; m <= I4_DC; m++) {
+        if (!modeAvailable(m, av)) continue
+        pred4(a, 0, 4, e, m, av)
+        if (costs[m]! !== satd4(src, y * stride + x, stride, a, 0, 4)) bad++
+      }
+      gather8(e, f, p, stride, x, y, av)
+      edge8m(t, p, stride, x, y, av, blk, 0)
+      i8SrcCosts(costs, src, y * stride + x, stride, t, av)
+      for (let m = 0; m < 9; m++) {
+        if (((modeMask(av) >> m) & 1) !== (modeAvailable(m, av) ? 1 : 0)) bad++
+        if (!modeAvailable(m, av)) continue
+        pred8(a, 0, 16, f, m, av)
+        pred8v(b, 3, t, m)
+        bad += same(a, 0, 16, b, 3, 8, 8)
+        const want = sa8d(src, y * stride + x, stride, a, 0, 16)
+        if (i8Cost(src, y * stride + x, stride, t, m) !== want) bad++
+        if (m <= I4_DC && costs[m]! !== want) bad++
+      }
+      for (let m = I4_DDL; m < I4_HU; m++) {
+        const n = m + 1 + (seed % (I4_HU - m))
+        if (!modeAvailable(m, av) || !modeAvailable(n, av)) continue
+        i8Cost2(costs, src, y * stride + x, stride, t, m, n)
+        if (costs[m]! !== i8Cost(src, y * stride + x, stride, t, m)) bad++
+        if (costs[n]! !== i8Cost(src, y * stride + x, stride, t, n)) bad++
+      }
+      i16Satd(costs, src, y * stride + x, stride, p, stride, x, y, av)
+      for (let m = 0; m < 4; m++) {
+        if (!mode16Available(m, av)) continue
+        pred16(a, 0, 16, p, stride, x, y, m, av)
+        pred16v(b, 0, 16, p, stride, x, y, m, av)
+        bad += same(a, 0, 16, b, 0, 16, 16)
+        const got = m === I16_PLANE ? i16PlaneSatd(src, y * stride + x, stride, p, stride, x, y) : costs[m]!
+        if (got !== satd16(src, y * stride + x, stride, a, 0, 16)) bad++
+      }
+      chromaSatd(costs, src, p, y * stride + x, stride, p, src, stride, x, y, av, uv)
+      for (let m = 0; m < 4; m++) {
+        if (!chromaModeAvailable(m, av)) continue
+        predChroma(a, 0, 8, p, stride, x, y, m, av)
+        predChromaV(b, 0, 8, p, stride, x, y, m, av)
+        bad += same(a, 0, 8, b, 0, 8, 8)
+        predChroma(b, 0, 8, src, stride, x, y, m, av)
+        const want = satd8(src, y * stride + x, stride, a, 0, 8) + satd8(p, y * stride + x, stride, b, 0, 8)
+        const got = m === C_PLANE ? chromaPlaneSatd(uv, p, src, stride, x, y, pl) : costs[m]!
+        if (got !== want) bad++
+        predChromaUv(c2, 0, uv, pl, m)
+        bad += same(a, 0, 8, c2, 0, 8, 8) + same(b, 0, 8, c2, 64, 8, 8)
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("I4 mode costs match satd4 of the prediction on extreme 0/255 blocks and edges", () => {
+  let bad = 0
+  const stride = 32
+  const e = new Int32Array(32)
+  const xb = new Uint8Array(16)
+  const pb = new Uint8Array(144)
+  const a = new Uint8Array(16)
+  const costs = new Int32Array(16)
+  const want = new Int32Array(9)
+  const ref = new Int32Array(2)
+  for (let pat = 0; pat < 1024; pat++) {
+    const p = new Uint8Array(stride * 16)
+    const src = new Uint8Array(16)
+    for (let i = 0; i < stride * 16; i++) p[i] = ((pat >> 8) & 1) * 255
+    for (let i = 0; i < 16; i++) {
+      const on = ((pat >> (i & 7)) & 1) !== 0 ? (i & 1) === 0 : ((i >> 2) & 1) === 0
+      const v: int = (pat & 512) !== 0 ? (on ? 255 : 0) : on ? 0 : 255
+      src[i] = v
+    }
+    for (let k = 0; k < 13; k++) {
+      const v: int = ((pat >> (k % 10)) & 1) !== 0 ? 0 : 255
+      if (k < 9) p[7 * stride + 7 + k] = v
+      else p[(8 + k - 9) * stride + 7] = v
+    }
+    for (let av = 0; av < 16; av++) {
+      gather4(e, p, stride, 8, 8, av)
+      edge4(xb, p, stride, 8, 8, av)
+      i4Costs(costs, src, 0, xb, av, pb, I4_HU, 1)
+      for (let m = 0; m < 9; m++) {
+        want[m] = COST_NA
+        if (!modeAvailable(m, av)) continue
+        pred4(a, 0, 4, e, m, av)
+        want[m] = satd4(src, 0, 4, a, 0, 4)
+        if (costs[m]! + (m === I4_HU ? 1 : 0) !== want[m]!) bad++
+      }
+      bad += decideBad(costs, want, ref, src, 0, xb, av, pb, pat)
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("I8 mode costs match sa8d of the prediction on extreme 0/255 blocks and edges", () => {
+  let bad = 0
+  const stride = 48
+  const e = new Int32Array(32)
+  const f = new Int32Array(32)
+  const t = new Uint8Array(T8_SIZE)
+  const a = new Uint8Array(256)
+  const blk = new Uint8Array(256)
+  const costs = new Int32Array(9)
+  const so = 8 * stride + 8
+  for (let pat = 0; pat < 48; pat++) {
+    const p = new Uint8Array(stride * 40)
+    const src = new Uint8Array(stride * 40)
+    for (let y = 0; y < 40; y++) {
+      for (let x = 0; x < stride; x++) {
+        const hx = ((x >> (pat & 1)) ^ (x >> ((pat >> 1) & 1))) & 1
+        const hy = ((y >> ((pat >> 2) & 1)) ^ (y >> ((pat >> 3) & 1))) & 1
+        const on = (pat & 16) !== 0 ? (hx ^ hy) === 0 : (pat & 32) !== 0 ? hy === 0 || hx === 0 : hx === 0
+        const v: int = pat >= 40 ? (pat & 1) * 255 : on ? 255 : 0
+        const k = (pat >> 1) % 3
+        const q: int = k === 0 ? 255 - v : k === 1 ? 0 : 255
+        src[y * stride + x] = v
+        p[y * stride + x] = q
+      }
+    }
+    for (let av = 0; av < 16; av++) {
+      gather8(e, f, p, stride, 8, 8, av)
+      edge8m(t, p, stride, 8, 8, av, blk, 0)
+      i8SrcCosts(costs, src, so, stride, t, av)
+      for (let m = 0; m < 9; m++) {
+        if (!modeAvailable(m, av)) continue
+        pred8(a, 0, 16, f, m, av)
+        const want = sa8d(src, so, stride, a, 0, 16)
+        if (m <= I4_DC && costs[m]! !== want) bad++
+        if (i8Cost(src, so, stride, t, m) !== want) bad++
+        if (m < I4_DDL) continue
+        for (let n = I4_DDL; n < 9; n++) {
+          if (n === m || !modeAvailable(n, av)) continue
+          i8Cost2(costs, src, so, stride, t, m, n)
+          if (costs[m]! !== want) bad++
+        }
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("I4 edges from the block-major macroblock scratch match those from the picture, and unblocks4 restores it", () => {
+  let bad = 0
+  const stride = 64
+  const xb = new Uint8Array(16)
+  const xm = new Uint8Array(16)
+  const rb = new Uint8Array(256)
+  for (let seed = 1; seed <= 40; seed++) {
+    const p = pixels(seed * 13 + 5, stride * 48)
+    const q = pixels(seed * 29 + 1, stride * 48)
+    const mx = 16 + (seed % 3) * 8
+    const my = 16 + (seed % 2) * 8
+    blocks4(rb, p, my * stride + mx, stride)
+    for (let i = 0; i < stride * 48; i++) {
+      const inside = i % stride >= mx && i % stride < mx + 16 && i >= my * stride && i < (my + 16) * stride
+      if (!inside) q[i] = p[i]!
+    }
+    for (let r = 0; r < 16; r++) {
+      const bx = r & 3
+      const by = r >> 2
+      for (let av = 0; av < 16; av++) {
+        if (bx > 0 && (av & AV_LEFT) === 0) continue
+        if (by > 0 && (av & AV_TOP) === 0) continue
+        if (by > 0 && bx === 3 && (av & AV_TR) !== 0) continue
+        edge4(xb, p, stride, mx + bx * 4, my + by * 4, av)
+        edge4m(xm, q, stride, mx + bx * 4, my + by * 4, av, rb, r)
+        for (let m = 0; m < 9; m++) {
+          if (modeAvailable(m, av) && pred4v(xb, m, av) !== pred4v(xm, m, av)) bad++
+        }
+      }
+    }
+    unblocks4(q, my * stride + mx, stride, rb)
+    for (let i = 0; i < stride * 48; i++) {
+      if (q[i]! !== p[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("I8 predictions from edges in the block-major macroblock scratch match the picture's, and unblocks8 restores it", () => {
+  let bad = 0
+  const stride = 64
+  const e = new Int32Array(32)
+  const f = new Int32Array(32)
+  const t = new Uint8Array(T8_SIZE)
+  const a = new Uint8Array(64)
+  const b = new Uint8Array(64)
+  const rb = new Uint8Array(256)
+  for (let seed = 1; seed <= 40; seed++) {
+    const p = pixels(seed * 17 + 3, stride * 48)
+    const q = pixels(seed * 31 + 7, stride * 48)
+    const mx = 16 + (seed % 3) * 8
+    const my = 16 + (seed % 2) * 8
+    for (let i = 0; i < 256; i++) {
+      const bk = i >> 6
+      const j = i & 15
+      const row = (bk >> 1) * 8 + ((i >> 4) & 3) * 2 + (j >> 3)
+      rb[i] = p[(my + row) * stride + mx + (bk & 1) * 8 + (j & 7)]!
+    }
+    for (let i = 0; i < stride * 48; i++) {
+      const inside = i % stride >= mx && i % stride < mx + 16 && i >= my * stride && i < (my + 16) * stride
+      if (!inside) q[i] = p[i]!
+    }
+    for (let b8 = 0; b8 < 4; b8++) {
+      const bx = b8 & 1
+      const by = b8 >> 1
+      for (let av = 0; av < 16; av++) {
+        if (bx > 0 && (av & AV_LEFT) === 0) continue
+        if (by > 0 && (av & AV_TOP) === 0) continue
+        if (b8 === 3 && (av & AV_TR) !== 0) continue
+        gather8(e, f, p, stride, mx + bx * 8, my + by * 8, av)
+        edge8m(t, q, stride, mx + bx * 8, my + by * 8, av, rb, b8)
+        for (let m = 0; m < 9; m++) {
+          if (!modeAvailable(m, av)) continue
+          pred8(a, 0, 8, f, m, av)
+          pred8v(b, 0, t, m)
+          bad += same(a, 0, 8, b, 0, 8, 8)
+        }
+      }
+    }
+    unblocks8(q, my * stride + mx, stride, rb)
+    for (let i = 0; i < stride * 48; i++) {
+      if (q[i]! !== p[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})

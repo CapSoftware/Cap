@@ -57,6 +57,8 @@ import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
+import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { resolveShareWebUrl } from "@/lib/share-web-url";
@@ -287,6 +289,8 @@ export async function generateMetadata(
 							videoId,
 							name: video.name,
 							sourceType: video.source.type,
+							width: Option.getOrNull(video.width),
+							height: Option.getOrNull(video.height),
 							webUrl,
 							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
@@ -342,6 +346,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 			db()
 				.select({
 					id: videos.id,
+					folderId: videos.folderId,
 					name: videos.name,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
@@ -438,7 +443,7 @@ async function AuthorizedContent({
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"folderId" | "password" | "settings" | "ownerId"
+		"password" | "settings" | "ownerId"
 	> & {
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
@@ -726,8 +731,8 @@ async function AuthorizedContent({
 
 	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
-	const canManageSharePageBrandingPromise = (async () => {
-		if (!userId) return false;
+	const videoOrganizationRolePromise = (async () => {
+		if (!userId) return null;
 
 		const [organizationAccess] = await db()
 			.select({
@@ -750,15 +755,13 @@ async function AuthorizedContent({
 			)
 			.limit(1);
 
-		if (!organizationAccess) return false;
+		if (!organizationAccess) return null;
 
-		return canManageOrganizationSettings(
-			getEffectiveOrganizationRole({
-				userId,
-				ownerId: organizationAccess.ownerId,
-				memberRole: organizationAccess.memberRole,
-			}),
-		);
+		return getEffectiveOrganizationRole({
+			userId,
+			ownerId: organizationAccess.ownerId,
+			memberRole: organizationAccess.memberRole,
+		});
 	})();
 
 	const isVideoDownloadReady =
@@ -772,6 +775,21 @@ async function AuthorizedContent({
 					videoId,
 				})
 			: Promise.resolve(false);
+
+	const dashboardDestinationPromise = getShareDashboardDestination({
+		viewer: user
+			? { id: user.id, activeOrganizationId: user.activeOrganizationId }
+			: null,
+		videoId,
+		ownerId: video.owner.id,
+		videoOrganizationId: video.orgId,
+	}).catch((error) => {
+		console.error(
+			`[ShareVideoPage] Dashboard destination lookup failed for ${videoId}:`,
+			error,
+		);
+		return null;
+	});
 
 	const videoHasEditsPromise = canDownloadVideoPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
@@ -798,11 +816,12 @@ async function AuthorizedContent({
 		membersList,
 		userOrganizations,
 		{ customDomain, domainVerified },
-		canManageSharePageBranding,
+		videoOrganizationRole,
 		canDownloadVideo,
 		videoHasEdits,
 		ownerIsOverShareLimit,
 		resolvedImages,
+		dashboardDestination,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -812,11 +831,12 @@ async function AuthorizedContent({
 		membersListPromise,
 		userOrganizationsPromise,
 		customDomainPromise,
-		canManageSharePageBrandingPromise,
+		videoOrganizationRolePromise,
 		canDownloadVideoPromise,
 		videoHasEditsPromise,
 		overShareLimitPromise,
 		imagesPromise,
+		dashboardDestinationPromise,
 		viewNotificationPromise,
 	]);
 
@@ -878,7 +898,7 @@ async function AuthorizedContent({
 		},
 		sharedOrganizations: sharedOrganizations,
 		password: null,
-		folderId: null,
+		folderId: user?.id === video.owner.id ? video.folderId : null,
 		orgSettings: video.orgSettings || null,
 		organizationName: video.organizationName,
 		organizationIconUrl: resolvedImages.organization,
@@ -887,6 +907,9 @@ async function AuthorizedContent({
 		hasInheritedPassword: rules.hasInheritedPassword,
 		inheritedPasswordSources: rules.inheritedPasswordSources,
 		inheritedSpaceSettings: rules.inheritedSettings,
+		callToAction: ownerIsPro
+			? parseShareCallToAction(video.videoSettings)
+			: null,
 	};
 	const isEditProcessing =
 		isEditSourceKey({
@@ -905,6 +928,8 @@ async function AuthorizedContent({
 			"timeline" && !video.isScreenshot
 			? ("timeline" as const)
 			: ("classic" as const);
+	const captionsInitiallyOff =
+		optionFromTOrFirst(searchParams.captions).pipe(Option.getOrNull) === "off";
 	// Recording media comments rides on the VIDEO OWNER's Pro plan; the
 	// upload/create paths re-check server-side via canUseMediaComments.
 	const canRecordMedia = Boolean(user) && videoWithOrganizationInfo.owner.isPro;
@@ -919,6 +944,9 @@ async function AuthorizedContent({
 			<Share
 				header={
 					<ShareHeader
+						canMoveToFolder={
+							user?.id === video.owner.id && videoOrganizationRole !== null
+						}
 						data={{
 							...videoWithOrganizationInfo,
 							createdAt: video.metadata?.customCreatedAt
@@ -936,15 +964,19 @@ async function AuthorizedContent({
 						userOrganizations={userOrganizations}
 						spacesData={spacesData}
 						branding={getSharePageBranding(videoWithOrganizationInfo)}
-						canManageSharePageBranding={canManageSharePageBranding}
+						canManageSharePageBranding={canManageOrganizationSettings(
+							videoOrganizationRole,
+						)}
 						canDownload={canDownloadVideo}
 						hasEdits={videoHasEdits}
 						// Caught separately from the copy the sidebar consumes: the
 						// header renders for everyone, and a failed count is worth
 						// less than the header it would otherwise take down.
 						views={viewsPromise.catch(() => null)}
+						dashboardDestination={dashboardDestination}
 					/>
 				}
+				dashboardDestination={dashboardDestination}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
 				screenshotImageUrl={screenshotImageUrl}
@@ -957,6 +989,7 @@ async function AuthorizedContent({
 				viewerId={user?.id ?? null}
 				viewerSignedIn={user !== null}
 				initialView={initialShareView}
+				captionsInitiallyOff={captionsInitiallyOff}
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}

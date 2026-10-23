@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 	quota: vi.fn(),
 	user: vi.fn(),
 	authenticated: false,
+	ownerIsPro: false,
 	sharedOrganizations: [] as {
 		id: string;
 		name: string;
@@ -24,7 +25,7 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({}),
 }));
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => false }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.ownerIsPro }));
 vi.mock("@cap/web-backend", () => ({
 	Database: Context.GenericTag("ShareTestDatabase"),
 	ImageUploads: Context.GenericTag("ShareTestImages"),
@@ -120,6 +121,9 @@ const createVideo = () => ({
 	activeUploadRawFileKey: null as string | null,
 	organizationTombstoneAt: null as Date | null,
 	metadata: null,
+	videoSettings: {
+		callToAction: { label: "Book a call", url: "https://example.com/" },
+	},
 	transcriptionStatus: "COMPLETE",
 	createdAt: new Date("2026-09-01T00:00:00.000Z"),
 	updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -161,7 +165,11 @@ async function renderAuthorizedContent() {
 		children: ReactElement<{
 			initialPlaybackUrl?: Promise<string | null>;
 			screenshotImageUrl?: string | null;
-			data: { sharedOrganizations: unknown[]; ownerIsOverShareLimit: boolean };
+			data: {
+				sharedOrganizations: unknown[];
+				ownerIsOverShareLimit: boolean;
+				callToAction: { label: string; url: string } | null;
+			};
 		}>;
 	}>;
 }
@@ -176,9 +184,26 @@ describe("share page loading", () => {
 		mocks.quota.mockResolvedValue(false);
 		mocks.user.mockResolvedValue(null);
 		mocks.authenticated = false;
+		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
 		arrangeRows([createVideo()]);
 	});
+
+	it.each([false, true])(
+		"serves a saved call to action only when the owner has Pro: %s",
+		async (ownerIsPro) => {
+			mocks.ownerIsPro = ownerIsPro;
+			const content = await renderAuthorizedContent();
+			const callToAction = content.props.children.props.data.callToAction;
+			if (ownerIsPro) {
+				expect(callToAction).toMatchObject(
+					createVideo().videoSettings.callToAction,
+				);
+			} else {
+				expect(callToAction).toBeNull();
+			}
+		},
+	);
 
 	it("reuses the organization sharing query for the header and video data", async () => {
 		mocks.sharedOrganizations = [

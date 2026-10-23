@@ -217,6 +217,9 @@ async copyRenderedScreenshotToClipboard() : Promise<null> {
 async openFilePath(path: string) : Promise<null> {
     return await TAURI_INVOKE("open_file_path", { path });
 },
+async revealItemInDir(path: string) : Promise<null> {
+    return await TAURI_INVOKE("reveal_item_in_dir", { path });
+},
 async getVideoMetadata(path: string) : Promise<VideoRecordingMetadata> {
     return await TAURI_INVOKE("get_video_metadata", { path });
 },

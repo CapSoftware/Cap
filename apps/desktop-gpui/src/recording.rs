@@ -50,6 +50,10 @@ pub struct StartConfig {
     /// recording locks these instead of spawning its own -- the Tauri model.
     pub camera_feed: Option<ActorRef<CameraFeed>>,
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
+    /// The app's mic level meter. A recording that opens its own microphone
+    /// feed (the app feed is released while the main window is hidden) feeds
+    /// it too, or the recording bar's level would stay empty.
+    pub mic_meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
     /// When set, the pipeline is primed behind this gate and records nothing
@@ -423,42 +427,19 @@ async fn finalize_studio(
         completed.meta.status(),
         cap_project::StudioRecordingStatus::NeedsRemux
     );
+    let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
             ensure_finalization_storage(&project_path)?;
         }
-        let preparing = progress
+        let preparing = claim_progress
             .as_ref()
             .and_then(|progress| progress.claim_preparing(&completed));
         let result = match preparing {
             Some(job) => RecoveryManager::remux_stopped_with_preparing(&completed, job),
             None => RecoveryManager::remux_if_needed(&project_path),
         };
-        result.map(|_| completed).map_err(anyhow::Error::from)
-    })
-    .await
-    .context("studio finalize task")?
-    .context("studio finalize")?;
-    tracing::info!(
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "Studio stop remux complete"
-    );
-
-    // Everything `handle_recording_finish` does after the remux,
-    // in its order: the first-frame JPEG the library's card is
-    // drawn from, then the camera preview's blur toggle copied
-    // into the project's configuration. Neither is fatal to a
-    // recording that is already on disk, so both only warn.
-    let project_path = completed.project_path.clone();
-    tokio::task::spawn_blocking(move || {
-        let thumbnail_started = std::time::Instant::now();
-        if let Some(display_path) = studio_display_path(&project_path) {
-            write_bundle_thumbnail(&project_path, &display_path);
-        }
-        tracing::info!(
-            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
-            "Studio stop thumbnail complete"
-        );
+        result.map_err(anyhow::Error::from)?;
         let placement = completed
             .meta
             .camera_path()
@@ -478,9 +459,46 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
         }
+        if crate::store::GeneralSettings::load().macbook_notch_overlay
+            && completed.meta.display_notch().is_some()
+            && matches!(
+                capture_target,
+                ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
+            )
+            && let Err(error) = enable_notch_overlay(&project_path)
+        {
+            tracing::warn!(%error, "Could not apply the notch overlay preference");
+        }
+        Ok::<_, anyhow::Error>(completed)
     })
     .await
-    .context("studio post-finalize task")?;
+    .context("studio finalize task")?
+    .context("studio finalize")?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "Studio stop remux complete"
+    );
+
+    if let Some(progress) = &progress {
+        progress.complete(&Ok(completed.project_path.clone()));
+    }
+
+    let project_path = completed.project_path.clone();
+    let pending = PendingStudioThumbnail::new();
+    tokio::task::spawn_blocking(move || {
+        let _pending = pending;
+        let _writing = STUDIO_THUMBNAIL_WRITES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let thumbnail_started = std::time::Instant::now();
+        if let Some(display_path) = studio_display_path(&project_path) {
+            write_bundle_thumbnail(&project_path, &display_path);
+        }
+        tracing::info!(
+            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio stop thumbnail complete"
+        );
+    });
 
     Ok(completed.project_path)
 }
@@ -734,13 +752,17 @@ impl StudioFinalizationPublisher {
     }
 
     fn complete(&self, result: &anyhow::Result<PathBuf>) {
-        self.state.send_modify(|state| {
+        self.state.send_if_modified(|state| {
+            if state.result.is_some() && result.is_ok() {
+                return false;
+            }
             state.result = Some(
                 result
                     .as_ref()
                     .map(|_| ())
                     .map_err(|error| format!("{error:#}")),
             );
+            true
         });
     }
 }
@@ -1443,6 +1465,61 @@ fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+static STUDIO_THUMBNAIL_WRITES: Mutex<()> = Mutex::new(());
+
+/// Deleting a recording waits for a Studio stop thumbnail being written, which
+/// checks its bundle still exists under the same lock, so the two can neither
+/// race nor leave a deleted bundle half recreated.
+pub(crate) fn hold_studio_thumbnail_writes() -> Option<std::sync::MutexGuard<'static, ()>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match STUDIO_THUMBNAIL_WRITES.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        }
+    }
+}
+
+static PENDING_STUDIO_THUMBNAILS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// A Studio stop returns before its thumbnail is written: quit waits while one
+/// is pending, and the library views that scanned on the way to idle rescan
+/// once it lands.
+struct PendingStudioThumbnail;
+
+impl PendingStudioThumbnail {
+    fn new() -> Self {
+        PENDING_STUDIO_THUMBNAILS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for PendingStudioThumbnail {
+    fn drop(&mut self) {
+        PENDING_STUDIO_THUMBNAILS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        let _ = studio_thumbnail_channel().0.send(());
+    }
+}
+
+fn studio_thumbnail_channel() -> &'static (flume::Sender<()>, flume::Receiver<()>) {
+    static CHANNEL: std::sync::OnceLock<(flume::Sender<()>, flume::Receiver<()>)> =
+        std::sync::OnceLock::new();
+    CHANNEL.get_or_init(flume::unbounded)
+}
+
+pub(crate) fn studio_thumbnail_events() -> flume::Receiver<()> {
+    studio_thumbnail_channel().1.clone()
+}
+
+pub(crate) fn studio_thumbnails_pending() -> bool {
+    PENDING_STUDIO_THUMBNAILS.load(std::sync::atomic::Ordering::Acquire) > 0
+}
+
 /// Write `<bundle>/screenshots/display.jpg` -- the file both apps' Recents
 /// cards draw. `cap-recording` does not produce it, so without this a project
 /// recorded here would show the icon fallback forever, including in the
@@ -1545,6 +1622,34 @@ fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
         serde_json::to_value(crate::store::studio_sound_isolation())?,
     );
     let temp = path.with_extension(format!("studio-sound-{}.tmp", crate::store::new_uuid_v4()));
+    let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
+        .and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+fn enable_notch_overlay(project_path: &std::path::Path) -> std::io::Result<()> {
+    let path = project_path.join("project-config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let object = config.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Project configuration is not an object",
+        )
+    })?;
+    let background = object
+        .entry("background")
+        .or_insert_with(|| serde_json::json!({}));
+    let background = background.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Background configuration is not an object",
+        )
+    })?;
+    background.insert("notch".into(), serde_json::json!({ "enabled": true }));
+    let temp = path.with_extension(format!("notch-{}.tmp", crate::store::new_uuid_v4()));
     let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
         .and_then(|()| std::fs::rename(&temp, path));
     if result.is_err() {
@@ -2096,17 +2201,24 @@ async fn start_attempt_with_upload(
             }
             Err(error) => {
                 tracing::warn!("app mic feed lock failed ({error}), spawning one for '{label}'");
-                let (feed, lock, error_rx) =
-                    setup_microphone(label, config.device_settings.microphone)
-                        .await
-                        .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+                let (feed, lock, error_rx) = setup_microphone(
+                    label,
+                    config.device_settings.microphone,
+                    config.mic_meter.clone(),
+                )
+                .await
+                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
                 (Some(feed), Some(lock), Some(error_rx))
             }
         },
         (None, Some(label)) => {
-            let (feed, lock, error_rx) = setup_microphone(label, config.device_settings.microphone)
-                .await
-                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+            let (feed, lock, error_rx) = setup_microphone(
+                label,
+                config.device_settings.microphone,
+                config.mic_meter.clone(),
+            )
+            .await
+            .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
             (Some(feed), Some(lock), Some(error_rx))
         }
         _ => (None, None, None),
@@ -2426,6 +2538,7 @@ async fn setup_camera(
 async fn setup_microphone(
     label: &str,
     settings: Option<microphone::MicrophoneDeviceSettings>,
+    meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
 ) -> anyhow::Result<(
     Arc<RecordingOwnedFeed<MicrophoneFeed>>,
     Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
@@ -2434,6 +2547,11 @@ async fn setup_microphone(
     let (error_tx, error_rx) = flume::unbounded();
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
     let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
+    if let Some(meter) = meter {
+        feed.ask(microphone::AddSender(meter))
+            .await
+            .map_err(|e| anyhow!("meter: {e}"))?;
+    }
     let ready = feed
         .ask(microphone::SetInput {
             label: label.to_string(),
@@ -2569,15 +2687,51 @@ fn format_recording_project_name(
         RecordingMode::Studio => ("Studio", "studio"),
         RecordingMode::Instant => ("Instant", "instant"),
     };
+    let template = replace_random_template_tokens(
+        template.unwrap_or(crate::store::DEFAULT_PROJECT_NAME_TEMPLATE),
+    );
     let formatted = template
-        .unwrap_or(crate::store::DEFAULT_PROJECT_NAME_TEMPLATE)
         .replace("{recording_mode}", recording_mode)
         .replace("{mode}", mode)
         .replace("{target_kind}", target_kind)
         .replace("{target_name}", &target_name);
     let formatted = replace_datetime_template_token(&formatted, "date", "%Y-%m-%d", datetime);
     let formatted = replace_datetime_template_token(&formatted, "time", "%I:%M %p", datetime);
-    replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime)
+    let formatted =
+        replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime);
+    formatted
+}
+
+fn replace_random_template_tokens(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut remaining = input;
+
+    while let Some(start) = remaining.find("{random") {
+        output.push_str(&remaining[..start]);
+        let candidate = &remaining[start..];
+        let Some(end) = candidate.find('}') else {
+            output.push_str(candidate);
+            return output;
+        };
+        let token = &candidate[..=end];
+        let length = if token == "{random}" {
+            Some(10)
+        } else {
+            token
+                .strip_prefix("{random:")
+                .and_then(|value| value.strip_suffix('}'))
+                .and_then(|value| value.parse::<usize>().ok())
+        };
+        if let Some(length @ 1..=32) = length {
+            let random = crate::store::new_uuid_v4().replace('-', "");
+            output.push_str(&random[..length]);
+        } else {
+            output.push_str(token);
+        }
+        remaining = &candidate[end + 1..];
+    }
+    output.push_str(remaining);
+    output
 }
 
 fn replace_datetime_template_token(
@@ -2688,6 +2842,49 @@ mod tests {
             ),
             format!("studio-{}...-{{unknown}}", "x".repeat(180))
         );
+    }
+
+    #[test]
+    fn recording_project_names_expand_filename_safe_random_tokens() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+        let name = format_recording_project_name(
+            Some("{random}-{random:16}-{random:0}"),
+            "Example Window",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+        let parts = name.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts[0].len(), 10);
+        assert_eq!(parts[1].len(), 16);
+        assert!(
+            parts[..2]
+                .iter()
+                .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
+        );
+        assert_eq!(parts[2], "{random:0}");
+    }
+
+    #[test]
+    fn recording_project_names_preserve_random_placeholder_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        let name = format_recording_project_name(
+            None,
+            "Implement {random} placeholder",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+
+        assert!(name.contains("Implement {random} placeholder"));
     }
 
     #[test]
@@ -3432,6 +3629,26 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn notch_overlay_is_enabled_without_touching_other_settings() {
+        let dir = temp_project("notch-overlay");
+        let path = dir.join("project-config.json");
+        let mut original =
+            serde_json::to_value(cap_project::ProjectConfiguration::default()).unwrap();
+        original["background"]["future"] = 7.into();
+        original["futureProjectSetting"] = true.into();
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+
+        enable_notch_overlay(&dir).unwrap();
+
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["background"]["future"], 7);
+        assert_eq!(written["futureProjectSetting"], true);
+        let parsed: cap_project::ProjectConfiguration = serde_json::from_value(written).unwrap();
+        assert!(parsed.background.notch.is_some_and(|notch| notch.enabled));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A config written by a build that predates `backgroundBlur` (or one that
     /// never had a camera section at all) gets the key created rather than
     /// being skipped.
@@ -3862,6 +4079,127 @@ mod studio_finalization_tests {
         drop(publisher);
         assert!(finalization.wait_for_preparing().await.is_none());
         assert!(finalization.wait().await.is_err());
+    }
+
+    static THUMBNAIL_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn stopped_studio_project(tag: &str) -> studio_recording::CompletedRecording {
+        use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+
+        let _ = ffmpeg::init();
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-stop-thumbnail-{tag}-{}.cap",
+            crate::store::new_uuid_v4()
+        ));
+        std::fs::create_dir_all(root.join("content")).unwrap();
+        std::fs::write(
+            root.join("content/display.mp4"),
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        let meta: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "display": { "path": "content/display.mp4", "fps": 30 }
+        }))
+        .unwrap();
+        RecordingMeta {
+            platform: None,
+            project_path: root.clone(),
+            pretty_name: "Stop".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(meta.clone())),
+            upload: None,
+        }
+        .save_for_project()
+        .unwrap();
+        studio_recording::CompletedRecording {
+            project_path: root,
+            meta,
+            cursor_data: Default::default(),
+            clean_stopped: None,
+        }
+    }
+
+    async fn next_thumbnail_event(written: &flume::Receiver<()>) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), written.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn studio_stop_writes_its_thumbnail_after_returning() {
+        let _serial = THUMBNAIL_TESTS.lock().await;
+        let completed = stopped_studio_project("written");
+        let root = completed.project_path.clone();
+        let written = studio_thumbnail_events();
+        while written.try_recv().is_ok() {}
+
+        let writing = hold_studio_thumbnail_writes().unwrap();
+        let project = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(project, root);
+        assert!(studio_thumbnails_pending());
+        assert!(!crate::library::bundle_thumbnail_path(&root).exists());
+        drop(writing);
+
+        next_thumbnail_event(&written).await;
+        assert!(!studio_thumbnails_pending());
+        let thumbnail = image::open(crate::library::bundle_thumbnail_path(&root))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(thumbnail.dimensions(), (320, 240));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn thumbnail_written_after_a_delete_does_not_recreate_the_bundle() {
+        let _serial = THUMBNAIL_TESTS.lock().await;
+        let completed = stopped_studio_project("deleted");
+        let root = completed.project_path.clone();
+        let written = studio_thumbnail_events();
+        while written.try_recv().is_ok() {}
+
+        let deleting = hold_studio_thumbnail_writes().unwrap();
+        finalize_studio(completed, ScreenCaptureTarget::CameraOnly, None, None)
+            .await
+            .unwrap();
+        assert!(studio_thumbnails_pending());
+        std::fs::remove_dir_all(&root).unwrap();
+        drop(deleting);
+
+        next_thumbnail_event(&written).await;
+        assert!(!root.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_a_recording_waits_for_its_thumbnail_write() {
+        let _serial = THUMBNAIL_TESTS.lock().await;
+        let library = std::env::temp_dir().join(format!(
+            "cap-gpui-stop-thumbnail-library-{}",
+            crate::store::new_uuid_v4()
+        ));
+        let bundle = library.join("Recording.cap");
+        std::fs::create_dir_all(bundle.join("screenshots")).unwrap();
+
+        let writing = hold_studio_thumbnail_writes().unwrap();
+        let delete = std::thread::spawn({
+            let library = library.clone();
+            let bundle = bundle.clone();
+            move || crate::library::delete_recording_directory_in(&[library], &bundle)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!delete.is_finished());
+        assert!(bundle.exists());
+        drop(writing);
+
+        assert_eq!(delete.join().unwrap(), Ok(()));
+        assert!(!bundle.exists());
+        std::fs::remove_dir_all(library).unwrap();
     }
 
     #[test]

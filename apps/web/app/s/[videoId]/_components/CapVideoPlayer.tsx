@@ -14,7 +14,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import CommentStamp from "./CommentStamp";
+import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
 import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
@@ -100,6 +102,7 @@ interface Props {
 	chaptersSrc: string;
 	captionsSrc: string;
 	disableCaptions?: boolean;
+	captionsInitiallyOff?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
@@ -139,6 +142,7 @@ interface Props {
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
+	callToAction?: ShareCallToAction | null;
 }
 
 export function CapVideoPlayer({
@@ -149,6 +153,7 @@ export function CapVideoPlayer({
 	chaptersSrc,
 	captionsSrc,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
@@ -176,16 +181,21 @@ export function CapVideoPlayer({
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
+	callToAction = null,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
+	const [
+		isRefreshingInitialPlaybackSource,
+		setIsRefreshingInitialPlaybackSource,
+	] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
@@ -197,6 +207,13 @@ export function CapVideoPlayer({
 	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
 		undefined,
 	);
+	const hasRetriedInitialPlaybackSource = useRef(false);
+	const initialPlaybackSourceRetryPending = useRef(false);
+	const playbackToRestore = useRef<{
+		sourceUrl: string;
+		time: number;
+		wasPlaying: boolean;
+	} | null>(null);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -275,6 +292,10 @@ export function CapVideoPlayer({
 		setShowPlayButton(false);
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
+		hasRetriedInitialPlaybackSource.current = false;
+		initialPlaybackSourceRetryPending.current = false;
+		playbackToRestore.current = null;
+		setIsRefreshingInitialPlaybackSource(false);
 	}, [videoSrc, rawFallbackSrc]);
 
 	useEffect(() => {
@@ -422,6 +443,18 @@ export function CapVideoPlayer({
 		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				const restore = playbackToRestore.current;
+				if (
+					restore &&
+					resolvedSrc.data?.url !== restore.sourceUrl &&
+					!video.seeking &&
+					Math.abs(video.currentTime - restore.time) < 0.25
+				) {
+					finishPlaybackSourceRestore();
+				}
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -430,6 +463,10 @@ export function CapVideoPlayer({
 		};
 
 		const handleCanPlay = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				handleLoadedData();
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -442,6 +479,45 @@ export function CapVideoPlayer({
 		};
 
 		const handleError = () => {
+			if (initialPlaybackSourceRetryPending.current) return;
+			if (
+				!rawFallbackSrc &&
+				resolvedSrc.data?.fromInitialUrl &&
+				!hasRetriedInitialPlaybackSource.current
+			) {
+				hasRetriedInitialPlaybackSource.current = true;
+				initialPlaybackSourceRetryPending.current = true;
+				playbackToRestore.current = {
+					sourceUrl: resolvedSrc.data.url,
+					time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+					wasPlaying: !video.paused && !video.ended,
+				};
+				setIsRefreshingInitialPlaybackSource(true);
+				setVideoLoaded(false);
+				setHasError(false);
+				setShowPlayButton(false);
+				void resolvedSrc
+					.refetch()
+					.then((result) => {
+						if (
+							!result.data ||
+							result.data.url === playbackToRestore.current?.sourceUrl
+						) {
+							playbackToRestore.current = null;
+							setIsRefreshingInitialPlaybackSource(false);
+							setHasError(true);
+						}
+					})
+					.catch(() => {
+						playbackToRestore.current = null;
+						setIsRefreshingInitialPlaybackSource(false);
+						setHasError(true);
+					})
+					.finally(() => {
+						initialPlaybackSourceRetryPending.current = false;
+					});
+				return;
+			}
 			if (
 				shouldFallbackToRawPlaybackSource(
 					resolvedSrc.data?.type,
@@ -457,22 +533,68 @@ export function CapVideoPlayer({
 				return;
 			}
 
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
 			setHasError(true);
 		};
 
 		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
+		const finishPlaybackSourceRestore = () => {
+			const restore = playbackToRestore.current;
+			if (!restore) return;
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
+			setVideoLoaded(true);
+			setHasError(false);
+			if (restore.wasPlaying) void video.play().catch(() => undefined);
+		};
 
 		const handleLoadedMetadataWithTracks = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				const duration = video.duration;
+				const time = Number.isFinite(duration)
+					? Math.min(restore.time, Math.max(0, duration - 0.1))
+					: restore.time;
+				restore.time = time;
+				if (time > 0) {
+					try {
+						video.currentTime = time;
+						return;
+					} catch {
+						finishPlaybackSourceRestore();
+						return;
+					}
+				}
+				finishPlaybackSourceRestore();
+				return;
+			}
+			if (isRefreshingInitialPlaybackSource) return;
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 		};
+		const handleSeeked = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				finishPlaybackSourceRestore();
+			}
+		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
+		video.addEventListener("seeked", handleSeeked);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
 
@@ -485,6 +607,7 @@ export function CapVideoPlayer({
 			video.removeEventListener("canplay", handleCanPlay);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
+			video.removeEventListener("seeked", handleSeeked);
 			video.removeEventListener(
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
@@ -494,8 +617,12 @@ export function CapVideoPlayer({
 	}, [
 		hasPlayedOnce,
 		hasTriedRawFallback,
+		isRefreshingInitialPlaybackSource,
 		rawFallbackSrc,
+		resolvedSrc.data?.fromInitialUrl,
 		resolvedSrc.data?.type,
+		resolvedSrc.data?.url,
+		resolvedSrc.refetch,
 		resolvedSrc.isPending,
 		videoRef.current,
 	]);
@@ -734,7 +861,7 @@ export function CapVideoPlayer({
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
-						setVideoLoaded(true);
+						if (!isRefreshingInitialPlaybackSource) setVideoLoaded(true);
 					}}
 					onPlay={() => {
 						setShowPlayButton(false);
@@ -880,9 +1007,21 @@ export function CapVideoPlayer({
 			)}
 			<MediaPlayerLoading />
 			{!isUploading &&
+				!isRefreshingInitialPlaybackSource &&
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
+			{callToAction &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<CallToActionOverlay
+						cta={callToAction}
+						videoId={videoId}
+						controlsDocked={externalTimeline && controlsPortalEl !== null}
+					/>
+				)}
 			{showFloatingVolumeControl &&
 				videoLoaded &&
 				!showUploadFailureOverlay &&

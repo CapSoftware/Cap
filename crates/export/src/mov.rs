@@ -57,6 +57,9 @@ impl MovExportSettings {
         base: ExporterBase,
         mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        if self.fps == 0 {
+            return Err("Export frame rate must be at least 1 fps".to_string());
+        }
         let meta = &base.studio_meta;
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
@@ -147,7 +150,7 @@ impl MovExportSettings {
                     cursor: s.cursor.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
-                    render_display: false,
+                    render_display: !self.cursor_only,
                 })
                 .collect(),
             fps,

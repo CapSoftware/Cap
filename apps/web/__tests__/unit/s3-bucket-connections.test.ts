@@ -40,7 +40,10 @@ vi.mock("@cap/web-backend/src/S3Buckets/S3BucketsRepo.ts", async () => {
 });
 
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets";
-import { s3ConnectionPool } from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
+import {
+	defaultBucketS3ConnectionPool,
+	s3ConnectionPool,
+} from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
 
 async function storageFixture() {
 	let connections = 0;
@@ -191,6 +194,40 @@ describe("S3 connection reuse", () => {
 		} finally {
 			await fixture.close();
 		}
+	});
+
+	it("keeps default bucket connections warm across 32-wide snapshot pages", async () => {
+		const fixture = await storageFixture();
+		try {
+			const [access] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(Option.none()),
+			);
+			for (let checkpoint = 0; checkpoint < 10; checkpoint++) {
+				await Promise.all(
+					Array.from({ length: 32 }, (_, index) =>
+						fixture.runtime.runPromise(
+							access.headObject(`recording/${checkpoint}/${index}`),
+						),
+					),
+				);
+			}
+			expect(fixture.authorizations).toHaveLength(320);
+			expect(fixture.connections()).toBeLessThanOrEqual(40);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("keeps the custom bucket idle connection bound", async () => {
+		const pools = await Effect.runPromise(
+			Effect.scoped(
+				Effect.all([s3ConnectionPool, defaultBucketS3ConnectionPool]),
+			),
+		);
+		expect(pools.map((pool) => pool.httpsAgent.maxFreeSockets)).toEqual([
+			8, 32,
+		]);
+		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 50]);
 	});
 
 	it("reuses custom bucket connections while using current credentials", async () => {
