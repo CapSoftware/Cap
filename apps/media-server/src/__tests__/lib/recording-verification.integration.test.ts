@@ -2645,8 +2645,7 @@ describe("chunked packet-proven verification", () => {
 		expect(chunked.video.frameCount).toBe(120);
 	});
 
-	test("falls back as soon as a later chunk starts at a different resolution", async () => {
-		const name = "chunk-resize";
+	async function resizedRecording(name: string) {
 		const halves: string[] = [];
 		for (const size of ["320x180", "352x180"]) {
 			const half = join(directory, `${name}-${size}.h264`);
@@ -2727,12 +2726,12 @@ describe("chunked packet-proven verification", () => {
 		);
 		const output = join(directory, `${name}-output.mp4`);
 		await muxMediaTracksToMp4(combined, silent, output);
-		const { single, chunked, fallbacks } = await both({
-			init,
-			segments,
-			combined,
-			output,
-		});
+		return { init, segments, combined, output };
+	}
+
+	test("falls back when a later chunk starts at a different resolution", async () => {
+		const recording = await resizedRecording("chunk-resize");
+		const { single, chunked, fallbacks } = await both(recording);
 		expect(fallbacks).toHaveLength(1);
 		expect(String(fallbacks[0][0])).toContain(
 			"dimensions 0: 320x180 -> 352x180",
@@ -2740,6 +2739,53 @@ describe("chunked packet-proven verification", () => {
 		expect(chunked).toEqual(single);
 		expect(chunked.video.frameCount).toBe(180);
 	});
+
+	test("stops the other chunk decoders once headers differ", async () => {
+		const recording = await resizedRecording("chunk-resize-early");
+		const ffmpeg = Bun.which("ffmpeg");
+		if (!ffmpeg) throw new Error("ffmpeg is required");
+		// Every chunk after the first keeps running for 30 s after its output is complete,
+		// so verification only finishes quickly if those decoders are stopped early.
+		const bin = await mkdtemp(join(directory, "slow-ffmpeg-"));
+		await writeFile(
+			join(bin, "ffmpeg"),
+			[
+				"#!/bin/sh",
+				'case "$*" in',
+				`*verify-chunk-0.mp4*) exec "${ffmpeg}" "$@" ;;`,
+				`*verify-chunk-*) "${ffmpeg}" "$@"; status=$?; exec 1>&- 2>&-; sleep 30; exit $status ;;`,
+				`*) exec "${ffmpeg}" "$@" ;;`,
+				"esac",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const path = process.env.PATH;
+		process.env.PATH = `${bin}:${path}`;
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		const warn = spyOn(console, "warn");
+		try {
+			const started = performance.now();
+			const result = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+			);
+			expect(performance.now() - started).toBeLessThan(15_000);
+			expect(result.video.frameCount).toBe(180);
+			expect(
+				warn.mock.calls.some((call) =>
+					String(call[0]).includes("chunk stream parameters differ"),
+				),
+			).toBe(true);
+		} finally {
+			warn.mockRestore();
+			process.env.PATH = path;
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	}, 60_000);
 
 	test("copies many fragments into one run without piling up stream listeners", async () => {
 		const recording = await segmentedRecording("chunk-many", 6, 240, 0.2);
