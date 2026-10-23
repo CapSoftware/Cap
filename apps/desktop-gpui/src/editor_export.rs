@@ -373,6 +373,18 @@ impl ExportUi {
             .is_some_and(|bpp| (bpp - self.compression.bits_per_pixel()).abs() > 0.001)
     }
 
+    fn complete_share_export(&mut self, link: String, copy_link: impl FnOnce(String)) {
+        if self.close_requested || self.cancel.load(Ordering::Relaxed) {
+            self.phase = ExportPhase::Idle;
+            return;
+        }
+
+        self.phase = ExportPhase::Done;
+        self.share_link = Some(link.clone());
+        self.upload_progress = 1.0;
+        copy_link(link);
+    }
+
     fn clipboard_retry_path(&self) -> Option<&Path> {
         if self.phase == ExportPhase::Failed && self.destination == ExportDestination::Clipboard {
             self.output_path.as_deref()
@@ -1243,15 +1255,14 @@ impl EditorWindow {
                                     this.sharing = meta.sharing;
                                 }
                                 if let Some(ui) = this.export.as_mut() {
-                                    ui.phase = ExportPhase::Done;
-                                    ui.share_link = Some(link.clone());
-                                    ui.upload_progress = 1.0;
+                                    ui.complete_share_export(link, |link| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            link,
+                                        ));
+                                        crate::app_sounds::play_notification();
+                                    });
                                 }
                                 cx.notify();
-                            });
-                            let _ = this.update(cx, |_, cx| {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
-                                crate::app_sounds::play_notification();
                             });
                         }
                         Ok(Ok(crate::upload::UploadResult::NotAuthenticated)) => {
@@ -3081,6 +3092,44 @@ mod tests {
             assert_eq!(ui.phase, ExportPhase::Idle);
             assert_eq!(ui.output_path, Some(output));
             assert!(ui.clipboard_retry_path().is_none());
+        }
+    }
+
+    #[test]
+    fn completed_share_export_copies_the_link_and_shows_success() {
+        let mut ui = clipboard_export();
+        ui.destination = ExportDestination::Link;
+        ui.phase = ExportPhase::Uploading;
+        ui.upload_progress = 0.9;
+        let link = "https://cap.link/finished".to_string();
+        let mut copied = None;
+
+        ui.complete_share_export(link.clone(), |link| copied = Some(link));
+
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(ui.share_link, Some(link.clone()));
+        assert_eq!(ui.upload_progress, 1.0);
+        assert_eq!(copied, Some(link));
+    }
+
+    #[test]
+    fn cancellation_or_close_ignores_a_completed_share_export() {
+        for closing in [false, true] {
+            let mut ui = clipboard_export();
+            ui.destination = ExportDestination::Link;
+            ui.phase = ExportPhase::Uploading;
+            ui.upload_progress = 0.9;
+            let completed_link = "https://cap.link/finished".to_string();
+            ui.close_requested = closing;
+            ui.cancel.store(!closing, Ordering::Relaxed);
+
+            ui.complete_share_export(completed_link, |_| {
+                panic!("cancelled share exports must not copy a link or notify")
+            });
+
+            assert_eq!(ui.phase, ExportPhase::Idle);
+            assert!(ui.share_link.is_none());
+            assert_eq!(ui.upload_progress, 0.9);
         }
     }
 

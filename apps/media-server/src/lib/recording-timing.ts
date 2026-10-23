@@ -13,6 +13,11 @@ import {
 } from "mediabunny";
 
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
+const MAX_LONG_RECORDING_METADATA_BYTES = 1024 * 1024 * 1024;
+// A long budget covers many reads; one allocation for a single header box stays bounded.
+const MAX_SINGLE_METADATA_READ_BYTES = 256 * 1024 * 1024;
+// Sample tables grow with a recording's length; reads stream through a fixed cache.
+const METADATA_BYTES_PER_FILE_BYTE = 1 / 64;
 const MAX_RANGE_BYTES = 1024 * 1024;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_TERMINAL_PACKETS = 1024;
@@ -304,6 +309,22 @@ async function readTerminalDurations(
 	return durations;
 }
 
+export function timingMetadataBudget(fileSize: number): number {
+	if (!Number.isSafeInteger(fileSize) || fileSize <= 0)
+		return MAX_METADATA_BYTES;
+	return Math.min(
+		MAX_LONG_RECORDING_METADATA_BYTES,
+		Math.max(
+			MAX_METADATA_BYTES,
+			Math.ceil(fileSize * METADATA_BYTES_PER_FILE_BYTE),
+		),
+	);
+}
+
+function megabytes(bytes: number): string {
+	return (bytes / (1024 * 1024)).toFixed(1);
+}
+
 export async function readRecordingVideoTiming(
 	path: string,
 	options: RecordingTimingOptions,
@@ -359,13 +380,10 @@ export async function readRecordingVideoTiming(
 	const reads = new Set<Promise<Uint8Array>>();
 	const reserve = (bytes: number) => {
 		metadataBytes += bytes;
-		if (
-			!Number.isSafeInteger(bytes) ||
-			bytes < 0 ||
-			metadataBytes > MAX_METADATA_BYTES
-		) {
+		const budget = timingMetadataBudget(fileSize);
+		if (!Number.isSafeInteger(bytes) || bytes < 0 || metadataBytes > budget) {
 			throw new RecordingTimingError(
-				"Recording timing metadata exceeds its read budget",
+				`Recording timing metadata exceeds its read budget (${megabytes(metadataBytes)} of ${megabytes(budget)} MB for a ${megabytes(fileSize)} MB file)`,
 				false,
 			);
 		}
@@ -505,6 +523,12 @@ export async function readRecordingVideoTiming(
 		) {
 			throw new RecordingTimingError(
 				"Invalid recording timing byte range",
+				false,
+			);
+		}
+		if (end - start > MAX_SINGLE_METADATA_READ_BYTES) {
+			throw new RecordingTimingError(
+				`Recording timing metadata exceeds its read budget (one ${megabytes(end - start)} MB read)`,
 				false,
 			);
 		}

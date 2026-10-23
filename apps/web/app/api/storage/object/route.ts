@@ -28,6 +28,47 @@ const copyHeader = (
 	if (value) target.set(targetName, value);
 };
 
+const INLINE_CONTENT_TYPES = new Set([
+	"video/mp4",
+	"video/webm",
+	"video/quicktime",
+	"video/x-matroska",
+	"video/x-msvideo",
+	"video/x-m4v",
+	"video/mp2t",
+	"video/mpeg",
+	"video/ogg",
+	"video/3gpp",
+	"audio/mp4",
+	"audio/mpeg",
+	"audio/aac",
+	"audio/webm",
+	"audio/ogg",
+	"image/jpeg",
+	"image/png",
+	"image/gif",
+	"image/webp",
+	"text/vtt",
+	"application/vnd.apple.mpegurl",
+	"application/x-mpegurl",
+	"application/json",
+]);
+
+const setObjectContentHeaders = (
+	headers: Headers,
+	contentType: string | null | undefined,
+) => {
+	headers.set("X-Content-Type-Options", "nosniff");
+	headers.set("Content-Security-Policy", "sandbox; default-src 'none'");
+	const essence = contentType?.split(";")[0]?.trim().toLowerCase();
+	if (contentType && essence && INLINE_CONTENT_TYPES.has(essence)) {
+		headers.set("Content-Type", contentType);
+		return;
+	}
+	headers.set("Content-Type", "application/octet-stream");
+	headers.set("Content-Disposition", "attachment");
+};
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
 	typeof value === "object" && value !== null
 		? (value as Record<string, unknown>)
@@ -230,7 +271,7 @@ export async function GET(request: NextRequest) {
 			headers.set("Accept-Ranges", "bytes");
 			if (head.ContentLength !== undefined)
 				headers.set("Content-Length", String(head.ContentLength));
-			if (head.ContentType) headers.set("Content-Type", head.ContentType);
+			setObjectContentHeaders(headers, head.ContentType);
 			return new Response(null, { status: 200, headers });
 		}
 		const upstream = identity
@@ -243,7 +284,7 @@ export async function GET(request: NextRequest) {
 				});
 		const headers = new Headers(CACHE_CONTROL_HEADERS);
 		if (identity) headers.set("ETag", identity);
-		copyHeader(upstream.headers, headers, "content-type", "Content-Type");
+		setObjectContentHeaders(headers, upstream.headers.get("content-type"));
 		copyHeader(upstream.headers, headers, "content-length", "Content-Length");
 		copyHeader(upstream.headers, headers, "content-range", "Content-Range");
 		copyHeader(upstream.headers, headers, "accept-ranges", "Accept-Ranges");

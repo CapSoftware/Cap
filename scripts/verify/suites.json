@@ -191,14 +191,14 @@
 			"cases": {
 				"prefix": "audio/",
 				"fast": {
-					"linux": 56,
-					"macos": 40,
-					"windows": 39
+					"linux": 58,
+					"macos": 41,
+					"windows": 40
 				},
 				"full": {
-					"linux": 58,
-					"macos": 58,
-					"windows": 58
+					"linux": 60,
+					"macos": 60,
+					"windows": 60
 				}
 			}
 		},
