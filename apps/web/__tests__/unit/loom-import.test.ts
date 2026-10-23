@@ -602,6 +602,49 @@ describe("importFromLoom", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		["long titles", "a".repeat(383), "a".repeat(255)],
+		["Unicode titles", "🎥".repeat(260), "🎥".repeat(255)],
+		["short titles", "Imported 🎥 video", "Imported 🎥 video"],
+	])(
+		"fits %s into the destination without changing the import",
+		async (_, title, expected) => {
+			valuesMock.mockImplementation(async (value: { name?: string }) => {
+				if (value.name && Array.from(value.name).length > 255) {
+					throw new Error("Data too long for column name");
+				}
+			});
+			vi.mocked(fetch).mockImplementation(async (input) => {
+				const url = input.toString();
+				if (url.includes("/transcoded-url")) {
+					return Response.json({ url: "https://cdn.loom.com/video.mp4" });
+				}
+				if (url === "https://www.loom.com/graphql") {
+					return Response.json({ data: { getVideo: { name: title } } });
+				}
+				if (url.includes("/v1/oembed")) {
+					return Response.json({ duration: 42, width: 1920, height: 1080 });
+				}
+				throw new Error(`Unexpected fetch: ${url}`);
+			});
+			const { importFromLoom } = await import("@/actions/loom");
+			expect(
+				await importFromLoom({
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					orgId: "org-1" as Organisation.OrganisationId,
+				}),
+			).toEqual({ success: true, videoId: "video-123" });
+			expect(valuesMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					name: expected,
+					ownerId: "user-123",
+					orgId: "org-1",
+				}),
+			);
+			expect(startMock).toHaveBeenCalledTimes(1);
+		},
+	);
+
 	it("does not call the Vercel firewall from the Loom import server action", async () => {
 		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
 
