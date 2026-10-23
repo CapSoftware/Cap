@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
+import { beginRequest } from "./lib/lifecycle";
 import audio from "./routes/audio";
 import health from "./routes/health";
 import video from "./routes/video";
@@ -7,6 +8,15 @@ import video from "./routes/video";
 const app = new Hono();
 
 app.use("*", logger());
+app.use("*", async (c, next) => {
+	if (c.req.method === "GET" || c.req.method === "HEAD") return await next();
+	const end = beginRequest();
+	try {
+		await next();
+	} finally {
+		end();
+	}
+});
 
 app.route("/health", health);
 app.route("/audio", audio);

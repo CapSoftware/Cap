@@ -50,7 +50,7 @@ impl RecordingStartGate {
     /// timeline starts where audio anchored at the recording epoch does.
     /// Instant merges its tracks by timestamp; Studio aligns them with each
     /// track's recorded start time instead and leaves this off.
-    pub(crate) fn set_video_origin_at_arm(&self) {
+    pub fn set_video_origin_at_arm(&self) {
         self.0.video_origin_at_arm.store(true, Ordering::Release);
     }
 

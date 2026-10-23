@@ -364,4 +364,115 @@ describe("media-server multipart fencing", () => {
 		expect((await request("unexpected")).status).toBe(404);
 		expect(mocks.storage).not.toHaveBeenCalled();
 	});
+
+	function loomUpload(source = true) {
+		const sourceKey = `${ownerId}/${videoId}/raw-upload.mp4`;
+		const resultKey = `${ownerId}/${videoId}/result.mp4`;
+		const row = {
+			id: videoId,
+			ownerId,
+			orgId: "organization",
+			metadata: {
+				loomImportUpload: {
+					attemptId: "loom-run:0",
+					ownerId,
+					organizationId: "organization",
+					source: { key: sourceKey, uploadId: "source-upload" },
+					output: { key: resultKey, uploadId: "result-upload" },
+				},
+			},
+		};
+		mocks.rows = [row];
+		return {
+			row,
+			body: {
+				videoId,
+				key: source ? sourceKey : resultKey,
+				uploadId: source ? "source-upload" : "result-upload",
+				loomImportAttemptId: "loom-run:0",
+				partNumber: 1,
+				contentLength: 64 * 1024 ** 2,
+				parts: [{ partNumber: 1, etag: '"part-1"', size: 64 * 1024 ** 2 }],
+			},
+		};
+	}
+
+	it.each([true, false])(
+		"signs only the registered Loom upload and preserves existing objects (source=%s)",
+		async (source) => {
+			const { body } = loomUpload(source);
+			expect((await request("sign-part", body)).status).toBe(200);
+			expect(mocks.signPart).toHaveBeenCalledWith(body.key, body.uploadId, 1, {
+				ContentLength: body.contentLength,
+			});
+			expect((await request("complete", body)).status).toBe(200);
+			expect(mocks.complete).toHaveBeenCalledWith(
+				body.key,
+				body.uploadId,
+				expect.objectContaining({ IfNoneMatch: "*" }),
+			);
+		},
+	);
+
+	it.each([
+		{ loomImportAttemptId: "old-run:0" },
+		{ loomImportAttemptId: undefined },
+		{ uploadId: "unregistered-upload" },
+		{ key: "other-owner/other-video/raw-upload.mp4" },
+	])("blocks a stale or substituted Loom upload %#", async (change) => {
+		const { body } = loomUpload(false);
+		expect((await request("sign-part", { ...body, ...change })).status).toBe(
+			409,
+		);
+		expect((await request("complete", { ...body, ...change })).status).toBe(
+			409,
+		);
+		expect(mocks.signPart).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+	});
+
+	it("blocks Loom upload finalization after a destination move", async () => {
+		const { body, row } = loomUpload();
+		row.orgId = "another-organization";
+		expect((await request("complete", body)).status).toBe(409);
+		expect(mocks.complete).not.toHaveBeenCalled();
+	});
+
+	it("blocks callbacks after a replacement workflow takes ownership", async () => {
+		const { body, row } = loomUpload();
+		mocks.rows = [
+			{
+				...row,
+				metadata: {
+					...row.metadata,
+					loomImportRun: { runId: "replacement-run", dispatch: "accepted" },
+				},
+			},
+		];
+		expect((await request("sign-part", body)).status).toBe(409);
+		expect((await request("complete", body)).status).toBe(409);
+		expect((await request("abort", body)).status).toBe(409);
+		expect(mocks.signPart).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.abort).not.toHaveBeenCalled();
+	});
+
+	it("accepts exactly 10 GB and rejects a further multipart part", async () => {
+		const { body } = loomUpload();
+		const parts = Array.from({ length: 160 }, (_, index) => ({
+			partNumber: index + 1,
+			etag: `"part-${index + 1}"`,
+			size: 64 * 1024 ** 2,
+		}));
+		expect((await request("complete", { ...body, parts })).status).toBe(200);
+		mocks.complete.mockClear();
+		expect(
+			(await request("sign-part", { ...body, partNumber: 161 })).status,
+		).toBe(400);
+		expect(
+			(await request("complete", { ...body, parts: [...parts, parts[0]] }))
+				.status,
+		).toBe(400);
+		expect(mocks.complete).not.toHaveBeenCalled();
+	});
 });
