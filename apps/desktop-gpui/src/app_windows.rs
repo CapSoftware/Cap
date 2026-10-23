@@ -5344,30 +5344,43 @@ fn load_editor_project_candidate(
             return;
         }
 
-        // The pump: convert on the background executor (un-padding plus the
-        // BGRA swap is a few megabytes per frame), deliver on the main one.
+        // The pump: RGBA frames go into the preview's streaming image as-is on
+        // the main thread. With streaming off they are converted on the
+        // background executor instead (un-padding plus the BGRA swap is a few
+        // megabytes per frame) and delivered on the main one.
         cx.spawn({
             let stats = stats.clone();
             let pump_instance = Arc::downgrade(&instance);
+            let stream = editor_window::streaming_preview_enabled()
+                .then(|| gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8));
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
+                    let mut streamed = None;
                     let (frame, number) = match output {
                         cap_editor::EditorFrameOutput::Rgba(rgba) => {
-                            let stats = stats.clone();
                             let number = rgba.frame_number;
-                            let image = cx
-                                .background_executor()
-                                .spawn(
-                                    async move { editor_window::frame_image_timed(&rgba, &stats) },
+                            if let Some(stream) = &stream {
+                                streamed = Some(rgba);
+                                (
+                                    editor_window::EditorPreviewFrame::Stream(stream.clone()),
+                                    number,
                                 )
-                                .await;
-                            let Some(image) = image else {
-                                tracing::warn!(
-                                    "a rendered frame could not be converted for display"
-                                );
-                                continue;
-                            };
-                            (editor_window::EditorPreviewFrame::Image(image), number)
+                            } else {
+                                let stats = stats.clone();
+                                let image = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        editor_window::frame_image_timed(&rgba, &stats)
+                                    })
+                                    .await;
+                                let Some(image) = image else {
+                                    tracing::warn!(
+                                        "a rendered frame could not be converted for display"
+                                    );
+                                    continue;
+                                };
+                                (editor_window::EditorPreviewFrame::Image(image), number)
+                            }
                         }
                         cap_editor::EditorFrameOutput::Nv12(frame) => {
                             tracing::warn!(
@@ -5385,6 +5398,11 @@ fn load_editor_project_candidate(
                     if handle
                         .update(cx, |view, window, cx| {
                             if !view.holds_instance(&pump_instance) {
+                                return;
+                            }
+                            if let (Some(stream), Some(rgba)) = (&stream, streamed)
+                                && !editor_window::stream_frame_timed(stream, rgba, &stats)
+                            {
                                 return;
                             }
                             view.frame_arrived(
