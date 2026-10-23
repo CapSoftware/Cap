@@ -7,7 +7,7 @@ import { comments, notifications, users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { Comment, User, Video } from "@cap/web-domain";
-import { and, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
 
@@ -269,7 +269,9 @@ async function sendNewCommentEmail(params: {
 			.where(
 				and(
 					eq(comments.videoId, Video.VideoId.make(params.videoId)),
-					eq(comments.type, "text"),
+					// Media comments email through the same path as text comments, so
+					// they must share the throttle window with them.
+					inArray(comments.type, ["text", "video", "audio"]),
 					or(
 						isNull(comments.parentCommentId),
 						eq(comments.parentCommentId, Comment.CommentId.make("")),

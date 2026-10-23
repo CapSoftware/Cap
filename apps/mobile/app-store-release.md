@@ -144,13 +144,13 @@ Tell the reviewer:
 Run these from `apps/mobile` after EAS and Apple access are configured:
 
 ```sh
-pnpm dlx eas-cli@21.0.2 project:info --non-interactive
-pnpm dlx eas-cli@21.0.2 config --platform ios --profile production
-pnpm dlx expo-doctor@latest
-pnpm typecheck
-pnpm test
-pnpm exec expo prebuild --platform ios --clean --no-install
-pnpm dlx eas-cli@21.0.2 build --platform ios --profile production
+bunx eas-cli@21.0.2 project:info --non-interactive
+bunx eas-cli@21.0.2 config --platform ios --profile production
+bunx expo-doctor@latest
+bun run typecheck
+bun run test
+bun run expo prebuild --platform ios --clean --no-install
+bunx eas-cli@21.0.2 build --platform ios --profile production
 ```
 
 After the build reaches App Store Connect:

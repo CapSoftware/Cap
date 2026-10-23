@@ -95,11 +95,11 @@ const needsDevPrebuild = () => {
 	return entitlements.includes("com.apple.developer.associated-domains");
 };
 
-const command = ["exec", "expo", "run:ios", "--device", simulator.udid];
+const command = ["run", "expo", "run:ios", "--device", simulator.udid];
 console.log(`Using iOS simulator: ${simulator.name} (${simulator.udid})`);
 
 if (process.env.CAP_MOBILE_DRY_RUN === "1") {
-	console.log(`pnpm ${command.join(" ")}`);
+	console.log(`bun ${command.join(" ")}`);
 	process.exit(0);
 }
 
@@ -110,16 +110,8 @@ if (
 	needsDevPrebuild()
 ) {
 	const prebuild = spawnSync(
-		"pnpm",
-		[
-			"exec",
-			"expo",
-			"prebuild",
-			"--platform",
-			"ios",
-			"--no-install",
-			"--clean",
-		],
+		"bun",
+		["run", "expo", "prebuild", "--platform", "ios", "--no-install", "--clean"],
 		{
 			stdio: "inherit",
 			env: process.env,
@@ -131,7 +123,7 @@ if (
 }
 
 const runExpo = () =>
-	spawnSync("pnpm", command, {
+	spawnSync("bun", command, {
 		stdio: "inherit",
 		env: process.env,
 	});

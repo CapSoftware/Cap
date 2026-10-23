@@ -139,6 +139,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             })
         }
         extern "C" fn on_window_will_close<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
+            let window = unsafe { objc::rc::StrongPtr::retain(*this.get_ivar("window")) };
             let super_del: id = unsafe { *this.get_ivar("super_delegate") };
 
             // Forward to the previous delegate first, but don't let a panic there
@@ -148,6 +149,9 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             });
 
             suppress_delegate_panic("windowWillClose:cleanup", (), || unsafe {
+                // Tao clears the delegate before Destroyed; preserve that even if forwarding panics.
+                let _: () = msg_send![*window, setDelegate: cocoa::base::nil];
+
                 // Drop the boxed `WindowState<R>` (and the `Window<R>` handle it holds)
                 // that was leaked via `Box::into_raw` when this delegate was created.
                 let app_box: *mut c_void = *this.get_ivar("app_box");
@@ -156,11 +160,6 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
                     (*this_mut).set_ivar("app_box", std::ptr::null_mut::<c_void>());
                     drop(Box::from_raw(app_box as *mut WindowState<R>));
                 }
-
-                // Restore the previous delegate before releasing this one, so any
-                // further delegate callbacks during teardown don't hit a freed object.
-                let window: id = *this.get_ivar("window");
-                let _: () = msg_send![window, setDelegate: super_del];
 
                 // NSWindow does not retain its delegate, so the reference taken when
                 // this delegate was created (`new`) is the only owning one. Release

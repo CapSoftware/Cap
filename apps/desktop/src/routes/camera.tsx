@@ -38,10 +38,12 @@ import {
 	normalizeBackgroundBlurMode,
 } from "~/components/CameraPreviewChrome";
 import { generalSettingsStore } from "~/store";
+import { cameraPresentationInput } from "~/utils/camera-presentation";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
+	revealRecordingWindow,
 } from "~/utils/queries";
 import {
 	type CanvasControls,
@@ -49,7 +51,10 @@ import {
 	type FrameData,
 } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
-import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
 
 type CameraPreviewIssue = {
 	title: string;
@@ -129,7 +134,7 @@ export default function () {
 
 	const generalSettings = generalSettingsStore.createQuery();
 	const isNativePreviewEnabled = () => {
-		if (type() === "windows") return false;
+		if (type() === "windows" || type() === "linux") return false;
 		if (generalSettings.isPending) return getNativeCameraPreviewInitialState();
 		return (
 			generalSettings.data?.enableNativeCameraPreview ??
@@ -405,18 +410,46 @@ function LegacyCameraPreviewPage(props: {
 		}
 	});
 
+	let layoutRevision = 0;
+	let previewStateSync: Promise<unknown> = Promise.resolve();
 	createEffect(() => {
-		commands.setCameraPreviewState({
+		layoutRevision = (layoutRevision + 1) >>> 0;
+		previewStateSync = commands.setCameraPreviewState({
 			size: state.size,
 			shape: state.shape,
 			mirrored: state.mirrored,
 			background_blur: normalizeBackgroundBlurMode(state.backgroundBlur),
 		});
+		void previewStateSync.catch((error) =>
+			console.error("Camera preview state sync failed", error),
+		);
 	});
 
 	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode());
 
 	const [hasFrame, setHasFrame] = createSignal(false);
+	const [hasRetainedFrame, setHasRetainedFrame] = createSignal(false);
+	const retainedCanvas = document.createElement("canvas");
+	const { rawOptions } = useRecordingOptions();
+	let retainedFrameTimeout: ReturnType<typeof setTimeout> | undefined;
+	let retainedFrameCapturedAt: number | undefined;
+
+	const clearRetainedFrame = () => {
+		clearTimeout(retainedFrameTimeout);
+		retainedFrameCapturedAt = undefined;
+		setHasRetainedFrame(false);
+		retainedCanvas.width = 0;
+		retainedCanvas.height = 0;
+	};
+	const scheduleRetainedFrameExpiry = () => {
+		clearTimeout(retainedFrameTimeout);
+		if (retainedFrameCapturedAt === undefined) return;
+		const remaining = 60_000 - (performance.now() - retainedFrameCapturedAt);
+		retainedFrameTimeout = setTimeout(
+			clearRetainedFrame,
+			Math.max(0, remaining),
+		);
+	};
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
 		height: number;
@@ -441,6 +474,7 @@ function LegacyCameraPreviewPage(props: {
 				Math.abs(currentSize.width - rect.width) > 1 ||
 				Math.abs(currentSize.height - rect.height) > 1
 			) {
+				layoutRevision = (layoutRevision + 1) >>> 0;
 				setExternalContainerSize({ width: rect.width, height: rect.height });
 			}
 		};
@@ -470,12 +504,33 @@ function LegacyCameraPreviewPage(props: {
 	let lastFrameTime = 0;
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
 
+	const retainCurrentFrame = (controls: CanvasControls | undefined) => {
+		if (!rawOptions.cameraID || props.issue()) {
+			clearRetainedFrame();
+			return;
+		}
+		try {
+			if (
+				controls?.hasRenderedFrame() &&
+				controls.drawLatestFrameToCanvas(retainedCanvas)
+			) {
+				retainedFrameCapturedAt = performance.now();
+				setHasRetainedFrame(true);
+			}
+		} catch {
+			clearRetainedFrame();
+		}
+	};
+
 	const closeSocket = () => {
 		const socket = ws;
 		const controls = canvasControls;
 		ws = undefined;
 		canvasControls = undefined;
+		retainCurrentFrame(controls);
 		controls?.dispose();
+		setHasFrame(false);
+		scheduleRetainedFrameExpiry();
 		if (
 			socket &&
 			socket.readyState !== WebSocket.CLOSING &&
@@ -502,8 +557,10 @@ function LegacyCameraPreviewPage(props: {
 		) {
 			setFrameDimensions({ width: frame.width, height: frame.height });
 		}
-		if (canvasControls?.hasRenderedFrame()) {
+		if (canvasControls?.hasRenderedFrame() && !hasFrame()) {
 			setHasFrame(true);
+			clearTimeout(retainedFrameTimeout);
+			retainedFrameTimeout = setTimeout(clearRetainedFrame, 180);
 		}
 	};
 
@@ -536,24 +593,39 @@ function LegacyCameraPreviewPage(props: {
 		const instantQuery = isInstantRecording() ? "?instant=true" : "";
 		const [socket, _isConnected, _isWorkerReady, controls] = createImageDataWS(
 			`ws://localhost:${cameraWsPort}${instantQuery}`,
-			updateFrameState,
+			(frame) => {
+				if (canvasControls === controls) updateFrameState(frame);
+			},
 			() => commands.refreshCameraFeed().catch(() => {}),
-			{ powerPreference: "low-power" },
+			{ powerPreference: "low-power", preserveAlpha: type() === "macos" },
 		);
 		canvasControls = controls;
 		initCanvasControls();
 
 		socket.addEventListener("open", () => {
+			if (ws !== socket) return;
 			lastFrameTime = Date.now();
 			setHasFrame(false);
-			setFrameDimensions(null);
 		});
+
+		const captureBeforeCleanup = () => {
+			if (ws !== socket || canvasControls !== controls) return;
+			retainCurrentFrame(controls);
+			setHasFrame(false);
+			scheduleRetainedFrameExpiry();
+		};
+		// Capture listeners run before the transport discards its frame buffers.
+		socket.addEventListener("close", captureBeforeCleanup, { capture: true });
+		socket.addEventListener("error", captureBeforeCleanup, { capture: true });
 
 		socket.addEventListener("close", () => {
 			if (canvasControls === controls) {
 				canvasControls = undefined;
 			}
-			if (ws === socket) ws = undefined;
+			if (ws !== socket) return;
+			ws = undefined;
+			setHasFrame(false);
+			scheduleRetainedFrameExpiry();
 			scheduleReconnect();
 		});
 
@@ -645,9 +717,27 @@ function LegacyCameraPreviewPage(props: {
 		),
 	);
 
+	createEffect(
+		on(
+			() => JSON.stringify(rawOptions.cameraID),
+			() => {
+				stopSocket();
+				clearRetainedFrame();
+				setFrameDimensions(null);
+				if (rawOptions.cameraID) startSocket();
+			},
+			{ defer: true },
+		),
+	);
+
+	createEffect(() => {
+		if (props.issue()) clearRetainedFrame();
+	});
+
 	onCleanup(() => {
 		isCleanedUp = true;
 		stopSocket();
+		clearRetainedFrame();
 	});
 
 	const scale = () => cameraToolbarScale(state.size);
@@ -707,9 +797,11 @@ function LegacyCameraPreviewPage(props: {
 						);
 					});
 					if (onMonitor) {
-						currentWindow.setPosition(new LogicalPosition(saved.x, saved.y));
+						await currentWindow.setPosition(
+							new LogicalPosition(saved.x, saved.y),
+						);
 					} else {
-						currentWindow.setPosition(
+						await currentWindow.setPosition(
 							new LogicalPosition(
 								width + activeMonitor.position.toLogical(scalingFactor).x,
 								height + activeMonitor.position.toLogical(scalingFactor).y,
@@ -717,7 +809,7 @@ function LegacyCameraPreviewPage(props: {
 						);
 					}
 				} else {
-					currentWindow.setPosition(
+					await currentWindow.setPosition(
 						new LogicalPosition(
 							width + activeMonitor.position.toLogical(scalingFactor).x,
 							height + activeMonitor.position.toLogical(scalingFactor).y,
@@ -771,7 +863,112 @@ function LegacyCameraPreviewPage(props: {
 		},
 	);
 
-	onMount(() => getCurrentWindow().show());
+	onMount(() => {
+		let disposed = false;
+		let requestRevision = 0;
+		const unlisten = events.cameraPresentationRequested.listen(
+			async ({ payload }) => {
+				const request = ++requestRevision;
+				try {
+					if (
+						type() !== "linux" ||
+						isCameraOnlyMode() ||
+						!containerRef ||
+						!hasFrame()
+					) {
+						throw new Error(
+							"Wait for the selected camera preview before recording",
+						);
+					}
+					const sync = previewStateSync;
+					await sync;
+					const deadline = performance.now() + 900;
+					while (_windowSize.loading) {
+						if (performance.now() >= deadline)
+							throw new Error("Camera layout did not settle");
+						await new Promise<void>((resolve) => setTimeout(resolve, 16));
+					}
+					const measuredRevision = layoutRevision;
+					await Promise.race([
+						new Promise<void>((resolve) =>
+							requestAnimationFrame(() =>
+								requestAnimationFrame(() => resolve()),
+							),
+						),
+						new Promise<never>((_, reject) =>
+							setTimeout(
+								() =>
+									reject(new Error("Camera window did not render its layout")),
+								500,
+							),
+						),
+					]);
+					if (disposed || request !== requestRevision) return;
+					if (
+						sync !== previewStateSync ||
+						measuredRevision !== layoutRevision ||
+						_windowSize.loading
+					) {
+						throw new Error(
+							"Camera appearance changed while measuring; start again",
+						);
+					}
+					const rect = containerRef.getBoundingClientRect();
+					const clip = getComputedStyle(containerRef);
+					const input = cameraPresentationInput(
+						{
+							viewportWidth: window.innerWidth,
+							viewportHeight: window.innerHeight,
+							left: rect.left,
+							top: rect.top,
+							width: rect.width,
+							height: rect.height,
+							cornerRadii: [
+								clip.borderTopLeftRadius,
+								clip.borderTopRightRadius,
+								clip.borderBottomRightRadius,
+								clip.borderBottomLeftRadius,
+							],
+						},
+						{
+							size: state.size,
+							shape: state.shape,
+							mirrored: state.mirrored,
+							background_blur: normalizeBackgroundBlurMode(
+								state.backgroundBlur,
+							),
+						},
+						measuredRevision,
+					);
+					await commands.submitCameraPresentation(payload.nonce, input, null);
+				} catch (error) {
+					if (!disposed && request === requestRevision) {
+						await commands
+							.submitCameraPresentation(payload.nonce, null, String(error))
+							.catch(() => {});
+					}
+				}
+			},
+		);
+		onCleanup(() => {
+			disposed = true;
+			requestRevision += 1;
+			void unlisten.then((remove) => remove());
+		});
+	});
+
+	const initialGeneration = (
+		window.__CAP__ as { cleanCaptureGeneration?: number } | undefined
+	)?.cleanCaptureGeneration;
+	const revealGeneration =
+		initialGeneration === undefined
+			? commands.getCleanCaptureState().then((state) => state.generation)
+			: Promise.resolve(initialGeneration);
+	onMount(() => {
+		void revealGeneration.then((generation) =>
+			revealRecordingWindow(generation),
+		);
+	});
 
 	return (
 		<div
@@ -802,8 +999,13 @@ function LegacyCameraPreviewPage(props: {
 			<div
 				ref={containerRef}
 				class={cx(
-					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
-					state.shape === "round" ? "rounded-full" : "rounded-3xl",
+					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none text-gray-12",
+					state.backgroundBlur !== "remove" && "shadow-lg bg-gray-1",
+					state.backgroundBlur === "remove"
+						? "rounded-none"
+						: state.shape === "round"
+							? "rounded-full"
+							: "rounded-3xl",
 				)}
 				data-tauri-drag-region
 			>
@@ -817,7 +1019,15 @@ function LegacyCameraPreviewPage(props: {
 						}}
 						containerSize={externalContainerSize() ?? undefined}
 					/>
-					<Show when={!hasFrame()}>
+					<Canvas
+						frameDimensions={frameDimensions}
+						state={state}
+						canvas={retainedCanvas}
+						onCanvas={() => {}}
+						containerSize={externalContainerSize() ?? undefined}
+						opacity={hasRetainedFrame() && !hasFrame() ? 1 : 0}
+					/>
+					<Show when={!hasFrame() && !hasRetainedFrame()}>
 						<CameraLoadingState />
 					</Show>
 				</Suspense>
@@ -836,6 +1046,8 @@ function Canvas(props: {
 	state: CameraWindowState;
 	onCanvas: (canvas: HTMLCanvasElement) => void;
 	containerSize?: { width: number; height: number };
+	canvas?: HTMLCanvasElement;
+	opacity?: number;
 }) {
 	const style = () => {
 		const dimensions = props.frameDimensions();
@@ -862,6 +1074,7 @@ function Canvas(props: {
 		const top = (size.height - targetSize.height) / 2;
 
 		return {
+			opacity: props.opacity,
 			width: `${size.width}px`,
 			height: `${size.height}px`,
 			left: `-${left}px`,
@@ -869,6 +1082,21 @@ function Canvas(props: {
 			transform: props.state.mirrored ? "scaleX(-1)" : "scaleX(1)",
 		};
 	};
+
+	if (props.canvas) {
+		const canvas = props.canvas;
+		canvas.className =
+			"absolute pointer-events-none motion-reduce:transition-none";
+		createEffect(() => {
+			canvas.style.transition =
+				props.opacity === 0 &&
+				!matchMedia("(prefers-reduced-motion: reduce)").matches
+					? "opacity 180ms ease-out"
+					: "none";
+			Object.assign(canvas.style, style());
+		});
+		return canvas;
+	}
 
 	return (
 		<canvas

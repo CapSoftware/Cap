@@ -7,6 +7,7 @@ import { startTransition } from "react";
 import { toast } from "sonner";
 import { resetUser } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { consumeOnboardingNextPath } from "../../onboarding-next";
 
 export const Bottom = () => {
 	const router = useRouter();
@@ -21,7 +22,7 @@ export const Bottom = () => {
 			}),
 		onSuccess: () => {
 			startTransition(() => {
-				router.push("/dashboard/caps");
+				router.push(consumeOnboardingNextPath("/dashboard/caps"));
 				router.refresh();
 			});
 		},

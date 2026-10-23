@@ -43,6 +43,11 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import {
+	loomImportDestinationFromPathname,
+	loomImportPageHref,
+} from "@/lib/loom-import-destination";
+import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
+import {
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
@@ -74,6 +79,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const showDeveloperDashboard =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
 		DEVELOPER_DASHBOARD_ALLOWED_EMAILS.includes(user.email);
+	const showMigrationQueue =
+		buildEnv.NEXT_PUBLIC_IS_CAP &&
+		user.email.toLowerCase() === MESSENGER_ADMIN_EMAIL;
 
 	const manageNavigation = [
 		{
@@ -98,7 +106,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		},
 		{
 			name: "Import Media",
-			href: `/dashboard/import`,
+			href: loomImportPageHref(loomImportDestinationFromPathname(pathname)),
 			matchChildren: true,
 			icon: <ImportIcon />,
 			subNav: [],
@@ -120,6 +128,16 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						matchChildren: true,
 						icon: <CodeIcon />,
 						subNav: [] as { name: string; href: string }[],
+					},
+				]
+			: []),
+		...(showMigrationQueue
+			? [
+					{
+						name: "Migration Queue",
+						href: "/dashboard/admin/loom-migrations",
+						icon: <ImportIcon />,
+						subNav: [],
 					},
 				]
 			: []),
@@ -174,11 +192,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	}, [canScrollUp, canScrollDown]);
 
 	const isPathActive = (path: string, matchChildren: boolean = false) => {
+		const basePath = path.split("?")[0] ?? path;
 		if (matchChildren) {
-			return pathname === path || pathname.startsWith(`${path}/`);
+			return pathname === basePath || pathname.startsWith(`${basePath}/`);
 		}
 
-		return pathname === path;
+		return pathname === basePath;
 	};
 
 	const isDomainSetupVerified =

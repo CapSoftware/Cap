@@ -15,6 +15,15 @@ export type ShareVideoMetadataInput = {
 	name: string;
 	sourceType: ShareVideoSourceType;
 	webUrl: string;
+	width: number | null;
+	height: number | null;
+	/**
+	 * Two surfaces only answer on the default Cap origin: `proxy.ts` redirects
+	 * `/embed/` away from a custom domain, and `parseCapShareUrl` accepts share
+	 * URLs on `cap.so`, `cap.link`, and the configured web host, so `/api/oembed`
+	 * rejects an unrelated custom domain `url`. Defaults to `webUrl`.
+	 */
+	canonicalWebUrl?: string;
 	advertiseIframelyPlayer?: boolean;
 };
 
@@ -22,9 +31,17 @@ export const getShareVideoUrls = ({
 	videoId,
 	sourceType,
 	webUrl,
-}: Pick<ShareVideoMetadataInput, "videoId" | "sourceType" | "webUrl">) => {
+	canonicalWebUrl = webUrl,
+}: Pick<
+	ShareVideoMetadataInput,
+	"videoId" | "sourceType" | "webUrl" | "canonicalWebUrl"
+>) => {
 	const shareUrl = new URL(`/s/${videoId}`, webUrl).toString();
-	const playerUrl = new URL(`/embed/${videoId}`, webUrl).toString();
+	const canonicalShareUrl = new URL(
+		`/s/${videoId}`,
+		canonicalWebUrl,
+	).toString();
+	const playerUrl = new URL(`/embed/${videoId}`, canonicalWebUrl).toString();
 	const streamUrl = new URL("/api/playlist", webUrl);
 	streamUrl.searchParams.set("videoId", videoId);
 	let streamContentType = "application/vnd.apple.mpegurl";
@@ -42,8 +59,8 @@ export const getShareVideoUrls = ({
 	previewImageUrl.searchParams.set("fallback", "og");
 	const ogImageUrl = new URL("/api/video/og", webUrl);
 	ogImageUrl.searchParams.set("videoId", videoId);
-	const oEmbedUrl = new URL("/api/oembed", webUrl);
-	oEmbedUrl.searchParams.set("url", shareUrl);
+	const oEmbedUrl = new URL("/api/oembed", canonicalWebUrl);
+	oEmbedUrl.searchParams.set("url", canonicalShareUrl);
 	oEmbedUrl.searchParams.set("format", "json");
 
 	return {
@@ -62,11 +79,23 @@ export const buildShareVideoMetadata = ({
 	name,
 	sourceType,
 	webUrl,
+	canonicalWebUrl,
 	advertiseIframelyPlayer = false,
+	width,
+	height,
 }: ShareVideoMetadataInput): Metadata => {
-	const urls = getShareVideoUrls({ videoId, sourceType, webUrl });
+	const urls = getShareVideoUrls({
+		videoId,
+		sourceType,
+		webUrl,
+		canonicalWebUrl,
+	});
 	const title = `${name} | Cap Recording`;
 	const description = "Watch this video on Cap";
+	const hasDimensions =
+		width != null && height != null && width > 0 && height > 0;
+	const playerWidth = hasDimensions ? width : PLAYER_WIDTH;
+	const playerHeight = hasDimensions ? height : PLAYER_HEIGHT;
 
 	return {
 		title,
@@ -79,7 +108,7 @@ export const buildShareVideoMetadata = ({
 								rel: "iframely player",
 								url: urls.playerUrl,
 								type: "text/html",
-								media: "(aspect-ratio: 16/9)",
+								media: `(aspect-ratio: ${playerWidth}/${playerHeight})`,
 							},
 						],
 					},
@@ -121,8 +150,8 @@ export const buildShareVideoMetadata = ({
 				{
 					url: urls.streamUrl,
 					secureUrl: urls.streamUrl,
-					width: PLAYER_WIDTH,
-					height: PLAYER_HEIGHT,
+					width: playerWidth,
+					height: playerHeight,
 					type: urls.streamContentType,
 				},
 			],
@@ -135,8 +164,8 @@ export const buildShareVideoMetadata = ({
 			players: {
 				playerUrl: urls.playerUrl,
 				streamUrl: urls.streamUrl,
-				width: PLAYER_WIDTH,
-				height: PLAYER_HEIGHT,
+				width: playerWidth,
+				height: playerHeight,
 			},
 		},
 		other: {

@@ -103,6 +103,31 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+/// Tokens minted for the CLI (from `cap auth login` or the dashboard's CLI API keys section) carry
+/// this prefix. A `cap_cli_` value in `CAP_API_KEY` is an agent token the user pasted from the
+/// dashboard, not a legacy desktop key, so it must take the agent path.
+const AGENT_TOKEN_PREFIX: &str = "cap_cli_";
+
+pub fn is_agent_api_key(value: &str) -> bool {
+    value.starts_with(AGENT_TOKEN_PREFIX)
+}
+
+fn agent_env_token() -> Option<String> {
+    env_var("CAP_AGENT_TOKEN").or_else(|| env_var("CAP_API_KEY").filter(|v| is_agent_api_key(v)))
+}
+
+/// The environment variable currently supplying the agent token, for messages that tell the user
+/// what to unset.
+pub fn agent_env_var_name() -> Option<&'static str> {
+    if env_var("CAP_AGENT_TOKEN").is_some() {
+        Some("CAP_AGENT_TOKEN")
+    } else if env_var("CAP_API_KEY").is_some_and(|v| is_agent_api_key(&v)) {
+        Some("CAP_API_KEY")
+    } else {
+        None
+    }
+}
+
 pub fn server_url() -> String {
     normalize_server(
         env_var("CAP_SERVER_URL")
@@ -360,7 +385,7 @@ pub fn store_agent(
 
 pub fn resolve_agent() -> Result<AgentCredentials, String> {
     let server = server_url();
-    if let Some(access_token) = env_var("CAP_AGENT_TOKEN") {
+    if let Some(access_token) = agent_env_token() {
         return Ok(AgentCredentials {
             access_token,
             server: validate_agent_server(server)?,
@@ -442,8 +467,9 @@ pub fn resolve() -> Result<Credentials, String> {
     }
 
     Err(
-        "Not signed in. Sign in to Cap Desktop (the CLI reuses its login), or set CAP_API_KEY to a \
-         Cap auth key from Settings."
+        "Not signed in. Run `cap auth login` (needs a browser), sign in to Cap Desktop (the CLI \
+         reuses its login), or create a CLI API key in the Cap dashboard under Settings -> Account \
+         and set it as CAP_API_KEY."
             .to_string(),
     )
 }
@@ -603,7 +629,7 @@ async fn verify_agent_status(credentials: &AgentCredentials) -> AgentVerificatio
 
 fn resolve_status() -> Result<StatusCredentials, String> {
     let agent = resolve_agent();
-    if env_var("CAP_AGENT_TOKEN").is_some() {
+    if agent_env_token().is_some() {
         return agent.map(StatusCredentials::Agent);
     }
     let legacy = resolve();
@@ -750,5 +776,14 @@ mod tests {
     #[test]
     fn file_fallback_is_only_available_where_permissions_are_enforced() {
         assert_eq!(file_fallback_supported(), cfg!(unix));
+    }
+
+    #[test]
+    fn dashboard_minted_keys_are_recognized_as_agent_tokens() {
+        assert!(is_agent_api_key(
+            "cap_cli_0123456789abcdefghijklmnopqrstuvwxyzABCDEF-"
+        ));
+        assert!(!is_agent_api_key("00000000-0000-0000-0000-000000000000"));
+        assert!(!is_agent_api_key(""));
     }
 }

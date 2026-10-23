@@ -1,4 +1,5 @@
 import { Clapperboard, Zap } from "lucide-react";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -150,8 +151,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 	comparison: [
 		{
 			title: "Cap vs Loom",
-			description:
-				"Loom is a closed-source SaaS that owns your recording data and can change pricing at any time. Cap is open source with custom storage support, starting at $9.99/month versus Loom's $18/month — and Cap's Studio Mode is completely free. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Loom is a closed-source SaaS that owns your recording data and can change pricing at any time. Cap is open source with custom storage support, starting at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month — and Cap's Studio Mode is completely free. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 		{
 			title: "Cap vs OBS Studio",
@@ -226,8 +226,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		},
 		{
 			question: "Is Cap's open source version free?",
-			answer:
-				"Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro ($9.99/month) removes Instant Mode time limits and adds team features. The core software will always be open source and free to use.",
+			answer: `Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro ($${PRICING.pro.annualPerMonth}/month) removes Instant Mode time limits and adds team features. The core software will always be open source and free to use.`,
 		},
 		{
 			question:
@@ -253,9 +252,11 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap open source screen recorder demo showing recording, sharing, and self-hosting",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title:
+				"Cap open source screen recorder demo showing recording, sharing, and self-hosting",
+		},
 	},
 
 	cta: {

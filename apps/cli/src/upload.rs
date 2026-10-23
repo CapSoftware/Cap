@@ -116,7 +116,17 @@ impl UploadArgs {
     async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
         let file_path = self.resolve_upload_file().await?;
         let meta = probe_video_meta(&file_path)?;
-        let (video_id, link) = if prefer_agent_upload() {
+        let use_agent = prefer_agent_upload();
+        // The agent upload API always creates a new Cap, so honoring --video-id there would
+        // silently upload to the wrong place. Fail loudly instead of scattering new videos.
+        if use_agent && self.video_id.is_some() {
+            return Err(
+                "--video-id is not supported with a CLI API key (cap_cli_) or agent login; it \
+                 requires Cap Desktop login or a legacy desktop CAP_API_KEY."
+                    .to_string(),
+            );
+        }
+        let (video_id, link) = if use_agent {
             upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
                 .await
                 .map_err(|error| {
@@ -141,7 +151,7 @@ impl UploadArgs {
                 Err(legacy_error) => {
                     if self.video_id.is_some() {
                         return Err(format!(
-                            "{legacy_error} --video-id currently requires Cap Desktop or CAP_API_KEY authentication"
+                            "{legacy_error} --video-id currently requires Cap Desktop login or a legacy desktop CAP_API_KEY"
                         ));
                     }
                     upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
@@ -248,6 +258,27 @@ pub async fn upload_video_path(file_path: &Path, name: Option<String>) -> Result
     }
 }
 
+fn agent_upload_payload(
+    file_name: &str,
+    name: Option<&str>,
+    content_length: u64,
+    meta: &VideoMeta,
+) -> serde_json::Value {
+    let mut payload = json!({
+        "fileName": file_name,
+        "contentType": "video/mp4",
+        "contentLength": content_length,
+        "durationSeconds": meta.duration_in_secs,
+        "width": meta.width,
+        "height": meta.height,
+        "fps": meta.fps,
+    });
+    if let Some(name) = name {
+        payload["title"] = json!(name);
+    }
+    payload
+}
+
 async fn upload_file_with_agent(
     file_path: &Path,
     name: Option<&str>,
@@ -266,16 +297,7 @@ async fn upload_file_with_agent(
         .mutate_json(
             Method::POST,
             "/uploads",
-            &json!({
-                "fileName": file_name,
-                "contentType": "video/mp4",
-                "contentLength": content_length,
-                "durationSeconds": meta.duration_in_secs,
-                "width": meta.width,
-                "height": meta.height,
-                "fps": meta.fps,
-                "title": name,
-            }),
+            &agent_upload_payload(file_name, name, content_length, meta),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -519,8 +541,25 @@ async fn upload_file(http: &Client, put_url: &str, path: &Path) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use super::prefer_agent_upload_sources;
+    use super::{VideoMeta, agent_upload_payload, prefer_agent_upload_sources};
     use crate::credentials::{AgentCredentialSource, CredentialSource};
+
+    #[test]
+    fn agent_upload_payload_only_includes_a_requested_title() {
+        let meta = VideoMeta {
+            duration_in_secs: 1.0,
+            width: 640,
+            height: 360,
+            fps: 30.0,
+        };
+        for name in [None, Some("Demo"), Some("")] {
+            let payload = agent_upload_payload("demo.mp4", name, 1024, &meta);
+            match name {
+                Some(name) => assert_eq!(payload["title"], name),
+                None => assert!(payload.get("title").is_none()),
+            }
+        }
+    }
 
     #[test]
     fn explicit_agent_environment_credential_has_highest_upload_priority() {

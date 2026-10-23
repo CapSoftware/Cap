@@ -5,6 +5,7 @@
 		"skipLibCheck": true,
 		"emitDeclarationOnly": true,
 		"declaration": true,
+		"rootDir": "./src",
 		"outDir": "dist"
 	}
 }

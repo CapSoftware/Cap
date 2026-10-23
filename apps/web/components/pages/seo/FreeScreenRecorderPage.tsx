@@ -1,3 +1,4 @@
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 
 export const freeScreenRecorderContent = {
@@ -78,8 +79,7 @@ export const freeScreenRecorderContent = {
 		},
 		{
 			question: "Can I store my recordings in the cloud?",
-			answer:
-				"Yes, from just $6/month, Cap offers unlimited cloud storage, making it easy to access and share recordings whenever needed.",
+			answer: `Yes, from just $${PRICING.pro.annualPerMonth}/month, Cap offers unlimited cloud storage, making it easy to access and share recordings whenever needed.`,
 		},
 		{
 			question: "What makes Cap's free screen recorder different?",
@@ -94,9 +94,10 @@ export const freeScreenRecorderContent = {
 	],
 
 	video: {
-		url: "/videos/cap-free-screen-recorder-demo.mp4",
-		thumbnail: "/videos/cap-free-screen-recorder-thumbnail.png",
-		alt: "Cap free screen recorder demo showing high-quality features",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	cta: {

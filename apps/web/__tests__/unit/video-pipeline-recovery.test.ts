@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = vi.fn();
 const mockStart = vi.fn();
+const mockStartLoomImport = vi.fn();
+const mockLoomImportRunState = vi.fn();
 const mockTranscribeVideo = vi.fn();
 const mockStartAiGeneration = vi.fn();
 
@@ -10,6 +12,12 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/schema", () => ({
+	importedVideos: {
+		id: "importedVideos.id",
+		orgId: "importedVideos.orgId",
+		source: "importedVideos.source",
+		sourceId: "importedVideos.sourceId",
+	},
 	users: {
 		id: "users.id",
 		stripeSubscriptionStatus: "users.stripeSubscriptionStatus",
@@ -18,6 +26,7 @@ vi.mock("@cap/database/schema", () => ({
 	videos: {
 		id: "videos.id",
 		ownerId: "videos.ownerId",
+		orgId: "videos.orgId",
 		bucket: "videos.bucket",
 		source: "videos.source",
 		metadata: "videos.metadata",
@@ -62,6 +71,17 @@ vi.mock("workflow/api", () => ({
 	start: mockStart,
 }));
 
+vi.mock("@/lib/loom-import-start", () => ({
+	startLoomImportWorkflow: mockStartLoomImport,
+	getLoomImportRunState: mockLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE: "Confirming Loom import",
+	LoomImportStartError: class extends Error {
+		constructor(readonly canRetry: boolean) {
+			super("Loom startup failed");
+		}
+	},
+}));
+
 vi.mock("@/lib/transcribe", () => ({
 	transcribeVideo: mockTranscribeVideo,
 }));
@@ -72,6 +92,10 @@ vi.mock("@/lib/generate-ai", () => ({
 
 vi.mock("@/workflows/process-video", () => ({
 	processVideoWorkflow: vi.fn(),
+}));
+
+vi.mock("@/workflows/import-loom-video", () => ({
+	importLoomVideoWorkflow: vi.fn(),
 }));
 
 vi.mock("@/workflows/finalize-desktop-recording", () => ({
@@ -116,6 +140,8 @@ const staleAt = new Date("2026-07-20T14:00:00.000Z");
 beforeEach(() => {
 	vi.clearAllMocks();
 	mockStart.mockResolvedValue({ runId: "run-1" });
+	mockStartLoomImport.mockReset().mockResolvedValue(undefined);
+	mockLoomImportRunState.mockReset().mockResolvedValue("inactive");
 	mockTranscribeVideo.mockResolvedValue({
 		success: true,
 		message: "Transcription workflow started",
@@ -133,6 +159,8 @@ describe("recoverStalledVideoPipeline", () => {
 			userId: "user-1",
 			bucketId: null,
 			rawFileKey: "user-1/video-media/raw.mp4",
+			loomVideoId: null,
+			processingMessage: "Starting video processing...",
 			sourceType: "webMP4",
 			updatedAt: staleAt,
 		};
@@ -181,6 +209,8 @@ describe("recoverStalledVideoPipeline", () => {
 			userId: "user-1",
 			bucketId: null,
 			rawFileKey: "user-1/video-media/raw.mp4",
+			loomVideoId: null,
+			processingMessage: "Starting video processing...",
 			sourceType: "webMP4",
 			updatedAt: staleAt,
 		};
@@ -201,6 +231,136 @@ describe("recoverStalledVideoPipeline", () => {
 		expect(mockStart).not.toHaveBeenCalled();
 		expect(result.media.statuses).toEqual({ "already-claimed": 1 });
 	});
+
+	it.each([
+		"Downloading video...",
+		"Queued for Loom import processing...",
+		"Confirming Loom import",
+	])(
+		"restarts orphaned Loom jobs in the %s state through the bulk import workflow",
+		async (processingMessage) => {
+			const mediaCandidate = {
+				videoId: "video-loom",
+				userId: "user-1",
+				bucketId: null,
+				rawFileKey: "user-1/video-loom/raw.mp4",
+				loomVideoId: "loom-video-1",
+				metadata: { loomImportRun: { runId: "old-run", dispatch: "accepted" } },
+				processingMessage,
+				updatedAt: staleAt,
+			};
+
+			let dbCall = 0;
+			mockDb.mockImplementation(() => {
+				dbCall++;
+				if (dbCall === 1) return makeSelectChain([mediaCandidate]);
+				if (dbCall <= 3) return makeSelectChain([]);
+				return makeUpdateChain(1);
+			});
+
+			const { recoverStalledVideoPipeline } = await import(
+				"@/lib/video-pipeline-recovery"
+			);
+			const result = await recoverStalledVideoPipeline({ now, concurrency: 1 });
+			const { inArray } = await import("drizzle-orm");
+
+			expect(inArray).toHaveBeenCalledWith(
+				"videoUploads.processingMessage",
+				expect.arrayContaining([processingMessage]),
+			);
+			expect(mockStartLoomImport).toHaveBeenCalledWith(
+				expect.objectContaining({
+					videoId: "video-loom",
+					loomVideoId: "loom-video-1",
+					reuseExistingRawUpload: true,
+				}),
+			);
+			expect(mockStart).not.toHaveBeenCalled();
+			expect(result.media.statuses).toEqual({ started: 1 });
+		},
+	);
+
+	it.each(["active", "pending", "unconfirmed", "legacy"])(
+		"preserves a %s Loom attempt without starting a replacement",
+		async (state) => {
+			mockLoomImportRunState.mockResolvedValue(
+				state === "legacy" ? "inactive" : state,
+			);
+			const mediaCandidate = {
+				videoId: "video-loom",
+				userId: "user-1",
+				bucketId: null,
+				rawFileKey: "user-1/video-loom/raw.mp4",
+				loomVideoId: "loom-video-1",
+				metadata:
+					state === "legacy"
+						? null
+						: { loomImportRun: { runId: "old-run", dispatch: "accepted" } },
+				processingMessage: "Downloading video...",
+				updatedAt: staleAt,
+			};
+			const update = makeUpdateChain(1);
+			let dbCall = 0;
+			mockDb.mockImplementation(() => {
+				dbCall++;
+				if (dbCall === 1) return makeSelectChain([mediaCandidate]);
+				if (dbCall <= 3) return makeSelectChain([]);
+				return update;
+			});
+			const { recoverStalledVideoPipeline } = await import(
+				"@/lib/video-pipeline-recovery"
+			);
+			const result = await recoverStalledVideoPipeline({ now, concurrency: 1 });
+			expect(mockStartLoomImport).not.toHaveBeenCalled();
+			expect(mockStart).not.toHaveBeenCalled();
+			expect(result.media.statuses).toEqual({
+				[state === "active" ? "already-claimed" : "reconciliation-required"]: 1,
+			});
+			if (state === "active") expect(update.set).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([true, false])(
+		"keeps the claimed Loom attempt safe after retryable=%s startup failure",
+		async (canRetry) => {
+			const { LoomImportStartError } = await import("@/lib/loom-import-start");
+			mockStartLoomImport.mockRejectedValue(
+				new LoomImportStartError(canRetry, new Error("startup")),
+			);
+			const mediaCandidate = {
+				videoId: "video-loom",
+				userId: "user-1",
+				bucketId: null,
+				rawFileKey: "user-1/video-loom/raw.mp4",
+				loomVideoId: "loom-video-1",
+				metadata: { loomImportRun: { runId: "old-run", dispatch: "accepted" } },
+				processingMessage: "Downloading video...",
+				updatedAt: staleAt,
+			};
+			const update = makeUpdateChain(1);
+			let dbCall = 0;
+			mockDb.mockImplementation(() => {
+				dbCall++;
+				if (dbCall === 1) return makeSelectChain([mediaCandidate]);
+				if (dbCall <= 3) return makeSelectChain([]);
+				return update;
+			});
+			const { recoverStalledVideoPipeline } = await import(
+				"@/lib/video-pipeline-recovery"
+			);
+			const result = await recoverStalledVideoPipeline({ now, concurrency: 1 });
+			expect(result.media.statuses).toEqual({
+				[canRetry ? "retry-scheduled" : "reconciliation-required"]: 1,
+			});
+			expect(update.set).toHaveBeenLastCalledWith(
+				expect.objectContaining({
+					processingMessage: canRetry
+						? "Processing recovery will retry automatically"
+						: "Confirming Loom import",
+				}),
+			);
+		},
+	);
 
 	it("starts eligible AI generation when legacy metadata is null", async () => {
 		const aiCandidate = {

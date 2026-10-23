@@ -19,6 +19,10 @@ import {
 	vi,
 } from "vitest";
 import { EmbedVideo } from "@/app/embed/[videoId]/_components/EmbedVideo";
+import {
+	getSharePageBranding,
+	type SharePageBrandingInput,
+} from "@/lib/share-branding";
 
 vi.mock("@cap/env", () => ({ NODE_ENV: "test" }));
 
@@ -79,12 +83,19 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 	const { createElement, useEffect, useState } = await import("react");
 	const DeferredVideoPlayer = ({
 		videoRef,
+		defaultPlaybackSpeed,
 	}: {
 		videoRef: Ref<HTMLVideoElement>;
+		defaultPlaybackSpeed?: number;
 	}) => {
 		const [isMounted, setIsMounted] = useState(false);
 		useEffect(() => setIsMounted(true), []);
-		return isMounted ? createElement("video", { ref: videoRef }) : null;
+		return isMounted
+			? createElement("video", {
+					ref: videoRef,
+					"data-default-speed": defaultPlaybackSpeed,
+				})
+			: null;
 	};
 	return { CapVideoPlayer: DeferredVideoPlayer };
 });
@@ -92,8 +103,17 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 vi.mock("@/app/s/[videoId]/_components/HLSVideoPlayer", async () => {
 	const { createElement } = await import("react");
 	return {
-		HLSVideoPlayer: ({ videoRef }: { videoRef: Ref<HTMLVideoElement> }) =>
-			createElement("video", { ref: videoRef }),
+		HLSVideoPlayer: ({
+			videoRef,
+			defaultPlaybackSpeed,
+		}: {
+			videoRef: Ref<HTMLVideoElement>;
+			defaultPlaybackSpeed?: number;
+		}) =>
+			createElement("video", {
+				ref: videoRef,
+				"data-default-speed": defaultPlaybackSpeed,
+			}),
 	};
 });
 
@@ -107,6 +127,7 @@ const createProps = (
 	source: EmbedVideoProps["data"]["source"],
 ): EmbedVideoProps => ({
 	comments: [],
+	branding: { type: "cap" },
 	data: {
 		id: "video-id" as EmbedVideoProps["data"]["id"],
 		ownerId: "owner-id" as EmbedVideoProps["data"]["ownerId"],
@@ -168,6 +189,40 @@ describe("EmbedVideo playback chrome", () => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
 	});
 
+	it.each(
+		["desktopMP4", "webMP4", "MediaConvert", "desktopSegments"].flatMap(
+			(type) =>
+				[false, true].flatMap((minimal) =>
+					[1, 1.5].map((speed) => ({ type, minimal, speed })),
+				),
+		),
+	)(
+		"passes $speed× to $type playback with minimal=$minimal",
+		async ({ type, minimal, speed }) => {
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+			const props = createProps({
+				type,
+			} as EmbedVideoProps["data"]["source"]);
+
+			await act(async () => {
+				root.render(
+					createElement(EmbedVideo, {
+						...props,
+						minimal,
+						defaultPlaybackSpeed: speed,
+					}),
+				);
+			});
+			expect(container.querySelector("video")?.dataset.defaultSpeed).toBe(
+				String(speed),
+			);
+
+			await act(async () => root.unmount());
+		},
+	);
+
 	it.each([
 		["an asynchronously mounted MP4", { type: "desktopMP4" } as const],
 		["an HLS video", { type: "MediaConvert" } as const],
@@ -225,4 +280,150 @@ describe("EmbedVideo playback chrome", () => {
 			root.unmount();
 		});
 	});
+});
+
+const organizationIconUrl =
+	"https://example.com/organization.png" as NonNullable<
+		SharePageBrandingInput["organizationIconUrl"]
+	>;
+const shareableLinkIconUrl =
+	"https://example.com/shareable-link.png" as NonNullable<
+		SharePageBrandingInput["shareableLinkIconUrl"]
+	>;
+
+const brandingCases: {
+	name: string;
+	input: SharePageBrandingInput;
+	expected: "cap" | "custom" | null;
+	imageUrl?: string;
+}[] = [
+	{
+		name: "hidden Pro branding",
+		input: {
+			owner: { isPro: true },
+			orgSettings: { hideShareableLinkCapLogo: true },
+		},
+		expected: null,
+	},
+	{
+		name: "custom organization logo with Cap branding hidden",
+		input: {
+			owner: { isPro: true },
+			orgSettings: {
+				hideShareableLinkCapLogo: true,
+				shareableLinkUseOrganizationIcon: true,
+			},
+			organizationIconUrl,
+			shareableLinkIconUrl,
+			organizationName: "Acme",
+		},
+		expected: "custom",
+		imageUrl: organizationIconUrl,
+	},
+	{
+		name: "custom shareable link logo",
+		input: {
+			owner: { isPro: true },
+			organizationIconUrl,
+			shareableLinkIconUrl,
+			organizationName: "Acme",
+		},
+		expected: "custom",
+		imageUrl: shareableLinkIconUrl,
+	},
+	{
+		name: "free owner with saved Pro branding preferences",
+		input: {
+			owner: { isPro: false },
+			orgSettings: {
+				hideShareableLinkCapLogo: true,
+				shareableLinkUseOrganizationIcon: true,
+			},
+			organizationIconUrl,
+		},
+		expected: "cap",
+	},
+	{
+		name: "default Pro branding",
+		input: { owner: { isPro: true } },
+		expected: "cap",
+	},
+	{
+		name: "hidden branding with a missing organization logo",
+		input: {
+			owner: { isPro: true },
+			orgSettings: {
+				hideShareableLinkCapLogo: true,
+				shareableLinkUseOrganizationIcon: true,
+			},
+			shareableLinkIconUrl,
+		},
+		expected: null,
+	},
+];
+
+describe.each([
+	{ type: "desktopMP4" } as const,
+	{ type: "MediaConvert" } as const,
+])("EmbedVideo $type organization branding", (source) => {
+	beforeAll(() => {
+		actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+	});
+	afterAll(() => {
+		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+	});
+
+	it.each(brandingCases)(
+		"honors $name before and after playback",
+		async ({ input, expected, imageUrl }) => {
+			const container = document.createElement("div");
+			const root = createRoot(container);
+			const props = {
+				...createProps(source),
+				branding: getSharePageBranding(input),
+			};
+			await act(async () => {
+				root.render(createElement(EmbedVideo, props));
+			});
+
+			const expectBranding = () => {
+				expect(container.textContent).toContain("Test video");
+				expect(
+					Boolean(container.querySelector('[aria-label="Powered by Cap"]')),
+				).toBe(expected === "cap");
+				expect(Boolean(container.querySelector("[data-cap-logo]"))).toBe(
+					expected === "cap",
+				);
+				const logo = container.querySelector("img");
+				if (expected === "custom") {
+					expect(logo?.getAttribute("src")).toBe(imageUrl);
+					expect(logo?.getAttribute("alt")).toBe("Acme logo");
+					expect(logo?.closest("a, button")).toBeNull();
+				} else {
+					expect(logo).toBeNull();
+				}
+			};
+			expectBranding();
+			const video = container.querySelector("video");
+			for (const event of ["pause", "ended"]) {
+				await act(async () => {
+					video?.dispatchEvent(new Event("play"));
+				});
+				expectChromeHidden(container);
+				expect(container.querySelector("img")).toBeNull();
+				await act(async () => {
+					video?.dispatchEvent(new Event(event));
+				});
+				expectBranding();
+			}
+			await act(async () => {
+				root.render(createElement(EmbedVideo, { ...props, minimal: true }));
+			});
+			expectChromeHidden(container);
+			expect(container.querySelector("img")).toBeNull();
+			await act(async () => {
+				root.unmount();
+			});
+		},
+	);
 });

@@ -111,8 +111,8 @@ fn build() -> Guide {
             EnvVar {
                 name: "CAP_API_KEY",
                 required: false,
-                used_by: "upload",
-                description: "Overrides auth for upload (Cap auth key from Settings). Optional when signed into Cap Desktop, which the CLI reuses automatically.",
+                used_by: "upload, auth, caps, mcp",
+                description: "Overrides auth (create a CLI API key in the Cap dashboard under Settings -> Account, or use a legacy desktop key). Optional when signed into Cap Desktop, which the CLI reuses automatically.",
             },
             EnvVar {
                 name: "CAP_SERVER_URL",
@@ -124,7 +124,7 @@ fn build() -> Guide {
                 name: "CAP_AGENT_TOKEN",
                 required: false,
                 used_by: "caps, mcp",
-                description: "Overrides the OS-stored Cap agent credential for headless use.",
+                description: "Overrides the OS-stored Cap agent credential for headless use. Mint one in the Cap dashboard under Settings -> Account.",
             },
             EnvVar {
                 name: "CAP_NO_MODIFY_PATH",
@@ -194,15 +194,28 @@ fn build() -> Guide {
                 notes: Some(
                     "EXCEPTION: export NDJSON uses PascalCase `type` tags and snake_case fields \
                      (rendered_count, total_frames) for desktop compatibility. --format selects the \
-                     CONTAINER (mp4/gif/mov), NOT output mode; use --json for machine-readable output.",
+                     CONTAINER (mp4/gif/mov), NOT output mode; use --json for machine-readable output. Pass several projects to export them in one run; each is written to '<project name>.<ext>' inside the output directory.",
                 ),
                 ..cmd(
                     "export",
-                    "Render a .cap project to a video file.",
+                    "Render one or more .cap projects to video files.",
                     OutputMode::Ndjson,
-                    &["Progress", "Completed", "Error"],
+                    &[
+                        "Progress",
+                        "Completed",
+                        "Error",
+                        "FileStarted",
+                        "FileFailed",
+                        "BatchCompleted",
+                    ],
                 )
             },
+            cmd(
+                "export-preview",
+                "Render a still frame from a .cap project at a given timestamp. JSON emits jpeg_base64 plus frame metadata.",
+                OutputMode::AlwaysJson,
+                &[],
+            ),
             cmd(
                 "screenshot",
                 "Capture a still of a screen/window. JSON emits {path,width,height}.",

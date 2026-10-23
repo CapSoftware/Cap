@@ -3,10 +3,14 @@
 import { Button } from "@cap/ui";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import {
+	loomImportDestinationFromPathname,
+	loomImportPageHref,
+} from "@/lib/loom-import-destination";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -17,6 +21,7 @@ export const UploadCapButton = ({
 	const { user } = useDashboardContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
+	const pathname = usePathname();
 
 	const handleClick = () => {
 		if (!user) return;
@@ -26,7 +31,9 @@ export const UploadCapButton = ({
 			return;
 		}
 
-		router.push("/dashboard/import");
+		router.push(
+			loomImportPageHref(loomImportDestinationFromPathname(pathname)),
+		);
 	};
 
 	return (

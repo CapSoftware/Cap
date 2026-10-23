@@ -7,7 +7,7 @@ import { notFound } from "next/navigation";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
 import { CollectionShareControl } from "@/app/(org)/dashboard/_components/CollectionShareControl";
-import FolderCard from "@/app/(org)/dashboard/caps/components/Folder";
+import { FoldersSection } from "@/app/(org)/dashboard/caps/components/FoldersSection";
 import {
 	getChildFolders,
 	getFolderBreadcrumb,
@@ -150,29 +150,23 @@ const FolderPage = async (props: {
 						))}
 					</div>
 				</div>
-				{childFolders.length > 0 && (
-					<>
-						<h1 className="mb-6 text-xl font-medium text-gray-12">
-							Subfolders
-						</h1>
-						<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
-							{childFolders.map((folder) => (
-								<FolderCard
-									key={folder.id}
-									name={folder.name}
-									color={folder.color}
-									public={folder.public}
-									spaceId={params.spaceId}
-									id={folder.id}
-									parentId={folder.parentId}
-									videoCount={folder.videoCount}
-									canMove={canManageCollection}
-									moveRootLabel={moveRootLabel}
-								/>
-							))}
-						</div>
-					</>
-				)}
+				<FoldersSection
+					title="Subfolders"
+					scope={`space:${params.spaceId}`}
+					headingSize="md"
+					folders={childFolders.map((folder) => ({
+						id: folder.id,
+						name: folder.name,
+						color: folder.color,
+						public: folder.public,
+						spaceId: params.spaceId,
+						parentId: folder.parentId,
+						videoCount: folder.videoCount,
+						createdAt: folder.createdAt,
+					}))}
+					canMove={canManageCollection}
+					moveRootLabel={moveRootLabel}
+				/>
 				<FolderVideosSection
 					initialVideos={videosData}
 					location={moveLocation}

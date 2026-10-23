@@ -1,5 +1,10 @@
 import { db } from "@cap/database";
-import { users, videos, videoUploads } from "@cap/database/schema";
+import {
+	importedVideos,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import type { User, Video } from "@cap/web-domain";
@@ -18,6 +23,12 @@ import {
 import { start } from "workflow/api";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import { startAiGeneration } from "@/lib/generate-ai";
+import {
+	getLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
+	LoomImportStartError,
+	startLoomImportWorkflow,
+} from "@/lib/loom-import-start";
 import { transcribeVideo } from "@/lib/transcribe";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
@@ -27,9 +38,20 @@ export const STALLED_MEDIA_RECOVERY_BATCH_SIZE = 50;
 export const STALLED_TRANSCRIPTION_RECOVERY_BATCH_SIZE = 50;
 export const STALLED_AI_RECOVERY_BATCH_SIZE = 25;
 
+const STALLED_MEDIA_PROCESSING_MESSAGES = [
+	"Starting video processing...",
+	"Downloading video...",
+	"Retrying video processing...",
+	"Queued for video processing...",
+	"Queued for Loom import processing...",
+	"Processing recovery will retry automatically",
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
+] as const;
+
 type PipelineRecoveryStatus =
 	| "started"
 	| "already-claimed"
+	| "reconciliation-required"
 	| "retry-scheduled"
 	| "failed";
 
@@ -112,58 +134,110 @@ type MediaCandidate = {
 	userId: User.UserId;
 	bucketId: string | null;
 	rawFileKey: string;
+	loomVideoId: string | null;
+	metadata: VideoMetadata | null;
+	processingMessage: string;
 	updatedAt: Date;
 };
 
 async function recoverMediaCandidate(
 	candidate: MediaCandidate,
 ): Promise<PipelineRecoveryStatus> {
+	const receipt = candidate.metadata?.loomImportRun;
+	const receiptCondition = candidate.loomVideoId
+		? receipt
+			? sql`EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${candidate.videoId} AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomImportRun.runId')) = ${receipt.runId})`
+			: sql`EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${candidate.videoId} AND JSON_EXTRACT(${videos.metadata}, '$.loomImportRun') IS NULL)`
+		: undefined;
+	if (candidate.loomVideoId) {
+		const state = await getLoomImportRunState(receipt);
+		if (state === "active") return "already-claimed";
+		if (!receipt || state !== "inactive") {
+			const result = await db()
+				.update(videoUploads)
+				.set({
+					processingMessage: LOOM_IMPORT_CONFIRMATION_MESSAGE,
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(videoUploads.videoId, candidate.videoId),
+						eq(videoUploads.phase, "processing"),
+						eq(videoUploads.updatedAt, candidate.updatedAt),
+						receiptCondition,
+					),
+				);
+			return getAffectedRows(result) === 1
+				? "reconciliation-required"
+				: "already-claimed";
+		}
+	}
+	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	const claimResult = await db()
 		.update(videoUploads)
 		.set({
 			processingProgress: 0,
 			processingMessage: "Restarting video processing",
 			processingError: null,
-			updatedAt: new Date(),
+			updatedAt: claimedAt,
 		})
 		.where(
 			and(
 				eq(videoUploads.videoId, candidate.videoId),
 				eq(videoUploads.phase, "processing"),
 				eq(videoUploads.processingProgress, 0),
-				eq(videoUploads.processingMessage, "Starting video processing..."),
+				eq(videoUploads.processingMessage, candidate.processingMessage),
 				eq(videoUploads.rawFileKey, candidate.rawFileKey),
 				eq(videoUploads.updatedAt, candidate.updatedAt),
+				receiptCondition,
 			),
 		);
 
 	if (getAffectedRows(claimResult) === 0) return "already-claimed";
 
 	try {
-		await start(processVideoWorkflow, [
-			{
+		if (candidate.loomVideoId) {
+			await startLoomImportWorkflow({
 				videoId: candidate.videoId,
 				userId: candidate.userId,
 				rawFileKey: candidate.rawFileKey,
 				bucketId: candidate.bucketId,
-			},
-		]);
+				loomVideoId: candidate.loomVideoId,
+				reuseExistingRawUpload: true,
+			});
+		} else {
+			await start(processVideoWorkflow, [
+				{
+					videoId: candidate.videoId,
+					userId: candidate.userId,
+					rawFileKey: candidate.rawFileKey,
+					bucketId: candidate.bucketId,
+				},
+			]);
+		}
 
 		return "started";
-	} catch {
+	} catch (error) {
+		const needsReconciliation =
+			Boolean(candidate.loomVideoId) &&
+			(!(error instanceof LoomImportStartError) || !error.canRetry);
 		await db()
 			.update(videoUploads)
 			.set({
-				processingMessage: "Processing recovery will retry automatically",
+				processingMessage: needsReconciliation
+					? LOOM_IMPORT_CONFIRMATION_MESSAGE
+					: "Processing recovery will retry automatically",
 				updatedAt: new Date(),
 			})
 			.where(
 				and(
 					eq(videoUploads.videoId, candidate.videoId),
 					eq(videoUploads.phase, "processing"),
+					eq(videoUploads.updatedAt, claimedAt),
+					eq(videoUploads.processingMessage, "Restarting video processing"),
 				),
 			);
-		return "retry-scheduled";
+		return needsReconciliation ? "reconciliation-required" : "retry-scheduled";
 	}
 }
 
@@ -269,15 +343,29 @@ export async function recoverStalledVideoPipeline({
 			userId: videos.ownerId,
 			bucketId: videos.bucket,
 			rawFileKey: videoUploads.rawFileKey,
+			loomVideoId: importedVideos.sourceId,
+			metadata: videos.metadata,
+			processingMessage: videoUploads.processingMessage,
 			updatedAt: videoUploads.updatedAt,
 		})
 		.from(videos)
 		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+		.leftJoin(
+			importedVideos,
+			and(
+				eq(importedVideos.orgId, videos.orgId),
+				eq(importedVideos.source, "loom"),
+				eq(importedVideos.id, videos.id),
+			),
+		)
 		.where(
 			and(
 				eq(videoUploads.phase, "processing"),
 				eq(videoUploads.processingProgress, 0),
-				eq(videoUploads.processingMessage, "Starting video processing..."),
+				inArray(
+					videoUploads.processingMessage,
+					STALLED_MEDIA_PROCESSING_MESSAGES,
+				),
 				isNotNull(videoUploads.rawFileKey),
 				lte(videoUploads.updatedAt, staleBefore),
 				gte(videoUploads.startedAt, recentBefore),

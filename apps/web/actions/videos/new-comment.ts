@@ -10,6 +10,7 @@ import { Comment, Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import { revalidatePath } from "next/cache";
+import { isReplyParentOnVideo } from "@/lib/comment-reply-parent";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
 
@@ -68,6 +69,12 @@ export async function newComment(data: {
 		throw new Error("Video not found");
 	}
 
+	if (
+		parentCommentId &&
+		!(await isReplyParentOnVideo(parentCommentId, videoId))
+	)
+		throw new Error("Comment not found");
+
 	const id = Comment.CommentId.make(nanoId());
 
 	const newComment = {
@@ -78,6 +85,9 @@ export async function newComment(data: {
 		videoId: videoId,
 		timestamp: timestamp ?? null,
 		parentCommentId: parentCommentId,
+		mediaKey: null,
+		mediaDuration: null,
+		mediaMeta: null,
 		createdAt: new Date(),
 		updatedAt: new Date(),
 	};

@@ -78,8 +78,20 @@ pub struct UnexpectedTermination {
 /// report that unexpected termination to Sentry. Call once at startup, after Sentry
 /// is initialised. Returns details of the previous session's unexpected termination,
 /// or `None` if the previous session shut down cleanly.
-pub fn init(logs_dir: &Path, app_version: &str) -> Option<UnexpectedTermination> {
-    let path = logs_dir.join(SENTINEL_FILE);
+pub fn init(logs_dir: Option<&Path>, app_version: &str) -> Option<UnexpectedTermination> {
+    let os = format!(
+        "{} {}",
+        tauri_plugin_os::platform(),
+        tauri_plugin_os::version()
+    );
+    let arch = tauri_plugin_os::arch().to_string();
+    sentry::configure_scope(|scope| {
+        scope.set_tag("os.full", &os);
+        scope.set_tag("arch", &arch);
+        scope.set_tag("app.version", app_version);
+    });
+
+    let path = logs_dir?.join(SENTINEL_FILE);
     let mut previous_termination = None;
 
     if let Ok(contents) = std::fs::read_to_string(&path) {
@@ -104,13 +116,6 @@ pub fn init(logs_dir: &Path, app_version: &str) -> Option<UnexpectedTermination>
         let _ = std::fs::remove_file(&path);
     }
 
-    let os = format!(
-        "{} {}",
-        tauri_plugin_os::platform(),
-        tauri_plugin_os::version()
-    );
-    let arch = tauri_plugin_os::arch().to_string();
-
     let record = SessionRecord {
         pid: std::process::id(),
         started_at: chrono::Utc::now().to_rfc3339(),
@@ -125,12 +130,6 @@ pub fn init(logs_dir: &Path, app_version: &str) -> Option<UnexpectedTermination>
     };
 
     write_record(&path, &record);
-
-    sentry::configure_scope(|scope| {
-        scope.set_tag("os.full", &os);
-        scope.set_tag("arch", &arch);
-        scope.set_tag("app.version", app_version);
-    });
 
     *SESSION.lock().unwrap() = Some(ActiveSession {
         path,
@@ -342,5 +341,37 @@ fn write_record(path: &Path, record: &SessionRecord) {
             }
         }
         Err(error) => tracing::warn!(%error, "Failed to serialize crash sentinel"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sentinel_is_disabled_without_a_directory_and_works_when_available() {
+        assert!(init(None, "test").is_none());
+        assert!(SESSION.lock().unwrap().is_none());
+        enter_gpu_init_phase();
+        exit_gpu_init_phase();
+        enter_blur_session();
+        exit_blur_session();
+        mark_clean_exit();
+        assert!(SESSION.lock().unwrap().is_none());
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(SENTINEL_FILE);
+        assert!(init(Some(directory.path()), "test").is_none());
+        let read_record = || {
+            serde_json::from_str::<SessionRecord>(&std::fs::read_to_string(&path).unwrap()).unwrap()
+        };
+        assert_eq!(read_record().app_version, "test");
+        enter_gpu_init_phase();
+        assert!(read_record().gpu_init_phase);
+        exit_gpu_init_phase();
+        assert!(!read_record().gpu_init_phase);
+        mark_clean_exit();
+        assert!(!path.exists());
+        assert!(SESSION.lock().unwrap().is_none());
     }
 }

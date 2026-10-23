@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
@@ -51,6 +51,8 @@ describe("GET /video/status", () => {
 		expect(data).toHaveProperty("canAcceptNewProbeProcess");
 		expect(data).toHaveProperty("jobCount");
 		expect(data).toHaveProperty("jobs");
+		expect(data.loomMultipartUploads).toBe(true);
+		expect(data.loomImportMaxBytes).toBe(10 * 1024 ** 3);
 		expect(Array.isArray(data.jobs)).toBe(true);
 	});
 });
@@ -281,6 +283,7 @@ describe("POST /video/thumbnail", () => {
 describe("POST /video/convert", () => {
 	beforeEach(() => {
 		mock.restore();
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
 	});
 
 	test("returns 401 without media server secret", async () => {
@@ -403,6 +406,44 @@ describe("POST /video/process", () => {
 		mock.restore();
 	});
 
+	test("accepts a Loom multipart original without a single-PUT original URL", async () => {
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(false);
+		const response = await app.fetch(
+			videoPostRequest("/video/import", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				maxImportBytes: 10 * 1024 ** 3,
+				sourceUpload: {
+					type: "multipart",
+					videoId: "test-id",
+					loomImportAttemptId: "run:0",
+					key: "user-id/test-id/raw-upload.mp4",
+					uploadId: "upload-id",
+					partSize: 64 * 1024 ** 2,
+					signPartUrl: "https://cap.example.com/sign",
+					completeUrl: "https://cap.example.com/complete",
+					abortUrl: "https://cap.example.com/abort",
+				},
+			}),
+		);
+		expect(response.status).toBe(503);
+		expect((await response.json()).code).toBe("SERVER_BUSY");
+	});
+
+	test("rejects an import without an original upload target", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/import", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+			}),
+		);
+		expect(response.status).toBe(400);
+	});
+
 	test("returns 400 for missing required fields", async () => {
 		const response = await app.fetch(videoPostRequest("/video/process", {}));
 
@@ -470,6 +511,37 @@ describe("POST /video/process", () => {
 		expect(response.status).toBe(503);
 		const data = await response.json();
 		expect(data.code).toBe("SERVER_BUSY");
+	});
+
+	test("reserves one processing slot for normal-priority recordings", async () => {
+		const resources = jobManager.getSystemResources();
+		mock.module("../../lib/job-manager", () => ({
+			...jobManager,
+			canAcceptNewVideoProcess: () => true,
+			getActiveVideoProcessCount: () => 3,
+			getMaxConcurrentVideoProcesses: () => 4,
+			getSystemResources: () => ({
+				...resources,
+				effectiveMax: 4,
+			}),
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/process", {
+				videoId: "bulk-video",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				priority: "bulk",
+			}),
+		);
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("15");
+		const data = await response.json();
+		expect(data.code).toBe("SERVER_BUSY");
+		expect(data.activeVideoProcesses).toBe(3);
 	});
 
 	test("returns jobId when process starts successfully", async () => {

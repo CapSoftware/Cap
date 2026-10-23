@@ -1,3 +1,4 @@
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -49,7 +50,10 @@ export const howToScreenRecordContent: SeoPageContent = {
 		rows: [
 			[
 				"Price",
-				{ text: "Free / from $8.16/mo", status: "positive" },
+				{
+					text: `Free / from $${PRICING.pro.annualPerMonth}/mo`,
+					status: "positive",
+				},
 				{ text: "Free", status: "positive" },
 				{ text: "From $18/mo", status: "warning" },
 				{ text: "Free", status: "positive" },
@@ -212,9 +216,10 @@ export const howToScreenRecordContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "How to screen record with Cap on Mac and Windows",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "How to screen record with Cap on Mac and Windows",
+		},
 	},
 
 	cta: {

@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations, users } from "@cap/database/schema";
-import { stripe } from "@cap/utils";
+import { isProSubscription, stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
@@ -15,6 +15,7 @@ export type SubscriptionDetails = {
 	currentQuantity: number;
 	currentPeriodEnd: number;
 	currency: string;
+	cancelAtPeriodEnd: boolean;
 };
 
 export async function getSubscriptionDetails(
@@ -36,6 +37,7 @@ export async function getSubscriptionDetails(
 	const [owner] = await db()
 		.select({
 			stripeSubscriptionId: users.stripeSubscriptionId,
+			stripeCustomerId: users.stripeCustomerId,
 		})
 		.from(users)
 		.where(eq(users.id, user.id))
@@ -48,6 +50,12 @@ export async function getSubscriptionDetails(
 	const subscription = await stripe().subscriptions.retrieve(
 		owner.stripeSubscriptionId,
 	);
+	const customerId =
+		typeof subscription.customer === "string"
+			? subscription.customer
+			: subscription.customer.id;
+	if (!isProSubscription(subscription) || customerId !== owner.stripeCustomerId)
+		return null;
 
 	// past_due renders as a payment-failed state in the billing card rather
 	// than falling through to the "Upgrade to Pro" card.
@@ -76,5 +84,6 @@ export async function getSubscriptionDetails(
 		currentQuantity: item.quantity ?? 1,
 		currentPeriodEnd: subscription.current_period_end,
 		currency: price.currency,
+		cancelAtPeriodEnd: subscription.cancel_at_period_end,
 	};
 }

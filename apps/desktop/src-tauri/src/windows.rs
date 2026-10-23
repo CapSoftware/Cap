@@ -7,11 +7,12 @@ use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
 use std::{
+    collections::HashMap,
     ops::Deref,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
@@ -30,13 +31,13 @@ use crate::panel_manager::{PanelManager, PanelState, PanelWindowType, is_window_
 use crate::{
     App, ArcLock, CameraWindowCloseGate, CameraWindowPositionGuard, MainWindowReadyState,
     NewNotification, RequestSetTargetMode, camera_preview_error_message,
-    editor_window::PendingEditorInstances,
+    editor_window::{EditorInstances, PendingEditorInstances},
     emit_camera_preview_clear, emit_camera_preview_error, fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
     recording::{RecordingEvent, RecordingInputKind},
     recording_settings::RecordingTargetMode,
-    screenshot_editor::PendingScreenshotEditorInstances,
+    screenshot_editor::{PendingScreenshotEditorInstances, ScreenshotEditorInstances},
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
@@ -46,13 +47,64 @@ use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
 #[cfg(target_os = "macos")]
-const MAIN_PANEL_LEVEL: i32 = 100;
-
-#[cfg(target_os = "macos")]
-const TELEPROMPTER_PANEL_LEVEL: objc2_app_kit::NSWindowLevel = MAIN_PANEL_LEVEL as isize + 1;
+const TELEPROMPTER_PANEL_LEVEL: objc2_app_kit::NSWindowLevel = 101;
 
 const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
 const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn restore_main_window_geometry(window: WebviewWindow) -> Result<bool, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can restore its geometry".into());
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = window.app_handle().clone();
+    handle
+        .run_on_main_thread(move || {
+            let result = restore_main_window_bounds(&window).map(|()| false);
+            let _ = tx.send(result.map_err(|error| error.to_string()));
+        })
+        .map_err(|error| error.to_string())?;
+    rx.await.map_err(|error| error.to_string())?
+}
+
+fn restore_main_window_bounds(window: &WebviewWindow) -> tauri::Result<()> {
+    let inner = window.inner_size()?;
+    let outer = window.outer_size()?;
+    let scale = window.scale_factor()?;
+    let before = window.outer_position().ok();
+    let monitor = window.current_monitor().ok().flatten();
+    let frame = (
+        (f64::from(outer.width) - f64::from(inner.width)).max(0.0) / scale,
+        (f64::from(outer.height) - f64::from(inner.height)).max(0.0) / scale,
+    );
+    let (width, height) = crate::main_window_geometry::SIZE;
+    if (width - f64::from(inner.width) / scale).abs() > 0.5
+        || (height - f64::from(inner.height) / scale).abs() > 0.5
+    {
+        window.set_size(LogicalSize::new(width, height))?;
+    }
+    if let Some((before, monitor)) = before.zip(monitor)
+        && let Ok(after) = window.outer_position()
+    {
+        let area = monitor.work_area();
+        let (x, y) = crate::main_window_geometry::restored_position(
+            (f64::from(before.x), f64::from(before.y)),
+            ((width + frame.0) * scale, (height + frame.1) * scale),
+            (f64::from(area.position.x), f64::from(area.position.y)),
+            (f64::from(area.size.width), f64::from(area.size.height)),
+            scale,
+        );
+        if x != f64::from(after.x) || y != f64::from(after.y) {
+            let _ = window.set_position(PhysicalPosition::new(
+                (x + 0.5).floor() as i32,
+                (y + 0.5).floor() as i32,
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[cfg(windows)]
 const WINDOWS_WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-vulkan --use-angle=d3d11";
@@ -121,13 +173,24 @@ fn is_system_dark_mode() -> bool {
 }
 
 pub fn hide_overlay(window: &WebviewWindow) {
+    if let Some(state) = window.app_handle().try_state::<WindowFocusManager>() {
+        state.suspend_overlay(window.label());
+    }
     let _ = window.set_ignore_cursor_events(true);
-    let _ = window.hide();
+    if let Err(error) = window.hide() {
+        warn!(%error, label = window.label(), "Failed to hide overlay; destroying it");
+        let _ = window.destroy();
+    }
 }
 
 pub fn show_overlay(window: &WebviewWindow) {
-    let _ = window.set_ignore_cursor_events(false);
-    let _ = window.show();
+    if let Some(session) = window
+        .app_handle()
+        .state::<WindowFocusManager>()
+        .picker_session()
+    {
+        crate::target_select_overlay::restore_overlay_reveal(window, session);
+    }
 }
 
 fn emit_app_event<E>(app: &AppHandle, event: E)
@@ -147,6 +210,9 @@ where
 
 fn hide_recording_windows(app: &AppHandle, restore_target_select_overlays: bool) {
     let focus_manager = app.try_state::<WindowFocusManager>();
+    if let Some(focus_manager) = focus_manager.as_ref() {
+        focus_manager.suspend_all_overlays();
+    }
 
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label)
@@ -163,6 +229,8 @@ fn hide_recording_windows(app: &AppHandle, restore_target_select_overlays: bool)
                     focus_manager.remember_overlay_for_restore(label);
                 }
                 hide_overlay(&window);
+            } else if matches!(id, CapWindowId::Main) {
+                crate::hide_main_window(app);
             } else {
                 let _ = window.hide();
             }
@@ -326,9 +394,23 @@ async fn init_native_camera_preview(
 }
 
 pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
+    let app_handle = app_state.handle.clone();
+    let requested = app_handle.state::<crate::RequestedInputsState>();
+    let snapshot = requested.snapshot();
+    if snapshot.camera.pending
+        || snapshot.camera.error.is_some()
+        || snapshot.camera.value != app_state.selected_camera_id
+        || app_state.is_recording_active_or_pending()
+    {
+        return;
+    }
     if let Some(id) = app_state.selected_camera_id.clone()
         && !app_state.camera_in_use
     {
+        if let Err(error) = crate::permissions::check_camera_access() {
+            warn!(%error, "Camera preview requires permission before restoring input");
+            return;
+        }
         let settings = crate::recording_settings::RecordingSettingsStore::camera_settings_for(
             &app_state.handle,
             &id,
@@ -350,170 +432,15 @@ pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
             }
         }
 
-        app_state.camera_in_use = true;
-        app_state.camera_cleanup_done = false;
+        requested.publish_camera_if_current(snapshot.camera.revision, || {
+            app_state.camera_in_use = true;
+            app_state.camera_cleanup_done = false;
+        });
     }
 }
 
 pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
-    let Some(state) = app.try_state::<ArcLock<App>>() else {
-        warn!("App state unavailable while restoring main window inputs");
-        return;
-    };
-
-    let should_restore = state
-        .try_read()
-        .map(|state| !state.is_recording_active_or_pending())
-        .unwrap_or(false);
-
-    if !should_restore {
-        return;
-    }
-
-    let settings = crate::recording_settings::RecordingSettingsStore::get(app)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let stored_camera_id = settings.camera_id.clone();
-
-    if let Err(err) = crate::set_mic_input(state.clone(), settings.mic_name).await {
-        warn!("Failed to restore microphone input for main window: {err}");
-    }
-
-    let Some(operation_lock) = app.try_state::<crate::CameraWindowOperationLock>() else {
-        warn!("CameraWindowOperationLock unavailable while restoring main window inputs");
-        return;
-    };
-    let operation_guard = operation_lock.lock().await;
-
-    let camera_to_restore = state
-        .try_read()
-        .map(|s| {
-            if !s.camera_cleanup_done && !s.camera_in_use {
-                s.selected_camera_id
-                    .clone()
-                    .or_else(|| stored_camera_id.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or(None);
-
-    if let Some(camera_id) = camera_to_restore {
-        emit_camera_preview_clear(app);
-        let settings =
-            crate::recording_settings::RecordingSettingsStore::camera_settings_for(app, &camera_id);
-
-        let (camera_feed, camera_ws_sender, native_sender) = {
-            let app_state = &mut *state.write().await;
-            app_state.selected_camera_id = Some(camera_id.clone());
-            app_state.camera_in_use = true;
-            app_state.camera_cleanup_done = false;
-            #[allow(deprecated)]
-            (
-                app_state.camera_feed.clone(),
-                app_state.camera_ws_sender.clone(),
-                app_state.camera_preview.sender(),
-            )
-        };
-
-        if let Some(sender) = native_sender {
-            #[allow(deprecated)]
-            let _ = camera_feed
-                .ask(feeds::camera::RemoveSender(camera_ws_sender))
-                .await;
-            if let Err(err) = sender.attach(&camera_feed).await {
-                warn!(error = %err, "Failed to add native preview camera sender");
-            }
-        } else {
-            #[allow(deprecated)]
-            let _ = camera_feed
-                .ask(feeds::camera::AddSender(camera_ws_sender))
-                .await;
-        }
-
-        let mut showed_camera_window = false;
-        let mut attempts = 0;
-        let init_result: Result<(), String> = loop {
-            attempts += 1;
-            let request = camera_feed
-                .ask(feeds::camera::SetInput {
-                    id: camera_id.clone(),
-                    settings,
-                })
-                .await
-                .map_err(|e| e.to_string());
-
-            if !showed_camera_window {
-                showed_camera_window = true;
-                crate::show_camera_window_unlocked(app);
-            }
-
-            match request {
-                Ok(future) => match future.await {
-                    Ok(_) => {
-                        emit_camera_preview_clear(app);
-                        break Ok(());
-                    }
-                    Err(e) => {
-                        if attempts == 1 {
-                            emit_camera_preview_error(
-                                app,
-                                camera_preview_error_message(&e.to_string()),
-                            );
-                        }
-                        if attempts >= 3 {
-                            break Err(format!(
-                                "Failed to restore camera after {attempts} attempts: {e}"
-                            ));
-                        }
-                        warn!("Camera restore attempt {attempts} failed: {e}. Retrying...");
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                },
-                Err(e) => {
-                    if attempts >= 3 {
-                        break Err(e);
-                    }
-                    warn!("Camera restore attempt {attempts} failed: {e}. Retrying...");
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-        };
-
-        drop(operation_guard);
-
-        match init_result {
-            Ok(()) => crate::restore_camera_window(app),
-            Err(error) => {
-                let message = camera_preview_error_message(&error);
-                warn!("Failed to restore camera input for main window: {error}");
-                let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
-                let emit_input_lost = {
-                    let app_state = &mut *state.write().await;
-                    app_state.selected_camera_id = None;
-                    app_state.camera_in_use = false;
-                    app_state
-                        .disconnected_inputs
-                        .insert(RecordingInputKind::Camera)
-                };
-                crate::show_camera_window_unlocked(app);
-                if emit_input_lost {
-                    let _ = RecordingEvent::InputLost {
-                        input: RecordingInputKind::Camera,
-                    }
-                    .emit(app);
-                }
-                emit_camera_preview_error(app, message.clone());
-                let _ = NewNotification {
-                    title: "Camera unavailable".to_string(),
-                    body: message,
-                    is_error: true,
-                }
-                .emit(app);
-            }
-        }
-    }
+    crate::restore_requested_inputs(app).await;
 }
 
 pub(crate) async fn cleanup_camera_window(
@@ -914,15 +841,341 @@ fn recenter_window_if_offscreen(window: &WebviewWindow) {
     let _ = window.set_position(monitor.position(pos_x, pos_y));
 }
 
-fn ensure_settings_window_bounds(window: &WebviewWindow) {
-    const MIN_W: f64 = 780.0;
-    const MIN_H: f64 = 560.0;
-    let _ = window.set_min_size(Some(LogicalSize::new(MIN_W, MIN_H)));
-    if let (Ok(physical), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
-        let width = physical.width as f64 / scale;
-        let height = physical.height as f64 / scale;
-        if width < MIN_W || height < MIN_H {
-            let _ = window.set_size(LogicalSize::new(width.max(MIN_W), height.max(MIN_H)));
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ContentWindowRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, PartialEq)]
+struct ContentWindowFit {
+    frame: ContentWindowRect,
+    inner: (f64, f64),
+    minimum: (f64, f64),
+}
+
+fn fit_content_window(
+    work_area: ContentWindowRect,
+    frame: ContentWindowRect,
+    inner: (f64, f64),
+    minimum: (f64, f64),
+    preferred: Option<(f64, f64)>,
+) -> Option<ContentWindowFit> {
+    let requested = preferred.unwrap_or(inner);
+    if ![work_area.x, work_area.y, frame.x, frame.y]
+        .into_iter()
+        .all(f64::is_finite)
+        || ![
+            work_area.width,
+            work_area.height,
+            frame.width,
+            frame.height,
+            inner.0,
+            inner.1,
+            minimum.0,
+            minimum.1,
+            requested.0,
+            requested.1,
+        ]
+        .into_iter()
+        .all(|value| value.is_finite() && value > 0.0)
+    {
+        return None;
+    }
+
+    let decoration = (
+        (frame.width - inner.0).max(0.0),
+        (frame.height - inner.1).max(0.0),
+    );
+    let available = (
+        work_area.width - 32.0 - decoration.0,
+        work_area.height - 32.0 - decoration.1,
+    );
+    if available.0 <= 0.0 || available.1 <= 0.0 {
+        return None;
+    }
+    let minimum = (minimum.0.min(available.0), minimum.1.min(available.1));
+    let inner = (
+        requested.0.clamp(minimum.0, available.0),
+        requested.1.clamp(minimum.1, available.1),
+    );
+    let width = inner.0 + decoration.0;
+    let height = inner.1 + decoration.1;
+    let left = work_area.x + 16.0;
+    let bottom = work_area.y + 16.0;
+    let right = (work_area.x + work_area.width - width - 16.0).max(left);
+    let top = (work_area.y + work_area.height - height - 16.0).max(bottom);
+    let (x, y) = if preferred.is_some() {
+        (
+            work_area.x + (work_area.width - width) / 2.0,
+            work_area.y + (work_area.height - height) / 2.0,
+        )
+    } else {
+        (frame.x.clamp(left, right), frame.y.clamp(bottom, top))
+    };
+    Some(ContentWindowFit {
+        frame: ContentWindowRect {
+            x,
+            y,
+            width,
+            height,
+        },
+        inner,
+        minimum,
+    })
+}
+
+fn monitor_work_area(monitor: &Monitor) -> Option<(ContentWindowRect, f64)> {
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    Some((logical_work_area(area.position, area.size, scale)?, scale))
+}
+
+fn logical_work_area(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+) -> Option<ContentWindowRect> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    Some(ContentWindowRect {
+        x: position.x as f64 / scale,
+        y: position.y as f64 / scale,
+        width: size.width as f64 / scale,
+        height: size.height as f64 / scale,
+    })
+}
+
+fn initial_content_window_fit(
+    app: &AppHandle,
+    id: &CapWindowId,
+) -> Option<(ContentWindowFit, f64)> {
+    let preferred = id.preferred_content_size()?;
+    let monitor = app
+        .cursor_position()
+        .ok()
+        .and_then(|position| {
+            app.monitor_from_point(position.x, position.y)
+                .ok()
+                .flatten()
+        })
+        .or_else(|| app.primary_monitor().ok().flatten())?;
+    let (area, scale) = monitor_work_area(&monitor)?;
+    let frame = ContentWindowRect {
+        width: preferred.0,
+        height: preferred.1,
+        ..area
+    };
+    Some((
+        fit_content_window(area, frame, preferred, id.min_size()?, Some(preferred))?,
+        scale,
+    ))
+}
+
+async fn fit_content_window_bounds(window: &WebviewWindow, id: &CapWindowId, initial: bool) {
+    let Some(preferred) = id.preferred_content_size() else {
+        return;
+    };
+    let Some(minimum) = id.min_size() else {
+        return;
+    };
+    if window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let result = window.run_on_main_thread({
+            let window = window.clone();
+            move || {
+                if tx.is_closed() {
+                    return;
+                }
+                let result =
+                    fit_macos_content_window(&window, minimum, initial.then_some(preferred));
+                let _ = tx.send(result);
+            }
+        });
+        if let Err(error) = result {
+            warn!(%error, "Failed to schedule content window bounds update");
+        } else if let Err(error) =
+            await_window_operation(rx, "Content window bounds update", Duration::from_secs(5)).await
+        {
+            warn!(%error, "Failed to fit content window bounds");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let initial_monitor = initial
+            .then(|| {
+                window
+                    .app_handle()
+                    .cursor_position()
+                    .ok()
+                    .and_then(|position| {
+                        window
+                            .monitor_from_point(position.x, position.y)
+                            .ok()
+                            .flatten()
+                    })
+            })
+            .flatten();
+        let Some((area, scale)) = initial_monitor
+            .or_else(|| window.current_monitor().ok().flatten())
+            .or_else(|| window.primary_monitor().ok().flatten())
+            .as_ref()
+            .and_then(monitor_work_area)
+        else {
+            return;
+        };
+        let (Ok(position), Ok(outer), Ok(inner), Ok(current_scale)) = (
+            window.outer_position(),
+            window.outer_size(),
+            window.inner_size(),
+            window.scale_factor(),
+        ) else {
+            return;
+        };
+        if !current_scale.is_finite() || current_scale <= 0.0 {
+            return;
+        }
+        let frame = ContentWindowRect {
+            x: position.x as f64 / current_scale,
+            y: position.y as f64 / current_scale,
+            width: outer.width as f64 / current_scale,
+            height: outer.height as f64 / current_scale,
+        };
+        let Some(fit) = fit_content_window(
+            area,
+            frame,
+            (
+                inner.width as f64 / current_scale,
+                inner.height as f64 / current_scale,
+            ),
+            minimum,
+            initial.then_some(preferred),
+        ) else {
+            return;
+        };
+        let _ = window.set_min_size(Some(LogicalSize::new(fit.minimum.0, fit.minimum.1)));
+        #[cfg(windows)]
+        {
+            let _ = window.set_position(PhysicalPosition::new(
+                (fit.frame.x * scale).round() as i32,
+                (fit.frame.y * scale).round() as i32,
+            ));
+            let _ = window.set_size(PhysicalSize::new(
+                (fit.inner.0 * scale).round() as u32,
+                (fit.inner.1 * scale).round() as u32,
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = scale;
+            let _ = window.set_size(LogicalSize::new(fit.inner.0, fit.inner.1));
+            let _ = window.set_position(LogicalPosition::new(fit.frame.x, fit.frame.y));
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn fit_macos_content_window(
+    window: &WebviewWindow,
+    minimum: (f64, f64),
+    preferred: Option<(f64, f64)>,
+) -> Result<(), String> {
+    use objc2::{MainThreadMarker, runtime::NSObjectProtocol, sel};
+    use objc2_app_kit::{NSEvent, NSScreen, NSWindow};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let main_thread = MainThreadMarker::new().ok_or("Window bounds require the main thread")?;
+    let native = window.ns_window().map_err(|error| error.to_string())? as *const NSWindow;
+    let native = unsafe { native.as_ref() }.ok_or("Content window is unavailable")?;
+    let cursor_screen = preferred.and_then(|_| {
+        let cursor = unsafe { NSEvent::mouseLocation() };
+        NSScreen::screens(main_thread).iter().find(|screen| {
+            let frame = screen.frame();
+            cursor.x >= frame.origin.x
+                && cursor.x < frame.origin.x + frame.size.width
+                && cursor.y >= frame.origin.y
+                && cursor.y < frame.origin.y + frame.size.height
+        })
+    });
+    let screen = cursor_screen
+        .or_else(|| native.screen())
+        .or_else(|| NSScreen::mainScreen(main_thread))
+        .ok_or("Content window screen is unavailable")?;
+    let visible = screen.visibleFrame();
+    let screen_frame = screen.frame();
+    let safe_top = if screen.respondsToSelector(sel!(safeAreaInsets)) {
+        unsafe { screen.safeAreaInsets().top }
+    } else {
+        0.0
+    };
+    let top = (visible.origin.y + visible.size.height)
+        .min(screen_frame.origin.y + screen_frame.size.height - safe_top);
+    let area = ContentWindowRect {
+        x: visible.origin.x,
+        y: visible.origin.y,
+        width: visible.size.width,
+        height: top - visible.origin.y,
+    };
+    let frame = native.frame();
+    let content = native
+        .contentView()
+        .ok_or("Content view is unavailable")?
+        .frame();
+    let Some(fit) = fit_content_window(
+        area,
+        ContentWindowRect {
+            x: frame.origin.x,
+            y: frame.origin.y,
+            width: frame.size.width,
+            height: frame.size.height,
+        },
+        (content.size.width, content.size.height),
+        minimum,
+        preferred,
+    ) else {
+        return Ok(());
+    };
+    native.setMinSize(NSSize::new(
+        fit.minimum.0 + fit.frame.width - fit.inner.0,
+        fit.minimum.1 + fit.frame.height - fit.inner.1,
+    ));
+    native.setFrame_display(
+        NSRect::new(
+            NSPoint::new(fit.frame.x, fit.frame.y),
+            NSSize::new(fit.frame.width, fit.frame.height),
+        ),
+        true,
+    );
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+async fn await_window_operation(
+    receiver: tokio::sync::oneshot::Receiver<Result<(), String>>,
+    operation: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(timeout, receiver)
+        .await
+        .map_err(|_| format!("{operation} timed out"))?
+        .map_err(|_| format!("{operation} was cancelled"))?
+}
+
+#[cfg(target_os = "macos")]
+struct PendingControlsWindow(Option<WebviewWindow>);
+
+#[cfg(target_os = "macos")]
+impl Drop for PendingControlsWindow {
+    fn drop(&mut self) {
+        if let Some(window) = self.0.take() {
+            let _ = window.destroy();
         }
     }
 }
@@ -1019,6 +1272,14 @@ impl std::fmt::Display for CapWindowId {
 }
 
 impl CapWindowId {
+    fn preferred_content_size(&self) -> Option<(f64, f64)> {
+        match self {
+            Self::Settings => Some((782.0, 775.0)),
+            Self::Editor { .. } => Some((1275.0, 800.0)),
+            Self::ScreenshotEditor { .. } => Some((1240.0, 800.0)),
+            _ => None,
+        }
+    }
     pub fn label(&self) -> String {
         self.to_string()
     }
@@ -1104,7 +1365,7 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Main => (330.0, 395.0),
+            Self::Main => crate::main_window_geometry::SIZE,
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (780.0, 560.0),
@@ -1156,38 +1417,83 @@ pub enum ShowCapWindow {
 }
 
 impl ShowCapWindow {
-    pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        if let Self::Editor { project_path } = &self {
-            let state = app.state::<EditorWindowIds>();
-            let window_id = {
-                let mut s = state.ids.lock().unwrap();
-                if !s.iter().any(|(path, _)| path == project_path) {
-                    let id = state
-                        .counter
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    s.push((project_path.clone(), id));
-                    id
-                } else {
-                    s.iter().find(|(path, _)| path == project_path).unwrap().1
-                }
-            };
+    pub fn show<'a>(
+        &'a self,
+        app: &'a AppHandle<Wry>,
+    ) -> futures::future::BoxFuture<'a, tauri::Result<WebviewWindow>> {
+        let picker_session = matches!(self, Self::TargetSelectOverlay { .. })
+            .then(|| app.state::<WindowFocusManager>().picker_session())
+            .flatten();
+        Box::pin(self.show_inner(app, picker_session))
+    }
 
-            let window_label = CapWindowId::Editor { id: window_id }.label();
-            PendingEditorInstances::start_prewarm(app, window_label, project_path.clone()).await;
-        }
+    pub(crate) fn show_for_picker<'a>(
+        &'a self,
+        app: &'a AppHandle<Wry>,
+        session: u32,
+    ) -> futures::future::BoxFuture<'a, tauri::Result<WebviewWindow>> {
+        Box::pin(self.show_inner(app, Some(session)))
+    }
 
-        if let Self::ScreenshotEditor { path } = &self {
-            let state = app.state::<ScreenshotEditorWindowIds>();
-            {
-                let mut s = state.ids.lock().unwrap();
-                if !s.iter().any(|(p, _)| p == path) {
-                    let id = state
-                        .counter
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    s.push((path.clone(), id));
-                }
+    async fn show_inner(
+        &self,
+        app: &AppHandle<Wry>,
+        picker_session: Option<u32>,
+    ) -> tauri::Result<WebviewWindow> {
+        let picker = app.state::<WindowFocusManager>();
+        let _picker_creation = if matches!(self, Self::TargetSelectOverlay { .. }) {
+            let guard = picker.creation.lock().await;
+            if picker_session.is_none_or(|session| !picker.picker_is_current(session)) {
+                return Err(tauri::Error::WindowNotFound);
             }
+            Some(guard)
+        } else {
+            None
+        };
+        let reveal_generation = crate::clean_capture::generation(app);
+        if matches!(self, Self::Main { .. }) && crate::clean_capture::phase(app).is_some() {
+            crate::clean_capture::show_main_controls(app)
+                .await
+                .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
         }
+        #[cfg(target_os = "linux")]
+        crate::clean_capture::admit_wayland_window_creation(app)
+            .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
+        let mut project_opening = match self {
+            Self::Editor { project_path } => {
+                let state = app.state::<EditorWindowIds>();
+                Some(
+                    ProjectWindowOpening::acquire(
+                        app,
+                        project_path,
+                        state.ids.clone(),
+                        &state.counter,
+                        &state.open_gates,
+                        |id| CapWindowId::Editor { id },
+                    )
+                    .await?,
+                )
+            }
+            Self::ScreenshotEditor { path } => {
+                let state = app.state::<ScreenshotEditorWindowIds>();
+                Some(
+                    ProjectWindowOpening::acquire(
+                        app,
+                        path,
+                        state.ids.clone(),
+                        &state.counter,
+                        &state.open_gates,
+                        |id| CapWindowId::ScreenshotEditor { id },
+                    )
+                    .await?,
+                )
+            }
+            _ => None,
+        };
+        let window_id = project_opening
+            .as_ref()
+            .map(|opening| opening.id.clone())
+            .unwrap_or_else(|| self.id(app));
 
         let camera_window_label = if matches!(self, Self::Camera { .. }) {
             Some(camera_window_label_for_session(bump_camera_window_session(
@@ -1233,6 +1539,11 @@ impl ShowCapWindow {
             }
 
             if let Some(window) = self.id(app).get(app) {
+                if crate::clean_capture::phase(app)
+                    .is_some_and(|phase| phase != crate::clean_capture::Phase::Restoring)
+                {
+                    return Ok(window);
+                }
                 #[cfg(target_os = "macos")]
                 {
                     use crate::panel_manager::is_window_handle_valid;
@@ -1392,8 +1703,13 @@ impl ShowCapWindow {
                     if *centered {
                         center_camera_window(app, &window);
                     }
-                    window.show().ok();
-                    window.set_focus().ok();
+                    crate::clean_capture::guarded_show(
+                        window.clone(),
+                        reveal_generation,
+                        true,
+                        false,
+                    )
+                    .await?;
                     return Ok(window);
                 }
             }
@@ -1423,17 +1739,33 @@ impl ShowCapWindow {
                 let _ = window.set_position(tauri::LogicalPosition::new(pos_x, pos_y));
 
                 let label = window.label().to_string();
+                let (show_tx, show_rx) = tokio::sync::oneshot::channel();
                 app.run_on_main_thread({
                     let app = app.clone();
                     move || {
-                        use tauri_nspanel::ManagerExt;
-                        if let Ok(panel) = app.get_webview_panel(&label) {
-                            panel.order_front_regardless();
-                            panel.show();
+                        if show_tx.is_closed() {
+                            return;
                         }
+                        use tauri_nspanel::ManagerExt;
+                        let result = app
+                            .get_webview_panel(&label)
+                            .map(|panel| {
+                                panel.order_front_regardless();
+                                panel.show();
+                            })
+                            .map_err(|error| {
+                                format!("Recording controls panel is unavailable: {error:?}")
+                            });
+                        let _ = show_tx.send(result);
                     }
-                })
-                .ok();
+                })?;
+                await_window_operation(
+                    show_rx,
+                    "Showing recording controls",
+                    Duration::from_secs(5),
+                )
+                .await
+                .map_err(|error| tauri::Error::Anyhow(anyhow!(error)))?;
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 return Ok(window);
             } else {
@@ -1476,15 +1808,33 @@ impl ShowCapWindow {
                     CursorMonitorInfo::get().bottom_center_position(width, height, 120.0)
                 });
             let _ = window.set_position(logical_point_position(pos_x, pos_y));
-            window.show().ok();
-            window.set_focus().ok();
+            crate::clean_capture::guarded_show(window.clone(), reveal_generation, true, false)
+                .await?;
             fake_window::spawn_fake_window_listener(app.clone(), window.clone());
             return Ok(window);
         }
 
+        let existing_window = match project_opening.as_ref() {
+            Some(opening) => opening.existing_window.clone(),
+            None if !matches!(self, Self::Camera { .. } | Self::InProgressRecording { .. }) => {
+                window_id.get(app)
+            }
+            None => None,
+        };
         if !matches!(self, Self::Camera { .. } | Self::InProgressRecording { .. })
-            && let Some(window) = self.id(app).get(app)
+            && let Some(window) = existing_window
         {
+            if let Some(session) = picker_session {
+                crate::target_select_overlay::request_overlay_reveal(&window, session, false);
+                return Ok(window);
+            }
+            if matches!(self, Self::WindowCaptureOccluder { .. })
+                && let Err(error) = window.set_ignore_cursor_events(true)
+            {
+                hide_overlay(&window);
+                let _ = window.destroy();
+                return Err(error);
+            }
             if matches!(self, Self::Main { .. }) && crate::should_show_onboarding(app) {
                 return Box::pin(Self::Onboarding.show(app)).await;
             }
@@ -1511,7 +1861,7 @@ impl ShowCapWindow {
                 init_target_mode: Some(target_mode),
             } = self
             {
-                window.hide().ok();
+                crate::hide_main_window(app);
                 emit_app_event(
                     app,
                     RequestSetTargetMode {
@@ -1526,17 +1876,13 @@ impl ShowCapWindow {
                     let _ = window.set_ignore_cursor_events(false);
                 }
 
-                if matches!(self, Self::Main { .. } | Self::Settings { .. }) {
+                if matches!(self, Self::Main { .. }) {
                     recenter_window_if_offscreen(&window);
                 }
+                fit_content_window_bounds(&window, &window_id, false).await;
 
-                window.show().ok();
-                window.unminimize().ok();
-                window.set_focus().ok();
-
-                if let Self::Settings { .. } = self {
-                    ensure_settings_window_bounds(&window);
-                }
+                crate::clean_capture::guarded_show(window.clone(), reveal_generation, true, true)
+                    .await?;
 
                 if let Self::Main { init_target_mode } = self {
                     emit_app_event(
@@ -1557,14 +1903,14 @@ impl ShowCapWindow {
             }
 
             #[cfg(target_os = "macos")]
-            if self.id(app).activates_dock() {
+            if window_id.activates_dock() {
                 crate::permissions::sync_macos_dock_visibility(app);
             }
 
             return Ok(window);
         }
 
-        let _id = self.id(app);
+        let _id = window_id;
         let cursor_monitor = CursorMonitorInfo::get();
 
         let window = match self {
@@ -1628,16 +1974,9 @@ impl ShowCapWindow {
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
                             use crate::panel_manager::try_to_panel;
 
-                            let delegate = panel_delegate!(MainPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
+                            // Tao's delegate carries the native events from queued AppKit resizes.
                             let panel = match try_to_panel(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
@@ -1652,9 +1991,16 @@ impl ShowCapWindow {
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                             );
 
-                            panel.set_delegate(delegate);
-
-                            panel.set_level(MAIN_PANEL_LEVEL);
+                            let resized_window = window.clone();
+                            window.on_window_event(move |event| {
+                                if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. })
+                                    && let Err(error) = crate::platform::constrain_main_window_to_visible_frame(
+                                        &resized_window.as_ref().window(),
+                                    )
+                                {
+                                    warn!(%error, "Failed to fit resized Main window to its visible screen area");
+                                }
+                            });
 
                             let _ = window.set_position(main_position);
 
@@ -1680,7 +2026,13 @@ impl ShowCapWindow {
                         }
                     }
 
-                    window.show().ok();
+                    crate::clean_capture::guarded_show(
+                        window.clone(),
+                        reveal_generation,
+                        false,
+                        false,
+                    )
+                    .await?;
                 }
 
                 window
@@ -1689,6 +2041,10 @@ impl ShowCapWindow {
                 display_id,
                 target_mode,
             } => {
+                let picker_session = picker_session.ok_or(tauri::Error::WindowNotFound)?;
+                let overlay_instance = picker
+                    .register_overlay(&self.id(app).label(), picker_session)
+                    .ok_or(tauri::Error::WindowNotFound)?;
                 let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
@@ -1725,7 +2081,7 @@ impl ShowCapWindow {
                 let mut window_builder = self
                     .window_builder(
                         app,
-                        format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}{target_mode_param}"),
+                        format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}&overlayInstance={overlay_instance}{target_mode_param}"),
                     )
                     .maximized(false)
                     .resizable(false)
@@ -1740,6 +2096,19 @@ impl ShowCapWindow {
                     .initialization_script(format!(
                         "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {camera_ws_port};"
                     ));
+
+                #[cfg(all(target_os = "macos", debug_assertions))]
+                {
+                    window_builder = window_builder.background_throttling(
+                        tauri::utils::config::BackgroundThrottlingPolicy::Disabled,
+                    );
+                }
+
+                #[cfg(debug_assertions)]
+                if crate::picker_benchmark::enabled() {
+                    window_builder =
+                        window_builder.initialization_script(crate::picker_benchmark::SCRIPT);
+                }
 
                 #[cfg(target_os = "macos")]
                 {
@@ -1757,7 +2126,14 @@ impl ShowCapWindow {
                 }
 
                 #[cfg(target_os = "linux")]
-                {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    let Some(bounds) = display.raw_handle().logical_bounds() else {
+                        return Err(tauri::Error::WindowNotFound);
+                    };
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                } else {
                     let position = display.raw_handle().physical_position().unwrap();
                     let size = display.physical_size().unwrap();
                     window_builder = window_builder
@@ -1765,11 +2141,37 @@ impl ShowCapWindow {
                         .position(position.x(), position.y());
                 }
 
+                if !picker.picker_is_current(picker_session) {
+                    return Err(tauri::Error::WindowNotFound);
+                }
                 let window = window_builder.build()?;
                 lock_window_text_scale(&window);
+                if !picker.picker_is_current(picker_session) {
+                    let _ = window.destroy();
+                    return Err(tauri::Error::WindowNotFound);
+                }
+
+                if let Err(error) = window.set_ignore_cursor_events(true) {
+                    hide_overlay(&window);
+                    let _ = window.destroy();
+                    return Err(error);
+                }
 
                 #[cfg(target_os = "linux")]
-                {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    use tauri::{LogicalPosition, LogicalSize};
+                    let Some(bounds) = display.raw_handle().logical_bounds() else {
+                        return Err(tauri::Error::WindowNotFound);
+                    };
+                    let _ = window.set_position(LogicalPosition::new(
+                        bounds.position().x(),
+                        bounds.position().y(),
+                    ));
+                    let _ = window.set_size(LogicalSize::new(
+                        bounds.size().width(),
+                        bounds.size().height(),
+                    ));
+                } else {
                     use tauri::{LogicalSize, PhysicalPosition};
                     let position = display.raw_handle().physical_position().unwrap();
                     let size = display.physical_size().unwrap();
@@ -1816,7 +2218,7 @@ impl ShowCapWindow {
                 }
 
                 app.state::<WindowFocusManager>()
-                    .spawn(display_id, window.clone());
+                    .spawn(display_id, window.clone(), picker_session);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -1827,7 +2229,6 @@ impl ShowCapWindow {
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
                             use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
@@ -1838,17 +2239,12 @@ impl ShowCapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let delegate = panel_delegate!(TargetSelectOverlayPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
                             let panel = match window.to_panel() {
                                 Ok(p) => p,
                                 Err(e) => {
                                     tracing::error!("Failed to convert target select overlay to panel: {:?}", e);
+                                    hide_overlay(&window);
+                                    let _ = window.destroy();
                                     crate::permissions::sync_macos_dock_visibility(&app);
                                     return;
                                 }
@@ -1859,8 +2255,6 @@ impl ShowCapWindow {
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                             );
 
-                            panel.set_delegate(delegate);
-
                             #[allow(non_upper_case_globals)]
                             const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
                             panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
@@ -1868,8 +2262,7 @@ impl ShowCapWindow {
                             let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                             panel.set_level(max_level - 1);
 
-                            panel.order_front_regardless();
-                            panel.show();
+                            crate::target_select_overlay::mark_overlay_native_ready(&window, overlay_instance);
 
                             crate::permissions::schedule_macos_dock_visibility_sync(&app);
                         }
@@ -1879,7 +2272,10 @@ impl ShowCapWindow {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    window.show().ok();
+                    crate::target_select_overlay::mark_overlay_native_ready(
+                        &window,
+                        overlay_instance,
+                    );
                 }
 
                 window
@@ -1890,8 +2286,6 @@ impl ShowCapWindow {
                         app,
                         format!("/settings/{}", page.clone().unwrap_or_default()),
                     )
-                    .inner_size(782.0, 775.0)
-                    .min_inner_size(780.0, 560.0)
                     .resizable(true)
                     .maximized(false)
                     .focused(true);
@@ -1904,62 +2298,40 @@ impl ShowCapWindow {
                 let window = builder.build()?;
                 lock_window_text_scale(&window);
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(782.0, 775.0);
-                let _ = window.set_position(cursor_monitor.position(pos_x, pos_y));
-
-                #[cfg(windows)]
-                {
-                    if let Err(e) = window.set_size(LogicalSize::new(782.0, 775.0)) {
-                        warn!("Failed to set Settings window size on Windows: {}", e);
-                    }
-                    if let Err(e) = window.set_position(cursor_monitor.position(pos_x, pos_y)) {
-                        warn!("Failed to position Settings window on Windows: {}", e);
-                    }
-                }
-
-                ensure_settings_window_bounds(&window);
+                fit_content_window_bounds(&window, &_id, true).await;
 
                 window
             }
-            Self::Editor { .. } => {
+            Self::Editor { project_path } => {
                 let open_started = std::time::Instant::now();
                 hide_recording_windows(app, false);
                 release_camera_preview_if_idle(app);
 
-                let window = match self
-                    .window_builder(app, "/editor")
+                PendingEditorInstances::start_prewarm(app, _id.label(), project_path.clone()).await;
+
+                let builder = self
+                    .window_builder_with_id(app, "/editor", &_id, _id.label())
                     .maximizable(true)
-                    .inner_size(1275.0, 800.0)
-                    .min_inner_size(1275.0, 800.0)
-                    .focused(true)
-                    .build()
-                {
-                    Ok(window) => window,
-                    Err(error) => {
-                        // Don't leave the prewarmed instance (decoders, frame
-                        // websocket) orphaned if the window failed to appear.
-                        let window_label = self.id(app).label();
-                        PendingEditorInstances::get(app)
-                            .cancel_prewarm(&window_label)
-                            .await;
-                        return Err(error);
-                    }
+                    .focused(true);
+                #[cfg(debug_assertions)]
+                let builder = if crate::stop_editor_benchmark::enabled() {
+                    builder.initialization_script(crate::stop_editor_benchmark::SCRIPT)
+                } else {
+                    builder
                 };
+                #[cfg(debug_assertions)]
+                let builder = if crate::stop_editor_benchmark::dom_capture_requested() {
+                    builder.initialization_script(crate::stop_editor_benchmark::DOM_SCRIPT)
+                } else {
+                    builder
+                };
+                let window = builder.build()?;
+                if let Some(opening) = project_opening.as_mut() {
+                    opening.own_window(&window);
+                }
                 lock_window_text_scale(&window);
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(1275.0, 800.0);
-                let _ = window.set_position(cursor_monitor.position(pos_x, pos_y));
-
-                #[cfg(windows)]
-                {
-                    use tauri::LogicalSize;
-                    if let Err(e) = window.set_size(LogicalSize::new(1275.0, 800.0)) {
-                        warn!("Failed to set Editor window size on Windows: {}", e);
-                    }
-                    if let Err(e) = window.set_position(cursor_monitor.position(pos_x, pos_y)) {
-                        warn!("Failed to position Editor window on Windows: {}", e);
-                    }
-                }
+                fit_content_window_bounds(&window, &_id, true).await;
 
                 // Show immediately: the native background color is already
                 // themed, so the window can appear before the webview loads and
@@ -1989,50 +2361,20 @@ impl ShowCapWindow {
                 hide_recording_windows(app, false);
                 release_camera_preview_if_idle(app);
 
-                let window_label = self.id(app).label();
-                let pending = PendingScreenshotEditorInstances::get(app);
-                PendingScreenshotEditorInstances::start_prewarm(
-                    app,
-                    window_label.clone(),
-                    path.clone(),
-                )
-                .await;
+                PendingScreenshotEditorInstances::start_prewarm(app, _id.label(), path.clone())
+                    .await;
 
-                let window = match self
-                    .window_builder(app, "/screenshot-editor")
+                let window = self
+                    .window_builder_with_id(app, "/screenshot-editor", &_id, _id.label())
                     .maximizable(true)
-                    .inner_size(1240.0, 800.0)
-                    .min_inner_size(800.0, 600.0)
                     .focused(true)
-                    .build()
-                {
-                    Ok(window) => window,
-                    Err(error) => {
-                        pending.cancel_prewarm(&window_label).await;
-                        return Err(error);
-                    }
-                };
+                    .build()?;
+                if let Some(opening) = project_opening.as_mut() {
+                    opening.own_window(&window);
+                }
                 lock_window_text_scale(&window);
 
-                let (pos_x, pos_y) = cursor_monitor.center_position(1240.0, 800.0);
-                let _ = window.set_position(cursor_monitor.position(pos_x, pos_y));
-
-                #[cfg(windows)]
-                {
-                    use tauri::LogicalSize;
-                    if let Err(e) = window.set_size(LogicalSize::new(1240.0, 800.0)) {
-                        warn!(
-                            "Failed to set ScreenshotEditor window size on Windows: {}",
-                            e
-                        );
-                    }
-                    if let Err(e) = window.set_position(cursor_monitor.position(pos_x, pos_y)) {
-                        warn!(
-                            "Failed to position ScreenshotEditor window on Windows: {}",
-                            e
-                        );
-                    }
-                }
+                fit_content_window_bounds(&window, &_id, true).await;
 
                 window.show().ok();
                 window.set_focus().ok();
@@ -2040,9 +2382,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Upgrade => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let window = self
                     .window_builder(app, "/upgrade")
@@ -2076,9 +2416,7 @@ impl ShowCapWindow {
                 window
             }
             Self::ModeSelect => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let window = self
                     .window_builder(app, "/mode-select")
@@ -2112,9 +2450,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Onboarding => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let width = (cursor_monitor.width * 0.58).clamp(860.0, 1080.0);
                 let height = (width * 0.72).clamp(690.0, 780.0);
@@ -2239,8 +2575,12 @@ impl ShowCapWindow {
 			                window.__CAP__.cameraWsPort = {};
 			                window.__CAP__.cameraOnlyMode = {};
 			                window.__CAP__.enableNativeCameraPreview = {};
+                            window.__CAP__.cleanCaptureGeneration = {};
 		                ",
-                            state.camera_ws_port, centered, enable_native_camera_preview
+                            state.camera_ws_port,
+                            centered,
+                            enable_native_camera_preview,
+                            reveal_generation
                         ))
                         .content_protected(should_protect)
                         .transparent(true)
@@ -2365,7 +2705,6 @@ impl ShowCapWindow {
                             move || {
                                 let _panel_activation_guard = panel_activation_guard;
                                 use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                                use tauri_nspanel::panel_delegate;
                                 use crate::panel_manager::try_to_panel;
 
                                 #[link(name = "CoreGraphics", kind = "framework")]
@@ -2375,13 +2714,6 @@ impl ShowCapWindow {
 
                                 #[allow(non_upper_case_globals)]
                                 const kCGMaximumWindowLevelKey: i32 = 10;
-
-                                let delegate = panel_delegate!(CameraPanelDelegate {
-                                    window_did_become_key,
-                                    window_did_resign_key
-                                });
-
-                                delegate.set_listener(Box::new(|_delegate_name: String| {}));
 
                                 let panel = match try_to_panel(&window) {
                                     Ok(p) => p,
@@ -2397,8 +2729,6 @@ impl ShowCapWindow {
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                                         | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                                 );
-
-                                panel.set_delegate(delegate);
 
                                 let max_level =
                                     unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
@@ -2439,7 +2769,13 @@ impl ShowCapWindow {
 
                     #[cfg(not(target_os = "macos"))]
                     {
-                        window.show().ok();
+                        crate::clean_capture::guarded_show(
+                            window.clone(),
+                            reveal_generation,
+                            false,
+                            false,
+                        )
+                        .await?;
                     }
 
                     drop(state);
@@ -2498,7 +2834,14 @@ impl ShowCapWindow {
                 }
 
                 #[cfg(target_os = "linux")]
-                {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    let Some(bounds) = display.raw_handle().logical_bounds() else {
+                        return Err(tauri::Error::WindowNotFound);
+                    };
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                } else {
                     let position = display.raw_handle().physical_position().unwrap();
                     let Some(size) = display.physical_size() else {
                         warn!(screen_id = %screen_id, "Missing display size for window capture occluder");
@@ -2513,7 +2856,20 @@ impl ShowCapWindow {
                 lock_window_text_scale(&window);
 
                 #[cfg(target_os = "linux")]
-                {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    use tauri::{LogicalPosition, LogicalSize};
+                    let Some(bounds) = display.raw_handle().logical_bounds() else {
+                        return Err(tauri::Error::WindowNotFound);
+                    };
+                    let _ = window.set_position(LogicalPosition::new(
+                        bounds.position().x(),
+                        bounds.position().y(),
+                    ));
+                    let _ = window.set_size(LogicalSize::new(
+                        bounds.size().width(),
+                        bounds.size().height(),
+                    ));
+                } else {
                     use tauri::{LogicalSize, PhysicalPosition};
                     let position = display.raw_handle().physical_position().unwrap();
                     if let Some(size) = display.physical_size() {
@@ -2569,12 +2925,18 @@ impl ShowCapWindow {
 
                 if let Err(err) = window.set_ignore_cursor_events(true) {
                     warn!(%err, "Failed to ignore cursor events for window capture occluder");
+                    hide_overlay(&window);
+                    let _ = window.destroy();
+                    return Err(err);
                 }
 
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 900);
                 }
+
+                crate::clean_capture::guarded_show(window.clone(), reveal_generation, false, false)
+                    .await?;
 
                 window
             }
@@ -2619,7 +2981,14 @@ impl ShowCapWindow {
                 }
 
                 #[cfg(target_os = "linux")]
-                if let Some(bounds) = display.raw_handle().physical_bounds() {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    let Some(bounds) = display.raw_handle().logical_bounds() else {
+                        return Err(tauri::Error::WindowNotFound);
+                    };
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                } else if let Some(bounds) = display.raw_handle().physical_bounds() {
                     window_builder = window_builder
                         .inner_size(bounds.size().width(), bounds.size().height())
                         .position(bounds.position().x(), bounds.position().y());
@@ -2672,7 +3041,20 @@ impl ShowCapWindow {
                 }
 
                 #[cfg(target_os = "linux")]
-                if let Some(bounds) = display.raw_handle().physical_bounds() {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    use tauri::{LogicalPosition, LogicalSize};
+                    let Some(bounds) = display.raw_handle().logical_bounds() else {
+                        return Err(tauri::Error::WindowNotFound);
+                    };
+                    let _ = window.set_position(LogicalPosition::new(
+                        bounds.position().x(),
+                        bounds.position().y(),
+                    ));
+                    let _ = window.set_size(LogicalSize::new(
+                        bounds.size().width(),
+                        bounds.size().height(),
+                    ));
+                } else if let Some(bounds) = display.raw_handle().physical_bounds() {
                     use tauri::{LogicalSize, PhysicalPosition};
                     let _ = window.set_position(PhysicalPosition::new(
                         bounds.position().x(),
@@ -2804,14 +3186,19 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    app.run_on_main_thread({
+                    let mut pending_window = PendingControlsWindow(Some(window.clone()));
+                    let (show_tx, show_rx) = tokio::sync::oneshot::channel();
+                    let scheduled = app.run_on_main_thread({
                         let window = window.clone();
                         let app = app.clone();
                         let panel_activation_guard = panel_activation_guard;
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
+                            if show_tx.is_closed() {
+                                crate::permissions::sync_macos_dock_visibility(&app);
+                                return;
+                            }
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
                             use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
@@ -2822,18 +3209,12 @@ impl ShowCapWindow {
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
 
-                            let delegate = panel_delegate!(RecordingControlsPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
                             let panel = match window.to_panel() {
                                 Ok(p) => p,
                                 Err(e) => {
                                     tracing::error!("Failed to convert recording controls to panel: {:?}", e);
                                     crate::permissions::sync_macos_dock_visibility(&app);
+                                    let _ = show_tx.send(Err(format!("Failed to prepare recording controls: {e:?}")));
                                     return;
                                 }
                             };
@@ -2843,8 +3224,6 @@ impl ShowCapWindow {
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                             );
 
-                            panel.set_delegate(delegate);
-
                             let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                             panel.set_level(max_level);
 
@@ -2852,9 +3231,21 @@ impl ShowCapWindow {
                             panel.show();
 
                             crate::permissions::schedule_macos_dock_visibility_sync(&app);
+                            let _ = show_tx.send(Ok(()));
                         }
-                    })
-                    .ok();
+                    });
+                    let shown = match scheduled {
+                        Ok(()) => await_window_operation(
+                            show_rx,
+                            "Showing recording controls",
+                            Duration::from_secs(5),
+                        )
+                        .await
+                        .map_err(|error| tauri::Error::Anyhow(anyhow!(error))),
+                        Err(error) => Err(error),
+                    };
+                    shown?;
+                    pending_window.0 = None;
 
                     fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 }
@@ -2978,6 +3369,9 @@ impl ShowCapWindow {
             crate::permissions::sync_macos_dock_visibility(app);
         }
 
+        if let Some(opening) = project_opening.as_mut() {
+            opening.commit();
+        }
         Ok(window)
     }
 
@@ -2987,7 +3381,7 @@ impl ShowCapWindow {
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
-        self.window_builder_with_label(app, url, id.label())
+        self.window_builder_with_id(app, url, &id, id.label())
     }
 
     fn window_builder_with_label<'a>(
@@ -2998,6 +3392,16 @@ impl ShowCapWindow {
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
 
+        self.window_builder_with_id(app, url, &id, label)
+    }
+
+    fn window_builder_with_id<'a>(
+        &'a self,
+        app: &'a AppHandle<Wry>,
+        url: impl Into<PathBuf>,
+        id: &CapWindowId,
+        label: impl Into<String>,
+    ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let settings = GeneralSettingsStore::get(app).ok().flatten();
         let window_transparency_enabled = settings
             .as_ref()
@@ -3018,6 +3422,13 @@ impl ShowCapWindow {
             .shadow(true)
             .theme(theme)
             .devtools(cfg!(debug_assertions));
+
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        if matches!(id, CapWindowId::Main) {
+            // Main stays hidden until its frontend mounts; WebKit must finish loading Vite first.
+            builder = builder
+                .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
+        }
 
         if !id.is_transparent() {
             let is_dark = match theme {
@@ -3048,9 +3459,13 @@ impl ShowCapWindow {
         }
 
         if let Some(min) = id.min_size() {
+            let preferred = id.preferred_content_size().unwrap_or(min);
+            let (inner, minimum) = initial_content_window_fit(app, id)
+                .map(|(fit, _)| (fit.inner, fit.minimum))
+                .unwrap_or((preferred, min));
             builder = builder
-                .inner_size(min.0, min.1)
-                .min_inner_size(min.0, min.1);
+                .inner_size(inner.0, inner.1)
+                .min_inner_size(minimum.0, minimum.1);
         }
 
         #[cfg(target_os = "macos")]
@@ -3094,8 +3509,8 @@ impl ShowCapWindow {
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
             ShowCapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();
-                let s = state.ids.lock().unwrap();
-                let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
+                let id = project_window_id_for_key(&state.ids, &project_window_key(project_path))
+                    .expect("editor window is not reserved");
                 CapWindowId::Editor { id }
             }
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
@@ -3117,8 +3532,8 @@ impl ShowCapWindow {
             ShowCapWindow::Onboarding => CapWindowId::Onboarding,
             ShowCapWindow::ScreenshotEditor { path } => {
                 let state = app.state::<ScreenshotEditorWindowIds>();
-                let s = state.ids.lock().unwrap();
-                let id = s.iter().find(|(p, _)| p == path).unwrap().1;
+                let id = project_window_id_for_key(&state.ids, &project_window_key(path))
+                    .expect("screenshot editor window is not reserved");
                 CapWindowId::ScreenshotEditor { id }
             }
         }
@@ -3307,8 +3722,7 @@ fn position_traffic_lights_impl(
 // Cap's own windows while a recording is actually active, which is the only time the
 // exclusion is meaningful.
 //
-// On desktops that are themselves delivered through a capture-based stream (Shadow
-// and other cloud PCs, RDP, VMs), even recording-gated exclusion hides the recording
+// On known capture-based remote displays (Shadow and RDP), recording-gated exclusion hides the recording
 // controls from the user and trips DRM detectors (Shadow error S:102), so exclusion
 // is skipped entirely there — Cap's windows then appear in recordings, which is the
 // lesser evil. Overridable via the CAP_WINDOW_CAPTURE_EXCLUSION env var.
@@ -3372,7 +3786,12 @@ fn window_capture_excluded(app: &AppHandle<Wry>, window_title: &str) -> bool {
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
     content_protection_enabled(app)
         && !capture_exclusion_hides_ui()
+        && native_content_protection_allowed(window_title)
         && window_capture_excluded(app, window_title)
+}
+
+fn native_content_protection_allowed(window_title: &str) -> bool {
+    !cfg!(target_os = "macos") || window_title != CapWindowId::RecordingControls.title()
 }
 
 pub fn apply_content_protection(app: &AppHandle<Wry>, enabled: bool) {
@@ -3394,7 +3813,9 @@ pub fn apply_content_protection(app: &AppHandle<Wry>, enabled: bool) {
         }
 
         let title = id.title();
-        let should_protect = enabled && window_capture_excluded(app, &title);
+        let should_protect = enabled
+            && native_content_protection_allowed(&title)
+            && window_capture_excluded(app, &title);
         let _ = window.set_content_protected(should_protect);
 
         #[cfg(target_os = "windows")]
@@ -3648,10 +4069,165 @@ pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     }
 }
 
+fn project_window_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn project_window_id_for_key(ids: &Mutex<Vec<(PathBuf, u32)>>, key: &Path) -> Option<u32> {
+    let entries = ids.lock().unwrap().clone();
+    entries
+        .into_iter()
+        .find_map(|(path, id)| (project_window_key(&path) == key).then_some(id))
+}
+
+fn next_project_window_id(counter: &AtomicU32) -> tauri::Result<u32> {
+    counter
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| tauri::Error::Io(std::io::Error::other("project window IDs exhausted")))
+}
+
+#[derive(Default, Clone)]
+struct ProjectWindowOpenGates {
+    paths: Arc<Mutex<ProjectWindowGateMap>>,
+}
+
+type ProjectWindowGateMap = HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>;
+
+impl ProjectWindowOpenGates {
+    fn for_path(&self, key: PathBuf) -> Arc<tokio::sync::Mutex<()>> {
+        let mut paths = self.paths.lock().unwrap();
+        paths.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = paths.get(&key).and_then(Weak::upgrade) {
+            return gate;
+        }
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        paths.insert(key, Arc::downgrade(&gate));
+        gate
+    }
+}
+
+struct ProjectWindowOpening {
+    app: AppHandle,
+    ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
+    id: CapWindowId,
+    existing_window: Option<WebviewWindow>,
+    owned_window: Option<WebviewWindow>,
+    committed: bool,
+    _gate: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl ProjectWindowOpening {
+    async fn acquire(
+        app: &AppHandle,
+        path: &Path,
+        ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
+        counter: &AtomicU32,
+        gates: &ProjectWindowOpenGates,
+        make_id: fn(u32) -> CapWindowId,
+    ) -> tauri::Result<Self> {
+        let key = project_window_key(path);
+        let gate = gates.for_path(key.clone()).lock_owned().await;
+        let previous_id = project_window_id_for_key(&ids, &key);
+        if let Some(previous_id) = previous_id {
+            let id = make_id(previous_id);
+            if let Some(window) = id.get(app) {
+                return Ok(Self {
+                    app: app.clone(),
+                    ids,
+                    id,
+                    existing_window: Some(window),
+                    owned_window: None,
+                    committed: true,
+                    _gate: gate,
+                });
+            }
+        }
+
+        let numeric_id = next_project_window_id(counter)?;
+        let id = make_id(numeric_id);
+        {
+            let mut entries = ids.lock().unwrap();
+            entries.retain(|(_, id)| Some(*id) != previous_id);
+            entries.push((path.to_path_buf(), numeric_id));
+        }
+        Ok(Self {
+            app: app.clone(),
+            ids,
+            id,
+            existing_window: None,
+            owned_window: None,
+            committed: false,
+            _gate: gate,
+        })
+    }
+
+    fn own_window(&mut self, window: &WebviewWindow) {
+        self.owned_window = Some(window.clone());
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ProjectWindowOpening {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let numeric_id = match self.id {
+            CapWindowId::Editor { id } | CapWindowId::ScreenshotEditor { id } => id,
+            _ => return,
+        };
+        self.ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(_, id)| *id != numeric_id);
+        if let Some(window) = self.owned_window.take() {
+            if let Err(error) = window.destroy() {
+                warn!(label = %self.id.label(), %error, "Failed to destroy unfinished project window");
+            }
+            let native_window = window.as_ref().window().clone();
+            match self.id {
+                CapWindowId::Editor { .. } => {
+                    tauri::async_runtime::spawn(EditorInstances::remove(native_window));
+                }
+                CapWindowId::ScreenshotEditor { .. } => {
+                    tauri::async_runtime::spawn(ScreenshotEditorInstances::remove(native_window));
+                }
+                _ => {}
+            }
+        }
+        let app = self.app.clone();
+        let id = self.id.clone();
+        tauri::async_runtime::spawn(async move {
+            let label = id.label();
+            match id {
+                CapWindowId::Editor { .. } => {
+                    PendingEditorInstances::get(&app)
+                        .cancel_prewarm(&label)
+                        .await;
+                }
+                CapWindowId::ScreenshotEditor { .. } => {
+                    PendingScreenshotEditorInstances::get(&app)
+                        .cancel_prewarm(&label)
+                        .await;
+                }
+                _ => {}
+            }
+        });
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct EditorWindowIds {
     pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
     pub counter: Arc<AtomicU32>,
+    open_gates: ProjectWindowOpenGates,
 }
 
 impl EditorWindowIds {
@@ -3664,6 +4240,7 @@ impl EditorWindowIds {
 pub struct ScreenshotEditorWindowIds {
     pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
     pub counter: Arc<AtomicU32>,
+    open_gates: ProjectWindowOpenGates,
 }
 
 impl ScreenshotEditorWindowIds {
@@ -3695,9 +4272,212 @@ impl EditorRecordingTarget {
 
 pub fn editor_window_for_path(app: &AppHandle, path: &std::path::Path) -> Option<WebviewWindow> {
     let ids = EditorWindowIds::get(app);
-    let id = {
-        let guard = ids.ids.lock().unwrap();
-        guard.iter().find(|(p, _)| p == path).map(|(_, id)| *id)?
-    };
+    let id = project_window_id_for_key(&ids.ids, &project_window_key(path))?;
     CapWindowId::Editor { id }.get(app)
+}
+
+#[cfg(test)]
+mod content_window_tests {
+    use super::*;
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> ContentWindowRect {
+        ContentWindowRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn assert_inside(frame: ContentWindowRect, area: ContentWindowRect) {
+        assert!(frame.x >= area.x + 16.0);
+        assert!(frame.y >= area.y + 16.0);
+        assert!(frame.x + frame.width <= area.x + area.width - 16.0);
+        assert!(frame.y + frame.height <= area.y + area.height - 16.0);
+    }
+
+    #[test]
+    fn small_display_fits_all_content_windows_and_lowers_oversized_minimums() {
+        let area = rect(0.0, 25.0, 1024.0, 703.0);
+        for id in [
+            CapWindowId::Settings,
+            CapWindowId::Editor { id: 0 },
+            CapWindowId::ScreenshotEditor { id: 0 },
+        ] {
+            let preferred = id.preferred_content_size().unwrap();
+            let fit = fit_content_window(
+                area,
+                rect(0.0, 0.0, preferred.0, preferred.1),
+                preferred,
+                id.min_size().unwrap(),
+                Some(preferred),
+            )
+            .unwrap();
+            assert_inside(fit.frame, area);
+            assert!(fit.minimum.0 <= fit.inner.0);
+            assert!(fit.minimum.1 <= fit.inner.1);
+        }
+    }
+
+    #[test]
+    fn roomy_display_keeps_preferred_size_and_minimum() {
+        let area = rect(0.0, 24.0, 2560.0, 1376.0);
+        let preferred = (1275.0, 800.0);
+        let fit = fit_content_window(
+            area,
+            rect(0.0, 0.0, 1275.0, 800.0),
+            preferred,
+            preferred,
+            Some(preferred),
+        )
+        .unwrap();
+        assert_eq!(fit.inner, preferred);
+        assert_eq!(fit.minimum, preferred);
+        assert_inside(fit.frame, area);
+    }
+
+    #[test]
+    fn decorated_window_fits_outer_frame_on_negative_origin_display() {
+        let area = rect(-1536.0, 24.0, 1536.0, 800.0);
+        let fit = fit_content_window(
+            area,
+            rect(0.0, 0.0, 1291.0, 839.0),
+            (1275.0, 800.0),
+            (1275.0, 800.0),
+            Some((1275.0, 800.0)),
+        )
+        .unwrap();
+        assert_eq!(fit.inner, (1275.0, 729.0));
+        assert_eq!(fit.minimum, (1275.0, 729.0));
+        assert_inside(fit.frame, area);
+    }
+
+    #[test]
+    fn work_area_uses_the_target_monitors_scale() {
+        for scale in [1.0, 1.25, 2.0] {
+            let position = PhysicalPosition::new(-1920, 30);
+            let size = PhysicalSize::new(1920, 1000);
+            let area = logical_work_area(position, size, scale).unwrap();
+            let fit = fit_content_window(
+                area,
+                rect(area.x, area.y, 1275.0, 800.0),
+                (1275.0, 800.0),
+                (1275.0, 800.0),
+                Some((1275.0, 800.0)),
+            )
+            .unwrap();
+            assert_inside(fit.frame, area);
+            assert!(fit.frame.x * scale >= position.x as f64);
+            assert!(
+                (fit.frame.x + fit.frame.width) * scale <= (position.x + size.width as i32) as f64
+            );
+        }
+        assert!(
+            logical_work_area(
+                PhysicalPosition::new(0, 0),
+                PhysicalSize::new(1024, 768),
+                0.0
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn reopening_shrinks_and_recovers_an_oversized_offscreen_window() {
+        let area = rect(1920.0, 0.0, 1024.0, 728.0);
+        let fit = fit_content_window(
+            area,
+            rect(-2000.0, 3000.0, 1800.0, 1200.0),
+            (1800.0, 1200.0),
+            (1275.0, 800.0),
+            None,
+        )
+        .unwrap();
+        assert_eq!(fit.inner, (992.0, 696.0));
+        assert_inside(fit.frame, area);
+    }
+
+    #[test]
+    fn reopening_preserves_a_valid_user_size_and_position() {
+        let area = rect(0.0, 24.0, 1920.0, 1016.0);
+        let frame = rect(43.0, 71.0, 900.0, 650.0);
+        let fit = fit_content_window(area, frame, (900.0, 650.0), (780.0, 560.0), None).unwrap();
+        assert_eq!(fit.frame, frame);
+    }
+
+    #[test]
+    fn invalid_or_unusable_geometry_is_ignored() {
+        for area in [
+            rect(0.0, 0.0, 0.0, 768.0),
+            rect(0.0, 0.0, 20.0, 20.0),
+            rect(f64::NAN, 0.0, 1024.0, 768.0),
+        ] {
+            assert!(
+                fit_content_window(
+                    area,
+                    rect(0.0, 0.0, 1275.0, 800.0),
+                    (1275.0, 800.0),
+                    (1275.0, 800.0),
+                    None
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn only_macos_controls_bypass_native_content_protection() {
+        assert_eq!(
+            native_content_protection_allowed(&CapWindowId::RecordingControls.title()),
+            !cfg!(target_os = "macos")
+        );
+        assert!(native_content_protection_allowed(
+            &CapWindowId::Camera.title()
+        ));
+        assert!(native_content_protection_allowed(
+            &CapWindowId::Settings.title()
+        ));
+        assert!(native_content_protection_allowed(
+            &CapWindowId::Teleprompter.title()
+        ));
+    }
+
+    #[tokio::test]
+    async fn panel_show_waits_for_acknowledgment_and_propagates_failure() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let wait = await_window_operation(rx, "Test panel", Duration::from_secs(1));
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+        tx.send(Err("Native panel conversion failed".to_string()))
+            .unwrap();
+        assert_eq!(
+            wait.await,
+            Err("Native panel conversion failed".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_panel_show_cancels_queued_native_work() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let result = await_window_operation(rx, "Test panel", Duration::ZERO).await;
+        assert_eq!(result, Err("Test panel timed out".to_string()));
+        assert!(tx.is_closed());
+    }
+
+    #[tokio::test]
+    async fn panel_show_success_and_cancel_are_distinct() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(Ok(())).unwrap();
+        assert!(
+            await_window_operation(rx, "Test panel", Duration::from_secs(1))
+                .await
+                .is_ok()
+        );
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        drop(tx);
+        assert_eq!(
+            await_window_operation(rx, "Test panel", Duration::from_secs(1)).await,
+            Err("Test panel was cancelled".to_string())
+        );
+    }
 }

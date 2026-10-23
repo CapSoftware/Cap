@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import {
 	Button,
 	Dialog,
@@ -9,6 +10,11 @@ import {
 	DialogTitle,
 	Input,
 	Select,
+	SelectContent,
+	SelectItem,
+	SelectRoot,
+	SelectTrigger,
+	SelectValue,
 	Table,
 	TableBody,
 	TableCell,
@@ -16,6 +22,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@cap/ui";
+import { Folder } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faCircleCheck,
@@ -26,19 +33,22 @@ import {
 	faUpload,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	type ChangeEvent,
 	type DragEvent,
+	useId,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { toast } from "sonner";
 import {
+	getLoomImportFolders,
 	importFromLoom,
 	importFromLoomCsv,
 	type LoomCsvImportResult,
@@ -46,10 +56,18 @@ import {
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { parseLoomCsvRecords } from "@/lib/loom-csv";
+import {
+	type LoomImportDestination,
+	loomImportDestinationHref,
+	loomImportPageHref,
+} from "@/lib/loom-import-destination";
+import { buildMoveFolderDestinationRows } from "@/lib/move-items";
 import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { LoomConciergeRow } from "./LoomConciergeRow";
 
 type Mode = "single" | "csv";
 
@@ -74,6 +92,8 @@ type MappedRow = {
 
 const LOOM_CSV_TEMPLATE =
 	"loom_video_url,user_email,space_name\nhttps://www.loom.com/share/0123456789abcdef,user@example.com,Sales\n";
+
+const ROOT_FOLDER_VALUE = "__cap_root_folder__";
 
 const OPTIONAL_COLUMN_VALUE = "__cap_skip_column__";
 const MAX_SPACE_NAME_LENGTH = 255;
@@ -200,57 +220,8 @@ function buildResultsCsv(
 	return `${lines.map((line) => line.map(escapeCsvValue).join(",")).join("\n")}\n`;
 }
 
-function parseCsvRecords(text: string) {
-	const records: string[][] = [];
-	let field = "";
-	let row: string[] = [];
-	let inQuotes = false;
-	const input = text.replace(/^\uFEFF/, "");
-
-	for (let index = 0; index < input.length; index += 1) {
-		const char = input.charAt(index);
-		const next = input.charAt(index + 1);
-
-		if (char === '"') {
-			if (inQuotes && next === '"') {
-				field += '"';
-				index += 1;
-			} else {
-				inQuotes = !inQuotes;
-			}
-			continue;
-		}
-
-		if (char === "," && !inQuotes) {
-			row.push(field.trim());
-			field = "";
-			continue;
-		}
-
-		if ((char === "\n" || char === "\r") && !inQuotes) {
-			if (char === "\r" && next === "\n") index += 1;
-			row.push(field.trim());
-			if (row.some((cell) => cell.length > 0)) records.push(row);
-			row = [];
-			field = "";
-			continue;
-		}
-
-		field += char;
-	}
-
-	if (inQuotes) throw new Error("CSV has an unclosed quoted field.");
-
-	if (field.length > 0 || row.length > 0) {
-		row.push(field.trim());
-		if (row.some((cell) => cell.length > 0)) records.push(row);
-	}
-
-	return records;
-}
-
 function parseCsv(text: string, fileName: string): CsvData {
-	const records = parseCsvRecords(text);
+	const records = parseLoomCsvRecords(text);
 	const headers = records[0]?.map((header) => header.trim()) ?? [];
 	const rows = records
 		.slice(1)
@@ -317,9 +288,17 @@ const LoomMark = ({ size = 18 }: { size?: number }) => (
 	</svg>
 );
 
-export const ImportLoomPage = () => {
-	const { user, activeOrganization } = useDashboardContext();
+export const ImportLoomPage = ({
+	initialDestination = {},
+}: {
+	initialDestination?: LoomImportDestination;
+}) => {
+	const { user, activeOrganization, spacesData } = useDashboardContext();
 	const router = useRouter();
+	const searchParams = useSearchParams();
+	const prefilledLoomUrl = searchParams?.get("url")?.trim() ?? "";
+	const prefilledMode: Mode =
+		searchParams?.get("mode") === "csv" ? "csv" : "single";
 
 	const currentMember = activeOrganization?.members.find(
 		(member) => member.userId === user?.id,
@@ -331,11 +310,50 @@ export const ImportLoomPage = () => {
 	});
 	const canUseCsvImport = canManageOrganizationSettings(currentRole);
 
-	const [mode, setMode] = useState<Mode>("single");
+	const [mode, setMode] = useState<Mode>(prefilledMode);
 	const activeMode = canUseCsvImport ? mode : "single";
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(!user?.isPro);
 
-	const [loomUrl, setLoomUrl] = useState("");
+	const [selectedFolderId, setSelectedFolderId] = useState(
+		initialDestination.folderId ?? ROOT_FOLDER_VALUE,
+	);
+	const destinationInputId = useId();
+	const orgId = activeOrganization?.organization.id;
+	const spaceId = initialDestination.spaceId;
+	const foldersQuery = useQuery({
+		queryKey: ["loom-import-folders", user.id, orgId, spaceId],
+		queryFn: () =>
+			orgId ? getLoomImportFolders({ orgId, spaceId }) : Promise.resolve([]),
+		enabled: Boolean(orgId) && activeMode === "single",
+	});
+	const folderRows = useMemo(
+		() => buildMoveFolderDestinationRows(foldersQuery.data ?? []),
+		[foldersQuery.data],
+	);
+	const destination: LoomImportDestination = {
+		folderId:
+			selectedFolderId === ROOT_FOLDER_VALUE
+				? undefined
+				: Folder.FolderId.make(selectedFolderId),
+		spaceId,
+	};
+	const rootLabel = !spaceId
+		? "My Caps"
+		: spaceId === orgId
+			? (activeOrganization?.organization.name ?? "Organization")
+			: (spacesData?.find((space) => space.id === spaceId)?.name ?? "Space");
+	const selectedFolder = folderRows.find(
+		(folder) => folder.id === selectedFolderId,
+	);
+	const destinationAvailable =
+		foldersQuery.isSuccess &&
+		(selectedFolderId === ROOT_FOLDER_VALUE || Boolean(selectedFolder));
+	const destinationLabel = selectedFolder
+		? `${rootLabel} / ${selectedFolder.path}`
+		: rootLabel;
+	const importPageHref = loomImportPageHref(destination);
+
+	const [loomUrl, setLoomUrl] = useState(prefilledLoomUrl);
 	const [isImporting, setIsImporting] = useState(false);
 
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -426,7 +444,7 @@ export const ImportLoomPage = () => {
 			return;
 		}
 
-		if (!loomUrl.trim()) return;
+		if (!loomUrl.trim() || !destinationAvailable || isImporting) return;
 
 		setIsImporting(true);
 
@@ -434,18 +452,18 @@ export const ImportLoomPage = () => {
 			const importResult = await importFromLoom({
 				loomUrl: loomUrl.trim(),
 				orgId: activeOrganization.organization.id,
+				...destination,
 			});
 
-			if (!importResult.success) {
-				toast.error(importResult.error || "Failed to import video.");
+			if (!importResult?.success) {
+				toast.error(importResult?.error || "Failed to import video.");
 				setIsImporting(false);
 				return;
 			}
 
-			toast.success(
-				"Loom video import started! It will appear in your caps shortly.",
-			);
-			router.push("/dashboard/caps");
+			toast.success(`Loom import started in ${destinationLabel}.`);
+			router.push(loomImportDestinationHref(destination));
+			router.refresh();
 		} catch {
 			toast.error("An unexpected error occurred. Please try again.");
 		} finally {
@@ -669,7 +687,7 @@ export const ImportLoomPage = () => {
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
 				<Link
-					href="/dashboard/import"
+					href={importPageHref}
 					className="inline-flex gap-2 items-center mb-4 text-sm transition-colors text-gray-10 hover:text-gray-12"
 				>
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
@@ -730,18 +748,98 @@ export const ImportLoomPage = () => {
 								onChange={(event) => setLoomUrl(event.target.value)}
 								placeholder="https://www.loom.com/share/..."
 								onKeyDown={(event) => {
-									if (event.key === "Enter" && isValidLoomUrl && !isImporting) {
+									if (
+										event.key === "Enter" &&
+										isValidLoomUrl &&
+										!isImporting &&
+										destinationAvailable
+									) {
 										handleSingleImport();
 									}
 								}}
 							/>
+
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor={destinationInputId}
+									className="text-sm font-medium text-gray-12"
+								>
+									Import to
+								</label>
+								<SelectRoot
+									value={foldersQuery.isPending ? "" : selectedFolderId}
+									onValueChange={setSelectedFolderId}
+									disabled={
+										foldersQuery.isPending ||
+										foldersQuery.isError ||
+										isImporting
+									}
+								>
+									<SelectTrigger
+										id={destinationInputId}
+										className="w-full min-w-0 [&_span]:truncate"
+									>
+										<SelectValue
+											placeholder={
+												foldersQuery.isPending
+													? "Loading folders..."
+													: "Choose a destination"
+											}
+										/>
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value={ROOT_FOLDER_VALUE}>
+											{rootLabel}
+										</SelectItem>
+										{folderRows.map((folder) => (
+											<SelectItem key={folder.id} value={folder.id}>
+												{rootLabel} / {folder.path}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</SelectRoot>
+								{foldersQuery.isError ? (
+									<div
+										role="alert"
+										className="flex flex-wrap gap-2 items-center text-sm text-red-11"
+									>
+										<p>
+											We couldn't load this destination. Check your access or
+											try again.
+										</p>
+										<Button
+											type="button"
+											size="sm"
+											variant="gray"
+											onClick={() => foldersQuery.refetch()}
+											disabled={foldersQuery.isFetching}
+										>
+											Retry
+										</Button>
+										{spaceId && (
+											<Link href="/dashboard/import/loom" className="underline">
+												Import to My Caps instead
+											</Link>
+										)}
+									</div>
+								) : foldersQuery.isSuccess && !destinationAvailable ? (
+									<p role="alert" className="text-sm text-red-11">
+										This folder is no longer available. Choose another
+										destination.
+									</p>
+								) : spaceId ? (
+									<p className="text-xs text-gray-10">
+										This video will be shared with {rootLabel}.
+									</p>
+								) : null}
+							</div>
 
 							<div className="flex flex-col-reverse gap-3 justify-end sm:flex-row">
 								<Button
 									type="button"
 									size="sm"
 									variant="gray"
-									onClick={() => router.push("/dashboard/import")}
+									onClick={() => router.push(importPageHref)}
 								>
 									Cancel
 								</Button>
@@ -751,7 +849,9 @@ export const ImportLoomPage = () => {
 									size="sm"
 									spinner={isImporting}
 									variant="dark"
-									disabled={!isValidLoomUrl || isImporting}
+									disabled={
+										!isValidLoomUrl || isImporting || !destinationAvailable
+									}
 								>
 									{isImporting ? "Importing..." : "Import Loom"}
 								</Button>
@@ -1117,6 +1217,14 @@ export const ImportLoomPage = () => {
 						)}
 					</div>
 				)}
+
+				{buildEnv.NEXT_PUBLIC_IS_CAP &&
+					canUseCsvImport &&
+					activeOrganization?.organization.id && (
+						<LoomConciergeRow
+							organizationId={activeOrganization.organization.id}
+						/>
+					)}
 			</div>
 
 			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>

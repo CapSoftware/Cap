@@ -501,7 +501,7 @@ const shouldAutoPipCaptureSource = (source: RecordingCaptureSource) =>
 	isWindowCaptureSource(source) && !isLikelyBrowserWindow(source);
 
 const isWebcamPreviewEnabled = (settings: ExtensionSettings) =>
-	settings.webcam.enabled && Boolean(settings.webcam.deviceId);
+	Boolean(settings.webcam.enabled);
 
 const shouldShowWebcamPreview = async (
 	settings: ExtensionSettings,
@@ -815,6 +815,29 @@ const broadcastOverlayHide = async () => {
 	);
 	activePreviewTabId = null;
 	pendingPreviewTabId = null;
+};
+
+const broadcastOverlayCountdown = async (
+	seconds: number,
+	durationMs: number,
+) => {
+	const tabs = await getTabs();
+	await Promise.all(
+		tabs.map((tab) => {
+			if (!canInjectIntoTab(tab) || tab.id === undefined) {
+				return undefined;
+			}
+			return sendOverlay(
+				tab.id,
+				{
+					type: "overlay-countdown",
+					seconds,
+					durationMs,
+				},
+				false,
+			).catch(() => undefined);
+		}),
+	);
 };
 
 const broadcastRecordingStatusToTabs = async (status: RecordingStatus) => {
@@ -1244,7 +1267,9 @@ const forwardToOffscreen = (type: OffscreenRequest["type"]) =>
 	sendOffscreen({ target: "offscreen", type } as OffscreenRequest);
 
 const syncRecordingStatus = async () => {
+	const initialStatus = recordingStatus;
 	const hasDocument = await hasOffscreenDocument();
+	if (recordingStatus !== initialStatus) return recordingStatus;
 	if (!hasDocument) {
 		if (
 			isActiveRecordingStatus(recordingStatus) ||
@@ -1269,6 +1294,7 @@ const syncRecordingStatus = async () => {
 		{ target: "offscreen", type: "get-recording-status" },
 		{ createIfMissing: false },
 	);
+	if (recordingStatus !== initialStatus) return recordingStatus;
 	if (response.ok && response.status) {
 		if (
 			recordingStatus.phase === "creating" &&
@@ -1621,6 +1647,15 @@ const handleRequest = async (
 			: { ok: false, error: response.error };
 	}
 
+	if (message.type === "toggle-microphone-mute") {
+		const response = await sendOffscreen({
+			target: "offscreen",
+			type: "toggle-microphone-mute",
+			muted: message.muted,
+		});
+		return response;
+	}
+
 	if (message.type === "open-options") {
 		chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
 		return { ok: true };
@@ -1737,17 +1772,7 @@ const handleRequest = async (
 	}
 
 	if (message.type === "show-countdown") {
-		// Relay the offscreen recorder's countdown to the recorded tab. Inject
-		// the overlay if it is not there yet; a tab that cannot host it (e.g. a
-		// chrome:// page) just shows nothing while the recorder waits out the
-		// same countdown, so the count is still kept out of the capture.
-		if (message.tabId !== undefined) {
-			void sendOverlay(message.tabId, {
-				type: "overlay-countdown",
-				seconds: message.seconds,
-				durationMs: message.durationMs,
-			}).catch(() => undefined);
-		}
+		await broadcastOverlayCountdown(message.seconds, message.durationMs);
 		return { ok: true };
 	}
 

@@ -23,6 +23,7 @@ import {
 	MAX_CONTENT_TRANSFER_FOLDERS,
 	MAX_CONTENT_TRANSFER_VIDEOS,
 } from "@/lib/content-transfer";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 const CONTENT_TRANSFER_UPLOAD_PHASES = new Set<ContentTransferUploadPhase>([
@@ -829,6 +830,7 @@ async function transferOneVideo(
 			}
 		}
 	});
+	await enqueueVideoStorageNameSync(videoId);
 
 	const cleanupWarnings: string[] = [];
 	if (copied) {

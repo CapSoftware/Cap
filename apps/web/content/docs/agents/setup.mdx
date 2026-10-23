@@ -64,7 +64,25 @@ cap auth login --profile admin --json
 cap auth login --profile full --json
 ```
 
-Cap CLI credentials are stored by the operating system when available. `CAP_AGENT_TOKEN` is supported for headless environments, but do not paste tokens into an agent conversation or commit them to a project.
+Cap CLI credentials are stored by the operating system when available. For machines without a browser, see [Headless environments](#headless-environments-ci-containers-and-remote-sandboxes) below.
+
+## Headless environments (CI, containers, and remote sandboxes)
+
+`cap auth login` opens a browser on the same machine, so it does not work on headless runners. Mint an API key from the Cap dashboard instead:
+
+1. Open [Settings, then Account](https://cap.so/dashboard/settings/account) in the Cap dashboard and find **Cap CLI access**.
+2. Choose **Create API key**, then pick a name, an access profile (`creator`, `admin`, or `full`, the same profiles as `cap auth login`), and an expiry.
+3. Copy the key when it is shown. Cap stores only a hash, so it cannot be displayed again.
+4. Inject the key into the headless environment as `CAP_API_KEY` or `CAP_AGENT_TOKEN` (both are honored), then verify:
+
+```sh
+export CAP_API_KEY="cap_cli_..."
+cap auth status --json
+```
+
+The key authenticates every `cap` command and MCP tool with the scopes of the chosen profile. Revoke it at any time from the same settings page; keys minted by `cap auth login` are listed and revocable there too.
+
+Follow least privilege here as well: prefer the `creator` profile and the shortest expiry that fits the job, and use your platform's secret storage (for example CI secrets) to inject the key. Do not paste keys into an agent conversation or commit them to a project.
 
 ## Codex
 

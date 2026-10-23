@@ -22,12 +22,34 @@ describe("share video metadata", () => {
 		);
 	});
 
+	it("advertises a custom domain but keeps the player and oEmbed canonical", () => {
+		const urls = getShareVideoUrls({
+			videoId: "video123",
+			sourceType: "desktopMP4",
+			webUrl: "https://looms.example.com",
+			canonicalWebUrl: "https://cap.so",
+		});
+
+		expect(urls.shareUrl).toBe("https://looms.example.com/s/video123");
+		expect(urls.previewImageUrl).toContain("https://looms.example.com/");
+		expect(urls.ogImageUrl).toContain("https://looms.example.com/");
+		expect(urls.streamUrl).toContain("https://looms.example.com/");
+		// `/embed/` redirects off a custom domain and `/api/oembed` rejects a
+		// custom domain `url`, so both stay on the default origin.
+		expect(urls.playerUrl).toBe("https://cap.so/embed/video123");
+		expect(urls.oEmbedUrl).toBe(
+			"https://cap.so/api/oembed?url=https%3A%2F%2Fcap.so%2Fs%2Fvideo123&format=json",
+		);
+	});
+
 	it("emits video metadata used by Open Graph and Twitter players", () => {
 		const metadata = buildShareVideoMetadata({
 			videoId: "video123",
 			name: "Product demo",
 			sourceType: "desktopMP4",
 			webUrl: "https://cap.so",
+			width: null,
+			height: null,
 			advertiseIframelyPlayer: true,
 		});
 
@@ -64,7 +86,7 @@ describe("share video metadata", () => {
 					rel: "iframely player",
 					url: "https://cap.so/embed/video123",
 					type: "text/html",
-					media: "(aspect-ratio: 16/9)",
+					media: "(aspect-ratio: 1280/720)",
 				},
 			],
 		});
@@ -79,9 +101,64 @@ describe("share video metadata", () => {
 			name: "Product demo",
 			sourceType: "desktopMP4",
 			webUrl: "https://cap.so",
+			width: null,
+			height: null,
 		});
 
 		expect(metadata.icons).toBeUndefined();
+	});
+
+	it.each([
+		[1080, 1920],
+		[1920, 1080],
+		[1440, 1080],
+	])(
+		"preserves %ix%i recording dimensions in link previews",
+		(width, height) => {
+			const metadata = buildShareVideoMetadata({
+				videoId: "video123",
+				name: "Product demo",
+				sourceType: "desktopMP4",
+				webUrl: "https://cap.so",
+				width,
+				height,
+				advertiseIframelyPlayer: true,
+			});
+
+			expect(metadata.openGraph).toMatchObject({
+				videos: [{ width, height }],
+			});
+			expect(metadata.twitter).toMatchObject({
+				players: { width, height },
+			});
+			expect(metadata.icons).toMatchObject({
+				other: [{ media: `(aspect-ratio: ${width}/${height})` }],
+			});
+		},
+	);
+
+	it.each([
+		[null, null],
+		[1080, null],
+		[null, 1920],
+		[0, 1920],
+		[1080, 0],
+	])("uses default dimensions when %s x %s is incomplete", (width, height) => {
+		const metadata = buildShareVideoMetadata({
+			videoId: "video123",
+			name: "Product demo",
+			sourceType: "desktopMP4",
+			webUrl: "https://cap.so",
+			width,
+			height,
+		});
+
+		expect(metadata.openGraph).toMatchObject({
+			videos: [{ width: 1280, height: 720 }],
+		});
+		expect(metadata.twitter).toMatchObject({
+			players: { width: 1280, height: 720 },
+		});
 	});
 
 	it.each([

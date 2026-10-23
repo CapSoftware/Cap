@@ -4,7 +4,7 @@ use x11rb::{
     connection::Connection,
     protocol::{
         randr::ConnectionExt as RandrConnectionExt,
-        xproto::{Atom, AtomEnum, ConnectionExt as XprotoConnectionExt, Window},
+        xproto::{Atom, AtomEnum, ConnectionExt as XprotoConnectionExt, MapState, Window},
     },
     rust_connection::RustConnection,
 };
@@ -12,6 +12,8 @@ use x11rb::{
 use crate::bounds::{
     LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
 };
+
+mod wayland;
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl {
@@ -21,6 +23,8 @@ pub struct DisplayImpl {
     width: u32,
     height: u32,
     refresh_rate: f64,
+    logical_bounds: Option<LogicalBounds>,
+    wayland_uuid: Option<uuid::Uuid>,
 }
 
 impl DisplayImpl {
@@ -32,10 +36,15 @@ impl DisplayImpl {
             width: 0,
             height: 0,
             refresh_rate: 60.0,
+            logical_bounds: None,
+            wayland_uuid: None,
         })
     }
 
     pub fn list() -> Vec<Self> {
+        if prefers_wayland() {
+            return wayland_displays();
+        }
         let Ok((conn, screen_num)) = x11_connection() else {
             return wayland_displays();
         };
@@ -59,6 +68,8 @@ impl DisplayImpl {
                         width: monitor.width.into(),
                         height: monitor.height.into(),
                         refresh_rate: 60.0,
+                        logical_bounds: None,
+                        wayland_uuid: None,
                     })
                     .collect::<Vec<_>>()
             })
@@ -75,7 +86,13 @@ impl DisplayImpl {
             width: screen.width_in_pixels.into(),
             height: screen.height_in_pixels.into(),
             refresh_rate: 60.0,
+            logical_bounds: None,
+            wayland_uuid: None,
         }]
+    }
+
+    pub fn wayland_uuid(&self) -> Option<uuid::Uuid> {
+        self.wayland_uuid
     }
 
     pub fn raw_id(&self) -> DisplayIdImpl {
@@ -90,10 +107,16 @@ impl DisplayImpl {
     }
 
     pub fn logical_size(&self) -> Option<LogicalSize> {
-        Some(LogicalSize::new(self.width.into(), self.height.into()))
+        Some(self.logical_bounds.map_or_else(
+            || LogicalSize::new(self.width.into(), self.height.into()),
+            |bounds| bounds.size(),
+        ))
     }
 
     pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        if let Some(bounds) = self.logical_bounds {
+            return Some(bounds);
+        }
         Some(LogicalBounds::new(
             LogicalPosition::new(self.x.into(), self.y.into()),
             self.logical_size()?,
@@ -155,8 +178,16 @@ impl FromStr for DisplayIdImpl {
 #[derive(Clone, Copy)]
 pub struct WindowImpl(Window);
 
+pub struct WindowSelectionMetadata {
+    pub is_viewable: bool,
+    pub owner_pid: Option<u32>,
+}
+
 impl WindowImpl {
     pub fn list() -> Vec<Self> {
+        if prefers_wayland() {
+            return wayland_windows();
+        }
         let Ok((conn, screen_num)) = x11_connection() else {
             return wayland_windows();
         };
@@ -191,6 +222,15 @@ impl WindowImpl {
         Self::list_containing_cursor().into_iter().next()
     }
 
+    pub fn selection_metadata(&self) -> Option<WindowSelectionMetadata> {
+        let (conn, _) = x11_connection().ok()?;
+        let attributes = conn.get_window_attributes(self.0).ok()?.reply().ok()?;
+        Some(WindowSelectionMetadata {
+            is_viewable: attributes.map_state == MapState::VIEWABLE,
+            owner_pid: window_pid(&conn, self.0),
+        })
+    }
+
     pub fn id(&self) -> WindowIdImpl {
         WindowIdImpl(self.0)
     }
@@ -200,13 +240,16 @@ impl WindowImpl {
     }
 
     pub fn logical_size(&self) -> Option<LogicalSize> {
+        if is_wayland_portal_window(self.0) {
+            return DisplayImpl::primary().logical_size();
+        }
         let size = self.physical_size()?;
         Some(LogicalSize::new(size.width(), size.height()))
     }
 
     pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
         if is_wayland_portal_window(self.0) {
-            return Some(DisplayImpl::primary().physical_bounds()?);
+            return DisplayImpl::primary().physical_bounds();
         }
 
         let (conn, screen_num) = x11_connection().ok()?;
@@ -225,6 +268,9 @@ impl WindowImpl {
     }
 
     pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        if is_wayland_portal_window(self.0) {
+            return DisplayImpl::primary().logical_bounds();
+        }
         let bounds = self.physical_bounds()?;
         Some(LogicalBounds::new(
             LogicalPosition::new(bounds.position().x(), bounds.position().y()),
@@ -318,15 +364,7 @@ fn wayland_displays() -> Vec<DisplayImpl> {
         return Vec::new();
     }
 
-    let (width, height) = wayland_display_size();
-    vec![DisplayImpl {
-        id: 0,
-        x: 0,
-        y: 0,
-        width,
-        height,
-        refresh_rate: 60.0,
-    }]
+    wayland::displays().unwrap_or_default()
 }
 
 fn wayland_windows() -> Vec<WindowImpl> {
@@ -337,23 +375,20 @@ fn wayland_windows() -> Vec<WindowImpl> {
     }
 }
 
-fn wayland_display_size() -> (u32, u32) {
-    let width = env::var("CAP_WAYLAND_OUTPUT_WIDTH")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(1920);
-    let height = env::var("CAP_WAYLAND_OUTPUT_HEIGHT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(1080);
+fn prefers_wayland() -> bool {
+    prefers_wayland_environment(
+        env::var_os("WAYLAND_DISPLAY").is_some(),
+        env::var_os("DISPLAY").is_some(),
+        env::var("XDG_SESSION_TYPE").ok().as_deref(),
+    )
+}
 
-    (width, height)
+fn prefers_wayland_environment(wayland: bool, x11: bool, session: Option<&str>) -> bool {
+    wayland && (!x11 || session.is_some_and(|session| session.eq_ignore_ascii_case("wayland")))
 }
 
 fn is_wayland_portal_window(window: Window) -> bool {
-    window == 0 && x11_connection().is_err() && env::var_os("WAYLAND_DISPLAY").is_some()
+    window == 0 && prefers_wayland()
 }
 
 fn intern_atom(conn: &RustConnection, name: &str) -> Option<Atom> {
@@ -445,6 +480,9 @@ fn process_name(pid: u32) -> Option<String> {
 }
 
 fn get_cursor_position() -> Option<PhysicalPosition> {
+    if prefers_wayland() {
+        return None;
+    }
     let (conn, screen_num) = x11_connection().ok()?;
     let root = conn.setup().roots[screen_num].root;
     let reply = conn.query_pointer(root).ok()?.reply().ok()?;

@@ -6,6 +6,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
@@ -17,6 +18,7 @@ import {
 	Videos,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
 	CurrentUser,
@@ -57,12 +59,17 @@ import {
 } from "@/lib/account-deletion-request";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+} from "@/lib/email-code-rate-limit";
+import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
 } from "@/lib/mobile-request-origin";
 import { createNotification } from "@/lib/Notification";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -388,6 +395,10 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
+	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	if (publishedThumbnail) {
+		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
+	}
 	const response = yield* bucket.listObjects({
 		prefix: `${video.ownerId}/${video.id}/`,
 	});
@@ -465,10 +476,15 @@ const createMobileApiKey = Effect.fn("Mobile.createMobileApiKey")(function* (
 
 const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
+	headers: Headers,
 ) {
 	const email = normalizeEmail(rawEmail);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
+
+	if (yield* Effect.promise(() => isEmailCodeSendLimited(email, headers))) {
+		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	}
 
 	const code = crypto.randomInt(100000, 1000000).toString();
 	const token = hashEmailCode(code);
@@ -506,10 +522,13 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	return { success: true as const };
 });
 
-const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
-	email: rawEmail,
-	code: rawCode,
-}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"]) {
+const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
+	{
+		email: rawEmail,
+		code: rawCode,
+	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
+	headers: Headers,
+) {
 	const email = normalizeEmail(rawEmail);
 	const code = rawCode.trim();
 
@@ -519,6 +538,10 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
+
+	if (yield* Effect.promise(() => isEmailCodeVerifyLimited(email, headers))) {
+		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	}
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
@@ -532,32 +555,21 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 		if (!verificationToken) return "missing" as const;
 
-		if (verificationToken.expires.valueOf() < Date.now()) {
-			await db
-				.delete(Db.verificationTokens)
-				.where(eq(Db.verificationTokens.identifier, identifier));
-			return "expired" as const;
-		}
-
-		if (verificationToken.token !== token) {
-			await db
-				.delete(Db.verificationTokens)
-				.where(eq(Db.verificationTokens.identifier, identifier));
-			return "invalid" as const;
-		}
-
-		const result = await db
+		const claim = await db
 			.delete(Db.verificationTokens)
 			.where(
 				and(
-					eq(Db.verificationTokens.identifier, identifier),
-					eq(Db.verificationTokens.token, token),
+					eq(Db.verificationTokens.identifier, verificationToken.identifier),
+					eq(Db.verificationTokens.token, verificationToken.token),
 				),
 			);
 
-		return getAffectedRows(result) === 1
-			? ("verified" as const)
-			: ("used" as const);
+		if (getAffectedRows(claim) !== 1) return "used" as const;
+		if (verificationToken.expires.valueOf() < Date.now()) {
+			return "expired" as const;
+		}
+		if (verificationToken.token !== token) return "invalid" as const;
+		return "verified" as const;
 	});
 
 	if (verificationStatus !== "verified") {
@@ -1978,9 +1990,17 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 			.from(Db.comments)
 			.leftJoin(Db.users, eq(Db.comments.authorId, Db.users.id))
 			.where(
-				commentId
-					? and(eq(Db.comments.videoId, videoId), eq(Db.comments.id, commentId))
-					: eq(Db.comments.videoId, videoId),
+				and(
+					// MobileComment's response schema only decodes text/emoji; a media
+					// comment row here would ParseError the whole response.
+					inArray(Db.comments.type, ["text", "emoji"]),
+					commentId
+						? and(
+								eq(Db.comments.videoId, videoId),
+								eq(Db.comments.id, commentId),
+							)
+						: eq(Db.comments.videoId, videoId),
+				),
 			)
 			.orderBy(Db.comments.createdAt),
 	);
@@ -2010,7 +2030,9 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 	return visibleRows.map((row) => ({
 		id: row.id,
 		videoId: row.videoId,
-		type: row.type,
+		// Safe: the query filters to these two types (media comments are hidden
+		// from the mobile API until its schema learns about them).
+		type: row.type as "text" | "emoji",
 		content: row.content,
 		timestamp: row.timestamp,
 		parentCommentId: row.parentCommentId,
@@ -2094,6 +2116,22 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	const id = Comment.CommentId.make(nanoId());
 	const now = new Date();
 	const database = yield* Database;
+	if (parentCommentId) {
+		const [parent] = yield* database.use((db) =>
+			db
+				.select({ id: Db.comments.id })
+				.from(Db.comments)
+				.where(
+					and(
+						eq(Db.comments.id, parentCommentId),
+						eq(Db.comments.videoId, videoId),
+						eq(Db.comments.type, "text"),
+					),
+				)
+				.limit(1),
+		);
+		if (!parent) return yield* Effect.fail(new HttpApiError.NotFound());
+	}
 	yield* database.use((db) =>
 		db.insert(Db.comments).values({
 			id,
@@ -2374,7 +2412,7 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 				source: { type: "webMP4" },
 				bucket: Option.getOrNull(writable.bucketId),
 				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+				public: await getNewVideoPublic(user.activeOrganizationId),
 				duration: download.durationSeconds,
 				width: download.width,
 				height: download.height,
@@ -2457,30 +2495,29 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
-	const videoId = yield* repo.create({
-		ownerId: user.id,
-		orgId: organizationId,
-		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-		source: { type: "webMP4" },
-		bucketId: writable.bucketId,
-		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.fromNullable(input.width),
-		height: Option.fromNullable(input.height),
-		duration: Option.fromNullable(input.durationSeconds),
-		metadata: Option.none(),
-		transcriptionStatus: Option.none(),
-	});
-
-	yield* database.use((db) =>
-		db.insert(Db.videoUploads).values({
-			videoId,
-			total: input.contentLength ?? 0,
-			mode: "singlepart",
-		}),
+	const videoId = yield* repo.create(
+		{
+			ownerId: user.id,
+			orgId: organizationId,
+			name: getUploadTitle(input.fileName),
+			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			source: { type: "webMP4" },
+			bucketId: writable.bucketId,
+			storageIntegrationId: writable.storageIntegrationId,
+			folderId: Option.fromNullable(folderId),
+			width: Option.fromNullable(input.width),
+			height: Option.fromNullable(input.height),
+			duration: Option.fromNullable(input.durationSeconds),
+			metadata: Option.none(),
+			transcriptionStatus: Option.none(),
+		},
+		{
+			initialUpload: {
+				total: input.contentLength ?? 0,
+				mode: "singlepart",
+			},
+		},
 	);
-
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
 		contentType: input.contentType,
@@ -2552,28 +2589,28 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		user.id,
 		organizationId,
 	);
-	const videoId = yield* repo.create({
-		ownerId: user.id,
-		orgId: organizationId,
-		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-		source: { type: "desktopSegments" },
-		bucketId: writable.bucketId,
-		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.some(input.width),
-		height: Option.some(input.height),
-		duration: Option.none(),
-		metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
-		transcriptionStatus: Option.none(),
-	});
-
-	yield* database.use((db) =>
-		db.insert(Db.videoUploads).values({
-			videoId,
-			total: 0,
-			mode: "singlepart",
-		}),
+	const videoId = yield* repo.create(
+		{
+			ownerId: user.id,
+			orgId: organizationId,
+			name: getUploadTitle(input.fileName),
+			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			source: { type: "desktopSegments" },
+			bucketId: writable.bucketId,
+			storageIntegrationId: writable.storageIntegrationId,
+			folderId: Option.fromNullable(folderId),
+			width: Option.some(input.width),
+			height: Option.some(input.height),
+			duration: Option.none(),
+			metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
+			transcriptionStatus: Option.none(),
+		},
+		{
+			initialUpload: {
+				total: 0,
+				mode: "singlepart",
+			},
+		},
 	);
 
 	return {
@@ -2756,14 +2793,16 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								serverEnv().APPLE_CLIENT_ID && serverEnv().APPLE_CLIENT_SECRET,
 							),
 							googleAuthAvailable: Boolean(serverEnv().GOOGLE_CLIENT_ID),
-							workosAuthAvailable: Boolean(serverEnv().WORKOS_CLIENT_ID),
+							workosAuthAvailable: Boolean(
+								serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY,
+							),
 						}),
 					)
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* getCurrentUser;
-								if (Option.isNone(user)) {
+								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =
 										Mobile.createMobileSessionLoginRedirectUrl({
 											deploymentOrigin: getDeploymentOrigin(),
@@ -2795,11 +2834,15 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("requestEmailSession", ({ payload }) =>
-						withMappedErrors(requestEmailSession(payload.email)),
+					.handle("requestEmailSession", ({ payload, request }) =>
+						withMappedErrors(
+							requestEmailSession(payload.email, toHeaders(request.headers)),
+						),
 					)
-					.handle("verifyEmailSession", ({ payload }) =>
-						withMappedErrors(verifyEmailSession(payload)),
+					.handle("verifyEmailSession", ({ payload, request }) =>
+						withMappedErrors(
+							verifyEmailSession(payload, toHeaders(request.headers)),
+						),
 					)
 					.handle("revokeSession", ({ headers }) =>
 						withMappedErrors(
@@ -2922,13 +2965,19 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
-										.set({ name: title })
+										.set({
+											name: title,
+											metadata: sql`JSON_SET(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), '$.titleManuallyEdited', true)`,
+										})
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
 											),
 										),
+								);
+								yield* Effect.promise(() =>
+									enqueueVideoStorageNameSync(path.id),
 								);
 								yield* Effect.sync(() => {
 									revalidatePath("/dashboard/caps");
@@ -2965,6 +3014,11 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
+								yield* Effect.sync(() => {
+									revalidatePath("/dashboard/caps");
+									revalidatePath("/dashboard/shared-caps");
+									revalidatePath(`/s/${path.id}`);
+								});
 								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),

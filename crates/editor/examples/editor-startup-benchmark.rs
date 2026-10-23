@@ -32,6 +32,18 @@ fn percentile(data: &[f64], p: f64) -> f64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+fn clone_shared_device(
+    shared: &cap_rendering::SharedWgpuDevice,
+) -> cap_rendering::SharedWgpuDevice {
+    cap_rendering::SharedWgpuDevice {
+        instance: shared.instance.clone(),
+        adapter: shared.adapter.clone(),
+        device: shared.device.clone(),
+        queue: shared.queue.clone(),
+        is_software_adapter: shared.is_software_adapter,
+    }
+}
+
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
 }
@@ -43,6 +55,7 @@ fn push_stage(stages: &mut Vec<(&'static str, f64)>, name: &'static str, start: 
 
 async fn profile_startup_stages(
     recording_path: PathBuf,
+    shared_device: Option<cap_rendering::SharedWgpuDevice>,
 ) -> Result<Vec<(&'static str, f64)>, String> {
     let mut stages = Vec::new();
     let total_start = Instant::now();
@@ -64,15 +77,23 @@ async fn profile_startup_stages(
     )?);
     push_stage(&mut stages, "recordings metadata", &mut stage_start);
 
-    let render_constants = Arc::new(
+    let render_constants = Arc::new(if let Some(shared) = shared_device {
+        RenderVideoConstants::new_with_device(
+            shared,
+            &recordings.segments,
+            recording_meta.clone(),
+            (**meta).clone(),
+        )
+        .map_err(|e| format!("Failed to create render constants: {e}"))?
+    } else {
         RenderVideoConstants::new(
             &recordings.segments,
             recording_meta.clone(),
             (**meta).clone(),
         )
         .await
-        .map_err(|e| format!("Failed to create render constants: {e}"))?,
-    );
+        .map_err(|e| format!("Failed to create render constants: {e}"))?
+    });
     push_stage(&mut stages, "render constants", &mut stage_start);
 
     let layers_rx = start_renderer_layers_creation(&render_constants, &project);
@@ -100,13 +121,20 @@ async fn profile_startup_stages(
     Ok(stages)
 }
 
-async fn run_stage_profile(recording_path: PathBuf, runs: usize) {
+async fn run_stage_profile(
+    recording_path: PathBuf,
+    runs: usize,
+    shared_device: Option<&cap_rendering::SharedWgpuDevice>,
+) {
     let mut stage_values: Vec<(&'static str, Vec<f64>)> = Vec::new();
 
     for _ in 0..runs {
-        let stages = profile_startup_stages(recording_path.clone())
-            .await
-            .expect("Failed to profile startup stages");
+        let stages = profile_startup_stages(
+            recording_path.clone(),
+            shared_device.map(clone_shared_device),
+        )
+        .await
+        .expect("Failed to profile startup stages");
 
         for (stage_idx, (name, value)) in stages.into_iter().enumerate() {
             if stage_values.len() <= stage_idx {
@@ -165,6 +193,10 @@ async fn main() {
         })
         .unwrap_or(0);
     let profile_stages = has_flag(&args, "--profile-stages");
+    let profile_stages_only = has_flag(&args, "--profile-stages-only");
+    let prewarm_fonts = has_flag(&args, "--prewarm-fonts");
+    let shared_device_mode = has_flag(&args, "--shared-device");
+    let prewarm_renderer = has_flag(&args, "--prewarm-renderer");
     let resolution_base = cap_project::XY::new(1248, 702);
 
     println!("{}", "=".repeat(64));
@@ -174,6 +206,57 @@ async fn main() {
     println!("Runs: {runs}");
     println!("Preview frame: {preview_frame}");
     println!("Profile stages: {profile_stages}");
+    println!("Profile stages only: {profile_stages_only}");
+    if prewarm_fonts {
+        let started = Instant::now();
+        tokio::task::spawn_blocking(cap_rendering::prewarm_fonts)
+            .await
+            .expect("Font preparation failed");
+        println!(
+            "Font preparation before startup timing: {:.3}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    let mut shared_device = None;
+    if prewarm_renderer {
+        let started = Instant::now();
+        tokio::task::spawn_blocking(cap_rendering::prewarm_fonts)
+            .await
+            .expect("Font preparation failed");
+        let shared = cap_rendering::create_shared_device()
+            .await
+            .expect("Failed to create shared device");
+        let (device, queue, software) = (
+            shared.device.clone(),
+            shared.queue.clone(),
+            shared.is_software_adapter,
+        );
+        let mut layers = tokio::task::spawn_blocking(move || {
+            cap_rendering::RendererLayers::new_with_options(&device, &queue, software)
+        })
+        .await
+        .expect("Renderer warmup failed");
+        cap_rendering::prewarm_first_frame(clone_shared_device(&shared), &mut layers)
+            .await
+            .expect("Renderer warmup frame failed");
+        drop(layers);
+        shared_device = Some(shared);
+        println!(
+            "Renderer warmup before startup timing: {:.3}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    if profile_stages_only {
+        if shared_device_mode && shared_device.is_none() {
+            shared_device = Some(
+                cap_rendering::create_shared_device()
+                    .await
+                    .expect("Failed to create shared device"),
+            );
+        }
+        run_stage_profile(recording_path, runs, shared_device.as_ref()).await;
+        return;
+    }
 
     let mut values_ms = Vec::with_capacity(runs);
     let mut preview_values_ms = Vec::with_capacity(runs);
@@ -186,13 +269,20 @@ async fn main() {
 
         let (frame_tx, frame_rx) = mpsc::channel::<()>();
         let start = Instant::now();
+        if (shared_device_mode || prewarm_renderer) && shared_device.is_none() {
+            shared_device = Some(
+                cap_rendering::create_shared_device()
+                    .await
+                    .expect("Failed to create shared device"),
+            );
+        }
         let editor = EditorInstance::new(
             recording_path.clone(),
             |_| {},
             Box::new(move |_: EditorFrameOutput, _: FrameLayout| {
                 let _ = frame_tx.send(());
             }),
-            None,
+            shared_device.as_ref().map(clone_shared_device),
         )
         .await
         .expect("Failed to create editor instance");
@@ -204,11 +294,10 @@ async fn main() {
             .preview_tx
             .send(Some((preview_frame, fps, resolution_base)))
             .expect("Failed to request preview frame");
-        let preview_elapsed = if frame_rx.recv_timeout(Duration::from_secs(10)).is_ok() {
-            preview_start.elapsed().as_secs_f64() * 1000.0
-        } else {
-            f64::INFINITY
-        };
+        frame_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("Preview did not produce a frame within 10 seconds");
+        let preview_elapsed = preview_start.elapsed().as_secs_f64() * 1000.0;
         preview_values_ms.push(preview_elapsed);
 
         editor.dispose().await;
@@ -251,6 +340,6 @@ async fn main() {
     );
 
     if profile_stages {
-        run_stage_profile(recording_path, runs).await;
+        run_stage_profile(recording_path, runs, shared_device.as_ref()).await;
     }
 }

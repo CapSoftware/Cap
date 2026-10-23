@@ -6,7 +6,7 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -27,6 +27,7 @@ import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { importVideoFromPicker, showImportError } from "~/utils/importMedia";
 import { openRecordingFolder } from "~/utils/recording";
+import { createRecordingThumbnail } from "~/utils/recording-thumbnail";
 import {
 	commands,
 	events,
@@ -41,7 +42,6 @@ type Recording = {
 	meta: RecordingMetaWithMetadata;
 	path: string;
 	prettyName: string;
-	thumbnailPath: string;
 };
 
 const Tabs = [
@@ -80,13 +80,11 @@ const recordingsQuery = queryOptions<Recording[]>({
 		const recordings = await Promise.all(
 			result.map(async (file) => {
 				const [path, meta] = file;
-				const thumbnailPath = `${path}/screenshots/display.jpg`;
 
 				return {
 					meta,
 					path,
 					prettyName: meta.pretty_name,
-					thumbnailPath,
 				};
 			}),
 		);
@@ -329,6 +327,11 @@ function RecordingItem(props: {
 	uploadProgress: number | undefined;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
+	const thumbnail = createRecordingThumbnail(() => props.recording.path);
+	createEffect(() => {
+		thumbnail();
+		setImageExists(true);
+	});
 	const mode = () => props.recording.meta.mode;
 	const firstLetterUpperCase = () =>
 		mode().charAt(0).toUpperCase() + mode().slice(1);
@@ -357,9 +360,7 @@ function RecordingItem(props: {
 					<img
 						class="object-cover rounded-sm size-12"
 						alt="Recording thumbnail"
-						src={`${convertFileSrc(
-							props.recording.thumbnailPath,
-						)}?t=${Date.now()}`}
+						src={thumbnail()}
 						onError={() => setImageExists(false)}
 					/>
 				</Show>
