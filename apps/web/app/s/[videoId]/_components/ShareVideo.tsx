@@ -21,6 +21,7 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
@@ -84,6 +85,7 @@ export const ShareVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
 		areCaptionsDisabled?: boolean;
+		captionsInitiallyOff?: boolean;
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		/** Timeline view scrubs on the deck below the video, not in it. */
@@ -98,6 +100,7 @@ export const ShareVideo = forwardRef<
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
+		callToAction?: ShareCallToAction | null;
 	}
 >(
 	(
@@ -107,6 +110,7 @@ export const ShareVideo = forwardRef<
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
+			captionsInitiallyOff = false,
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
@@ -119,6 +123,7 @@ export const ShareVideo = forwardRef<
 			recordingStopped = false,
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
+			callToAction = null,
 		},
 		ref,
 	) => {
@@ -553,6 +558,7 @@ export const ShareVideo = forwardRef<
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
+							captionsInitiallyOff={captionsInitiallyOff}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
 							disableReactionStamps={areReactionStampsDisabled ?? false}
 							externalTimeline={externalTimeline}
@@ -575,6 +581,7 @@ export const ShareVideo = forwardRef<
 								liveVttContent != null
 							}
 							canRetryProcessing={canRetryProcessing}
+							callToAction={callToAction}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -589,6 +596,7 @@ export const ShareVideo = forwardRef<
 							externalTimeline={externalTimeline}
 							controlsPortalEl={controlsPortalEl}
 							disableCaptions={areCaptionsDisabled ?? false}
+							captionsInitiallyOff={captionsInitiallyOff}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
@@ -607,6 +615,7 @@ export const ShareVideo = forwardRef<
 								liveVttContent != null
 							}
 							canRetryProcessing={canRetryProcessing}
+							callToAction={callToAction}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

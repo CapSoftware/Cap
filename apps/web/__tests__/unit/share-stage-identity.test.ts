@@ -65,7 +65,7 @@ vi.mock("next/image", async () => {
 });
 
 vi.mock("next/navigation", () => ({
-	useSearchParams: () => new URLSearchParams(),
+	useSearchParams: () => new URLSearchParams(window.location.search),
 	useRouter: () => ({ refresh: () => undefined }),
 }));
 
@@ -75,6 +75,10 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@/actions/videos/get-status", () => ({
 	getVideoStatus: async () => ({}),
+}));
+
+vi.mock("@/app/(org)/dashboard/_components/Navbar/server", () => ({
+	updateActiveOrganization: vi.fn(),
 }));
 
 vi.mock("@/app/s/[videoId]/_components/CaptionContext", () => ({
@@ -91,7 +95,18 @@ vi.mock("@/app/s/[videoId]/_components/ShareVideo", async () => {
 
 vi.mock("@/app/s/[videoId]/_components/Sidebar", async () => {
 	const { createElement } = await import("react");
-	return { Sidebar: () => createElement("div", { "data-sidebar": "" }) };
+	return {
+		Sidebar: ({ onCollapse }: { onCollapse?: () => void }) =>
+			createElement(
+				"div",
+				{ "data-sidebar": "" },
+				createElement(
+					"button",
+					{ type: "button", onClick: onCollapse },
+					"Hide sidebar",
+				),
+			),
+	};
 });
 
 vi.mock("@/app/s/[videoId]/_components/Toolbar", async () => {
@@ -140,26 +155,155 @@ const createProps = (
 });
 
 const findButton = (container: HTMLElement, label: string) =>
-	Array.from(container.querySelectorAll("button")).find(
-		(button) => button.textContent === label,
+	Array.from(container.querySelectorAll("button")).find((button) =>
+		button.textContent?.endsWith(label),
 	);
 
 /** The stage wrapper is three levels above the `<video>`: player -> inset box -> card -> stage. */
 const stageOf = (video: Element | null) =>
 	video?.parentElement?.parentElement?.parentElement ?? null;
 
-describe("Share view toggle", () => {
+describe("Share", () => {
 	beforeAll(() => {
 		actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		document.body.replaceChildren();
+		window.localStorage.clear();
 		window.history.replaceState(window.history.state, "", "/s/video-id");
 	});
 
 	afterAll(() => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+	});
+
+	it.each(["loadedmetadata", "canplay"])(
+		"seeks a timestamp link when %s arrives after five seconds",
+		async (readyEvent) => {
+			vi.useFakeTimers();
+			window.history.replaceState(null, "", "/s/video-id?t=42");
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+
+			try {
+				await act(async () => {
+					root.render(createElement(Share, createProps()));
+				});
+
+				const video = container.querySelector("video");
+				if (!video) throw new Error("Share video did not mount");
+				expect(video.currentTime).toBe(0);
+
+				await act(async () => {
+					vi.advanceTimersByTime(5000);
+					Object.defineProperty(video, "duration", { value: 60 });
+					video.dispatchEvent(new Event(readyEvent));
+				});
+
+				expect(video.currentTime).toBe(42);
+				video.currentTime = 50;
+				video.dispatchEvent(new Event("loadedmetadata"));
+				video.dispatchEvent(new Event("canplay"));
+				expect(video.currentTime).toBe(50);
+			} finally {
+				await act(async () => root.unmount());
+			}
+		},
+	);
+
+	it("keeps the sidebar open after mounting with an old collapsed preference", async () => {
+		window.localStorage.setItem("cap_share_rail_collapsed", "true");
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+
+		await act(async () => {
+			root.render(createElement(Share, createProps()));
+		});
+
+		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
+			false,
+		);
+		expect(
+			container
+				.querySelector("aside > div")
+				?.classList.contains("lg:invisible"),
+		).toBe(false);
+		expect(findButton(container, "Show sidebar")).toBeUndefined();
+
+		await act(async () => {
+			root.unmount();
+		});
+	});
+
+	it("preserves the sidebar and player while collapsing, without persisting to another visit", async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		let root = createRoot(container);
+
+		await act(async () => {
+			root.render(createElement(Share, createProps()));
+		});
+
+		const sidebar = container.querySelector("[data-sidebar]");
+		const video = container.querySelector("[data-share-video]");
+		expect(sidebar).not.toBeNull();
+		expect(video).not.toBeNull();
+
+		await act(async () => {
+			findButton(container, "Hide sidebar")?.click();
+		});
+
+		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
+			true,
+		);
+		expect(
+			container
+				.querySelector("aside > div")
+				?.classList.contains("lg:invisible"),
+		).toBe(true);
+		expect(container.querySelector("[data-sidebar]")).toBe(sidebar);
+		expect(container.querySelector("[data-share-video]")).toBe(video);
+		const reopen = findButton(container, "Show sidebar");
+		expect(reopen).toBeDefined();
+		expect(reopen?.getAttribute("aria-controls")).toBe(
+			container.querySelector("aside")?.id,
+		);
+		expect(reopen?.getAttribute("aria-expanded")).toBe("false");
+		expect(window.localStorage.getItem("cap_share_rail_collapsed")).toBeNull();
+
+		await act(async () => {
+			reopen?.click();
+		});
+
+		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
+			false,
+		);
+		expect(container.querySelector("[data-sidebar]")).toBe(sidebar);
+		expect(container.querySelector("[data-share-video]")).toBe(video);
+
+		await act(async () => {
+			findButton(container, "Hide sidebar")?.click();
+		});
+		await act(async () => {
+			root.unmount();
+		});
+		root = createRoot(container);
+		await act(async () => {
+			root.render(createElement(Share, createProps()));
+		});
+
+		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
+			false,
+		);
+		expect(findButton(container, "Show sidebar")).toBeUndefined();
+
+		await act(async () => {
+			root.unmount();
+		});
 	});
 
 	it("keeps the same stage and video element across view changes", async () => {

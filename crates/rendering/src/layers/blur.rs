@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::SourceBindGroups;
 use crate::ProjectUniforms;
 
 pub struct BlurLayer {
@@ -10,6 +11,20 @@ pub struct BlurLayer {
     uniforms_buffer_v: wgpu::Buffer,
     pipeline: BlurPipeline,
     cached_uniforms: Option<BlurUniforms>,
+    result: Option<(BlurResultKey, wgpu::Texture)>,
+    bind_groups: SourceBindGroups,
+}
+
+/// Everything the blurred background depends on. While it matches, the
+/// previous frame's blurred background is still exact and two full-frame
+/// gaussian passes collapse into one texture copy. On a software rasterizer
+/// those passes are most of the frame's cost.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlurResultKey {
+    pub background_generation: u64,
+    pub blur_amount_bits: u64,
+    pub output_size: (u32, u32),
+    pub texture_size: (u32, u32),
 }
 
 impl BlurLayer {
@@ -39,7 +54,54 @@ impl BlurLayer {
             uniforms_buffer_v: make_buffer(1.0),
             pipeline: BlurPipeline::new(device),
             cached_uniforms: None,
+            result: None,
+            bind_groups: SourceBindGroups::default(),
         }
+    }
+
+    pub fn cached_result(&self, key: BlurResultKey) -> Option<&wgpu::Texture> {
+        self.result
+            .as_ref()
+            .filter(|(cached, _)| *cached == key)
+            .map(|(_, texture)| texture)
+    }
+
+    pub fn clear_result(&mut self) {
+        self.result = None;
+    }
+
+    #[cfg(test)]
+    pub fn has_cached_result(&self) -> bool {
+        self.result.is_some()
+    }
+
+    pub fn store_result(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        key: BlurResultKey,
+        source: &wgpu::Texture,
+    ) {
+        let size = source.size();
+        let reusable = self
+            .result
+            .take()
+            .map(|(_, texture)| texture)
+            .filter(|texture| texture.size() == size && texture.format() == source.format());
+        let texture = reusable.unwrap_or_else(|| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Blurred Background Cache"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: source.format(),
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        });
+        encoder.copy_texture_to_texture(source.as_image_copy(), texture.as_image_copy(), size);
+        self.result = Some((key, texture));
     }
 
     pub fn prepare(&mut self, queue: &wgpu::Queue, uniforms: &ProjectUniforms) {
@@ -73,39 +135,53 @@ impl BlurLayer {
         }
     }
 
+    pub fn retain_views(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.bind_groups.retain_views(views);
+    }
+
+    #[cfg(test)]
+    pub fn bind_groups_created(&self) -> usize {
+        self.bind_groups.created()
+    }
+
     pub fn render_h(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
-        self.render_pass(pass, device, source_texture, &self.uniforms_buffer_h);
+        self.render_pass(pass, device, source_texture, false);
     }
 
     pub fn render_v(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
-        self.render_pass(pass, device, source_texture, &self.uniforms_buffer_v);
+        self.render_pass(pass, device, source_texture, true);
     }
 
     fn render_pass(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
-        uniforms_buffer: &wgpu::Buffer,
+        vertical: bool,
     ) {
+        let uniforms_buffer = if vertical {
+            &self.uniforms_buffer_v
+        } else {
+            &self.uniforms_buffer_h
+        };
+        let bind_group = self
+            .bind_groups
+            .get_or_create(uniforms_buffer, source_texture, || {
+                self.pipeline
+                    .bind_group(device, uniforms_buffer, source_texture, &self.sampler)
+            });
         pass.set_pipeline(&self.pipeline.render_pipeline);
-        pass.set_bind_group(
-            0,
-            &self
-                .pipeline
-                .bind_group(device, uniforms_buffer, source_texture, &self.sampler),
-            &[],
-        );
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..4, 0..1);
     }
 }

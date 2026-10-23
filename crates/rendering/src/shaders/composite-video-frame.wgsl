@@ -337,7 +337,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
     }
 
-    // Screen Studio semantics: the user amount is baked into the LENGTH of
+    // Length-based semantics: the user amount is baked into the LENGTH of
     // the kernel (velocity vector / zoom ray) on the CPU side, and the output
     // is the fully blurred result — never a crossfade with the sharp frame
     // (a sharp copy mixed over a smear reads as ghosting, not motion). Alpha

@@ -11,6 +11,8 @@ use crate::{ProjectUniforms, RenderingError};
 use crate::iosurface_texture::{IOSurfaceTextureCache, import_metal_texture_to_wgpu_with_usage};
 #[cfg(target_os = "macos")]
 use cidre::{arc, cf, cv, io, mtl};
+#[cfg(target_os = "macos")]
+use foreign_types::ForeignType;
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
@@ -26,13 +28,82 @@ pub(crate) fn note_software_adapter_in_use() {
     SOFTWARE_ADAPTER_IN_USE.store(true, Ordering::Release);
 }
 
-fn gpu_buffer_wait_timeout() -> std::time::Duration {
+fn gpu_buffer_wait_timeout(export_deadlines: bool) -> std::time::Duration {
+    if export_deadlines {
+        return crate::decoder::EXPORT_STALL_LIMIT;
+    }
     let secs = if SOFTWARE_ADAPTER_IN_USE.load(Ordering::Acquire) {
         SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS
     } else {
         GPU_BUFFER_WAIT_TIMEOUT_SECS
     };
     std::time::Duration::from_secs(secs)
+}
+
+/// How long the readback of `frame_number` has been waited for.
+fn readback_waited(started: Instant, frame_number: u32) -> std::time::Duration {
+    #[cfg(test)]
+    {
+        started.elapsed() + readback_delay::injected(frame_number)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = frame_number;
+        started.elapsed()
+    }
+}
+
+/// Test seam: makes one frame's readback look older than it is, to exercise
+/// the readback deadlines without waiting for them.
+#[cfg(test)]
+pub(crate) mod readback_delay {
+    use std::{cell::RefCell, collections::HashMap, time::Duration};
+
+    thread_local! {
+        static DELAYS: RefCell<HashMap<u32, Duration>> = RefCell::new(HashMap::new());
+    }
+
+    pub(crate) fn inject(frame_number: u32, delay: Duration) {
+        DELAYS.with(|delays| delays.borrow_mut().insert(frame_number, delay));
+    }
+
+    pub(super) fn injected(frame_number: u32) -> Duration {
+        DELAYS.with(|delays| {
+            delays
+                .borrow()
+                .get(&frame_number)
+                .copied()
+                .unwrap_or_default()
+        })
+    }
+}
+
+async fn wait_for_submission(
+    device: &wgpu::Device,
+    submission: &wgpu::SubmissionIndex,
+    started: Instant,
+    frame_number: u32,
+    timeout: std::time::Duration,
+) -> bool {
+    loop {
+        let Some(remaining) = timeout.checked_sub(readback_waited(started, frame_number)) else {
+            return false;
+        };
+        let device = device.clone();
+        let submission = submission.clone();
+        let waited = tokio::time::timeout(
+            remaining,
+            tokio::task::spawn_blocking(move || {
+                device.poll(wgpu::PollType::WaitForSubmissionIndex(submission))
+            }),
+        )
+        .await;
+        match waited {
+            Ok(Ok(Ok(_))) => return readback_waited(started, frame_number) <= timeout,
+            Ok(Ok(Err(wgpu::PollError::Timeout))) => {}
+            _ => return false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -146,14 +217,17 @@ pub struct RgbaToNv12Converter {
     cached_width: u32,
     cached_height: u32,
     cached_stride: u32,
-    cached_bind_groups: Option<[wgpu::BindGroup; 2]>,
-    cached_texture_view: Option<wgpu::TextureView>,
-    cached_texture_ptr: usize,
+    source_bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
     surface_output: bool,
     #[cfg(target_os = "macos")]
     surface_ring: Option<Nv12SurfaceRing>,
     #[cfg(all(test, target_os = "macos"))]
     surface_setup_should_fail: bool,
+    #[cfg(target_os = "linux")]
+    external_ring: Option<crate::linux_gpu::SharedRing>,
+    #[cfg(target_os = "linux")]
+    external_output: bool,
+    export_deadlines: bool,
 }
 
 /// An NV12 CVPixelBuffer produced by the GPU converter, ready for zero-copy
@@ -492,15 +566,30 @@ impl RgbaToNv12Converter {
             cached_width: 0,
             cached_height: 0,
             cached_stride: 0,
-            cached_bind_groups: None,
-            cached_texture_view: None,
-            cached_texture_ptr: 0,
+            source_bind_groups: Vec::new(),
             surface_output: false,
             #[cfg(target_os = "macos")]
             surface_ring: None,
             #[cfg(all(test, target_os = "macos"))]
             surface_setup_should_fail: false,
+            #[cfg(target_os = "linux")]
+            external_ring: None,
+            #[cfg(target_os = "linux")]
+            external_output: false,
+            export_deadlines: false,
         }
+    }
+
+    /// See `FrameRenderer::use_export_deadlines`.
+    pub fn use_export_deadlines(&mut self) {
+        self.export_deadlines = true;
+    }
+
+    /// Keep NV12 output on the GPU: the compute result is copied into a ring
+    /// of CUDA-shared buffers for NVENC instead of being read back.
+    #[cfg(target_os = "linux")]
+    pub fn enable_external_output(&mut self) {
+        self.external_output = true;
     }
 
     /// Emit IOSurface-backed NV12 CVPixelBuffers instead of CPU readbacks:
@@ -611,9 +700,47 @@ impl RgbaToNv12Converter {
         self.cached_width = width;
         self.cached_height = height;
         self.cached_stride = stride;
-        self.cached_bind_groups = None;
-        self.cached_texture_view = None;
-        self.cached_texture_ptr = 0;
+        self.source_bind_groups.clear();
+    }
+
+    fn source_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        source_texture: &wgpu::Texture,
+    ) -> Option<wgpu::BindGroup> {
+        if let Some((_, bind_group)) = self
+            .source_bind_groups
+            .iter()
+            .find(|(texture, _)| texture == source_texture)
+        {
+            return Some(bind_group.clone());
+        }
+        let nv12_buffer = self.nv12_buffer.as_ref()?;
+        let source_view = source_texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to NV12 Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: nv12_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        if self.source_bind_groups.len() >= 2 {
+            self.source_bind_groups.remove(0);
+        }
+        self.source_bind_groups
+            .push((source_texture.clone(), bind_group.clone()));
+        Some(bind_group)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -634,6 +761,9 @@ impl RgbaToNv12Converter {
 
         self.ensure_buffers(device, width, height);
 
+        let Some(bind_group) = self.source_bind_group(device, source_texture) else {
+            return Ok(false);
+        };
         let Some(nv12_buffer) = self.nv12_buffer.as_ref() else {
             return Ok(false);
         };
@@ -652,51 +782,13 @@ impl RgbaToNv12Converter {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        let texture_ptr = source_texture as *const wgpu::Texture as usize;
-        let needs_rebind =
-            self.cached_texture_ptr != texture_ptr || self.cached_bind_groups.is_none();
-
-        if needs_rebind {
-            let source_view = source_texture.create_view(&Default::default());
-
-            let make_bind_group = |view: &wgpu::TextureView| {
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("RGBA to NV12 Bind Group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: nv12_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: self.params_buffer.as_entire_binding(),
-                        },
-                    ],
-                })
-            };
-
-            let bg0 = make_bind_group(&source_view);
-            let bg1 = make_bind_group(&source_view);
-
-            self.cached_texture_view = Some(source_view);
-            self.cached_bind_groups = Some([bg0, bg1]);
-            self.cached_texture_ptr = texture_ptr;
-        }
-
-        let bind_groups = self.cached_bind_groups.as_ref().unwrap();
-
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("RGBA to NV12 Conversion"),
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_groups[readback_idx], &[]);
+            pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
         }
 
@@ -746,8 +838,46 @@ impl RgbaToNv12Converter {
                 y_stride,
                 frame_number,
                 frame_rate,
+                export_deadlines: self.export_deadlines,
             }));
             return Ok(true);
+        }
+
+        #[cfg(target_os = "linux")]
+        if self.external_output {
+            let nv12_size = self.nv12_size(width, height);
+            if self
+                .external_ring
+                .as_ref()
+                .is_none_or(|ring| ring.size() < nv12_size)
+            {
+                // Frames in flight between renderer and encoder hold slots,
+                // so the ring covers both channels' depth.
+                match crate::linux_gpu::SharedRing::new(device, 16, nv12_size, "NV12 CUDA Output") {
+                    Ok(ring) => self.external_ring = Some(ring),
+                    Err(error) => {
+                        tracing::warn!(%error, "CUDA output unavailable, reading frames back");
+                        self.external_output = false;
+                    }
+                }
+            }
+            if let Some(ring) = self.external_ring.as_mut().filter(|_| self.external_output) {
+                let slot = ring
+                    .acquire(device)
+                    .ok_or(RenderingError::BufferMapWaitingFailed)?;
+                encoder.copy_buffer_to_buffer(nv12_buffer, 0, &slot.shared.buffer, 0, nv12_size);
+                self.pending = Some(PendingNv12Output::External(PendingNv12External {
+                    slot: Some(slot),
+                    completed: None,
+                    width,
+                    height,
+                    y_stride,
+                    frame_number,
+                    frame_rate,
+                    export_deadlines: self.export_deadlines,
+                }));
+                return Ok(true);
+            }
         }
 
         let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
@@ -758,13 +888,15 @@ impl RgbaToNv12Converter {
         encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
 
         self.pending = Some(PendingNv12Output::Readback(PendingNv12Readback {
-            rx: None,
+            armed: None,
+            mapped: false,
             buffer: readback_buffer,
             width,
             height,
             y_stride,
             frame_number,
             frame_rate,
+            export_deadlines: self.export_deadlines,
         }));
 
         Ok(true)
@@ -772,8 +904,8 @@ impl RgbaToNv12Converter {
 
     /// Arms the pending output after its command buffer has been submitted:
     /// readback mode starts the buffer map, surface mode registers a
-    /// submitted-work-done completion flag.
-    pub fn after_submit(&mut self, queue: &wgpu::Queue) {
+    /// native queue completion signal.
+    pub fn after_submit(&mut self, queue: &wgpu::Queue, submission: &wgpu::SubmissionIndex) {
         match self.pending.as_mut() {
             Some(PendingNv12Output::Readback(pending)) => {
                 let (tx, rx) = oneshot::channel();
@@ -783,10 +915,34 @@ impl RgbaToNv12Converter {
                     .map_async(wgpu::MapMode::Read, move |result| {
                         let _ = tx.send(result);
                     });
-                pending.rx = Some(rx);
+                pending.armed = Some((rx, submission.clone()));
+                pending.mapped = true;
             }
             #[cfg(target_os = "macos")]
             Some(PendingNv12Output::Surface(pending)) => {
+                pending.completed = unsafe {
+                    queue.as_hal::<wgpu_hal::api::Metal, _, _>(|queue| {
+                        let queue = queue?.as_raw().lock();
+                        let queue = &*queue.as_ptr().cast::<mtl::CmdQueue>();
+                        let mut marker = queue.new_cmd_buf()?;
+                        let (tx, rx) = oneshot::channel();
+                        let mut tx = Some(tx);
+                        let mut handler =
+                            mtl::CmdBufHandler::new1(move |buffer: &mut mtl::CmdBuf| {
+                                if let Some(tx) = tx.take() {
+                                    let _ =
+                                        tx.send(buffer.status() == mtl::CmdBufStatus::Completed);
+                                }
+                            });
+                        // This queue marker completes after the surface copy without requiring wgpu polling.
+                        marker.add_completed_handler(&mut handler);
+                        marker.commit();
+                        Some(rx)
+                    })
+                };
+            }
+            #[cfg(target_os = "linux")]
+            Some(PendingNv12Output::External(pending)) => {
                 let completed = Arc::new(AtomicBool::new(false));
                 let callback_completed = Arc::clone(&completed);
                 queue.on_submitted_work_done(move || {
@@ -808,6 +964,80 @@ pub enum PendingNv12Output {
     Readback(PendingNv12Readback),
     #[cfg(target_os = "macos")]
     Surface(PendingNv12Surface),
+    #[cfg(target_os = "linux")]
+    External(PendingNv12External),
+}
+
+#[cfg(target_os = "linux")]
+pub struct PendingNv12External {
+    slot: Option<Arc<crate::linux_gpu::RingSlot>>,
+    completed: Option<Arc<AtomicBool>>,
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    frame_number: u32,
+    frame_rate: u32,
+    export_deadlines: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PendingNv12External {
+    fn drop(&mut self) {
+        // Abandoned before hand-off (error or flush): free the slot.
+        if let Some(slot) = self.slot.take() {
+            slot.release();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl PendingNv12External {
+    async fn wait(mut self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+        let Some(completed) = self.completed.clone() else {
+            return Err(RenderingError::BufferMapWaitingFailed);
+        };
+        let started = Instant::now();
+        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
+        let mut poll_count = 0u32;
+        loop {
+            if readback_waited(started, self.frame_number) > timeout_duration {
+                return Err(RenderingError::BufferMapWaitingFailed);
+            }
+            if completed.load(Ordering::Acquire) {
+                break;
+            }
+            device.poll(wgpu::PollType::Poll)?;
+            poll_count += 1;
+            if poll_count < 10 {
+                tokio::task::yield_now().await;
+            } else if poll_count < 100 {
+                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+        let slot = self
+            .slot
+            .take()
+            .ok_or(RenderingError::BufferMapWaitingFailed)?;
+        let target_time_ns =
+            (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
+        Ok(Nv12RenderedFrame {
+            data: SharedNv12Buffer::from_vec(Vec::new()),
+            width: self.width,
+            height: self.height,
+            y_stride: self.y_stride,
+            frame_number: self.frame_number,
+            target_time_ns,
+            format: GpuOutputFormat::Nv12,
+            gpu: Some(Arc::new(crate::linux_gpu::GpuNv12Output {
+                slot,
+                y_stride: self.y_stride,
+                uv_offset: u64::from(self.y_stride) * u64::from(self.height),
+                uv_stride: self.y_stride,
+            })),
+        })
+    }
 }
 
 impl PendingNv12Output {
@@ -820,6 +1050,8 @@ impl PendingNv12Output {
             Self::Readback(pending) => pending.wait_with_pool(device, buffer_pool).await,
             #[cfg(target_os = "macos")]
             Self::Surface(pending) => pending.wait(device).await,
+            #[cfg(target_os = "linux")]
+            Self::External(pending) => pending.wait(device).await,
         }
     }
 }
@@ -827,12 +1059,13 @@ impl PendingNv12Output {
 #[cfg(target_os = "macos")]
 pub struct PendingNv12Surface {
     pixel_buffer: arc::R<cv::PixelBuf>,
-    completed: Option<Arc<AtomicBool>>,
+    completed: Option<oneshot::Receiver<bool>>,
     width: u32,
     height: u32,
     y_stride: u32,
     frame_number: u32,
     frame_rate: u32,
+    export_deadlines: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -840,26 +1073,24 @@ unsafe impl Send for PendingNv12Surface {}
 
 #[cfg(target_os = "macos")]
 impl PendingNv12Surface {
-    async fn wait(self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
-        let Some(completed) = self.completed.as_ref() else {
-            return Err(RenderingError::BufferMapWaitingFailed);
-        };
+    async fn wait(mut self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+        let completed = self
+            .completed
+            .take()
+            .ok_or(RenderingError::BufferMapWaitingFailed)?;
         let started = Instant::now();
-        let mut poll_count = 0u32;
-        while !completed.load(Ordering::Acquire) {
-            if started.elapsed() > gpu_buffer_wait_timeout() {
-                return Err(RenderingError::BufferMapWaitingFailed);
-            }
-            device.poll(wgpu::PollType::Poll)?;
-            poll_count += 1;
-            if poll_count < 10 {
-                tokio::task::yield_now().await;
-            } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-            } else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
+        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
+        let remaining = timeout_duration
+            .checked_sub(readback_waited(started, self.frame_number))
+            .ok_or(RenderingError::BufferMapWaitingFailed)?;
+        let succeeded = tokio::time::timeout(remaining, completed)
+            .await
+            .map_err(|_| RenderingError::BufferMapWaitingFailed)?
+            .map_err(|_| RenderingError::BufferMapWaitingFailed)?;
+        if !succeeded || readback_waited(started, self.frame_number) > timeout_duration {
+            return Err(RenderingError::BufferMapWaitingFailed);
         }
+        device.poll(wgpu::PollType::Poll)?;
 
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
@@ -873,23 +1104,37 @@ impl PendingNv12Surface {
             target_time_ns,
             format: GpuOutputFormat::Nv12,
             surface: Some(Nv12Surface(self.pixel_buffer)),
+            #[cfg(target_os = "linux")]
+            gpu: None,
         })
     }
 }
 
 pub struct PendingNv12Readback {
-    rx: Option<oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    armed: Option<(
+        oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+        wgpu::SubmissionIndex,
+    )>,
+    mapped: bool,
     buffer: Arc<wgpu::Buffer>,
     pub width: u32,
     pub height: u32,
     pub y_stride: u32,
     pub frame_number: u32,
     pub frame_rate: u32,
+    export_deadlines: bool,
 }
 
 impl PendingNv12Readback {
-    fn cancel(self) -> RenderingError {
-        self.buffer.unmap();
+    fn unmap(&mut self) {
+        if self.mapped {
+            self.mapped = false;
+            self.buffer.unmap();
+        }
+    }
+
+    fn cancel(mut self) -> RenderingError {
+        self.unmap();
         RenderingError::BufferMapWaitingFailed
     }
 
@@ -898,42 +1143,25 @@ impl PendingNv12Readback {
         device: &wgpu::Device,
         buffer_pool: Option<&mut NV12BufferPool>,
     ) -> Result<Nv12RenderedFrame, RenderingError> {
-        let Some(mut rx) = self.rx.take() else {
+        let Some((mut rx, submission)) = self.armed.take() else {
             return Err(self.cancel());
         };
 
-        let mut poll_count = 0u32;
-        let start_time = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout();
-
-        loop {
-            if start_time.elapsed() > timeout_duration {
-                return Err(self.cancel());
+        let completed = wait_for_submission(
+            device,
+            &submission,
+            Instant::now(),
+            self.frame_number,
+            gpu_buffer_wait_timeout(self.export_deadlines),
+        )
+        .await;
+        match (completed, rx.try_recv()) {
+            (true, Ok(Ok(()))) => {}
+            (_, Ok(Err(error))) => {
+                self.unmap();
+                return Err(RenderingError::BufferMapFailed(error));
             }
-
-            match rx.try_recv() {
-                Ok(result) => match result {
-                    Ok(()) => break,
-                    Err(error) => {
-                        self.buffer.unmap();
-                        return Err(RenderingError::BufferMapFailed(error));
-                    }
-                },
-                Err(oneshot::error::TryRecvError::Empty) => {
-                    device.poll(wgpu::PollType::Poll)?;
-                    poll_count += 1;
-                    if poll_count < 10 {
-                        tokio::task::yield_now().await;
-                    } else if poll_count < 100 {
-                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    }
-                }
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(self.cancel());
-                }
-            }
+            _ => return Err(self.cancel()),
         }
 
         let buffer_slice = self.buffer.slice(..);
@@ -949,7 +1177,7 @@ impl PendingNv12Readback {
         };
 
         drop(data);
-        self.buffer.unmap();
+        self.unmap();
 
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
@@ -964,7 +1192,15 @@ impl PendingNv12Readback {
             format: GpuOutputFormat::Nv12,
             #[cfg(target_os = "macos")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            gpu: None,
         })
+    }
+}
+
+impl Drop for PendingNv12Readback {
+    fn drop(&mut self) {
+        self.unmap();
     }
 }
 
@@ -986,6 +1222,10 @@ pub struct Nv12RenderedFrame {
     /// `data` is empty (surface-output mode; macOS export path).
     #[cfg(target_os = "macos")]
     pub surface: Option<Nv12Surface>,
+    /// When set, the frame lives in a CUDA-shared GPU buffer and `data` is
+    /// empty (Linux GPU render hosts, NVENC input).
+    #[cfg(target_os = "linux")]
+    pub gpu: Option<Arc<crate::linux_gpu::GpuNv12Output>>,
 }
 
 impl Nv12RenderedFrame {
@@ -1000,6 +1240,8 @@ impl Nv12RenderedFrame {
             format: self.format,
             #[cfg(target_os = "macos")]
             surface: self.surface.clone(),
+            #[cfg(target_os = "linux")]
+            gpu: self.gpu.clone(),
         }
     }
 
@@ -1364,28 +1606,19 @@ impl PendingSurface {
     pub async fn wait(
         self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        submission: wgpu::SubmissionIndex,
     ) -> Result<SurfaceFrame, RenderingError> {
-        let completed = Arc::new(AtomicBool::new(false));
-        let callback_completed = Arc::clone(&completed);
-        queue.on_submitted_work_done(move || {
-            callback_completed.store(true, Ordering::Release);
-        });
         let started = Instant::now();
-        let mut poll_count = 0u32;
-        while !completed.load(Ordering::Acquire) {
-            if started.elapsed() > gpu_buffer_wait_timeout() {
-                return Err(RenderingError::BufferMapWaitingFailed);
-            }
-            device.poll(wgpu::PollType::Poll)?;
-            poll_count += 1;
-            if poll_count < 10 {
-                tokio::task::yield_now().await;
-            } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-            } else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
+        if !wait_for_submission(
+            device,
+            &submission,
+            started,
+            self.frame_number,
+            gpu_buffer_wait_timeout(false),
+        )
+        .await
+        {
+            return Err(RenderingError::BufferMapWaitingFailed);
         }
 
         Ok(SurfaceFrame {
@@ -1402,12 +1635,15 @@ impl PendingSurface {
 pub struct PendingReadback {
     readiness_phase: Option<crate::readiness::Phase>,
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    submission: wgpu::SubmissionIndex,
+    mapped: bool,
     buffer: Arc<wgpu::Buffer>,
     padded_bytes_per_row: u32,
     width: u32,
     height: u32,
     frame_number: u32,
     frame_rate: u32,
+    export_deadlines: bool,
 }
 
 fn active_readback_byte_len(
@@ -1420,59 +1656,82 @@ fn active_readback_byte_len(
         .filter(|&active_bytes| active_bytes > 0 && active_bytes <= mapped_bytes)
 }
 
+fn reserve_readback(
+    data: &mut Vec<u8>,
+    active_bytes: usize,
+    frame_number: u32,
+) -> Result<(), RenderingError> {
+    let allocation_failed = || RenderingError::ReadbackAllocationFailed { frame_number };
+    let capacity = active_bytes.checked_add(24).ok_or_else(allocation_failed)?;
+    #[cfg(test)]
+    let capacity = readback_allocation_failure::capacity(frame_number, capacity);
+    data.try_reserve_exact(capacity)
+        .map_err(|_| allocation_failed())
+}
+
+#[cfg(test)]
+pub(crate) mod readback_allocation_failure {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FRAME: Cell<Option<u32>> = const { Cell::new(None) };
+    }
+
+    pub(crate) fn inject(frame_number: u32) {
+        FRAME.set(Some(frame_number));
+    }
+
+    pub(super) fn capacity(frame_number: u32, capacity: usize) -> usize {
+        if FRAME.get() == Some(frame_number) {
+            // Fail one reservation without exhausting memory; a retry would succeed.
+            FRAME.set(None);
+            usize::MAX
+        } else {
+            capacity
+        }
+    }
+}
+
 impl PendingReadback {
-    fn cancel(&self) -> RenderingError {
-        self.buffer.unmap();
+    fn unmap(&mut self) {
+        if self.mapped {
+            self.mapped = false;
+            self.buffer.unmap();
+        }
+    }
+
+    fn cancel(&mut self) -> RenderingError {
+        self.unmap();
         RenderingError::BufferMapWaitingFailed
     }
 
-    pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
-        let mut poll_count = 0u32;
+    async fn wait(
+        mut self,
+        device: &wgpu::Device,
+        recycled: &mut RecycledReadbackFrames,
+    ) -> Result<RenderedFrame, RenderingError> {
         let start_time = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout();
-
-        loop {
-            if start_time.elapsed() > timeout_duration {
+        let completed = wait_for_submission(
+            device,
+            &self.submission,
+            start_time,
+            self.frame_number,
+            gpu_buffer_wait_timeout(self.export_deadlines),
+        )
+        .await;
+        match (completed, self.rx.try_recv()) {
+            (true, Ok(Ok(()))) => {}
+            (_, Ok(Err(error))) => {
+                self.unmap();
+                return Err(RenderingError::BufferMapFailed(error));
+            }
+            _ => {
                 tracing::error!(
                     frame_number = self.frame_number,
-                    elapsed_secs = start_time.elapsed().as_secs(),
-                    poll_count = poll_count,
-                    "GPU buffer mapping timed out after {}s",
-                    timeout_duration.as_secs()
+                    elapsed_ms = start_time.elapsed().as_millis() as u64,
+                    "GPU buffer mapping timed out or was abandoned"
                 );
                 return Err(self.cancel());
-            }
-
-            match self.rx.try_recv() {
-                Ok(result) => match result {
-                    Ok(()) => break,
-                    Err(error) => {
-                        self.buffer.unmap();
-                        return Err(RenderingError::BufferMapFailed(error));
-                    }
-                },
-                Err(oneshot::error::TryRecvError::Empty) => {
-                    device.poll(wgpu::PollType::Poll)?;
-                    poll_count += 1;
-                    if poll_count < 10 {
-                        tokio::task::yield_now().await;
-                    } else if poll_count < 100 {
-                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    }
-                    if poll_count.is_multiple_of(10000) {
-                        tracing::warn!(
-                            frame_number = self.frame_number,
-                            poll_count = poll_count,
-                            elapsed_ms = start_time.elapsed().as_millis() as u64,
-                            "GPU buffer mapping taking longer than expected"
-                        );
-                    }
-                }
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(self.cancel());
-                }
             }
         }
 
@@ -1490,16 +1749,21 @@ impl PendingReadback {
                     )
                 })
         else {
-            self.buffer.unmap();
+            self.unmap();
             return Err(RenderingError::BufferMapWaitingFailed);
         };
+        let mut data_vec = if self.export_deadlines {
+            recycled.take().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        reserve_readback(&mut data_vec, active_bytes, self.frame_number)?;
         let buffer_slice = self.buffer.slice(..active_bytes as u64);
         let data = buffer_slice.get_mapped_range();
-        let mut data_vec = Vec::with_capacity(active_bytes + 24);
         data_vec.extend_from_slice(&data);
 
         drop(data);
-        self.buffer.unmap();
+        self.unmap();
 
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
@@ -1507,8 +1771,12 @@ impl PendingReadback {
         if let Some(phase) = self.readiness_phase.take() {
             phase.finish("frame_ready");
         }
+        let data = Arc::new(data_vec);
+        if self.export_deadlines {
+            recycled.keep(&data);
+        }
         Ok(RenderedFrame {
-            data: Arc::new(data_vec),
+            data,
             padded_bytes_per_row: self.padded_bytes_per_row,
             width: self.width,
             height: self.height,
@@ -1518,14 +1786,47 @@ impl PendingReadback {
     }
 }
 
+impl Drop for PendingReadback {
+    fn drop(&mut self) {
+        self.unmap();
+    }
+}
+
+const MAX_RECYCLED_READBACK_FRAMES: usize = 8;
+
+/// Export readbacks are handed downstream as `Arc<Vec<u8>>`; keeping a clone
+/// lets the next readback reuse a frame once every consumer has dropped it.
+#[derive(Default)]
+struct RecycledReadbackFrames(Vec<Arc<Vec<u8>>>);
+
+impl RecycledReadbackFrames {
+    fn take(&mut self) -> Option<Vec<u8>> {
+        let index = self
+            .0
+            .iter()
+            .position(|data| Arc::strong_count(data) == 1)?;
+        let mut data = Arc::try_unwrap(self.0.swap_remove(index)).ok()?;
+        data.clear();
+        Some(data)
+    }
+
+    fn keep(&mut self, data: &Arc<Vec<u8>>) {
+        if self.0.len() < MAX_RECYCLED_READBACK_FRAMES {
+            self.0.push(Arc::clone(data));
+        }
+    }
+}
+
 pub struct PipelinedGpuReadback {
     buffers: [Arc<wgpu::Buffer>; 3],
+    recycled_frames: RecycledReadbackFrames,
     buffer_size: u64,
     current_index: usize,
     pending: Option<PendingReadback>,
     needs_resize: bool,
     pending_resize_size: u64,
     readiness_first_output: bool,
+    export_deadlines: bool,
 }
 
 impl PipelinedGpuReadback {
@@ -1541,12 +1842,14 @@ impl PipelinedGpuReadback {
 
         Self {
             buffers: [make_buffer(), make_buffer(), make_buffer()],
+            recycled_frames: RecycledReadbackFrames::default(),
             buffer_size: initial_size,
             current_index: 0,
             pending: None,
             needs_resize: false,
             pending_resize_size: 0,
             readiness_first_output: true,
+            export_deadlines: false,
         }
     }
 
@@ -1653,7 +1956,7 @@ impl PipelinedGpuReadback {
         if let Some(phase) = &phase {
             phase.mark("submit_start");
         }
-        queue.submit(std::iter::once(render_encoder.finish()));
+        let submission = queue.submit(std::iter::once(render_encoder.finish()));
         if let Some(phase) = &phase {
             phase.mark("submit_returned");
         }
@@ -1669,13 +1972,16 @@ impl PipelinedGpuReadback {
 
         self.pending = Some(PendingReadback {
             readiness_phase: phase,
+            mapped: true,
             rx,
+            submission,
             buffer,
             padded_bytes_per_row,
             width: uniforms.output_size.0,
             height: uniforms.output_size.1,
             frame_number: uniforms.frame_number,
             frame_rate: uniforms.frame_rate,
+            export_deadlines: self.export_deadlines,
         });
 
         Ok(())
@@ -1693,6 +1999,16 @@ pub struct RenderSession {
     pipelined_readback: Option<PipelinedGpuReadback>,
     texture_width: u32,
     texture_height: u32,
+    export_deadlines: bool,
+}
+
+/// The blurred-background cache copies its result into the current session
+/// texture.
+fn session_texture_usage() -> wgpu::TextureUsages {
+    wgpu::TextureUsages::TEXTURE_BINDING
+        | wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::COPY_SRC
+        | wgpu::TextureUsages::COPY_DST
 }
 
 impl RenderSession {
@@ -1709,9 +2025,7 @@ impl RenderSession {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage: session_texture_usage(),
                 label: Some("Intermediate Texture"),
                 view_formats: &[],
             })
@@ -1729,9 +2043,16 @@ impl RenderSession {
             pipelined_readback: None,
             texture_width: width,
             texture_height: height,
+            export_deadlines: false,
         };
         phase.finish("returned");
         session
+    }
+
+    /// See `FrameRenderer::use_export_deadlines`.
+    pub fn with_export_deadlines(mut self, export_deadlines: bool) -> Self {
+        self.export_deadlines = export_deadlines;
+        self
     }
 
     pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -1758,9 +2079,7 @@ impl RenderSession {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage: session_texture_usage(),
                 label: Some("Intermediate Texture"),
                 view_formats: &[],
             })
@@ -1865,6 +2184,22 @@ pub fn padded_bytes_per_row(output_size: (u32, u32)) -> u32 {
     (padded_bytes_per_row + 3) & !3
 }
 
+async fn drain_submitted_work(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let finished = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&finished);
+    queue.on_submitted_work_done(move || {
+        flag.store(true, Ordering::Release);
+    });
+    let start = Instant::now();
+    let timeout = gpu_buffer_wait_timeout(false);
+    while !finished.load(Ordering::Acquire) && start.elapsed() <= timeout {
+        if device.poll(wgpu::PollType::Poll).is_err() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
 pub async fn finish_encoder(
     session: &mut RenderSession,
     device: &wgpu::Device,
@@ -1887,17 +2222,13 @@ pub async fn finish_encoder_timed(
     let mut timings = FinishEncoderTimings::default();
     let initial_buffer_size =
         (padded_bytes_per_row(uniforms.output_size) * uniforms.output_size.1) as u64;
+    let export_deadlines = session.export_deadlines;
     let readback = session
         .pipelined_readback
         .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
+    readback.export_deadlines = export_deadlines;
 
-    let wait_start = Instant::now();
-    let previous_frame = if let Some(prev) = readback.take_pending() {
-        Some(prev.wait(device).await?)
-    } else {
-        None
-    };
-    timings.wait_previous_duration = wait_start.elapsed();
+    let previous = readback.take_pending();
 
     let resize_start = Instant::now();
     readback.perform_resize_if_needed(device);
@@ -1912,6 +2243,20 @@ pub async fn finish_encoder_timed(
     let submit_start = Instant::now();
     readback.submit_readback(device, queue, texture, uniforms, encoder)?;
     timings.submit_readback_duration = submit_start.elapsed();
+
+    let wait_start = Instant::now();
+    let previous_frame = if let Some(prev) = previous {
+        match prev.wait(device, &mut readback.recycled_frames).await {
+            Ok(frame) => Some(frame),
+            Err(error) => {
+                drain_submitted_work(device, queue).await;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    timings.wait_previous_duration = wait_start.elapsed();
 
     Ok((previous_frame, timings))
 }
@@ -1928,11 +2273,7 @@ pub async fn finish_encoder_nv12_pooled(
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
-    let previous_frame = if let Some(prev) = nv12_converter.take_pending() {
-        Some(prev.wait_with_pool(device, buffer_pool).await?)
-    } else {
-        None
-    };
+    let previous = nv12_converter.take_pending();
 
     let texture = if session.current_is_left {
         &session.textures.0
@@ -1953,17 +2294,9 @@ pub async fn finish_encoder_nv12_pooled(
         )
         .await?;
 
-    if submitted {
-        queue.submit(std::iter::once(encoder.finish()));
-        nv12_converter.after_submit(queue);
-
-        Ok(previous_frame)
-    } else if let Some(prev_frame) = previous_frame {
-        queue.submit(std::iter::once(encoder.finish()));
-        Ok(Some(prev_frame))
-    } else {
+    if !submitted && previous.is_none() {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
-        Ok(rgba_frame.map(|f| Nv12RenderedFrame {
+        return Ok(rgba_frame.map(|f| Nv12RenderedFrame {
             data: SharedNv12Buffer::from_arc_vec(f.data),
             width: f.width,
             height: f.height,
@@ -1973,7 +2306,26 @@ pub async fn finish_encoder_nv12_pooled(
             format: GpuOutputFormat::Rgba,
             #[cfg(target_os = "macos")]
             surface: None,
-        }))
+            #[cfg(target_os = "linux")]
+            gpu: None,
+        }));
+    }
+
+    let submission = queue.submit(std::iter::once(encoder.finish()));
+    if submitted {
+        nv12_converter.after_submit(queue, &submission);
+    }
+
+    if let Some(prev) = previous {
+        match prev.wait_with_pool(device, buffer_pool).await {
+            Ok(frame) => Ok(Some(frame)),
+            Err(error) => {
+                drain_submitted_work(device, queue).await;
+                Err(error)
+            }
+        }
+    } else {
+        Ok(None)
     }
 }
 
@@ -2007,11 +2359,11 @@ pub async fn finish_encoder_bgra_surface(
     if let Some(phase) = &phase {
         phase.mark("submit_start");
     }
-    queue.submit(std::iter::once(encoder.finish()));
+    let submission = queue.submit(std::iter::once(encoder.finish()));
     if let Some(phase) = &phase {
         phase.mark("submit_returned");
     }
-    let result = pending.wait(device, queue).await;
+    let result = pending.wait(device, submission).await;
     if let Some(phase) = phase {
         phase.finish(if result.is_ok() {
             "frame_ready"
@@ -2028,7 +2380,7 @@ pub async fn flush_pending_readback(
 ) -> Option<Result<RenderedFrame, RenderingError>> {
     let readback = session.pipelined_readback.as_mut()?;
     if let Some(pending) = readback.take_pending() {
-        Some(pending.wait(device).await)
+        Some(pending.wait(device, &mut readback.recycled_frames).await)
     } else {
         None
     }
@@ -2036,7 +2388,83 @@ pub async fn flush_pending_readback(
 
 #[cfg(test)]
 mod readback_output_tests {
-    use super::active_readback_byte_len;
+    use super::*;
+
+    #[test]
+    fn readback_allocation_reserves_frame_and_metadata_without_changing_length() {
+        let mut data = Vec::new();
+        reserve_readback(&mut data, 8_294_400, 7).expect("readback allocation");
+        assert!(data.is_empty());
+        assert!(data.capacity() >= 8_294_424);
+    }
+
+    #[test]
+    fn readback_allocation_overflow_is_terminal() {
+        for active_bytes in [usize::MAX, usize::MAX - 24] {
+            assert!(matches!(
+                reserve_readback(&mut Vec::new(), active_bytes, 7),
+                Err(RenderingError::ReadbackAllocationFailed { frame_number: 7 })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn readback_allocation_failure_unmaps_the_buffer() {
+        let instance = crate::create_wgpu_instance_sync();
+        let Ok(adapter) = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+        else {
+            eprintln!("No graphics adapter available for readback cleanup test");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("graphics device");
+        let buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback allocation cleanup"),
+            size: 256,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        for fail in [true, false] {
+            let submission = queue.submit([]);
+            let (tx, rx) = oneshot::channel();
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    tx.send(result).expect("map receiver");
+                });
+            let pending = PendingReadback {
+                readiness_phase: None,
+                rx,
+                submission,
+                mapped: true,
+                buffer: buffer.clone(),
+                padded_bytes_per_row: 256,
+                width: 64,
+                height: 1,
+                frame_number: 7,
+                frame_rate: 30,
+                export_deadlines: false,
+            };
+            if fail {
+                readback_allocation_failure::inject(7);
+                assert!(matches!(
+                    pending.wait(&device, &mut Default::default()).await,
+                    Err(RenderingError::ReadbackAllocationFailed { frame_number: 7 })
+                ));
+            } else {
+                let frame = pending
+                    .wait(&device, &mut Default::default())
+                    .await
+                    .expect("remapped readback");
+                assert_eq!(frame.data.as_slice(), &[0; 256]);
+                assert!(frame.data.capacity() >= 280);
+            }
+        }
+    }
 
     #[test]
     fn oversized_readback_buffers_only_include_active_rows() {
@@ -2082,6 +2510,40 @@ mod readback_output_tests {
     fn empty_readback_dimensions_do_not_access_the_buffer() {
         assert_eq!(active_readback_byte_len(2_048, 0, 3_594_240), None);
         assert_eq!(active_readback_byte_len(0, 270, 3_594_240), None);
+    }
+}
+
+#[cfg(test)]
+mod recycled_readback_tests {
+    use super::*;
+
+    #[test]
+    fn readback_frames_are_reused_only_after_every_consumer_drops_them() {
+        let mut recycled = RecycledReadbackFrames::default();
+        let frame = Arc::new(vec![7u8; 64]);
+        let address = frame.as_ptr();
+        recycled.keep(&frame);
+        let held = frame.clone();
+        drop(frame);
+        assert!(recycled.take().is_none());
+        drop(held);
+        let reused = recycled.take().expect("released frame is reused");
+        assert!(reused.is_empty());
+        assert!(reused.capacity() >= 64);
+        assert_eq!(reused.as_ptr(), address);
+        assert!(recycled.take().is_none());
+    }
+
+    #[test]
+    fn recycled_readback_frames_are_bounded() {
+        let mut recycled = RecycledReadbackFrames::default();
+        let frames: Vec<_> = (0..MAX_RECYCLED_READBACK_FRAMES + 2)
+            .map(|_| Arc::new(vec![0u8; 4]))
+            .collect();
+        for frame in &frames {
+            recycled.keep(frame);
+        }
+        assert_eq!(recycled.0.len(), MAX_RECYCLED_READBACK_FRAMES);
     }
 }
 
@@ -2162,14 +2624,51 @@ mod surface_output_tests {
                 .await
                 .expect("conversion submission")
         );
-        queue.submit(std::iter::once(encoder.finish()));
-        converter.after_submit(queue);
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        converter.after_submit(queue, &submission);
         converter
             .take_pending()
             .expect("conversion pending")
             .wait_with_pool(device, None)
             .await
             .expect("conversion completes")
+    }
+
+    #[tokio::test]
+    async fn surface_completion_wakes_without_device_polling() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let source = gradient_texture(&device, &queue, 64, 32);
+        let mut converter = RgbaToNv12Converter::new(&device);
+        converter.enable_surface_output();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(
+            converter
+                .submit_conversion(&device, &queue, &mut encoder, &source, 64, 32, 0, 30)
+                .await
+                .expect("surface conversion")
+        );
+        let submission = queue.submit([encoder.finish()]);
+        converter.after_submit(&queue, &submission);
+        let Some(PendingNv12Output::Surface(mut pending)) = converter.take_pending() else {
+            panic!("expected surface output");
+        };
+        let completed = pending.completed.take().expect("native completion signal");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), completed)
+                .await
+                .expect("native completion without polling")
+                .expect("completion sender")
+        );
+        let (tx, rx) = oneshot::channel();
+        tx.send(false).expect("completion receiver");
+        pending.completed = Some(rx);
+        assert!(matches!(
+            pending.wait(&device).await,
+            Err(RenderingError::BufferMapWaitingFailed)
+        ));
     }
 
     fn assert_surface_matches_cpu(
@@ -2213,6 +2712,51 @@ mod surface_output_tests {
     /// the readback path maps, so every pixel must match byte-for-byte. Both
     /// strides differ (4-aligned vs 256-aligned vs the IOSurface's own), which
     /// is exactly what this guards.
+    #[tokio::test]
+    async fn alternating_sources_reuse_their_bind_groups() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (width, height) = (64, 32);
+        let first = gradient_texture(&device, &queue, width, height);
+        let second = gradient_texture(&device, &queue, width, height);
+        queue.write_texture(
+            second.as_image_copy(),
+            &[200u8, 40, 90, 255].repeat((width * height) as usize),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let mut expected = Vec::new();
+        for source in [&first, &second] {
+            let mut converter = RgbaToNv12Converter::new(&device);
+            expected.push(convert(&device, &queue, &mut converter, source, width, height).await);
+        }
+        assert_ne!(expected[0].data.as_ref(), expected[1].data.as_ref());
+
+        let mut converter = RgbaToNv12Converter::new(&device);
+        let mut cached = Vec::new();
+        for round in 0..3 {
+            for (source, expected) in [&first, &second].into_iter().zip(&expected) {
+                let frame = convert(&device, &queue, &mut converter, source, width, height).await;
+                assert_eq!(frame.data.as_ref(), expected.data.as_ref());
+            }
+            if round == 0 {
+                cached = converter.source_bind_groups.clone();
+            }
+            assert_eq!(converter.source_bind_groups.len(), 2);
+            assert!(converter.source_bind_groups == cached);
+        }
+    }
+
     #[tokio::test]
     async fn the_surface_output_matches_the_readback_output() {
         let Some((device, queue)) = device() else {
@@ -2389,7 +2933,7 @@ mod surface_output_tests {
         .await;
         assert!(surface_a.surface.is_some());
         assert!(resized_converter.surface_ring.is_some());
-        assert!(resized_converter.cached_bind_groups.is_some());
+        assert!(!resized_converter.source_bind_groups.is_empty());
         assert!(resized_converter.nv12_buffer.is_some());
         assert!(
             resized_converter
@@ -2565,9 +3109,9 @@ mod surface_output_tests {
                 )
                 .await
                 .expect("BGRA output");
-            queue.submit(std::iter::once(encoder.finish()));
+            let submission = queue.submit(std::iter::once(encoder.finish()));
             let frame = pending
-                .wait(&device, &queue)
+                .wait(&device, submission)
                 .await
                 .expect("BGRA completion");
             expected.push(bgra_first_pixel(&frame));
@@ -2594,8 +3138,8 @@ mod surface_output_tests {
             .encode(device, &mut encoder, source, width, height, 0, 30)
             .await
             .expect("BGRA submission");
-        queue.submit(std::iter::once(encoder.finish()));
-        pending.wait(device, queue).await.expect("BGRA output")
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        pending.wait(device, submission).await.expect("BGRA output")
     }
 
     #[tokio::test]
@@ -2717,7 +3261,7 @@ mod surface_output_tests {
             started.elapsed(),
             nv12.surface_ring.as_ref().unwrap().slots.len()
         );
-        assert_eq!(nv12.surface_ring.as_ref().unwrap().slots.len(), 1);
+        assert!(nv12.surface_ring.as_ref().unwrap().slots.len() <= 2);
         let started = Instant::now();
         for _ in 0..120 {
             drop(convert_bgra(&device, &queue, &mut bgra, &source, 1920, 1080).await);
@@ -2727,6 +3271,6 @@ mod surface_output_tests {
             started.elapsed(),
             bgra.surface_ring.len()
         );
-        assert_eq!(bgra.surface_ring.len(), 1);
+        assert!(bgra.surface_ring.len() <= 2);
     }
 }

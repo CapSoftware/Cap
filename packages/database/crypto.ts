@@ -6,7 +6,9 @@ import { serverEnv } from "@cap/env";
 const ALGORITHM = { name: "AES-GCM", length: 256 };
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
-const KEY_LENGTH = 32;
+// Coolify 4.3.1+ generates SERVICE_HEX_32 values as 16 bytes; keys made
+// before that, and by `openssl rand -hex 32`, are 32 bytes.
+const KEY_LENGTHS = [16, 32];
 const ITERATIONS = 100000;
 
 const ENCRYPTION_KEY = () => {
@@ -15,11 +17,9 @@ const ENCRYPTION_KEY = () => {
 
 	try {
 		const keyBuffer = Buffer.from(key, "hex");
-		if (keyBuffer.length !== KEY_LENGTH) {
+		if (!KEY_LENGTHS.includes(keyBuffer.length)) {
 			throw new Error(
-				`Encryption key must be ${KEY_LENGTH} bytes (${
-					KEY_LENGTH * 2
-				} hex characters)`,
+				"Encryption key must be 16 or 32 bytes (32 or 64 hex characters)",
 			);
 		}
 	} catch (error: unknown) {

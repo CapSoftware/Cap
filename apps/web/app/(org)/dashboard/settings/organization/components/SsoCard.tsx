@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner";
 import {
 	confirmOrganizationSsoCheckout,
+	getOrganizationSsoInvoices,
 	getOrganizationSsoSettings,
 	type OrganizationSsoSettings,
 	openOrganizationSsoPortal,
@@ -33,11 +34,13 @@ import {
 	type SupportedCurrency,
 } from "@/utils/currency";
 
-type SsoAction = "checkout" | "portal" | "refresh" | "confirm";
+type SsoAction = "checkout" | "portal" | "invoices" | "refresh" | "confirm";
 
 const actionErrors: Record<SsoAction, string> = {
 	checkout: "We couldn't open checkout. Please try again or contact support.",
 	portal: "We couldn't open SSO setup. Please try again or contact support.",
+	invoices:
+		"We couldn't load SSO invoices. Please try again or contact support.",
 	refresh: "We couldn't refresh SSO status. Please try again.",
 	confirm:
 		"We couldn't confirm your SSO subscription yet. Refresh the status to try again, or contact support if you've been charged.",
@@ -60,6 +63,9 @@ export function SsoCard({
 		checkoutSessionId ? "confirm" : null,
 	);
 	const [error, setError] = useState<string | null>(null);
+	const [invoiceHistory, setInvoiceHistory] = useState<Awaited<
+		ReturnType<typeof getOrganizationSsoInvoices>
+	> | null>(null);
 	const [isPending, startTransition] = useTransition();
 	const actionInFlight = useRef(false);
 	const confirmationStarted = useRef<string | null>(null);
@@ -123,7 +129,12 @@ export function SsoCard({
 				} catch {
 					setError(actionErrors[action]);
 				} finally {
-					if (!succeeded || action === "refresh" || action === "confirm") {
+					if (
+						!succeeded ||
+						action === "refresh" ||
+						action === "confirm" ||
+						action === "invoices"
+					) {
 						actionInFlight.current = false;
 						setPendingAction(null);
 					}
@@ -423,6 +434,86 @@ export function SsoCard({
 						Ask your organization owner to add SAML SSO. Once subscribed, owners
 						and admins can configure it here.
 					</p>
+				)}
+
+				{settings.canManageBilling && settings.hasSubscription && (
+					<div className="flex flex-col gap-3">
+						<Button
+							type="button"
+							size="sm"
+							variant="gray"
+							className="w-fit"
+							disabled={busy}
+							spinner={pendingAction === "invoices"}
+							onClick={() => {
+								setInvoiceHistory(null);
+								runAction("invoices", async () => {
+									setInvoiceHistory(
+										await getOrganizationSsoInvoices(organizationId),
+									);
+								});
+							}}
+						>
+							View invoices
+						</Button>
+						{invoiceHistory && (
+							<div className="rounded-xl border border-gray-4 p-4">
+								<h3 className="text-sm font-medium text-gray-12">
+									SSO invoices
+								</h3>
+								{invoiceHistory.invoices.length ? (
+									<ul className="mt-3 flex flex-col gap-3">
+										{invoiceHistory.invoices.map((invoice) => (
+											<li
+												key={invoice.id}
+												className="flex flex-wrap items-center justify-between gap-2 text-sm"
+											>
+												<span className="text-gray-11">
+													{invoice.number ?? invoice.id}
+													{" · "}
+													{new Date(invoice.created * 1000).toLocaleDateString(
+														"en-GB",
+														{ timeZone: "UTC" },
+													)}
+												</span>
+												{invoice.pdfUrl ? (
+													<a
+														href={invoice.pdfUrl}
+														target="_blank"
+														rel="noopener noreferrer"
+														className="font-medium underline"
+													>
+														Download PDF
+														<span className="sr-only">
+															{" "}
+															for invoice {invoice.number ?? invoice.id}
+														</span>
+													</a>
+												) : (
+													<span className="text-gray-10">
+														PDF not available yet
+													</span>
+												)}
+											</li>
+										))}
+									</ul>
+								) : (
+									<p className="mt-2 text-sm text-gray-11">
+										No SSO invoices found.
+									</p>
+								)}
+								{invoiceHistory.hasMore && (
+									<p className="mt-3 text-sm text-gray-11">
+										Showing the latest 100 invoices. Contact{" "}
+										<a href="mailto:hello@cap.so" className="underline">
+											hello@cap.so
+										</a>{" "}
+										for older invoices.
+									</p>
+								)}
+							</div>
+						)}
+					</div>
 				)}
 
 				{isActive && settings.signInUrl && (

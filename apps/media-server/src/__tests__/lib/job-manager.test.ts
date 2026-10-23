@@ -6,7 +6,9 @@ import {
 	cleanupExpiredJobs,
 	createJob,
 	deleteJob,
+	extendJobLifetime,
 	getJob,
+	getJobTotals,
 	type JobProgress,
 	type RecordingWorkerAcknowledgement,
 	sendWebhook,
@@ -520,5 +522,85 @@ describe("job cleanup", () => {
 		expect(cleaned).toBe(1);
 		expect(currentJob?.phase).toBe("error");
 		expect(currentJob?.error).toContain("maximum lifetime of 60 minutes");
+	});
+});
+
+describe("job lifetime", () => {
+	test("extends the lifetime cap for long work without shortening it", () => {
+		const job = createTrackedJob("job-extended-lifetime");
+		const now = Date.now();
+		job.phase = "processing";
+		job.createdAt = now - 10 * 60 * 1000;
+
+		expect(extendJobLifetime(job.jobId, 60_000)).toBe(
+			job.createdAt + 60 * 60 * 1000,
+		);
+		const deadline = extendJobLifetime(job.jobId, 2 * 60 * 60 * 1000);
+		expect(deadline).toBeGreaterThanOrEqual(now + 2 * 60 * 60 * 1000);
+		expect(extendJobLifetime(job.jobId, 60_000)).toBe(deadline);
+
+		job.createdAt = now - 90 * 60 * 1000;
+		job.updatedAt = Date.now();
+		expect(cleanupExpiredJobs()).toBe(0);
+		expect(getJob(job.jobId)?.phase).toBe("processing");
+	});
+
+	test("keeps a hard upper bound on extended lifetimes", () => {
+		const job = createTrackedJob("job-capped-lifetime");
+		job.phase = "uploading";
+		job.createdAt = Date.now() - 10 * 60 * 1000;
+
+		expect(extendJobLifetime(job.jobId, 24 * 60 * 60 * 1000)).toBe(
+			job.createdAt + 4 * 60 * 60 * 1000,
+		);
+		expect(extendJobLifetime(job.jobId, Number.NaN)).toBeUndefined();
+		expect(extendJobLifetime(job.jobId, -1)).toBeUndefined();
+	});
+
+	test("expires a job past its extended deadline", () => {
+		const job = createTrackedJob("job-past-extended-lifetime");
+		const abortController = new AbortController();
+		updateJob(job.jobId, { phase: "processing", abortController });
+		job.createdAt = Date.now() - 10 * 60 * 1000;
+		extendJobLifetime(job.jobId, 2 * 60 * 60 * 1000);
+		job.createdAt -= 3 * 60 * 60 * 1000;
+		job.lifetimeDeadlineAt = Date.now() - 1;
+		job.updatedAt = Date.now();
+
+		expect(cleanupExpiredJobs()).toBe(1);
+		expect(job.phase).toBe("error");
+		expect(job.error).toContain("maximum lifetime");
+		expect(abortController.signal.aborted).toBe(true);
+	});
+
+	test("does not extend terminal jobs", () => {
+		const job = createTrackedJob("job-terminal-lifetime");
+		updateJob(job.jobId, { phase: "complete" });
+		expect(extendJobLifetime(job.jobId, 2 * 60 * 60 * 1000)).toBeUndefined();
+		expect(job.lifetimeDeadlineAt).toBeUndefined();
+	});
+});
+
+describe("job totals", () => {
+	test("counts created, terminal, and expired jobs", () => {
+		const before = getJobTotals();
+		const completed = createTrackedJob("job-total-complete");
+		const errored = createTrackedJob("job-total-error");
+		const cancelled = createTrackedJob("job-total-cancelled");
+		const stale = createTrackedJob("job-total-stale");
+		updateJob(completed.jobId, { phase: "complete" });
+		updateJob(completed.jobId, { phase: "error" });
+		updateJob(errored.jobId, { phase: "error" });
+		updateJob(cancelled.jobId, { phase: "cancelled" });
+		updateJob(stale.jobId, { phase: "processing" });
+		stale.updatedAt = Date.now() - 16 * 60 * 1000;
+		cleanupExpiredJobs();
+
+		const after = getJobTotals();
+		expect(after.created - before.created).toBe(4);
+		expect(after.completed - before.completed).toBe(1);
+		expect(after.errored - before.errored).toBe(2);
+		expect(after.cancelled - before.cancelled).toBe(1);
+		expect(after.expired - before.expired).toBe(1);
 	});
 });

@@ -30,6 +30,7 @@ import { notFound } from "next/navigation";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
+import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -52,6 +53,8 @@ export async function generateMetadata(
 						videoId,
 						name: video.name,
 						sourceType: video.source.type,
+						width: Option.getOrNull(video.width),
+						height: Option.getOrNull(video.height),
 						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 					}),
 					robots: "index, follow",
@@ -410,6 +413,11 @@ async function EmbedContent({
 			)}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
+			callToAction={
+				ownerIsProUser && !minimal
+					? parseShareCallToAction(video.settings)
+					: null
+			}
 		/>
 	);
 }

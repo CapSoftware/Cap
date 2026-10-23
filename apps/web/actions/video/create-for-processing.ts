@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
@@ -88,9 +88,8 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
-	await db()
-		.insert(videos)
-		.values({
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
 			name: videoTitle,
 			ownerId: user.id,
@@ -98,16 +97,17 @@ export async function createVideoForServerProcessing({
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(folderId ? { folderId } : {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		mode: "singlepart",
-		phase: "uploading",
-		processingProgress: 0,
-		rawFileKey,
+		await tx.insert(videoUploads).values({
+			videoId,
+			mode: "singlepart",
+			phase: "uploading",
+			processingProgress: 0,
+			rawFileKey,
+		});
 	});
 
 	revalidatePath("/dashboard/caps");

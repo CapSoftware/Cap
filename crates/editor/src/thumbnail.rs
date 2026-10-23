@@ -1,7 +1,7 @@
 use crate::{EditorInstance, editor::RendererTransitionInput};
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderedFrame, ZoomTransformTimeline};
-use std::{io::Write, path::Path};
+use std::{io::Write, path::Path, sync::Arc};
 
 const THUMBNAIL_SIZE: XY<u32> = XY { x: 640, y: 640 };
 const THUMBNAIL_FPS: u32 = 30;
@@ -53,6 +53,7 @@ impl EditorInstance {
         let Some((project, signature)) = pending else {
             return Ok(None);
         };
+        let project = Arc::new(project);
         let (source_time, segment) = project
             .get_segment_time(0.0)
             .ok_or("No first frame in the edited timeline")?;
@@ -165,7 +166,6 @@ fn save_thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn project() -> (tempfile::TempDir, Vec<u8>) {
         let root = tempfile::tempdir().unwrap();

@@ -173,12 +173,18 @@ pub fn cover_crop_geometry(orig_w: u32, orig_h: u32, size: u32) -> (u32, u32, u3
 
 /// `load_thumbnail_data`, ending in a PNG rather than raw RGBA -- muda hands
 /// its icon to AppKit as a PNG too (`PlatformIcon::to_nsimage`), so this is the
-/// same conversion one step earlier.
+/// same conversion one step earlier. A JPEG source starts from the Recents card
+/// thumbnail cache instead of the native-resolution original. That cache is
+/// itself JPEG and drops alpha, so anything else (a transparent screenshot PNG)
+/// still decodes directly.
 fn load_thumbnail_png(path: &Path) -> Option<Vec<u8>> {
-    use image::{GenericImageView, ImageEncoder, RgbaImage, imageops::FilterType};
+    use image::{GenericImageView, ImageEncoder, ImageFormat, RgbaImage, imageops::FilterType};
 
-    let bytes = std::fs::read(path).ok()?;
-    let img = image::load_from_memory(&bytes).ok()?;
+    let img = if ImageFormat::from_path(path).ok() == Some(ImageFormat::Jpeg) {
+        image::DynamicImage::ImageRgba8(library::thumbnail_rgba(path)?)
+    } else {
+        image::load_from_memory(&std::fs::read(path).ok()?).ok()?
+    };
     let (orig_w, orig_h) = img.dimensions();
     if orig_w == 0 || orig_h == 0 {
         return None;
@@ -687,6 +693,7 @@ mod mac {
         actions: Vec<TrayItem>,
         mode: Mode,
         previous: Vec<PreviousItem>,
+        previous_generation: u64,
         recording: bool,
     }
 
@@ -764,6 +771,7 @@ mod mac {
                 actions: Vec::new(),
                 mode,
                 previous: Vec::new(),
+                previous_generation: 0,
                 recording: false,
             };
             set_button_image(&tray, mode_icon(mode));
@@ -1036,13 +1044,17 @@ mod mac {
         if !cx.has_global::<Tray>() {
             return;
         }
+        let tray = cx.global_mut::<Tray>();
+        tray.previous_generation = tray.previous_generation.wrapping_add(1);
+        let generation = tray.previous_generation;
         cx.spawn(async move |cx| {
             let previous = cx
                 .background_executor()
                 .spawn(async { scan_previous(true) })
                 .await;
             cx.update(|cx| {
-                if !cx.has_global::<Tray>() {
+                if !cx.has_global::<Tray>() || cx.global::<Tray>().previous_generation != generation
+                {
                     return;
                 }
                 cx.global_mut::<Tray>().previous = previous;
@@ -1158,6 +1170,153 @@ mod tests {
         assert_eq!(cover_crop_geometry(424, 424, 32), (32, 32, 0, 0));
         // Smaller than the target still upscales to cover.
         assert_eq!(cover_crop_geometry(16, 8, 32), (64, 32, 16, 0));
+    }
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("cap-tray-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        root
+    }
+
+    fn bundle_display_jpg(bundle: &Path, width: u32, height: u32) -> PathBuf {
+        let screenshots = bundle.join("screenshots");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        let display = screenshots.join("display.jpg");
+        image::RgbImage::from_fn(width, height, |x, y| {
+            let noise = (x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663)) % 48;
+            image::Rgb([
+                (x * 255 / width) as u8 ^ noise as u8,
+                (y * 255 / height) as u8,
+                ((x + y) % 256) as u8,
+            ])
+        })
+        .save_with_format(&display, image::ImageFormat::Jpeg)
+        .unwrap();
+        display
+    }
+
+    fn cached_thumbnails(display: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(display.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("thumbnail-"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn previous_thumbnails_reuse_the_recents_cache() {
+        let root = temp_root("cache");
+        let display = bundle_display_jpg(&root.join("bundle.cap"), 1512, 982);
+
+        let cold = load_thumbnail_png(&display).expect("a thumbnail from the original");
+        let cold = image::load_from_memory(&cold).unwrap();
+        assert_eq!(
+            (cold.width(), cold.height()),
+            (THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+        );
+        let cached = cached_thumbnails(&display);
+        assert_eq!(cached.len(), 1, "the first scan fills the Recents cache");
+        assert_eq!(image::image_dimensions(&cached[0]).unwrap(), (392, 255));
+
+        let marker = image::Rgb([200, 30, 90]);
+        image::RgbImage::from_pixel(392, 255, marker)
+            .save_with_format(&cached[0], image::ImageFormat::Jpeg)
+            .unwrap();
+        let marker_bytes = std::fs::read(&cached[0]).unwrap();
+
+        let warm = load_thumbnail_png(&display).expect("a thumbnail from the cache");
+        assert_eq!(cached_thumbnails(&display), cached);
+        assert_eq!(
+            std::fs::read(&cached[0]).unwrap(),
+            marker_bytes,
+            "a hit rewrites nothing"
+        );
+        let warm = image::load_from_memory(&warm).unwrap().into_rgb8();
+        assert!(
+            warm.pixels().all(|pixel| pixel
+                .0
+                .iter()
+                .zip(marker.0)
+                .all(|(a, b)| a.abs_diff(b) <= 3)),
+            "the warm icon is built from the cached thumbnail, not the original"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn previous_thumbnails_keep_png_transparency_cold_and_warm() {
+        let root = temp_root("alpha");
+        std::fs::create_dir_all(&root).unwrap();
+        let png = root.join("screenshot.png");
+        image::RgbaImage::from_fn(800, 600, |x, _| {
+            if x < 400 {
+                image::Rgba([0, 0, 0, 0])
+            } else {
+                image::Rgba([220, 40, 40, 255])
+            }
+        })
+        .save_with_format(&png, image::ImageFormat::Png)
+        .unwrap();
+
+        for scan in ["cold", "warm"] {
+            let icon = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
+                .unwrap()
+                .into_rgba8();
+            assert!(
+                icon.get_pixel(2, 16)[3] < 8,
+                "{scan} scan lost the transparent half"
+            );
+            assert!(
+                icon.get_pixel(29, 16)[3] > 247,
+                "{scan} scan lost the opaque half"
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_previous_thumbnails() {
+        use std::time::Instant;
+
+        let root = temp_root("bench");
+        let displays: Vec<_> = (0..MAX_PREVIOUS_ITEMS)
+            .map(|index| bundle_display_jpg(&root.join(format!("{index}.cap")), 3024, 1964))
+            .collect();
+        let scan = || {
+            let start = Instant::now();
+            for display in &displays {
+                let png = load_thumbnail_png(display).unwrap();
+                assert_eq!(
+                    image::load_from_memory(&png).unwrap().width(),
+                    THUMBNAIL_SIZE
+                );
+            }
+            start.elapsed().as_secs_f64() * 1000.0
+        };
+        let mut cold = Vec::new();
+        let mut warm = Vec::new();
+        for _ in 0..5 {
+            for display in &displays {
+                for path in cached_thumbnails(display) {
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+            cold.push(scan());
+            warm.push(scan());
+        }
+        cold.sort_by(f64::total_cmp);
+        warm.sort_by(f64::total_cmp);
+        println!(
+            "{{\"items\":{MAX_PREVIOUS_ITEMS},\"source\":\"3024x1964 jpeg\",\"cold_scan_median_ms\":{:.1},\"warm_scan_median_ms\":{:.1}}}",
+            cold[2], warm[2]
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     fn titles(entries: &[Entry]) -> Vec<String> {

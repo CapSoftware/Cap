@@ -72,6 +72,18 @@ pub struct CursorEvents {
 }
 
 impl CursorEvents {
+    pub fn load_clicks_from_file(path: &Path) -> Result<Vec<CursorClickEvent>, String> {
+        #[derive(Deserialize)]
+        struct Clicks {
+            clicks: Vec<CursorClickEvent>,
+        }
+
+        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
+        serde_json::from_reader::<_, Clicks>(BufReader::new(file))
+            .map(|events| events.clicks)
+            .map_err(|e| format!("Failed to parse cursor clicks: {e}"))
+    }
+
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
         Self::load_from_reader(BufReader::new(file))
@@ -117,12 +129,19 @@ impl CursorEvents {
         }
 
         let last_move_time = self.moves.last().map(|event| event.time_ms).unwrap_or(0.0);
+        let final_segment = segments.last().unwrap();
+        let last_confirmed_time = self
+            .clicks
+            .iter()
+            .filter(|click| click.cursor_id == final_segment.id)
+            .map(|click| click.time_ms)
+            .fold(last_move_time, f64::max);
 
         for i in 0..segments.len() {
             let end_time = if i + 1 < segments.len() {
                 segments[i + 1].start_time
             } else {
-                last_move_time
+                last_confirmed_time
             };
 
             let duration = (end_time - segments[i].start_time).max(0.0);
@@ -309,6 +328,10 @@ mod tests {
         let events = CursorEvents::load_from_file(&path).unwrap();
         assert_eq!(events.moves, expected.moves);
         assert_eq!(events.clicks, expected.clicks);
+        assert_eq!(
+            CursorEvents::load_clicks_from_file(&path).unwrap(),
+            expected.clicks
+        );
         let legacy = CursorData::load_from_file(&path).unwrap();
         assert_eq!(
             serde_json::to_value(legacy).unwrap(),
@@ -321,6 +344,29 @@ mod tests {
         let loaded_events = CursorEvents::load_from_file(&path).unwrap();
         assert_eq!(loaded_events.moves, expected.moves);
         assert_eq!(loaded_events.clicks, expected.clicks);
+        assert_eq!(
+            CursorEvents::load_clicks_from_file(&path).unwrap(),
+            expected.clicks
+        );
+    }
+
+    #[test]
+    fn click_only_load_rejects_incomplete_files_and_invalid_clicks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cursor.json");
+        assert!(CursorEvents::load_clicks_from_file(&path).is_err());
+        for json in [
+            r#"{"clicks":[],"moves":["#,
+            r#"{"clicks":[{}],"moves":[]}"#,
+            r#"{"clicks":[],"moves":[]} trailing"#,
+            r#"{"moves":[]}"#,
+        ] {
+            std::fs::write(&path, json).unwrap();
+            assert!(
+                CursorEvents::load_clicks_from_file(&path).is_err(),
+                "{json}"
+            );
+        }
     }
 
     #[test]
@@ -479,6 +525,23 @@ mod tests {
                 move_event(1500.0, "pointer"),
             ],
             clicks: vec![click_event(400.0, "ibeam")],
+        };
+
+        events.stabilize_short_lived_cursor_shapes(
+            Some(&pointer_ids),
+            SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+        );
+
+        assert_eq!(events.moves[1].cursor_id, "ibeam");
+        assert_eq!(events.clicks[0].cursor_id, "ibeam");
+    }
+
+    #[test]
+    fn final_shape_is_preserved_when_a_later_click_confirms_its_duration() {
+        let pointer_ids = HashSet::from(["pointer".to_string()]);
+        let mut events = CursorEvents {
+            moves: vec![move_event(0.0, "pointer"), move_event(1500.0, "ibeam")],
+            clicks: vec![click_event(2700.0, "ibeam")],
         };
 
         events.stabilize_short_lived_cursor_shapes(

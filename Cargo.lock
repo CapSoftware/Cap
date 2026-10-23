@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "cap"
-version = "0.1.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "cap-automation",
@@ -1270,6 +1270,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-recording",
+ "cap-rendering",
  "cap-timestamp",
  "cap-utils",
  "chrono",
@@ -1328,6 +1329,7 @@ dependencies = [
  "cidre",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -1401,6 +1403,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "cidre",
+ "libc",
  "libloading 0.9.0",
  "ndarray 0.16.1",
  "ort",
@@ -1511,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1692,6 +1696,7 @@ dependencies = [
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
  "sysinfo 0.32.1",
@@ -1865,6 +1870,7 @@ dependencies = [
  "cap-muxer-protocol",
  "ffmpeg-next",
  "libc",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
@@ -1981,10 +1987,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-render-farm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "cap-audio",
+ "cap-editor",
+ "cap-export",
+ "cap-project",
+ "cap-rendering",
+ "ffmpeg-next",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-rendering"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bezier_easing",
  "build-time",
  "bytemuck",
@@ -1994,6 +2022,7 @@ dependencies = [
  "cap-flags",
  "cap-media-info",
  "cap-project",
+ "cap-verify-expect",
  "cap-video-decode",
  "cidre",
  "clap",
@@ -2005,6 +2034,7 @@ dependencies = [
  "futures-intrusive",
  "glyphon",
  "image 0.25.8",
+ "libloading 0.8.8",
  "log",
  "metal 0.31.0",
  "objc2 0.6.2",
@@ -2122,6 +2152,68 @@ dependencies = [
  "windows-sys 0.52.0",
  "workspace-hack",
  "zbus",
+]
+
+[[package]]
+name = "cap-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-audio",
+ "cap-camera-ffmpeg",
+ "cap-camera-windows",
+ "cap-editor",
+ "cap-enc-avfoundation",
+ "cap-export",
+ "cap-media-info",
+ "cap-mediafoundation-utils",
+ "cap-project",
+ "cap-recording",
+ "cap-rendering",
+ "cap-timestamp",
+ "cap-verify-expect",
+ "cidre",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "ffmpeg-next",
+ "flume",
+ "futures",
+ "relative-path",
+ "rustfft",
+ "scap-targets",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+ "windows 0.60.0",
+ "workspace-hack",
+]
+
+[[package]]
+name = "cap-verify-expect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
+]
+
+[[package]]
+name = "cap-verify-stimulus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-verify",
+ "cidre",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "futures",
+ "objc2-foundation 0.3.1",
+ "scap-screencapturekit",
+ "serde_json",
+ "softbuffer",
+ "windows 0.60.0",
+ "winit",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5061,7 +5153,6 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
- "rgb",
  "tiff 0.10.3",
  "zune-core",
  "zune-jpeg",
@@ -11443,6 +11534,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

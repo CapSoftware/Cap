@@ -25,10 +25,13 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::hash::{Hash as _, Hasher as _};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use cap_gpui_kernels::mask_cache::{
+    MaskEntry, MaskFrame, MaskRequest, finish_mask_build, retain_masks, retired_mask_values,
+    should_cancel_mask_build, update_masks,
+};
 use cap_project::{Annotation, AnnotationType, AspectRatio, Crop, MaskType};
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Corners, CursorStyle, Entity, FontWeight,
@@ -1201,11 +1204,8 @@ pub struct AnnotationState {
     /// The layers list's rows container, for the reorder drag's hit testing.
     list: BoundsCell,
     reorder: Option<Reorder>,
-    masks: Vec<MaskOverlay>,
-    /// The inputs the painted overlays were computed from, and the ones a
-    /// computation in flight is for.
-    mask_key: u64,
-    mask_pending: Option<u64>,
+    masks: Vec<MaskEntry<MaskOverlay>>,
+    mask_pending: Option<Vec<MaskRequest>>,
     mask_task: Option<gpui::Task<()>>,
 }
 
@@ -2241,88 +2241,91 @@ impl ScreenshotEditorWindow {
 
     // -- Mask overlays ---------------------------------------------------------
 
-    /// What the painted overlays were computed from: the frame, the image rect,
-    /// and every mask's geometry and style.
-    fn mask_key(&self) -> u64 {
-        let mut hasher = std::hash::DefaultHasher::new();
-        match &self.frame_rgba {
-            Some(rgba) => {
-                (Arc::as_ptr(rgba) as usize).hash(&mut hasher);
-                rgba.len().hash(&mut hasher);
-            }
-            None => 0usize.hash(&mut hasher),
+    fn mask_requests(&self) -> Vec<MaskRequest> {
+        if self.frame.is_none() {
+            return Vec::new();
         }
-        self.frame_size.0.to_bits().hash(&mut hasher);
-        self.frame_size.1.to_bits().hash(&mut hasher);
+        let size = (
+            self.frame_size.0.max(0.) as u32,
+            self.frame_size.1.max(0.) as u32,
+        );
         let rect = self.annotation_image_rect();
-        for value in [rect.x, rect.y, rect.width, rect.height] {
-            value.to_bits().hash(&mut hasher);
-        }
-        for annotation in &self.project.annotations {
-            if annotation.annotation_type != AnnotationType::Mask {
-                continue;
-            }
-            annotation.id.hash(&mut hasher);
-            for value in [
-                annotation.x,
-                annotation.y,
-                annotation.width,
-                annotation.height,
-                annotation.mask_level.unwrap_or(MASK_FALLBACK_LEVEL),
-            ] {
-                value.to_bits().hash(&mut hasher);
-            }
-            matches!(annotation.mask_type, Some(MaskType::Pixelate)).hash(&mut hasher);
-        }
-        hasher.finish()
+        let frame = MaskFrame {
+            revision: self.mask_frame_revision,
+            size,
+            content: [rect.x, rect.y, rect.width, rect.height].map(f64::to_bits),
+            padding: self.project.background.padding.to_bits(),
+            crop: self
+                .project
+                .background
+                .crop
+                .as_ref()
+                .map(|crop| [crop.position.x, crop.position.y, crop.size.x, crop.size.y]),
+        };
+        self.project
+            .annotations
+            .iter()
+            .filter_map(|mask| mask_request(mask, frame))
+            .collect()
     }
 
     /// `renderMaskOverlays` (`Preview.tsx:579-687`), off the main thread. The
     /// stale overlay keeps painting until the new one lands, so a drag never
     /// blocks on a resample.
     pub(crate) fn refresh_mask_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let key = self.mask_key();
-        if self.annotation_state.mask_key == key || self.annotation_state.mask_pending == Some(key)
+        let requests = self.mask_requests();
+        if self.annotation_state.mask_pending.as_ref() == Some(&requests) {
+            return;
+        }
+        let keep_build = self
+            .annotation_state
+            .mask_pending
+            .as_ref()
+            .is_some_and(|pending| !should_cancel_mask_build(pending, &requests));
+        if keep_build {
+            // Cancelling on each drag tick can starve installation even when filtering is fast.
+            self.annotation_state.mask_pending = Some(requests.clone());
+        } else {
+            self.annotation_state.mask_task = None;
+            self.annotation_state.mask_pending = None;
+        }
+
+        let retained = retain_masks(&self.annotation_state.masks, &requests);
+        if !retained.iter().map(|entry| &entry.request).eq(self
+            .annotation_state
+            .masks
+            .iter()
+            .map(|entry| &entry.request))
+        {
+            self.install_mask_overlays(retained, window);
+            cx.notify();
+        }
+        if keep_build
+            || self
+                .annotation_state
+                .masks
+                .iter()
+                .map(|entry| &entry.request)
+                .eq(requests.iter())
         {
             return;
         }
 
-        let masks: Vec<Annotation> = self
-            .project
-            .annotations
-            .iter()
-            .filter(|annotation| annotation.annotation_type == AnnotationType::Mask)
-            .cloned()
-            .collect();
-        let frame = self.frame_rgba.clone();
-
-        let (Some(rgba), false) = (frame, masks.is_empty()) else {
-            self.drop_mask_overlays(window);
-            // Dropping the task matters as much as dropping the tiles: a
-            // resample still in flight would re-install the regions of a mask
-            // that has just been deleted, and stamp its key over this one.
-            self.annotation_state.mask_task = None;
-            self.annotation_state.mask_key = key;
-            self.annotation_state.mask_pending = None;
-            cx.notify();
+        let previous = self.annotation_state.masks.clone();
+        let Some(frame) = self.frame.clone() else {
             return;
         };
-
-        let size = (
-            self.frame_size.0.max(0.) as u32,
-            self.frame_size.1.max(0.) as u32,
-        );
-        let rect = self.annotation_image_rect();
-        self.annotation_state.mask_pending = Some(key);
+        self.annotation_state.mask_pending = Some(requests.clone());
         self.annotation_state.mask_task = Some(cx.spawn_in(window, async move |this, cx| {
             let overlays = cx
                 .background_executor()
-                .spawn(async move { build_mask_overlays(&rgba, size, &masks, rect) })
+                .spawn(async move {
+                    build_mask_overlays(frame.as_bytes(0).unwrap_or_default(), &previous, &requests)
+                })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                this.drop_mask_overlays(window);
-                this.annotation_state.masks = overlays;
-                this.annotation_state.mask_key = key;
+                let overlays = finish_mask_build(&this.annotation_state.masks, overlays);
+                this.install_mask_overlays(overlays, window);
                 this.annotation_state.mask_pending = None;
                 cx.notify();
                 // The masks may have moved on while this was in flight.
@@ -2332,11 +2335,17 @@ impl ScreenshotEditorWindow {
         }));
     }
 
-    /// Hand the atlas back the tiles the old overlays held.
-    fn drop_mask_overlays(&mut self, window: &mut Window) {
-        for overlay in self.annotation_state.masks.drain(..) {
-            let _ = window.drop_image(overlay.image);
+    fn install_mask_overlays(
+        &mut self,
+        overlays: Vec<MaskEntry<MaskOverlay>>,
+        window: &mut Window,
+    ) {
+        for previous in retired_mask_values(&self.annotation_state.masks, &overlays, |overlay| {
+            Arc::as_ptr(&overlay.image)
+        }) {
+            let _ = window.drop_image(previous.image.clone());
         }
+        self.annotation_state.masks = overlays;
     }
 }
 
@@ -2365,7 +2374,12 @@ impl ScreenshotEditorWindow {
         let paint = LayerPaint {
             annotations: self.project.annotations.clone(),
             temp,
-            masks: self.annotation_state.masks.clone(),
+            masks: self
+                .annotation_state
+                .masks
+                .iter()
+                .filter_map(|entry| entry.value.clone())
+                .collect(),
             selected: self.selected_annotation.clone(),
             editing: self
                 .annotation_state
@@ -3940,37 +3954,56 @@ fn checker_quarters(size: f32) -> Vec<AnyElement> {
 /// `renderMaskOverlays` + `blurRegion` (`Preview.tsx:537-687`): resample the
 /// frame's own pixels inside each mask and hand back one image per region.
 /// Runs on the background executor -- the regions are small, but a 50-block
-/// pixelate over a 4K screenshot is still not main-thread work.
+/// pixelate over a 4K screenshot is still not main-thread work. The filter
+/// treats every channel alike, so it runs on the atlas's BGRA as-is and the
+/// overlays come out already in atlas order.
 fn build_mask_overlays(
-    rgba: &[u8],
-    size: (u32, u32),
-    masks: &[Annotation],
-    rect: Rect,
-) -> Vec<MaskOverlay> {
-    let mut overlays = Vec::new();
-    for mask in masks {
-        let Some((x0, y0, processed)) = masked_region_image(rgba, size, mask, rect) else {
-            continue;
-        };
-        overlays.push(MaskOverlay {
+    bgra: &[u8],
+    previous: &[MaskEntry<MaskOverlay>],
+    requests: &[MaskRequest],
+) -> Vec<MaskEntry<MaskOverlay>> {
+    update_masks(previous, requests, |request| {
+        let processed = request.filter(bgra)?;
+        Some(MaskOverlay {
             rect: Rect {
-                x: x0 as f64,
-                y: y0 as f64,
+                x: request.region.0 as f64,
+                y: request.region.1 as f64,
                 width: processed.width() as f64,
                 height: processed.height() as f64,
             },
-            image: crate::library::rgba_to_render_image(processed),
-        });
+            image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+                processed
+            )])),
+        })
+    })
+}
+
+fn mask_request(mask: &Annotation, frame: MaskFrame) -> Option<MaskRequest> {
+    if mask.annotation_type != AnnotationType::Mask {
+        return None;
     }
-    overlays
+    Some(MaskRequest {
+        id: mask.id.clone(),
+        region: cap_gpui_kernels::mask_cache::mask_region(
+            [mask.x, mask.y, mask.width, mask.height],
+            frame.content.map(f64::from_bits),
+            frame.size,
+        )?,
+        frame,
+        pixelate: mask.mask_type == Some(MaskType::Pixelate),
+        level: mask
+            .mask_level
+            .unwrap_or(MASK_FALLBACK_LEVEL)
+            .max(1.)
+            .to_bits(),
+    })
 }
 
 /// One mask's blurred or pixelated pixels, sampled from `rgba` (an unmodified
 /// copy of the frame) and returned with the region's top-left in frame
-/// coordinates. This is the single implementation of the two filters -- the
-/// preview's overlay tiles come through it, and so does the export's
-/// `applyMaskAnnotations` pass, which calls it with `rect` set to the whole
-/// canvas (`screenshotExport.ts:290-295` passes `{x:0,y:0,w,h}`).
+/// coordinates. The export's `applyMaskAnnotations` pass calls it with
+/// `rect` set to the whole canvas (`screenshotExport.ts:290-295` passes
+/// `{x:0,y:0,w,h}`).
 pub(crate) fn masked_region_image(
     rgba: &[u8],
     size: (u32, u32),
@@ -3986,57 +4019,28 @@ pub(crate) fn masked_region_image(
         return None;
     }
 
-    let (x0, y0, width, height) = mask_region(mask, rect, (frame_width, frame_height))?;
-
-    let mut region = Vec::with_capacity(width as usize * height as usize * 4);
-    for row in 0..height {
-        let start = (y0 + row) as usize * stride + x0 as usize * 4;
-        region.extend_from_slice(&rgba[start..start + width as usize * 4]);
-    }
-    let source = image::RgbaImage::from_raw(width, height, region)?;
-
+    let region = mask_region(mask, rect, (frame_width, frame_height))?;
     let level = mask.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).max(1.);
-    let processed = if mask.mask_type == Some(MaskType::Pixelate) {
-        // `blockSize = Math.max(2, Math.round(level))`, nearest both ways.
-        let block = (level.round() as u32).max(2);
-        let small = image::imageops::resize(
-            &source,
-            (width / block).max(1),
-            (height / block).max(1),
-            image::imageops::FilterType::Nearest,
-        );
-        image::imageops::resize(&small, width, height, image::imageops::FilterType::Nearest)
-    } else {
-        // `blurRegion`: `scale = Math.max(2, Math.round(level / 4))`, with
-        // smoothing on both passes.
-        let factor = ((level / 4.).round() as u32).max(2);
-        let small = image::imageops::resize(
-            &source,
-            (width / factor).max(1),
-            (height / factor).max(1),
-            image::imageops::FilterType::Triangle,
-        );
-        image::imageops::resize(&small, width, height, image::imageops::FilterType::Triangle)
-    };
+    let processed = cap_gpui_kernels::screenshot::mask_filter(
+        rgba,
+        frame_width,
+        frame_height,
+        region,
+        mask.mask_type == Some(MaskType::Pixelate),
+        level,
+    )?;
 
-    Some((x0, y0, processed))
+    Some((region.0, region.1, processed))
 }
 
 /// One mask's region in whole frame pixels: its own rect, clipped to the
 /// screenshot's content rect and then to the frame.
 fn mask_region(mask: &Annotation, rect: Rect, frame: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
-    let left = rect.x.max(mask.x.min(mask.x + mask.width));
-    let top = rect.y.max(mask.y.min(mask.y + mask.height));
-    let right = (rect.x + rect.width).min(mask.x.max(mask.x + mask.width));
-    let bottom = (rect.y + rect.height).min(mask.y.max(mask.y + mask.height));
-    if right <= left || bottom <= top {
-        return None;
-    }
-    let x0 = (left.round().max(0.) as u32).min(frame.0);
-    let y0 = (top.round().max(0.) as u32).min(frame.1);
-    let x1 = (right.round().max(0.) as u32).min(frame.0);
-    let y1 = (bottom.round().max(0.) as u32).min(frame.1);
-    (x1 > x0 && y1 > y0).then(|| (x0, y0, x1 - x0, y1 - y0))
+    cap_gpui_kernels::mask_cache::mask_region(
+        [mask.x, mask.y, mask.width, mask.height],
+        [rect.x, rect.y, rect.width, rect.height],
+        frame,
+    )
 }
 
 #[cfg(test)]
@@ -4525,6 +4529,68 @@ mod tests {
         assert_eq!(mask_region(&away, rect, (200, 200)), None);
     }
 
+    #[test]
+    fn mask_overlays_from_bgra_match_filtering_rgba_then_swapping() {
+        let (width, height) = (37u32, 23u32);
+        let stride = (width as usize * 4).next_multiple_of(256);
+        let padded: Vec<u8> = (0..stride * height as usize)
+            .map(|index| (index * 31 + index / 7) as u8)
+            .collect();
+        let rgba = cap_gpui_kernels::frame::unpad_rows(
+            &padded,
+            width as usize * 4,
+            stride,
+            height as usize,
+        )
+        .unwrap();
+        let bgra = cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+            &padded,
+            width as usize,
+            stride,
+            height as usize,
+        )
+        .unwrap();
+        let frame = MaskFrame {
+            revision: 1,
+            size: (width, height),
+            content: [0., 0., f64::from(width), f64::from(height)].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let mut masks = Vec::new();
+        for (index, (mask_type, level, region)) in [
+            (MaskType::Blur, 4., (0., 0., 37., 23.)),
+            (MaskType::Blur, 9., (3., 1., 17., 11.)),
+            (MaskType::Blur, 16., (20., 5., 17., 18.)),
+            (MaskType::Blur, 33., (1., 2., 35., 21.)),
+            (MaskType::Pixelate, 2., (0., 0., 37., 23.)),
+            (MaskType::Pixelate, 7., (5., 3., 13., 9.)),
+            (MaskType::Pixelate, 20., (11., 7., 26., 16.)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut mask = shape(AnnotationType::Mask, region.0, region.1, region.2, region.3);
+            mask.id = index.to_string();
+            mask.mask_type = Some(mask_type);
+            mask.mask_level = Some(level);
+            masks.push(mask);
+        }
+        let requests: Vec<_> = masks
+            .iter()
+            .filter_map(|mask| mask_request(mask, frame))
+            .collect();
+        assert_eq!(requests.len(), masks.len());
+
+        let overlays = build_mask_overlays(&bgra, &[], &requests);
+        for (request, entry) in requests.iter().zip(&overlays) {
+            let expected = crate::library::rgba_to_render_image(request.filter(&rgba).unwrap());
+            let overlay = entry.value.as_ref().unwrap();
+            assert_eq!(overlay.image.size(0), expected.size(0));
+            assert_eq!(overlay.image.as_bytes(0), expected.as_bytes(0));
+        }
+    }
+
     /// The resample itself: one overlay per mask, at the region's own size,
     /// with the row slicing staying inside the frame buffer.
     #[test]
@@ -4545,10 +4611,21 @@ mod tests {
         pixelate.mask_type = Some(MaskType::Pixelate);
         pixelate.mask_level = Some(7.);
 
-        let overlays = build_mask_overlays(&rgba, frame, &[blur, pixelate], rect);
+        let input = MaskFrame {
+            revision: 1,
+            size: frame,
+            content: [rect.x, rect.y, rect.width, rect.height].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let requests: Vec<_> = [blur, pixelate]
+            .iter()
+            .filter_map(|mask| mask_request(mask, input))
+            .collect();
+        let overlays = build_mask_overlays(&rgba, &[], &requests);
         assert_eq!(overlays.len(), 2);
         assert_eq!(
-            overlays[0].rect,
+            overlays[0].value.as_ref().unwrap().rect,
             Rect {
                 x: 8.,
                 y: 8.,
@@ -4557,7 +4634,7 @@ mod tests {
             }
         );
         assert_eq!(
-            overlays[1].rect,
+            overlays[1].value.as_ref().unwrap().rect,
             Rect {
                 x: 40.,
                 y: 30.,
@@ -4568,7 +4645,134 @@ mod tests {
 
         // A frame buffer that does not match the size it was handed is not
         // sliced at all.
-        assert!(build_mask_overlays(&rgba[..16], frame, &[], rect).is_empty());
+        assert!(
+            build_mask_overlays(&rgba[..16], &[], &requests)
+                .iter()
+                .all(|entry| entry.value.is_none())
+        );
+        let reused = build_mask_overlays(&rgba, &overlays, &requests);
+        for (previous, next) in overlays.iter().zip(&reused) {
+            assert!(Arc::ptr_eq(
+                &previous.value.as_ref().unwrap().image,
+                &next.value.as_ref().unwrap().image
+            ));
+        }
+    }
+
+    #[test]
+    fn duplicate_mask_ids_keep_both_regions_when_another_mask_is_deleted() {
+        let frame = MaskFrame {
+            revision: 1,
+            size: (64, 48),
+            content: [0., 0., 64., 48.].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let a = shape(AnnotationType::Mask, 0., 0., 16., 16.);
+        let b = shape(AnnotationType::Mask, 32., 24., 16., 16.);
+        let mut c = shape(AnnotationType::Mask, 48., 0., 16., 16.);
+        c.id = "unique".into();
+        assert_eq!(a.id, b.id);
+        let mut requests: Vec<_> = [a, b, c]
+            .iter()
+            .filter_map(|mask| mask_request(mask, frame))
+            .collect();
+        let rgba = vec![128; 64 * 48 * 4];
+        let previous = build_mask_overlays(&rgba, &[], &requests);
+        requests.pop();
+        for reorder in [false, true] {
+            if reorder {
+                requests.reverse();
+            }
+            let retained = retain_masks(&previous, &requests);
+            assert_eq!(retained.len(), 2);
+            for (entry, request) in retained.iter().zip(&requests) {
+                assert_eq!(&entry.request, request);
+                let overlay = entry.value.as_ref().unwrap();
+                assert_eq!(overlay.rect.x, f64::from(request.region.0));
+                assert_eq!(overlay.rect.y, f64::from(request.region.1));
+            }
+            let retired =
+                retired_mask_values(&previous, &retained, |overlay| Arc::as_ptr(&overlay.image));
+            assert_eq!(retired.len(), 1);
+            assert!(Arc::ptr_eq(
+                &retired[0].image,
+                &previous[2].value.as_ref().unwrap().image
+            ));
+            let rebuilt = build_mask_overlays(&rgba, &retained, &requests);
+            assert!(
+                retired_mask_values(&retained, &rebuilt, |overlay| {
+                    Arc::as_ptr(&overlay.image)
+                })
+                .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn coalesced_mask_build_installs_progress_then_catches_up_without_retiring_reused_images() {
+        let frame = MaskFrame {
+            revision: 1,
+            size: (64, 48),
+            content: [0., 0., 64., 48.].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let a = shape(AnnotationType::Mask, 0., 0., 16., 16.);
+        let b = shape(AnnotationType::Mask, 32., 24., 16., 16.);
+        let mut moving = shape(AnnotationType::Mask, 40., 0., 16., 16.);
+        moving.id = "moving".into();
+        let original: Vec<_> = [a, b, moving]
+            .iter()
+            .filter_map(|mask| mask_request(mask, frame))
+            .collect();
+        let rgba = vec![128; 64 * 48 * 4];
+        let previous = build_mask_overlays(&rgba, &[], &original);
+        let mut started = original.clone();
+        started[2].region.0 += 1;
+        let mut latest = started.clone();
+        for _ in 0..8 {
+            let mut next = latest.clone();
+            next[2].region.0 -= 1;
+            assert!(!should_cancel_mask_build(&latest, &next));
+            latest = next;
+        }
+        latest.reverse();
+        assert!(!should_cancel_mask_build(&started, &latest));
+        let current = retain_masks(&previous, &latest);
+        let completed = build_mask_overlays(&rgba, &previous, &started);
+        let installed = finish_mask_build(&current, completed);
+        assert_eq!(installed[2].request, started[2]);
+        let retired =
+            retired_mask_values(&current, &installed, |overlay| Arc::as_ptr(&overlay.image));
+        assert_eq!(retired.len(), 1);
+        assert!(Arc::ptr_eq(
+            &retired[0].image,
+            &previous[2].value.as_ref().unwrap().image
+        ));
+        for index in 0..2 {
+            assert!(Arc::ptr_eq(
+                &installed[index].value.as_ref().unwrap().image,
+                &previous[index].value.as_ref().unwrap().image
+            ));
+        }
+        let retained = retain_masks(&installed, &latest);
+        assert!(
+            retired_mask_values(&installed, &retained, |overlay| Arc::as_ptr(&overlay.image))
+                .is_empty()
+        );
+        let completed = build_mask_overlays(&rgba, &retained, &latest);
+        let caught_up = finish_mask_build(&retained, completed);
+        assert!(
+            caught_up
+                .iter()
+                .map(|entry| &entry.request)
+                .eq(latest.iter())
+        );
+        assert_eq!(
+            retired_mask_values(&retained, &caught_up, |overlay| Arc::as_ptr(&overlay.image)).len(),
+            1
+        );
     }
 
     /// A finished stroke stores fractions of its own box, so a later resize

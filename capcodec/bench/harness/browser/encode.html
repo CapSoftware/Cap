@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>capcodec browser encode</title></head>
+<body>
+<script>
+"use strict";
+window.__status = { state: "idle" };
+
+async function fetchFrame(job, index) {
+	const res = await fetch(`/frame/${job.id}/${index}`);
+	if (!res.ok) throw new Error(`frame ${index}: HTTP ${res.status}`);
+	return new Uint8Array(await res.arrayBuffer());
+}
+
+function makeFrame(job, data, index) {
+	return new VideoFrame(data, {
+		format: "I420",
+		codedWidth: job.width,
+		codedHeight: job.height,
+		timestamp: Math.round((index * 1e6 * job.fpsDen) / job.fpsNum),
+		duration: Math.round((1e6 * job.fpsDen) / job.fpsNum),
+		colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
+	});
+}
+
+async function upload(job, parts, name) {
+	const blob = new Blob(parts);
+	const res = await fetch(`/upload/${job.id}/${name}`, { method: "POST", body: blob });
+	if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+	return blob.size;
+}
+
+async function prefetch(job, count) {
+	const frames = new Array(job.frames);
+	let next = 0;
+	const workers = [];
+	for (let w = 0; w < 4; w++) {
+		workers.push((async () => {
+			while (next < count) {
+				const i = next++;
+				frames[i] = await fetchFrame(job, i);
+			}
+		})());
+	}
+	await Promise.all(workers);
+	return frames;
+}
+
+async function runWebCodecs(job) {
+	const support = await VideoEncoder.isConfigSupported(job.config);
+	if (!support.supported) throw new Error("config not supported: " + JSON.stringify(job.config));
+	const chunks = [];
+	let error = null;
+	let keyframes = 0;
+	const encoder = new VideoEncoder({
+		output: (chunk) => {
+			const buf = new Uint8Array(chunk.byteLength);
+			chunk.copyTo(buf);
+			chunks.push(buf);
+			if (chunk.type === "key") keyframes++;
+		},
+		error: (e) => { error = e; },
+	});
+	encoder.configure(job.config);
+	const t0 = performance.now();
+	for (let i = 0; i < job.frames; i++) {
+		if (error) throw error;
+		const data = await fetchFrame(job, i);
+		const frame = makeFrame(job, data, i);
+		const keyFrame = job.keyInterval > 0 && i % job.keyInterval === 0;
+		encoder.encode(frame, { keyFrame });
+		frame.close();
+		while (encoder.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 1));
+	}
+	await encoder.flush();
+	const encodeMs = performance.now() - t0;
+	encoder.close();
+	if (error) throw error;
+	const bytes = await upload(job, chunks, "out.264");
+	return { bytes, chunks: chunks.length, keyframes, encodeMs, support: support.config };
+}
+
+async function runMediaRecorder(job) {
+	if (!MediaRecorder.isTypeSupported(job.config.mimeType)) throw new Error("mime not supported: " + job.config.mimeType);
+	const generator = new MediaStreamTrackGenerator({ kind: "video" });
+	const writer = generator.writable.getWriter();
+	const stream = new MediaStream([generator]);
+	const opts = { ...job.config };
+	const recorder = new MediaRecorder(stream, opts);
+	const parts = [];
+	recorder.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+	const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+	const frames = await prefetch(job, job.frames);
+	recorder.start(job.timeslice || 1000);
+	const interval = (1000 * job.fpsDen) / job.fpsNum;
+	const t0 = performance.now();
+	let late = 0;
+	for (let i = 0; i < job.frames; i++) {
+		const due = t0 + i * interval;
+		const wait = due - performance.now();
+		if (wait > 1) await new Promise((r) => setTimeout(r, wait - 0.5));
+		while (performance.now() < due) {}
+		if (performance.now() - due > interval) late++;
+		await writer.write(makeFrame(job, frames[i], i));
+		frames[i] = null;
+	}
+	await new Promise((r) => setTimeout(r, interval));
+	recorder.stop();
+	await stopped;
+	await writer.close();
+	const encodeMs = performance.now() - t0;
+	const bytes = await upload(job, parts, "out." + job.ext);
+	return { bytes, encodeMs, late, mimeType: recorder.mimeType };
+}
+
+window.runJob = async function (job) {
+	window.__status = { state: "running" };
+	try {
+		const result = job.mode === "webcodecs" ? await runWebCodecs(job) : await runMediaRecorder(job);
+		window.__status = { state: "done", result };
+	} catch (e) {
+		window.__status = { state: "error", error: String(e && e.stack ? e.stack : e) };
+	}
+};
+</script>
+</body>
+</html>

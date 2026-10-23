@@ -860,6 +860,59 @@ fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
 
+/// The loaded Parakeet model and its ONNX Runtime arena hold ~1.8 GB for
+/// `best`; keep them only long enough for a quick regenerate.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_IDLE_RELEASE: Duration = Duration::from_secs(60);
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+static PARAKEET_LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+/// Call with `slot` held, so a run in flight always bumps the generation
+/// before the release thread can take the slot. The thread returns whether it
+/// dropped a cached value.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn schedule_idle_release<T: Send + 'static>(
+    slot: &'static Mutex<()>,
+    cache: &'static Mutex<Option<T>>,
+    last_use: &'static AtomicU64,
+    delay: Duration,
+) -> std::io::Result<std::thread::JoinHandle<bool>> {
+    let generation = last_use.fetch_add(1, Ordering::AcqRel) + 1;
+    std::thread::Builder::new()
+        .name("parakeet-release".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            let _slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if last_use.load(Ordering::Acquire) != generation {
+                return false;
+            }
+            let released = cache.lock().unwrap_or_else(PoisonError::into_inner).take();
+            let was_cached = released.is_some();
+            drop(released);
+            if was_cached {
+                tracing::info!("Released idle Parakeet TDT model");
+            }
+            was_cached
+        })
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn schedule_parakeet_release() {
+    let spawned = schedule_idle_release(
+        &TRANSCRIPTION_LOCK,
+        &PARAKEET_CONTEXT,
+        &PARAKEET_LAST_USE,
+        PARAKEET_IDLE_RELEASE,
+    );
+    if let Err(error) = spawned {
+        tracing::warn!("Failed to schedule Parakeet release: {error}");
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn schedule_parakeet_release() {}
+
 // ---------------------------------------------------------------------------
 // Audio extraction
 // ---------------------------------------------------------------------------
@@ -1504,6 +1557,38 @@ fn process_with_whisper(
 // Parakeet
 // ---------------------------------------------------------------------------
 
+/// Parakeet's encoder fails with an ONNX broadcast error past 400 s of audio
+/// (5,000 frames of 80 ms), and below that its time and memory per second of
+/// audio grow with the input's length. Minute-long windows, cut at the quietest
+/// 100 ms near each boundary so words stay whole, keep cost linear in the
+/// recording's length and lift the 400 s cap.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_CHUNK_SECONDS: usize = 60;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_CUT_SEARCH_SECONDS: usize = 5;
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn parakeet_chunk_ranges(samples: &[f32], sample_rate: usize) -> Vec<std::ops::Range<usize>> {
+    let target = PARAKEET_CHUNK_SECONDS * sample_rate;
+    let search = PARAKEET_CUT_SEARCH_SECONDS * sample_rate;
+    let window = sample_rate / 10;
+    let energy = |at: usize| -> f32 { samples[at..at + window].iter().map(|s| s * s).sum() };
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while samples.len() - start > target {
+        let end = start + target;
+        let quietest = (end - search..=end - window)
+            .step_by(sample_rate / 100)
+            .min_by(|a, b| energy(*a).total_cmp(&energy(*b)))
+            .unwrap_or(end - window);
+        let cut = quietest + window / 2;
+        ranges.push(start..cut);
+        start = cut;
+    }
+    ranges.push(start..samples.len());
+    ranges
+}
+
 /// `process_with_parakeet` (`captions.rs:1202-1302`).
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn process_with_parakeet(
@@ -1549,21 +1634,62 @@ fn process_with_parakeet(
         }
     };
 
-    let result = {
+    let mut reader = hound::WavReader::open(audio_path)
+        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
+    let spec = reader.spec();
+    if spec.channels != 1 || spec.sample_rate != WHISPER_SAMPLE_RATE {
+        return Err(format!(
+            "Expected 16 kHz mono audio, got {} Hz with {} channels",
+            spec.sample_rate, spec.channels
+        ));
+    }
+    let sample_rate = spec.sample_rate;
+    let samples = reader
+        .samples::<i16>()
+        .map(|sample| sample.map(|sample| f32::from(sample) / 32768.0))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read audio file: {e}"))?;
+    if samples.is_empty() {
+        return Err("No speech detected in the audio".to_string());
+    }
+
+    let mut tokens = Vec::new();
+    {
         let mut parakeet = model_arc
             .lock()
             .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
-        parakeet
-            .transcribe_file(audio_path, Some(TimestampMode::Words))
-            .map_err(|e| format!("Parakeet transcription failed: {e}"))?
-    };
+        for range in parakeet_chunk_ranges(&samples, sample_rate as usize) {
+            let offset = range.start as f32 / sample_rate as f32;
+            let result = parakeet
+                .transcribe_samples(
+                    samples[range].to_vec(),
+                    sample_rate,
+                    1,
+                    Some(TimestampMode::Words),
+                )
+                .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
+            tokens.extend(result.tokens.into_iter().map(|token| CaptionWord {
+                text: token.text,
+                start: token.start + offset,
+                end: token.end + offset,
+            }));
+        }
+    }
 
-    tracing::info!("Parakeet produced {} timed tokens", result.tokens.len());
+    tracing::info!("Parakeet produced {} timed tokens", tokens.len());
 
+    caption_segments_from_tokens(tokens)
+}
+
+/// Parakeet's timed word tokens -> caption segments: drop empty tokens,
+/// normalize the words and chunk them.
+#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+fn caption_segments_from_tokens(
+    tokens: impl IntoIterator<Item = CaptionWord>,
+) -> Result<Vec<CaptionSegment>, String> {
     let words = normalize_caption_words(
-        result
-            .tokens
-            .iter()
+        tokens
+            .into_iter()
             .filter(|token| !token.text.trim().is_empty())
             .map(|token| CaptionWord {
                 text: token.text.trim().to_string(),
@@ -1626,6 +1752,30 @@ pub fn transcribe_blocking(
         ));
     }
 
+    transcribe_project_with(project_path, |audio_path| {
+        let _guard = lock_transcription_worker_slot();
+        if is_parakeet_model(model) {
+            tracing::info!("Using Parakeet TDT engine");
+            let result = process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref());
+            schedule_parakeet_release();
+            result
+        } else {
+            tracing::info!("Using Whisper engine");
+            let hints = transcription_hints();
+            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+            let result = process_with_whisper(audio_path, context, language, &hints);
+            release_whisper_context_after_transcription();
+            result
+        }
+    })
+}
+
+/// Extracts the project's transcription audio to a temporary 16 kHz mono WAV
+/// and runs `engine` on it.
+fn transcribe_project_with(
+    project_path: &Path,
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
+) -> Result<Vec<CaptionSegment>, String> {
     let temp_dir = std::env::temp_dir().join(format!(
         "cap-gpui-transcription-{}-{}",
         std::process::id(),
@@ -1637,19 +1787,7 @@ pub fn transcribe_blocking(
 
     let result = (|| {
         extract_audio_from_video(project_path, &audio_path)?;
-
-        let _guard = lock_transcription_worker_slot();
-        if is_parakeet_model(model) {
-            tracing::info!("Using Parakeet TDT engine");
-            process_with_parakeet(&audio_path, model_file.to_string_lossy().as_ref())
-        } else {
-            tracing::info!("Using Whisper engine");
-            let hints = transcription_hints();
-            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-            let result = process_with_whisper(&audio_path, context, language, &hints);
-            release_whisper_context_after_transcription();
-            result
-        }
+        engine(&audio_path)
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1732,7 +1870,7 @@ fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
         .collect::<String>()
         .to_lowercase();
 
-    normalized.len() <= 1
+    normalized.chars().count() <= 1
         || matches!(
             normalized.as_str(),
             "an" | "as"
@@ -1970,7 +2108,6 @@ pub fn sync_caption_words_with_text(
         .iter()
         .enumerate()
         .map(|(index, token)| {
-            let source = existing.get(index);
             let word_start = start + step * index as f64;
             let word_end = if index == tokens.len() - 1 {
                 end
@@ -1979,8 +2116,8 @@ pub fn sync_caption_words_with_text(
             };
             CaptionWord {
                 text: (*token).to_string(),
-                start: source.map_or(word_start as f32, |word| word.start),
-                end: source.map_or(word_end as f32, |word| word.end),
+                start: word_start as f32,
+                end: word_end as f32,
             }
         })
         .collect()
@@ -2121,8 +2258,71 @@ pub fn caption_generation_error_message(message: &str) -> String {
 }
 
 #[cfg(test)]
+mod verify_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn parakeet_chunks_cut_in_the_quiet_gap_and_cover_every_sample() {
+        let rate = 16_000;
+        let mut samples: Vec<f32> = (0..rate * 150).map(|i| (i as f32 * 0.05).sin()).collect();
+        samples[rate * 57..rate * 57 + rate / 2].fill(0.0);
+
+        let ranges = parakeet_chunk_ranges(&samples, rate);
+
+        assert_eq!(ranges.len(), 3);
+        assert!((rate * 57..rate * 57 + rate / 2).contains(&ranges[0].end));
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges.last().unwrap().end, samples.len());
+        for pair in ranges.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start);
+        }
+        assert!(
+            ranges
+                .iter()
+                .all(|r| r.len() <= rate * PARAKEET_CHUNK_SECONDS)
+        );
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn parakeet_keeps_a_one_minute_recording_in_one_chunk() {
+        let samples = vec![0.5; 16_000 * PARAKEET_CHUNK_SECONDS];
+
+        assert_eq!(
+            parakeet_chunk_ranges(&samples, 16_000),
+            vec![0..samples.len()]
+        );
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    #[ignore = "needs CAP_PARAKEET_BENCH_MODEL and CAP_PARAKEET_BENCH_WAV"]
+    fn benchmark_parakeet_transcription() {
+        let model = std::env::var("CAP_PARAKEET_BENCH_MODEL").expect("CAP_PARAKEET_BENCH_MODEL");
+        let wav =
+            PathBuf::from(std::env::var("CAP_PARAKEET_BENCH_WAV").expect("CAP_PARAKEET_BENCH_WAV"));
+        let started = std::time::Instant::now();
+        let result = process_with_parakeet(&wav, &model);
+        let seconds = started.elapsed().as_secs_f64();
+        match result {
+            Ok(segments) => {
+                let words: Vec<&CaptionWord> = segments.iter().flat_map(|s| &s.words).collect();
+                println!("parakeet_seconds={seconds:.2} words={}", words.len());
+                if let Ok(path) = std::env::var("CAP_PARAKEET_BENCH_WORDS") {
+                    let dump: String = words
+                        .iter()
+                        .map(|w| format!("{}\t{:.2}\t{:.2}\n", w.text, w.start, w.end))
+                        .collect();
+                    std::fs::write(path, dump).expect("write words");
+                }
+            }
+            Err(error) => panic!("parakeet_seconds={seconds:.2} error={error}"),
+        }
+    }
 
     fn word(text: &str, index: usize) -> CaptionWord {
         CaptionWord {
@@ -2154,6 +2354,150 @@ mod tests {
         }
     }
 
+    #[test]
+    fn caption_text_edits_redistribute_timings_when_word_count_changes() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 1.5, 4.0)],
+        );
+
+        for text in ["hello", "hello new world"] {
+            let words = sync_caption_words_with_text(text, &existing.words, 1.0, 4.0);
+            assert_eq!(caption_text_from_words(&words), text);
+            assert_eq!(words.first().unwrap().start, 1.0);
+            assert_eq!(words.last().unwrap().end, 4.0);
+            assert!(words.iter().all(|word| word.start < word.end));
+            assert!(words.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        }
+    }
+
+    #[test]
+    fn caption_spelling_edits_preserve_timings_and_empty_text_clears_words() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 2.0, 4.0)],
+        );
+        let words = sync_caption_words_with_text("Hello world!", &existing.words, 1.0, 4.0);
+        assert_eq!(caption_text_from_words(&words), "Hello world!");
+        for (word, original) in words.iter().zip(&existing.words) {
+            assert_eq!((word.start, word.end), (original.start, original.end));
+        }
+        assert!(sync_caption_words_with_text(" \n\t", &existing.words, 1.0, 4.0).is_empty());
+    }
+
+    #[test]
+    fn caption_text_edits_survive_source_write_and_reload() {
+        for text in ["hello new world", "hello"] {
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 1, "timescale": 2.0, "start": 1.0, "end": 6.0 }
+                    ],
+                    "zoomSegments": [],
+                    "textSegments": [
+                        { "start": 0.5, "end": 1.5, "layout": "fullscreen" }
+                    ]
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![caption(
+                        "caption",
+                        11.0,
+                        13.0,
+                        &[("hello", 11.0, 11.5), ("world", 11.5, 13.0)],
+                    )],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0, 10.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            project.timeline.as_mut().unwrap().caption_segments[0].text = text.into();
+
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            cap_project::synchronize_captions(&mut project, &durations);
+            let dir = tempfile::tempdir().unwrap();
+            project.write(dir.path()).unwrap();
+            let mut loaded = ProjectConfiguration::load(dir.path()).unwrap();
+            cap_project::synchronize_captions(&mut loaded, &durations);
+
+            let source = &loaded.captions.as_ref().unwrap().segments[0];
+            assert_eq!(source.text, text);
+            assert_eq!(source.words.first().unwrap().start, 11.0);
+            assert_eq!(source.words.last().unwrap().end, 13.0);
+            assert!(
+                source
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
+            let track = &loaded.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!(track.text, text);
+            assert_eq!((track.start, track.end), (0.0, 2.0));
+            assert_eq!(track.words.len(), text.split_whitespace().count());
+            assert!(
+                track
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
+        }
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_drops_cached_value_after_delay() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let handle = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(10))
+            .expect("spawns");
+
+        assert!(handle.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_is_cancelled_by_a_newer_run() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let slot = SLOT.lock().unwrap();
+        let older =
+            schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
+        LAST_USE.fetch_add(1, Ordering::AcqRel);
+        drop(slot);
+
+        assert!(!older.join().expect("joins"));
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_waits_for_a_run_in_flight() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let run = SLOT.lock().unwrap();
+        let handle =
+            schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!handle.is_finished());
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+        drop(run);
+
+        assert!(handle.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
+    }
+
     // -- captions.rs's own unit tests, carried over --------------------------
 
     #[test]
@@ -2183,21 +2527,44 @@ mod tests {
 
     #[test]
     fn caption_word_chunks_do_not_end_on_short_connector_when_more_words_follow() {
-        let words = [
-            "This", "is", "where", "we", "record", "I", "want", "clean", "captions",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(index, text)| word(text, index))
-        .collect::<Vec<_>>();
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "This", "is", "where", "we", "record", connector, "want", "clean", "captions",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
 
-        let chunks = caption_word_chunks(&words);
+            let chunks = caption_word_chunks(&words);
 
-        assert_eq!(
-            caption_text_from_words(chunks[0]),
-            "This is where we record I want"
-        );
-        assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("This is where we record {connector} want")
+            );
+            assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+        }
+    }
+
+    #[test]
+    fn caption_word_chunks_merge_short_tail_starting_with_connector() {
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "These", "captions", "should", "stay", "grouped", "together", connector, "Paris",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
+
+            let chunks = caption_word_chunks(&words);
+
+            assert_eq!(chunks.len(), 1, "connector {connector}");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("These captions should stay grouped together {connector} Paris")
+            );
+        }
     }
 
     // -- Model paths ----------------------------------------------------------
