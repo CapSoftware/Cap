@@ -289,6 +289,8 @@ pub async fn estimate_export(
         audio_cancellation: None,
         sample_windows: Some(windows.clone()),
         sample_timing: Some(timing.clone()),
+        #[cfg(feature = "test-hooks")]
+        video_encoder_failure_at: None,
     };
     let progress_editor = editor.clone();
     let progress_cancel = cancel.clone();
