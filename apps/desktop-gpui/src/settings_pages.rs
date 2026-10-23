@@ -1038,7 +1038,6 @@ const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
     ),
 ];
 
-/// `keepMainHiddenOnCancel`, phrased as what cancelling a picker does.
 const CANCEL_OUTCOMES: [(bool, OutcomeOption); 2] = [
     (
         false,
@@ -1595,7 +1594,7 @@ impl SettingsWindow {
                 .into_any_element()
         };
 
-        vec![
+        let mut sections = vec![
             self.section(
                 "Screenshots",
                 Some("Shortcuts work from any app. Click one to change it."),
@@ -1610,13 +1609,21 @@ impl SettingsWindow {
                 vec![card("shortcuts-recording", recording, cx)],
             )
             .into_any_element(),
-            self.section(
-                "Cancelling",
-                Some("For screenshots and recordings started from a shortcut or the tray."),
-                None,
-                vec![card("shortcuts-cancel", cancel, cx)],
-            )
-            .into_any_element(),
+        ];
+        // Linux has no main-window visibility probe, so a cancel there always
+        // counts the window as having been open and the choice would do nothing.
+        if !cfg!(target_os = "linux") {
+            sections.push(
+                self.section(
+                    "Cancelling",
+                    Some("For screenshots and recordings started from a shortcut or the tray."),
+                    None,
+                    vec![card("shortcuts-cancel", cancel, cx)],
+                )
+                .into_any_element(),
+            );
+        }
+        sections.push(
             self.section(
                 "While recording",
                 None,
@@ -1624,7 +1631,8 @@ impl SettingsWindow {
                 vec![card("shortcuts-while-recording", while_recording, cx)],
             )
             .into_any_element(),
-        ]
+        );
+        sections
     }
 
     fn render_outcome_panel(

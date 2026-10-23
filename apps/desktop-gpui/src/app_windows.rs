@@ -1898,8 +1898,12 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
                 .update(cx, |_, window, _| platform::window_is_visible(window))
                 .unwrap_or(true);
         let windows = cx.global_mut::<AppWindows>();
+        windows.main_visible_before_picker = picker_start_visibility(
+            windows.main_hidden_for_picker,
+            windows.main_visible_before_picker,
+            visible,
+        );
         windows.main_hidden_for_picker = true;
-        windows.main_visible_before_picker = visible;
         hide_main_window(cx);
     }
 }
@@ -2118,6 +2122,20 @@ pub fn dismiss_target_overlays(cx: &mut App) {
     tracing::info!(hidden, was_visible, idle, keep_hidden, "picker dismissed");
     if reveal_main_after_picker_cancel(hidden, was_visible, idle, keep_hidden) {
         show_main_window(cx);
+    }
+}
+
+/// A picker reopened over one that already hid the main window keeps the
+/// visibility saved when the first one opened.
+fn picker_start_visibility(
+    already_hidden_for_picker: bool,
+    saved: bool,
+    visible_now: bool,
+) -> bool {
+    if already_hidden_for_picker {
+        saved
+    } else {
+        visible_now
     }
 }
 
@@ -7688,15 +7706,20 @@ mod tests {
 
     #[test]
     fn cancelling_a_picker_keeps_main_hidden_only_when_asked() {
-        // Default: a cancel reveals main even if the picker opened from another app.
         assert!(reveal_main_after_picker_cancel(true, false, true, false));
         assert!(reveal_main_after_picker_cancel(true, true, true, false));
-        // `keepMainHiddenOnCancel`: only a main window that was on screen comes back.
         assert!(!reveal_main_after_picker_cancel(true, false, true, true));
         assert!(reveal_main_after_picker_cancel(true, true, true, true));
-        // The picker never hid main, or a recording owns the foreground.
         assert!(!reveal_main_after_picker_cancel(false, true, true, false));
         assert!(!reveal_main_after_picker_cancel(true, true, false, false));
+    }
+
+    #[test]
+    fn reopening_a_picker_keeps_the_visibility_from_before_the_first() {
+        assert!(picker_start_visibility(false, false, true));
+        assert!(!picker_start_visibility(false, true, false));
+        assert!(picker_start_visibility(true, true, false));
+        assert!(!picker_start_visibility(true, false, true));
     }
 
     #[test]
