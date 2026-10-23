@@ -2630,13 +2630,14 @@ describe("chunked packet-proven verification", () => {
 		expect(recording.segments.length).toBeGreaterThanOrEqual(30);
 		const warnings: string[] = [];
 		const onWarning = (warning: Error) => warnings.push(warning.name);
-		process.on("warning", onWarning);
+		const events = process as unknown as NodeJS.EventEmitter;
+		events.on("warning", onWarning);
 		try {
 			const { single, chunked, fallbacks } = await both(recording);
 			expect(fallbacks).toHaveLength(0);
 			expect(chunked).toEqual(single);
 		} finally {
-			process.off("warning", onWarning);
+			events.off("warning", onWarning);
 		}
 		expect(warnings).not.toContain("MaxListenersExceededWarning");
 	});

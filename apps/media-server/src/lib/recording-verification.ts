@@ -727,7 +727,18 @@ async function concatFiles(
 		for (const path of paths) {
 			signal?.throwIfAborted();
 			for await (const chunk of createReadStream(path, { signal })) {
-				await output.write(chunk);
+				for (let offset = 0; offset < chunk.byteLength; ) {
+					const { bytesWritten } = await output.write(
+						chunk,
+						offset,
+						chunk.byteLength - offset,
+					);
+					if (bytesWritten <= 0)
+						throw new Error(
+							"Recording verification chunk could not be written",
+						);
+					offset += bytesWritten;
+				}
 			}
 		}
 	} finally {
