@@ -25,6 +25,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
+cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),

@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -9,6 +11,18 @@ import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 const addHttps = (s?: string) => {
 	if (!s) return s;
 	return `https://${s}`;
+};
+
+const publicDir = resolve(process.cwd(), "public");
+
+const isPublicAsset = (path: string) => {
+	try {
+		const file = resolve(publicDir, `.${decodeURIComponent(path)}`);
+		if (!file.startsWith(`${publicDir}${sep}`)) return false;
+		return statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
+	} catch {
+		return false;
+	}
 };
 
 const mainOrigins = [
@@ -54,8 +68,11 @@ export async function proxy(request: NextRequest) {
 	const hostname = url.hostname;
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
+		// Files under public/ have no route of their own, so without this every
+		// <img src="/logos/..."> on a self-hosted instance redirects to /login.
 		if (
 			!(
+				isPublicAsset(path) ||
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
 				path.startsWith("/cli/") ||
