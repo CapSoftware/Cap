@@ -421,12 +421,15 @@ fn frames_survive_the_capture_item_resizing() {
     let window = fixture.window();
     let before = window.physical_size().expect("window size");
 
-    let samples = capture_samples(
+    let samples = capture_samples_with(
         window
             .raw_handle()
             .try_as_capture_item()
             .expect("window capture item"),
-        None,
+        Settings {
+            follow_item_size: true,
+            ..Default::default()
+        },
         Duration::from_secs(4),
         || {
             std::thread::sleep(Duration::from_millis(500));

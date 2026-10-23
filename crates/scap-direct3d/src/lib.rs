@@ -367,6 +367,10 @@ pub struct Settings {
     /// consumer that encodes at even dimensions receives frames it can take as
     /// they are. Ignored when `crop` is set.
     pub even_dimensions: bool,
+    /// Follow the capture item when it changes size: recreate the frame pool
+    /// at the new size, and drop frames a `crop` box no longer fits inside.
+    /// Off by default so display and area captures behave as they always have.
+    pub follow_item_size: bool,
 }
 
 impl Settings {
@@ -601,6 +605,7 @@ impl Capturer {
                     let pixel_format = settings.pixel_format;
                     let pool_size = pool_size.clone();
                     let even_dimensions = settings.even_dimensions && settings.crop.is_none();
+                    let follow_item_size = settings.follow_item_size;
 
                     move |frame_pool, _| {
                         let _activity_guard = callback_activity.enter();
@@ -624,7 +629,7 @@ impl Capturer {
                         // describing its texture and every later frame reads
                         // back as black. Recreate the pool for the new size and
                         // skip this frame; the next one arrives correctly sized.
-                        {
+                        if follow_item_size {
                             let mut pool_size = pool_size
                                 .lock()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -656,8 +661,9 @@ impl Capturer {
                             // A shrunk item leaves the crop box hanging off the
                             // edge of the source texture, which copies nothing
                             // and would vend a stale surface as if it were live.
-                            if crop.right > size.Width.max(0) as u32
-                                || crop.bottom > size.Height.max(0) as u32
+                            if follow_item_size
+                                && (crop.right > size.Width.max(0) as u32
+                                    || crop.bottom > size.Height.max(0) as u32)
                             {
                                 return Ok(());
                             }

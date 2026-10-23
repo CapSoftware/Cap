@@ -417,6 +417,9 @@ impl ScreenCaptureConfig<Direct3DCapture> {
             }),
             // Matches `window_capture_size`, which the output is sized from.
             even_dimensions: self.config.window.is_some(),
+            // Only a window target follows its item's size; display and area
+            // recordings keep the pool they were created with.
+            follow_item_size: self.config.window.is_some(),
             ..Default::default()
         };
 
