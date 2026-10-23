@@ -676,6 +676,35 @@ describe("bounded source commitment steps", () => {
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 	});
 
+	it("returns the accepted job without committing or dispatching again when the combined step is retried", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockResolvedValue({ source });
+		mocks.attach.mockImplementation(
+			async ({ remoteJobId }: { remoteJobId: string }) => {
+				withCurrent({ remoteJobId });
+				return true;
+			},
+		);
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		expect(mocks.commitSource).toHaveBeenCalledOnce();
+		expect(mocks.persist).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.sourceUrls).toHaveBeenCalledOnce();
+	});
+
 	it("leaves dispatch to its own step after a slow commit", async () => {
 		withCurrent({ source: null });
 		mocks.commitSource.mockImplementation(async () => {
