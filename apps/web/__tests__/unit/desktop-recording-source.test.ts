@@ -29,8 +29,8 @@ vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
 			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
 		},
-		get SOURCE_COMMIT_PART_PAGE_SIZE() {
-			return mocks.treePageSize ?? actual.SOURCE_COMMIT_PART_PAGE_SIZE;
+		get SOURCE_COMMIT_TREE_PAGE_SIZE() {
+			return mocks.treePageSize ?? actual.SOURCE_COMMIT_TREE_PAGE_SIZE;
 		},
 	};
 });
@@ -1399,7 +1399,7 @@ describe("large desktop recording snapshots", () => {
 	});
 
 	it.each([
-		["s3", 64],
+		["s3", 128],
 		["googleDrive", 16],
 	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
@@ -1771,30 +1771,33 @@ describe("source commit page size", () => {
 		};
 	}
 
-	it("uses 64-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
+	it("uses 128-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
 		const actual = await vi.importActual<
 			typeof import("@/lib/desktop-recording-source-checkpoint")
 		>("@/lib/desktop-recording-source-checkpoint");
-		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(64);
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(128);
 		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
 		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
-			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
+			actual.SOURCE_COMMIT_TREE_PAGE_SIZE,
+		);
+		expect(actual.SOURCE_COMMIT_TREE_PAGE_SIZE).toBeLessThanOrEqual(
+			actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 		);
 	});
 
-	it("resumes a commit saved with larger tree pages using today's 64-entry writer, as after a rollback", async () => {
-		const reference = await referenceOutput(64);
+	it("resumes a commit saved with larger tree pages using today's 128-entry writer, as after a rollback", async () => {
+		const reference = await referenceOutput(128);
 		const storage = pagedFixture();
-		mocks.treePageSize = 128;
+		mocks.treePageSize = 256;
 		const partial = await advanceWithPageSize(
-			128,
+			256,
 			snapshotCheckpoint(),
 			(checkpoint) => checkpoint.phase === "verify",
 		);
 		expect(partial.source).toBeUndefined();
 		expect(partial.checkpoint.phase).toBe("verify");
 		mocks.treePageSize = undefined;
-		const resumed = await advanceWithPageSize(64, partial.checkpoint);
+		const resumed = await advanceWithPageSize(128, partial.checkpoint);
 		if (!resumed.source) throw new Error("Resumed commit did not complete");
 		expect(await snapshotOutput(storage, resumed.source)).toEqual(
 			reference.output,
@@ -1906,7 +1909,7 @@ describe("source commit page size", () => {
 	}
 
 	it.each([
-		["Cap's AWS bucket", "s3", false, 32],
+		["Cap's AWS bucket", "s3", false, 128],
 		["a custom S3-compatible bucket", "s3", true, 8],
 		["Google Drive", "googleDrive", false, 8],
 	] as const)(
