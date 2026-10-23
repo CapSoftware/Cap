@@ -57,6 +57,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     environment:
+      # Finish active work for up to 25s on stop (below stop_grace_period).
+      MEDIA_SERVER_SHUTDOWN_GRACE_MS: "25000"
       S3_INTERNAL_ENDPOINT: http://minio:3902
       MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
       PORT: 3456
