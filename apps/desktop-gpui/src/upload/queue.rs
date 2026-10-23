@@ -379,7 +379,7 @@ struct LiveBackend;
 
 impl UploadBackend for LiveBackend {
     fn check_account(&self, state: &UploadState) -> Result<(), String> {
-        if state.server_url != auth::server_url()
+        if !auth::has_same_origin(&state.server_url, &auth::server_url())
             || state.owner_id != owner_id()
             || store_auth_missing()
         {
@@ -1195,7 +1195,9 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
         state.phase = UploadPhase::Cancelled;
         write_state(&canonical, &state)?;
     }
-    crate::library::delete_recording_directory(&project)
+    tokio::task::spawn_blocking(move || crate::library::delete_recording_directory(&project))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
