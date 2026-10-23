@@ -14,6 +14,7 @@ import {
 } from "@/actions/loom";
 import {
 	getLoomMigrationOperatorQueue,
+	reconcileLoomMigrationInventory,
 	updateLoomMigrationStatus,
 } from "@/actions/loom-concierge";
 import type { OperatorLoomMigrationView } from "@/lib/loom-concierge";
@@ -45,6 +46,8 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 		request.importedVideoCount.toString(),
 	);
 	const [verified, setVerified] = useState(false);
+	const [deletedRecordingsVerified, setDeletedRecordingsVerified] =
+		useState(false);
 	const [csvRows, setCsvRows] = useState<LoomCsvImportRow[]>([]);
 	const [processedRows, setProcessedRows] = useState(0);
 	const [startedRows, setStartedRows] = useState(0);
@@ -62,6 +65,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 		setExpectedVideoCount(request.expectedVideoCount?.toString() ?? "");
 		setImportedVideoCount(request.importedVideoCount.toString());
 		setVerified(false);
+		setDeletedRecordingsVerified(false);
 	}, [
 		request.status,
 		request.capMessage,
@@ -89,6 +93,24 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 		onSuccess: async () => {
 			await refresh();
 			toast.success("Migration status updated.");
+		},
+		onError: (error) => toast.error(error.message),
+	});
+	const reconcileMutation = useMutation({
+		mutationFn: async () =>
+			unwrapLoomMigrationResult(
+				await reconcileLoomMigrationInventory({
+					requestId: request.id,
+					verified: deletedRecordingsVerified,
+				}),
+			),
+		onSuccess: async ({ removedCount, hasMore }) => {
+			setVerified(false);
+			setDeletedRecordingsVerified(false);
+			await refresh();
+			toast.success(
+				`Removed ${removedCount} deleted recording entries. ${hasMore ? "More entries remain; reconcile again." : "Check source counts before completing the migration."}`,
+			);
 		},
 		onError: (error) => toast.error(error.message),
 	});
@@ -488,6 +510,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				<Button
 					disabled={
 						statusMutation.isPending ||
+						reconcileMutation.isPending ||
 						importMutation.isPending ||
 						fileMutation.isPending ||
 						(nextStatus === "completed" && request.activeImportCount > 0)
@@ -499,6 +522,41 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					Save status
 				</Button>
 			</form>
+			<div className="mt-4 space-y-3 border-t border-gray-6 pt-4">
+				<p className="text-sm text-gray-11">
+					Remove inventory entries for recordings that no longer exist. Existing
+					recordings and source mappings are kept. This does not complete the
+					migration.
+				</p>
+				<label className="flex items-start gap-2 text-sm text-gray-11">
+					<input
+						checked={deletedRecordingsVerified}
+						className="mt-1"
+						type="checkbox"
+						onChange={(event) =>
+							setDeletedRecordingsVerified(event.target.checked)
+						}
+					/>
+					I reconciled deleted recordings against the agreed source list and
+					re-imported any missing sources.
+				</label>
+				<Button
+					type="button"
+					size="sm"
+					variant="gray"
+					disabled={
+						!deletedRecordingsVerified ||
+						reconcileMutation.isPending ||
+						statusMutation.isPending ||
+						importMutation.isPending ||
+						fileMutation.isPending ||
+						request.activeImportCount > 0
+					}
+					onClick={() => reconcileMutation.mutate()}
+				>
+					Reconcile deleted recordings
+				</Button>
+			</div>
 		</div>
 	);
 }

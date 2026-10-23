@@ -3,6 +3,7 @@ import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
+	HttpApiSchema,
 	OpenApi,
 } from "@effect/platform";
 import { Schema } from "effect";
@@ -151,6 +152,13 @@ export const MobileEmailSessionVerifyInput = Schema.Struct({
 	email: Schema.String,
 	code: Schema.String,
 });
+
+export class MobileTooManyRequests extends HttpApiSchema.EmptyError<MobileTooManyRequests>()(
+	{
+		tag: "TooManyRequests",
+		status: 429,
+	},
+) {}
 
 export const MobileAccountDeletionInput = Schema.Struct({
 	confirmation: Schema.Literal("DELETE"),
@@ -547,7 +555,8 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+			.addError(HttpApiError.NotFound)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.post("verifyEmailSession", "/session/email/verify")
@@ -556,7 +565,8 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+			.addError(HttpApiError.NotFound)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.post("revokeSession", "/session/revoke")
