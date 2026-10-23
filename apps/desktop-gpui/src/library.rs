@@ -1097,32 +1097,50 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     // Sniff rather than trust the extension: `list_screenshots` finds the
     // preview by extension scan, and a bundle could hold a mislabelled file.
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .max(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .min(1.0);
-    let target_width = ((width as f32 * scale).round() as u32).max(1);
-    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
+        crate::jpeg_thumbnail::decode_jpeg_thumbnail(&bytes, |width, height| {
+            let (_, target_width, target_height) = crate::jpeg_thumbnail::cover_target(
+                width,
+                height,
+                THUMBNAIL_WIDTH,
+                THUMBNAIL_HEIGHT,
+            );
+            (target_width, target_height)
+        })
+        .or_else(|| {
+            let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+            let dimensions = (decoded.width(), decoded.height());
+            Some((decoded, dimensions.0, dimensions.1))
+        })?
+    } else {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width(), decoded.height());
+        (decoded, dimensions.0, dimensions.1)
+    };
+    let (width, height) = (width.max(1), height.max(1));
+    let (_, target_width, target_height) =
+        crate::jpeg_thumbnail::cover_target(width, height, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     // Box sampling for the big ratios (one pass over a multi-megapixel
     // source, and at 8x down every output pixel averages a whole block);
     // Triangle when the sizes are close, where box would alias and costs
     // nothing to avoid.
-    let rgba = if scale <= 0.5 {
-        decoded
+    let rgba = match crate::jpeg_thumbnail::thumbnail_resize(
+        decoded.width(),
+        decoded.height(),
+        target_width,
+        target_height,
+    ) {
+        crate::jpeg_thumbnail::ThumbnailResize::Box => decoded
             .thumbnail_exact(target_width, target_height)
-            .into_rgba8()
-    } else if scale < 1.0 {
-        decoded
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Triangle => decoded
             .resize_exact(
                 target_width,
                 target_height,
                 image::imageops::FilterType::Triangle,
             )
-            .into_rgba8()
-    } else {
-        decoded.into_rgba8()
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Identity => decoded.into_rgba8(),
     };
 
     if let Some(cache) = &cache {
