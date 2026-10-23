@@ -21,6 +21,7 @@ import {
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
+	timingMetadataBudget,
 } from "../../lib/recording-timing";
 import {
 	inspectRecordingSources,
@@ -1963,6 +1964,25 @@ async function decoderPids(input: string): Promise<number[]> {
 function expectExited(pid: number) {
 	expect(() => process.kill(pid, 0)).toThrow();
 }
+
+describe("recording timing metadata budget", () => {
+	const mb = 1024 * 1024;
+	test("keeps the 64 MB budget for normal recordings", () => {
+		expect(timingMetadataBudget(0)).toBe(64 * mb);
+		expect(timingMetadataBudget(300 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(4096 * mb)).toBe(64 * mb);
+	});
+
+	test("scales with very long recordings up to 1 GB", () => {
+		expect(timingMetadataBudget(20 * 1024 * mb)).toBe(320 * mb);
+		expect(timingMetadataBudget(200 * 1024 * mb)).toBe(1024 * mb);
+	});
+
+	test("ignores an invalid size", () => {
+		expect(timingMetadataBudget(Number.NaN)).toBe(64 * mb);
+		expect(timingMetadataBudget(-1)).toBe(64 * mb);
+	});
+});
 
 describe("recording timing metadata lifetime", () => {
 	test.each(["cancel", "timeout"])(
