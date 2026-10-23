@@ -116,6 +116,7 @@ export interface LoomCsvImportResult {
 
 const MAX_LOOM_CSV_ROWS = 500;
 const MAX_LOOM_SPACE_NAME_LENGTH = 255;
+const MAX_LOOM_VIDEO_NAME_LENGTH = 255;
 const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time. Contact support to raise this limit.`;
 const LOOM_CSV_PERMISSION_ERROR =
 	"Only organization admins and owners can import Loom videos from a CSV.";
@@ -526,9 +527,12 @@ async function importLoomVideoForOwner({
 	const writable = writableResult.value;
 
 	const videoId = Video.VideoId.make(nanoId());
-	const name =
+	const name = Array.from(
 		videoName ||
-		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
+			`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`,
+	)
+		.slice(0, MAX_LOOM_VIDEO_NAME_LENGTH)
+		.join("");
 
 	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
