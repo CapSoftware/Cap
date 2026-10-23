@@ -148,8 +148,9 @@ fn covers(stride: usize, row_bytes: usize, height: usize, len: usize) -> bool {
         .is_some_and(|need| need <= len)
 }
 
-/// Converts same-size packed BGRZ/BGRA/RGBZ/RGBA into `dst` when `dst` is
-/// YUV420P or NV12. Returns false so the caller can keep swscale.
+/// Converts same-size packed BGRZ/BGRA/RGBZ/RGBA into `dst` when both
+/// dimensions are even and `dst` is YUV420P or NV12. Returns false so the
+/// caller keeps swscale, including for an odd width or height.
 pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     if src.width() != dst.width() || src.height() != dst.height() {
         return false;
@@ -166,6 +167,9 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     };
     let width = src.width() as usize;
     let height = src.height() as usize;
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        return false;
+    }
     if width == 0 || height == 0 {
         return true;
     }
@@ -823,7 +827,7 @@ mod tests {
     #[test]
     fn swscale_fast_bilinear_stays_within_tolerance() {
         ffmpeg::init().unwrap();
-        for (width, height) in [(32u32, 32u32), (65, 63), (320, 180)] {
+        for (width, height) in [(32u32, 32u32), (64, 48), (320, 180)] {
             compare_swscale(width, height, |x, y, width, height| {
                 let width = width.max(1);
                 let height = height.max(1);
@@ -853,18 +857,7 @@ mod tests {
                 src.data_mut(0)[offset..offset + 4].copy_from_slice(&[b, g, r, 255]);
             }
         }
-        let mut scaler = ffmpeg::software::scaling::Context::get(
-            Pixel::BGRZ,
-            width,
-            height,
-            Pixel::YUV420P,
-            width,
-            height,
-            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-        )
-        .unwrap();
-        super::super::colour::use_bt709_for_rgb_input(&mut scaler, Pixel::BGRZ, Pixel::YUV420P)
-            .unwrap();
+        let mut scaler = bt709_scaler(width, height);
         let mut sws = frame::Video::new(Pixel::YUV420P, width, height);
         scaler.run(&src, &mut sws).unwrap();
         let mut ours = frame::Video::new(Pixel::YUV420P, width, height);
@@ -883,18 +876,16 @@ mod tests {
             y_stats.row
         );
         assert!(
-            u_stats.interior_max <= 3
-                && v_stats.interior_max <= 3
+            u_stats.max_diff <= 3
+                && v_stats.max_diff <= 3
                 && u_stats.mean < 1.5
                 && v_stats.mean < 1.5,
-            "{width}x{height} chroma u max {} interior {} mean {:.3} at {},{} v max {} interior {} mean {:.3} at {},{}",
+            "{width}x{height} chroma u max {} mean {:.3} at {},{} v max {} mean {:.3} at {},{}",
             u_stats.max_diff,
-            u_stats.interior_max,
             u_stats.mean,
             u_stats.col,
             u_stats.row,
             v_stats.max_diff,
-            v_stats.interior_max,
             v_stats.mean,
             v_stats.col,
             v_stats.row
@@ -903,7 +894,6 @@ mod tests {
 
     struct PlaneStats {
         max_diff: u8,
-        interior_max: u8,
         mean: f64,
         col: usize,
         row: usize,
@@ -917,7 +907,6 @@ mod tests {
         height: usize,
     ) -> PlaneStats {
         let mut max_diff = 0u8;
-        let mut interior_max = 0u8;
         let mut sum = 0u64;
         let mut count = 0u64;
         let mut col = 0;
@@ -934,18 +923,72 @@ mod tests {
                     col = x;
                     row = y;
                 }
-                let edge = x == 0 || y == 0 || x + 1 == width || y + 1 == height;
-                if !edge {
-                    interior_max = interior_max.max(diff);
-                }
             }
         }
         PlaneStats {
             max_diff,
-            interior_max,
             mean: sum as f64 / count as f64,
             col,
             row,
+        }
+    }
+
+    #[test]
+    fn odd_sizes_convert_or_scale_matches_swscale() {
+        ffmpeg::init().unwrap();
+        for (width, height) in [(1u32, 2), (2, 1), (65, 64), (64, 63), (65, 63), (31, 17)] {
+            let mut src = frame::Video::new(Pixel::BGRZ, width, height);
+            let stride = src.stride(0);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let offset = y * stride + x * 4;
+                    src.data_mut(0)[offset..offset + 4].copy_from_slice(&[
+                        (x.wrapping_mul(3).wrapping_add(y)) as u8,
+                        (y.wrapping_mul(5).wrapping_add(40)) as u8,
+                        (x.wrapping_mul(7).wrapping_add(90)) as u8,
+                        255,
+                    ]);
+                }
+            }
+            let mut probe = frame::Video::new(Pixel::YUV420P, width, height);
+            assert!(!try_convert(&src, &mut probe), "{width}x{height} yuv420p");
+            let mut nv12 = frame::Video::new(Pixel::NV12, width, height);
+            assert!(!try_convert(&src, &mut nv12), "{width}x{height} nv12");
+
+            let mut via_scaler = bt709_scaler(width, height);
+            let mut via = frame::Video::new(Pixel::YUV420P, width, height);
+            convert_or_scale(&src, &mut via, &mut via_scaler).unwrap();
+            let mut direct_scaler = bt709_scaler(width, height);
+            let mut direct = frame::Video::new(Pixel::YUV420P, width, height);
+            direct_scaler.run(&src, &mut direct).unwrap();
+            assert_frames_eq(&via, &direct, width, height);
+        }
+    }
+
+    fn bt709_scaler(width: u32, height: u32) -> ffmpeg::software::scaling::Context {
+        let mut scaler = ffmpeg::software::scaling::Context::get(
+            Pixel::BGRZ,
+            width,
+            height,
+            Pixel::YUV420P,
+            width,
+            height,
+            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+        )
+        .unwrap();
+        super::super::colour::use_bt709_for_rgb_input(&mut scaler, Pixel::BGRZ, Pixel::YUV420P)
+            .unwrap();
+        scaler
+    }
+
+    fn assert_frames_eq(actual: &frame::Video, expected: &frame::Video, width: u32, height: u32) {
+        for plane in 0..expected.planes() {
+            let row_bytes = expected.plane_width(plane) as usize;
+            for row in 0..expected.plane_height(plane) as usize {
+                let got = &actual.data(plane)[row * actual.stride(plane)..][..row_bytes];
+                let want = &expected.data(plane)[row * expected.stride(plane)..][..row_bytes];
+                assert_eq!(got, want, "{width}x{height} plane {plane} row {row}");
+            }
         }
     }
 
