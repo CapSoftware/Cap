@@ -7,7 +7,7 @@ import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
@@ -160,6 +160,9 @@ const hashEmailCode = (code: string) =>
 const sendMobileEmailCode = async (email: string, code: string) => {
 	const emailStatus = getEmailDeliveryStatus();
 	if (!emailStatus.configured) {
+		if (process.env.NODE_ENV === "production" && buildEnv.NEXT_PUBLIC_IS_CAP) {
+			throw new Error(emailStatus.reason);
+		}
 		console.log("");
 		console.log("Cap mobile verification code (email delivery disabled)");
 		console.log(emailStatus.reason);

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
@@ -261,6 +261,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					async sendVerificationRequest({ identifier, token }) {
 						const emailStatus = getEmailDeliveryStatus();
 						if (!emailStatus.configured) {
+							if (
+								process.env.NODE_ENV === "production" &&
+								buildEnv.NEXT_PUBLIC_IS_CAP
+							) {
+								throw new Error(emailStatus.reason);
+							}
 							console.log("\n");
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",

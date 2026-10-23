@@ -135,7 +135,11 @@ export function VerifyOTPForm({
 			}
 		},
 		onSuccess: () => {
-			toast.success("A new code has been sent to your email!");
+			toast.success(
+				emailDeliveryConfigured
+					? "A new code has been sent to your email!"
+					: "A new code was printed to the server logs",
+			);
 			setCode(["", "", "", "", "", ""]);
 			inputRefs.current[0]?.focus();
 			setLastResendTime(Date.now());

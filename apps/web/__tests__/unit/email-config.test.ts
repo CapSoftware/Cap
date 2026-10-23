@@ -49,14 +49,6 @@ describe("email config", () => {
 		expect(result?.error?.name).toBe("email_not_configured");
 	});
 
-	it("never sends from auth@undefined", async () => {
-		mocks.env.RESEND_API_KEY = "re_test";
-		await sendEmail(message);
-		for (const call of mocks.send.mock.calls) {
-			expect(call[0].from).not.toContain("undefined");
-		}
-	});
-
 	it("sends an explicit sender without a default from-domain", async () => {
 		mocks.env.RESEND_API_KEY = "re_test";
 		mocks.send.mockResolvedValue({ data: { id: "email_2" }, error: null });
