@@ -7921,10 +7921,8 @@ impl EditorWindow {
     }
 
     /// `onContextMenu` on a clip's `SegmentRoot` (`TL/ClipTrack.tsx`): select
-    /// the segment unless it is already part of the selection, then open its
-    /// menu at the pointer. Clips get the speed popover, text segments the
-    /// Copy / Paste Style menu; other tracks have no context menu, and split
-    /// mode keeps every press for the cut.
+    /// the clip unless it is already part of the selection, then open its
+    /// menu at the pointer. Split mode keeps every press for the cut.
     fn track_context_menu(
         &mut self,
         kind: TrackKind,
