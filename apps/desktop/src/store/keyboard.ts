@@ -1,5 +1,9 @@
+import type { KeyboardStyle, KeycapTheme } from "~/utils/tauri";
+
 export type KeyboardSettings = {
 	enabled: boolean;
+	style: KeyboardStyle;
+	keycapTheme: KeycapTheme;
 	font: string;
 	size: number;
 	color: string;
@@ -17,6 +21,8 @@ export type KeyboardSettings = {
 
 export const defaultKeyboardSettings: KeyboardSettings = {
 	enabled: false,
+	style: "text",
+	keycapTheme: "black",
 	font: "System Sans-Serif",
 	size: 50,
 	color: "#FFFFFF",
