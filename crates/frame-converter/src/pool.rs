@@ -93,6 +93,9 @@ impl AsyncConverterPool {
         .expect("Factory using pre-created converter should not fail")
     }
 
+    /// On Windows, D3D11 converters are shared across workers and their textures are reused
+    /// by every conversion. External texture consumers must not read them while the pool is
+    /// converting.
     pub fn from_config(
         conversion_config: ConversionConfig,
         pool_config: ConverterPoolConfig,
