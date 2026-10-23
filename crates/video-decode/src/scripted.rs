@@ -27,6 +27,7 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 const MAGIC: [u8; 4] = *b"CAPS";
@@ -97,6 +98,7 @@ struct Counters {
 pub(crate) struct ScriptState {
     pub(crate) script: Script,
     counters: Counters,
+    vend_delay_micros: AtomicU64,
     vended: Mutex<Vec<u32>>,
     failing_samples: Mutex<Vec<usize>>,
     #[cfg(target_os = "macos")]
@@ -105,6 +107,10 @@ pub(crate) struct ScriptState {
 
 impl ScriptState {
     fn record_vend(&self, index: usize) {
+        let delay = self.vend_delay_micros.load(Ordering::Relaxed);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_micros(delay));
+        }
         self.vended.lock().unwrap().push(index as u32);
     }
 
@@ -169,6 +175,15 @@ impl Registration {
         std::mem::take(&mut *self.state.vended.lock().unwrap())
     }
 
+    /// Every reader of this script sleeps this long before each vend, so a
+    /// test can act while a read is still in progress.
+    pub fn set_vend_delay(&self, delay: Duration) {
+        let micros = u64::try_from(delay.as_micros()).unwrap_or(u64::MAX);
+        self.state
+            .vend_delay_micros
+            .store(micros, Ordering::Relaxed);
+    }
+
     /// AVAssetReader starts: creations and resets.
     pub fn reader_starts(&self) -> u64 {
         self.state.counters.reader_starts.load(Ordering::Relaxed)
@@ -204,6 +219,7 @@ pub fn register(script: Script) -> Registration {
     let state = Arc::new(ScriptState {
         script,
         counters: Counters::default(),
+        vend_delay_micros: AtomicU64::new(0),
         vended: Mutex::new(Vec::new()),
         failing_samples: Mutex::new(Vec::new()),
         #[cfg(target_os = "macos")]

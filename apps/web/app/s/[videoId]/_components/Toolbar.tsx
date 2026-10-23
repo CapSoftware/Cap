@@ -13,6 +13,7 @@ import type { VideoData } from "../types";
 import { AuthOverlay } from "./AuthOverlayLazy";
 import { RecordActionButtons } from "./media-comment/record-actions";
 import type { RecordIntentKind } from "./timeline/TimelineComposer";
+import { handleEmojiReaction, REACTIONS } from "./toolbar-reactions";
 
 // Capture and upload code stays out of the page bundle until someone records.
 const RecorderSurface = dynamic(
@@ -84,50 +85,59 @@ export const Toolbar = ({
 		setRecordIntent({ kind, t });
 	};
 
-	const handleEmojiClick = async (emoji: string) => {
-		if (!canReact || !user) return;
-		const videoElement = document.querySelector("video") as HTMLVideoElement;
-		const currentTime = data.isScreenshot
-			? null
-			: videoElement?.currentTime || 0;
-		const optimisticComment: CommentType = {
-			id: `temp-${Date.now()}` as Comment.CommentId,
-			authorId: user.id,
-			authorName: user.name,
-			authorImage: user.imageUrl,
-			content: emoji,
-			createdAt: new Date(),
-			videoId: data.id,
-			parentCommentId: "" as Comment.CommentId,
-			type: "emoji",
-			timestamp: currentTime,
-			updatedAt: new Date(),
-			mediaKey: null,
-			mediaDuration: null,
-			mediaMeta: null,
-			sending: true,
-		};
+	const handleEmojiClick = (emoji: string) => {
+		handleEmojiReaction({
+			emoji,
+			canReact,
+			user,
+			onRequireAuth: () => setShowAuthOverlay(true),
+			onReact: async (chosenEmoji, authedUser) => {
+				const videoElement = document.querySelector(
+					"video",
+				) as HTMLVideoElement;
+				const currentTime = data.isScreenshot
+					? null
+					: videoElement?.currentTime || 0;
+				const optimisticComment: CommentType = {
+					id: `temp-${Date.now()}` as Comment.CommentId,
+					authorId: authedUser.id,
+					authorName: authedUser.name,
+					authorImage: authedUser.imageUrl,
+					content: chosenEmoji,
+					createdAt: new Date(),
+					videoId: data.id,
+					parentCommentId: "" as Comment.CommentId,
+					type: "emoji",
+					timestamp: currentTime,
+					updatedAt: new Date(),
+					mediaKey: null,
+					mediaDuration: null,
+					mediaMeta: null,
+					sending: true,
+				};
 
-		onOptimisticComment?.(optimisticComment);
+				onOptimisticComment?.(optimisticComment);
 
-		try {
-			const newCommentData = await newComment({
-				content: emoji,
-				videoId: data.id,
-				authorImage: user.imageUrl,
-				parentCommentId: "" as Comment.CommentId,
-				type: "emoji",
-				timestamp: currentTime,
-			});
-			startTransition(() => {
-				onCommentSuccess?.(newCommentData);
-			});
-		} catch (error) {
-			console.error("Error posting comment:", error);
-		} finally {
-			setCommentBoxOpen(false);
-			setComment("");
-		}
+				try {
+					const newCommentData = await newComment({
+						content: chosenEmoji,
+						videoId: data.id,
+						authorImage: authedUser.imageUrl,
+						parentCommentId: "" as Comment.CommentId,
+						type: "emoji",
+						timestamp: currentTime,
+					});
+					startTransition(() => {
+						onCommentSuccess?.(newCommentData);
+					});
+				} catch (error) {
+					console.error("Error posting comment:", error);
+				} finally {
+					setCommentBoxOpen(false);
+					setComment("");
+				}
+			},
+		});
 	};
 
 	const handleCommentSubmit = async () => {
@@ -377,30 +387,3 @@ export const Toolbar = ({
 		</>
 	);
 };
-
-const REACTIONS = [
-	{
-		emoji: "😂",
-		label: "joy",
-	},
-	{
-		emoji: "😍",
-		label: "love",
-	},
-	{
-		emoji: "😮",
-		label: "wow",
-	},
-	{
-		emoji: "🙌",
-		label: "yay",
-	},
-	{
-		emoji: "👍",
-		label: "up",
-	},
-	{
-		emoji: "👎",
-		label: "down",
-	},
-];

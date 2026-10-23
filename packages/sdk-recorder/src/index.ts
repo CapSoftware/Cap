@@ -35,6 +35,7 @@ export class CapRecorder {
 	private _videoId: string | null = null;
 	private _durationMs = 0;
 	private recorder: MediaRecorder | null = null;
+	private recordingStopped = Promise.resolve();
 	private streams: ManagedStreams | null = null;
 	private startup: AbortController | null = null;
 	private chunks: Blob[] = [];
@@ -144,8 +145,12 @@ export class CapRecorder {
 
 			const mimeType = getSupportedMimeType();
 			this.selectedMimeType = mimeType;
-			this.recorder = new MediaRecorder(composite, {
+			const recorder = new MediaRecorder(composite, {
 				mimeType: mimeType || undefined,
+			});
+			this.recorder = recorder;
+			this.recordingStopped = new Promise<void>((resolve) => {
+				recorder.onstop = () => resolve();
 			});
 
 			this.chunks = [];
@@ -211,17 +216,10 @@ export class CapRecorder {
 		this.stopDurationTimer();
 
 		const recorder = this.recorder;
-		return new Promise((resolve, reject) => {
-			recorder.onstop = async () => {
-				try {
-					const result = await this.uploadRecording();
-					resolve(result);
-				} catch (err) {
-					reject(err);
-				}
-			};
-			recorder.stop();
-		});
+		const stopped = this.recordingStopped;
+		if (recorder.state !== "inactive") recorder.stop();
+		await stopped;
+		return this.uploadRecording();
 	}
 
 	destroy(): void {
