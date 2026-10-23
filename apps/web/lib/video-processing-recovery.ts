@@ -151,18 +151,31 @@ async function recoverLoomCandidate({
 	const runState = await getLoomImportRunState(receipt);
 	const receiptCondition = receipt
 		? sql`EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${videoId} AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomImportRun.runId')) = ${receipt.runId})`
-		: undefined;
-	if (runState === "active") return "already-claimed";
+		: sql`EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${videoId} AND JSON_EXTRACT(${videos.metadata}, '$.loomImportRun') IS NULL)`;
+	if (runState === "active") {
+		await db()
+			.update(videoUploads)
+			.set({ updatedAt: new Date() })
+			.where(
+				and(
+					eq(videoUploads.videoId, videoId),
+					eq(videoUploads.phase, phase),
+					eq(videoUploads.updatedAt, uploadUpdatedAt),
+					receiptCondition,
+				),
+			);
+		return "already-claimed";
+	}
 	if (
 		runState === "pending" ||
 		runState === "unconfirmed" ||
-		phase === "processing"
+		(phase === "processing" && !receipt)
 	) {
 		const result = await db()
 			.update(videoUploads)
 			.set({
 				processingMessage: LOOM_IMPORT_CONFIRMATION_MESSAGE,
-				...(phase === "processing" ? {} : { updatedAt: new Date() }),
+				updatedAt: new Date(),
 			})
 			.where(
 				and(
@@ -200,16 +213,25 @@ async function recoverLoomCandidate({
 							eq(videoUploads.rawFileKey, rawFileKey),
 							recoverableProcessingError(),
 						]
-					: [
-							isNull(videoUploads.rawFileKey),
-							or(
-								eq(videoUploads.processingMessage, LOOM_IMPORT_PENDING_MESSAGE),
-								eq(
-									videoUploads.processingMessage,
-									LOOM_IMPORT_CONFIRMATION_MESSAGE,
+					: phase === "processing"
+						? [
+								existingRawFileKey
+									? eq(videoUploads.rawFileKey, existingRawFileKey)
+									: isNull(videoUploads.rawFileKey),
+							]
+						: [
+								isNull(videoUploads.rawFileKey),
+								or(
+									eq(
+										videoUploads.processingMessage,
+										LOOM_IMPORT_PENDING_MESSAGE,
+									),
+									eq(
+										videoUploads.processingMessage,
+										LOOM_IMPORT_CONFIRMATION_MESSAGE,
+									),
 								),
-							),
-						]),
+							]),
 			),
 		);
 
@@ -225,7 +247,8 @@ async function recoverLoomCandidate({
 			bucketId,
 			loomDownloadUrl: "",
 			loomVideoId,
-			reuseExistingRawUpload: phase === "error",
+			reuseExistingRawUpload:
+				phase !== "uploading" && existingRawFileKey !== null,
 		});
 		return "started";
 	} catch (error) {
@@ -233,7 +256,7 @@ async function recoverLoomCandidate({
 			return "already-claimed";
 		}
 		const message = error instanceof Error ? error.message : String(error);
-		if (phase === "error") {
+		if (phase !== "uploading") {
 			await db()
 				.update(videoUploads)
 				.set({

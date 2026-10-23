@@ -162,7 +162,8 @@ describe("recoverFailedVideoProcessing", () => {
 			.mockReturnValueOnce(makeSelectChain(createCandidates("uploading", 0)))
 			.mockReturnValueOnce(makeSelectChain(createCandidates("processing", 1)))
 			.mockReturnValueOnce(makeSelectChain([]))
-			.mockReturnValueOnce(makeSelectChain([]));
+			.mockReturnValueOnce(makeSelectChain([]))
+			.mockReturnValue(makeUpdateChain(1));
 		mockGetLoomImportRunState.mockResolvedValue("active");
 		const { recoverFailedVideoProcessing } = await import(
 			"@/lib/video-processing-recovery"
@@ -176,6 +177,75 @@ describe("recoverFailedVideoProcessing", () => {
 		);
 		expect(mockGetLoomImportRunState).toHaveBeenCalledTimes(8);
 		expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
+	});
+
+	it("rotates eight unresolved holds so a newer import is checked on the next scan", async () => {
+		const holds = Array.from({ length: 8 }, (_, i) => ({
+			...candidate,
+			videoId: `hold-${i}`,
+			phase: "processing",
+			loomVideoId: `loom-${i}`,
+			uploadUpdatedAt: new Date(1000 + i),
+			metadata: {
+				loomImportRun: { runId: `hold-${i}`, dispatch: "uncertain" as const },
+			},
+		}));
+		const pending = {
+			...candidate,
+			videoId: "newer",
+			phase: "uploading",
+			rawFileKey: null,
+			loomVideoId: "newer-loom",
+			uploadUpdatedAt: new Date(9000),
+			metadata: {
+				loomImportRun: { runId: "newer", dispatch: "rejected" as const },
+			},
+		};
+		let selection = 0;
+		mockDb.mockImplementation(() => ({
+			select: (...args: unknown[]) => {
+				const slot = selection++ % 4;
+				const rows =
+					slot === 0
+						? [pending]
+						: slot === 1
+							? [...holds].sort(
+									(a, b) =>
+										a.uploadUpdatedAt.getTime() - b.uploadUpdatedAt.getTime(),
+								)
+							: [];
+				return makeSelectChain(rows).select(...args);
+			},
+			update: () => ({
+				set: (values: { updatedAt?: Date }) => ({
+					where: async (
+						conditions: Array<{ left?: string; right?: unknown }>,
+					) => {
+						const id = conditions.find(
+							(c) => c?.left === "videoUploads.videoId",
+						)?.right;
+						const row = [...holds, pending].find((row) => row.videoId === id);
+						if (row && values.updatedAt) row.uploadUpdatedAt = values.updatedAt;
+						return [{ affectedRows: 1 }];
+					},
+				}),
+			}),
+		}));
+		mockGetLoomImportRunState.mockImplementation(async (receipt) =>
+			receipt.runId === "newer" ? "inactive" : "unconfirmed",
+		);
+		const { recoverFailedVideoProcessing } = await import(
+			"@/lib/video-processing-recovery"
+		);
+		const first = await recoverFailedVideoProcessing();
+		expect(first.results.map((row) => row.videoId)).not.toContain("newer");
+		const second = await recoverFailedVideoProcessing();
+		expect(second.results).toContainEqual({
+			videoId: "newer",
+			kind: "loom",
+			status: "started",
+		});
+		expect(mockStartLoomImportWorkflow).toHaveBeenCalledTimes(1);
 	});
 
 	it("reserves a failed-import slot while uncertain startups remain protected", async () => {
@@ -375,7 +445,7 @@ describe("recoverFailedVideoProcessing", () => {
 			expect(mockStart).not.toHaveBeenCalled();
 			expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
 			expect(result.statuses).toEqual({ "already-claimed": 1 });
-			expect(mockDb).toHaveBeenCalledTimes(4);
+			expect(mockDb).toHaveBeenCalledTimes(5);
 			expect(mockGetLoomImportRunState).toHaveBeenCalledWith(receipt);
 		},
 	);
@@ -418,7 +488,6 @@ describe("recoverFailedVideoProcessing", () => {
 		{ phase: "uploading", state: "unconfirmed" },
 		{ phase: "processing", state: "pending" },
 		{ phase: "processing", state: "unconfirmed" },
-		{ phase: "processing", state: "inactive" },
 	])(
 		"exposes startup reconciliation without redispatching: %j",
 		async (row) => {
@@ -451,7 +520,7 @@ describe("recoverFailedVideoProcessing", () => {
 			expect(result.statuses).toEqual({ "reconciliation-required": 1 });
 			expect(update.set).toHaveBeenCalledWith({
 				processingMessage: "Confirmation required",
-				...(row.phase === "processing" ? {} : { updatedAt: expect.any(Date) }),
+				updatedAt: expect.any(Date),
 			});
 			expect(update.where).toHaveBeenCalledWith(
 				expect.arrayContaining([
@@ -466,6 +535,65 @@ describe("recoverFailedVideoProcessing", () => {
 			);
 			expect(mockStartLoomImportWorkflow).not.toHaveBeenCalled();
 			expect(mockStart).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([false, true])(
+		"reclaims a confirmed inactive processing attempt without losing its source, rejection=%s",
+		async (reject) => {
+			const { LoomImportStartError } = await import("@/lib/loom-import-start");
+			const receipt = { runId: "failed-run", dispatch: "accepted" as const };
+			const claim = makeUpdateChain(1);
+			const restore = makeUpdateChain(1);
+			mockDb
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(
+					makeSelectChain([
+						{
+							...candidate,
+							phase: "processing",
+							loomVideoId: "loom-1",
+							metadata: { loomImportRun: receipt },
+						},
+					]),
+				)
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(claim)
+				.mockReturnValueOnce(restore);
+			if (reject)
+				mockStartLoomImportWorkflow.mockRejectedValueOnce(
+					new LoomImportStartError(true, new Error("busy")),
+				);
+			const { recoverFailedVideoProcessing } = await import(
+				"@/lib/video-processing-recovery"
+			);
+			const result = await recoverFailedVideoProcessing();
+			expect(result.statuses).toEqual({
+				[reject ? "retry-scheduled" : "started"]: 1,
+			});
+			expect(mockStartLoomImportWorkflow).toHaveBeenCalledWith(
+				expect.objectContaining({
+					rawFileKey: candidate.rawFileKey,
+					reuseExistingRawUpload: true,
+				}),
+			);
+			expect(claim.where).toHaveBeenCalledWith(
+				expect.arrayContaining([
+					{ left: "videoUploads.rawFileKey", right: candidate.rawFileKey },
+					{ left: "videoUploads.updatedAt", right: candidate.uploadUpdatedAt },
+					expect.objectContaining({
+						values: expect.arrayContaining(["failed-run"]),
+					}),
+				]),
+			);
+			if (reject)
+				expect(restore.set).toHaveBeenCalledWith(
+					expect.objectContaining({
+						phase: "error",
+						rawFileKey: candidate.rawFileKey,
+					}),
+				);
 		},
 	);
 
