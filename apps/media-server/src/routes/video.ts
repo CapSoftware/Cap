@@ -2159,7 +2159,7 @@ async function verifyUploadedRecordingAsync(
 			videoId: body.videoId,
 			phase,
 			errorCode,
-			retryable,
+			retryable: errorCode === "processing-unavailable",
 			stage,
 			reason: logReason(cause ?? error),
 			...(mismatch && { mismatch }),
