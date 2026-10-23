@@ -2897,12 +2897,7 @@ impl EditorWindow {
                 };
                 let start = matches!(key, FieldKey::CaptionStart(_));
                 self.edit_caption_segment("caption-timing", index, window, cx, move |segment| {
-                    if start {
-                        segment.start = value;
-                    } else {
-                        segment.end = value;
-                    }
-                    true
+                    commit_segment_timing(segment, start, &text, value)
                 });
             }
             FieldKey::KeyboardStart(index) | FieldKey::KeyboardEnd(index) => {
@@ -2914,12 +2909,7 @@ impl EditorWindow {
                 };
                 let start = matches!(key, FieldKey::KeyboardStart(_));
                 self.edit_keyboard_segment("keyboard-timing", index, window, cx, move |segment| {
-                    if start {
-                        segment.start = value;
-                    } else {
-                        segment.end = value;
-                    }
-                    true
+                    commit_segment_timing(segment, start, &text, value)
                 });
             }
             FieldKey::SyncOffset(clip, kind) => {
@@ -2973,6 +2963,31 @@ impl EditorWindow {
             true
         });
     }
+}
+
+/// `text` is the field's committed text: it shows times to two decimals, so
+/// tabbing through an untouched field commits a rounded copy of the stored
+/// time, which must not count as an edit.
+fn commit_segment_timing(
+    segment: &mut impl crate::editor_edits::TrackSegmentOps,
+    start: bool,
+    text: &str,
+    value: f64,
+) -> bool {
+    let current = if start {
+        segment.start()
+    } else {
+        segment.end()
+    };
+    if text.trim() == format!("{current:.2}") || current == value {
+        return false;
+    }
+    if start {
+        segment.set_start(value);
+    } else {
+        segment.set_end(value);
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -7935,6 +7950,86 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_timing_fields_preserve_redo() {
+        use crate::editor_edits::ProjectHistory;
+
+        for base in [2., 2.3456] {
+            for caption in [true, false] {
+                for start in [true, false] {
+                    for paused in [true, false] {
+                        let mut project: cap_project::ProjectConfiguration =
+                            serde_json::from_value(serde_json::json!({
+                                "timeline": {
+                                    "segments": [],
+                                    "zoomSegments": [],
+                                    "captionSegments": [{ "id": "caption", "start": base, "end": base + 4., "text": "hello" }],
+                                    "keyboardSegments": [{ "id": "keyboard", "start": base, "end": base + 4., "displayText": "A", "keys": [] }]
+                                }
+                            }))
+                            .unwrap();
+                        let initial = serde_json::to_value(&project).unwrap();
+                        let mut history = ProjectHistory::new(project.clone());
+                        let commit = |project: &mut cap_project::ProjectConfiguration,
+                                      text: &str| {
+                            let value = text.parse().unwrap();
+                            let timeline = project.timeline.as_mut().unwrap();
+                            if caption {
+                                commit_segment_timing(
+                                    &mut timeline.caption_segments[0],
+                                    start,
+                                    text,
+                                    value,
+                                )
+                            } else {
+                                commit_segment_timing(
+                                    &mut timeline.keyboard_segments[0],
+                                    start,
+                                    text,
+                                    value,
+                                )
+                            }
+                        };
+                        let before = if start { base } else { base + 4. };
+                        assert!(commit(&mut project, &format!("{:.2}", before + 1.)));
+                        history.record(&project);
+                        let edited = serde_json::to_value(&project).unwrap();
+                        project = history.undo().unwrap().clone();
+                        assert_eq!(serde_json::to_value(&project).unwrap(), initial);
+
+                        if paused {
+                            history.pause();
+                        }
+                        if commit(&mut project, &format!("{before:.2}")) {
+                            history.record(&project);
+                        }
+                        if paused {
+                            history.resume(&project);
+                        }
+                        let context = format!(
+                            "base={base}, caption={caption}, start={start}, paused={paused}"
+                        );
+                        assert_eq!(
+                            serde_json::to_value(&project).unwrap(),
+                            initial,
+                            "{context}"
+                        );
+                        assert!(history.can_redo(), "{context}");
+                        assert!(!history.can_undo(), "{context}");
+                        assert_eq!(
+                            serde_json::to_value(history.redo().unwrap()).unwrap(),
+                            edited
+                        );
+                        assert_eq!(
+                            serde_json::to_value(history.undo().unwrap()).unwrap(),
+                            initial
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn camera3d(start: f64, end: f64) -> Camera3DSegment {
         Camera3DSegment {
