@@ -674,8 +674,12 @@ pub fn create_d3d_device()
 
         if error.code() == DXGI_ERROR_UNSUPPORTED {
             use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+            use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
-            result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device);
+            // WARP rejects VIDEO_SUPPORT; it cannot hardware-encode anyway.
+            let warp_flags =
+                D3D11_CREATE_DEVICE_FLAG(flags.0 & !D3D11_CREATE_DEVICE_VIDEO_SUPPORT.0);
+            result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, warp_flags, &mut device);
         }
     }
     result?;
