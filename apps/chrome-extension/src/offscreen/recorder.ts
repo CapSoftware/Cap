@@ -65,7 +65,10 @@ import {
 	toSessionDescriptionInit,
 	waitForIceGatheringComplete,
 } from "../shared/webrtc";
-import { setMicrophoneMuted } from "./audio-mute";
+import {
+	resolveMicrophoneStream,
+	toggleMicrophoneMuteForRecording,
+} from "./audio-mute";
 import { captureDisplayStream } from "./display-capture";
 
 const RECORDING_TIMESLICE_MS = 1000;
@@ -1002,7 +1005,11 @@ const startRecording = async (request: StartRecordingRequest) => {
 			stopPromise: Promise.resolve(),
 			streams,
 			recordingStream,
-			microphoneStream: microphoneStream ?? undefined,
+			microphoneStream: resolveMicrophoneStream(
+				request.mode,
+				mainStream,
+				microphoneStream,
+			),
 			statusTimer: null,
 			spool,
 			uploader,
@@ -1777,7 +1784,7 @@ const handleRequest = async (
 	}
 
 	if (message.type === "toggle-microphone-mute") {
-		setMicrophoneMuted(activeRecording?.microphoneStream, message.muted);
+		toggleMicrophoneMuteForRecording(activeRecording, message.muted);
 		return { ok: true };
 	}
 
