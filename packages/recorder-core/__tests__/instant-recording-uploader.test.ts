@@ -466,6 +466,82 @@ describe("InstantRecordingUploader", () => {
 		);
 	});
 
+	it.each([
+		[DRIVE_PART_BYTES - 1, false],
+		[DRIVE_PART_BYTES, false],
+		[DRIVE_PART_BYTES, true],
+		[DRIVE_PART_BYTES + 1, false],
+		[2 * DRIVE_PART_BYTES, false],
+		[2 * DRIVE_PART_BYTES, true],
+	] as const)(
+		"declares the final Drive size for %i streamed bytes, final Blob: %s",
+		async (totalBytes, withFinalBlob) => {
+			const partCount = Math.ceil(totalBytes / DRIVE_PART_BYTES);
+			const fetchMock = vi.fn(
+				async (input: RequestInfo | URL, init?: RequestInit) => {
+					if (input.toString().endsWith("/presign-part")) {
+						return makeJsonResponse({
+							presignedUrl:
+								"https://www.googleapis.com/upload/drive/v3/files/session",
+							provider: "googleDrive",
+						});
+					}
+					expect(input.toString()).toBe("/api/upload/multipart/complete");
+					const body = JSON.parse(String(init?.body));
+					expect(body.parts).toEqual(
+						Array.from({ length: partCount }, (_, index) => ({
+							partNumber: index + 1,
+							etag: `drive-${index + 1}`,
+							size: Math.min(
+								DRIVE_PART_BYTES,
+								totalBytes - index * DRIVE_PART_BYTES,
+							),
+						})),
+					);
+					return makeJsonResponse({ success: true });
+				},
+			);
+			vi.stubGlobal("fetch", fetchMock);
+			MockXMLHttpRequest.setOutcomes(
+				Array.from({ length: partCount }, (_, index) => ({
+					type: "success",
+					status: index === partCount - 1 ? 200 : 308,
+				})),
+			);
+			const uploader = new InstantRecordingUploader({
+				videoId,
+				uploadId: "drive-session",
+				provider: "googleDrive",
+				mimeType: "video/webm",
+				subpath: "raw-upload.webm",
+				setUploadStatus: vi.fn(),
+				sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+			});
+			const blob = makeBlob(totalBytes, "video/webm");
+			uploader.handleChunk(blob, totalBytes);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+
+			const streamedPartCount = MockXMLHttpRequest.recordedParts.length;
+			await uploader.finalize({
+				finalBlob: withFinalBlob ? blob : undefined,
+				durationSeconds: 20,
+				subpath: "raw-upload.webm",
+			});
+
+			expect(
+				MockXMLHttpRequest.recordedHeaders.map((headers) =>
+					headers.get("content-range"),
+				),
+			).toEqual(
+				Array.from({ length: partCount }, (_, index) => {
+					const end = Math.min((index + 1) * DRIVE_PART_BYTES, totalBytes);
+					return `bytes ${index * DRIVE_PART_BYTES}-${end - 1}/${end === totalBytes ? totalBytes : "*"}`;
+				}),
+			);
+			expect(streamedPartCount).toBe(partCount - 1);
+		},
+	);
+
 	it("completes multipart uploads with parts ordered by part number", async () => {
 		const fetchMock = vi.fn(
 			async (input: RequestInfo | URL, init?: RequestInit) => {

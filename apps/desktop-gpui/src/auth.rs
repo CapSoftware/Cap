@@ -299,7 +299,7 @@ impl UploadRequestContext {
         current_server: &str,
         current_auth: &serde_json::Map<String, Value>,
     ) -> Result<String, AuthApiError> {
-        if current_server != self.server_url
+        if !has_same_origin(current_server, &self.server_url)
             || current_auth.get("user_id").and_then(Value::as_str) != Some(self.owner_id.as_str())
         {
             return Err(AuthApiError::InvalidAuthentication);
@@ -864,6 +864,12 @@ mod upload_context_tests {
         assert_eq!(
             context
                 .credentials_from("https://original.invalid", &refreshed)
+                .unwrap(),
+            "refreshed-credential"
+        );
+        assert_eq!(
+            context
+                .credentials_from("https://original.invalid:443", &refreshed)
                 .unwrap(),
             "refreshed-credential"
         );
