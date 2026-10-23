@@ -10,6 +10,7 @@ const revalidatePathMock = vi.fn();
 const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
 const storageGetAccessForVideoMock = vi.hoisted(() => vi.fn());
 const startVideoProcessingWorkflowMock = vi.hoisted(() => vi.fn());
+const startLoomFileProcessingWorkflowMock = vi.hoisted(() => vi.fn());
 const uploadedFileHeadMock = vi.hoisted(() => vi.fn());
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 const headersMock = vi.hoisted(() => vi.fn());
@@ -174,6 +175,11 @@ vi.mock("@cap/web-backend", () => ({
 
 vi.mock("@/lib/video-processing", () => ({
 	startVideoProcessingWorkflow: startVideoProcessingWorkflowMock,
+}));
+
+vi.mock("@/lib/loom-file-processing", () => ({
+	LOOM_FILE_SINGLE_UPLOAD_MAX_BYTES: 5 * 1024 ** 3,
+	startLoomFileProcessingWorkflow: startLoomFileProcessingWorkflowMock,
 }));
 
 vi.mock("@/lib/video-storage", () => ({
@@ -1634,6 +1640,7 @@ describe("resuming an uploaded concierge Loom file", () => {
 		metadata: { loomImportRun: { runId: "old-run", dispatch: "accepted" } },
 	};
 	const uploaded = {
+		loomVideoId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		video: {
 			id: "existing-video",
 			ownerId: "owner-id",
@@ -1658,12 +1665,13 @@ describe("resuming an uploaded concierge Loom file", () => {
 		conciergeMocks.reserveConciergeImport.mockResolvedValue("lease");
 		conciergeMocks.releaseConciergeImport.mockResolvedValue(undefined);
 		storageGetAccessForVideoMock.mockReturnValue(
-			Effect.succeed([{ headObject: uploadedFileHeadMock }]),
+			Effect.succeed([{ provider: "s3", headObject: uploadedFileHeadMock }]),
 		);
 		uploadedFileHeadMock.mockReturnValue(
 			Effect.succeed({ ContentLength: 6 * 1024 ** 3 }),
 		);
 		startVideoProcessingWorkflowMock.mockResolvedValue("started");
+		startLoomFileProcessingWorkflowMock.mockResolvedValue("started");
 		getRunMock.mockReturnValue({ status: Promise.resolve("failed") });
 	});
 
@@ -1718,17 +1726,58 @@ describe("resuming an uploaded concierge Loom file", () => {
 			ok: true,
 			value: { status: "started" },
 		});
-		expect(startVideoProcessingWorkflowMock).toHaveBeenCalledExactlyOnceWith({
-			videoId: "existing-video",
-			userId: "owner-id",
-			rawFileKey: uploaded.rawFileKey,
-			bucketId: null,
-			processingMessage: "Processing Loom video...",
-			startFailureMessage: "Loom file processing could not start.",
-		});
+		expect(startLoomFileProcessingWorkflowMock).toHaveBeenCalledExactlyOnceWith(
+			{
+				videoId: "existing-video",
+				userId: "owner-id",
+				rawFileKey: uploaded.rawFileKey,
+				bucketId: null,
+				processingMessage: "Processing Loom video...",
+				startFailureMessage: "Loom file processing could not start.",
+				loomVideoId: uploaded.loomVideoId,
+			},
+		);
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
 		expect(mockDb.insert).not.toHaveBeenCalled();
 		expect(mockDb.update).not.toHaveBeenCalled();
 		expect(storageGetWritableAccessForUserMock).not.toHaveBeenCalled();
+	});
+
+	it.each([1024, 5 * 1024 ** 3])(
+		"keeps the existing file workflow for a %i-byte upload",
+		async (bytes) => {
+			whereMock
+				.mockReturnValueOnce(withLimit([recording]))
+				.mockReturnValueOnce(withLimit([uploaded]));
+			uploadedFileHeadMock.mockReturnValue(
+				Effect.succeed({ ContentLength: bytes }),
+			);
+			const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+			await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject(
+				{
+					ok: true,
+				},
+			);
+			expect(startVideoProcessingWorkflowMock).toHaveBeenCalledOnce();
+			expect(startLoomFileProcessingWorkflowMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps non-S3 storage on its existing processing path", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([recording]))
+			.mockReturnValueOnce(withLimit([uploaded]));
+		storageGetAccessForVideoMock.mockReturnValue(
+			Effect.succeed([
+				{ provider: "google-drive", headObject: uploadedFileHeadMock },
+			]),
+		);
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject({
+			ok: true,
+		});
+		expect(startVideoProcessingWorkflowMock).toHaveBeenCalledOnce();
+		expect(startLoomFileProcessingWorkflowMock).not.toHaveBeenCalled();
 	});
 
 	it.each([
