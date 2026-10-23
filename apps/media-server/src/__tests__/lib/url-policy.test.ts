@@ -293,3 +293,26 @@ describe("connection address pinning", () => {
 		expect(calls).toBe(1);
 	});
 });
+
+test("tries another checked address when a dual-stack media connection fails", async () => {
+	const seen: string[] = [];
+	const fetcher: NonNullable<Parameters<typeof fetchAllowed>[4]> = async (
+		input,
+	) => {
+		seen.push(input);
+		if (seen.length === 1) throw new Error("IPv6 is unreachable");
+		return new Response("ok");
+	};
+	const response = await fetchAllowed(
+		"https://cdn.example/video.mp4",
+		{},
+		getUrlPolicy({}),
+		resolveTo("2606:4700::6810:85e5", "93.184.216.34"),
+		fetcher,
+	);
+	expect(await response.text()).toBe("ok");
+	expect(seen).toEqual([
+		"https://[2606:4700::6810:85e5]/video.mp4",
+		"https://93.184.216.34/video.mp4",
+	]);
+});

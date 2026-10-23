@@ -249,19 +249,34 @@ async function fetchChecked(
 	headers.set("Host", origin.host);
 	// Dial only checked addresses. Keep the original authority for routing and
 	// TLS verification, and bypass proxies that could resolve the host again.
-	const pinned = new URL(origin);
-	pinned.hostname =
-		isIP(addresses[0]) === 6 ? `[${addresses[0]}]` : addresses[0];
-	const response = await fetcher(pinned.toString(), {
-		...withManualRedirect(init),
-		headers,
-		proxy: false,
-		...(origin.protocol === "https:"
-			? { tls: { serverName: normalizeHost(origin.hostname) } }
-			: {}),
-	});
-	Object.defineProperty(response, "url", { value: input, configurable: true });
-	return response;
+	const candidates = ["GET", "HEAD"].includes(
+		(init.method ?? "GET").toUpperCase(),
+	)
+		? addresses
+		: addresses.slice(0, 1);
+	for (const [index, address] of candidates.entries()) {
+		const pinned = new URL(origin);
+		pinned.hostname = isIP(address) === 6 ? `[${address}]` : address;
+		try {
+			const response = await fetcher(pinned.toString(), {
+				...withManualRedirect(init),
+				headers,
+				proxy: false,
+				...(origin.protocol === "https:"
+					? { tls: { serverName: normalizeHost(origin.hostname) } }
+					: {}),
+			});
+			Object.defineProperty(response, "url", {
+				value: input,
+				configurable: true,
+			});
+			return response;
+		} catch (error) {
+			init.signal?.throwIfAborted();
+			if (index === candidates.length - 1) throw error;
+		}
+	}
+	throw new BlockedUrlError(input, "no connection address available");
 }
 
 async function redirectTarget(
