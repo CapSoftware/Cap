@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatLoomCsvCell, parseConciergeLoomCsv } from "@/lib/loom-csv";
+import {
+	formatLoomCsvCell,
+	parseConciergeLoomCsv,
+	parseLoomCsvRecords,
+	readLoomCsvCell,
+} from "@/lib/loom-csv";
 
 describe("concierge Loom CSV", () => {
 	it("keeps quoted workspace names and source row numbers", () => {
@@ -52,5 +57,20 @@ describe("Loom CSV results cells", () => {
 	it("neutralizes formulas that also need quoting", () => {
 		expect(formatLoomCsvCell("=1,2")).toBe(`"'=1,2"`);
 		expect(formatLoomCsvCell("\r=1")).toBe(`"'\r=1"`);
+	});
+});
+
+describe("Loom CSV results round trip", () => {
+	it("restores neutralized values when a results CSV is imported again", () => {
+		const values = ["@Sales", "+owner@example.com", "-Ops, EU", "=1"];
+		const [cells] = parseLoomCsvRecords(
+			`${values.map(formatLoomCsvCell).join(",")}\n`,
+		);
+		expect(cells?.map(readLoomCsvCell)).toEqual(values);
+	});
+
+	it("leaves other leading apostrophes alone", () => {
+		expect(readLoomCsvCell("'Sales")).toBe("'Sales");
+		expect(readLoomCsvCell("O'Brien")).toBe("O'Brien");
 	});
 });

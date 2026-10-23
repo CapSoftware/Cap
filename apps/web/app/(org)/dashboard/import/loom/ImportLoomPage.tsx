@@ -56,7 +56,11 @@ import {
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { formatLoomCsvCell, parseLoomCsvRecords } from "@/lib/loom-csv";
+import {
+	formatLoomCsvCell,
+	parseLoomCsvRecords,
+	readLoomCsvCell,
+} from "@/lib/loom-csv";
 import {
 	type LoomImportDestination,
 	loomImportDestinationHref,
@@ -100,7 +104,7 @@ const MAX_SPACE_NAME_LENGTH = 255;
 const MAX_LOOM_CSV_IMPORT_ROWS = 500;
 const LOOM_CSV_BATCH_SIZE = 10;
 const LOOM_CSV_BATCH_DELAY_MS = 1500;
-const LOOM_CSV_RATE_LIMIT_RETRY_DELAY_MS = 30000;
+const LOOM_CSV_RETRY_DELAY_MS = 30000;
 const LOOM_CSV_NOT_ATTEMPTED_MESSAGE = "Not attempted.";
 const LOOM_CSV_LIMIT_MESSAGE =
 	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
@@ -166,22 +170,19 @@ function withNotAttemptedRows(
 	].sort((a, b) => a.rowNumber - b.rowNumber);
 }
 
-function isRateLimitError(message: string | undefined) {
-	if (!message) return false;
-	const normalized = message.toLowerCase();
-	return normalized.includes("rate limit") || normalized.includes("too many");
-}
-
-function rateLimitedBatchRows(
+function retryableBatchRows(
 	batch: MappedRow[],
 	results: LoomCsvImportRowResult[],
 ) {
-	const limited = new Set(
+	const retryable = new Set(
 		results
-			.filter((row) => !row.success && isRateLimitError(row.error))
+			.filter(
+				(row) =>
+					!row.success && row.errorCode === "loom_temporarily_unavailable",
+			)
 			.map((row) => row.rowNumber),
 	);
-	return batch.filter((row) => limited.has(row.rowNumber));
+	return batch.filter((row) => retryable.has(row.rowNumber));
 }
 
 function importErrorMessage(error: unknown) {
@@ -218,7 +219,8 @@ function parseCsv(text: string, fileName: string): CsvData {
 	const headers = records[0]?.map((header) => header.trim()) ?? [];
 	const rows = records
 		.slice(1)
-		.filter((row) => row.some((cell) => cell.trim().length > 0));
+		.filter((row) => row.some((cell) => cell.trim().length > 0))
+		.map((row) => row.map(readLoomCsvCell));
 
 	if (headers.length === 0) {
 		throw new Error("No CSV headers found.");
@@ -593,15 +595,14 @@ export const ImportLoomPage = ({
 					}
 
 					batchResults = importResult.results;
-					retryRows = rateLimitedBatchRows(batch, batchResults);
+					retryRows = retryableBatchRows(batch, batchResults);
 				} catch (error) {
 					const message = importErrorMessage(error);
 					batchResults = batch.map((row) => buildRowFailure(row, message));
-					if (isRateLimitError(message)) retryRows = batch;
 				}
 
 				if (retryRows.length > 0) {
-					await delay(LOOM_CSV_RATE_LIMIT_RETRY_DELAY_MS);
+					await delay(LOOM_CSV_RETRY_DELAY_MS);
 
 					try {
 						const retryResult = await importFromLoomCsv({

@@ -51,6 +51,7 @@ export function parseLoomCsvRecords(text: string) {
 }
 
 const SPREADSHEET_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const NEUTRALIZED_FORMULA_PREFIX = /^'(?=[=+\-@\t\r])/;
 
 export function formatLoomCsvCell(value: string) {
 	const literal = SPREADSHEET_FORMULA_PREFIX.test(value) ? `'${value}` : value;
@@ -58,6 +59,10 @@ export function formatLoomCsvCell(value: string) {
 		return `"${literal.replace(/"/g, '""')}"`;
 	}
 	return literal;
+}
+
+export function readLoomCsvCell(value: string) {
+	return value.replace(NEUTRALIZED_FORMULA_PREFIX, "");
 }
 
 export function parseConciergeLoomCsv(text: string): LoomCsvImportRow[] {
