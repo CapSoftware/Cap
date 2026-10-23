@@ -12,6 +12,7 @@ import {
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 export async function addVideosToFolder(
@@ -33,26 +34,32 @@ export async function addVideosToFolder(
 		const [folder] = await db()
 			.select({
 				id: folders.id,
+				organizationId: folders.organizationId,
 				spaceId: folders.spaceId,
-				createdById: folders.createdById,
 			})
 			.from(folders)
-			.where(eq(folders.id, folderId));
+			.where(and(eq(folders.id, folderId), eq(folders.spaceId, spaceId)));
 
 		if (!folder) {
 			throw new Error("Folder not found");
 		}
 
-		// Verify the caller can edit the destination folder. Mirrors
-		// FoldersPolicy.canEdit: personal folders (no space) are creator-only,
-		// space folders require space-admin or org admin/owner access.
-		if (folder.spaceId === null) {
-			if (folder.createdById !== user.id) {
+		if (spaceId === user.activeOrganizationId) {
+			const access = await getOrganizationAccess(
+				user.id,
+				user.activeOrganizationId,
+			);
+			if (!access || folder.organizationId !== user.activeOrganizationId) {
 				throw new Error("Folder not found");
 			}
 		} else {
-			const access = await getSpaceAccess(user.id, folder.spaceId);
-			if (!access?.canManage) {
+			const access = await getSpaceAccess(user.id, spaceId);
+			if (
+				!access ||
+				access.organizationId !== folder.organizationId ||
+				!access.organizationRole ||
+				(!access.canManage && !access.spaceRole)
+			) {
 				throw new Error("Folder not found");
 			}
 		}

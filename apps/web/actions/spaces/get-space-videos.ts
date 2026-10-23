@@ -22,21 +22,17 @@ export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
 
-		// Only members/owner of the space (or organization) may see its videos.
 		if (isAllSpacesEntry) {
-			const access = await getOrganizationAccess(user.id, spaceId);
+			const access = await getOrganizationAccess(
+				user.id,
+				user.activeOrganizationId,
+			);
 			if (!access) {
 				throw new Error("Space not found");
 			}
 		} else {
-			// getSpaceAccess returns a non-null object even for non-members (with
-			// both roles null), so a bare `!access` check would NOT block them.
-			// Require an actual org or space role to view the space's videos.
 			const access = await getSpaceAccess(user.id, spaceId);
-			if (
-				!access ||
-				(access.organizationRole === null && access.spaceRole === null)
-			) {
+			if (!access || (!access.organizationRole && !access.spaceRole)) {
 				throw new Error("Space not found");
 			}
 		}

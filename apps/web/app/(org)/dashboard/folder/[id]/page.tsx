@@ -4,7 +4,7 @@ import { makeCurrentUserLayer } from "@cap/web-backend";
 import { Folder } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
-import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import { canViewFolder } from "@/actions/folders/folder-access";
 import {
 	getChildFolders,
 	getFolderBreadcrumb,
@@ -32,32 +32,13 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId) return notFound();
 
-	// Ensure the folder belongs to a space the caller can access before
-	// disclosing its contents (mirrors FoldersPolicy: personal folders are
-	// creator-only, space folders require space/org membership). A missing folder
-	// surfaces as notFound() rather than an unhandled 500.
-	const folderForAccess = await getFolderById(folderId).pipe(
+	const folder = await getFolderById(folderId).pipe(
 		Effect.provide(makeCurrentUserLayer(user)),
-		Effect.catchAll(() => Effect.succeed(null)),
+		Effect.catchAllCause(() => Effect.succeed(null)),
 		runPromise,
 	);
 
-	if (!folderForAccess) return notFound();
-
-	if (folderForAccess.spaceId === null) {
-		if (folderForAccess.createdById !== user.id) return notFound();
-	} else {
-		// getSpaceAccess returns a non-null object even for non-members (both roles
-		// null), so check for an actual role. Using space access (not org-only)
-		// keeps legitimate space members who aren't org members from being blocked.
-		const access = await getSpaceAccess(user.id, folderForAccess.spaceId);
-		if (
-			!access ||
-			(access.organizationRole === null && access.spaceRole === null)
-		) {
-			return notFound();
-		}
-	}
+	if (!folder || !(await canViewFolder(user.id, folder))) return notFound();
 
 	return Effect.gen(function* () {
 		const [childFolders, breadcrumb, videosData, share] = yield* Effect.all(
@@ -68,7 +49,6 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 					variant: "user",
 				}),
 				Effect.gen(function* () {
-					const folder = yield* getFolderById(folderId);
 					// Mirrors FoldersPolicy.canEdit for personal folders: only the
 					// creator may manage sharing; the Pro gate uses the folder's own
 					// organization, which is what the server enforces on writes.

@@ -21,7 +21,6 @@ export async function getOrganizationVideoIds(
 			throw new Error("Organization ID is required");
 		}
 
-		// Only members/owner of the organization may see its shared videos.
 		const access = await getOrganizationAccess(user.id, organizationId);
 		if (!access) {
 			throw new Error("Organization not found");
