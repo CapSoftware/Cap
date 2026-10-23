@@ -606,9 +606,13 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
     std::fs::create_dir_all(&content)?;
     let timestamps = Timestamps::now();
     let base = timestamps.instant();
-    let gate = spec
-        .arm_at
-        .map(|_| cap_recording::RecordingStartGate::new());
+    // Mirrors the product's Instant gate: the screen track starts at the arm
+    // point, where the epoch-anchored audio below starts.
+    let gate = spec.arm_at.map(|_| {
+        let gate = cap_recording::RecordingStartGate::new();
+        gate.set_video_origin_at_arm();
+        gate
+    });
     let mut emitted = Emitted {
         fps: spec.screen.fps,
         ..Default::default()
