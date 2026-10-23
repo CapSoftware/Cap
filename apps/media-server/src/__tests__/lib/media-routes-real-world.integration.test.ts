@@ -14,7 +14,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import type appType from "../../app";
 import * as audioLevels from "../../lib/audio-levels";
 import * as containerCpu from "../../lib/container-cpu";
@@ -65,10 +64,6 @@ let corruptRecordingReadback = false;
 let transientFixtureFailures = 0;
 let permanentFixtureFailures = 0;
 let slowFixtureCancellations = 0;
-
-function fileUrl(path: string) {
-	return pathToFileURL(path).toString();
-}
 
 function fixtureUrl(name = "test-with-audio.mp4") {
 	return `${baseUrl}/fixtures/${name}`;
@@ -1000,12 +995,12 @@ describe("media routes real-world integration tests", () => {
 	test("checks real audio tracks through the route stack", async () => {
 		const withAudioResponse = await app.fetch(
 			mediaPostRequest("/audio/check", {
-				videoUrl: fileUrl(TEST_VIDEO_WITH_AUDIO),
+				videoUrl: fixtureUrl("test-with-audio.mp4"),
 			}),
 		);
 		const noAudioResponse = await app.fetch(
 			mediaPostRequest("/audio/check", {
-				videoUrl: fileUrl(TEST_VIDEO_NO_AUDIO),
+				videoUrl: fixtureUrl("test-no-audio.mp4"),
 			}),
 		);
 
@@ -1021,7 +1016,7 @@ describe("media routes real-world integration tests", () => {
 	test("extracts real audio through the non-streaming route", async () => {
 		const response = await app.fetch(
 			mediaPostRequest("/audio/extract", {
-				videoUrl: fileUrl(TEST_VIDEO_WITH_AUDIO),
+				videoUrl: fixtureUrl("test-with-audio.mp4"),
 				stream: false,
 			}),
 		);
@@ -1034,7 +1029,7 @@ describe("media routes real-world integration tests", () => {
 	test("probes and thumbnails a real video through the route stack", async () => {
 		const probeResponse = await app.fetch(
 			mediaPostRequest("/video/probe", {
-				videoUrl: fileUrl(TEST_VIDEO_WITH_AUDIO),
+				videoUrl: fixtureUrl("test-with-audio.mp4"),
 			}),
 		);
 		expect(probeResponse.status).toBe(200);
@@ -1046,7 +1041,7 @@ describe("media routes real-world integration tests", () => {
 
 		const thumbnailResponse = await app.fetch(
 			mediaPostRequest("/video/thumbnail", {
-				videoUrl: fileUrl(TEST_VIDEO_WITH_AUDIO),
+				videoUrl: fixtureUrl("test-with-audio.mp4"),
 				timestamp: 0.2,
 				width: 160,
 				height: 120,
