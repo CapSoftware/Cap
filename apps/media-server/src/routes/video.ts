@@ -63,6 +63,7 @@ import {
 } from "../lib/media-transfer";
 import type {
 	ResilientInputFlags,
+	StorageUploadReceipt,
 	StorageUploadTarget,
 } from "../lib/media-video";
 import {
@@ -1197,15 +1198,30 @@ async function generateAndUploadPreviewGif(
 ): Promise<void> {
 	if (!previewGifPresignedUrl) return;
 
-	let previewGifFile: TempFileHandle | null = null;
-
+	const render = generatePreviewGif(inputPath, duration, {}, abortSignal);
 	try {
-		previewGifFile = await generatePreviewGif(
-			inputPath,
-			duration,
-			{},
+		await uploadRenderedPreviewGif(
+			render,
+			previewGifPresignedUrl,
 			abortSignal,
+			logPrefix,
 		);
+	} finally {
+		await render.then(
+			(gif) => gif.cleanup(),
+			() => {},
+		);
+	}
+}
+
+async function uploadRenderedPreviewGif(
+	render: Promise<TempFileHandle>,
+	previewGifPresignedUrl: string,
+	abortSignal: AbortSignal | undefined,
+	logPrefix: string,
+): Promise<void> {
+	try {
+		const previewGifFile = await render;
 		await uploadFileToS3(
 			previewGifFile.path,
 			previewGifPresignedUrl,
@@ -1219,8 +1235,6 @@ async function generateAndUploadPreviewGif(
 				: new Error("Preview GIF generation aborted");
 		}
 		console.warn(`[${logPrefix}] Preview GIF generation failed:`, previewErr);
-	} finally {
-		await previewGifFile?.cleanup();
 	}
 }
 
@@ -1639,71 +1653,92 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const uploadReceipt = await withJobHeartbeat(jobId, async () =>
-			options.existingOutput
-				? { objectIdentity: options.existingOutput.objectIdentity }
-				: options.outputUpload
-					? uploadFileToStorage(
-							outputPath,
-							options.outputUpload,
-							"video/mp4",
-							signal,
-						)
-					: uploadFileToS3(outputPath, outputPresignedUrl, "video/mp4", signal),
-		);
-		outputUploaded = true;
+		// Previews only read the finished output, so render them while it uploads; they are still
+		// uploaded after the output, so a failed upload never leaves previews behind.
+		let uploadReceipt: StorageUploadReceipt;
+		const previewAbort = new AbortController();
+		const previewSignal = AbortSignal.any([signal, previewAbort.signal]);
+		const thumbnailRender = thumbnailPresignedUrl
+			? generateThumbnail(outputPath, metadata.duration, {}, previewSignal)
+			: undefined;
+		const previewGifRender = previewGifPresignedUrl
+			? generatePreviewGif(outputPath, metadata.duration, {}, previewSignal)
+			: undefined;
+		thumbnailRender?.catch(() => {});
+		previewGifRender?.catch(() => {});
+		try {
+			uploadReceipt = await withJobHeartbeat(jobId, async () =>
+				options.existingOutput
+					? { objectIdentity: options.existingOutput.objectIdentity }
+					: options.outputUpload
+						? uploadFileToStorage(
+								outputPath,
+								options.outputUpload,
+								"video/mp4",
+								signal,
+							)
+						: uploadFileToS3(
+								outputPath,
+								outputPresignedUrl,
+								"video/mp4",
+								signal,
+							),
+			);
+			outputUploaded = true;
 
-		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
-			updateJob(jobId, {
-				phase: "generating_thumbnail",
-				progress: 90,
-				message: "Generating preview assets...",
-			});
-			await sendWebhook(job);
-		}
-
-		await withJobHeartbeat(jobId, async () => {
-			if (thumbnailPresignedUrl) {
-				// Only the fully verified reuse path can finish without a decoded preview.
-				const thumbnailData = await generateThumbnail(
-					outputPath,
-					metadata.duration,
-					{},
-					signal,
-				).catch((error) => {
-					signal.throwIfAborted();
-					if (!options.existingOutput) throw error;
-					console.warn(
-						"Verified Loom output preview could not be generated",
-						error,
-					);
-					return undefined;
+			if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+				updateJob(jobId, {
+					phase: "generating_thumbnail",
+					progress: 90,
+					message: "Generating preview assets...",
 				});
-				try {
-					if (thumbnailData)
-						await uploadToS3(
-							thumbnailData,
-							thumbnailPresignedUrl,
-							"image/jpeg",
-							signal,
-						);
-				} catch (error) {
-					signal.throwIfAborted();
-					console.warn(
-						`[video/process] Thumbnail upload failed for ${jobId}:`,
-						error,
-					);
-				}
+				await sendWebhook(job);
 			}
 
-			await generateAndUploadPreviewGif(
-				outputPath,
-				metadata.duration,
-				previewGifPresignedUrl,
-				signal,
-				"video/process",
-			);
-		});
+			await withJobHeartbeat(jobId, async () => {
+				if (thumbnailRender && thumbnailPresignedUrl) {
+					// Only the fully verified reuse path can finish without a decoded preview.
+					const thumbnailData = await thumbnailRender.catch((error) => {
+						signal.throwIfAborted();
+						if (!options.existingOutput) throw error;
+						console.warn(
+							"Verified Loom output preview could not be generated",
+							error,
+						);
+						return undefined;
+					});
+					try {
+						if (thumbnailData)
+							await uploadToS3(
+								thumbnailData,
+								thumbnailPresignedUrl,
+								"image/jpeg",
+								signal,
+							);
+					} catch (error) {
+						signal.throwIfAborted();
+						console.warn(
+							`[video/process] Thumbnail upload failed for ${jobId}:`,
+							error,
+						);
+					}
+				}
+
+				if (previewGifRender && previewGifPresignedUrl)
+					await uploadRenderedPreviewGif(
+						previewGifRender,
+						previewGifPresignedUrl,
+						signal,
+						"video/process",
+					);
+			});
+		} finally {
+			previewAbort.abort();
+			await Promise.allSettled([
+				thumbnailRender,
+				previewGifRender?.then((gif) => gif.cleanup()),
+			]);
+		}
 		signal.throwIfAborted();
 
 		updateJob(jobId, {
