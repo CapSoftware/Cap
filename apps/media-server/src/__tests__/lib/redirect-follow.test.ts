@@ -12,8 +12,11 @@ const video = readFileSync(
 
 describe("redirects to a private address", () => {
 	const previous = process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+	const previousEndpoint = process.env.S3_INTERNAL_ENDPOINT;
 
 	afterEach(() => {
+		if (previousEndpoint === undefined) delete process.env.S3_INTERNAL_ENDPOINT;
+		else process.env.S3_INTERNAL_ENDPOINT = previousEndpoint;
 		if (previous === undefined) {
 			delete process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
 		} else {
@@ -23,6 +26,7 @@ describe("redirects to a private address", () => {
 
 	function privateRedirectServer() {
 		let secretHits = 0;
+		let firstHits = 0;
 		const server: ReturnType<typeof Bun.serve> = Bun.serve({
 			port: 0,
 			fetch(request): Response {
@@ -33,16 +37,21 @@ describe("redirects to a private address", () => {
 						headers: { "content-type": "video/mp4" },
 					});
 				}
+				firstHits++;
+				const destination = new URL("/secret", server.url);
+				destination.hostname = "127.0.0.2";
 				return new Response(null, {
 					status: 302,
 					headers: {
-						location: new URL("/secret", server.url).toString(),
+						location: destination.toString(),
 					},
 				});
 			},
 		});
+		process.env.S3_INTERNAL_ENDPOINT = server.url.toString();
 		return {
 			server,
+			firstHits: () => firstHits,
 			url: `${server.url}clip.mp4`,
 			secretHits: () => secretHits,
 		};
@@ -53,6 +62,7 @@ describe("redirects to a private address", () => {
 		const target = privateRedirectServer();
 		try {
 			await expect(probeVideo(target.url)).rejects.toThrow("private address");
+			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			target.server.stop(true);
@@ -64,6 +74,7 @@ describe("redirects to a private address", () => {
 		const target = privateRedirectServer();
 		try {
 			await expect(extractAudio(target.url)).rejects.toThrow("private address");
+			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			target.server.stop(true);
@@ -77,6 +88,7 @@ describe("redirects to a private address", () => {
 			await expect(generateThumbnail(target.url, 1)).rejects.toThrow(
 				"private address",
 			);
+			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			target.server.stop(true);
@@ -93,6 +105,7 @@ describe("redirects to a private address", () => {
 					requireAudio: false,
 				}),
 			).rejects.toThrow("private address");
+			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			target.server.stop(true);
@@ -107,6 +120,7 @@ describe("redirects to a private address", () => {
 			await expect(downloadVideoToTemp(target.url, "mp4")).rejects.toThrow(
 				"private address",
 			);
+			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			if (previousConcurrency === undefined) {

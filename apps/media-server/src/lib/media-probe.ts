@@ -12,7 +12,7 @@ import {
 	withMediaOperation,
 } from "./media-operations";
 import { materializeMedia } from "./media-transfer";
-import { fetchAllowed, getUrlPolicy, resolveAllowedUrl } from "./url-policy";
+import { BlockedUrlError, fetchAllowed } from "./url-policy";
 
 const PROBE_TIMEOUT_MS = 30_000;
 
@@ -58,7 +58,8 @@ async function hasHttpNetworkFailure(
 		});
 		await response.body?.cancel();
 		return !response.ok;
-	} catch {
+	} catch (error) {
+		if (error instanceof BlockedUrlError) throw error;
 		return true;
 	}
 }
@@ -136,18 +137,7 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 	return await withMediaOperation("probe", () => {
 		const controller = new AbortController();
 		return withTimeout(
-			(async () => {
-				const allowedUrl = /^https?:/i.test(videoUrl)
-					? await resolveAllowedUrl(
-							videoUrl,
-							getUrlPolicy(),
-							undefined,
-							undefined,
-							controller.signal,
-						)
-					: videoUrl;
-				return probeMedia(allowedUrl, controller.signal);
-			})(),
+			probeMedia(videoUrl, controller.signal),
 			PROBE_TIMEOUT_MS,
 			() => controller.abort(),
 		);

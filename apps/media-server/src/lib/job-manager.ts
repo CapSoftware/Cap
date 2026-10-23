@@ -777,6 +777,7 @@ async function deliverWebhook(
 		job.webhookLastAttemptAt = startedAt;
 		try {
 			const resp = await fetchAllowed(job.webhookUrl, {
+				redirect: "error",
 				method: "POST",
 				headers,
 				body,

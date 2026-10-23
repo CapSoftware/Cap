@@ -76,6 +76,7 @@ export async function enhanceLocalRecording(input: {
 			]);
 			const callback = async (body: Record<string, unknown>) => {
 				const response = await fetchAllowed(webhookUrl, {
+					redirect: "error",
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",

@@ -1961,10 +1961,6 @@ async function decoderPids(input: string): Promise<number[]> {
 		.map((line) => Number.parseInt(line.trim(), 10));
 }
 
-function expectExited(pid: number) {
-	expect(() => process.kill(pid, 0)).toThrow();
-}
-
 describe("recording timing metadata budget", () => {
 	const mb = 1024 * 1024;
 	test("keeps the 64 MB budget for normal recordings", () => {
@@ -3488,9 +3484,7 @@ describe("remote recording object identity", () => {
 					{ expectedDuration: 5, requireAudio: true },
 				).catch((error: unknown) => error);
 				expect(error).toBeInstanceOf(Error);
-				expect((error as Error).message).toContain(
-					when === "before-decode" ? "full decode failed" : "object changed",
-				);
+				expect((error as Error).message).toContain("object changed");
 				expect(isRetryableRecordingVerificationError(error)).toBe(false);
 				expect(decoderRequests).toBeGreaterThan(0);
 				if (when !== "before-decode") expect(probes).toBe(2);

@@ -121,7 +121,10 @@ function getAudioExtractArgs(
 	return [
 		"ffmpeg",
 		"-protocol_whitelist",
-		"file,pipe",
+		"file,pipe,crypto,data",
+		...(videoUrl.toLowerCase().endsWith(".m3u8")
+			? ["-allowed_extensions", "ALL"]
+			: []),
 		"-i",
 		videoUrl,
 		"-vn",
@@ -407,17 +410,18 @@ export async function extractAudio(
 	});
 }
 
-export function extractAudioStream(
+export async function extractAudioStream(
 	videoUrl: string,
 	options: AudioExtractionOptions = {},
-): StreamingExtractResult {
+	abortSignal?: AbortSignal,
+): Promise<StreamingExtractResult> {
 	if (!canAcceptNewAudioOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	if (/^https?:/i.test(videoUrl)) {
-		return openRemoteAudioExtractStream(videoUrl, opts);
+		return openRemoteAudioExtractStream(videoUrl, opts, abortSignal);
 	}
 	return openAudioExtractStream(videoUrl, opts);
 }
@@ -425,6 +429,7 @@ export function extractAudioStream(
 function openAudioExtractStream(
 	videoUrl: string,
 	opts: Required<AudioExtractionOptions>,
+	cleanupInput: () => Promise<void> = async () => {},
 ): StreamingExtractResult {
 	const proc: Subprocess = registerSubprocess(
 		spawn({
@@ -455,6 +460,7 @@ function openAudioExtractStream(
 			reader = null;
 		}
 		unregisterMediaOperation(operation);
+		void cleanupInput();
 		void terminateProcess(proc);
 	};
 	const cleanup = () => finish(new Error("Audio extraction cancelled"));
@@ -516,96 +522,38 @@ function openAudioExtractStream(
 	return { stream, cleanup };
 }
 
-function openRemoteAudioExtractStream(
+async function openRemoteAudioExtractStream(
 	videoUrl: string,
 	opts: Required<AudioExtractionOptions>,
-): StreamingExtractResult {
-	const abortController = new AbortController();
-	let cleaned = false;
-	let proc: Subprocess | undefined;
-	let cleanupStaged = async () => {};
-	let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-	let timeoutId: ReturnType<typeof setTimeout> | undefined;
-	let resolveReady: () => void = () => {};
-	const ready = new Promise<void>((resolve) => {
-		resolveReady = resolve;
-	});
-	let operation: ReturnType<typeof registerMediaOperation> | undefined;
-
-	const cleanup = () => {
-		if (cleaned) return;
-		cleaned = true;
-		abortController.abort();
-		if (timeoutId) clearTimeout(timeoutId);
-		if (reader) {
-			try {
-				reader.cancel().catch(() => {});
-				reader.releaseLock();
-			} catch {}
-			reader = null;
-		}
-		if (operation) unregisterMediaOperation(operation);
-		if (proc) void terminateProcess(proc);
-		void cleanupStaged();
-	};
-	operation = registerMediaOperation("audio", cleanup);
-
-	timeoutId = setTimeout(cleanup, opts.timeoutMs);
-
-	const stream = new ReadableStream<Uint8Array>(
-		{
-			async start() {
-				try {
-					const staged = await stageRemoteInput(
-						videoUrl,
-						abortController.signal,
-					);
-					cleanupStaged = staged.cleanup;
-					if (cleaned) return;
-					proc = registerSubprocess(
-						spawn({
-							cmd: getAudioExtractArgs(staged.inputPath, opts),
-							stdout: "pipe",
-							stderr: "pipe",
-						}),
-					);
-					void drainStream(proc.stderr as ReadableStream<Uint8Array>);
-					proc.exited.then(() => {
-						cleanup();
-					});
-					reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
-				} catch (error) {
-					cleanup();
-					throw error;
-				} finally {
-					resolveReady();
-				}
+	abortSignal?: AbortSignal,
+): Promise<StreamingExtractResult> {
+	const controller = new AbortController();
+	const signal = AbortSignal.any([
+		controller.signal,
+		AbortSignal.timeout(opts.timeoutMs),
+		...(abortSignal ? [abortSignal] : []),
+	]);
+	const operation = registerMediaOperation("audio", () => controller.abort());
+	const startedAt = performance.now();
+	let staged: Awaited<ReturnType<typeof stageRemoteInput>> | undefined;
+	try {
+		staged = await stageRemoteInput(videoUrl, signal);
+		signal.throwIfAborted();
+		return openAudioExtractStream(
+			staged.inputPath,
+			{
+				...opts,
+				timeoutMs: Math.max(
+					1,
+					opts.timeoutMs - (performance.now() - startedAt),
+				),
 			},
-			async pull(controller) {
-				await ready;
-				if (!reader || cleaned) {
-					controller.close();
-					return;
-				}
-				try {
-					const { done, value } = await reader.read();
-					if (done) {
-						controller.close();
-						cleanup();
-					} else {
-						controller.enqueue(value);
-					}
-				} catch (err) {
-					controller.error(err);
-					cleanup();
-				}
-			},
-			cancel() {
-				cleanup();
-			},
-		},
-		new CountQueuingStrategy({ highWaterMark: 4 }),
-	);
-
-	return { stream, cleanup };
+			staged.cleanup,
+		);
+	} catch (error) {
+		await staged?.cleanup();
+		throw error;
+	} finally {
+		unregisterMediaOperation(operation);
+	}
 }

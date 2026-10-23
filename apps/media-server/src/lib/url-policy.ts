@@ -151,11 +151,11 @@ const defaultResolver: Resolver = async (host) =>
 		(entry) => entry.address,
 	);
 
-export async function assertUrlAllowed(
+async function checkedAddresses(
 	value: string,
 	policy: UrlPolicy = getUrlPolicy(),
 	resolve: Resolver = defaultResolver,
-): Promise<void> {
+): Promise<string[]> {
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -173,7 +173,7 @@ export async function assertUrlAllowed(
 	const trustedOrigin = policy.trustedOrigins.some(
 		(origin) => origin.host === host && origin.port === port,
 	);
-	if (explicitlyAllowed || trustedOrigin || policy.allowPrivate) return;
+	if (explicitlyAllowed || trustedOrigin || policy.allowPrivate) return [];
 	if (policy.strictHosts) {
 		throw new BlockedUrlError(
 			value,
@@ -194,6 +194,15 @@ export async function assertUrlAllowed(
 			`host ${host} resolves to private address ${privateAddress ?? "none"}; add it to MEDIA_SERVER_ALLOWED_HOSTS if this is your storage or Cap web host`,
 		);
 	}
+	return addresses;
+}
+
+export async function assertUrlAllowed(
+	value: string,
+	policy: UrlPolicy = getUrlPolicy(),
+	resolve: Resolver = defaultResolver,
+): Promise<void> {
+	await checkedAddresses(value, policy, resolve);
 }
 
 const URL_KEY = /urls?$/i;
@@ -218,7 +227,42 @@ export function collectUrls(input: unknown, key = ""): string[] {
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
 
-type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+type PinnedRequestInit = RequestInit & {
+	proxy?: false;
+	tls?: { serverName: string };
+};
+type Fetcher = (input: string, init?: PinnedRequestInit) => Promise<Response>;
+
+async function fetchChecked(
+	input: string,
+	init: RequestInit,
+	policy: UrlPolicy,
+	resolve: Resolver,
+	fetcher: Fetcher,
+): Promise<Response> {
+	init.signal?.throwIfAborted();
+	const addresses = await checkedAddresses(input, policy, resolve);
+	init.signal?.throwIfAborted();
+	if (addresses.length === 0) return fetcher(input, withManualRedirect(init));
+	const origin = new URL(input);
+	const headers = new Headers(init.headers);
+	headers.set("Host", origin.host);
+	// Dial only checked addresses. Keep the original authority for routing and
+	// TLS verification, and bypass proxies that could resolve the host again.
+	const pinned = new URL(origin);
+	pinned.hostname =
+		isIP(addresses[0]) === 6 ? `[${addresses[0]}]` : addresses[0];
+	const response = await fetcher(pinned.toString(), {
+		...withManualRedirect(init),
+		headers,
+		proxy: false,
+		...(origin.protocol === "https:"
+			? { tls: { serverName: normalizeHost(origin.hostname) } }
+			: {}),
+	});
+	Object.defineProperty(response, "url", { value: input, configurable: true });
+	return response;
+}
 
 async function redirectTarget(
 	response: Response,
@@ -248,19 +292,30 @@ export async function resolveAllowedUrl(
 ): Promise<string> {
 	let current = input;
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-		await assertUrlAllowed(current, policy, resolve);
-		let response = await fetcher(current, {
-			method: "HEAD",
-			redirect: "manual",
-			signal,
-		});
-		if (response.status === 405 || response.status === 501) {
-			await response.body?.cancel();
-			response = await fetcher(current, {
-				method: "GET",
+		let response = await fetchChecked(
+			current,
+			{
+				method: "HEAD",
 				redirect: "manual",
 				signal,
-			});
+			},
+			policy,
+			resolve,
+			fetcher,
+		);
+		if (response.status === 405 || response.status === 501) {
+			await response.body?.cancel();
+			response = await fetchChecked(
+				current,
+				{
+					method: "GET",
+					redirect: "manual",
+					signal,
+				},
+				policy,
+				resolve,
+				fetcher,
+			);
 		}
 		const next = await redirectTarget(response, current);
 		await response.body?.cancel();
@@ -282,13 +337,43 @@ export async function fetchAllowed(
 ): Promise<Response> {
 	let current = input;
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-		await assertUrlAllowed(current, policy, resolve);
-		const response = await fetcher(current, withManualRedirect(init));
+		const response = await fetchChecked(
+			current,
+			init,
+			policy,
+			resolve,
+			fetcher,
+		);
+		if (
+			response.status >= 300 &&
+			response.status < 400 &&
+			init.redirect === "error"
+		) {
+			await response.body?.cancel();
+			throw new TypeError("Redirects are not allowed for this request");
+		}
+		if (init.redirect === "manual") return response;
 		const next = await redirectTarget(response, current);
 		if (!next) return response;
 		await response.body?.cancel();
 		if (hop === MAX_REDIRECTS) {
 			throw new BlockedUrlError(current, "too many redirects");
+		}
+		if (new URL(next).origin !== new URL(current).origin) {
+			const headers = new Headers(init.headers);
+			for (const name of ["authorization", "cookie", "x-media-server-secret"])
+				headers.delete(name);
+			init = { ...init, headers };
+		}
+		if (
+			response.status === 303 ||
+			((response.status === 301 || response.status === 302) &&
+				init.method?.toUpperCase() === "POST")
+		) {
+			const headers = new Headers(init.headers);
+			headers.delete("content-type");
+			headers.delete("content-length");
+			init = { ...init, method: "GET", body: undefined, headers };
 		}
 		current = next;
 	}

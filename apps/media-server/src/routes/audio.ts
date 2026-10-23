@@ -165,7 +165,11 @@ audio.post("/extract", async (c) => {
 		}
 
 		if (useStreaming) {
-			const { stream, cleanup } = extractAudioStream(videoUrl);
+			const { stream, cleanup } = await extractAudioStream(
+				videoUrl,
+				{},
+				c.req.raw.signal,
+			);
 
 			c.req.raw.signal.addEventListener("abort", () => {
 				cleanup();
@@ -259,10 +263,14 @@ audio.post("/convert", async (c) => {
 	let streaming = false;
 
 	try {
-		const { stream, cleanup } = extractAudioStream(audioUrl, {
-			bitrate,
-			timeoutMs: 15 * 60 * 1000,
-		});
+		const { stream, cleanup } = await extractAudioStream(
+			audioUrl,
+			{
+				bitrate,
+				timeoutMs: 15 * 60 * 1000,
+			},
+			c.req.raw.signal,
+		);
 
 		c.req.raw.signal.addEventListener("abort", () => {
 			cleanup();

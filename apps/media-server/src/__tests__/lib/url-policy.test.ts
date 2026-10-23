@@ -140,7 +140,7 @@ describe("redirect checks", () => {
 	test("does not follow a redirect to a private address", async () => {
 		const policy = getUrlPolicy({});
 		const fetcher = async (input: string) => {
-			if (input === "https://cdn.example/v.mp4") {
+			if (input === "https://93.184.216.34/v.mp4") {
 				return new Response(null, {
 					status: 302,
 					headers: { location: "http://169.254.169.254/latest/meta-data/" },
@@ -178,5 +178,118 @@ describe("collectUrls", () => {
 				videoSegmentUrls: ["http://c/3"],
 			}),
 		).toEqual(["http://a/1", "http://b/2", "http://c/3"]);
+	});
+});
+
+describe("connection address pinning", () => {
+	test.each(["fetch", "resolve"])(
+		"pins the checked address during %s without another hostname lookup",
+		async (mode) => {
+			let lookups = 0;
+			const resolve = async () =>
+				++lookups === 1 ? ["93.184.216.34"] : ["127.0.0.1"];
+			let connections = 0;
+			const fetcher: NonNullable<Parameters<typeof fetchAllowed>[4]> = async (
+				input,
+				init,
+			) => {
+				connections++;
+				expect(input).toBe("https://93.184.216.34:8443/video.mp4?token=signed");
+				expect(new Headers(init?.headers).get("host")).toBe("cdn.example:8443");
+				expect(init?.tls?.serverName).toBe("cdn.example");
+				expect(init?.proxy).toBe(false);
+				return new Response("ok");
+			};
+			const url = "https://cdn.example:8443/video.mp4?token=signed";
+			if (mode === "fetch") {
+				const response = await fetchAllowed(
+					url,
+					{},
+					getUrlPolicy({}),
+					resolve,
+					fetcher,
+				);
+				expect(response.url).toBe(url);
+			} else {
+				expect(
+					await resolveAllowedUrl(url, getUrlPolicy({}), resolve, fetcher),
+				).toBe(url);
+			}
+			expect(lookups).toBe(1);
+			expect(connections).toBe(1);
+		},
+	);
+
+	test("resolves relative redirects against the original hostname", async () => {
+		const seen: string[] = [];
+		const fetcher: NonNullable<Parameters<typeof fetchAllowed>[4]> = async (
+			input,
+			init,
+		) => {
+			seen.push(input);
+			expect(new Headers(init?.headers).get("host")).toBe("cdn.example");
+			return seen.length === 1
+				? new Response(null, {
+						status: 302,
+						headers: { location: "../video.mp4" },
+					})
+				: new Response("ok");
+		};
+		await fetchAllowed(
+			"https://cdn.example/start/redirect",
+			{},
+			getUrlPolicy({}),
+			resolveTo("93.184.216.34"),
+			fetcher,
+		);
+		expect(seen).toEqual([
+			"https://93.184.216.34/start/redirect",
+			"https://93.184.216.34/video.mp4",
+		]);
+	});
+
+	test("refuses callback redirects before sending a secret to the target", async () => {
+		let calls = 0;
+		const fetcher = async () => {
+			calls++;
+			return new Response(null, {
+				status: 307,
+				headers: { location: "https://other.example/secret" },
+			});
+		};
+		await expect(
+			fetchAllowed(
+				"https://cdn.example/callback",
+				{
+					method: "POST",
+					redirect: "error",
+					headers: { "x-media-server-secret": "test-secret" },
+					body: "recording-details",
+				},
+				getUrlPolicy({}),
+				resolveTo("93.184.216.34"),
+				fetcher,
+			),
+		).rejects.toThrow("Redirects are not allowed");
+		expect(calls).toBe(1);
+	});
+
+	test("returns manual redirects without following them", async () => {
+		let calls = 0;
+		const response = await fetchAllowed(
+			"https://cdn.example/callback",
+			{ redirect: "manual" },
+			getUrlPolicy({}),
+			resolveTo("93.184.216.34"),
+			async () => {
+				calls++;
+				return new Response(null, {
+					status: 302,
+					headers: { location: "http://127.0.0.1/" },
+				});
+			},
+		);
+		expect(response.status).toBe(302);
+		expect(calls).toBe(1);
 	});
 });

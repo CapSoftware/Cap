@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
+	consumeMediaTransferBytes,
 	fetchMedia,
 	MediaTransferBudgetError,
 	materializeMedia,
@@ -22,6 +23,7 @@ import {
 	readRecordingVideoTiming,
 } from "./recording-timing";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess";
+import { ensureTempDir, getTempDir } from "./temp-files";
 
 const MAX_LOCAL_VERIFICATION_MS = 2 * 60 * 60_000;
 const DECODER_STALL_MS = 5 * 60_000;
@@ -1296,7 +1298,10 @@ async function stageRemoteRecording(
 	abortSignal?: AbortSignal,
 	objectIdentity?: string,
 ): Promise<{ path: string; cleanup: () => Promise<void> }> {
-	const directory = await mkdtemp(join(tmpdir(), "cap-recording-"));
+	const local = await materializeMedia(input, abortSignal, objectIdentity);
+	if (local) return { path: local.path, cleanup: async () => {} };
+	await ensureTempDir();
+	const directory = await mkdtemp(join(getTempDir(), "recording-"));
 	const path = join(directory, "recording.mp4");
 	const cleanup = () => rm(directory, { force: true, recursive: true });
 	try {
@@ -1320,7 +1325,9 @@ async function stageRemoteRecording(
 					true,
 				);
 			}
-			if (!response.body) {
+			if (response.status === 412)
+				throw new Error("Recording object changed during verification");
+			if (!response.ok || !response.body) {
 				throw new Error(`Failed to download recording: ${response.status}`);
 			}
 			const reader = response.body.getReader();
@@ -1330,10 +1337,12 @@ async function stageRemoteRecording(
 					abortSignal?.throwIfAborted();
 					const { done, value } = await reader.read();
 					if (done) break;
+					consumeMediaTransferBytes(value.byteLength);
 					writer.write(value);
 				}
-				await writer.end();
 			} finally {
+				await writer.end();
+				await reader.cancel().catch(() => {});
 				reader.releaseLock();
 			}
 		} finally {
@@ -1398,7 +1407,11 @@ async function decodeRecording(
 			try {
 				return await decodeRecording(
 					staged.path,
-					options,
+					{
+						...options,
+						abortSignal: signal,
+						timeoutMs: Math.max(1, timeoutMs - (performance.now() - startedAt)),
+					},
 					undefined,
 					sourceAudioInput,
 					packetProof,
@@ -2136,7 +2149,11 @@ export async function verifyRemoteRecording(
 		const local = await materializeMedia(input, signal, before.objectIdentity);
 		const evidence = await decodeRecording(
 			local?.path ?? input,
-			{ ...options, abortSignal: signal, timeoutMs: remainingMs },
+			{
+				...options,
+				abortSignal: signal,
+				timeoutMs: Math.max(1, timeoutMs - (performance.now() - startedAt)),
+			},
 			local ? undefined : before.objectIdentity,
 		);
 		const remoteSha256 =
