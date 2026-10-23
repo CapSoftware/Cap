@@ -51,6 +51,10 @@ import {
 	getLoomDownloadUrl,
 	LoomDownloadTemporaryError,
 } from "@/lib/loom-download-url";
+import {
+	LOOM_FILE_SINGLE_UPLOAD_MAX_BYTES,
+	startLoomFileProcessingWorkflow,
+} from "@/lib/loom-file-processing";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
 import { LOOM_IMPORT_MAX_BYTES } from "@/lib/loom-import-limits";
 import {
@@ -1297,7 +1301,7 @@ export async function resumeConciergeLoomFileUpload(input: {
 			throw new LoomMigrationError("The destination workspace needs Cap Pro.");
 		}
 		const previousRun = record.metadata?.loomImportRun;
-		if (previousRun) {
+		if (previousRun && previousRun.dispatch !== "rejected") {
 			let status: string | null;
 			try {
 				status = await getRun(previousRun.runId).status;
@@ -1643,6 +1647,7 @@ async function startConciergeLoomFileProcessing({
 		const [record] = await db()
 			.select({
 				video: videos,
+				loomVideoId: importedVideos.sourceId,
 				rawFileKey: videoUploads.rawFileKey,
 				phase: videoUploads.phase,
 				processingMessage: videoUploads.processingMessage,
@@ -1709,14 +1714,22 @@ async function startConciergeLoomFileProcessing({
 		if (maxBytes !== undefined && (head.ContentLength ?? 0) > maxBytes) {
 			throw new LoomMigrationError("The uploaded Loom file exceeds 10 GB.");
 		}
-		const status = await startVideoProcessingWorkflow({
+		const processingInput = {
 			videoId,
 			userId: record.video.ownerId,
 			rawFileKey: record.rawFileKey,
 			bucketId: record.video.bucket,
 			processingMessage: "Processing Loom video...",
 			startFailureMessage: "Loom file processing could not start.",
-		});
+		};
+		const status =
+			bucket.provider === "s3" &&
+			(head.ContentLength ?? 0) > LOOM_FILE_SINGLE_UPLOAD_MAX_BYTES
+				? await startLoomFileProcessingWorkflow({
+						...processingInput,
+						loomVideoId: record.loomVideoId,
+					})
+				: await startVideoProcessingWorkflow(processingInput);
 		revalidatePath("/dashboard/import/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return { status };
