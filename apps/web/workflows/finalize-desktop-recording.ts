@@ -143,14 +143,16 @@ export async function finalizeDesktopRecordingWorkflow(
 		}
 		const attempt = next.attempt;
 		try {
-			let committed = await commitDesktopRecordingAttempt(attempt);
-			while (committed === "progress") {
-				committed = await commitDesktopRecordingAttempt(attempt);
+			let committed = await commitAndStartDesktopRecordingAttempt(attempt);
+			while (committed.committed === "progress") {
+				committed = await commitAndStartDesktopRecordingAttempt(attempt);
 			}
-			if (committed !== "ready") {
-				return { success: false, reason: committed };
+			if (committed.committed !== "ready") {
+				return { success: false, reason: committed.committed };
 			}
-			const started = await startDesktopRecordingJob(attempt);
+			const started = committed.dispatched
+				? committed.started
+				: await startDesktopRecordingJob(attempt);
 			if (typeof started === "object") {
 				if (started.status === "media-server-unconfigured") {
 					mediaServerUnavailable = true;
@@ -276,6 +278,36 @@ export async function commitDesktopRecordingAttempt(
 ): Promise<SourceCommitResult> {
 	"use step";
 
+	return commitDesktopRecordingBatch(attempt);
+}
+
+// Each step costs a queue hop, so a commit that finishes inside its batch budget dispatches in the same step.
+// A slow commit returns without dispatching and the workflow runs startDesktopRecordingJob as its own step.
+export async function commitAndStartDesktopRecordingAttempt(
+	attempt: DesktopRecordingAttempt,
+): Promise<
+	| { committed: SourceCommitResult; dispatched?: undefined }
+	| { committed: "ready"; dispatched: true; started: DesktopRecordingDispatch }
+> {
+	"use step";
+
+	const startedAt = Date.now();
+	const committed = await commitDesktopRecordingBatch(attempt);
+	if (
+		committed !== "ready" ||
+		Date.now() - startedAt >= SOURCE_COMMIT_BATCH_DURATION_MS
+	)
+		return { committed };
+	return {
+		committed,
+		dispatched: true,
+		started: await dispatchDesktopRecordingJob(attempt),
+	};
+}
+
+async function commitDesktopRecordingBatch(
+	attempt: DesktopRecordingAttempt,
+): Promise<SourceCommitResult> {
 	const startedAt = Date.now();
 	for (let index = 0; index < SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS; index++) {
 		try {
@@ -480,17 +512,24 @@ async function buildDesktopSegmentsOutput({
 	};
 }
 
-export async function startDesktopRecordingJob(
-	attempt: DesktopRecordingAttempt,
-): Promise<
+type DesktopRecordingDispatch =
 	| string
 	| undefined
 	| { status: "deferred" }
 	| { status: "capacity"; retryAfterMs: number }
-	| { status: "media-server-unconfigured" }
-> {
+	| { status: "media-server-unconfigured" };
+
+export async function startDesktopRecordingJob(
+	attempt: DesktopRecordingAttempt,
+): Promise<DesktopRecordingDispatch> {
 	"use step";
 
+	return dispatchDesktopRecordingJob(attempt);
+}
+
+async function dispatchDesktopRecordingJob(
+	attempt: DesktopRecordingAttempt,
+): Promise<DesktopRecordingDispatch> {
 	if (await completeWithoutMediaServerIfUnavailable(attempt)) {
 		return { status: "media-server-unconfigured" };
 	}
