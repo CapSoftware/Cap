@@ -986,7 +986,7 @@ pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIso
     set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
 }
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
-/// the section the tray's Select Mode submenu reads and writes.
+/// the section the tray's mode picker reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
