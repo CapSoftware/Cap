@@ -727,6 +727,10 @@ pub(crate) const EXPORT_STALL_LIMIT: Duration = Duration::from_secs(120);
 enum FrameDeadline {
     /// Playback: a missed deadline returns no frame so the caller can move on.
     Drop,
+    /// The first frame after a seek or for a paused preview. Nothing asks for
+    /// it again, so on macOS a missed deadline switches to software decoding
+    /// at once, which then answers it.
+    Initial,
     /// Offline export: a missed deadline keeps waiting for the same reply.
     Wait,
 }
@@ -766,9 +770,9 @@ struct PrimaryStall {
 
 #[cfg(target_os = "macos")]
 impl MacOsDecoderFallback {
-    /// A single timeout is a busy machine, not a dead reader: only a reader
-    /// that misses this many request rounds in a row without delivering any
-    /// frame is replaced by software decoding.
+    /// A single playback timeout is a busy machine, not a dead reader: only a
+    /// reader that misses this many playback rounds in a row without
+    /// delivering any frame is replaced by software decoding.
     const MAX_TIMED_OUT_ROUNDS: u32 = 3;
 
     fn new(name: &'static str, path: PathBuf, fps: u32) -> Self {
@@ -843,7 +847,7 @@ impl AsyncVideoDecoderHandle {
             Self::INITIAL_SEEK_TIMEOUT_MS,
             self.max_fallback_distance
                 .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
-            FrameDeadline::Drop,
+            FrameDeadline::Initial,
         )
         .await
         .ok()
@@ -899,7 +903,9 @@ impl AsyncVideoDecoderHandle {
                     fallback.primary_answered();
                     return Ok(Some(frame));
                 }
-                Ok(FrameReply::TimedOut) if !fallback.primary_stalled(sent_at) => {
+                Ok(FrameReply::TimedOut)
+                    if deadline == FrameDeadline::Drop && !fallback.primary_stalled(sent_at) =>
+                {
                     return Ok(None);
                 }
                 Ok(FrameReply::TimedOut) => ("AVAssetReader stopped answering", Ok(None)),

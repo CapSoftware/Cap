@@ -1157,10 +1157,11 @@ fn avassetreader_answers_stay_exact_when_its_reader_fails() {
     }
 }
 
-/// A busy machine can miss one decode deadline without anything being
+/// A busy machine can miss one playback deadline without anything being
 /// wrong with the reader: that request gets no frame, and hardware decoding
-/// stays. Only a reader that answers without a frame, or misses every
-/// deadline round after round, is replaced by software decoding.
+/// stays. A reader that answers without a frame, misses every playback
+/// deadline round after round, or misses the deadline of a first frame that
+/// nothing will ask for again is replaced by software decoding.
 #[cfg(target_os = "macos")]
 #[test]
 fn avassetreader_switches_to_software_only_when_its_reader_stops_answering() {
@@ -1261,6 +1262,48 @@ fn avassetreader_switches_to_software_only_when_its_reader_stops_answering() {
                 .as_ref()
                 .and_then(frame_identity),
             Some(frame)
+        );
+    });
+
+    let registration = scripted::register(script.clone());
+    let path = registration.path().to_path_buf();
+    runtime.block_on(async {
+        let handle = spawn_decoder("model", path, 30, 0.0, false)
+            .await
+            .unwrap()
+            .with_max_fallback_distance(2);
+        assert_eq!(
+            handle
+                .get_frame_initial(time(5))
+                .await
+                .as_ref()
+                .and_then(frame_identity),
+            Some(5)
+        );
+        registration.set_vend_delay(slow_vend);
+        let late = handle
+            .get_frame_with_timeout(time(6), deadline_ms, 2, FrameDeadline::Drop)
+            .await;
+        assert!(
+            matches!(late, Ok(None)),
+            "request 6 beat a {deadline_ms} ms deadline"
+        );
+        assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
+        let seek = handle.get_frame_with_timeout(time(10), deadline_ms, 2, FrameDeadline::Initial);
+        let lift_delay = async {
+            tokio::time::sleep(Duration::from_millis(deadline_ms / 2)).await;
+            registration.set_vend_delay(Duration::ZERO);
+        };
+        let (answered, ()) = tokio::join!(seek, lift_delay);
+        assert_eq!(
+            answered.unwrap().as_ref().and_then(frame_identity),
+            Some(10),
+            "the first timed-out initial request"
+        );
+        assert_eq!(handle.decoder_type(), DecoderType::FFmpegSoftware);
+        assert_eq!(
+            handle.fallback_reason(),
+            Some("AVAssetReader stopped answering")
         );
     });
 
