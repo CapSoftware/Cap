@@ -1525,6 +1525,12 @@ export async function downloadVideoToTemp(
 		if (parallel.concurrency > 1) {
 			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
 				...parallel,
+				// Ranged parts go through the same URL policy as a single download.
+				fetchImpl: ((input, init) =>
+					fetchAllowed(
+						input instanceof Request ? input.url : input.toString(),
+						init,
+					)) as typeof fetch,
 				signal: combinedSignal,
 			});
 			if (file(tempFile.path).size === 0) {

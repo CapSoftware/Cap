@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractAudio } from "../../lib/media-audio";
 import { probeVideo } from "../../lib/media-probe";
-import { generateThumbnail } from "../../lib/media-video";
+import { downloadVideoToTemp, generateThumbnail } from "../../lib/media-video";
 import { verifyRecording } from "../../lib/recording-verification";
 
 const video = readFileSync(
@@ -95,6 +95,25 @@ describe("redirects to a private address", () => {
 			).rejects.toThrow("private address");
 			expect(target.secretHits()).toBe(0);
 		} finally {
+			target.server.stop(true);
+		}
+	});
+	test("parallel ranged downloads do not fetch the redirect target", async () => {
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		const previousConcurrency = process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY;
+		process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY = "4";
+		const target = privateRedirectServer();
+		try {
+			await expect(downloadVideoToTemp(target.url, "mp4")).rejects.toThrow(
+				"private address",
+			);
+			expect(target.secretHits()).toBe(0);
+		} finally {
+			if (previousConcurrency === undefined) {
+				delete process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY;
+			} else {
+				process.env.MEDIA_SERVER_DOWNLOAD_CONCURRENCY = previousConcurrency;
+			}
 			target.server.stop(true);
 		}
 	});
