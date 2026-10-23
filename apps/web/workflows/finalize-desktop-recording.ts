@@ -116,7 +116,8 @@ export async function finalizeDesktopRecordingWorkflow(
 ): Promise<WorkflowResult> {
 	"use workflow";
 
-	const generation = await ensureWorkflowJob(payload);
+	// Every step costs a queue hop (~0.7 s in prod), so skip the lookup when the caller already knows the generation.
+	const generation = payload.generation ?? (await ensureWorkflowJob(payload));
 	let completedJobId: string | undefined;
 	let mediaServerUnavailable = false;
 	let retainedAttempt: DesktopRecordingAttempt | undefined;
@@ -145,12 +146,12 @@ export async function finalizeDesktopRecordingWorkflow(
 			if (committed !== "ready") {
 				return { success: false, reason: committed };
 			}
-			if (await completeWithoutMediaServerIfUnavailable(attempt)) {
-				mediaServerUnavailable = true;
-				break;
-			}
 			const started = await startDesktopRecordingJob(attempt);
 			if (typeof started === "object") {
+				if (started.status === "media-server-unconfigured") {
+					mediaServerUnavailable = true;
+					break;
+				}
 				if (started.status === "capacity") {
 					retainedAttempt = attempt;
 					await sleep(started.retryAfterMs);
@@ -342,8 +343,6 @@ async function advanceDesktopRecordingAttempt(
 async function completeWithoutMediaServerIfUnavailable(
 	attempt: DesktopRecordingAttempt,
 ): Promise<boolean> {
-	"use step";
-
 	if (serverEnv().MEDIA_SERVER_URL) return false;
 	const deferred = await deferWithoutMediaServer(attempt);
 	if (deferred) {
@@ -456,8 +455,13 @@ export async function startDesktopRecordingJob(
 	| undefined
 	| { status: "deferred" }
 	| { status: "capacity"; retryAfterMs: number }
+	| { status: "media-server-unconfigured" }
 > {
 	"use step";
+
+	if (await completeWithoutMediaServerIfUnavailable(attempt)) {
+		return { status: "media-server-unconfigured" };
+	}
 
 	const current = await getProcessingState(attempt);
 	if (!current || current.attemptId !== attempt.attemptId || !current.source) {
