@@ -4871,11 +4871,84 @@ pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevi
     }
 }
 
+/// Set once anything has asked for the shared device -- an editor, a
+/// screenshot editor or a recording -- so the launch warmup leaves the GPU to
+/// it instead of compiling pipelines alongside.
+static GPU_WORK_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+fn gpu_work_requested() -> bool {
+    GPU_WORK_REQUESTED.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub(crate) fn prewarm_shared_wgpu_device(cx: &App) {
+    GPU_WORK_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
     gpui_tokio::Tokio::spawn(cx, async {
         let _ = shared_wgpu_device().await;
     })
     .detach();
+}
+
+const LAUNCH_RENDER_WARMUP_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The first editor open in a process paid for the system font scan, the
+/// shared device and the renderer's first pipeline compiles and draw before
+/// its first frame: 0.7-1.2 s, against ~0.2 s for every later open. This warms
+/// them a few seconds after launch, off the main thread. The layers are
+/// dropped again; only the driver's compiled pipelines, the device and the
+/// font database stay.
+pub(crate) fn schedule_launch_render_warmup(cx: &App) {
+    gpui_tokio::Tokio::spawn(cx, async {
+        tokio::time::sleep(LAUNCH_RENDER_WARMUP_DELAY).await;
+        let started = std::time::Instant::now();
+        if tokio::task::spawn_blocking(cap_rendering::prewarm_fonts)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let fonts_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let renderer_ms = warm_renderer().await;
+        tracing::info!(fonts_ms, ?renderer_ms, "launch render warmup finished");
+    })
+    .detach();
+}
+
+#[cfg(target_os = "macos")]
+async fn warm_renderer() -> Option<f64> {
+    if gpu_work_requested() {
+        return None;
+    }
+    let shared = shared_wgpu_device().await?;
+    if gpu_work_requested() {
+        return None;
+    }
+    let started = std::time::Instant::now();
+    let (device, queue, software) = (
+        shared.device.clone(),
+        shared.queue.clone(),
+        shared.is_software_adapter,
+    );
+    let mut layers = tokio::task::spawn_blocking(move || {
+        (!gpu_work_requested())
+            .then(|| cap_rendering::RendererLayers::new_with_options(&device, &queue, software))
+    })
+    .await
+    .ok()??;
+    if gpu_work_requested() {
+        return None;
+    }
+    if let Err(error) = cap_rendering::prewarm_first_frame(shared, &mut layers).await {
+        tracing::warn!(%error, "launch render warmup frame failed");
+    }
+    drop(layers);
+    Some(started.elapsed().as_secs_f64() * 1000.0)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn warm_renderer() -> Option<f64> {
+    None
 }
 
 fn editor_audio_output() -> Arc<cap_editor::AudioOutput> {
