@@ -960,6 +960,26 @@ describe("complete recording decode", () => {
 		);
 	});
 
+	test("skips decoded content hashes only when nothing compares them", async () => {
+		const options = { expectedDuration: 5, requireAudio: true };
+		const hashed = await verifyRecording(silent, options);
+		const unhashed = await verifyRecording(silent, {
+			...options,
+			hashDecodedContent: false,
+		});
+		expect(unhashed.integrity).toBeUndefined();
+		expect(unhashed.video).toEqual(hashed.video);
+		expect(unhashed.audio).toEqual(hashed.audio);
+		const evidence = await inspectRecordingSources(silent, silent);
+		const preserved = await verifyRecording(silent, {
+			requireAudio: false,
+			hashDecodedContent: false,
+			sourceEvidence: evidence,
+		});
+		expect(preserved.sourcePreserved).toBe(true);
+		expect(preserved.integrity).toEqual(evidence.integrity);
+	});
+
 	test("accepts legacy video without audio only when audio was not requested", async () => {
 		const input = join(FIXTURES, "test-no-audio.mp4");
 		const evidence = await verifyRecording(input, {

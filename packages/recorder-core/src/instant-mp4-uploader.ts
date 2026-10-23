@@ -505,7 +505,14 @@ export class InstantRecordingUploader {
 				? DRIVE_PART_SIZE_BYTES
 				: MIN_PART_SIZE_BYTES;
 		while (this.bufferedBytes > 0) {
-			if (!force && this.bufferedBytes < targetPartSize) return;
+			if (
+				!force &&
+				(this.bufferedBytes < targetPartSize ||
+					(this.provider === "googleDrive" &&
+						this.bufferedBytes === targetPartSize))
+			) {
+				return;
+			}
 
 			const partSize = Math.min(this.bufferedBytes, targetPartSize);
 			const { part, remainingChunks, remainingBytes } =
