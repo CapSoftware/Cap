@@ -95,6 +95,7 @@ async fn main() {
             10.0,
             constants.options.screen_size,
         );
+        let project = std::sync::Arc::new(project);
         let prepare = |frame: u32| {
             ProjectUniforms::new(
                 &constants,
