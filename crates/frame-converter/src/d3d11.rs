@@ -898,6 +898,8 @@ impl FrameConverter for D3D11Converter {
                     .context
                     .CopyResource(&staging.output, &resources.output_texture);
 
+                resources.context.Flush();
+
                 // Polling releases the shared context between retries so other
                 // workers can submit GPU work while this readback completes.
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
