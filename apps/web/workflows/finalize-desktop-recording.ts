@@ -85,6 +85,7 @@ const PRESIGNED_EXPIRES_SECONDS = 6 * 60 * 60;
 const MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
 const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 32;
 const SOURCE_COMMIT_BATCH_DURATION_MS = 15_000;
+const TRANSCRIPTION_QUEUE_MAX_ATTEMPTS = 12;
 
 function getErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
@@ -190,7 +191,7 @@ export async function finalizeDesktopRecordingWorkflow(
 			if (retained !== "retry") return { success: false, reason: retained };
 		}
 	}
-	for (let attempt = 0; ; attempt++) {
+	for (let attempt = 0; attempt < TRANSCRIPTION_QUEUE_MAX_ATTEMPTS; attempt++) {
 		let queued: boolean;
 		try {
 			queued = await queueFinalizedRecordingTranscription(
@@ -201,7 +202,9 @@ export async function finalizeDesktopRecordingWorkflow(
 			queued = false;
 		}
 		if (queued) break;
-		await sleep(Math.min(15_000 * 2 ** Math.min(attempt, 5), 300_000));
+		if (attempt + 1 < TRANSCRIPTION_QUEUE_MAX_ATTEMPTS) {
+			await sleep(Math.min(15_000 * 2 ** Math.min(attempt, 5), 300_000));
+		}
 	}
 	return mediaServerUnavailable
 		? { success: false, reason: "media-server-unconfigured" }
@@ -780,7 +783,7 @@ async function queueFinalizedRecordingTranscription(
 		);
 		if (result.success) return true;
 		console.warn(
-			"[finalizeDesktopRecordingWorkflow] Transcription enqueue will retry",
+			"[finalizeDesktopRecordingWorkflow] Transcription enqueue failed",
 			{ videoId, message: result.message },
 		);
 	} catch (error) {
