@@ -19,6 +19,7 @@ vi.mock("@cap/database/emails/organization-invite", () => ({
 	OrganizationInvite: (props: unknown) => props,
 }));
 vi.mock("@cap/database/helpers", () => ({
+	nanoIdLength: 15,
 	nanoId: () => `invite-${++mocks.sequence}`,
 }));
 vi.mock("@cap/env", () => ({
