@@ -10,6 +10,7 @@ import type { RecordingVerification } from "@/lib/desktop-recording-verification
 const mocks = vi.hoisted(() => ({
 	storage: vi.fn(),
 	pageSize: undefined as number | undefined,
+	treePageSize: undefined as number | undefined,
 }));
 
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
@@ -27,6 +28,9 @@ vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 		},
 		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
 			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
+		},
+		get SOURCE_COMMIT_PART_PAGE_SIZE() {
+			return mocks.treePageSize ?? actual.SOURCE_COMMIT_PART_PAGE_SIZE;
 		},
 	};
 });
@@ -446,6 +450,7 @@ function seedSegments(
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.pageSize = undefined;
+	mocks.treePageSize = undefined;
 });
 
 describe("recording source preparation during upload", () => {
@@ -1776,6 +1781,50 @@ describe("source commit page size", () => {
 			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
 		);
 	});
+
+	it("resumes a commit saved with larger tree pages using today's 64-entry writer, as after a rollback", async () => {
+		const reference = await referenceOutput(64);
+		const storage = pagedFixture();
+		mocks.treePageSize = 128;
+		const partial = await advanceWithPageSize(
+			128,
+			snapshotCheckpoint(),
+			(checkpoint) => checkpoint.phase === "verify",
+		);
+		expect(partial.source).toBeUndefined();
+		expect(partial.checkpoint.phase).toBe("verify");
+		mocks.treePageSize = undefined;
+		const resumed = await advanceWithPageSize(64, partial.checkpoint);
+		if (!resumed.source) throw new Error("Resumed commit did not complete");
+		expect(await snapshotOutput(storage, resumed.source)).toEqual(
+			reference.output,
+		);
+	});
+
+	it.each([
+		[256, true],
+		[257, false],
+	] as const)(
+		"reads a commit with %i-entry tree pages only within the read limit",
+		async (size, readable) => {
+			const storage = storageFixture("s3");
+			seedSegments(
+				storage,
+				Array.from({ length: 300 }, (_, index) => index + 1),
+			);
+			mocks.treePageSize = size;
+			const commit = advanceWithPageSize(size, snapshotCheckpoint());
+			if (readable) {
+				const result = await commit;
+				if (!result.source) throw new Error("Commit did not complete");
+				expect(
+					Math.max(...leafSizes(storage, result.source.inventoryKey)),
+				).toBe(size);
+			} else {
+				await expect(commit).rejects.toMatchObject({ code: "source-invalid" });
+			}
+		},
+	);
 
 	it.each([
 		["a custom S3-compatible bucket", "s3", true],
