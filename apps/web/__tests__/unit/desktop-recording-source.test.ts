@@ -10,6 +10,7 @@ import type { RecordingVerification } from "@/lib/desktop-recording-verification
 const mocks = vi.hoisted(() => ({
 	storage: vi.fn(),
 	pageSize: undefined as number | undefined,
+	treePageSize: undefined as number | undefined,
 }));
 
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
@@ -27,6 +28,9 @@ vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 		},
 		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
 			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
+		},
+		get SOURCE_COMMIT_PART_PAGE_SIZE() {
+			return mocks.treePageSize ?? actual.SOURCE_COMMIT_PART_PAGE_SIZE;
 		},
 	};
 });
@@ -446,6 +450,7 @@ function seedSegments(
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.pageSize = undefined;
+	mocks.treePageSize = undefined;
 });
 
 describe("recording source preparation during upload", () => {
@@ -1774,6 +1779,26 @@ describe("source commit page size", () => {
 		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
 		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
 			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
+		);
+	});
+
+	it("reads tree pages larger than it writes, so a newer deployment's commit can be resumed after a rollback", async () => {
+		const reference = await referenceOutput(64);
+		mocks.treePageSize = 128;
+		const larger = await referenceOutput(128);
+		mocks.treePageSize = undefined;
+		expect(Math.max(...larger.leaves)).toBeGreaterThan(64);
+		expect(larger.output).toEqual(reference.output);
+		expect(larger.checkpoints).toBeLessThan(reference.checkpoints);
+	});
+
+	it("still rejects tree pages above the read limit", async () => {
+		const actual = await vi.importActual<
+			typeof import("@/lib/desktop-recording-source-checkpoint")
+		>("@/lib/desktop-recording-source-checkpoint");
+		expect(actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES).toBe(256);
+		expect(actual.SOURCE_COMMIT_PART_PAGE_SIZE).toBeLessThanOrEqual(
+			actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 		);
 	});
 
