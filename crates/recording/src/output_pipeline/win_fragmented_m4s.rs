@@ -844,7 +844,7 @@ impl WindowsFragmentedM4SMuxer {
                             }
                         }
 
-                        Ok(())
+                        Err(error.into())
                     }
                 }
             })?;
