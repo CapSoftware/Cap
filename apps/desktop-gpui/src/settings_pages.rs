@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 
+use cap_cli_install as cli_install;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
@@ -189,11 +190,15 @@ struct DriveQuota {
     stale: bool,
 }
 
-/// hotkeys.tsx's `listening` signal: which action is armed, and the binding
-/// to restore when the capture is abandoned.
 struct ListeningHotkey {
-    action: usize,
-    prev: Option<Value>,
+    action: &'static str,
+    modifiers: gpui::Modifiers,
+    error: Option<&'static str>,
+}
+
+struct SavedShortcut {
+    action: &'static str,
+    moved_from: Option<&'static str>,
 }
 
 /// The S3 form's five text fields, in render order.
@@ -285,6 +290,9 @@ pub(crate) struct PagesState {
     // Shortcuts (hotkeys.tsx)
     hotkeys: Map<String, Value>,
     listening: Option<ListeningHotkey>,
+    shortcut_saved: Option<SavedShortcut>,
+    shortcut_saved_reset: Option<gpui::Task<()>>,
+    shortcut_blocked: Option<&'static str>,
 
     // CLI (cli.tsx). `None` while the status fetch is in flight.
     cli_status: Option<Result<cli_install::CliInstallStatus, String>>,
@@ -344,7 +352,7 @@ pub(crate) struct PagesState {
     s3: S3Page,
     gdrive: GDrivePage,
 
-    // Experimental (experimental.tsx). The Native app row's hand-back takes the
+    // Experimental (experimental.tsx). The Developer section's hand-back takes the
     // whole settings window over, so its clock and the ticker that repaints the
     // sequence live here and the overlay renders from the window root.
     switch_back: Option<SwitchBack>,
@@ -403,10 +411,20 @@ impl PagesState {
                 this.page_field_event(PageField::S3(index), input, event, cx)
             }));
         }
+        // Keys stop arriving once the window loses focus, so a recording row
+        // would otherwise keep every global shortcut paused.
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.shortcuts_cancel(cx);
+            }
+        }));
 
         Self {
             hotkeys: store::hotkeys_raw(),
             listening: None,
+            shortcut_saved: None,
+            shortcut_saved_reset: None,
+            shortcut_blocked: None,
             cli_status: None,
             cli_installing: false,
             cli_uninstalling: false,
@@ -485,7 +503,9 @@ impl SettingsWindow {
         match self.page {
             Page::Shortcuts => {
                 self.pages.hotkeys = store::hotkeys_raw();
-                self.pages.listening = None;
+                self.pages.shortcut_saved = None;
+                self.pages.shortcut_saved_reset = None;
+                self.pages.shortcut_blocked = None;
             }
             Page::Cli => self.cli_refresh(window, cx),
             Page::Transcription => {
@@ -909,23 +929,203 @@ impl SettingsWindow {
 }
 
 // ---------------------------------------------------------------------------
-// Shortcuts (hotkeys.tsx)
+// Shortcuts
 // ---------------------------------------------------------------------------
 
-/// `actions()` in hotkeys.tsx, with `ACTION_TEXT`'s labels, in render order.
-const HOTKEY_ACTIONS: [(&str, &str); 11] = [
-    ("screenshotDisplay", "Screenshot current display"),
-    ("screenshotWindow", "Screenshot current window"),
-    ("screenshotArea", "Screenshot area picker"),
-    ("openRecordingPicker", "Open recording picker"),
-    ("stopRecording", "Stop recording"),
-    ("restartRecording", "Restart recording"),
-    ("togglePauseRecording", "Pause/resume recording"),
-    ("cycleRecordingMode", "Cycle recording mode"),
-    ("openRecordingPickerDisplay", "Record display"),
-    ("openRecordingPickerWindow", "Record window"),
-    ("openRecordingPickerArea", "Record area"),
+const SCREENSHOT_SHORTCUTS: [&str; 3] = ["screenshotArea", "screenshotWindow", "screenshotDisplay"];
+
+const RECORDING_SHORTCUTS: [&str; 7] = [
+    "startStudioRecording",
+    "startInstantRecording",
+    "openRecordingPickerArea",
+    "openRecordingPickerWindow",
+    "openRecordingPickerDisplay",
+    "openRecordingPicker",
+    "cycleRecordingMode",
 ];
+
+const WHILE_RECORDING_SHORTCUTS: [&str; 3] =
+    ["stopRecording", "togglePauseRecording", "restartRecording"];
+
+const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
+
+#[derive(Clone, Copy)]
+struct OutcomeOption {
+    icon: &'static str,
+    label: &'static str,
+    hint: &'static str,
+}
+
+const SCREENSHOT_OUTCOMES: [(store::PostScreenshotBehaviour, OutcomeOption); 4] = [
+    (
+        store::PostScreenshotBehaviour::OpenEditor,
+        OutcomeOption {
+            icon: "icons/edit.svg",
+            label: "Open editor",
+            hint: "Annotate first",
+        },
+    ),
+    (
+        store::PostScreenshotBehaviour::Copy,
+        OutcomeOption {
+            icon: "icons/copy.svg",
+            label: "Copy",
+            hint: "Paste anywhere",
+        },
+    ),
+    (
+        store::PostScreenshotBehaviour::CopyAndOpenEditor,
+        OutcomeOption {
+            icon: "icons/layers.svg",
+            label: "Copy and edit",
+            hint: "Both at once",
+        },
+    ),
+    (
+        store::PostScreenshotBehaviour::Save,
+        OutcomeOption {
+            icon: "icons/folder-down.svg",
+            label: "Do nothing",
+            hint: "Saved to library",
+        },
+    ),
+];
+
+const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
+    (
+        store::PostStudioBehaviour::OpenEditor,
+        OutcomeOption {
+            icon: "icons/edit.svg",
+            label: "Open editor",
+            hint: "Edit right away",
+        },
+    ),
+    (
+        store::PostStudioBehaviour::ShowOverlay,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: "Show Cap",
+            hint: "Back to the recorder",
+        },
+    ),
+    (
+        store::PostStudioBehaviour::DoNothing,
+        OutcomeOption {
+            icon: "icons/folder-down.svg",
+            label: "Do nothing",
+            hint: "Saved to library",
+        },
+    ),
+];
+
+/// `disableAutoOpenLinks`, phrased as what an Instant recording does.
+const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/globe.svg",
+            label: "Open link",
+            hint: "In your browser",
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/link.svg",
+            label: "Copy link only",
+            hint: "Nothing opens",
+        },
+    ),
+];
+
+fn shortcut_label(action: &str) -> &'static str {
+    match action {
+        "screenshotArea" => "Screenshot an area",
+        "screenshotWindow" => "Screenshot a window",
+        "screenshotDisplay" => "Screenshot the display",
+        "startStudioRecording" => "Start Studio recording",
+        "startInstantRecording" => "Start Instant recording",
+        "openRecordingPickerArea" => "Record an area",
+        "openRecordingPickerWindow" => "Record a window",
+        "openRecordingPickerDisplay" => "Record a display",
+        "openRecordingPicker" => "Open recording picker",
+        "cycleRecordingMode" => "Cycle recording mode",
+        "stopRecording" => "Stop recording",
+        "togglePauseRecording" => "Pause or resume",
+        "restartRecording" => "Restart recording",
+        _ => "Shortcut",
+    }
+}
+
+fn screenshot_outcome(behaviour: store::PostScreenshotBehaviour) -> &'static str {
+    match behaviour {
+        store::PostScreenshotBehaviour::OpenEditor => "open it in the editor",
+        store::PostScreenshotBehaviour::Copy => "copy it to your clipboard",
+        store::PostScreenshotBehaviour::CopyAndOpenEditor => "copy it and open the editor",
+        store::PostScreenshotBehaviour::Save => "save it to your library without opening anything",
+    }
+}
+
+fn picker_outcome(mode: crate::main_window::Mode) -> &'static str {
+    match mode {
+        crate::main_window::Mode::Studio => "record it in Studio mode",
+        crate::main_window::Mode::Instant => "record it in Instant mode",
+        crate::main_window::Mode::Screenshot => "take a screenshot of it",
+    }
+}
+
+/// What pressing the shortcut does, as a phrase that completes "Press ⌘⇧4
+/// to ...". It follows the after-capture settings and the current mode, so
+/// the row always describes what will actually happen.
+fn shortcut_effect(
+    action: &str,
+    settings: &store::GeneralSettings,
+    mode: crate::main_window::Mode,
+) -> String {
+    let screenshot = screenshot_outcome(settings.post_screenshot_behaviour);
+    let studio_stop = match settings.post_studio_recording_behaviour {
+        store::PostStudioBehaviour::OpenEditor => ", then open the editor when you stop",
+        store::PostStudioBehaviour::ShowOverlay | store::PostStudioBehaviour::DoNothing => "",
+    };
+    let instant_stop = if settings.disable_auto_open_links {
+        ", then copy its share link when you stop"
+    } else {
+        ", then copy and open its share link when you stop"
+    };
+    match action {
+        "screenshotArea" => format!("select an area and {screenshot}"),
+        "screenshotWindow" => format!("capture the window under your pointer and {screenshot}"),
+        "screenshotDisplay" => format!("capture the display under your pointer and {screenshot}"),
+        "startStudioRecording" => {
+            format!("record your selected screen or window in Studio mode{studio_stop}")
+        }
+        "startInstantRecording" => {
+            format!("record your selected screen or window in Instant mode{instant_stop}")
+        }
+        "openRecordingPickerArea" => format!("select an area, then {}", picker_outcome(mode)),
+        "openRecordingPickerWindow" => format!("choose a window, then {}", picker_outcome(mode)),
+        "openRecordingPickerDisplay" => format!("choose a display, then {}", picker_outcome(mode)),
+        "openRecordingPicker" => "open Cap so you can choose what to record".into(),
+        "cycleRecordingMode" => "switch between Studio, Instant and Screenshot mode".into(),
+        "stopRecording" => "stop the current recording".into(),
+        "togglePauseRecording" => "pause the current recording, or resume it".into(),
+        "restartRecording" => "throw away the current take and start again".into(),
+        _ => String::new(),
+    }
+}
+
+fn description_follows_outcome(action: &str) -> bool {
+    SCREENSHOT_SHORTCUTS.contains(&action)
+        || matches!(action, "startStudioRecording" | "startInstantRecording")
+}
+
+fn capitalized_sentence(phrase: &str) -> String {
+    let mut chars = phrase.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
 
 /// The gpui keystroke name for a key, as the W3C `KeyboardEvent.code` string
 /// the Tauri app stores (`e.code` in hotkeys.tsx, `global_hotkey::Code` in
@@ -977,6 +1177,34 @@ fn hotkey_code_for_key(key: &str) -> Option<String> {
     Some(code.to_string())
 }
 
+fn is_function_key(code: &str) -> bool {
+    code.strip_prefix('F')
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Bare letters, digits and Shift-only combos would fire while typing in any
+/// app, so a shortcut needs ⌘, ⌃ or ⌥ unless it is a function key.
+fn shortcut_needs_modifier(hotkey: &Hotkey) -> bool {
+    !(hotkey.meta || hotkey.ctrl || hotkey.alt) && !is_function_key(&hotkey.code)
+}
+
+const NEEDS_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "Include ⌘, ⌃ or ⌥ so the shortcut doesn't get in the way of typing."
+} else {
+    "Include Ctrl, Alt or Win so the shortcut doesn't get in the way of typing."
+};
+
+const UNSUPPORTED_KEY: &str =
+    "That key can't be used in a shortcut. Try a letter, number or F-key.";
+
+const RECORDING_HINT: &str = "Press the keys you want to use. Esc cancels, Delete removes it.";
+
+const BLOCKED_WHILE_RECORDING: &str =
+    "Shortcuts can't be changed while this recording holds its stop key. Stop recording first.";
+
+const UNAVAILABLE: &str =
+    "Another app or the system already uses this shortcut. Click to choose a different one.";
+
 /// `HotkeyText`'s key list: modifiers in ⌘⌃⌥⇧ order, then the main key.
 /// [`ui::kbd_symbol`] does the per-OS glyph mapping.
 fn hotkey_display_keys(hotkey: &Hotkey) -> Vec<String> {
@@ -997,305 +1225,713 @@ fn hotkey_display_keys(hotkey: &Hotkey) -> Vec<String> {
     keys
 }
 
+fn held_modifier_keys(modifiers: gpui::Modifiers) -> Vec<String> {
+    let mut keys = Vec::new();
+    if modifiers.platform {
+        keys.push("meta".to_string());
+    }
+    if modifiers.control {
+        keys.push("ctrl".to_string());
+    }
+    if modifiers.alt {
+        keys.push("alt".to_string());
+    }
+    if modifiers.shift {
+        keys.push("shift".to_string());
+    }
+    keys
+}
+
+fn hotkey_inline_text(hotkey: &Hotkey) -> String {
+    let separator = if cfg!(target_os = "macos") { "" } else { "+" };
+    hotkey_display_keys(hotkey)
+        .iter()
+        .map(|key| hotkey_key_text(key))
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+fn hotkey_key_text(key: &str) -> SharedString {
+    if let Some(digit) = key.strip_prefix("Digit") {
+        return SharedString::from(digit.to_string());
+    }
+    let named = match key {
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Backslash" => "\\",
+        "Minus" => "-",
+        "Equal" => "=",
+        "Backquote" => "`",
+        "ArrowUp" => "↑",
+        "ArrowDown" => "↓",
+        "ArrowLeft" => "←",
+        "ArrowRight" => "→",
+        "Tab" => "⇥",
+        "Delete" => "⌦",
+        _ => return ui::kbd_symbol(key),
+    };
+    SharedString::from(named)
+}
+
+fn shortcut_key_cap(theme: &Theme, key: &str) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .h(px(20.))
+        .min_w(px(20.))
+        .px(px(5.))
+        .rounded(px(5.))
+        .bg(theme.settings_card_bg())
+        .border_1()
+        .border_color(theme.settings_border())
+        .text_size(px(11.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.settings_text())
+        .child(hotkey_key_text(key))
+}
+
 impl SettingsWindow {
-    /// The window keydown listener while a binding is armed. Returns whether
+    fn shortcut_binding(&self, action: &str) -> Option<Hotkey> {
+        self.pages
+            .hotkeys
+            .get(action)
+            .and_then(store::hotkey_from_value)
+    }
+
+    fn shortcuts_start_listening(
+        &mut self,
+        action: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pages.shortcut_saved = None;
+        self.pages.shortcut_saved_reset = None;
+        if !crate::hotkeys::pause(cx) {
+            self.pages.shortcut_blocked = Some(action);
+            cx.notify();
+            return;
+        }
+        self.pages.shortcut_blocked = None;
+        self.pages.listening = Some(ListeningHotkey {
+            action,
+            modifiers: window.modifiers(),
+            error: None,
+        });
+        // Keys must reach the root's on_key_down, not a focused field.
+        self.focus_root(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn shortcut_listening(&self) -> bool {
+        self.pages.listening.is_some()
+    }
+
+    pub(crate) fn switch_back_running(&self) -> bool {
+        self.pages.switch_back.is_some()
+    }
+
+    /// Leave recording mode without touching the binding. Safe to call when
+    /// nothing is recording; every exit path (Escape, a click elsewhere,
+    /// another page, the window losing focus or closing) lands here.
+    pub(crate) fn shortcuts_cancel(&mut self, cx: &mut Context<Self>) {
+        if self.pages.listening.take().is_none() {
+            return;
+        }
+        crate::hotkeys::resume(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn shortcuts_modifiers_changed(
+        &mut self,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(listening) = self.pages.listening.as_mut() {
+            listening.modifiers = modifiers;
+            cx.notify();
+        }
+    }
+
+    /// The window keydown listener while a row is recording. Returns whether
     /// the key was consumed. Modifier-only presses never arrive as
-    /// `KeyDownEvent`s in gpui, so `MODIFIER_KEYS` needs no equivalent.
+    /// `KeyDownEvent`s in gpui; they come through
+    /// [`Self::shortcuts_modifiers_changed`].
     pub(crate) fn shortcuts_capture_key(
         &mut self,
         keystroke: &gpui::Keystroke,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.page != Page::Shortcuts || self.pages.listening.is_none() {
+        if self.page != Page::Shortcuts {
             return false;
         }
-        // Escape restores the previous binding instead of becoming one --
-        // the one deliberate divergence from the DOM listener, which cannot
-        // bind Escape globally anyway (it is the overlay-cancel key).
+        let Some(listening) = self.pages.listening.as_mut() else {
+            return false;
+        };
+        let action = listening.action;
+        let modifiers = keystroke.modifiers;
+        let bare = !modifiers.platform && !modifiers.control && !modifiers.alt && !modifiers.shift;
+
+        // Escape is the picker's cancel key, so it is never a binding.
         if keystroke.key == "escape" {
-            self.shortcuts_restore_prev(cx);
+            self.shortcuts_cancel(cx);
             return true;
         }
-        let Some(code) = hotkey_code_for_key(&keystroke.key) else {
+        if bare && matches!(keystroke.key.as_str(), "backspace" | "delete") {
+            self.pages.listening = None;
+            self.pages.hotkeys.remove(action);
+            self.shortcuts_commit(cx);
             return true;
-        };
+        }
+
         // A code the Tauri app cannot parse must never reach the store: its
         // `HotkeysStore` deserializes the whole `hotkeys` map strictly
         // (`serde_json::from_value` in `HotkeysStore::get`), so one bad entry
         // would silently drop every binding over there.
-        if global_hotkey::hotkey::Code::from_str(&code).is_err() {
-            return true;
-        }
-        let Some(listening) = self.pages.listening.as_ref() else {
+        let Some(code) = hotkey_code_for_key(&keystroke.key)
+            .filter(|code| global_hotkey::hotkey::Code::from_str(code).is_ok())
+        else {
+            listening.error = Some(UNSUPPORTED_KEY);
+            cx.notify();
             return true;
         };
-        let action = HOTKEY_ACTIONS[listening.action].0;
         let hotkey = Hotkey {
             code,
-            meta: keystroke.modifiers.platform,
-            ctrl: keystroke.modifiers.control,
-            alt: keystroke.modifiers.alt,
-            shift: keystroke.modifiers.shift,
+            meta: modifiers.platform,
+            ctrl: modifiers.control,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
         };
+        if shortcut_needs_modifier(&hotkey) {
+            listening.error = Some(NEEDS_MODIFIER);
+            cx.notify();
+            return true;
+        }
+
+        let mut moved_from = None;
+        for other in SCREENSHOT_SHORTCUTS
+            .iter()
+            .chain(RECORDING_SHORTCUTS.iter())
+            .chain(WHILE_RECORDING_SHORTCUTS.iter())
+        {
+            if *other != action && self.shortcut_binding(other).as_ref() == Some(&hotkey) {
+                self.pages.hotkeys.remove(*other);
+                moved_from.get_or_insert(*other);
+            }
+        }
+
         let value = serde_json::to_value(&hotkey).unwrap_or(Value::Null);
         self.pages.hotkeys.insert(action.to_string(), value);
-        // `createEffect` persists on every store change, captures included --
-        // but the OS registration waits for the confirm, exactly as
-        // `commands.setHotkey` only runs from the buttons over there. Pressing
-        // the candidate combo again keeps re-capturing it instead of firing
-        // the action.
-        self.shortcuts_save();
-        cx.notify();
+        self.pages.listening = None;
+        self.shortcuts_commit(cx);
+        self.pages.shortcut_saved = Some(SavedShortcut { action, moved_from });
+        self.pages.shortcut_saved_reset = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SHORTCUT_SAVED_NOTICE).await;
+            this.update(cx, |this, cx| {
+                if this
+                    .pages
+                    .shortcut_saved
+                    .as_ref()
+                    .is_some_and(|saved| saved.action == action)
+                {
+                    this.pages.shortcut_saved = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
         true
     }
 
-    /// The `createEffect` half: write the map to the shared store, touch
-    /// nothing at the OS.
-    fn shortcuts_save(&self) {
+    /// Persist the map and swap the OS registrations. Deferred because the
+    /// registry swap reads the store this just wrote; resuming re-registers
+    /// from the store, and so does a reload when nothing was paused.
+    fn shortcuts_commit(&mut self, cx: &mut Context<Self>) {
         if !store::set_hotkeys_raw(&self.pages.hotkeys) {
             tracing::warn!("saving the hotkeys store failed");
         }
-    }
-
-    /// The `commands.setHotkey` half: persist and swap the OS registrations.
-    /// Deferred because the registry swap reads the store this just wrote.
-    fn shortcuts_commit(&self, cx: &mut Context<Self>) {
-        self.shortcuts_save();
-        cx.defer(crate::hotkeys::reload);
-    }
-
-    /// The window click listener: an abandoned capture puts the previous
-    /// binding back. Store only -- the capture never touched the OS
-    /// registration, so there is nothing to swap back (the TSX cancel path
-    /// never calls `setHotkey` either).
-    fn shortcuts_restore_prev(&mut self, cx: &mut Context<Self>) {
-        let Some(listening) = self.pages.listening.take() else {
-            return;
-        };
-        let action = HOTKEY_ACTIONS[listening.action].0;
-        match listening.prev {
-            Some(prev) => {
-                self.pages.hotkeys.insert(action.to_string(), prev);
+        cx.defer(|cx| {
+            if !crate::hotkeys::resume(cx) {
+                crate::hotkeys::reload(cx);
             }
-            None => {
-                self.pages.hotkeys.remove(action);
-            }
-        }
-        self.shortcuts_save();
+            cx.refresh_windows();
+        });
         cx.notify();
     }
 
     pub(crate) fn render_shortcuts(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let theme = self.theme;
+        let unavailable = crate::hotkeys::unavailable_actions(cx);
+        let mode = crate::main_window::Mode::from_store();
+        let rows_for = |actions: &[&'static str], cx: &mut Context<Self>| {
+            actions
+                .iter()
+                .map(|action| {
+                    self.render_shortcut_row(action, mode, unavailable.contains(action), cx)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut screenshots = rows_for(&SCREENSHOT_SHORTCUTS, cx);
+        screenshots.push(
+            self.render_outcome_panel(
+                "outcome-screenshot",
+                "After a screenshot",
+                "For every screenshot, from a shortcut or from Cap",
+                &SCREENSHOT_OUTCOMES
+                    .iter()
+                    .map(|(value, option)| {
+                        (*option, *value == self.settings.post_screenshot_behaviour)
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((value, _)) = SCREENSHOT_OUTCOMES.get(index) {
+                        this.settings.post_screenshot_behaviour = *value;
+                        this.write_enum("postScreenshotBehaviour", *value, cx);
+                    }
+                },
+                cx,
+            ),
+        );
+
+        let mut recording = rows_for(&RECORDING_SHORTCUTS, cx);
+        recording.push(
+            self.render_outcome_panel(
+                "outcome-studio",
+                "After a Studio recording",
+                "When you stop",
+                &STUDIO_OUTCOMES
+                    .iter()
+                    .map(|(value, option)| {
+                        (
+                            *option,
+                            *value == self.settings.post_studio_recording_behaviour,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((value, _)) = STUDIO_OUTCOMES.get(index) {
+                        this.settings.post_studio_recording_behaviour = *value;
+                        this.write_enum("postStudioRecordingBehaviour", *value, cx);
+                    }
+                },
+                cx,
+            ),
+        );
+        recording.push(
+            self.render_outcome_panel(
+                "outcome-instant",
+                "After an Instant recording",
+                "The share link is always copied",
+                &INSTANT_OUTCOMES
+                    .iter()
+                    .map(|(disabled, option)| {
+                        (*option, *disabled == self.settings.disable_auto_open_links)
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((disabled, _)) = INSTANT_OUTCOMES.get(index) {
+                        this.settings.disable_auto_open_links = *disabled;
+                        this.write_bool("disableAutoOpenLinks", *disabled, cx);
+                    }
+                },
+                cx,
+            ),
+        );
+
+        let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
+
         let listening_any = self.pages.listening.is_some();
-
-        let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        for (index, (action, label)) in HOTKEY_ACTIONS.iter().enumerate() {
-            let binding = self
-                .pages
-                .hotkeys
-                .get(*action)
-                .and_then(store::hotkey_from_value);
-            let listening = self
-                .pages
-                .listening
-                .as_ref()
-                .is_some_and(|listening| listening.action == index);
-
-            let right: gpui::AnyElement = if listening {
-                self.render_shortcut_listening(index, binding.as_ref(), cx)
-                    .into_any_element()
-            } else {
-                self.render_shortcut_idle(index, binding.as_ref(), cx)
-                    .into_any_element()
-            };
-
-            rows.push(
-                // `flex flex-row justify-between items-center w-full h-8`.
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_center()
-                    .w_full()
-                    .h(px(32.))
-                    .child(div().text_size(px(13.)).child(*label))
-                    .child(right)
-                    .into_any_element(),
-            );
-            if index + 1 != HOTKEY_ACTIONS.len() {
-                // `w-full h-px bg-gray-3`.
-                rows.push(
-                    div()
-                        .w_full()
-                        .h(px(1.))
-                        .bg(theme.settings_border())
-                        .into_any_element(),
-                );
-            }
-        }
-
-        let card = self
-            .card(false)
-            .id("shortcuts-card")
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .p(px(16.))
-            // The window click listener: any press that reaches the card while
-            // a capture is armed abandons it and restores the old binding.
-            .when(listening_any, |this| {
-                this.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _window, cx| this.shortcuts_restore_prev(cx)),
-                )
-            })
-            .children(rows);
+        let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
+            self.rows(rows)
+                .id(id)
+                .when(listening_any, |this| {
+                    this.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _window, cx| this.shortcuts_cancel(cx)),
+                    )
+                })
+                .into_any_element()
+        };
 
         vec![
             self.section(
-                "Shortcuts",
-                Some("Configure system-wide keyboard shortcuts to control Cap."),
+                "Screenshots",
+                Some("Shortcuts work from any app. Click one to change it."),
                 None,
-                vec![card.into_any_element()],
+                vec![card("shortcuts-screenshots", screenshots, cx)],
+            )
+            .into_any_element(),
+            self.section(
+                "Recording",
+                Some("Start a recording without opening Cap first."),
+                None,
+                vec![card("shortcuts-recording", recording, cx)],
+            )
+            .into_any_element(),
+            self.section(
+                "While recording",
+                None,
+                None,
+                vec![card("shortcuts-while-recording", while_recording, cx)],
             )
             .into_any_element(),
         ]
     }
 
-    /// The resting state: the binding as keycap chips, or the `None` pill.
-    fn render_shortcut_idle(
+    fn render_outcome_panel(
         &self,
-        index: usize,
-        binding: Option<&Hotkey>,
+        id: &'static str,
+        title: &'static str,
+        hint: &'static str,
+        options: &[(OutcomeOption, bool)],
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
         let theme = self.theme;
-        let content: gpui::AnyElement = match binding {
-            Some(hotkey) => div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.))
-                .children(
-                    hotkey_display_keys(hotkey)
-                        .into_iter()
-                        .map(|key| ui::KbdChip::row(&theme, key)),
-                )
-                .into_any_element(),
-            // `text-[11px] uppercase py-3 px-2.5 h-5 bg-gray-4 border
-            //  border-gray-5 rounded-lg text-gray-11`.
-            None => div()
-                .flex()
-                .items_center()
-                .h(px(20.))
-                .px(px(10.))
-                .rounded(px(8.))
-                .bg(theme.settings_fill())
-                .border_1()
-                .border_color(theme.settings_border())
-                .text_size(px(11.))
-                .text_color(theme.settings_muted())
-                .child("NONE")
-                .into_any_element(),
+        let ink = theme.settings_text();
+        // The card tokens are translucent, so on this tinted panel they read
+        // as gray; the chosen option needs a solid, lighter surface.
+        let raised = if theme.is_dark() {
+            gpui::hsla(0., 0., 1., 0.1)
+        } else {
+            gpui::white()
         };
+        let on_select = std::rc::Rc::new(on_select);
 
-        div()
-            .id(("hotkey", index))
-            .cursor_pointer()
-            .child(content)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let prev = this.pages.hotkeys.get(HOTKEY_ACTIONS[index].0).cloned();
-                this.pages.listening = Some(ListeningHotkey {
-                    action: index,
-                    prev,
+        let cards =
+            options
+                .iter()
+                .enumerate()
+                .map(|(index, (option, selected))| {
+                    let selected = *selected;
+                    let on_select = on_select.clone();
+                    div()
+                        .id((id, index))
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .flex_1()
+                        .min_w_0()
+                        .p(px(10.))
+                        .rounded(px(10.))
+                        .border_1()
+                        .when(selected, |this| this.border_color(ink).bg(raised))
+                        .when(!selected, |this| {
+                            this.border_color(theme.settings_border())
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme.settings_hover()))
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(px(28.))
+                                .rounded(px(7.))
+                                .bg(theme.settings_fill())
+                                .child(svg().path(option.icon).size(px(16.)).text_color(
+                                    if selected {
+                                        ink
+                                    } else {
+                                        theme.settings_muted()
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(ink)
+                                        .child(option.label),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .line_height(px(14.))
+                                        .text_color(theme.settings_muted())
+                                        .child(option.hint),
+                                ),
+                        )
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.shortcuts_cancel(cx);
+                            on_select(this, index, cx);
+                            cx.notify();
+                        }))
                 });
-                // Keys must reach the root's on_key_down, not a focused field.
-                this.focus_root(window, cx);
-                cx.notify();
-            }))
-    }
-
-    /// The armed state: confirm/clear buttons on the left, the live capture
-    /// (or "Set hotkeys...") on the right -- `flex-row-reverse` in the TSX.
-    fn render_shortcut_listening(
-        &self,
-        index: usize,
-        binding: Option<&Hotkey>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        let has_binding = binding.is_some();
-
-        let mut buttons = div().flex().flex_row().items_center().gap(px(2.));
-        if has_binding {
-            // IconCapCircleCheck: commit and stop listening.
-            buttons = buttons.child(
-                div()
-                    .id(("hotkey-confirm", index))
-                    .cursor_pointer()
-                    .child(
-                        svg()
-                            .path("icons/circle-check.svg")
-                            .size(px(20.))
-                            .text_color(theme.settings_text()),
-                    )
-                    .hover(|style| style.opacity(0.7))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.pages.listening = None;
-                        this.shortcuts_commit(cx);
-                        cx.notify();
-                    })),
-            );
-        }
-        // IconCapCircleX: clear the binding entirely.
-        buttons = buttons.child(
-            div()
-                .id(("hotkey-clear", index))
-                .cursor_pointer()
-                .child(
-                    svg()
-                        .path("icons/circle-x.svg")
-                        .size(px(20.))
-                        .text_color(Hsla::from(rgb(0xef4444))),
-                )
-                .hover(|style| style.opacity(0.7))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.pages.listening = None;
-                    this.pages.hotkeys.remove(HOTKEY_ACTIONS[index].0);
-                    this.shortcuts_commit(cx);
-                    cx.notify();
-                })),
-        );
-
-        let capture: gpui::AnyElement = match binding {
-            Some(hotkey) => div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.))
-                .children(
-                    hotkey_display_keys(hotkey)
-                        .into_iter()
-                        .map(|key| ui::KbdChip::row(&theme, key)),
-                )
-                .into_any_element(),
-            None => div()
-                .text_size(px(13.))
-                .text_color(theme.settings_muted())
-                .child("Set hotkeys...")
-                .into_any_element(),
-        };
 
         div()
             .flex()
+            .flex_col()
+            .gap(px(10.))
+            .p(px(12.))
+            .bg(theme.settings_fill())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.settings_muted())
+                            .child(hint),
+                    ),
+            )
+            .child(div().flex().flex_row().gap(px(8.)).children(cards))
+            .into_any_element()
+    }
+
+    fn render_shortcut_row(
+        &self,
+        action: &'static str,
+        mode: crate::main_window::Mode,
+        unavailable: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+        let binding = self.shortcut_binding(action);
+        let listening = self
+            .pages
+            .listening
+            .as_ref()
+            .filter(|listening| listening.action == action);
+        let saved = self
+            .pages
+            .shortcut_saved
+            .as_ref()
+            .filter(|saved| saved.action == action);
+        let effect = shortcut_effect(action, &self.settings, mode);
+        let red: Hsla = theme.red_11.into();
+        let amber: Hsla = theme.amber_11.into();
+
+        let blocked =
+            self.pages.shortcut_blocked == Some(action) && crate::hotkeys::editing_blocked(cx);
+        let (detail, detail_color, detail_icon): (String, Hsla, Option<(&str, Hsla)>) = if blocked {
+            (BLOCKED_WHILE_RECORDING.into(), red, None)
+        } else if let Some(listening) = listening {
+            match listening.error {
+                Some(error) => (error.into(), red, None),
+                None => (RECORDING_HINT.into(), theme.settings_muted(), None),
+            }
+        } else if unavailable && binding.is_some() {
+            (UNAVAILABLE.into(), amber, None)
+        } else if let (Some(saved), Some(binding)) = (saved, binding.as_ref()) {
+            let mut text = format!(
+                "Saved. Press {} in any app to {effect}.",
+                hotkey_inline_text(binding)
+            );
+            if let Some(from) = saved.moved_from {
+                text.push_str(&format!(" Removed from {}.", shortcut_label(from)));
+            }
+            (
+                text,
+                theme.settings_text(),
+                Some(("icons/circle-check.svg", theme.settings_text())),
+            )
+        } else {
+            (capitalized_sentence(&effect), theme.settings_muted(), None)
+        };
+
+        let group: SharedString = format!("shortcut-row-{action}").into();
+
+        let field = self.render_shortcut_field(action, binding.as_ref(), listening, cx);
+        let clear = div()
+            .id(SharedString::from(format!("shortcut-clear-{action}")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(20.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .invisible()
+            .when(binding.is_some() && listening.is_none(), |this| {
+                this.group_hover(group.clone(), |style| style.visible())
+            })
+            .hover(|style| style.bg(theme.settings_hover()))
+            .child(
+                svg()
+                    .path("icons/x.svg")
+                    .size(px(12.))
+                    .text_color(theme.settings_muted()),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                this.shortcuts_cancel(cx);
+                this.pages.hotkeys.remove(action);
+                if this
+                    .pages
+                    .shortcut_saved
+                    .as_ref()
+                    .is_some_and(|saved| saved.action == action)
+                {
+                    this.pages.shortcut_saved = None;
+                }
+                this.shortcuts_commit(cx);
+            }));
+
+        div()
+            .id(SharedString::from(format!("shortcut-{action}")))
+            .group(group)
+            .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.))
-            .child(buttons)
-            .child(capture)
+            .justify_between()
+            .gap(px(16.))
+            .min_h(px(56.))
+            .p(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(div().text_size(px(13.)).child(shortcut_label(action)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(5.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(detail_color)
+                            // Picking an "After ..." option rewrites this text,
+                            // and a one-line/two-line swap moved the panel out
+                            // from under the pointer. Two lines are reserved
+                            // for every description that can change that way.
+                            .when(description_follows_outcome(action), |this| {
+                                this.min_h(px(32.))
+                            })
+                            .when_some(detail_icon, |this, (path, color)| {
+                                this.child(
+                                    svg()
+                                        .path(path)
+                                        .flex_shrink_0()
+                                        .mt(px(2.))
+                                        .size(px(12.))
+                                        .text_color(color),
+                                )
+                            })
+                            .child(div().min_w_0().child(detail)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(4.))
+                    .flex_shrink_0()
+                    .child(clear)
+                    .child(field),
+            )
+            .into_any_element()
+    }
+
+    fn render_shortcut_field(
+        &self,
+        action: &'static str,
+        binding: Option<&Hotkey>,
+        listening: Option<&ListeningHotkey>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+
+        let base = div()
+            .id(SharedString::from(format!("shortcut-field-{action}")))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(3.))
+            .h(px(30.))
+            .min_w(px(132.))
+            .px(px(5.))
+            .rounded(px(8.))
+            .border_1()
+            .cursor_pointer();
+
+        let field = match (listening, binding) {
+            (Some(listening), _) => {
+                let held = held_modifier_keys(listening.modifiers);
+                let mut field = base
+                    .border_color(theme.settings_text())
+                    .bg(theme.settings_card_bg())
+                    .children(held.iter().map(|key| shortcut_key_cap(&theme, key)));
+                if held.is_empty() {
+                    field = field.child(
+                        div()
+                            .px(px(4.))
+                            .text_size(px(12.))
+                            .text_color(theme.settings_muted())
+                            .child("Type shortcut…"),
+                    );
+                } else {
+                    field = field.child(
+                        div()
+                            .px(px(2.))
+                            .text_size(px(12.))
+                            .text_color(theme.settings_muted())
+                            .child("…"),
+                    );
+                }
+                field.into_any_element()
+            }
+            (None, Some(hotkey)) => base
+                .border_color(theme.settings_border())
+                .bg(theme.settings_fill())
+                .hover(|style| style.bg(theme.settings_hover()))
+                .children(
+                    hotkey_display_keys(hotkey)
+                        .iter()
+                        .map(|key| shortcut_key_cap(&theme, key)),
+                )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.shortcuts_start_listening(action, window, cx);
+                }))
+                .into_any_element(),
+            (None, None) => base
+                .border_color(theme.settings_border())
+                .border_dashed()
+                .hover(|style| style.bg(theme.settings_hover()))
+                .child(
+                    div()
+                        .px(px(4.))
+                        .text_size(px(12.))
+                        .text_color(theme.settings_muted())
+                        .child("Record shortcut"),
+                )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.shortcuts_start_listening(action, window, cx);
+                }))
+                .into_any_element(),
+        };
+        div().child(field).into_any_element()
     }
 }
 
@@ -1904,16 +2540,9 @@ impl SettingsWindow {
 // Experimental (experimental.tsx)
 // ---------------------------------------------------------------------------
 
-/// The hand-back takeover, mirroring `experimental.tsx`'s overlay: the toggle
-/// is the confirmation, and the sequence is what the user reads while Cancel is
-/// on screen.
 pub(crate) enum SwitchBack {
-    /// The sequence, timed from its start. One clock drives the sentence, its
-    /// fade and the countdown, so nothing can drift apart.
     Running(std::time::Instant),
     WaitingForClassic,
-    /// The switch was refused; the overlay stays up with the reason and the
-    /// toggle goes back to on, because nothing was switched.
     Failed(String),
 }
 
@@ -1921,8 +2550,6 @@ pub(crate) enum SwitchBack {
 /// failed and hand the user back their app with a pointer at the terminal.
 const CLASSIC_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// One line at a time, fading between them, underneath the countdown rather
-/// than ahead of it: the numeral is on screen from the first frame.
 const SWITCH_SENTENCES: &[&str] = &[
     "Switching back to the classic Cap app.",
     "Your recordings and settings stay exactly where they are.",
@@ -1955,182 +2582,23 @@ fn takeover_frame(elapsed_ms: f32) -> (usize, f32, u32) {
     (index, alpha, remaining)
 }
 
-/// Where the classic app lives when this build was not started from inside its
-/// bundle and is not a dev build either.
-const CLASSIC_APP_FALLBACK: &str = "/Applications/Cap.app";
-
-#[cfg(windows)]
-const CLASSIC_EXECUTABLE_NAME: &str = "Cap.exe";
-#[cfg(not(windows))]
-const CLASSIC_EXECUTABLE_NAME: &str = "Cap";
-
-/// What "the classic app" means for this process -- decided from where its
-/// binary lives, so dev sessions reopen the dev app and installed ones the
-/// installed app.
-#[derive(Debug, PartialEq)]
-enum ClassicTarget {
-    /// `open` this bundle: the shipped layout is
-    /// `.../Cap.app/Contents/MacOS/cap-gpui`, so the nearest `.app`
-    /// ancestor is the classic app this binary shipped inside.
-    Bundle(std::path::PathBuf),
-    /// Windows and Linux install Tauri sidecars beside the main executable.
-    Executable(std::path::PathBuf),
-    /// A cargo-built binary (an ancestor directory literally named `target`):
-    /// the classic app here is the `tauri dev` harness, which cannot be
-    /// `open`ed -- ask the dev-session supervisor to restart it instead
-    /// (`store::request_classic_reopen`).
-    DevSupervisor,
-}
-
-fn classic_target_for_exe(exe: &std::path::Path) -> Option<ClassicTarget> {
-    if let Some(bundle) = exe
-        .ancestors()
-        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-    {
-        return Some(ClassicTarget::Bundle(bundle.to_path_buf()));
-    }
-    if exe
-        .components()
-        .any(|component| component.as_os_str() == "target")
-    {
-        return Some(ClassicTarget::DevSupervisor);
-    }
-
-    if let Some(parent) = exe.parent() {
-        let executable = parent.join(CLASSIC_EXECUTABLE_NAME);
-        if executable.is_file() && executable != exe {
-            return Some(ClassicTarget::Executable(executable));
-        }
-    }
-
-    let fallback = std::path::PathBuf::from(CLASSIC_APP_FALLBACK);
-    fallback.is_dir().then_some(ClassicTarget::Bundle(fallback))
-}
-
-fn classic_target() -> Option<ClassicTarget> {
-    std::env::current_exe()
-        .ok()
-        .as_deref()
-        .and_then(classic_target_for_exe)
-}
-
-pub(crate) fn start_update_handoff(cx: &mut gpui::App) {
-    begin_update_handoff(cx, store::request_update_handoff);
-}
-
-fn quit_after_flushing_editors(cx: &mut gpui::App) {
-    crate::menus::quit(cx);
-}
-
-#[cfg(debug_assertions)]
-pub(crate) fn simulate_update_handoff(cx: &mut gpui::App) {
-    cx.spawn(async move |cx| {
-        crate::platform::activate_app();
-        if crate::platform::confirm_dialog(
-            "Update Cap",
-            "Version 99.0.0 of Cap is available. Would you like to install it?",
-            "Update",
-            "Ignore",
-            false,
-        ) {
-            cx.update(|cx| begin_update_handoff(cx, store::request_simulated_update_handoff));
-        }
-    })
-    .detach();
-}
-
-fn begin_update_handoff(cx: &mut gpui::App, request_handoff: fn() -> std::io::Result<()>) {
-    if update_handoff_blocked(cx) {
-        return;
-    }
-
-    let Some(target) = classic_target() else {
-        cx.open_url("https://cap.so/download");
-        return;
-    };
-
-    if matches!(target, ClassicTarget::DevSupervisor) && !cfg!(debug_assertions) {
-        cx.open_url("https://cap.so/download");
-        return;
-    }
-
-    if update_handoff_blocked(cx) {
-        return;
-    }
-    if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
-        cx.spawn(async move |_| {
-            crate::platform::alert_dialog("Cap is still open", &error);
+/// Cap ships as this app alone, so the classic Tauri app only exists inside
+/// the `tauri dev` harness: a debug cargo build can hand the session back to
+/// it through the dev-session supervisor (`store::request_classic_reopen`),
+/// and nothing else has a classic app to switch to.
+fn dev_supervisor_available_for(exe: Option<&std::path::Path>, debug_build: bool) -> bool {
+    debug_build
+        && exe.is_some_and(|exe| {
+            exe.components()
+                .any(|component| component.as_os_str() == "target")
         })
-        .detach();
-        return;
-    }
-
-    if let Err(error) = request_handoff() {
-        tracing::error!("couldn't request the Tauri updater: {error}");
-        cx.open_url("https://cap.so/download");
-        return;
-    }
-
-    let started = match &target {
-        ClassicTarget::Bundle(_) | ClassicTarget::Executable(_) => launch_classic(&target),
-        ClassicTarget::DevSupervisor => {
-            store::mark_classic_pending().and_then(|()| store::request_classic_reopen())
-        }
-    };
-
-    match (started, target) {
-        (Ok(()), ClassicTarget::Bundle(_) | ClassicTarget::Executable(_)) => {
-            tracing::info!("handing off to the Tauri updater");
-            quit_after_flushing_editors(cx);
-        }
-        (Ok(()), ClassicTarget::DevSupervisor) => {
-            tracing::info!("handing off to the Tauri updater; waiting for the dev app");
-            cx.spawn(async move |cx| {
-                let started = std::time::Instant::now();
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(250))
-                        .await;
-
-                    if !store::classic_pending_path().exists() {
-                        tracing::info!("the Tauri updater is ready; quitting Cap GPUI");
-                        cx.update(quit_after_flushing_editors);
-                        return;
-                    }
-
-                    if started.elapsed() > CLASSIC_WAIT_TIMEOUT {
-                        store::clear_update_handoff();
-                        tracing::error!("the dev app did not start for the update hand-off");
-                        return;
-                    }
-                }
-            })
-            .detach();
-        }
-        (Err(error), _) => {
-            store::clear_update_handoff();
-            tracing::error!("couldn't open the Tauri updater: {error}");
-            cx.open_url("https://cap.so/download");
-        }
-    }
 }
 
-fn update_handoff_blocked(cx: &mut gpui::App) -> bool {
-    if !crate::updates::work_in_flight(cx) {
-        return false;
-    }
-
-    tracing::info!(
-        "deferring update hand-off while recording, exporting, uploading, importing, or transcribing"
-    );
-    cx.spawn(async move |_| {
-        crate::platform::alert_dialog(
-            "Cap is busy",
-            "Finish your recording, export, upload, import, or transcription task before checking for updates.",
-        );
-    })
-    .detach();
-    true
+fn dev_supervisor_available() -> bool {
+    dev_supervisor_available_for(
+        std::env::current_exe().ok().as_deref(),
+        cfg!(debug_assertions),
+    )
 }
 
 impl SettingsWindow {
@@ -2140,7 +2608,7 @@ impl SettingsWindow {
         // experimental switch has nothing to switch. The store key
         // (`enableNativeCameraPreview`) stays readable in `store.rs` and is
         // left untouched in the shared store -- the Tauri app still uses it.
-        let sections = vec![
+        let mut sections = vec![
             self.section(
                 "Reliability",
                 None,
@@ -2156,6 +2624,7 @@ impl SettingsWindow {
                             ),
                             self.toggle(
                                 "out-of-process-muxer",
+                                "Out-of-process muxer",
                                 self.settings.out_of_process_muxer,
                                 cx,
                                 |this, cx| {
@@ -2172,75 +2641,46 @@ impl SettingsWindow {
                 ],
             )
             .into_any_element(),
-            self.section(
-                "Native app",
-                None,
-                None,
-                vec![self.rows(vec![self.native_app_row(cx)]).into_any_element()],
-            )
-            .into_any_element(),
         ];
-
-        #[cfg(debug_assertions)]
-        let sections = {
-            let mut sections = sections;
+        if dev_supervisor_available() {
             sections.push(
                 self.section(
-                    "Updates",
+                    "Developer",
+                    Some("Only shown in development builds."),
                     None,
-                    None,
-                    vec![
-                        self.rows(vec![
-                            self.setting_row(
-                                "Simulate an update",
-                                Some(
-                                    "Preview the complete update flow without downloading or \
-                                     installing anything.",
-                                ),
-                                self.button(
-                                    "simulate-update",
-                                    (ui::ButtonVariant::Dark, None),
-                                    "Simulate update",
-                                    false,
-                                    cx,
-                                    |_, _, cx| simulate_update_handoff(cx),
-                                )
-                                .into_any_element(),
-                            ),
-                        ])
-                        .into_any_element(),
-                    ],
+                    vec![self.rows(vec![self.classic_app_row(cx)]).into_any_element()],
                 )
                 .into_any_element(),
             );
-            sections
-        };
-
+        }
         sections
     }
 
-    /// The mirror of the Tauri page's Native app row: it hands the session over
-    /// to this app, this one hands it back.
-    fn native_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        // Being in this app is what the toggle means, so it reads on even when
-        // the stored flag does not -- a `cargo run` or `dev.sh` launch never
-        // went through the hand-off. The flag only routes the Tauri app's
-        // startup.
+    /// The dev harness's way back to the classic app: being in this app is what
+    /// the toggle means, and turning it off reopens the classic app under
+    /// `tauri dev`.
+    fn classic_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let checked = !matches!(self.pages.switch_back, Some(SwitchBack::Running(_)));
         self.setting_row(
-            "Cap GPUI",
+            "Use native app",
             Some(
-                "You are using the native version of Cap. Turning this off closes it and reopens \
-                 the classic app. Your recordings and settings are shared.",
+                "Turn off to close this app and reopen the classic Tauri app in the dev harness. \
+                 Recordings and settings are shared.",
             ),
-            self.toggle("enable-gpui-app", checked, cx, |this, cx| {
-                match this.pages.switch_back {
-                    Some(SwitchBack::Running(_)) => this.cancel_switch_back(cx),
-                    // Committed: the classic app is already being brought up.
-                    Some(SwitchBack::WaitingForClassic) => {}
-                    _ => this.start_switch_back(cx),
-                }
-            })
+            self.toggle(
+                "enable-gpui-app",
+                "Use native app",
+                checked,
+                cx,
+                |this, cx| {
+                    match this.pages.switch_back {
+                        Some(SwitchBack::Running(_)) => this.cancel_switch_back(cx),
+                        // Committed: the classic app is already being brought up.
+                        Some(SwitchBack::WaitingForClassic) => {}
+                        _ => this.start_switch_back(cx),
+                    }
+                },
+            )
             .into_any_element(),
         )
     }
@@ -2342,7 +2782,11 @@ impl SettingsWindow {
                         .cursor_pointer()
                         .hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.12)))
                         .on_click(cx.listener(|this, _, _window, cx| this.cancel_switch_back(cx)))
-                        .child("Cancel"),
+                        .child(if matches!(switch, SwitchBack::Failed(_)) {
+                            "Close"
+                        } else {
+                            "Cancel"
+                        }),
                 )
                 .into_any_element(),
         )
@@ -2404,24 +2848,17 @@ impl SettingsWindow {
         true
     }
 
-    /// Write the flag, start the classic app, then quit -- in that order, so
-    /// the app that comes up already owns the session. Nothing is written when
-    /// there is no way to start one: the flag would strand the user in an app
-    /// that redirects to one that is not installed.
+    /// Hand the session (`enableGpuiApp`) to the classic dev app, ask the dev
+    /// supervisor to start it, then quit once it is visible.
     fn finish_switch_back(&mut self, cx: &mut Context<Self>) {
         if self.switch_back_blocked(cx) {
             return;
         }
-
-        let Some(target) = classic_target() else {
+        if !dev_supervisor_available() {
             self.pages.switch_back = Some(SwitchBack::Failed(
-                "Couldn't find the Cap app to switch back to.".to_string(),
+                "Couldn't find the classic Cap app to switch back to.".to_string(),
             ));
             cx.notify();
-            return;
-        };
-
-        if self.switch_back_blocked(cx) {
             return;
         }
         if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
@@ -2437,13 +2874,6 @@ impl SettingsWindow {
             cx.notify();
             return;
         }
-        self.settings.enable_gpui_app = false;
-        let dev = matches!(target, ClassicTarget::DevSupervisor);
-        let timeout = if dev {
-            CLASSIC_WAIT_TIMEOUT
-        } else {
-            Duration::from_secs(30)
-        };
         let pending = store::mark_classic_pending();
         self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
         self.pages.switch_back_ticker = None;
@@ -2453,87 +2883,50 @@ impl SettingsWindow {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    pending?;
-                    match target {
-                        ClassicTarget::DevSupervisor => store::request_classic_reopen(),
-                        _ => launch_classic(&target),
-                    }
-                })
+                .spawn(async move { pending.and_then(|()| store::request_classic_reopen()) })
                 .await;
-            let mut failure = result.err().map(|error| format!("Couldn't open Cap: {error}"));
+            let mut failure = result
+                .err()
+                .map(|error| format!("Couldn't open the classic Cap app: {error}"));
             let started = std::time::Instant::now();
             while failure.is_none() {
                 match store::classic_pending_path().try_exists() {
                     Ok(false) => {
                         tracing::info!("classic app is visible; quitting GPUI");
-                        cx.update(quit_after_flushing_editors);
+                        cx.update(crate::menus::quit);
                         return;
                     }
                     Ok(true) => {}
                     Err(error) => {
-                        failure = Some(format!("Couldn't check whether Cap opened: {error}"));
+                        failure = Some(format!(
+                            "Couldn't check whether the classic Cap app opened: {error}"
+                        ));
                         break;
                     }
                 }
-                if started.elapsed() >= timeout {
-                    failure = Some(if dev {
+                if started.elapsed() >= CLASSIC_WAIT_TIMEOUT {
+                    failure = Some(
                         "The classic app hasn't opened. Check the dev terminal for build errors, then try again."
-                            .to_string()
-                    } else {
-                        "The classic app hasn't opened. Cap is still here; please try again."
-                            .to_string()
-                    });
+                            .to_string(),
+                    );
                     break;
                 }
                 cx.background_executor()
                     .timer(Duration::from_millis(250))
                     .await;
             }
-            let message = failure.unwrap_or_else(|| "Couldn't open Cap.".to_string());
+            let message =
+                failure.unwrap_or_else(|| "Couldn't open the classic Cap app.".to_string());
             tracing::error!("{message}");
             store::clear_classic_pending();
             store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(true));
             this.update(cx, |this, cx| {
-                this.settings = store::GeneralSettings::load();
                 this.pages.switch_back = Some(SwitchBack::Failed(message));
                 cx.notify();
             })
             .ok();
         })
         .detach();
-    }
-}
-
-fn classic_launch_command(target: &ClassicTarget) -> Option<std::process::Command> {
-    match target {
-        ClassicTarget::Bundle(bundle) => {
-            let mut command = std::process::Command::new("/usr/bin/open");
-            // GPUI shares Cap's bundle identity, so a normal open can reactivate GPUI.
-            command.arg("-n").arg(bundle);
-            Some(command)
-        }
-        ClassicTarget::Executable(executable) => Some(std::process::Command::new(executable)),
-        ClassicTarget::DevSupervisor => None,
-    }
-}
-
-fn launch_classic(target: &ClassicTarget) -> std::io::Result<()> {
-    let Some(mut command) = classic_launch_command(target) else {
-        return Ok(());
-    };
-    if matches!(target, ClassicTarget::Bundle(_)) {
-        let output = command.output()?;
-        if !output.status.success() {
-            return Err(std::io::Error::other(format!(
-                "Cap launcher failed ({}): {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(())
-    } else {
-        command.spawn().map(drop)
     }
 }
 
@@ -3013,6 +3406,7 @@ impl SettingsWindow {
                 ),
                 self.toggle(
                     "diagnostic-mic",
+                    "Test microphone",
                     self.pages.diagnostic_mic,
                     cx,
                     |this, cx| {
@@ -6347,8 +6741,8 @@ impl SettingsWindow {
             self.section(
                 "Automations",
                 Some(
-                    "Rules are shared with classic Cap and the Cap CLI. Experimental GPUI \
-                     saves these rules but does not run automations.",
+                    "Rules are shared with the Cap CLI. Cap saves these rules but does not \
+                     run automations yet.",
                 ),
                 None,
                 rule_content,
@@ -6610,15 +7004,19 @@ impl SettingsWindow {
                                 (false, true) => "Disabled · Not saved",
                             }),
                     )
-                    .child(
-                        self.toggle(("rule-enabled", index), enabled, cx, move |this, cx| {
+                    .child(self.toggle(
+                        ("rule-enabled", index),
+                        "Enabled",
+                        enabled,
+                        cx,
+                        move |this, cx| {
                             if let Some(rule) = this.pages.automations.rules.get_mut(index) {
                                 rule.enabled = !rule.enabled;
                                 this.automations_persist();
                                 cx.notify();
                             }
-                        }),
-                    ),
+                        },
+                    )),
             )
             .child(
                 div()
@@ -6936,8 +7334,8 @@ impl SettingsWindow {
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
                         .child(
-                            "In classic Cap or the Cap CLI, this automation runs commands or sends \
-                             network requests with your permissions. Only use values you trust.",
+                            "In the Cap CLI, this automation runs commands or sends network \
+                             requests with your permissions. Only use values you trust.",
                         ),
                 )
             })
@@ -6949,9 +7347,8 @@ impl SettingsWindow {
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
                         .child(
-                            "Compatibility checked: this automation cannot run in Experimental \
-                             GPUI. Saved rules remain available to classic Cap and the Cap CLI. \
-                             No actions were run.",
+                            "Compatibility checked: this automation doesn't run in Cap yet. \
+                             Saved rules remain available to the Cap CLI. No actions were run.",
                         ),
                 )
             })
@@ -7308,6 +7705,7 @@ impl SettingsWindow {
                                             SharedString::from(format!(
                                                 "action-copy-link-{rule}-{index}"
                                             )),
+                                            "Copy link to clipboard",
                                             copy_link,
                                             cx,
                                             move |this, cx| {
@@ -7340,6 +7738,7 @@ impl SettingsWindow {
                                             SharedString::from(format!(
                                                 "action-open-browser-{rule}-{index}"
                                             )),
+                                            "Open in browser",
                                             open_in_browser,
                                             cx,
                                             move |this, cx| {
@@ -7394,6 +7793,7 @@ impl SettingsWindow {
                                 .gap(px(8.))
                                 .child(self.toggle(
                                     SharedString::from(format!("action-shell-{rule}-{index}")),
+                                    "Run through shell",
                                     use_shell,
                                     cx,
                                     move |this, cx| {
@@ -7734,647 +8134,6 @@ async fn http_json(
 /// depend on the crate, and the whole point is that `status`/`install`/
 /// `uninstall` behave byte-for-byte like the Tauri commands
 /// (`src-tauri/src/cli.rs`) so the two apps manage the same shim.
-mod cli_install {
-    #[cfg(unix)]
-    use std::ffi::OsStr;
-    use std::{
-        env, fs,
-        path::{Path, PathBuf},
-    };
-
-    const CAP_DIR_NAME: &str = ".cap";
-    const BIN_DIR_NAME: &str = "bin";
-    const CLI_BINARY_STEM: &str = "cap-cli";
-
-    #[cfg(windows)]
-    const SHIM_NAME: &str = "cap.cmd";
-    #[cfg(not(windows))]
-    const SHIM_NAME: &str = "cap";
-
-    #[cfg(windows)]
-    const CLI_BINARY_NAME: &str = "cap-cli.exe";
-    #[cfg(not(windows))]
-    const CLI_BINARY_NAME: &str = "cap-cli";
-
-    /// `CliInstallStatus`, minus the serde/specta derives the commands need
-    /// and minus `install_dir`, which neither cli.tsx nor this page displays
-    /// (`path_entry` carries the same string).
-    #[derive(Clone, Debug)]
-    pub(crate) struct CliInstallStatus {
-        pub shim_path: String,
-        pub target_path: String,
-        pub installed: bool,
-        pub on_path: bool,
-        pub conflict: Option<String>,
-        pub path_entry: String,
-        pub shell_command: String,
-        pub path_configured: bool,
-    }
-
-    fn home_dir() -> Result<PathBuf, String> {
-        dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())
-    }
-
-    fn install_dir() -> Result<PathBuf, String> {
-        let home = home_dir()?;
-        let cap_bin = home.join(CAP_DIR_NAME).join(BIN_DIR_NAME);
-        let local_bin = home.join(".local/bin");
-
-        // Prefer whichever candidate already holds a Cap-managed shim, so
-        // status and install agree regardless of the launching PATH.
-        if let Ok(target) = target_path() {
-            for candidate in [&cap_bin, &local_bin] {
-                let shim = candidate.join(SHIM_NAME);
-                if shim_points_to(&shim, &target).unwrap_or(false) || shim_is_cap_managed(&shim) {
-                    return Ok(candidate.clone());
-                }
-            }
-        }
-
-        if path_is_present(&cap_bin.join(SHIM_NAME)) || cfg!(windows) {
-            return Ok(cap_bin);
-        }
-
-        if path_contains_install_dir(&local_bin) {
-            return Ok(local_bin);
-        }
-
-        Ok(cap_bin)
-    }
-
-    fn shim_path() -> Result<PathBuf, String> {
-        Ok(install_dir()?.join(SHIM_NAME))
-    }
-
-    fn target_path() -> Result<PathBuf, String> {
-        let exe =
-            env::current_exe().map_err(|e| format!("Could not locate Cap executable: {e}"))?;
-        let exe = resolve_path_for_target_lookup(exe);
-        let dir = exe
-            .parent()
-            .ok_or_else(|| "Could not locate Cap executable directory".to_string())?;
-
-        for candidate in cli_binary_candidates(dir) {
-            if candidate.exists() {
-                return Ok(resolve_path_for_target_lookup(candidate));
-            }
-        }
-
-        Ok(dir.join(CLI_BINARY_NAME))
-    }
-
-    #[cfg(windows)]
-    fn resolve_path_for_target_lookup(path: PathBuf) -> PathBuf {
-        path
-    }
-
-    #[cfg(not(windows))]
-    fn resolve_path_for_target_lookup(path: PathBuf) -> PathBuf {
-        fs::canonicalize(&path).unwrap_or(path)
-    }
-
-    fn cli_binary_candidates(dir: &Path) -> Vec<PathBuf> {
-        let mut names = vec![CLI_BINARY_NAME.to_string()];
-        if let Some(target_triple) = current_target_triple() {
-            names.push(target_specific_cli_binary_name(target_triple));
-        }
-
-        let dirs = [
-            dir.to_path_buf(),
-            dir.join("../MacOS"),
-            dir.join("../Resources"),
-        ];
-        let mut candidates = Vec::new();
-        for dir in dirs {
-            for name in &names {
-                candidates.push(dir.join(name));
-            }
-        }
-        candidates
-    }
-
-    fn target_specific_cli_binary_name(target_triple: &str) -> String {
-        format!(
-            "{CLI_BINARY_STEM}-{target_triple}{}",
-            exe_suffix_for_target(target_triple)
-        )
-    }
-
-    fn exe_suffix_for_target(target_triple: &str) -> &'static str {
-        if target_triple.contains("windows") {
-            ".exe"
-        } else {
-            ""
-        }
-    }
-
-    fn current_target_triple() -> Option<&'static str> {
-        if cfg!(all(
-            target_os = "windows",
-            target_arch = "x86_64",
-            target_env = "msvc"
-        )) {
-            Some("x86_64-pc-windows-msvc")
-        } else if cfg!(all(
-            target_os = "windows",
-            target_arch = "aarch64",
-            target_env = "msvc"
-        )) {
-            Some("aarch64-pc-windows-msvc")
-        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            Some("aarch64-apple-darwin")
-        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-            Some("x86_64-apple-darwin")
-        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            Some("x86_64-unknown-linux-gnu")
-        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-            Some("aarch64-unknown-linux-gnu")
-        } else {
-            None
-        }
-    }
-
-    #[cfg(unix)]
-    fn cli_binary_file_name_is_cap_managed(name: &OsStr) -> bool {
-        if name == CLI_BINARY_NAME {
-            return true;
-        }
-
-        let Some(name) = name.to_str() else {
-            return false;
-        };
-
-        current_target_triple().is_some_and(|target_triple| {
-            name.eq_ignore_ascii_case(&target_specific_cli_binary_name(target_triple))
-        })
-    }
-
-    fn display_path(path: &Path) -> String {
-        path.to_string_lossy().into_owned()
-    }
-
-    fn path_is_present(path: &Path) -> bool {
-        fs::symlink_metadata(path).is_ok()
-    }
-
-    fn path_contains_install_dir(install_dir: &Path) -> bool {
-        let Some(path) = env::var_os("PATH") else {
-            return false;
-        };
-
-        env::split_paths(&path).any(|entry| entry == install_dir)
-    }
-
-    #[cfg(unix)]
-    fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> {
-        match fs::read_link(shim_path) {
-            Ok(link) => Ok(link == target_path || same_file(&link, target_path)),
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
-                ) =>
-            {
-                Ok(false)
-            }
-            Err(err) => Err(format!("Could not read CLI shim: {err}")),
-        }
-    }
-
-    #[cfg(unix)]
-    fn same_file(a: &Path, b: &Path) -> bool {
-        match (fs::canonicalize(a), fs::canonicalize(b)) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        }
-    }
-
-    #[cfg(windows)]
-    fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> {
-        let contents = match fs::read(shim_path) {
-            Ok(contents) => contents,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(err) => return Err(format!("Could not read CLI shim: {err}")),
-        };
-
-        let target = windows_command_path(target_path);
-        Ok(windows_shim_target(&contents).is_some_and(|shim_target| {
-            windows_shim_target_matches(shim_target, &target, |name| env::var(name).ok())
-        }))
-    }
-
-    #[cfg(unix)]
-    fn shim_is_cap_managed(shim_path: &Path) -> bool {
-        match fs::read_link(shim_path) {
-            Ok(link) => link
-                .file_name()
-                .is_some_and(cli_binary_file_name_is_cap_managed),
-            Err(_) => false,
-        }
-    }
-
-    #[cfg(windows)]
-    fn shim_is_cap_managed(shim_path: &Path) -> bool {
-        fs::read(shim_path).is_ok_and(|contents| windows_shim_target(&contents).is_some())
-    }
-
-    #[cfg(windows)]
-    fn windows_shim_target(contents: &[u8]) -> Option<&[u8]> {
-        let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(contents);
-        let mut lines = contents.split(|byte| *byte == b'\n');
-        if !trim_ascii_whitespace(lines.next()?).eq_ignore_ascii_case(b"@echo off") {
-            return None;
-        }
-
-        let command = trim_ascii_whitespace(lines.next()?);
-        if lines.any(|line| !trim_ascii_whitespace(line).is_empty()) {
-            return None;
-        }
-
-        let target = command.strip_prefix(b"\"")?.strip_suffix(b"\" %*")?;
-        if windows_cli_binary_file_name_is_cap_managed(windows_path_file_name(target)) {
-            Some(target)
-        } else {
-            None
-        }
-    }
-
-    #[cfg(windows)]
-    fn windows_path_file_name(path: &[u8]) -> &[u8] {
-        path.rsplit(|byte| *byte == b'\\' || *byte == b'/')
-            .next()
-            .unwrap_or(path)
-    }
-
-    #[cfg(windows)]
-    fn windows_cli_binary_file_name_is_cap_managed(name: &[u8]) -> bool {
-        name.eq_ignore_ascii_case(b"cap-cli.exe")
-            || name.eq_ignore_ascii_case(b"cap-cli-x86_64-pc-windows-msvc.exe")
-            || name.eq_ignore_ascii_case(b"cap-cli-aarch64-pc-windows-msvc.exe")
-    }
-
-    #[cfg(windows)]
-    fn windows_command_path(path: &Path) -> String {
-        let path = display_path(path);
-
-        if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
-            return format!("\\\\{rest}");
-        }
-
-        if let Some(rest) = path.strip_prefix("\\\\?\\") {
-            return rest.to_string();
-        }
-
-        path
-    }
-
-    #[cfg(windows)]
-    fn windows_shim_target_matches<F>(shim_target: &[u8], target: &str, env_value: F) -> bool
-    where
-        F: FnMut(&str) -> Option<String>,
-    {
-        if shim_target.eq_ignore_ascii_case(target.as_bytes()) {
-            return true;
-        }
-
-        let Ok(shim_target) = std::str::from_utf8(shim_target) else {
-            return false;
-        };
-
-        windows_expand_env_prefix(shim_target, env_value)
-            .is_some_and(|expanded| expanded.eq_ignore_ascii_case(target))
-    }
-
-    #[cfg(windows)]
-    fn windows_expand_env_prefix<F>(target: &str, mut env_value: F) -> Option<String>
-    where
-        F: FnMut(&str) -> Option<String>,
-    {
-        let rest = target.strip_prefix('%')?;
-        let (name, suffix) = rest.split_once('%')?;
-        if name.is_empty() {
-            return None;
-        }
-
-        env_value(name).map(|value| format!("{value}{suffix}"))
-    }
-
-    #[cfg(windows)]
-    fn windows_env_prefixed_path<F>(target: &str, mut env_value: F) -> Option<String>
-    where
-        F: FnMut(&str) -> Option<String>,
-    {
-        for name in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
-            let Some(value) = env_value(name) else {
-                continue;
-            };
-            let Some(suffix) = strip_ascii_prefix(target, &value) else {
-                continue;
-            };
-            if suffix.is_empty() || suffix.starts_with('\\') || suffix.starts_with('/') {
-                return Some(format!("%{name}%{suffix}"));
-            }
-        }
-
-        None
-    }
-
-    #[cfg(windows)]
-    fn strip_ascii_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
-        let head = value.get(..prefix.len())?;
-        let tail = value.get(prefix.len()..)?;
-        head.eq_ignore_ascii_case(prefix).then_some(tail)
-    }
-
-    #[cfg(windows)]
-    fn trim_ascii_whitespace(mut value: &[u8]) -> &[u8] {
-        while value.first().is_some_and(|byte| byte.is_ascii_whitespace()) {
-            value = &value[1..];
-        }
-
-        while value.last().is_some_and(|byte| byte.is_ascii_whitespace()) {
-            value = &value[..value.len() - 1];
-        }
-
-        value
-    }
-
-    fn shell_command(install_dir: &Path) -> String {
-        let install_dir = display_path(install_dir);
-
-        if cfg!(windows) {
-            let install_dir = install_dir.replace('\'', "''");
-            format!(
-                r#"powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';{install_dir}', 'User')""#
-            )
-        } else {
-            format!(r#"export PATH="{install_dir}:$PATH""#)
-        }
-    }
-
-    pub(crate) fn status() -> Result<CliInstallStatus, String> {
-        let install_dir = install_dir()?;
-        let shim_path = shim_path()?;
-        let target_path = target_path()?;
-        let target_exists = target_path.exists();
-        let shim_exists = path_is_present(&shim_path);
-        let installed = target_exists && shim_points_to(&shim_path, &target_path)?;
-        let conflict = if shim_exists && !installed && !shim_is_cap_managed(&shim_path) {
-            Some(format!(
-                "{} already exists and is not managed by Cap",
-                display_path(&shim_path)
-            ))
-        } else if !target_exists {
-            Some(format!(
-                "Bundled CLI binary not found at {}",
-                display_path(&target_path)
-            ))
-        } else {
-            None
-        };
-
-        let on_path = path_contains_install_dir(&install_dir);
-
-        Ok(CliInstallStatus {
-            shim_path: display_path(&shim_path),
-            target_path: display_path(&target_path),
-            installed,
-            on_path,
-            conflict,
-            path_entry: display_path(&install_dir),
-            shell_command: shell_command(&install_dir),
-            path_configured: path_persisted(&install_dir, on_path),
-        })
-    }
-
-    #[cfg(unix)]
-    fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
-        std::os::unix::fs::symlink(target_path, shim_path)
-            .map_err(|e| format!("Could not create CLI symlink: {e}"))
-    }
-
-    #[cfg(windows)]
-    fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
-        let target = windows_command_path(target_path);
-        let target =
-            windows_env_prefixed_path(&target, |name| env::var(name).ok()).unwrap_or(target);
-        let contents = format!(
-            r#"@echo off
-"{target}" %*
-"#
-        );
-        fs::write(shim_path, contents).map_err(|e| format!("Could not write CLI shim: {e}"))
-    }
-
-    pub(crate) fn install() -> Result<CliInstallStatus, String> {
-        let install_dir = install_dir()?;
-        let shim_path = shim_path()?;
-        let target_path = target_path()?;
-
-        if !target_path.exists() {
-            return Err(format!(
-                "Bundled CLI binary not found at {}",
-                display_path(&target_path)
-            ));
-        }
-
-        fs::create_dir_all(&install_dir)
-            .map_err(|e| format!("Could not create CLI directory: {e}"))?;
-
-        if path_is_present(&shim_path) {
-            // Repoint our own shim and any other Cap-managed one; only refuse
-            // to clobber a genuinely foreign file.
-            if !shim_points_to(&shim_path, &target_path)? && !shim_is_cap_managed(&shim_path) {
-                return Err(format!(
-                    "{} already exists and is not managed by Cap",
-                    display_path(&shim_path)
-                ));
-            }
-
-            match fs::remove_file(&shim_path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("Could not replace CLI shim: {e}")),
-            }
-        }
-
-        write_shim(&shim_path, &target_path)?;
-
-        let mut status = status()?;
-        if !status.on_path && ensure_path_persisted(&install_dir) {
-            status.path_configured = true;
-        }
-        Ok(status)
-    }
-
-    #[cfg(unix)]
-    fn ensure_path_persisted(install_dir: &Path) -> bool {
-        if env::var_os("CAP_NO_MODIFY_PATH").is_some() {
-            return false;
-        }
-        let Some(home) = dirs::home_dir() else {
-            return false;
-        };
-        let needle = display_path(install_dir);
-        if profile_mentions_dir(&home, &needle) {
-            return true;
-        }
-        let shell = env::var("SHELL").unwrap_or_default();
-        let shell_name = Path::new(&shell)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        append_path_export(&shell_profile(&home, shell_name), &needle)
-    }
-
-    #[cfg(windows)]
-    fn ensure_path_persisted(install_dir: &Path) -> bool {
-        if env::var_os("CAP_NO_MODIFY_PATH").is_some() {
-            return false;
-        }
-        let dir = display_path(install_dir).replace('\'', "''");
-        let script = format!(
-            "$d = '{dir}'; \
-             $u = [Environment]::GetEnvironmentVariable('Path', 'User'); \
-             $e = if ($u) {{ $u -split ';' }} else {{ @() }}; \
-             if ($e -notcontains $d) {{ \
-             $n = if ($u) {{ \"$d;$u\" }} else {{ $d }}; \
-             [Environment]::SetEnvironmentVariable('Path', $n, 'User') }}"
-        );
-        let mut command = powershell_command();
-        command
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    }
-
-    #[cfg(unix)]
-    fn path_persisted(install_dir: &Path, on_path: bool) -> bool {
-        on_path
-            || dirs::home_dir()
-                .is_some_and(|home| profile_mentions_dir(&home, &display_path(install_dir)))
-    }
-
-    #[cfg(windows)]
-    fn path_persisted(install_dir: &Path, on_path: bool) -> bool {
-        on_path || windows_user_path_contains(install_dir)
-    }
-
-    #[cfg(windows)]
-    fn windows_user_path_contains(install_dir: &Path) -> bool {
-        let mut command = powershell_command();
-        let Ok(output) = command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Environment]::GetEnvironmentVariable('Path', 'User')",
-            ])
-            .output()
-        else {
-            return false;
-        };
-        if !output.status.success() {
-            return false;
-        }
-        let needle = display_path(install_dir);
-        let needle = needle.trim();
-        String::from_utf8_lossy(&output.stdout)
-            .split(';')
-            .any(|entry| entry.trim().eq_ignore_ascii_case(needle))
-    }
-
-    #[cfg(windows)]
-    fn powershell_command() -> std::process::Command {
-        use std::os::windows::process::CommandExt;
-
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-        let mut command = std::process::Command::new("powershell");
-        command.creation_flags(CREATE_NO_WINDOW);
-        command
-    }
-
-    #[cfg(unix)]
-    fn shell_profile(home: &Path, shell_name: &str) -> PathBuf {
-        match shell_name {
-            "zsh" => home.join(".zshrc"),
-            "bash" => home.join(".bashrc"),
-            "" if home.join(".zshrc").exists() => home.join(".zshrc"),
-            _ => home.join(".profile"),
-        }
-    }
-
-    #[cfg(unix)]
-    fn profile_mentions_dir(home: &Path, needle: &str) -> bool {
-        [".zshrc", ".bashrc", ".bash_profile", ".profile"]
-            .iter()
-            .any(|file| fs::read_to_string(home.join(file)).is_ok_and(|c| c.contains(needle)))
-    }
-
-    #[cfg(unix)]
-    fn append_path_export(profile: &Path, install_dir: &str) -> bool {
-        use std::io::Write;
-        let line = format!("export PATH=\"{install_dir}:$PATH\"");
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(profile)
-            .and_then(|mut file| writeln!(file, "\n# Added by Cap\n{line}"))
-            .is_ok()
-    }
-
-    pub(crate) fn uninstall() -> Result<CliInstallStatus, String> {
-        let shim_path = shim_path()?;
-        let target_path = target_path()?;
-
-        if shim_points_to(&shim_path, &target_path)? {
-            fs::remove_file(&shim_path).map_err(|e| format!("Could not remove CLI shim: {e}"))?;
-        }
-
-        status()
-    }
-
-    #[cfg(all(test, unix))]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn shell_profile_selection() {
-            let home = Path::new("/home/u");
-            assert_eq!(shell_profile(home, "zsh"), home.join(".zshrc"));
-            assert_eq!(shell_profile(home, "bash"), home.join(".bashrc"));
-            assert_eq!(shell_profile(home, "fish"), home.join(".profile"));
-        }
-
-        #[test]
-        fn cap_managed_shim_detection() {
-            let dir =
-                std::env::temp_dir().join(format!("cap-gpui-cli-test-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            let shim = dir.join(SHIM_NAME);
-
-            // A symlink to a cap-cli binary is Cap-managed even when it points
-            // at a different install (the target need not exist).
-            std::os::unix::fs::symlink("/elsewhere/Cap.app/Contents/MacOS/cap-cli", &shim).unwrap();
-            assert!(shim_is_cap_managed(&shim));
-
-            // A symlink to anything else is not.
-            fs::remove_file(&shim).unwrap();
-            std::os::unix::fs::symlink("/bin/ls", &shim).unwrap();
-            assert!(!shim_is_cap_managed(&shim));
-
-            // Nor is a regular file, so install refuses to clobber it.
-            fs::remove_file(&shim).unwrap();
-            fs::write(&shim, b"#!/bin/sh\n").unwrap();
-            assert!(!shim_is_cap_managed(&shim));
-
-            let _ = fs::remove_dir_all(&dir);
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -8383,6 +8142,191 @@ mod cli_install {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hotkey(code: &str, meta: bool, ctrl: bool, alt: bool, shift: bool) -> Hotkey {
+        Hotkey {
+            code: code.into(),
+            meta,
+            ctrl,
+            alt,
+            shift,
+        }
+    }
+
+    #[test]
+    fn shortcuts_need_a_typing_safe_modifier() {
+        assert!(shortcut_needs_modifier(&hotkey(
+            "KeyA", false, false, false, false
+        )));
+        assert!(shortcut_needs_modifier(&hotkey(
+            "Digit4", false, false, false, true
+        )));
+        assert!(!shortcut_needs_modifier(&hotkey(
+            "Digit4", true, false, false, true
+        )));
+        assert!(!shortcut_needs_modifier(&hotkey(
+            "KeyS", false, true, false, false
+        )));
+        assert!(!shortcut_needs_modifier(&hotkey(
+            "KeyS", false, false, true, false
+        )));
+        assert!(!shortcut_needs_modifier(&hotkey(
+            "F5", false, false, false, false
+        )));
+        assert!(!shortcut_needs_modifier(&hotkey(
+            "F12", false, false, false, true
+        )));
+        assert!(shortcut_needs_modifier(&hotkey(
+            "Space", false, false, false, false
+        )));
+    }
+
+    #[test]
+    fn every_hotkey_action_appears_once_with_a_label_and_effect() {
+        let shown: Vec<&str> = SCREENSHOT_SHORTCUTS
+            .iter()
+            .chain(RECORDING_SHORTCUTS.iter())
+            .chain(WHILE_RECORDING_SHORTCUTS.iter())
+            .copied()
+            .collect();
+        assert_eq!(shown.len(), 13);
+        let settings = store::GeneralSettings::default();
+        for action in &shown {
+            assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
+            assert_ne!(shortcut_label(action), "Shortcut", "{action}");
+            assert!(
+                !shortcut_effect(action, &settings, crate::main_window::Mode::Studio).is_empty(),
+                "{action}"
+            );
+        }
+    }
+
+    /// The reserved two lines only hold if no outcome-dependent description
+    /// wraps to a third at the window's minimum width (about 55 characters
+    /// per line there).
+    #[test]
+    fn outcome_descriptions_fit_the_reserved_two_lines() {
+        let mut settings = store::GeneralSettings::default();
+        let mut longest = 0;
+        for screenshot in [
+            store::PostScreenshotBehaviour::OpenEditor,
+            store::PostScreenshotBehaviour::Copy,
+            store::PostScreenshotBehaviour::CopyAndOpenEditor,
+            store::PostScreenshotBehaviour::Save,
+        ] {
+            settings.post_screenshot_behaviour = screenshot;
+            for open_links_disabled in [false, true] {
+                settings.disable_auto_open_links = open_links_disabled;
+                for studio in [
+                    store::PostStudioBehaviour::OpenEditor,
+                    store::PostStudioBehaviour::ShowOverlay,
+                    store::PostStudioBehaviour::DoNothing,
+                ] {
+                    settings.post_studio_recording_behaviour = studio;
+                    for action in SCREENSHOT_SHORTCUTS
+                        .iter()
+                        .chain(RECORDING_SHORTCUTS.iter())
+                        .filter(|action| description_follows_outcome(action))
+                    {
+                        let text = capitalized_sentence(&shortcut_effect(
+                            action,
+                            &settings,
+                            crate::main_window::Mode::Studio,
+                        ));
+                        longest = longest.max(text.chars().count());
+                    }
+                }
+            }
+        }
+        assert!(
+            longest <= 104,
+            "longest outcome description is {longest} characters"
+        );
+    }
+
+    #[test]
+    fn every_after_capture_value_has_exactly_one_card() {
+        use store::SettingsEnum as _;
+        for value in store::PostScreenshotBehaviour::ALL {
+            assert_eq!(
+                SCREENSHOT_OUTCOMES
+                    .iter()
+                    .filter(|(v, _)| v == value)
+                    .count(),
+                1
+            );
+        }
+        for value in store::PostStudioBehaviour::ALL {
+            assert_eq!(
+                STUDIO_OUTCOMES.iter().filter(|(v, _)| v == value).count(),
+                1
+            );
+        }
+        for disabled in [false, true] {
+            assert_eq!(
+                INSTANT_OUTCOMES
+                    .iter()
+                    .filter(|(v, _)| *v == disabled)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn descriptions_follow_the_after_capture_settings() {
+        let mut settings = store::GeneralSettings::default();
+        let studio = crate::main_window::Mode::Studio;
+        assert_eq!(
+            shortcut_effect("screenshotArea", &settings, studio),
+            "select an area and open it in the editor"
+        );
+        settings.post_screenshot_behaviour = store::PostScreenshotBehaviour::Copy;
+        assert_eq!(
+            shortcut_effect("screenshotArea", &settings, studio),
+            "select an area and copy it to your clipboard"
+        );
+        assert!(
+            shortcut_effect("startStudioRecording", &settings, studio)
+                .ends_with("open the editor when you stop")
+        );
+        settings.post_studio_recording_behaviour = store::PostStudioBehaviour::ShowOverlay;
+        assert!(!shortcut_effect("startStudioRecording", &settings, studio).contains("editor"));
+        settings.disable_auto_open_links = true;
+        assert!(
+            shortcut_effect("startInstantRecording", &settings, studio)
+                .ends_with("copy its share link when you stop")
+        );
+        assert_eq!(
+            shortcut_effect(
+                "openRecordingPickerWindow",
+                &settings,
+                crate::main_window::Mode::Instant
+            ),
+            "choose a window, then record it in Instant mode"
+        );
+        assert_eq!(
+            capitalized_sentence("stop the current recording"),
+            "Stop the current recording."
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn combos_read_naturally_inside_a_sentence() {
+        assert_eq!(
+            hotkey_inline_text(&hotkey("Digit4", true, false, false, true)),
+            "⌘⇧4"
+        );
+        assert_eq!(
+            hotkey_inline_text(&hotkey("KeyR", false, true, true, false)),
+            "⌃⌥R"
+        );
+        assert_eq!(
+            hotkey_inline_text(&hotkey("Slash", true, false, false, false)),
+            "⌘/"
+        );
+    }
 
     /// gpui keystroke names against the `KeyboardEvent.code` strings hotkeys
     /// written by the Tauri app carry.
@@ -8467,52 +8411,17 @@ mod tests {
         );
     }
 
-    /// The switch-back target matches how this binary was started: the `.app`
-    /// it is staged inside beats everything, a cargo `target/` path means the
-    /// dev harness (never the installed app), and only a bare binary from
-    /// neither falls through to `/Applications`.
     #[test]
-    fn the_classic_target_matches_the_launch_context() {
-        assert_eq!(
-            classic_target_for_exe(std::path::Path::new(
-                "/Applications/Cap.app/Contents/MacOS/cap-gpui"
-            )),
-            Some(ClassicTarget::Bundle(std::path::PathBuf::from(
-                "/Applications/Cap.app"
-            )))
-        );
-        assert_eq!(
-            classic_target_for_exe(std::path::Path::new(
-                "/Users/x/Cap/apps/desktop-gpui/target/debug/cap-gpui"
-            )),
-            Some(ClassicTarget::DevSupervisor)
-        );
-        // A dev binary staged inside a bundle is still that bundle's.
-        assert_eq!(
-            classic_target_for_exe(std::path::Path::new(
-                "/Users/x/Cap/target/debug/bundle/osx/Cap.app/Contents/MacOS/cap-gpui"
-            )),
-            Some(ClassicTarget::Bundle(std::path::PathBuf::from(
-                "/Users/x/Cap/target/debug/bundle/osx/Cap.app"
-            )))
-        );
-    }
+    fn only_debug_cargo_builds_can_switch_back_to_the_dev_harness() {
+        let cargo_build =
+            std::path::Path::new("/Users/x/Cap/apps/desktop-gpui/target/debug/cap-gpui");
+        let installed_app = std::path::Path::new("/Applications/Cap.app/Contents/MacOS/Cap");
 
-    #[test]
-    fn installed_handoff_launches_a_new_bundle_instance() {
-        let bundle = std::path::PathBuf::from("/Applications/Cap Preview.app");
-        let command = classic_launch_command(&ClassicTarget::Bundle(bundle.clone())).unwrap();
-        assert_eq!(command.get_program(), "/usr/bin/open");
-        assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
-            [std::ffi::OsStr::new("-n"), bundle.as_os_str()]
-        );
-        assert!(classic_launch_command(&ClassicTarget::DevSupervisor).is_none());
-        let executable = std::path::PathBuf::from("/opt/cap/Cap");
-        let command =
-            classic_launch_command(&ClassicTarget::Executable(executable.clone())).unwrap();
-        assert_eq!(command.get_program(), executable.as_os_str());
-        assert_eq!(command.get_args().count(), 0);
+        assert!(dev_supervisor_available_for(Some(cargo_build), true));
+        assert!(!dev_supervisor_available_for(Some(cargo_build), false));
+        assert!(!dev_supervisor_available_for(Some(installed_app), true));
+        assert!(!dev_supervisor_available_for(Some(installed_app), false));
+        assert!(!dev_supervisor_available_for(None, true));
     }
 
     /// The takeover's whole timeline, read off its one clock.

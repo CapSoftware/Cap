@@ -79,6 +79,31 @@ describe("share page playback URL", () => {
 			source: publishedVideo.source,
 			storageIntegrationId: Option.some("drive-integration"),
 		});
+		expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
+			publishedVideo.source.outputKey,
+		);
+	});
+
+	it("signs the audio leveled output when it is the published source", async () => {
+		mocks.sign.mockReturnValue(
+			Effect.succeed("https://media.example.com/audio.mp4"),
+		);
+		mocks.access.mockReturnValue(
+			Effect.succeed([{ getSignedObjectUrl: mocks.sign }, Option.none()]),
+		);
+		const outputKey = "owner/video/.recording/outputs/generation/result.mp4";
+		const audioLevelOutputKey =
+			"owner/video/.recording/outputs/audio-quality-v3/result.mp4";
+		await getSharePlaybackUrl({
+			...video,
+			source: {
+				type: "desktopMP4",
+				outputKey,
+				audioLevelSourceKey: outputKey,
+				audioLevelOutputKey,
+			},
+		});
+		expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(audioLevelOutputKey);
 	});
 
 	it("allows the player to use its existing route when storage resolution fails", async () => {

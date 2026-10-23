@@ -2,6 +2,7 @@ import {
 	authOptions,
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
+import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
 	ssoLoginErrorPath,
@@ -12,8 +13,41 @@ import { type NextRequest, NextResponse } from "next/server";
 import NextAuth from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { getSafeNextPath } from "@/app/(org)/safe-next";
+import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+	normalizeSignInEmail,
+} from "@/lib/email-code-rate-limit";
+import { isRateLimited } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+
+async function idpSignInConnection(request: NextRequest) {
+	const query = request.nextUrl.searchParams;
+	const code = query.get("code");
+	if (
+		request.method !== "GET" ||
+		query.size !== 1 ||
+		!code ||
+		code.length > 2048 ||
+		(await isRateLimited("rl_auth_sso_start", { headers: request.headers }))
+	) {
+		return null;
+	}
+	try {
+		const clientId = serverEnv().WORKOS_CLIENT_ID;
+		if (!clientId) return null;
+		const { profile } = await getWorkOS().sso.getProfileAndToken({
+			clientId,
+			code,
+		});
+		return /^conn_[a-zA-Z0-9]{1,100}$/.test(profile.connectionId)
+			? profile.connectionId
+			: null;
+	} catch {
+		return null;
+	}
+}
 
 async function readSignInBody(request: NextRequest) {
 	if (request.method !== "POST") return null;
@@ -27,6 +61,7 @@ async function readSignInBody(request: NextRequest) {
 				json: payload.json === "true",
 				callbackUrl:
 					typeof payload.callbackUrl === "string" ? payload.callbackUrl : null,
+				email: typeof payload.email === "string" ? payload.email : null,
 			};
 		}
 		if (contentType?.includes("application/x-www-form-urlencoded")) {
@@ -34,10 +69,48 @@ async function readSignInBody(request: NextRequest) {
 			return {
 				json: body.get("json") === "true",
 				callbackUrl: body.get("callbackUrl"),
+				email: body.get("email"),
 			};
 		}
 	} catch {
 		return null;
+	}
+	return null;
+}
+
+function authErrorUrl(error: string) {
+	const url = new URL("/api/auth/error", serverEnv().WEB_URL);
+	url.searchParams.set("error", error);
+	return url.toString();
+}
+
+async function emailCodeLimitResponse(
+	request: NextRequest,
+	nextauth: string[],
+) {
+	if (nextauth[1] !== "email") return null;
+	if (nextauth[0] === "signin" && request.method === "POST") {
+		const body = await readSignInBody(request);
+		const email = normalizeSignInEmail(body?.email);
+		if (!email || !(await isEmailCodeSendLimited(email, request.headers))) {
+			return null;
+		}
+		const url = authErrorUrl("EmailSignin");
+		return body?.json
+			? NextResponse.json({ url }, { status: 429 })
+			: NextResponse.redirect(url, 302);
+	}
+	if (nextauth[0] === "callback") {
+		const query = request.nextUrl.searchParams;
+		const email = normalizeSignInEmail(query.get("email"));
+		if (
+			!email ||
+			!query.get("token") ||
+			!(await isEmailCodeVerifyLimited(email, request.headers))
+		) {
+			return null;
+		}
+		return NextResponse.redirect(authErrorUrl("Verification"), 302);
 	}
 	return null;
 }
@@ -47,11 +120,29 @@ async function handler(
 	context: { params: Promise<{ nextauth: string[] }> },
 ) {
 	const { nextauth } = await context.params;
+	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
+	if (limitedResponse) return limitedResponse;
 	if (nextauth[1] !== "workos") {
 		return NextAuth(request, context, authOptions());
 	}
 	const env = serverEnv();
 	const cookie = ssoIntentCookie(new URL(env.WEB_URL).protocol === "https:");
+	if (
+		nextauth[0] === "callback" &&
+		!request.nextUrl.searchParams.has("state")
+	) {
+		const connectionId = await idpSignInConnection(request);
+		if (connectionId) {
+			// An unsolicited code only selects the IdP; a fresh state/PKCE flow must authenticate the browser.
+			const signInUrl = new URL("/login", env.WEB_URL);
+			signInUrl.searchParams.set("connection_id", connectionId);
+			const response = NextResponse.redirect(signInUrl, 303);
+			response.headers.set("cache-control", "no-store");
+			response.headers.set("referrer-policy", "no-referrer");
+			response.cookies.set(cookie.name, "", { ...cookie.options, maxAge: 0 });
+			return response;
+		}
+	}
 	const intent = verifySsoLoginIntent(
 		request.cookies.get(cookie.name)?.value,
 		env.NEXTAUTH_SECRET,

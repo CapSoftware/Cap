@@ -14,9 +14,12 @@ mod segments;
 mod telemetry;
 mod thumbnail;
 
-pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
+pub use audio::{AudioRenderer, AudioSegment, MusicTracks, release_playback_audio_caches};
+#[cfg(feature = "test-hooks")]
+pub use audio_output::OfflineAudioSink;
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
+    PlaySpec,
 };
 pub use cap_audio::{
     TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,

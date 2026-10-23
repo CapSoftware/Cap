@@ -70,6 +70,7 @@ use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
+    project_save::PendingProjectSave,
     store::SettingsEnum,
     theme::Theme,
     ui,
@@ -282,6 +283,17 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     }
 }
 
+fn frame_seconds(frame: u32) -> f64 {
+    frame as f64 / EDITOR_PREVIEW_FPS as f64
+}
+
+/// Where a seek leaves the playhead. Paused, the engine echoes the seek back
+/// as `playhead_changed(frame)`; storing the frame's own time makes that echo
+/// a no-op instead of a second whole-editor rebuild for every scrub step.
+fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
+    if playing { time } else { frame_seconds(frame) }
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -360,6 +372,15 @@ pub struct ProjectSummary {
 pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     if !path.exists() {
         return Err(format!("Video path {} not found!", path.display()));
+    }
+
+    // Repairs tracks older recorders stamped at the wrong rate, and display
+    // fps that finalization replaced with the average rate, before anything
+    // reads them. Non-fatal: the editor opens the files as they are.
+    match cap_recording::track_heal::heal_stretched_tracks(path) {
+        Ok(true) => tracing::info!(?path, "Healed recording tracks"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(?path, "Track heal check failed: {error:#}"),
     }
 
     let meta = RecordingMeta::load_for_project(path)
@@ -479,38 +500,33 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     })
 }
 
-/// `meta().hasRecordedCursorData` -- any segment with a cursor file on disk.
-/// The click half of `generate_zoom_segments_for_project`
-/// (`src-tauri/src/recording.rs:3806-3848`): every recorded cursor click, with
-/// the same short-lived-shape stabilisation the Tauri command applies.
 const NO_AUTO_ZOOM_CLICKS_MESSAGE: &str =
     "No clicks found to zoom into. Drag across the lane to add one.";
 
-fn load_recording_clicks(project_path: &std::path::Path) -> Vec<cap_project::CursorClickEvent> {
+fn load_recording_clicks(
+    project_path: &std::path::Path,
+) -> Vec<Vec<cap_project::CursorClickEvent>> {
     let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
         return Vec::new();
     };
-    let cap_project::RecordingMetaInner::Studio(studio) = &meta.inner else {
+    let RecordingMetaInner::Studio(studio) = &meta.inner else {
         return Vec::new();
+    };
+    let load = |cursor: Option<PathBuf>| {
+        cursor
+            .and_then(|cursor| cap_project::CursorEvents::load_clicks_from_file(&cursor).ok())
+            .unwrap_or_default()
     };
     match &**studio {
         StudioRecordingMeta::SingleSegment { segment } => {
-            let Some(cursor) = &segment.cursor else {
-                return Vec::new();
-            };
-            let mut events =
-                cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap_or_default();
-            let pointer_ids = studio.pointer_cursor_ids();
-            events.stabilize_short_lived_cursor_shapes(
-                (!pointer_ids.is_empty()).then_some(&pointer_ids),
-                cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
-            );
-            events.clicks
+            vec![load(
+                segment.cursor.as_ref().map(|cursor| meta.path(cursor)),
+            )]
         }
         StudioRecordingMeta::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .flat_map(|segment| segment.cursor_events(&meta).clicks)
+            .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
             .collect(),
     }
 }
@@ -561,17 +577,12 @@ fn recorded_cursor_family(studio: &StudioRecordingMeta) -> Option<CursorFamily> 
 ///   (`frame_pipeline.rs:809-827`) and gpui's atlas expects BGRA, the same
 ///   swap `library::decode_thumbnail` does after decoding a thumbnail.
 pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
-    let row_bytes = frame.width as usize * 4;
-    let mut tight = Vec::with_capacity(row_bytes * frame.height as usize);
-    for row in frame.data.chunks(frame.padded_bytes_per_row as usize) {
-        if row.len() < row_bytes {
-            return None;
-        }
-        tight.extend_from_slice(&row[..row_bytes]);
-    }
-    for pixel in tight.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    let tight = cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+        &frame.data,
+        frame.width as usize,
+        frame.padded_bytes_per_row as usize,
+        frame.height as usize,
+    )?;
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, tight)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(buffer)
@@ -1227,45 +1238,6 @@ enum Scrub {
 /// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
 const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
-/// The debounced `project-config.json` write.
-///
-/// The Tauri editor's `scheduleProjectConfigSave` restarts a 250ms timer on
-/// every store change and `flushProjectConfig` serialises the whole config
-/// through `commands.setProjectConfig` (`ED/context.ts:1186-1252`), which is
-/// `config.write(&project_path)` on the Rust side (`lib.rs:3346-3360`). The
-/// pending value lives behind an `Rc<RefCell<..>>` so the close path -- which
-/// only ever gets an `&mut App` -- can force it out, the same shape the
-/// teleprompter's `onCloseRequested` save uses.
-#[derive(Default)]
-pub struct PendingProjectSave {
-    path: Option<PathBuf>,
-    config: Option<ProjectConfiguration>,
-}
-
-impl PendingProjectSave {
-    /// Drop a scheduled write without performing it -- the reload path after
-    /// an import, where the config on disk is newer than the editor's copy.
-    pub fn discard(&mut self) {
-        self.config = None;
-    }
-
-    pub fn flush(&mut self) {
-        if let Err(error) = self.try_flush() {
-            tracing::error!(path = ?self.path, "failed to persist project config: {error}");
-        }
-    }
-
-    pub fn try_flush(&mut self) -> std::io::Result<()> {
-        let (Some(path), Some(config)) = (&self.path, &self.config) else {
-            return Ok(());
-        };
-        config.write(path)?;
-        tracing::debug!(path = %path.display(), "project config written");
-        self.config = None;
-        Ok(())
-    }
-}
-
 /// Which edge -- or the whole box -- a live drag is moving.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum DragKind {
@@ -1436,6 +1408,7 @@ pub struct EditorWindow {
     /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
     /// first render that knows both the width and the duration does it.
     fitted: bool,
+    restore_transform: Option<Transform>,
     /// The transport's zoom slider track rect, written by the slider's own
     /// prepaint canvas and read by the pointer maths.
     zoom_slider_track: ui::SliderTrack,
@@ -2054,6 +2027,7 @@ impl EditorWindow {
             sharing: RecordingMeta::load_for_project(&project_path)
                 .ok()
                 .and_then(|meta| meta.sharing),
+            pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2091,6 +2065,7 @@ impl EditorWindow {
             view: TimelineView::default(),
             playback_follow: timeline::PlaybackFollow::default(),
             fitted: false,
+            restore_transform: None,
             zoom_slider_track: ui::SliderTrack::default(),
             zoom_slider_drag: false,
             project: ProjectConfiguration::default(),
@@ -2123,7 +2098,6 @@ impl EditorWindow {
             has_camera: false,
             multiple_clips: false,
             recorded_cursor_family: None,
-            pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
             name_input,
             hex_inputs,
@@ -2197,7 +2171,7 @@ impl EditorWindow {
     /// Hand the close path the pending write, so a `.cap` closed inside the
     /// 250ms debounce still lands on disk -- `onCleanup(() => { ...
     /// flushProjectConfig() })` (`ED/context.ts:1246-1252`).
-    pub fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
+    pub(crate) fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
         self.pending_save.clone()
     }
 
@@ -2239,7 +2213,6 @@ impl EditorWindow {
         self.has_camera = summary.has_camera;
         self.multiple_clips = summary.multiple_clips;
         self.recorded_cursor_family = summary.recorded_cursor_family;
-        self.pending_save.borrow_mut().path = Some(self.project_path.clone());
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
         // the on-mount 80px fit then narrows it on the first render that knows
@@ -2293,6 +2266,7 @@ impl EditorWindow {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
+        let waveform_paths = self.timeline.waveform_paths.clone();
         self.timeline = TimelineModel::build_with_lanes(
             &self.project,
             self.has_camera,
@@ -2301,6 +2275,7 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.timeline.waveform_paths = waveform_paths;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -2526,11 +2501,18 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
-        self.pending_save.borrow_mut().config = Some(self.project.clone());
+        self.pending_save.borrow_mut().queue(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
             cx.background_executor().timer(PROJECT_SAVE_DEBOUNCE).await;
-            pending.borrow_mut().flush();
+            let Some(save) = pending.borrow().snapshot() else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { save.write() })
+                .await;
+            pending.borrow_mut().complete(result);
         }));
     }
 
@@ -2863,6 +2845,12 @@ impl EditorWindow {
             .is_some_and(|current| Arc::ptr_eq(current, instance))
     }
 
+    pub(crate) fn holds_instance(&self, instance: &std::sync::Weak<EditorInstance>) -> bool {
+        self.instance
+            .as_ref()
+            .is_some_and(|current| std::ptr::eq(Arc::as_ptr(current), instance.as_ptr()))
+    }
+
     fn retry_preparing_candidate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.preparing_retry_pending {
             return;
@@ -2904,6 +2892,14 @@ impl EditorWindow {
 
     pub fn take_instance(&mut self) -> Option<Arc<EditorInstance>> {
         self.instance.take()
+    }
+
+    pub fn timeline_transform(&self) -> Transform {
+        self.view.transform
+    }
+
+    pub fn restore_timeline_transform(&mut self, transform: Transform) {
+        self.restore_transform = Some(transform);
     }
 
     /// Hand the window its transport, the pump's counters, and the duration
@@ -2982,7 +2978,7 @@ impl EditorWindow {
     /// is `setEditorState("playbackTime", payload.playhead_position / FPS)`
     /// (`Editor.tsx:482-486`).
     pub fn playhead_changed(&mut self, frame: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let next = frame as f64 / EDITOR_PREVIEW_FPS as f64;
+        let next = frame_seconds(frame);
         if (next - self.playhead).abs() < f64::EPSILON {
             return;
         }
@@ -3245,6 +3241,7 @@ impl EditorWindow {
         } else {
             transport.seek(frame);
         }
+        let time = seeked_playhead(time, frame, self.playing);
         self.playhead = time;
         self.view.playhead = time;
         self.view.playing = self.playing;
@@ -3301,6 +3298,26 @@ impl EditorWindow {
     /// stop, this just guarantees one happens.
     pub fn stop_for_measurement(&mut self, cx: &mut Context<Self>) {
         self.stop_playback(cx);
+    }
+
+    pub(crate) fn has_waveforms(&self) -> (bool, bool) {
+        let present = |tables: &[Arc<Vec<f32>>]| tables.iter().any(|peaks| !peaks.is_empty());
+        (
+            present(&self.timeline.mic_waveforms),
+            present(&self.timeline.system_waveforms),
+        )
+    }
+
+    pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
+        self.timeline.waveform_paths.stats()
+    }
+
+    pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        let total = self.total_duration();
+        self.view
+            .transform
+            .update_zoom(seconds, self.playhead, total);
+        cx.notify();
     }
 
     fn capture_playback_key(
@@ -3746,7 +3763,11 @@ impl EditorWindow {
         cx.notify();
     }
 
-    fn invalidate_playback_chrome(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn invalidate_playback_chrome(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
         self.transport_controls.update(cx, |_, cx| cx.notify());
         // While playing, nothing else the parent renders reads the playhead:
@@ -3754,9 +3775,11 @@ impl EditorWindow {
         // scene-mode pane gates on it too. Notifying the parent here would
         // rebuild every cached section -- header, toolbar, sidebar included --
         // at the 60Hz playhead rate, which is the same class of rebuild that
-        // measured 40ms/frame on the text-panel sidebar. Paused paths (hover,
-        // seeks) keep the full invalidation: the overlay's element boxes
-        // appear and disappear as the playhead crosses segments.
+        // measured 40ms/frame on the text-panel sidebar. A paused playhead
+        // change keeps the full invalidation: the overlay's element boxes
+        // appear and disappear as the playhead crosses segments. Pointer hover
+        // goes through `invalidate_hover_chrome` instead, and an arriving
+        // paused frame whose layout changed still notifies the whole editor.
         if !self.playing {
             cx.notify();
         }
@@ -3777,10 +3800,16 @@ impl EditorWindow {
         );
     }
 
+    pub(crate) fn preview_frames_presented(&self) -> Option<u64> {
+        self.stats
+            .as_ref()
+            .map(|stats| stats.presented.load(Ordering::Relaxed))
+    }
+
     /// `onMouseMove` on the timeline container (`TL/index.tsx:1170-1188`):
     /// while paused, the pointer's time becomes `previewTime`; outside the
     /// content column, and at all times while playing, it is cleared.
-    fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
         // `if (editorState.playing) return;` -- the handler bails *before* it
         // writes, so a preview time set while paused survives a play rather
         // than being cleared. The ghost is hidden by the render's own
@@ -3793,17 +3822,28 @@ impl EditorWindow {
         if next != self.view.preview_time {
             self.view.preview_time = next;
             self.emit_preview_frame();
-            self.invalidate_playback_chrome(window, cx);
+            self.invalidate_hover_chrome(cx);
         }
     }
 
-    fn timeline_hover_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn timeline_hover_leave(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.playing || self.view.preview_time.is_none() {
             return;
         }
         self.view.preview_time = None;
         self.emit_preview_frame();
-        self.invalidate_playback_chrome(window, cx);
+        self.invalidate_hover_chrome(cx);
+    }
+
+    /// Pointer-hover state that only the timeline, the transport and the
+    /// canvas overlay read. Notifying `self` would rebuild the header, toolbar
+    /// and sidebar on every pointer move, because each section observes the
+    /// editor. Notifying a child view marks its ancestors dirty instead, so
+    /// this window and its canvas overlay still re-render while the untouched
+    /// sections are reused from their cache.
+    fn invalidate_hover_chrome(&mut self, cx: &mut Context<Self>) {
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.transport_controls.update(cx, |_, cx| cx.notify());
     }
 
     fn set_hovered_track(
@@ -4185,6 +4225,14 @@ impl EditorWindow {
             .and_then(|timeline| timeline.segments.get(index))
             .map(|segment| (segment.start, segment.end));
 
+        let audio_segment = if kind == TrackKind::Audio {
+            self.project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.audio_segments.get(index))
+        } else {
+            None
+        };
         let kind_of_drag = match (kind, hit) {
             // The clip's handles: recording-domain, no promotion threshold, no
             // selection on release.
@@ -4200,16 +4248,22 @@ impl EditorWindow {
             (TrackKind::Clip, Hit::Body { .. }) => None,
             (_, Hit::Handle { start: true, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_start_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimStart {
                     start,
-                    bounds: edits::trim_start_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_start_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Handle { start: false, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_end_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimEnd {
                     end,
-                    bounds: edits::trim_end_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_end_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Body { .. }) => Some(DragKind::Move {
@@ -5511,7 +5565,16 @@ impl EditorWindow {
     ) {
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let imported = match crate::platform::open_audio_panel() {
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(
+                &[("Audio", AUDIO_IMPORT_EXTENSIONS)],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::platform::open_audio_panel();
+            let imported = match source {
                 Some(source)
                     if this
                         .update_in(cx, |this, _, _| {
@@ -5561,7 +5624,7 @@ impl EditorWindow {
     /// `handleGenerateZoomSegments` (`TL/ZoomTrack.tsx:84-93`): read the
     /// recorded clicks off the bundle, run the auto-zoom pass, and land the
     /// result as the zoom track.
-    fn generate_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn generate_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.generating_auto_zoom {
             return;
         }
@@ -5569,30 +5632,33 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let duration = self.recording_duration;
         let amount = f64::from(
             crate::store::GeneralSettings::load()
                 .default_zoom_amount
                 .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
         );
         cx.spawn_in(window, async move |this, cx| {
-            let segments = cx
+            let clicks = cx
                 .background_executor()
-                .spawn(async move {
-                    let clicks = load_recording_clicks(&path);
-                    edits::generate_zoom_segments_from_clicks(clicks, duration, amount)
-                })
+                .spawn(async move { load_recording_clicks(&path) })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.generating_auto_zoom = false;
                 this.hovering_generate_zoom = false;
+                edits::ensure_timeline(&mut this.project, &this.clip_display_durations);
+                let segments = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .map_or_else(Vec::new, |timeline| {
+                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
+                    });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
                     this.auto_zoom_message = Some(NO_AUTO_ZOOM_CLICKS_MESSAGE);
                     cx.notify();
                     return;
                 }
-                edits::ensure_timeline(&mut this.project, &this.clip_display_durations);
                 let applied = this.edit(
                     |timeline| {
                         timeline.zoom_segments = segments;
@@ -5890,7 +5956,7 @@ impl EditorWindow {
             changed = true;
         }
         if changed {
-            cx.notify();
+            self.invalidate_hover_chrome(cx);
         }
     }
 
@@ -10174,6 +10240,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        self.timeline.waveform_paths.sweep();
         if !self.project_ready() {
             if self
                 .preparing_presentation
@@ -11163,6 +11230,7 @@ impl Render for EditorWindow {
         });
         self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
+        self.sidebar.release_retired_images(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
@@ -11182,9 +11250,17 @@ impl Render for EditorWindow {
         if !self.fitted && self.total_duration() > 0.0 {
             self.fitted = true;
             let total = self.total_duration();
-            self.view
-                .transform
-                .fit_on_mount(timeline::content_width(viewport_width), total);
+            match self
+                .restore_transform
+                .take()
+                .and_then(|saved| Transform::restored(saved, total))
+            {
+                Some(transform) => self.view.transform = transform,
+                None => self
+                    .view
+                    .transform
+                    .fit_on_mount(timeline::content_width(viewport_width), total),
+            }
         }
 
         if self.export.is_some() {
@@ -11192,7 +11268,7 @@ impl Render for EditorWindow {
                 .size_full()
                 .flex()
                 .flex_col()
-                .font_family("Geist")
+                .font_family(crate::theme::UI_FONT)
                 .bg(self.root_bg())
                 .text_color(Hsla::from(theme.gray_12))
                 .track_focus(&self.focus)
@@ -11219,7 +11295,7 @@ impl Render for EditorWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
@@ -11663,6 +11739,8 @@ impl Render for EditorWindow {
     }
 }
 
+const AUDIO_IMPORT_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
+
 struct ImportedAudio {
     path: String,
     name: String,
@@ -11678,8 +11756,7 @@ fn import_audio_file(
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .ok_or_else(|| "Audio file has no extension".to_string())?;
-    const EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
-    if !EXTENSIONS.contains(&extension.as_str()) {
+    if !AUDIO_IMPORT_EXTENSIONS.contains(&extension.as_str()) {
         return Err(format!("Unsupported audio format: .{extension}"));
     }
     if !source.exists() {
@@ -11828,6 +11905,129 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_zoom_loads_clicks_without_losing_take_indices() {
+        let root =
+            std::env::temp_dir().join(format!("cap-auto-zoom-clicks-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let click = cap_project::CursorClickEvent {
+            active_modifiers: vec!["Shift".into()],
+            cursor_num: 1,
+            cursor_id: "pointer".into(),
+            time_ms: 4000.0,
+            down: true,
+        };
+        let events = cap_project::CursorEvents {
+            clicks: vec![click.clone()],
+            moves: vec![cap_project::CursorMoveEvent {
+                active_modifiers: Vec::new(),
+                cursor_id: "arrow".into(),
+                time_ms: 4000.0,
+                x: 0.5,
+                y: 0.5,
+            }],
+        };
+        std::fs::write(
+            root.join("cursor.json"),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(root.join("broken.json"), b"{\"clicks\":[").unwrap();
+        let display = serde_json::json!({ "path": "display.mp4", "fps": 30 });
+        let meta_path = root.join("recording-meta.json");
+        std::fs::write(
+            &meta_path,
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Auto zoom test", "platform": "MacOS",
+                "segments": [
+                    { "display": display },
+                    { "display": display, "cursor": "missing.json" },
+                    { "display": display, "cursor": "broken.json" },
+                    { "display": display, "cursor": "cursor.json" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_recording_clicks(&root),
+            vec![vec![], vec![], vec![], vec![click.clone()]]
+        );
+        std::fs::write(
+            &meta_path,
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Auto zoom test", "platform": "MacOS",
+                "display": display, "cursor": "cursor.json"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(load_recording_clicks(&root), vec![vec![click]]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "set CAP_AUTO_ZOOM_BENCH_PROJECT to a disposable recording bundle"]
+    fn auto_zoom_click_loading_benchmark() {
+        let path = PathBuf::from(std::env::var_os("CAP_AUTO_ZOOM_BENCH_PROJECT").unwrap());
+        let meta = RecordingMeta::load_for_project(&path).unwrap();
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            panic!("benchmark requires a Studio recording");
+        };
+        let full_events = || match &**studio {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                let mut events = segment
+                    .cursor
+                    .as_ref()
+                    .map_or_else(cap_project::CursorEvents::default, |cursor| {
+                        cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap()
+                    });
+                let pointer_ids = studio.pointer_cursor_ids();
+                events.stabilize_short_lived_cursor_shapes(
+                    (!pointer_ids.is_empty()).then_some(&pointer_ids),
+                    cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+                );
+                vec![events.clicks]
+            }
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|segment| segment.cursor_events(&meta).clicks)
+                .collect(),
+        };
+        let times = |clips: Vec<Vec<cap_project::CursorClickEvent>>| {
+            clips
+                .into_iter()
+                .map(|clicks| {
+                    clicks
+                        .into_iter()
+                        .map(|click| click.time_ms)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(times(full_events()), times(load_recording_clicks(&path)));
+        for round in 0..7 {
+            for full in if round % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                let start = std::time::Instant::now();
+                let clicks = if full {
+                    full_events()
+                } else {
+                    load_recording_clicks(&path)
+                };
+                std::hint::black_box(&clicks);
+                println!(
+                    "round={round} full_events={full} elapsed_ms={:.3}",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        }
+    }
 
     #[test]
     fn importing_short_audio_keeps_source_and_probes_copied_duration() {
@@ -12335,39 +12535,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_predelete_save_keeps_the_pending_edit_for_retry() {
-        let root = std::env::temp_dir().join(format!(
-            "cap-editor-save-delete-{}",
-            crate::store::new_uuid_v4()
-        ));
-        std::fs::create_dir(&root).unwrap();
-        let source = root.join("source.mp4");
-        std::fs::write(&source, b"original recording").unwrap();
-        let config = ProjectConfiguration {
-            aspect_ratio: Some(cap_project::AspectRatio::Square),
-            ..Default::default()
-        };
-        let mut pending = PendingProjectSave {
-            path: Some(source.clone()),
-            config: Some(config),
-        };
-        assert!(pending.try_flush().is_err());
-        assert!(pending.config.is_some());
-        assert_eq!(std::fs::read(&source).unwrap(), b"original recording");
-        pending.path = Some(root.clone());
-        pending.try_flush().unwrap();
-        assert!(pending.config.is_none());
-        let saved: ProjectConfiguration =
-            serde_json::from_slice(&std::fs::read(root.join("project-config.json")).unwrap())
-                .unwrap();
-        assert!(matches!(
-            saved.aspect_ratio,
-            Some(cap_project::AspectRatio::Square)
-        ));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields_and_menus() {
         let space = gpui::Keystroke::parse("space").unwrap();
         assert!(is_playback_shortcut(&space, false, false));
@@ -12523,6 +12690,19 @@ mod tests {
         );
         // A clock hiccup must not pull the playhead backwards.
         assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
+    }
+
+    /// A paused seek stores exactly the time its engine echo carries, so the
+    /// echo's `playhead_changed` returns before rebuilding the editor again.
+    #[test]
+    fn paused_seek_lands_where_its_echo_does() {
+        for frame in 0..=EDITOR_PREVIEW_FPS * 3600 {
+            let time = (frame as f64 + 0.37) / EDITOR_PREVIEW_FPS as f64;
+            let seeked = seeked_playhead(time, frame, false);
+            assert_eq!(seeked, frame_seconds(frame));
+            assert!((frame_seconds(frame) - seeked).abs() < f64::EPSILON);
+        }
+        assert_eq!(seeked_playhead(1.234, 74, true), 1.234);
     }
 
     /// The perf gate's line. `frames` is what reached the window, `dropped`

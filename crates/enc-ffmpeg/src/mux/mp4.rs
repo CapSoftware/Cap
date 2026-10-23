@@ -4,6 +4,7 @@ use std::{path::PathBuf, time::Duration};
 use tracing::*;
 
 use crate::{
+    PacketSink,
     audio::AudioEncoder,
     h264,
     video::h264::{H264Encoder, H264EncoderError},
@@ -145,6 +146,31 @@ impl MP4File {
         };
 
         audio.try_send_frame(frame, &mut self.output)
+    }
+
+    pub fn stream_time_base(&self, stream_index: usize) -> ffmpeg::Rational {
+        self.output.stream_time_base(stream_index)
+    }
+
+    pub fn write_packets(
+        &mut self,
+        packets: impl IntoIterator<Item = ffmpeg::Packet>,
+    ) -> Result<(), ffmpeg::Error> {
+        if self.is_finished {
+            return Err(ffmpeg::Error::Eof);
+        }
+
+        for packet in packets {
+            self.output.write_packet(packet)?;
+        }
+        Ok(())
+    }
+
+    /// Hands back an audio encoder that ran off this file's thread so
+    /// [`Self::finish`] flushes it after the video encoder, as it would
+    /// have if the file had owned it throughout.
+    pub fn attach_audio(&mut self, audio: Box<dyn AudioEncoder + Send>) {
+        self.audio = Some(audio);
     }
 
     pub fn finish(&mut self) -> Result<FinishResult, FinishError> {
