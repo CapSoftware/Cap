@@ -289,7 +289,7 @@ fn select_best_gpu(gpus: &[GpuInfo]) -> Option<GpuInfo> {
     Some((*best).clone())
 }
 
-const STAGING_RING_DEPTH: usize = 2;
+const STAGING_RING_DEPTH: usize = 4;
 
 struct D3D11Resources {
     #[allow(dead_code)]
