@@ -26,9 +26,11 @@ use gpui::{
 
 use crate::{
     app_windows::{self, AppWindows},
+    hotkeys,
     main_window::MainWindow,
     platform,
     session::{Phase, RecordingSession},
+    settings_window::Page,
     store,
     ui::text_input,
 };
@@ -66,6 +68,8 @@ actions!(
         Zoom,
         /// `PredefinedMenuItem::fullscreen` -- ⌃⌘F.
         ToggleFullscreen,
+        /// Settings… -- ⌘, on macOS, Ctrl+, on Windows and Linux.
+        OpenSettings,
     ]
 );
 
@@ -77,14 +81,7 @@ pub fn init(cx: &mut App) {
     // commands. Deliberately *not* including cmd-z/x/c/v/a -- those stay the
     // text field's own `TextInput`-scoped bindings (and, for the editor, its
     // `on_key_down` project-undo). A global binding here would shadow both.
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-h", HideSelf, None),
-        KeyBinding::new("alt-cmd-h", HideOthers, None),
-        KeyBinding::new("cmd-w", CloseWindow, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
-    ]);
+    cx.bind_keys(bindings());
 
     cx.on_action(|_: &About, cx: &mut App| {
         // Ordering a window front re-enters gpui's window callbacks, so it runs
@@ -99,6 +96,29 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &CloseWindow, cx: &mut App| close_key_window(cx));
     cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
     cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
+    cx.on_action(|_: &OpenSettings, cx: &mut App| {
+        // While a recording runs, onboarding is up or the Shortcuts page is
+        // recording a combo, the chord belongs to whatever has focus.
+        let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+        let onboarding_open = cx
+            .try_global::<AppWindows>()
+            .is_some_and(|windows| windows.onboarding.is_some());
+        if !settings_shortcut_allowed(idle, onboarding_open, hotkeys::is_paused(cx)) {
+            cx.propagate();
+            return;
+        }
+        // Deferred: the keystroke arrives inside the key window's dispatch, and
+        // `open_settings` updates the settings window, which may be that one.
+        cx.defer(|cx: &mut App| {
+            let page = cx
+                .try_global::<AppWindows>()
+                .and_then(|windows| windows.settings)
+                .and_then(|settings| settings.read(cx).ok().map(|settings| settings.page))
+                .unwrap_or(Page::General);
+            app_windows::open_settings(page, cx);
+            cx.activate(true);
+        });
+    });
     cx.on_action(|_: &ToggleFullscreen, cx: &mut App| {
         #[cfg(target_os = "windows")]
         if let Some(handle) = cx.active_window() {
@@ -113,6 +133,22 @@ pub fn init(cx: &mut App) {
     cx.set_menus(build_menus());
 }
 
+pub(crate) fn bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-h", HideSelf, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+    ]
+}
+
+fn settings_shortcut_allowed(idle: bool, onboarding_open: bool, hotkeys_paused: bool) -> bool {
+    idle && !onboarding_open && !hotkeys_paused
+}
+
 /// The menu bar model.
 ///
 /// One-to-one with `build_macos_app_menu`, including the empty Help submenu
@@ -124,6 +160,8 @@ pub fn build_menus() -> Vec<Menu> {
             disabled: false,
             items: vec![
                 MenuItem::action(format!("About {APP_NAME}"), About),
+                MenuItem::separator(),
+                MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
@@ -880,6 +918,58 @@ mod tests {
         assert!(gate.pending.is_none());
     }
 
+    #[test]
+    fn settings_shortcut_yields_to_recording_onboarding_and_the_recorder() {
+        assert!(settings_shortcut_allowed(true, false, false));
+        assert!(!settings_shortcut_allowed(false, false, false));
+        assert!(!settings_shortcut_allowed(true, true, false));
+        assert!(!settings_shortcut_allowed(true, false, true));
+    }
+
+    fn keystrokes(binding: &KeyBinding) -> Vec<gpui::Keystroke> {
+        binding
+            .keystrokes()
+            .iter()
+            .map(|keystroke| keystroke.inner().clone())
+            .collect()
+    }
+
+    #[test]
+    fn global_keymap_is_unchanged_apart_from_settings() {
+        let settings = if cfg!(target_os = "macos") {
+            "cmd-,"
+        } else {
+            "ctrl-,"
+        };
+        let expected: &[(&str, &dyn gpui::Action)] = &[
+            ("cmd-q", &Quit),
+            ("cmd-h", &HideSelf),
+            ("alt-cmd-h", &HideOthers),
+            ("cmd-w", &CloseWindow),
+            ("cmd-m", &Minimize),
+            ("ctrl-cmd-f", &ToggleFullscreen),
+            (settings, &OpenSettings),
+        ];
+        let bindings = bindings();
+        assert_eq!(bindings.len(), expected.len());
+        for (binding, (source, action)) in bindings.iter().zip(expected) {
+            assert_eq!(
+                keystrokes(binding),
+                vec![gpui::Keystroke::parse(source).unwrap()],
+                "{source}"
+            );
+            assert!(binding.action().partial_eq(*action), "{source}");
+            assert!(binding.predicate().is_none(), "{source}");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for binding in &bindings {
+            assert!(
+                seen.insert(keystrokes(binding)),
+                "{binding:?} is bound twice"
+            );
+        }
+    }
+
     /// The menu bar, transcribed from `build_macos_app_menu`. Separators are
     /// spelled `"-"` so the ordering is checked too.
     fn describe(menu: &Menu) -> (String, Vec<String>) {
@@ -906,6 +996,8 @@ mod tests {
                     "Cap".to_string(),
                     vec![
                         "About Cap".to_string(),
+                        "-".into(),
+                        "Settings…".into(),
                         "-".into(),
                         "Services".into(),
                         "-".into(),
