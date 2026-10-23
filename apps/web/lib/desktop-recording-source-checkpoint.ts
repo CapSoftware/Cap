@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const SOURCE_COMMIT_PAGE_SIZE = 16;
+export const SOURCE_COMMIT_PAGE_SIZE = 64;
 export const SOURCE_COMMIT_PART_BATCH_SIZE = 4;
 export const SOURCE_COMMIT_PART_PAGE_SIZE = 64;
 export const SOURCE_COMMIT_MAX_OBJECTS = 100_002;
