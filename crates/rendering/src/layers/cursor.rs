@@ -56,6 +56,7 @@ fn recorded_image_shape(image: &image::RgbaImage) -> Option<cap_cursor_info::Cur
 pub struct CursorLayer {
     statics: Statics,
     bind_group: Option<BindGroup>,
+    texture_bind_group: Option<(wgpu::Texture, BindGroup)>,
     cursors: HashMap<String, CursorTexture>,
     circle_cursor: Option<CursorTexture>,
     prev_is_svg_assets_enabled: Option<bool>,
@@ -216,6 +217,7 @@ impl CursorLayer {
         Self {
             statics,
             bind_group: None,
+            texture_bind_group: None,
             cursors: Default::default(),
             circle_cursor: None,
             prev_is_svg_assets_enabled: None,
@@ -651,10 +653,26 @@ impl CursorLayer {
             bytemuck::cast_slice(&[cursor_uniforms]),
         );
 
-        self.bind_group = Some(
-            self.statics
-                .create_bind_group(&constants.device, &cursor_texture.texture),
-        );
+        let texture = &cursor_texture.texture;
+        if self
+            .texture_bind_group
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != texture)
+        {
+            self.texture_bind_group = Some((
+                texture.clone(),
+                self.statics.create_bind_group(&constants.device, texture),
+            ));
+        }
+        self.bind_group = self
+            .texture_bind_group
+            .as_ref()
+            .map(|(_, bind_group)| bind_group.clone());
+    }
+
+    #[cfg(test)]
+    pub fn bind_group(&self) -> Option<&BindGroup> {
+        self.bind_group.as_ref()
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
