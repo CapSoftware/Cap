@@ -14,9 +14,9 @@ services:
       DATABASE_URL: mysql://cap:${MYSQL_PASSWORD:-cap-local-pwd-123}@mysql:3306/cap
       WEB_URL: ${CAP_URL:-http://localhost:3000}
       NEXTAUTH_URL: ${CAP_URL:-http://localhost:3000}
-      DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY:?Set DATABASE_ENCRYPTION_KEY in .env (run: openssl rand -hex 32)}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in .env (run: openssl rand -hex 32)}
-      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}
+      DATABASE_ENCRYPTION_KEY: "${DATABASE_ENCRYPTION_KEY:?Set DATABASE_ENCRYPTION_KEY in .env (run: openssl rand -hex 32)}"
+      NEXTAUTH_SECRET: "${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in .env (run: openssl rand -hex 32)}"
+      MEDIA_SERVER_WEBHOOK_SECRET: "${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}"
       CAP_AWS_ACCESS_KEY: ${MINIO_ROOT_USER:-cap-admin}
       CAP_AWS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456}
       CAP_AWS_BUCKET: cap
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
     environment:
       PORT: 3456
-      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}
+      MEDIA_SERVER_WEBHOOK_SECRET: "${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}"
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3456/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
