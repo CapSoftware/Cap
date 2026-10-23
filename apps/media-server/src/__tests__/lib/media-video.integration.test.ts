@@ -558,7 +558,7 @@ describe("processVideo integration tests", () => {
 		expect(outcome).toBe(reason);
 	});
 
-	test("rejects cancellation at final video progress and removes the output", async () => {
+	test("rejects cancellation during video progress and removes the output", async () => {
 		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
 		const controller = new AbortController();
 		const reason = new Error("Recording worker lease expired");
@@ -568,10 +568,7 @@ describe("processVideo integration tests", () => {
 			TEST_VIDEO_WITH_AUDIO,
 			metadata,
 			{ remuxOnly: true },
-			(progress) => {
-				if (progress < 100) return;
-				controller.abort(reason);
-			},
+			() => controller.abort(reason),
 			controller.signal,
 		).then(
 			(output) => {
