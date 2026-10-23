@@ -659,6 +659,7 @@ pub struct AudioConfiguration {
     pub mic_volume_db: f32,
     pub mic_stereo_mode: StereoMode,
     pub system_volume_db: f32,
+    pub normalize_loudness: bool,
 }
 
 impl Default for AudioConfiguration {
@@ -670,6 +671,7 @@ impl Default for AudioConfiguration {
             mic_volume_db: 0.0,
             mic_stereo_mode: StereoMode::default(),
             system_volume_db: 0.0,
+            normalize_loudness: false,
         }
     }
 }
