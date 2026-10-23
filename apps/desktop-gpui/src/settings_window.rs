@@ -668,6 +668,8 @@ pub struct SettingsWindow {
     _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 impl SettingsWindow {
@@ -754,6 +756,9 @@ impl SettingsWindow {
 
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
+            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
+        });
 
         Self {
             theme,
@@ -789,6 +794,8 @@ impl SettingsWindow {
             _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
     }
 
@@ -1583,6 +1590,10 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.switch_back_running() {
+            ui::keyboard_nav::leave(window, cx);
+        }
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
             && let Some(mode) = self.quality_scroll_request.take()
@@ -1597,6 +1608,7 @@ impl Render for SettingsWindow {
 
         let shell = div()
             .track_focus(&self.focus)
+            .child(ui::keyboard_nav::pointer_watcher())
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
@@ -1805,6 +1817,7 @@ impl SettingsWindow {
 
         div()
             .id("settings-nav")
+            .role(gpui::Role::TabList)
             .flex()
             .flex_col()
             // `.cap-settings-nav { padding: 0 var(--sidebar-padding-x)
@@ -1819,6 +1832,10 @@ impl SettingsWindow {
                 let selected = page == self.page;
                 div()
                     .id(SharedString::from(page.slug()))
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Tab)
+                    .aria_label(page.label())
+                    .aria_selected(selected)
                     .flex()
                     .flex_row()
                     .items_center()
@@ -3112,6 +3129,7 @@ impl SettingsWindow {
                         // The row is the *inverse* of the stored key.
                         self.toggle(
                             "hide-dock-icon",
+                            tr::settings::general::app::dock_icon::label(),
                             !self.settings.hide_dock_icon,
                             cx,
                             |this, cx| {
@@ -3132,6 +3150,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::app::notifications::description()),
                         self.toggle(
                             "enable-notifications",
+                            tr::settings::general::app::notifications::label(),
                             self.settings.enable_notifications,
                             cx,
                             |this, cx| {
@@ -3191,6 +3210,7 @@ impl SettingsWindow {
                             Some("Open the link in your browser when an upload finishes."),
                             self.toggle(
                                 "auto-open-links",
+                                "Open share links automatically",
                                 !self.settings.disable_auto_open_links,
                                 cx,
                                 |this, cx| {
@@ -3470,6 +3490,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::confirm_without_mic::description()),
                         self.toggle(
                             "confirm-without-mic",
+                            tr::settings::general::recording::confirm_without_mic::label(),
                             settings.confirm_without_microphone,
                             cx,
                             |this, cx| {
@@ -3493,6 +3514,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::studio_sound::description()),
                         self.toggle(
                             "studio-sound-default",
+                            tr::settings::general::recording::studio_sound::label(),
                             settings.studio_sound_by_default,
                             cx,
                             |this, cx| {
@@ -3537,6 +3559,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::delete_after_upload::description()),
                         self.toggle(
                             "delete-after-upload",
+                            tr::settings::general::recording::delete_after_upload::label(),
                             settings.delete_instant_recordings_after_upload,
                             cx,
                             |this, cx| {
@@ -3553,6 +3576,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::crash_recovery::description()),
                         self.toggle(
                             "crash-recovery",
+                            tr::settings::general::recording::crash_recovery::label(),
                             settings.crash_recovery_recording,
                             cx,
                             |this, cx| {
@@ -3569,6 +3593,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::custom_cursor::description()),
                         self.toggle(
                             "custom-cursor",
+                            tr::settings::general::recording::custom_cursor::label(),
                             settings.custom_cursor_capture,
                             cx,
                             |this, cx| {
@@ -3583,11 +3608,18 @@ impl SettingsWindow {
                     self.setting_row(
                         tr::settings::general::recording::auto_zoom::label(),
                         Some(tr::settings::general::recording::auto_zoom::description()),
-                        self.toggle("auto-zoom", settings.auto_zoom_on_clicks, cx, |this, cx| {
-                            this.settings.auto_zoom_on_clicks = !this.settings.auto_zoom_on_clicks;
-                            let value = this.settings.auto_zoom_on_clicks;
-                            this.write_bool("autoZoomOnClicks", value, cx);
-                        })
+                        self.toggle(
+                            "auto-zoom",
+                            tr::settings::general::recording::auto_zoom::label(),
+                            settings.auto_zoom_on_clicks,
+                            cx,
+                            |this, cx| {
+                                this.settings.auto_zoom_on_clicks =
+                                    !this.settings.auto_zoom_on_clicks;
+                                let value = this.settings.auto_zoom_on_clicks;
+                                this.write_bool("autoZoomOnClicks", value, cx);
+                            },
+                        )
                         .into_any_element(),
                     ),
                     self.setting_row(
@@ -3616,6 +3648,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::capture_keyboard::description()),
                         self.toggle(
                             "capture-keyboard",
+                            tr::settings::general::recording::capture_keyboard::label(),
                             settings.capture_keyboard_events,
                             cx,
                             |this, cx| {
@@ -3632,6 +3665,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::recording::notch_overlay::description()),
                         self.toggle(
                             "notch-overlay",
+                            tr::settings::general::recording::notch_overlay::label(),
                             settings.macbook_notch_overlay,
                             cx,
                             |this, cx| {
@@ -4337,6 +4371,7 @@ impl SettingsWindow {
                         Some(tr::settings::general::privacy::telemetry::description()),
                         self.toggle(
                             "telemetry",
+                            tr::settings::general::privacy::telemetry::label(),
                             self.settings.enable_telemetry,
                             cx,
                             |this, cx| {
@@ -4405,11 +4440,13 @@ impl SettingsWindow {
     pub(crate) fn toggle(
         &self,
         id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> ui::Toggle {
         ui::Toggle::settings(&self.theme, id, checked)
+            .label(label)
             .on_click(cx.listener(move |this, _, _window, cx| on_change(this, cx)))
     }
 

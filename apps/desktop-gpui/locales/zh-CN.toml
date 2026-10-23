@@ -12,6 +12,7 @@ hide = "隐藏 Cap"
 hide_others = "隐藏其他"
 quit = "退出 Cap"
 services = "服务"
+settings = "设置…"
 
 [menu.file]
 close_window = "关闭窗口"

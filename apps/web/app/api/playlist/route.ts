@@ -170,8 +170,11 @@ const getPlaylistResponse = (
 ) =>
 	Effect.gen(function* () {
 		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
-		const isMp4Source =
-			video.source.type === "desktopMP4" || video.source.type === "webMP4";
+		const source = Video.Video.getSource(video);
+		const isMp4Source = source instanceof Video.Mp4Source;
+		const mp4Key = isMp4Source
+			? source.getFileKey()
+			: `${video.ownerId}/${video.id}/result.mp4`;
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
@@ -364,8 +367,7 @@ const getPlaylistResponse = (
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
-			if (isMp4Source || urlParams.videoType === "mp4")
-				redirect = `${video.ownerId}/${video.id}/result.mp4`;
+			if (isMp4Source || urlParams.videoType === "mp4") redirect = mp4Key;
 			else if (video.source.type === "MediaConvert")
 				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
 
@@ -443,11 +445,9 @@ const getPlaylistResponse = (
 					},
 				});
 			} else if (isMp4Source) {
-				yield* Effect.log(
-					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
-				);
+				yield* Effect.log(`Returning path ${mp4Key}`);
 				return yield* bucket
-					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
+					.getSignedObjectUrl(mp4Key)
 					.pipe(Effect.map(HttpServerResponse.redirect));
 			}
 

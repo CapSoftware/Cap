@@ -12,6 +12,7 @@ hide = "Capを非表示"
 hide_others = "ほかを非表示"
 quit = "Capを終了"
 services = "サービス"
+settings = "設定…"
 
 [menu.file]
 close_window = "ウィンドウを閉じる"
