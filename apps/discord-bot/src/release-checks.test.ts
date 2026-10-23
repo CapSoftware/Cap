@@ -3,7 +3,7 @@ import {
 	canManageGuild,
 	isGuildInvocation,
 	matchesRepositoryClaims,
-} from "../src/release-checks";
+} from "./release-checks";
 
 const GUILD_ID = "1100000000000000000";
 const USER_ID = "1200000000000000000";
