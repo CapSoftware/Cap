@@ -97,7 +97,7 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
 		if (trimmedLine === "WEBVTT") continue;
 
-		if (/^\d+$/.test(trimmedLine)) {
+		if (!currentEntry.timestamp && /^\d+$/.test(trimmedLine)) {
 			currentId = parseInt(trimmedLine, 10);
 			continue;
 		}
@@ -119,7 +119,7 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 			continue;
 		}
 
-		if (currentEntry.timestamp && !currentEntry.text) {
+		if (currentEntry.timestamp && currentEntry.text === undefined) {
 			const textContent =
 				trimmedLine.startsWith('"') && trimmedLine.endsWith('"')
 					? trimmedLine.slice(1, -1)
@@ -129,7 +129,7 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 			if (
 				currentEntry.id !== undefined &&
 				currentEntry.timestamp &&
-				currentEntry.text &&
+				currentEntry.text !== undefined &&
 				currentEntry.startTime !== undefined
 			) {
 				entries.push(currentEntry as TranscriptEntry);
