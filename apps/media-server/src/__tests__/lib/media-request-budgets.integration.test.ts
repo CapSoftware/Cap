@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import app from "../../app";
@@ -114,6 +115,40 @@ describe("media request budgets", () => {
 		expect(managedPath).not.toBe("");
 		expect(await readdir(getTempDir())).not.toContain(managedPath);
 	});
+
+	test("shares the recording deadline between staging and decode", async () => {
+		const bytes = await readFile(
+			join(import.meta.dir, "../fixtures/test-with-audio.mp4"),
+		);
+		const server = startServer(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			return new Response(bytes);
+		});
+		const originalSpawn = childProcess.spawn;
+		const decoder = spyOn(childProcess, "spawn").mockImplementation(
+			(...args: Parameters<typeof childProcess.spawn>) =>
+				originalSpawn(
+					process.execPath,
+					["-e", "setTimeout(() => {}, 2000)"],
+					args[2],
+				),
+		);
+		const startedAt = performance.now();
+		try {
+			await expect(
+				verifyRecording(new URL("recording.mp4", server.url).toString(), {
+					allowObservedDuration: true,
+					requireAudio: false,
+					hasAudio: false,
+					timeoutMs: 500,
+				}),
+			).rejects.toThrow("timed out");
+			expect(decoder).toHaveBeenCalledTimes(1);
+			expect(performance.now() - startedAt).toBeLessThan(700);
+		} finally {
+			decoder.mockRestore();
+		}
+	}, 1500);
 
 	test("enforces the transfer budget on non-internal recording URLs", async () => {
 		const bytes = await readFile(
