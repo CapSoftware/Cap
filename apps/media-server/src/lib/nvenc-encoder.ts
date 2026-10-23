@@ -1,3 +1,6 @@
+import { FfmpegExitError } from "./ffmpeg-errors";
+import { redactLogText } from "./log-redaction";
+
 const DEFAULT_PRESET = "p1";
 const DEFAULT_CQ_OFFSET = 8;
 const DEFAULT_LOOKAHEAD = 0;
@@ -8,6 +11,7 @@ const NVDEC_CODECS = new Set(["h264", "hevc", "vp9", "av1"]);
 // H.264 and VP9 decode faster on the host CPU than on L4 NVDEC; HEVC and AV1 do not.
 const DEFAULT_GPU_DECODE_CODECS = ["hevc", "av1"];
 const MAX_FALLBACK_REASON_LENGTH = 500;
+const MAX_FFMPEG_CAUSE_LENGTH = 300;
 
 export const NVENC_HWACCEL_INPUT_ARGS = [
 	"-hwaccel",
@@ -192,10 +196,19 @@ export function nvencFallbackReason(
 	aborted: boolean,
 ): string | null {
 	if (aborted) return null;
-	const message = (
-		error instanceof Error ? error.message : String(error)
-	).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>");
-	return message.slice(-MAX_FALLBACK_REASON_LENGTH) || "unknown error";
+	const message = redactLogText(
+		error instanceof Error ? error.message : String(error),
+	);
+	// The message tail is mostly -progress output; the encoder's own error is printed earlier.
+	const cause =
+		error instanceof FfmpegExitError && error.errorLines.length > 0
+			? `${redactLogText(error.errorLines.join(" | ")).slice(0, MAX_FFMPEG_CAUSE_LENGTH)} || `
+			: "";
+	return (
+		(
+			cause + message.slice(-(MAX_FALLBACK_REASON_LENGTH - cause.length))
+		).trim() || "unknown error"
+	);
 }
 
 export function recordNvencAttempt(

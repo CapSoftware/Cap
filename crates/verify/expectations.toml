@@ -113,40 +113,11 @@ link = ""
 
 
 [[xfail]]
-case = "export/instant-gated-*mic*/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (33.3 ms at 30 fps; 12.6 to 17.2 ms measured with the gate opening between frames)"
-link = ""
-
-[[xfail]]
-case = "export/instant-gated-system-*/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (12.2 to 15.1 ms measured)"
-link = ""
-
-[[xfail]]
 case = "export/instant-gated-system-only/output/mp4/native"
 class = "audio-system"
 flaky = true
 bound = { count = 1, missing = 2, lost = 2 }
 reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early). Bound: at most 2 markers lost, none unexpected"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late after the start gate (14.2 to 15.3 ms measured)"
-link = ""
-
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34], mic-offset-ms = [5, 34], system-minus-mic-ms = [-1, 1] }
-reason = "NEW: the mixer places system audio on the microphone's timeline (system minus mic 0 ms), so it shares the gated mic offset of the sync-mic entry above (13.3 to 15.4 ms measured)"
 link = ""
 
 [[xfail]]
