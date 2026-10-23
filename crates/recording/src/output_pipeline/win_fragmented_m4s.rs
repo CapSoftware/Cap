@@ -423,6 +423,7 @@ impl WindowsFragmentedM4SMuxer {
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
                 let mut duplicated_frames = 0u64;
+                let mut readback_frames = 0u64;
                 let mut readback_misses = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
@@ -573,17 +574,18 @@ impl WindowsFragmentedM4SMuxer {
                         continue;
                     };
 
-                    if let Some(readback_elapsed) = readback_elapsed
-                        && readback_elapsed.as_millis() > SLOW_THRESHOLD_MS
-                    {
-                        slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = readback_elapsed.as_millis(),
-                                count = slow_convert_count,
-                                "D3D11 frame readback exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
-                            );
+                    if let Some(readback_elapsed) = readback_elapsed {
+                        readback_frames += 1;
+                        if readback_elapsed.as_millis() > SLOW_THRESHOLD_MS {
+                            slow_convert_count += 1;
+                            if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = readback_elapsed.as_millis(),
+                                    count = slow_convert_count,
+                                    "D3D11 frame readback exceeded {}ms threshold",
+                                    SLOW_THRESHOLD_MS
+                                );
+                            }
                         }
                     }
 
@@ -601,15 +603,18 @@ impl WindowsFragmentedM4SMuxer {
                 }
 
                 if total_frames > 0 {
+                    let readback_slow_pct = if readback_frames > 0 {
+                        100.0 * slow_convert_count as f64 / readback_frames as f64
+                    } else {
+                        0.0
+                    };
                     debug!(
                         total_frames = total_frames,
                         duplicated_frames = duplicated_frames,
-                        slow_converts = slow_convert_count,
+                        slow_readbacks = slow_convert_count,
+                        readback_frames = readback_frames,
                         slow_encodes = slow_encode_count,
-                        slow_convert_pct = format!(
-                            "{:.1}%",
-                            100.0 * slow_convert_count as f64 / total_frames as f64
-                        ),
+                        slow_readback_pct = format!("{readback_slow_pct:.1}%"),
                         slow_encode_pct = format!(
                             "{:.1}%",
                             100.0 * slow_encode_count as f64 / total_frames as f64
