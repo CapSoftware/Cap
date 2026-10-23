@@ -6,6 +6,8 @@ type PublicEnvContext = {
 	webUrl: string;
 	googleAuthAvailable: boolean;
 	workosAuthAvailable: boolean;
+	oidcAuthAvailable: boolean;
+	oidcName: string;
 };
 
 const Context = createContext<PublicEnvContext | null>(null);

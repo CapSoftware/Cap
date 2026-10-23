@@ -158,6 +158,8 @@ pub fn apply_preset(
 ) -> Option<ProjectConfiguration> {
     let mut next: ProjectConfiguration = serde_json::from_value(config.clone()).ok()?;
     next.timeline = current.timeline.clone();
+    next.text_size_version = current.text_size_version;
+    next.text_anim_version = current.text_anim_version;
     next.overlay_order = current.overlay_order.clone();
     next.clips = current.clips.clone();
     Some(next)
@@ -262,6 +264,68 @@ mod tests {
         assert_eq!(applied.background.blur, 42.);
         assert_eq!(applied.overlay_order, current.overlay_order);
         assert!(applied.timeline.is_some(), "current timeline is kept");
+    }
+
+    #[test]
+    fn applying_a_legacy_tauri_preset_keeps_text_unchanged_after_reopening() {
+        let store: Value = serde_json::from_str(
+            r#"{
+                "presets": {
+                    "default": 0,
+                    "presets": [{
+                        "name": "Legacy Tauri preset",
+                        "config": {
+                            "background": { "padding": 24.0 },
+                            "camera": { "size": 45.0, "zoom_size": 65.0 },
+                            "timeline": null,
+                            "clips": []
+                        }
+                    }]
+                }
+            }"#,
+        )
+        .unwrap();
+        let presets = PresetsStore::from_section(store["presets"].as_object().unwrap().clone());
+        let current: ProjectConfiguration = serde_json::from_str(
+            r#"{
+                "textSizeVersion": 1,
+                "textAnimVersion": 1,
+                "timeline": {
+                    "segments": [{ "recordingSegment": 0, "start": 0.0, "end": 5.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "textSegments": [{
+                        "start": 1.0,
+                        "end": 4.0,
+                        "content": "Keep this title",
+                        "size": { "x": 0.6, "y": 0.4 },
+                        "fontSize": 48.0,
+                        "fadeDuration": 0.15,
+                        "animationIn": "slideUp",
+                        "animationOut": "slideDown",
+                        "animationInDuration": 0.4,
+                        "animationOutDuration": 0.6
+                    }]
+                },
+                "clips": [{ "index": 0, "offsets": { "mic": -0.125 } }]
+            }"#,
+        )
+        .unwrap();
+        let applied = apply_preset(&presets.presets[0].config, &current).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        applied.write(directory.path()).unwrap();
+        let reopened = ProjectConfiguration::load(directory.path()).unwrap();
+
+        assert_eq!(reopened.background.padding, 24.0);
+        assert_eq!(reopened.camera.size, 45.0);
+        assert_eq!(reopened.camera.zoom_size, Some(65.0));
+        assert_eq!(
+            serde_json::to_value(&reopened.timeline).unwrap(),
+            serde_json::to_value(&current.timeline).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&reopened.clips).unwrap(),
+            serde_json::to_value(&current.clips).unwrap()
+        );
     }
 
     #[test]

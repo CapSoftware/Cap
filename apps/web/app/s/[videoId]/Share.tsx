@@ -482,7 +482,10 @@ export const Share = ({
 		);
 	}, [data.source.type, searchParams]);
 
+	const cancelPendingSeek = useRef<(() => void) | null>(null);
+
 	const handleSeek = useCallback((time: number) => {
+		cancelPendingSeek.current?.();
 		const v =
 			playerRef.current ??
 			(document.querySelector("video") as HTMLVideoElement | null);
@@ -504,19 +507,21 @@ export const Share = ({
 			seekOnce(time);
 			return;
 		}
-		let timeoutId: ReturnType<typeof setTimeout> | null = null;
-		const handleReady = () => {
-			seekOnce(time);
+		// A timeline seek before metadata moves currentTime; don't undo it.
+		const requestedFrom = v.currentTime;
+		const cancel = () => {
 			v.removeEventListener("canplay", handleReady);
 			v.removeEventListener("loadedmetadata", handleReady);
-			if (timeoutId) clearTimeout(timeoutId);
+			if (cancelPendingSeek.current === cancel)
+				cancelPendingSeek.current = null;
+		};
+		const handleReady = () => {
+			cancel();
+			if (v.currentTime === requestedFrom) seekOnce(time);
 		};
 		v.addEventListener("canplay", handleReady, { once: true });
 		v.addEventListener("loadedmetadata", handleReady, { once: true });
-		timeoutId = setTimeout(() => {
-			v.removeEventListener("canplay", handleReady);
-			v.removeEventListener("loadedmetadata", handleReady);
-		}, 3000);
+		cancelPendingSeek.current = cancel;
 	}, []);
 
 	useEffect(() => {
