@@ -663,6 +663,8 @@ pub struct SettingsWindow {
     _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 impl SettingsWindow {
@@ -749,6 +751,9 @@ impl SettingsWindow {
 
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
+            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
+        });
 
         Self {
             theme,
@@ -784,6 +789,8 @@ impl SettingsWindow {
             _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
     }
 
@@ -1553,6 +1560,10 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.switch_back_running() {
+            ui::keyboard_nav::leave(window, cx);
+        }
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
             && let Some(mode) = self.quality_scroll_request.take()
@@ -1567,6 +1578,7 @@ impl Render for SettingsWindow {
 
         let shell = div()
             .track_focus(&self.focus)
+            .child(ui::keyboard_nav::pointer_watcher())
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
@@ -1774,6 +1786,7 @@ impl SettingsWindow {
 
         div()
             .id("settings-nav")
+            .role(gpui::Role::TabList)
             .flex()
             .flex_col()
             // `.cap-settings-nav { padding: 0 var(--sidebar-padding-x)
@@ -1788,6 +1801,10 @@ impl SettingsWindow {
                 let selected = page == self.page;
                 div()
                     .id(SharedString::from(page.slug()))
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Tab)
+                    .aria_label(page.label())
+                    .aria_selected(selected)
                     .flex()
                     .flex_row()
                     .items_center()
@@ -3051,6 +3068,7 @@ impl SettingsWindow {
                         // The row is the *inverse* of the stored key.
                         self.toggle(
                             "hide-dock-icon",
+                            "Always show dock icon",
                             !self.settings.hide_dock_icon,
                             cx,
                             |this, cx| {
@@ -3074,6 +3092,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "enable-notifications",
+                            "System notifications",
                             self.settings.enable_notifications,
                             cx,
                             |this, cx| {
@@ -3133,6 +3152,7 @@ impl SettingsWindow {
                             Some("Open the link in your browser when an upload finishes."),
                             self.toggle(
                                 "auto-open-links",
+                                "Open share links automatically",
                                 !self.settings.disable_auto_open_links,
                                 cx,
                                 |this, cx| {
@@ -3415,6 +3435,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "confirm-without-mic",
+                            "Confirm before recording without a microphone",
                             settings.confirm_without_microphone,
                             cx,
                             |this, cx| {
@@ -3441,6 +3462,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "studio-sound-default",
+                            "Studio Sound on new recordings",
                             settings.studio_sound_by_default,
                             cx,
                             |this, cx| {
@@ -3485,6 +3507,7 @@ impl SettingsWindow {
                         Some("Cap removes the local file once it has uploaded successfully."),
                         self.toggle(
                             "delete-after-upload",
+                            "Delete Instant recordings after upload",
                             settings.delete_instant_recordings_after_upload,
                             cx,
                             |this, cx| {
@@ -3504,6 +3527,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "crash-recovery",
+                            "Crash-recoverable recording",
                             settings.crash_recovery_recording,
                             cx,
                             |this, cx| {
@@ -3523,6 +3547,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "custom-cursor",
+                            "Custom cursor capture (Studio)",
                             settings.custom_cursor_capture,
                             cx,
                             |this, cx| {
@@ -3540,11 +3565,18 @@ impl SettingsWindow {
                             "Automatically add zoom segments around mouse clicks in Studio \
                              recordings.",
                         ),
-                        self.toggle("auto-zoom", settings.auto_zoom_on_clicks, cx, |this, cx| {
-                            this.settings.auto_zoom_on_clicks = !this.settings.auto_zoom_on_clicks;
-                            let value = this.settings.auto_zoom_on_clicks;
-                            this.write_bool("autoZoomOnClicks", value, cx);
-                        })
+                        self.toggle(
+                            "auto-zoom",
+                            "Auto zoom on clicks",
+                            settings.auto_zoom_on_clicks,
+                            cx,
+                            |this, cx| {
+                                this.settings.auto_zoom_on_clicks =
+                                    !this.settings.auto_zoom_on_clicks;
+                                let value = this.settings.auto_zoom_on_clicks;
+                                this.write_bool("autoZoomOnClicks", value, cx);
+                            },
+                        )
                         .into_any_element(),
                     ),
                     self.setting_row(
@@ -3573,6 +3605,7 @@ impl SettingsWindow {
                         Some("Record key presses so you can add keyboard overlays in the editor."),
                         self.toggle(
                             "capture-keyboard",
+                            "Capture keyboard presses",
                             settings.capture_keyboard_events,
                             cx,
                             |this, cx| {
@@ -3594,6 +3627,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "notch-overlay",
+                            "Draw the MacBook notch on screen recordings",
                             settings.macbook_notch_overlay,
                             cx,
                             |this, cx| {
@@ -4278,6 +4312,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "telemetry",
+                            "Share anonymous telemetry",
                             self.settings.enable_telemetry,
                             cx,
                             |this, cx| {
@@ -4346,11 +4381,13 @@ impl SettingsWindow {
     pub(crate) fn toggle(
         &self,
         id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> ui::Toggle {
         ui::Toggle::settings(&self.theme, id, checked)
+            .label(label)
             .on_click(cx.listener(move |this, _, _window, cx| on_change(this, cx)))
     }
 
