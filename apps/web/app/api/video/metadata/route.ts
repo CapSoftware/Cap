@@ -30,12 +30,30 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 401 });
 	}
 
-	await db()
-		.update(videos)
-		.set({
-			metadata: metadata,
-		})
-		.where(eq(videos.id, videoId));
+	if (typeof metadata !== "object" || Array.isArray(metadata)) {
+		return Response.json({ error: true }, { status: 400 });
+	}
+
+	const { agentUpload: _agentUpload, ...clientMetadata } = metadata;
+
+	await db().transaction(async (tx) => {
+		const [locked] = await tx
+			.select({ metadata: videos.metadata })
+			.from(videos)
+			.where(eq(videos.id, videoId))
+			.for("update");
+
+		const storedAgentUpload = locked?.metadata?.agentUpload;
+
+		await tx
+			.update(videos)
+			.set({
+				metadata: storedAgentUpload
+					? { ...clientMetadata, agentUpload: storedAgentUpload }
+					: clientMetadata,
+			})
+			.where(eq(videos.id, videoId));
+	});
 
 	return Response.json(true, { status: 200 });
 }
