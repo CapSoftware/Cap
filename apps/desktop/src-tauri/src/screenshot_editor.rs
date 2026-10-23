@@ -469,7 +469,7 @@ impl ScreenshotEditorInstances {
             );
             let shutdown_token = render_shutdown_token;
             let mut current_update = config_rx.borrow().clone();
-            let mut current_config = current_update.config.clone();
+            let mut current_config = std::sync::Arc::new(current_update.config.clone());
             let mut current_revision = current_update.revision;
             let mut first_frame_logged = false;
 
@@ -564,7 +564,7 @@ impl ScreenshotEditorInstances {
                         }
                         current_update = config_rx.borrow().clone();
                         current_revision = current_update.revision;
-                        current_config = current_update.config.clone();
+                        current_config = std::sync::Arc::new(current_update.config.clone());
                     }
                     _ = shutdown_token.cancelled() => {
                         break;
@@ -989,7 +989,7 @@ pub async fn prewarm_screenshot_renderer() {
         Arc::new(cap_rendering::BackgroundTextureCache::default()),
     );
 
-    let config = ProjectConfiguration::default();
+    let config = std::sync::Arc::new(ProjectConfiguration::default());
     let mut frame_renderer = FrameRenderer::new(&constants);
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -1637,7 +1637,7 @@ pub async fn render_screenshot_project_for_export(
 
 pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Result<Vec<u8>, String> {
     let path = instance.path.clone();
-    let config = instance.config_tx.borrow().config.clone();
+    let config = std::sync::Arc::new(instance.config_tx.borrow().config.clone());
     let width = instance.image_width;
     let height = instance.image_height;
 

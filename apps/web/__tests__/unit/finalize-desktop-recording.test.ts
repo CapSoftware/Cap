@@ -317,6 +317,30 @@ describe("durable post-publication transcription enqueue", () => {
 		expect(mocks.claim).not.toHaveBeenCalled();
 	});
 
+	it("finishes after repeated transcription queue failures", async () => {
+		withCurrent({ state: "verified" });
+		mocks.transcribe.mockResolvedValue({
+			success: false,
+			message: "Queue unavailable",
+		});
+		mocks.sleep.mockImplementation(async () => {
+			if (mocks.transcribe.mock.calls.length >= 12) {
+				throw new Error("Transcription retry limit exceeded");
+			}
+		});
+
+		await expect(
+			finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).resolves.toEqual({ success: true });
+		expect(mocks.transcribe).toHaveBeenCalledTimes(12);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.claim).not.toHaveBeenCalled();
+	});
+
 	it.each(["unconfigured", "deleted"])(
 		"skips %s transcription without retrying forever",
 		async (reason) => {

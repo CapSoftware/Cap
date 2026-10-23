@@ -196,6 +196,7 @@ pub const BACKGROUND_IMAGE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "gif",
 pub const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 /// `recording.rs:92-93`.
 const DESKTOP_BACKGROUND_MAX_DIMENSION: u32 = 2560;
+#[cfg(target_os = "macos")]
 const DESKTOP_BACKGROUND_JPEG_QUALITY: u8 = 82;
 
 /// The sidebar's fallback border/shadow objects. The UI's numbers, **not**
@@ -596,6 +597,36 @@ fn noise_texture(width: u32, height: u32, base_frequency: f32) -> Arc<RenderImag
     )]))
 }
 
+#[derive(Default)]
+struct NoiseCache {
+    current: Option<(i32, Arc<RenderImage>)>,
+    retired: Vec<Arc<RenderImage>>,
+}
+
+impl NoiseCache {
+    fn image(&mut self, scale: f32) -> Arc<RenderImage> {
+        let key = scale.round() as i32;
+        if let Some((cached, image)) = &self.current
+            && *cached == key
+        {
+            return image.clone();
+        }
+        let image = noise_texture(
+            GRADIENT_PREVIEW_WIDTH as u32,
+            GRADIENT_PREVIEW_HEIGHT as u32,
+            noise_base_frequency(scale),
+        );
+        if let Some((_, previous)) = self.current.replace((key, image.clone())) {
+            self.retired.push(previous);
+        }
+        image
+    }
+
+    fn take_retired(&mut self) -> Vec<Arc<RenderImage>> {
+        std::mem::take(&mut self.retired)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -787,7 +818,7 @@ pub struct SidebarState {
     /// The gradient preview's grain, cached by the grain-scale step it was
     /// generated for -- regenerating 42k pixels of noise on every frame of a
     /// slider drag would be the one expensive thing in this panel.
-    noise: std::cell::RefCell<Option<(i32, Arc<RenderImage>)>>,
+    noise: std::cell::RefCell<NoiseCache>,
 
     /// The open `KSelect`'s menu, if any -- one slot for every select in the
     /// sidebar, the settings window's `Menu.popup()` stand-in.
@@ -876,7 +907,7 @@ impl SidebarState {
             cursor_previews: std::cell::RefCell::new(BTreeMap::new()),
             cursor_scale: 2.,
             panel_sections: std::cell::RefCell::new(HashMap::new()),
-            noise: std::cell::RefCell::new(None),
+            noise: std::cell::RefCell::default(),
             menu: None,
             caption_model: "best",
             caption_language: "auto",
@@ -905,19 +936,16 @@ impl SidebarState {
 
     /// The grain texture for a grain-scale value, generated once per step.
     fn noise_image(&self, scale: f32) -> Arc<RenderImage> {
-        let key = scale.round() as i32;
-        if let Some((cached, image)) = self.noise.borrow().as_ref()
-            && *cached == key
-        {
-            return image.clone();
+        self.noise.borrow_mut().image(scale)
+    }
+
+    /// Evicts the grain textures earlier steps of a slider drag left in the
+    /// window's atlas. The panel is built without a `&mut Window`, so they
+    /// are queued there and released from `render` on the next frame.
+    pub(crate) fn release_retired_images(&self, window: &mut Window) {
+        for image in self.noise.borrow_mut().take_retired() {
+            let _ = window.drop_image(image);
         }
-        let image = noise_texture(
-            GRADIENT_PREVIEW_WIDTH as u32,
-            GRADIENT_PREVIEW_HEIGHT as u32,
-            noise_base_frequency(scale),
-        );
-        *self.noise.borrow_mut() = Some((key, image.clone()));
-        image
     }
 
     /// The stored track rect, without creating one -- the pointer maths reads
@@ -1895,22 +1923,7 @@ fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
 }
 
 fn decode_jpeg_thumbnail(bytes: &[u8], max: u32) -> Option<(image::DynamicImage, u32, u32)> {
-    let mut decoder = jpeg_decoder::Decoder::new(bytes);
-    decoder.read_info().ok()?;
-    let info = decoder.info()?;
-    let requested = max.clamp(1, u16::MAX as u32) as u16;
-    let (width, height) = decoder.scale(requested, requested).ok()?;
-    let pixels = decoder.decode().ok()?;
-    let decoded = match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        jpeg_decoder::PixelFormat::L8 => image::DynamicImage::ImageLuma8(
-            image::GrayImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        _ => return None,
-    };
-    Some((decoded, info.width as u32, info.height as u32))
+    crate::jpeg_thumbnail::decode_jpeg_thumbnail(bytes, |_, _| (max, max))
 }
 
 /// [`decode_scaled_rgba`] in gpui's BGRA order.
@@ -1953,30 +1966,33 @@ pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
 /// re-encoding to JPEG at quality 82. The `sips` path matters -- macOS ships
 /// HEIC wallpapers the `image` crate cannot decode.
 fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(), String> {
-    let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
-        width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
-    });
-
-    let mut command = std::process::Command::new("sips");
-    command
-        .arg("-s")
-        .arg("format")
-        .arg("jpeg")
-        .arg("-s")
-        .arg("formatOptions")
-        .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
-    if needs_downscale {
-        command
-            .arg("-Z")
-            .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
-    }
-    if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
-        && output_status.status.success()
+    #[cfg(target_os = "macos")]
     {
-        return Ok(());
+        let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
+            width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
+        });
+
+        let mut command = std::process::Command::new("sips");
+        command
+            .arg("-s")
+            .arg("format")
+            .arg("jpeg")
+            .arg("-s")
+            .arg("formatOptions")
+            .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
+        if needs_downscale {
+            command
+                .arg("-Z")
+                .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
+        }
+        if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
+            && output_status.status.success()
+        {
+            return Ok(());
+        }
     }
 
-    let decoded = cap_gpui_kernels::codec::open_image(source)
+    let decoded = cap_gpui_kernels::codec::decode_image_file(source)
         .map_err(|err| format!("failed to decode desktop background: {err}"))?;
     let decoded = if decoded.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
         || decoded.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
@@ -2137,7 +2153,9 @@ impl EditorWindow {
     /// selected path.
     fn ensure_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.preview_path() else {
-            self.sidebar.preview = None;
+            if let Some((_, previous)) = self.sidebar.preview.take() {
+                let _ = window.drop_image(previous);
+            }
             return;
         };
         if self
@@ -2157,8 +2175,10 @@ impl EditorWindow {
                     .await
             };
             let Some(image) = decoded else { return };
-            this.update(cx, |this, cx| {
-                this.sidebar.preview = Some((target, image));
+            this.update_in(cx, |this, window, cx| {
+                if let Some((_, previous)) = this.sidebar.preview.replace((target, image)) {
+                    let _ = window.drop_image(previous);
+                }
                 cx.notify();
             })
             .ok();
@@ -2426,6 +2446,13 @@ impl EditorWindow {
                     }
                     Err(error) => {
                         tracing::error!("couldn't import your desktop wallpaper: {error}");
+                        cx.spawn(async move |_, _| {
+                            crate::platform::alert_dialog(
+                                "Couldn't import your desktop wallpaper",
+                                &error,
+                            );
+                        })
+                        .detach();
                     }
                 }
                 cx.notify();
@@ -4069,6 +4096,24 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_grain_step_retires_the_old_texture_for_atlas_eviction() {
+        let mut noise = NoiseCache::default();
+        let first = noise.image(20.);
+        assert!(Arc::ptr_eq(&noise.image(20.2), &first));
+        assert!(noise.take_retired().is_empty());
+
+        let second = noise.image(35.);
+        let third = noise.image(50.);
+        assert!(!Arc::ptr_eq(&second, &first));
+        let retired = noise.take_retired();
+        assert_eq!(retired.len(), 2);
+        assert!(Arc::ptr_eq(&retired[0], &first));
+        assert!(Arc::ptr_eq(&retired[1], &second));
+        assert!(noise.take_retired().is_empty());
+        assert!(Arc::ptr_eq(&noise.image(50.), &third));
+    }
 
     #[test]
     fn the_catalogue_matches_the_source() {

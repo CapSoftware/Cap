@@ -70,6 +70,7 @@ use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
+    project_save::PendingProjectSave,
     store::SettingsEnum,
     theme::Theme,
     ui,
@@ -281,6 +282,17 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     } else {
         (available_width, available_width / frame_aspect)
     }
+}
+
+fn frame_seconds(frame: u32) -> f64 {
+    frame as f64 / EDITOR_PREVIEW_FPS as f64
+}
+
+/// Where a seek leaves the playhead. Paused, the engine echoes the seek back
+/// as `playhead_changed(frame)`; storing the frame's own time makes that echo
+/// a no-op instead of a second whole-editor rebuild for every scrub step.
+fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
+    if playing { time } else { frame_seconds(frame) }
 }
 
 fn frame_layout_requires_editor_invalidation(
@@ -1227,45 +1239,6 @@ enum Scrub {
 /// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
 const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
-/// The debounced `project-config.json` write.
-///
-/// The Tauri editor's `scheduleProjectConfigSave` restarts a 250ms timer on
-/// every store change and `flushProjectConfig` serialises the whole config
-/// through `commands.setProjectConfig` (`ED/context.ts:1186-1252`), which is
-/// `config.write(&project_path)` on the Rust side (`lib.rs:3346-3360`). The
-/// pending value lives behind an `Rc<RefCell<..>>` so the close path -- which
-/// only ever gets an `&mut App` -- can force it out, the same shape the
-/// teleprompter's `onCloseRequested` save uses.
-#[derive(Default)]
-pub struct PendingProjectSave {
-    path: Option<PathBuf>,
-    config: Option<ProjectConfiguration>,
-}
-
-impl PendingProjectSave {
-    /// Drop a scheduled write without performing it -- the reload path after
-    /// an import, where the config on disk is newer than the editor's copy.
-    pub fn discard(&mut self) {
-        self.config = None;
-    }
-
-    pub fn flush(&mut self) {
-        if let Err(error) = self.try_flush() {
-            tracing::error!(path = ?self.path, "failed to persist project config: {error}");
-        }
-    }
-
-    pub fn try_flush(&mut self) -> std::io::Result<()> {
-        let (Some(path), Some(config)) = (&self.path, &self.config) else {
-            return Ok(());
-        };
-        config.write(path)?;
-        tracing::debug!(path = %path.display(), "project config written");
-        self.config = None;
-        Ok(())
-    }
-}
-
 /// Which edge -- or the whole box -- a live drag is moving.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum DragKind {
@@ -2056,6 +2029,7 @@ impl EditorWindow {
             sharing: RecordingMeta::load_for_project(&project_path)
                 .ok()
                 .and_then(|meta| meta.sharing),
+            pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2127,7 +2101,6 @@ impl EditorWindow {
             has_camera: false,
             multiple_clips: false,
             recorded_cursor_family: None,
-            pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
             name_input,
             hex_inputs,
@@ -2201,7 +2174,7 @@ impl EditorWindow {
     /// Hand the close path the pending write, so a `.cap` closed inside the
     /// 250ms debounce still lands on disk -- `onCleanup(() => { ...
     /// flushProjectConfig() })` (`ED/context.ts:1246-1252`).
-    pub fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
+    pub(crate) fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
         self.pending_save.clone()
     }
 
@@ -2243,7 +2216,6 @@ impl EditorWindow {
         self.has_camera = summary.has_camera;
         self.multiple_clips = summary.multiple_clips;
         self.recorded_cursor_family = summary.recorded_cursor_family;
-        self.pending_save.borrow_mut().path = Some(self.project_path.clone());
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
         // the on-mount 80px fit then narrows it on the first render that knows
@@ -2532,11 +2504,18 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
-        self.pending_save.borrow_mut().config = Some(self.project.clone());
+        self.pending_save.borrow_mut().queue(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
             cx.background_executor().timer(PROJECT_SAVE_DEBOUNCE).await;
-            pending.borrow_mut().flush();
+            let Some(save) = pending.borrow().snapshot() else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { save.write() })
+                .await;
+            pending.borrow_mut().complete(result);
         }));
     }
 
@@ -3002,7 +2981,7 @@ impl EditorWindow {
     /// is `setEditorState("playbackTime", payload.playhead_position / FPS)`
     /// (`Editor.tsx:482-486`).
     pub fn playhead_changed(&mut self, frame: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let next = frame as f64 / EDITOR_PREVIEW_FPS as f64;
+        let next = frame_seconds(frame);
         if (next - self.playhead).abs() < f64::EPSILON {
             return;
         }
@@ -3265,6 +3244,7 @@ impl EditorWindow {
         } else {
             transport.seek(frame);
         }
+        let time = seeked_playhead(time, frame, self.playing);
         self.playhead = time;
         self.view.playhead = time;
         self.view.playing = self.playing;
@@ -5588,7 +5568,16 @@ impl EditorWindow {
     ) {
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let imported = match crate::platform::open_audio_panel() {
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(
+                &[("Audio", AUDIO_IMPORT_EXTENSIONS)],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::platform::open_audio_panel();
+            let imported = match source {
                 Some(source)
                     if this
                         .update_in(cx, |this, _, _| {
@@ -11250,6 +11239,7 @@ impl Render for EditorWindow {
         });
         self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
+        self.sidebar.release_retired_images(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
@@ -11758,6 +11748,8 @@ impl Render for EditorWindow {
     }
 }
 
+const AUDIO_IMPORT_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
+
 struct ImportedAudio {
     path: String,
     name: String,
@@ -11773,8 +11765,7 @@ fn import_audio_file(
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .ok_or_else(|| "Audio file has no extension".to_string())?;
-    const EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
-    if !EXTENSIONS.contains(&extension.as_str()) {
+    if !AUDIO_IMPORT_EXTENSIONS.contains(&extension.as_str()) {
         return Err(format!("Unsupported audio format: .{extension}"));
     }
     if !source.exists() {
@@ -12553,39 +12544,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_predelete_save_keeps_the_pending_edit_for_retry() {
-        let root = std::env::temp_dir().join(format!(
-            "cap-editor-save-delete-{}",
-            crate::store::new_uuid_v4()
-        ));
-        std::fs::create_dir(&root).unwrap();
-        let source = root.join("source.mp4");
-        std::fs::write(&source, b"original recording").unwrap();
-        let config = ProjectConfiguration {
-            aspect_ratio: Some(cap_project::AspectRatio::Square),
-            ..Default::default()
-        };
-        let mut pending = PendingProjectSave {
-            path: Some(source.clone()),
-            config: Some(config),
-        };
-        assert!(pending.try_flush().is_err());
-        assert!(pending.config.is_some());
-        assert_eq!(std::fs::read(&source).unwrap(), b"original recording");
-        pending.path = Some(root.clone());
-        pending.try_flush().unwrap();
-        assert!(pending.config.is_none());
-        let saved: ProjectConfiguration =
-            serde_json::from_slice(&std::fs::read(root.join("project-config.json")).unwrap())
-                .unwrap();
-        assert!(matches!(
-            saved.aspect_ratio,
-            Some(cap_project::AspectRatio::Square)
-        ));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields_and_menus() {
         let space = gpui::Keystroke::parse("space").unwrap();
         assert!(is_playback_shortcut(&space, false, false));
@@ -12741,6 +12699,19 @@ mod tests {
         );
         // A clock hiccup must not pull the playhead backwards.
         assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
+    }
+
+    /// A paused seek stores exactly the time its engine echo carries, so the
+    /// echo's `playhead_changed` returns before rebuilding the editor again.
+    #[test]
+    fn paused_seek_lands_where_its_echo_does() {
+        for frame in 0..=EDITOR_PREVIEW_FPS * 3600 {
+            let time = (frame as f64 + 0.37) / EDITOR_PREVIEW_FPS as f64;
+            let seeked = seeked_playhead(time, frame, false);
+            assert_eq!(seeked, frame_seconds(frame));
+            assert!((frame_seconds(frame) - seeked).abs() < f64::EPSILON);
+        }
+        assert_eq!(seeked_playhead(1.234, 74, true), 1.234);
     }
 
     /// The perf gate's line. `frames` is what reached the window, `dropped`
