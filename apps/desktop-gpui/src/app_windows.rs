@@ -69,8 +69,7 @@ pub(crate) fn display_work_area(
         let bounds = scap_targets::Display::from_id(&id)
             .as_ref()
             .and_then(capture_display_bounds)?;
-        let primary_height = cx.primary_display()?.bounds().size.height;
-        Some(global_macos_work_area(available, bounds, primary_height))
+        Some(global_macos_work_area(available, bounds))
     }
     #[cfg(not(target_os = "macos"))]
     Some(available)
@@ -147,13 +146,12 @@ fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixe
 fn global_macos_work_area(
     mut available: Bounds<Pixels>,
     display: Bounds<Pixels>,
-    primary_height: Pixels,
 ) -> Bounds<Pixels> {
-    // GPUI's macOS work area uses local x but includes the AppKit screen y.
-    // Windows opened without a display ID need primary-display coordinates.
-    let appkit_origin_y = primary_height - display.origin.y - display.size.height;
-    available.origin.x += display.origin.x;
-    available.origin.y += display.origin.y - appkit_origin_y;
+    // GPUI's macOS work area is relative to its own display's top-left corner
+    // (`visible_bounds` in gpui_macos). Windows opened without a display ID need
+    // primary-display coordinates, so a display above or below the primary one
+    // has to carry its global origin across.
+    available.origin += display.origin;
     available
 }
 
@@ -542,6 +540,18 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 if TargetSelect::global(cx).read(cx).mode.is_some() {
                     dismiss_target_overlays(cx);
                 }
+            });
+        }
+    })
+    .detach();
+
+    let thumbnails = crate::recording::studio_thumbnail_events();
+    cx.spawn(async move |cx| {
+        while thumbnails.recv_async().await.is_ok() {
+            cx.update(|cx| {
+                crate::tray::refresh_previous(cx);
+                refresh_library_after_delete(cx);
+                crate::menus::recheck_pending_quit(cx);
             });
         }
     })
@@ -1856,6 +1866,14 @@ fn pinned_window_resolution_matches(
     requested.is_none_or(|requested| resolved.is_some_and(|resolved| requested == resolved))
 }
 
+/// An area screenshot never inherits a selection: re-arming one over an open
+/// Area picker (the Screenshot Area hotkey or tray item while a recording-mode
+/// area is drawn) reopens the overlays empty instead of keeping that crop.
+/// https://github.com/CapSoftware/Cap/issues/2432
+fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, recording_mode: Mode) -> bool {
+    armed != Some(mode) || (mode == TargetType::Area && recording_mode == Mode::Screenshot)
+}
+
 pub(crate) fn reject_unavailable_window(cx: &mut App) {
     dismiss_target_overlays(cx);
     RecordingSession::global(cx).update(cx, |session, cx| {
@@ -1972,8 +1990,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     }
 
     let select = TargetSelect::global(cx);
-    let mode_changed = select.read(cx).mode != Some(request.mode);
-    if mode_changed {
+    if reopens_overlays(select.read(cx).mode, request.mode, request.recording_mode) {
         close_overlay_windows(cx);
     }
 
@@ -4866,11 +4883,84 @@ pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevi
     }
 }
 
+/// Set once anything has asked for the shared device -- an editor, a
+/// screenshot editor or a recording -- so the launch warmup leaves the GPU to
+/// it instead of compiling pipelines alongside.
+static GPU_WORK_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+fn gpu_work_requested() -> bool {
+    GPU_WORK_REQUESTED.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub(crate) fn prewarm_shared_wgpu_device(cx: &App) {
+    GPU_WORK_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
     gpui_tokio::Tokio::spawn(cx, async {
         let _ = shared_wgpu_device().await;
     })
     .detach();
+}
+
+const LAUNCH_RENDER_WARMUP_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The first editor open in a process paid for the system font scan, the
+/// shared device and the renderer's first pipeline compiles and draw before
+/// its first frame: 0.7-1.2 s, against ~0.2 s for every later open. This warms
+/// them a few seconds after launch, off the main thread. The layers are
+/// dropped again; only the driver's compiled pipelines, the device and the
+/// font database stay.
+pub(crate) fn schedule_launch_render_warmup(cx: &App) {
+    gpui_tokio::Tokio::spawn(cx, async {
+        tokio::time::sleep(LAUNCH_RENDER_WARMUP_DELAY).await;
+        let started = std::time::Instant::now();
+        if tokio::task::spawn_blocking(cap_rendering::prewarm_fonts)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let fonts_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let renderer_ms = warm_renderer().await;
+        tracing::info!(fonts_ms, ?renderer_ms, "launch render warmup finished");
+    })
+    .detach();
+}
+
+#[cfg(target_os = "macos")]
+async fn warm_renderer() -> Option<f64> {
+    if gpu_work_requested() {
+        return None;
+    }
+    let shared = shared_wgpu_device().await?;
+    if gpu_work_requested() {
+        return None;
+    }
+    let started = std::time::Instant::now();
+    let (device, queue, software) = (
+        shared.device.clone(),
+        shared.queue.clone(),
+        shared.is_software_adapter,
+    );
+    let mut layers = tokio::task::spawn_blocking(move || {
+        (!gpu_work_requested())
+            .then(|| cap_rendering::RendererLayers::new_with_options(&device, &queue, software))
+    })
+    .await
+    .ok()??;
+    if gpu_work_requested() {
+        return None;
+    }
+    if let Err(error) = cap_rendering::prewarm_first_frame(shared, &mut layers).await {
+        tracing::warn!(%error, "launch render warmup frame failed");
+    }
+    drop(layers);
+    Some(started.elapsed().as_secs_f64() * 1000.0)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn warm_renderer() -> Option<f64> {
+    None
 }
 
 fn editor_audio_output() -> Arc<cap_editor::AudioOutput> {
@@ -5385,7 +5475,9 @@ fn load_editor_project_candidate(
 
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
+        crate::editor_bench::run(handle, cx).await;
         drive_auto_export(handle, cx).await;
+        crate::editor_hover_bench::run(handle, cx).await;
     })
     .detach();
 }
@@ -6119,6 +6211,11 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
         let index = editors.iter().position(|(path, _)| path == &key);
         index.map(|index| editors.remove(index).1)
     };
+    let transform = handle.and_then(|handle| {
+        handle
+            .update(cx, |view, _window, _cx| view.timeline_transform())
+            .ok()
+    });
 
     if let Some(handle) = handle {
         if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
@@ -6137,7 +6234,16 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
     }
 
     tracing::info!(path = %key.display(), "reloading editor after import");
-    open_editor(key, cx);
+    open_editor(key.clone(), cx);
+    if let Some(transform) = transform
+        && let Some(handle) = editor_window_handle(&key, cx)
+    {
+        handle
+            .update(cx, |view, _window, _cx| {
+                view.restore_timeline_transform(transform)
+            })
+            .ok();
+    }
 }
 
 /// `editor_window_for_path` (`src-tauri/src/windows.rs:3699-3706`): the live
@@ -6331,23 +6437,6 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, _window, cx| view.arm_overlay(kind, cx))
         .ok();
-}
-
-/// Repaint the bar between its once-a-second ticks -- the mic meter updates at
-/// up to ~20Hz and the bar is never the active window.
-pub fn refresh_controls_window(cx: &mut App) {
-    let level_db = crate::feeds::Feeds::global(cx).read(cx).mic_level_db;
-    if let Some(handle) = cx.global::<AppWindows>().controls {
-        handle
-            .update(cx, |controls, window, cx| {
-                if !controls.level_bar_moves(level_db, window.scale_factor()) {
-                    return;
-                }
-                cx.notify();
-                window.refresh();
-            })
-            .ok();
-    }
 }
 
 fn camera_window_number(cx: &mut App) -> Option<isize> {
@@ -6861,11 +6950,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_work_area_preserves_horizontal_and_vertical_display_origins() {
-        for (display_origin, appkit_y) in [
-            (point(px(-1440.), px(0.)), 180.),
-            (point(px(1920.), px(0.)), 180.),
-            (point(px(0.), px(-900.)), 1080.),
-            (point(px(0.), px(1080.)), -900.),
+        for display_origin in [
+            point(px(-1440.), px(0.)),
+            point(px(1920.), px(0.)),
+            point(px(0.), px(-900.)),
+            point(px(0.), px(1080.)),
+            point(px(1691.), px(-1080.)),
         ] {
             let display = Bounds {
                 origin: display_origin,
@@ -6873,11 +6963,10 @@ mod tests {
             };
             let available = global_macos_work_area(
                 Bounds {
-                    origin: point(px(0.), px(appkit_y + 25.)),
+                    origin: point(px(0.), px(25.)),
                     size: size(px(1440.), px(825.)),
                 },
                 display,
-                px(1080.),
             );
             assert_eq!(available.origin, display_origin + point(px(0.), px(25.)));
             assert_eq!(available.size, size(px(1440.), px(825.)));
@@ -7696,6 +7785,42 @@ mod tests {
         assert!(!pinned_window_resolution_matches(
             Some(&selected),
             Some(&other)
+        ));
+    }
+
+    #[test]
+    fn area_screenshots_reopen_the_overlays_instead_of_inheriting_a_selection() {
+        assert!(reopens_overlays(None, TargetType::Area, Mode::Screenshot));
+        assert!(reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Screenshot
+        ));
+
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Instant
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Display,
+            Mode::Screenshot
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Window),
+            TargetType::Window,
+            Mode::Screenshot
         ));
     }
 

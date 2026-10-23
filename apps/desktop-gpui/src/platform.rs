@@ -587,6 +587,15 @@ pub struct PanelBehavior {
 #[cfg(target_os = "macos")]
 pub use mac::*;
 
+/// GPUI keeps its own Reduce Motion flag and never reads the OS setting, so
+/// every animation ignored it until this fed it in.
+pub fn follow_system_reduce_motion(cx: &mut gpui::App) {
+    #[cfg(target_os = "macos")]
+    mac::follow_system_reduce_motion(cx);
+    #[cfg(not(target_os = "macos"))]
+    let _ = cx;
+}
+
 #[cfg(target_os = "macos")]
 mod macos_exception_guard;
 
@@ -595,6 +604,42 @@ mod macos_occlusion;
 
 #[cfg(target_os = "macos")]
 mod mac {
+    pub fn follow_system_reduce_motion(cx: &mut gpui::App) {
+        use objc2_app_kit::{
+            NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
+        };
+        use objc2_foundation::{NSNotification, NSOperationQueue};
+
+        let reduce_motion = || {
+            let reduce =
+                unsafe { NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion() };
+            tracing::debug!(reduce, "system reduce motion");
+            reduce
+        };
+        cx.set_reduce_motion(reduce_motion());
+
+        let (changed, changes) = flume::unbounded::<()>();
+        let block = block2::RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
+            let _ = changed.send(());
+        });
+        unsafe {
+            let center = NSWorkspace::sharedWorkspace().notificationCenter();
+            let observer = center.addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            );
+            std::mem::forget(observer);
+        }
+        cx.spawn(async move |cx| {
+            while changes.recv_async().await.is_ok() {
+                cx.update(|cx| cx.set_reduce_motion(reduce_motion()));
+            }
+        })
+        .detach();
+    }
+
     use gpui::Window;
     use objc2::rc::Id;
     use objc2::runtime::{AnyObject, Sel};
@@ -2718,9 +2763,6 @@ mod stub {
         None
     }
     pub fn open_image_panel(_extensions: &[&str]) -> Option<std::path::PathBuf> {
-        None
-    }
-    pub fn open_audio_panel() -> Option<std::path::PathBuf> {
         None
     }
     pub fn confirm_dialog(

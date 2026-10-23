@@ -4,6 +4,7 @@ use cap_project::{
     InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
     StudioRecordingStatus,
 };
+use cap_rendering::ProjectRecordingsMeta;
 use serde::Serialize;
 
 use crate::{OutputFormat, write_json};
@@ -16,11 +17,15 @@ pub struct ProjectInspection {
     /// camelCase convenience fields so agents never reach into the snake_case `meta` passthrough.
     pub name: String,
     pub recording_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
     pub meta: RecordingMeta,
     pub config: cap_project::ProjectConfiguration,
 }
 
 pub fn config_get(project_path: PathBuf) -> Result<(), String> {
+    RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
     let config = match cap_project::ProjectConfiguration::load(&project_path) {
         Ok(config) => config,
         // Instant and un-edited studio recordings have no project-config.json; return the
@@ -39,6 +44,8 @@ pub fn config_set(
 ) -> Result<(), String> {
     let config: cap_project::ProjectConfiguration = serde_json::from_str(settings_json)
         .map_err(|e| format!("Invalid project config JSON: {e}"))?;
+    RecordingMeta::load_for_project(&project_path)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
     // write() validates internally before its atomic temp-file-then-rename.
     config
         .write(&project_path)
@@ -54,6 +61,7 @@ pub fn inspect(project_path: PathBuf, format: OutputFormat) -> Result<(), String
         .map_err(|e| format!("Failed to load recording meta: {e}"))?;
     let output_path = meta.output_path();
     let config = meta.project_config();
+    let duration_seconds = project_duration_seconds(&project_path, &meta);
 
     match format {
         OutputFormat::Text => {
@@ -61,6 +69,9 @@ pub fn inspect(project_path: PathBuf, format: OutputFormat) -> Result<(), String
             println!("name: {}", meta.pretty_name);
             println!("type: {}", recording_type(&meta));
             println!("output: {}", output_path.display());
+            if let Some(duration) = duration_seconds {
+                println!("duration: {duration:.2}s");
+            }
             Ok(())
         }
         OutputFormat::Json => write_json(&ProjectInspection {
@@ -68,6 +79,7 @@ pub fn inspect(project_path: PathBuf, format: OutputFormat) -> Result<(), String
             output_path,
             name: meta.pretty_name.clone(),
             recording_type: recording_type(&meta),
+            duration_seconds,
             meta,
             config,
         }),
@@ -89,6 +101,8 @@ struct ValidationReport {
     project_path: PathBuf,
     valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     recording_type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -103,6 +117,21 @@ fn recording_type(meta: &RecordingMeta) -> &'static str {
         RecordingMetaInner::Studio(_) => "studio",
         RecordingMetaInner::Instant(_) => "instant",
     }
+}
+
+fn project_duration_seconds(project_path: &Path, meta: &RecordingMeta) -> Option<f64> {
+    let RecordingMetaInner::Studio(studio) = &meta.inner else {
+        return None;
+    };
+
+    let recordings = ProjectRecordingsMeta::new(&project_path.to_path_buf(), studio).ok()?;
+
+    Some(cap_rendering::get_duration(
+        &recordings,
+        meta,
+        studio,
+        &meta.project_config(),
+    ))
 }
 
 fn required_check(role: &'static str, path: PathBuf) -> FileCheck {
@@ -250,6 +279,7 @@ fn build_report(project_path: &Path, meta: &RecordingMeta) -> ValidationReport {
     ValidationReport {
         project_path: project_path.to_path_buf(),
         valid,
+        duration_seconds: project_duration_seconds(project_path, meta),
         recording_type: Some(recording_type(meta)),
         error,
         checks,
@@ -283,6 +313,7 @@ pub fn validate(project_path: PathBuf, format: OutputFormat) -> Result<(), Strin
             missing: vec![project_path.join("recording-meta.json")],
             project_path: project_path.clone(),
             valid: false,
+            duration_seconds: None,
             recording_type: None,
             error: Some(format!("Failed to load recording meta: {e}")),
             problems: Vec::new(),
@@ -295,6 +326,9 @@ pub fn validate(project_path: PathBuf, format: OutputFormat) -> Result<(), Strin
         OutputFormat::Json => write_json(&report)?,
         OutputFormat::Text => {
             println!("project: {}", report.project_path.display());
+            if let Some(duration) = report.duration_seconds {
+                println!("duration: {duration:.2}s");
+            }
             if let Some(error) = &report.error {
                 println!("error: {error}");
             }

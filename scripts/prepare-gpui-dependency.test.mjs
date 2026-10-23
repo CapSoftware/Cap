@@ -121,6 +121,8 @@ test("dependency verification handles overlapping patches without changing the c
 	};
 	writeFileSync(path.join(upstream, "renderer.rs"), "base\n");
 	writeFileSync(path.join(upstream, "windows.rs"), "base\n");
+	writeFileSync(path.join(upstream, "frames.rs"), "base\n");
+	writeFileSync(path.join(upstream, "atlas.rs"), "base\n");
 	commit();
 	const base = git(upstream, "rev-parse", "HEAD").trim();
 	const patch = (name) => {
@@ -139,6 +141,10 @@ test("dependency verification handles overlapping patches without changing the c
 	writeFileSync(path.join(upstream, "renderer.rs"), "Linux renderer\n");
 	rmSync(path.join(upstream, "temporary.rs"));
 	patch("zed-linux.patch");
+	writeFileSync(path.join(upstream, "frames.rs"), "paced frames\n");
+	patch("zed-idle-frames.patch");
+	writeFileSync(path.join(upstream, "atlas.rs"), "streaming images\n");
+	patch("zed-streaming-image.patch");
 	const script = path.join(cap, "scripts/prepare-gpui-dependency.sh");
 	writeFileSync(
 		script,
@@ -158,6 +164,14 @@ test("dependency verification handles overlapping patches without changing the c
 			"Linux renderer\n",
 		);
 		assert.equal(existsSync(path.join(zed, "temporary.rs")), false);
+		assert.equal(
+			readFileSync(path.join(zed, "frames.rs"), "utf8"),
+			"paced frames\n",
+		);
+		assert.equal(
+			readFileSync(path.join(zed, "atlas.rs"), "utf8"),
+			"streaming images\n",
+		);
 	});
 
 	writeFileSync(path.join(zed, "unrelated.txt"), "preserve staged work\n");
@@ -236,6 +250,35 @@ test("dependency verification handles overlapping patches without changing the c
 				"Linux renderer\n",
 			);
 			assert.equal(existsSync(path.join(zed, "temporary.rs")), false);
+			const after = fingerprint();
+			assert.deepEqual(after.unrelated, before.unrelated);
+			assert.equal(after.head, before.head);
+		},
+	);
+
+	await t.test(
+		"a checkout prepared before a patch was added gains the new patch",
+		() => {
+			const addedPatch = path.join(
+				cap,
+				patchDirectory,
+				"zed-idle-frames.patch",
+			);
+			const addedPatchBytes = readFileSync(addedPatch);
+			git(zed, "apply", "--reverse", addedPatch);
+			git(cap, "rm", "--quiet", addedPatch);
+			git(cap, "commit", "--quiet", "-m", "Stack without the added patch");
+			writeFileSync(addedPatch, addedPatchBytes);
+			git(cap, "add", addedPatch);
+			git(cap, "commit", "--quiet", "-m", "Add a patch");
+			const before = fingerprint();
+			const result = run(cap, "bash", [script]);
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(result.stderr, /Updated .* to the current ones/);
+			assert.equal(
+				readFileSync(path.join(zed, "frames.rs"), "utf8"),
+				"paced frames\n",
+			);
 			const after = fingerprint();
 			assert.deepEqual(after.unrelated, before.unrelated);
 			assert.equal(after.head, before.head);

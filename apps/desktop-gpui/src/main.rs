@@ -21,13 +21,16 @@ mod dev_restore;
 mod devices;
 mod diagnostics;
 mod doodle;
+mod draw_bench;
 mod editor_audio;
+mod editor_bench;
 mod editor_canvas;
 mod editor_clips;
 mod editor_color;
 mod editor_crop;
 mod editor_edits;
 mod editor_export;
+mod editor_hover_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
@@ -58,6 +61,7 @@ mod picker_benchmark;
 mod picker_ui_benchmark;
 mod platform;
 mod presets;
+mod project_save;
 mod recording;
 mod screenshot;
 mod screenshot_annotations;
@@ -266,6 +270,14 @@ fn main() {
         }
     }
 
+    // The AppImage CLI launcher re-enters the AppImage with `--cap-cli`; hand
+    // it to the bundled CLI before logging, single-instance or the GUI start.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = cap_cli_install::appimage::dispatch_cli() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+
     let _log_guard = init_logging();
 
     single_instance::acquire();
@@ -317,6 +329,7 @@ fn main() {
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
         crate::theme::init(cx);
+        platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);
         crate::sign_in::SignIn::init(cx);
@@ -424,6 +437,7 @@ fn main() {
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both

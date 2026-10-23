@@ -8,7 +8,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
-use super::menu::OpenHandler;
+use super::{keyboard_nav, menu::OpenHandler};
 use crate::theme::Theme;
 
 /// The click handler every component takes. `cx.listener(..)` produces exactly
@@ -408,7 +408,7 @@ fn radix_paint(theme: &Theme, variant: ButtonVariant) -> ButtonPaint {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Button {
             id,
             label,
@@ -433,6 +433,8 @@ impl RenderOnce for Button {
         div()
             .id(id)
             .tab_index(0)
+            .tab_stop(!disabled)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .flex()
             .flex_row()
             .items_center()
@@ -635,7 +637,7 @@ impl IconButton {
 }
 
 impl RenderOnce for IconButton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let IconButton {
             id,
             icon,
@@ -659,6 +661,8 @@ impl RenderOnce for IconButton {
             .id(id)
             .when(occlude, |this| this.occlude())
             .tab_index(0)
+            .tab_stop(!disabled)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .flex()
             .items_center()
             .justify_center()

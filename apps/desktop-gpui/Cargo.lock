@@ -1495,6 +1495,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-cli-install"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "serde",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-cursor-capture"
 version = "0.1.0"
 dependencies = [
@@ -1532,10 +1541,12 @@ dependencies = [
  "anyhow",
  "ashpd 0.11.1",
  "base64 0.22.1",
+ "block2 0.5.1",
  "bytes",
  "cap-audio",
  "cap-camera",
  "cap-camera-effects",
+ "cap-cli-install",
  "cap-cursor-info",
  "cap-editor",
  "cap-enc-ffmpeg",
@@ -11136,6 +11147,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

@@ -18,6 +18,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
@@ -26,6 +27,32 @@ use tracing::warn;
 pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
+const PREVIEW_SCRUB_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
+type PreviewRequest = Option<PreviewFrameInstruction>;
+
+// A scrub sends a new request faster than a seek can decode. Abandoning the
+// in-flight frame for every newer request starves the preview until the mouse
+// stops, so a newer request only wins while a frame was presented recently.
+fn preview_frame_overdue(last_presented: Option<Instant>) -> bool {
+    last_presented.is_none_or(|at| at.elapsed() >= PREVIEW_SCRUB_FRAME_INTERVAL)
+}
+
+fn preview_superseded(
+    preview_rx: &watch::Receiver<PreviewRequest>,
+    last_presented: Option<Instant>,
+) -> bool {
+    preview_rx.has_changed().unwrap_or(false) && !preview_frame_overdue(last_presented)
+}
+
+async fn preview_superseded_while_fresh(
+    mut probe: watch::Receiver<PreviewRequest>,
+    last_presented: Option<Instant>,
+) {
+    if probe.changed().await.is_err() || preview_frame_overdue(last_presented) {
+        std::future::pending::<()>().await;
+    }
+}
 
 pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 7] {
     let click_spring = cursor.click_spring_config();
@@ -492,7 +519,7 @@ impl EditorInstance {
         let completed_track_identity = completed_audio
             .as_deref()
             .map(crate::preparing_handoff::completed_track_identity);
-        let segments_task = tokio::spawn({
+        let segments_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let recording_meta = recording_meta.clone();
             let studio_meta = (**meta).clone();
             async move {
@@ -505,7 +532,7 @@ impl EditorInstance {
                 )
                 .await
             }
-        });
+        }));
 
         // Open the session's audio output stream now (in the background) so
         // the first play press doesn't wait on the device — Bluetooth outputs
@@ -1006,10 +1033,11 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
+        mut preview_rx: watch::Receiver<PreviewRequest>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
+            let mut last_presented: Option<Instant> = None;
             let mut cursor_cache = PreviewCursorCache::default();
             let mut project_rx = self.project_config.1.clone();
             let mut project = Arc::new(project_rx.borrow_and_update().clone());
@@ -1049,6 +1077,17 @@ impl EditorInstance {
                         zoom_timelines.clear();
                         outgoing_zoom_timelines.clear();
                     }
+                    let total_duration = project
+                        .timeline
+                        .as_ref()
+                        .map(|timeline| timeline.duration())
+                        .unwrap_or(0.0);
+                    let total_frames = (total_duration * f64::from(fps)).ceil() as u32;
+                    let mut last_frame = total_frames.saturating_sub(1);
+                    if f64::from(last_frame) / f64::from(fps) >= total_duration {
+                        last_frame = last_frame.saturating_sub(1);
+                    }
+                    let frame_number = frame_number.min(last_frame);
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {
@@ -1095,7 +1134,7 @@ impl EditorInstance {
                     tokio::select! {
                         biased;
 
-                        _ = preview_rx.changed() => {
+                        _ = preview_superseded_while_fresh(preview_rx.clone(), last_presented) => {
                             continue;
                         }
 
@@ -1105,7 +1144,7 @@ impl EditorInstance {
                             true,
                             clip_offsets,
                         ) => {
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1113,12 +1152,6 @@ impl EditorInstance {
                                 warn!("Preview renderer: no frames returned for frame {}", frame_number);
                                 break;
                             }
-
-                            let total_duration = project
-                                .timeline
-                                .as_ref()
-                                .map(|t| t.duration())
-                                .unwrap_or(0.0);
 
                             // Scrub renders sample the same precomputed spring
                             // timeline playback and export use (the old focus
@@ -1155,7 +1188,10 @@ impl EditorInstance {
                                     .unwrap_or_default();
                                 let outgoing_frames = tokio::select! {
                                     biased;
-                                    _ = preview_rx.changed() => {
+                                    _ = preview_superseded_while_fresh(
+                                        preview_rx.clone(),
+                                        last_presented,
+                                    ) => {
                                         continue;
                                     }
                                     frames = async {
@@ -1196,7 +1232,7 @@ impl EditorInstance {
                                         &outgoing_media.cursor,
                                         &project,
                                     );
-                                    if preview_rx.has_changed().unwrap_or(false) {
+                                    if preview_superseded(&preview_rx, last_presented) {
                                         continue;
                                     }
                                     let outgoing_uniforms = if let Some(cursor_timeline) =
@@ -1241,7 +1277,7 @@ impl EditorInstance {
                                 None
                             };
 
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1250,7 +1286,7 @@ impl EditorInstance {
                                 &segment_medias.cursor,
                                 &project,
                             );
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1324,6 +1360,7 @@ impl EditorInstance {
                                 };
                                 if render_confirmed {
                                     rendered = true;
+                                    last_presented = Some(Instant::now());
                                     break;
                                 }
 
@@ -1914,6 +1951,61 @@ fn get_calibration_offset(
 mod tests {
     use super::*;
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
+
+    fn scrub_request(frame: u32) -> PreviewRequest {
+        Some((frame, 60, XY::new(960, 540)))
+    }
+
+    fn overdue_frame() -> Option<Instant> {
+        Instant::now().checked_sub(PREVIEW_SCRUB_FRAME_INTERVAL)
+    }
+
+    #[test]
+    fn preview_frames_go_overdue_after_the_scrub_interval() {
+        assert!(preview_frame_overdue(None));
+        assert!(!preview_frame_overdue(Some(Instant::now())));
+        assert!(preview_frame_overdue(overdue_frame()));
+    }
+
+    #[test]
+    fn newer_requests_cancel_only_while_a_frame_is_fresh() {
+        let (tx, rx) = watch::channel(scrub_request(0));
+        assert!(!preview_superseded(&rx, Some(Instant::now())));
+
+        tx.send_modify(|request| *request = scrub_request(10));
+        assert!(preview_superseded(&rx, Some(Instant::now())));
+        assert!(!preview_superseded(&rx, overdue_frame()));
+        assert!(!preview_superseded(&rx, None));
+    }
+
+    #[tokio::test]
+    async fn fresh_frames_yield_to_newer_requests_and_keep_them_queued() {
+        let (tx, mut rx) = watch::channel(scrub_request(0));
+        let superseded = preview_superseded_while_fresh(rx.clone(), Some(Instant::now()));
+        tx.send_modify(|request| *request = scrub_request(10));
+
+        tokio::time::timeout(Duration::from_secs(1), superseded)
+            .await
+            .expect("a newer request should cancel a frame while the last one is fresh");
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), scrub_request(10));
+    }
+
+    #[tokio::test]
+    async fn overdue_frames_finish_before_newer_requests() {
+        let (tx, mut rx) = watch::channel(scrub_request(0));
+        let superseded = preview_superseded_while_fresh(rx.clone(), overdue_frame());
+        tx.send_modify(|request| *request = scrub_request(10));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), superseded)
+                .await
+                .is_err(),
+            "an overdue frame should not be cancelled by a newer request"
+        );
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), scrub_request(10));
+    }
 
     #[tokio::test]
     async fn completed_pcm_loader_reuses_arc_without_opening_a_missing_file() {
