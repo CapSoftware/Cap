@@ -16,8 +16,8 @@ use windows::{
         Graphics::{
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
-                D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAP_WRITE,
-                D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED,
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ,
+                D3D11_MAP_WRITE, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED,
                 D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
                 D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
                 D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
@@ -32,8 +32,9 @@ use windows::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010,
                     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_YUY2,
                 },
-                CreateDXGIFactory1, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
-                IDXGIAdapter, IDXGIDevice, IDXGIFactory1, IDXGIResource1,
+                CreateDXGIFactory1, DXGI_ERROR_WAS_STILL_DRAWING, DXGI_SHARED_RESOURCE_READ,
+                DXGI_SHARED_RESOURCE_WRITE, IDXGIAdapter, IDXGIDevice, IDXGIFactory1,
+                IDXGIResource1,
             },
         },
     },
@@ -832,7 +833,7 @@ impl FrameConverter for D3D11Converter {
         }
 
         let (output_ptr, output_pitch) = {
-            let resources = self.resources.lock();
+            let mut resources = self.resources.lock();
 
             unsafe {
                 resources.context.Unmap(&staging.input, 0);
@@ -865,13 +866,38 @@ impl FrameConverter for D3D11Converter {
                     .context
                     .CopyResource(&staging.output, &resources.output_texture);
 
+                // Polling releases the shared context between retries so other
+                // workers can submit GPU work while this readback completes.
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                resources
-                    .context
-                    .Map(&staging.output, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                    .map_err(|e| {
-                        ConvertError::ConversionFailed(format!("Map output failed: {e:?}"))
-                    })?;
+                loop {
+                    match resources.context.Map(
+                        &staging.output,
+                        0,
+                        D3D11_MAP_READ,
+                        D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                        Some(&mut mapped),
+                    ) {
+                        Ok(()) => break,
+                        Err(e) if e.code() == DXGI_ERROR_WAS_STILL_DRAWING => {
+                            drop(resources);
+                            std::thread::yield_now();
+                            resources = self.resources.lock();
+                        }
+                        Err(_) => {
+                            drop(resources);
+                            resources = self.resources.lock();
+                            resources
+                                .context
+                                .Map(&staging.output, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                                .map_err(|e| {
+                                    ConvertError::ConversionFailed(format!(
+                                        "Map output failed: {e:?}"
+                                    ))
+                                })?;
+                            break;
+                        }
+                    }
+                }
 
                 (mapped.pData as *const u8, mapped.RowPitch as usize)
             }
