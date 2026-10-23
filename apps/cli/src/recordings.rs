@@ -69,7 +69,11 @@ fn recording_type(meta: &RecordingMeta) -> &'static str {
     }
 }
 
-fn collect_rows(dirs: &[PathBuf], fail_on_unreadable: bool) -> Result<Vec<RecordingRow>, String> {
+fn collect_rows(
+    dirs: &[PathBuf],
+    fail_on_unreadable: bool,
+    created_at: impl Fn(&Path) -> std::io::Result<SystemTime>,
+) -> Result<Vec<RecordingRow>, String> {
     let mut entries: Vec<(PathBuf, SystemTime, RecordingMeta)> = Vec::new();
     for dir in dirs {
         if !dir.exists() {
@@ -91,10 +95,7 @@ fn collect_rows(dirs: &[PathBuf], fail_on_unreadable: bool) -> Result<Vec<Record
                 return None;
             }
             let meta = RecordingMeta::load_for_project(&path).ok()?;
-            let created = path
-                .metadata()
-                .and_then(|m| m.created())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let created = created_at(&path).unwrap_or(SystemTime::UNIX_EPOCH);
             Some((path, created, meta))
         }));
     }
@@ -128,7 +129,7 @@ pub fn list(dir: Option<PathBuf>, format: OutputFormat) -> Result<(), String> {
         }
     };
 
-    let rows = collect_rows(&dirs, dir.is_some())?;
+    let rows = collect_rows(&dirs, dir.is_some(), |path| path.metadata()?.created())?;
 
     match format {
         OutputFormat::Json => write_json(&rows),
@@ -234,24 +235,33 @@ mod tests {
     }
 
     #[test]
-    fn merges_recordings_from_multiple_libraries() {
+    fn merges_recordings_from_multiple_libraries_newest_first() {
         let root = tempfile::tempdir().unwrap();
-        let older = root.path().join("default/older.cap");
-        let newer = root.path().join("custom/newer.cap");
-        for (path, name) in [(&older, "Older"), (&newer, "Newer")] {
+        let recordings = [
+            (root.path().join("default/oldest.cap"), "Oldest", 10),
+            (root.path().join("custom/older.cap"), "Older", 20),
+            (root.path().join("default/newer.cap"), "Newer", 30),
+            (root.path().join("custom/newest.cap"), "Newest", 40),
+        ];
+        for (path, name, _) in &recordings {
             write_recording(path, name);
         }
 
         let rows = collect_rows(
             &[root.path().join("default"), root.path().join("custom")],
             true,
+            |path| {
+                let (_, _, seconds) = recordings
+                    .iter()
+                    .find(|(recording_path, _, _)| recording_path == path)
+                    .unwrap();
+                Ok(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(*seconds))
+            },
         )
         .unwrap();
         assert_eq!(
-            rows.iter()
-                .map(|row| row.name.as_str())
-                .collect::<HashSet<_>>(),
-            HashSet::from(["Newer", "Older"])
+            rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+            ["Newest", "Newer", "Older", "Oldest"]
         );
     }
 
@@ -263,9 +273,12 @@ mod tests {
         write_recording(&available.join("example.cap"), "Available");
         std::fs::write(&unavailable, "no longer a directory").unwrap();
 
-        let rows = collect_rows(&[unavailable.clone(), available], false).unwrap();
+        let rows = collect_rows(&[unavailable.clone(), available], false, |path| {
+            path.metadata()?.created()
+        })
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "Available");
-        assert!(collect_rows(&[unavailable], true).is_err());
+        assert!(collect_rows(&[unavailable], true, |path| path.metadata()?.created()).is_err());
     }
 }
