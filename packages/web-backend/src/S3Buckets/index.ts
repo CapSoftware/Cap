@@ -6,7 +6,7 @@ import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
-import { createCloudFrontSignedUrl } from "./CloudFrontSignedUrl.ts";
+import { createCloudFrontSignedUrl } from "./cloudfront-signed-url.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";

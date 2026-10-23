@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createCloudFrontSignedUrl,
 	getCloudFrontObjectUrl,
-} from "../../../../packages/web-backend/src/S3Buckets/CloudFrontSignedUrl";
+} from "../../../../packages/web-backend/src/S3Buckets/cloudfront-signed-url";
 
 const { privateKey } = generateKeyPairSync("rsa", {
 	modulusLength: 2048,
