@@ -466,10 +466,11 @@ pub fn quit(cx: &mut App) {
     }
     let phase = session.read(cx).phase;
     let ui_cleanup_pending = app_windows::clean_capture_owned(cx);
+    let finishing = ui_cleanup_pending || crate::recording::studio_thumbnails_pending();
     let Some((generation, action)) = cx
         .global_mut::<QuitCoordinator>()
         .gate
-        .request(quit_phase(phase, ui_cleanup_pending))
+        .request(quit_phase(phase, finishing))
     else {
         return;
     };
@@ -495,9 +496,23 @@ pub fn quit(cx: &mut App) {
     }
 }
 
+pub(crate) fn recheck_pending_quit(cx: &mut App) {
+    let Some(generation) = cx
+        .try_global::<QuitCoordinator>()
+        .and_then(|coordinator| coordinator.gate.pending)
+        .map(|(generation, _)| generation)
+    else {
+        return;
+    };
+    advance_pending_quit(generation, false, cx);
+}
+
 fn advance_pending_quit(generation: u64, timed_out: bool, cx: &mut App) {
     let session = RecordingSession::global(cx);
-    let phase = quit_phase(session.read(cx).phase, app_windows::clean_capture_owned(cx));
+    let phase = quit_phase(
+        session.read(cx).phase,
+        app_windows::clean_capture_owned(cx) || crate::recording::studio_thumbnails_pending(),
+    );
     let failed = session.read(cx).error.is_some();
     let action = cx
         .global_mut::<QuitCoordinator>()
