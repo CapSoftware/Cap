@@ -141,6 +141,12 @@ export function createPermissionsQuery() {
 	}));
 }
 
+export const getEditorRecordingTarget = queryOptions({
+	queryKey: ["editorRecordingTarget"] as const,
+	queryFn: () => commands.getEditorRecordingTarget(),
+	staleTime: Number.POSITIVE_INFINITY,
+});
+
 export const isSystemAudioSupported = queryOptions({
 	queryKey: ["systemAudioSupported"] as const,
 	queryFn: () => commands.isSystemAudioCaptureSupported(),
@@ -149,7 +155,7 @@ export const isSystemAudioSupported = queryOptions({
 
 type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
 type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
-type RecordingTargetModeSource = "main" | "editor" | "editorRecording" | null;
+type RecordingTargetModeSource = "main" | null;
 /**
  * Why the target picker was last dismissed. Written in the same `setOptions`
  * call that sets `targetMode: null`, so it reaches other webviews atomically
@@ -164,6 +170,19 @@ export type TargetModeDismissal =
 	| "screenshot"
 	| "superseded"
 	| "cancelled";
+
+function isStoredCameraId(value: unknown): value is DeviceOrModelID | null {
+	if (value === null) return true;
+	if (typeof value !== "object" || Object.keys(value).length !== 1)
+		return false;
+	if ("DeviceID" in value) {
+		return typeof value.DeviceID === "string" && value.DeviceID.length > 0;
+	}
+	if ("ModelID" in value) {
+		return typeof value.ModelID === "string" && value.ModelID.includes(":");
+	}
+	return false;
+}
 
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
@@ -187,8 +206,37 @@ export function createOptionsQuery() {
 		organizationId: null,
 	});
 
+	let microphoneRevision = 0;
+	let cameraRevision = 0;
+	const markInputChanges = (update: unknown) => {
+		if (
+			update === "micName" ||
+			(typeof update === "object" && update !== null && "micName" in update)
+		)
+			microphoneRevision++;
+		if (
+			update === "cameraID" ||
+			(typeof update === "object" && update !== null && "cameraID" in update)
+		)
+			cameraRevision++;
+	};
 	createEventListener(window, "storage", (e) => {
-		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
+		if (e.key === PERSIST_KEY) {
+			const update: unknown = JSON.parse(e.newValue ?? "{}");
+			if (typeof update === "object" && update !== null) {
+				const options =
+					"cameraID" in update
+						? {
+								...update,
+								cameraID: isStoredCameraId(update.cameraID)
+									? update.cameraID
+									: null,
+							}
+						: update;
+				markInputChanges(options);
+				_setState(options);
+			}
+		}
 	});
 
 	let initialized = false;
@@ -198,11 +246,15 @@ export function createOptionsQuery() {
 			if (data?.target) {
 				_setState("captureTarget", data.target);
 			}
-			if (data?.micName !== undefined) {
+			if (data?.micName !== undefined && microphoneRevision === 0) {
 				_setState("micName", data.micName);
 			}
-			if (data?.cameraId !== undefined) {
-				_setState("cameraID", data.cameraId);
+			if (
+				data?.cameraId !== undefined &&
+				cameraRevision === 0 &&
+				isStoredCameraId(data.cameraId)
+			) {
+				_setState("cameraID", reconcile(data.cameraId));
 			}
 			if (data?.mode && data.mode !== _state.mode) {
 				_setState("mode", data.mode);
@@ -242,8 +294,33 @@ export function createOptionsQuery() {
 	const [state, setState] = makePersisted([_state, _setState], {
 		name: PERSIST_KEY,
 	});
+	if (state.cameraID !== undefined && !isStoredCameraId(state.cameraID)) {
+		setState("cameraID", null);
+	}
 
-	return { rawOptions: state, setOptions: setState };
+	const setOptions = new Proxy(setState, {
+		apply(target, thisArg, args) {
+			markInputChanges(args[0]);
+			return Reflect.apply(target, thisArg, args);
+		},
+	});
+	return { rawOptions: state, setOptions, getCameraRevision: () => cameraRevision };
+}
+
+export function createCleanCaptureQuery() {
+	const query = createQuery(() => ({
+		queryKey: ["cleanCapture"] as const,
+		queryFn: () => commands.getCleanCaptureState(),
+		refetchOnWindowFocus: true,
+	}));
+	createQueryInvalidate(query, "currentRecordingChanged");
+	return query;
+}
+
+export async function revealRecordingWindow(generation?: number) {
+	const currentGeneration =
+		generation ?? (await commands.getCleanCaptureState()).generation;
+	return commands.revealCaptureWindow(currentGeneration, null);
 }
 
 export function createCurrentRecordingQuery() {
@@ -261,7 +338,8 @@ export function createLicenseQuery() {
 			const settings = await generalSettingsStore.get();
 			const auth = await authStore.get();
 
-			if (auth?.plan?.upgraded) return { type: "pro" as const, ...auth.plan };
+			if (auth?.plan?.upgraded || auth?.plan?.manual)
+				return { type: "pro" as const, ...auth.plan };
 			if (settings?.commercialLicense)
 				return {
 					type: "commercial" as const,
@@ -285,6 +363,29 @@ export function createLicenseQuery() {
 	return query;
 }
 
+function inputRequestWasSuperseded(error: unknown) {
+	return String(error).includes("selection was superseded by a newer request");
+}
+
+export function createMicrophoneMutation() {
+	const { setOptions, rawOptions } = useRecordingOptions();
+	return useMutation(() => ({
+		mutationFn: async (name: string | null) => {
+			setOptions("micName", name);
+			try {
+				await commands.setMicInput(name);
+			} catch (error) {
+				if (
+					(rawOptions.micName ?? null) !== name ||
+					inputRequestWasSuperseded(error)
+				)
+					return;
+				throw error;
+			}
+		},
+	}));
+}
+
 export function createCameraMutation() {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
@@ -292,36 +393,23 @@ export function createCameraMutation() {
 		model: DeviceOrModelID | null,
 		skipCameraWindow?: boolean,
 	) => {
-		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
 		setOptions("cameraID", reconcile(model));
-		await commands
-			.setCameraInput(model, skipCameraWindow ?? null)
-			.catch(async (e) => {
-				const message =
-					typeof e === "string"
-						? e
-						: e instanceof Error
-							? e.message
-							: String(e);
+		try {
+			await commands.setCameraInput(model, skipCameraWindow ?? null);
+		} catch (error) {
+			if (
+				JSON.stringify(rawOptions.cameraID ?? null) !== JSON.stringify(model) ||
+				inputRequestWasSuperseded(error)
+			)
+				return;
+			throw error;
+		}
 
-				if (
-					message.includes("DeviceNotFound") ||
-					message.includes("CameraTimeout") ||
-					message.includes("Failed to initialize camera")
-				) {
-					setOptions("cameraID", null);
-					console.warn("Selected camera is unavailable.");
-					return;
-				}
-
-				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-					setOptions("cameraID", null);
-				} else setOptions("cameraID", reconcile(before));
-
-				throw e;
-			});
-
-		if (model && !skipCameraWindow) {
+		if (
+			model &&
+			!skipCameraWindow &&
+			JSON.stringify(rawOptions.cameraID) === JSON.stringify(model)
+		) {
 			getCurrentWindow().setFocus();
 		}
 	};

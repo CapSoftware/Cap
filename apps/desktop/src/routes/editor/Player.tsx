@@ -1,14 +1,23 @@
-import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListener } from "@solid-primitives/event-listener";
 import { debounce } from "@solid-primitives/scheduled";
 import { Menu } from "@tauri-apps/api/menu";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { createEffect, createSignal, onMount, Show } from "solid-js";
-
+import {
+	createEffect,
+	createSignal,
+	For,
+	on,
+	onMount,
+	Show,
+	untrack,
+} from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
@@ -18,31 +27,31 @@ import {
 import { CaptionOverlay } from "./CaptionOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
-import {
-	type EditorPreviewQuality,
-	FPS,
-	serializeProjectConfiguration,
-	useEditorContext,
-} from "./context";
+import { type EditorPreviewQuality, FPS, useEditorContext } from "./context";
 import { FrameButton } from "./FrameButton";
+import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
+import { usePreparingEditor } from "./preparing-editor-context";
+import { PreparingFrame } from "./preparing-frame";
+import {
+	createPreviewBoundsReaction,
+	createPreviewBoundsUpdater,
+} from "./preview-bounds";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
-import {
-	EditorButton,
-	MenuItem,
-	MenuItemList,
-	PopperContent,
-	Slider,
-	topLeftAnimateClasses,
-} from "./ui";
+import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
-export function PlayerContent() {
+export function PlayerContent(props: { compactness?: number }) {
 	const {
+		previewStyle,
+		selectedStyle,
+		toggleStyleGroup,
+		styleScopeToken,
 		project,
+		flushProjectConfig,
 		editorInstance,
 		setDialog,
 		totalDuration,
@@ -53,7 +62,31 @@ export function PlayerContent() {
 		previewResolutionBase,
 		previewQuality,
 		setPreviewQuality,
+		playbackIntent,
+		requestHandoffPlayback,
+		handoffPlaybackPending,
 	} = useEditorContext();
+
+	let panelRef: HTMLDivElement | undefined;
+	const [panelHovered, setPanelHovered] = createSignal(false);
+	const [previewPointerDown, setPreviewPointerDown] = createSignal(false);
+
+	createEventListener(window, "mouseup", (event) => {
+		if (event.button !== 0 || !previewPointerDown()) return;
+		const bounds = panelRef?.getBoundingClientRect();
+		setPanelHovered(
+			!!bounds &&
+				event.clientX >= bounds.left &&
+				event.clientX < bounds.right &&
+				event.clientY >= bounds.top &&
+				event.clientY < bounds.bottom,
+		);
+		setPreviewPointerDown(false);
+	});
+	createEventListener(window, "blur", () => {
+		setPanelHovered(false);
+		setPreviewPointerDown(false);
+	});
 
 	const previewOptions = [
 		{ label: "Full", value: "full" as EditorPreviewQuality },
@@ -108,6 +141,9 @@ export function PlayerContent() {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
+							camera3dSegments: [],
 							transitions: [],
 						}),
 						captionSegments: createCaptionTrackSegments(captionSegments),
@@ -130,9 +166,7 @@ export function PlayerContent() {
 
 				if (projectDidChange) {
 					setProject(updatedProject);
-					await commands.setProjectConfig(
-						serializeProjectConfiguration(updatedProject),
-					);
+					await flushProjectConfig();
 				}
 			}
 		}
@@ -158,20 +192,34 @@ export function PlayerContent() {
 	};
 
 	const cropDialogHandler = async () => {
+		const background = selectedStyle()
+			? (selectedStyle()?.overrides.background ?? previewStyle().background)
+			: project.background;
+		if (selectedStyle() && !selectedStyle()?.overrides.background)
+			toggleStyleGroup("background", true);
+		const styleTarget = editorState.styleEditIndex;
+		const scopeToken = styleScopeToken();
 		const display = editorInstance.recordings.segments[0].display;
 		setDialog({
 			open: true,
 			type: "crop",
+			styleTarget,
+			scopeToken,
 			position: {
-				...(project.background.crop?.position ?? { x: 0, y: 0 }),
+				...(background.crop?.position ?? { x: 0, y: 0 }),
 			},
 			size: {
-				...(project.background.crop?.size ?? {
+				...(background.crop?.size ?? {
 					x: display.width,
 					y: display.height,
 				}),
 			},
 		});
+		const pending = requestHandoffPlayback(false);
+		if (pending) {
+			await pending;
+			return;
+		}
 		await commands.stopPlayback();
 		setEditorState("playing", false);
 	};
@@ -179,7 +227,7 @@ export function PlayerContent() {
 	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
 		if (quality === previewQuality()) return;
 
-		const wasPlaying = editorState.playing;
+		const wasPlaying = playbackIntent();
 		const currentFrame = Math.max(
 			Math.floor(editorState.playbackTime * FPS),
 			0,
@@ -188,6 +236,11 @@ export function PlayerContent() {
 		setPreviewQuality(quality);
 
 		if (!wasPlaying) return;
+		const pending = requestHandoffPlayback(true);
+		if (pending) {
+			await pending;
+			return;
+		}
 
 		try {
 			await commands.stopPlayback();
@@ -202,13 +255,23 @@ export function PlayerContent() {
 	};
 
 	createEffect(() => {
-		if (isAtEnd() && editorState.playing) {
+		if (isAtEnd() && playbackIntent()) {
+			const pending = requestHandoffPlayback(false);
+			if (pending) return;
 			commands.stopPlayback();
 			setEditorState("playing", false);
 		}
 	});
 
 	const handlePlayPauseClick = async () => {
+		const pending = requestHandoffPlayback(
+			isAtEnd() || !playbackIntent(),
+			isAtEnd() ? 0 : undefined,
+		);
+		if (pending) {
+			await pending;
+			return;
+		}
 		try {
 			if (isAtEnd()) {
 				await commands.stopPlayback();
@@ -230,6 +293,21 @@ export function PlayerContent() {
 			setEditorState("playing", false);
 		}
 	};
+
+	if (import.meta.env.DEV) {
+		createTauriEventListener<boolean>(
+			{
+				listen: (callback) =>
+					getCurrentWebviewWindow().listen(
+						"cap-dev-set-editor-playback",
+						callback,
+					),
+			},
+			(playing) => {
+				if (playbackIntent() !== playing) void handlePlayPauseClick();
+			},
+		);
+	}
 
 	// Register keyboard shortcuts in one place
 	useEditorShortcuts(() => {
@@ -273,10 +351,11 @@ export function PlayerContent() {
 			handler: async () => {
 				const prevTime = editorState.previewTime;
 
-				if (!editorState.playing) {
+				if (!playbackIntent()) {
 					if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-					await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+					if (!handoffPlaybackPending())
+						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
 				}
 
 				await handlePlayPauseClick();
@@ -285,126 +364,136 @@ export function PlayerContent() {
 	]);
 
 	return (
-		<div class="flex flex-col flex-1 min-h-0">
-			<div class="flex items-center justify-between gap-3 p-3">
-				<div class="flex items-center gap-3">
-					<AspectRatioSelect />
+		<div
+			ref={panelRef}
+			class="flex flex-col flex-1 min-h-0"
+			style={{
+				"--preview-controls-opacity":
+					panelHovered() || previewPointerDown() ? 1 : 0,
+			}}
+			onMouseEnter={() => setPanelHovered(true)}
+			onMouseLeave={() => setPanelHovered(false)}
+		>
+			<div
+				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3"
+				style={{ height: `${44 - 4 * (props.compactness ?? 0)}px` }}
+			>
+				<div class="flex flex-1 gap-0.5 items-center min-w-fit">
+					<Show when={!selectedStyle()}>
+						<AspectRatioSelect />
+					</Show>
 					<EditorButton
+						variant="text"
 						tooltipText="Crop Video"
 						onClick={cropDialogHandler}
-						leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
+						leftIcon={<IconCapCrop />}
 					>
-						Crop
+						<span class="max-[1200px]:hidden">Crop</span>
 					</EditorButton>
 					<FrameButton />
 				</div>
-				<div class="flex items-center gap-2">
-					<span class="text-xs font-medium text-gray-11">Preview quality</span>
-					<KSelect<{ label: string; value: EditorPreviewQuality }>
-						options={previewOptions}
-						optionValue="value"
-						optionTextValue="label"
-						value={previewOptions.find(
-							(option) => option.value === previewQuality(),
-						)}
-						onChange={(next) => {
-							if (next) handlePreviewQualityChange(next.value);
-						}}
-						disallowEmptySelection
-						itemComponent={(props) => (
-							<MenuItem<typeof KSelect.Item>
-								as={KSelect.Item}
-								item={props.item}
-							>
-								<KSelect.ItemLabel class="flex-1">
-									{props.item.rawValue.label}
-								</KSelect.ItemLabel>
-								<KSelect.ItemIndicator class="ml-auto text-blue-9">
-									<IconCapCircleCheck />
-								</KSelect.ItemIndicator>
-							</MenuItem>
-						)}
+				<div class="flex flex-row flex-none gap-2 items-center">
+					<span class="text-xs text-ed-text-2">Preview</span>
+					<div
+						role="group"
+						aria-label="Preview quality"
+						class="inline-flex gap-0.5 p-0.5 rounded-lg shrink-0 bg-ed-ctl"
 					>
-						<KSelect.Trigger class="flex items-center gap-2 h-9 px-3 rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm text-gray-12">
-							<KSelect.Value<{
-								label: string;
-								value: EditorPreviewQuality;
-							}> class="flex-1 text-left truncate">
-								{(state) =>
-									state.selectedOption()?.label ?? "Select preview quality"
-								}
-							</KSelect.Value>
-							<KSelect.Icon>
-								<IconCapChevronDown class="size-4 text-gray-11" />
-							</KSelect.Icon>
-						</KSelect.Trigger>
-						<KSelect.Portal>
-							<PopperContent<typeof KSelect.Content>
-								as={KSelect.Content}
-								class={cx(topLeftAnimateClasses, "w-44")}
-							>
-								<MenuItemList<typeof KSelect.Listbox>
-									as={KSelect.Listbox}
-									class="max-h-40"
-								/>
-							</PopperContent>
-						</KSelect.Portal>
-					</KSelect>
+						<For each={previewOptions}>
+							{(option) => {
+								const selected = () => previewQuality() === option.value;
+								return (
+									<button
+										type="button"
+										title={`${option.label} preview quality`}
+										aria-label={`${option.label} preview quality`}
+										aria-pressed={selected()}
+										onClick={() => handlePreviewQualityChange(option.value)}
+										class={cx(
+											"flex items-center px-2.5 h-6 text-xs font-medium rounded-md transition-colors duration-100",
+											selected()
+												? "bg-ed-card text-ed-text-1 shadow-[0_1px_2px_rgba(0,0,0,0.12),0_0_0_0.5px_rgba(0,0,0,0.06)] dark:bg-white/12 dark:shadow-none"
+												: "text-ed-text-2 hover:text-ed-text-1",
+										)}
+									>
+										{option.label}
+									</button>
+								);
+							}}
+						</For>
+					</div>
 				</div>
 			</div>
-			<PreviewCanvas />
-			<div class="relative flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
-				<div class="flex-1">
+			<PreviewCanvas
+				onPreviewMouseDown={(event) => {
+					if (event.button === 0) setPreviewPointerDown(true);
+				}}
+			/>
+			<div
+				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3.5"
+				style={{ height: `${48 - 4 * (props.compactness ?? 0)}px` }}
+			>
+				<div class="flex flex-1 items-center min-w-fit whitespace-nowrap">
 					<Time
-						class="text-gray-12"
+						class="font-medium text-ed-text-1"
 						seconds={Math.max(
 							editorState.previewTime ?? editorState.playbackTime,
 							0,
 						)}
 					/>
-					<span class="text-gray-11 text-[0.875rem] tabular-nums"> / </span>
+					<span class="text-[13px] tabular-nums text-ed-text-3"> / </span>
 					<Time seconds={totalDuration()} />
 				</div>
-				<div class="flex flex-row items-center justify-center text-gray-11 gap-8 text-[0.875rem]">
+				<div class="flex flex-row flex-none gap-3.5 items-center">
 					<button
 						type="button"
-						class="transition-opacity hover:opacity-70 will-change-[opacity]"
+						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
 						onClick={async () => {
+							const pending = requestHandoffPlayback(false, 0);
+							if (pending) {
+								editorState.timeline.transform.setPosition(0);
+								await pending;
+								return;
+							}
 							await commands.stopPlayback();
 							setEditorState("playing", false);
 							setEditorState("playbackTime", 0);
 							editorState.timeline.transform.setPosition(0);
 						}}
 					>
-						<IconCapPrev class="text-gray-12 size-3" />
+						<IconCapPrev class="size-3.5" />
 					</button>
 					<Tooltip kbd={["Space"]} content="Play/Pause video">
 						<button
 							type="button"
 							onClick={handlePlayPauseClick}
-							class="flex justify-center items-center rounded-full border border-gray-300 transition-colors bg-gray-3 hover:bg-gray-4 hover:text-black size-9"
+							class="flex justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
 						>
-							{!editorState.playing || isAtEnd() ? (
-								<IconCapPlay class="text-gray-12 size-3" />
+							{!playbackIntent() || isAtEnd() ? (
+								<IconCapPlay class="size-3" />
 							) : (
-								<IconCapPause class="text-gray-12 size-3" />
+								<IconCapPause class="size-3" />
 							)}
 						</button>
 					</Tooltip>
 					<button
 						type="button"
-						class="transition-opacity hover:opacity-70 will-change-[opacity]"
+						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
 						onClick={async () => {
+							const pending = requestHandoffPlayback(false, totalDuration());
+							if (pending) {
+								await pending;
+								return;
+							}
 							await commands.stopPlayback();
 							setEditorState("playing", false);
 							setEditorState("playbackTime", totalDuration());
 						}}
 					>
-						<IconCapNext class="text-gray-12 size-3" />
+						<IconCapNext class="size-3.5" />
 					</button>
 				</div>
-				<div class="flex flex-row flex-1 gap-4 justify-end items-center">
-					<div class="flex-1" />
+				<div class="flex flex-row flex-1 gap-0.5 justify-end items-center min-w-fit">
 					<EditorButton<typeof KToggleButton>
 						tooltipText="Toggle Split"
 						kbd={["S"]}
@@ -414,68 +503,60 @@ export function PlayerContent() {
 						}
 						as={KToggleButton}
 						variant="danger"
-						leftIcon={
-							<IconCapScissors
-								class={cx(
-									editorState.timeline.interactMode === "split"
-										? "text-white"
-										: "text-gray-12",
-								)}
-							/>
-						}
+						leftIcon={<IconCapScissors />}
 					/>
-					<div class="w-px h-8 rounded-full bg-gray-4" />
-					<Tooltip kbd={["meta", "-"]} content="Zoom out">
-						<IconCapZoomOut
+					<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
+					<div class="flex flex-row gap-0.5 items-center" title={zoomHint()}>
+						<EditorButton
+							tooltipText="Zoom out"
+							kbd={["meta", "-"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
 									editorState.timeline.transform.zoom * 1.1,
 									editorState.playbackTime,
 								);
 							}}
-							class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+							leftIcon={<IconCapZoomOut />}
 						/>
-					</Tooltip>
-					<Tooltip kbd={["meta", "+"]} content="Zoom in">
-						<IconCapZoomIn
+						<Slider
+							class="w-18 shrink-0"
+							thumbClass="size-3! -top-[4.5px]!"
+							minValue={0}
+							maxValue={1}
+							step={0.001}
+							value={[
+								Math.min(
+									Math.max(
+										1 - editorState.timeline.transform.zoom / zoomOutLimit(),
+										0,
+									),
+									1,
+								),
+							]}
+							onChange={([v]) => {
+								editorState.timeline.transform.updateZoom(
+									(1 - v) * zoomOutLimit(),
+									editorState.playbackTime,
+								);
+							}}
+							formatTooltip={() =>
+								`${editorState.timeline.transform.zoom.toFixed(
+									0,
+								)} seconds visible`
+							}
+						/>
+						<EditorButton
+							tooltipText="Zoom in"
+							kbd={["meta", "+"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
 									editorState.timeline.transform.zoom / 1.1,
 									editorState.playbackTime,
 								);
 							}}
-							class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
+							leftIcon={<IconCapZoomIn />}
 						/>
-					</Tooltip>
-					<Slider
-						class="w-24"
-						minValue={0}
-						maxValue={1}
-						step={0.001}
-						value={[
-							Math.min(
-								Math.max(
-									1 - editorState.timeline.transform.zoom / zoomOutLimit(),
-									0,
-								),
-								1,
-							),
-						]}
-						onChange={([v]) => {
-							editorState.timeline.transform.updateZoom(
-								(1 - v) * zoomOutLimit(),
-								editorState.playbackTime,
-							);
-						}}
-						formatTooltip={() =>
-							`${editorState.timeline.transform.zoom.toFixed(
-								0,
-							)} seconds visible`
-						}
-					/>
-				</div>
-				<div class="absolute right-2 bottom-1 text-[11px] leading-none text-right text-gray-9 pointer-events-none whitespace-nowrap">
-					{zoomHint()}
+					</div>
 				</div>
 			</div>
 		</div>
@@ -494,11 +575,30 @@ const gridStyle = {
 	"background-color": "rgba(200,200,200,0.08)",
 };
 
-function PreviewCanvas() {
-	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
-		useEditorContext();
+function PreviewCanvas(props: {
+	onPreviewMouseDown: (event: MouseEvent) => void;
+}) {
+	const preparing = usePreparingEditor();
+	const {
+		latestFrame,
+		canvasControls,
+		performanceMode,
+		setPerformanceMode,
+		editorState,
+	} = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+	createEffect(
+		on(
+			() => editorState.playing,
+			(playing) => {
+				preparing?.setOrdinaryAdvancing(
+					playing,
+					Math.max(Math.floor(editorState.playbackTime * FPS), 0),
+				);
+			},
+		),
+	);
 
 	const handleContextMenu = async (e: MouseEvent) => {
 		e.preventDefault();
@@ -514,13 +614,21 @@ function PreviewCanvas() {
 		menu.popup();
 	};
 
-	const canvasInitializedRef = { current: false };
+	let initializedCanvas: HTMLCanvasElement | undefined;
 	const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
 		null,
 	);
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
+	createEventListener(
+		canvasContainerRef,
+		"mousedown",
+		props.onPreviewMouseDown,
+		{
+			capture: true,
+		},
+	);
 	const containerBounds = createElementBounds(canvasContainerRef);
 
 	const [debouncedBounds, setDebouncedBounds] = createSignal({
@@ -533,14 +641,33 @@ function PreviewCanvas() {
 		100,
 	);
 
-	createEffect(() => {
-		const width = containerBounds.width ?? 0;
-		const height = containerBounds.height ?? 0;
-		if (debouncedBounds().width === 0 && debouncedBounds().height === 0) {
-			setDebouncedBounds({ width, height });
-		} else {
-			updateDebouncedBounds(width, height);
-		}
+	const boundsUpdater = createPreviewBoundsUpdater({
+		current: () => untrack(debouncedBounds),
+		measure: () => {
+			const container = canvasContainerRef();
+			if (!container?.isConnected) return;
+			const { width, height } = container.getBoundingClientRect();
+			return { width, height, connected: container.isConnected };
+		},
+		commit: setDebouncedBounds,
+		defer: ({ width, height }) => updateDebouncedBounds(width, height),
+		cancel: updateDebouncedBounds.clear,
+		requestFrame: (callback) => requestAnimationFrame(callback),
+		cancelFrame: (id) => cancelAnimationFrame(id),
+	});
+
+	// Only track container-size and frame-availability changes. Reading debouncedBounds()
+	// reactively here would resubscribe the effect to its own debounced write:
+	// the trailing setter rewrites debouncedBounds with a fresh object every
+	// 100ms, which would re-run this effect and re-arm the timer forever,
+	// spinning the whole preview graph at ~10Hz while the editor sits idle.
+	const hasFrame = createPreviewBoundsReaction({
+		bounds: () => ({
+			width: containerBounds.width ?? 0,
+			height: containerBounds.height ?? 0,
+		}),
+		hasFrame: () => !!latestFrame(),
+		updater: boundsUpdater,
 	});
 
 	createEffect(() => {
@@ -549,20 +676,20 @@ function PreviewCanvas() {
 		console.warn("[Player] Canvas init effect", {
 			hasCanvas: !!canvas,
 			hasControls: !!controls,
-			alreadyInit: canvasInitializedRef.current,
+			alreadyInit: initializedCanvas === canvas,
 		});
-		if (canvasInitializedRef.current || !canvas || !controls) return;
+		if (!canvas || !controls || initializedCanvas === canvas) return;
 
 		console.warn("[Player] Initializing canvas", {
 			canvasId: canvas.id,
 			isConnected: canvas.isConnected,
 		});
 		controls.initDirectCanvas(canvas);
-		canvasInitializedRef.current = true;
+		initializedCanvas = canvas;
 		console.warn("[Player] Canvas initialized successfully");
 	});
 
-	const padding = 4;
+	const padding = 16;
 	const frameWidth = () => latestFrame()?.width ?? 1920;
 	const frameHeight = () => latestFrame()?.height ?? 1080;
 
@@ -599,19 +726,32 @@ function PreviewCanvas() {
 		return { width, height };
 	};
 
-	const hasFrame = () => !!latestFrame();
+	createEffect(() => {
+		const frame = latestFrame();
+		if (frame && hasRenderedFrame()) {
+			preparing?.acknowledgeOrdinaryFrame(frame, size());
+		}
+	});
 
 	return (
 		<div
 			ref={setCanvasContainerRef}
-			class="relative flex-1 justify-center items-center"
+			class="relative flex-1 justify-center items-center min-h-0 bg-ed-card"
 			style={{ contain: "layout style" }}
 			onContextMenu={handleContextMenu}
 		>
 			<CaptionsRegenerateBadge class="absolute top-3 right-3 z-20" />
+			<Show when={preparing?.model.rendered() && !preparing?.ordinaryReady()}>
+				<div class="absolute inset-0 flex items-center justify-center p-4 z-10 pointer-events-none">
+					<PreparingFrame fallback={false} />
+				</div>
+			</Show>
 			<div
-				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
-				style={{ visibility: hasFrame() ? "visible" : "hidden" }}
+				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full transition-opacity duration-300 ease-out motion-reduce:transition-none"
+				style={{
+					visibility: hasFrame() ? "visible" : "hidden",
+					opacity: preparing?.model.rendered() || hasRenderedFrame() ? 1 : 0,
+				}}
 			>
 				<div
 					class="relative"
@@ -621,22 +761,30 @@ function PreviewCanvas() {
 						contain: "strict",
 					}}
 				>
-					<canvas
-						style={{
-							width: `${size().width}px`,
-							height: `${size().height}px`,
-							"image-rendering": "auto",
-							"background-color": "#000000",
-							...(hasRenderedFrame() ? gridStyle : {}),
-						}}
-						ref={setCanvasRef}
-						id="canvas"
-					/>
+					<Show when={canvasControls()} keyed>
+						{(_controls) => (
+							<canvas
+								class="rounded-md shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35),0_0_0_0.5px_rgba(0,0,0,0.12)]"
+								style={{
+									width: `${size().width}px`,
+									height: `${size().height}px`,
+									"image-rendering": "auto",
+									"background-color": "#000000",
+									...(hasRenderedFrame() ? gridStyle : {}),
+								}}
+								ref={setCanvasRef}
+								id="canvas"
+							/>
+						)}
+					</Show>
 					<Show when={hasFrame()}>
 						<CanvasElementsOverlay size={size()} />
-						<MaskOverlay size={size()} />
+						<div class="absolute inset-0 isolate pointer-events-none">
+							<MaskOverlay size={size()} />
+							<ImageOverlay size={size()} />
+							<TextOverlay size={size()} />
+						</div>
 						<CaptionOverlay size={size()} />
-						<TextOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
@@ -649,7 +797,7 @@ function PreviewCanvas() {
 
 function Time(props: { seconds: number; fps?: number; class?: string }) {
 	return (
-		<span class={cx("text-gray-11 text-sm tabular-nums", props.class)}>
+		<span class={cx("text-[13px] tabular-nums text-ed-text-3", props.class)}>
 			{formatTime(props.seconds, props.fps ?? FPS)}
 		</span>
 	);

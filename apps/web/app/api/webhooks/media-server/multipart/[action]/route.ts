@@ -7,6 +7,12 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getProcessingState } from "@/lib/desktop-recording-jobs";
+import { getDesktopRecordingOutputKey } from "@/lib/desktop-recording-source";
+import {
+	LOOM_IMPORT_MAX_BYTES,
+	LOOM_IMPORT_PART_BYTES,
+} from "@/lib/loom-import-upload";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -14,6 +20,15 @@ const baseSchema = z.object({
 	videoId: z.string().min(1),
 	key: z.string().min(1),
 	uploadId: z.string().min(1),
+	loomImportAttemptId: z.string().min(1).max(200).optional(),
+	generation: z
+		.string()
+		.regex(/^[a-zA-Z0-9_-]{1,64}$/)
+		.optional(),
+	attemptId: z
+		.string()
+		.regex(/^[a-zA-Z0-9_-]{1,64}$/)
+		.optional(),
 });
 
 const signPartSchema = baseSchema.extend({
@@ -50,7 +65,10 @@ function isAuthorized(request: NextRequest) {
 	);
 }
 
-async function getMultipartContext(payload: MultipartPayload) {
+async function getMultipartContext(
+	payload: MultipartPayload,
+	allowExpired = false,
+) {
 	const [video] = await db()
 		.select()
 		.from(videos)
@@ -65,14 +83,77 @@ async function getMultipartContext(payload: MultipartPayload) {
 		};
 	}
 
-	const expectedKey = `${video.ownerId}/${video.id}/result.mp4`;
-	if (payload.key !== expectedKey) {
+	const fenced =
+		payload.generation !== undefined || payload.attemptId !== undefined;
+	const loom =
+		payload.loomImportAttemptId !== undefined ||
+		video.metadata?.loomImportUpload !== undefined;
+	if (loom) {
+		const receipt = video.metadata?.loomImportUpload;
+		const upload = [receipt?.source, receipt?.output].find(
+			(value) =>
+				value?.key === payload.key && value.uploadId === payload.uploadId,
+		);
+		if (
+			fenced ||
+			!receipt ||
+			receipt.attemptId !== payload.loomImportAttemptId ||
+			(video.metadata?.loomImportRun &&
+				!receipt.attemptId.startsWith(
+					`${video.metadata.loomImportRun.runId}:`,
+				)) ||
+			receipt.ownerId !== video.ownerId ||
+			receipt.organizationId !== video.orgId ||
+			!upload ||
+			!payload.key.startsWith(`${video.ownerId}/${video.id}/`)
+		) {
+			return {
+				response: NextResponse.json(
+					{ error: "Loom import upload is no longer current" },
+					{ status: 409 },
+				),
+			};
+		}
+	}
+	const expectedKey =
+		fenced && payload.generation && payload.attemptId
+			? getDesktopRecordingOutputKey(
+					video.ownerId,
+					video.id,
+					payload.generation,
+					payload.attemptId,
+				)
+			: `${video.ownerId}/${video.id}/result.mp4`;
+	if (
+		(!loom && payload.key !== expectedKey) ||
+		(fenced && (!payload.generation || !payload.attemptId))
+	) {
 		return {
 			response: NextResponse.json(
 				{ error: "Invalid multipart upload key" },
 				{ status: 400 },
 			),
 		};
+	}
+	if (fenced && !allowExpired) {
+		const job = await getProcessingState({ videoId: video.id });
+		if (
+			!job ||
+			job.ownerId !== video.ownerId ||
+			job.state !== "processing" ||
+			!job.source ||
+			job.generation !== payload.generation ||
+			job.attemptId !== payload.attemptId ||
+			!job.leaseExpiresAt ||
+			job.leaseExpiresAt <= new Date()
+		) {
+			return {
+				response: NextResponse.json(
+					{ error: "Recording attempt is no longer active" },
+					{ status: 409 },
+				),
+			};
+		}
 	}
 
 	const [bucket] = await Storage.getAccessForVideo(
@@ -88,7 +169,7 @@ async function getMultipartContext(payload: MultipartPayload) {
 		};
 	}
 
-	return { bucket };
+	return { bucket, fenced, loom };
 }
 
 async function readJson(request: NextRequest) {
@@ -122,14 +203,32 @@ export async function POST(
 
 			const multipartContext = await getMultipartContext(payload.data);
 			if ("response" in multipartContext) return multipartContext.response;
+			if (
+				multipartContext.loom &&
+				(payload.data.partNumber >
+					Math.ceil(LOOM_IMPORT_MAX_BYTES / LOOM_IMPORT_PART_BYTES) ||
+					payload.data.contentLength > LOOM_IMPORT_PART_BYTES)
+			) {
+				return NextResponse.json(
+					{ error: "Loom imports are limited to 10 GB" },
+					{ status: 400 },
+				);
+			}
 
-			const url = await multipartContext.bucket.multipart
-				.getPresignedUploadPartUrl(
-					payload.data.key,
-					payload.data.uploadId,
-					payload.data.partNumber,
-				)
-				.pipe(runPromise);
+			const partArguments = [
+				payload.data.key,
+				payload.data.uploadId,
+				payload.data.partNumber,
+			] as const;
+			const url = await (multipartContext.loom
+				? multipartContext.bucket.multipart.getPresignedUploadPartUrl(
+						...partArguments,
+						{ ContentLength: payload.data.contentLength },
+					)
+				: multipartContext.bucket.multipart.getPresignedUploadPartUrl(
+						...partArguments,
+					)
+			).pipe(runPromise);
 
 			return NextResponse.json({ url });
 		}
@@ -145,6 +244,19 @@ export async function POST(
 
 			const multipartContext = await getMultipartContext(payload.data);
 			if ("response" in multipartContext) return multipartContext.response;
+			if (
+				multipartContext.loom &&
+				(payload.data.parts.length >
+					Math.ceil(LOOM_IMPORT_MAX_BYTES / LOOM_IMPORT_PART_BYTES) ||
+					payload.data.parts.reduce((size, part) => size + part.size, 0) >
+						LOOM_IMPORT_MAX_BYTES ||
+					payload.data.parts.some((part) => part.size > LOOM_IMPORT_PART_BYTES))
+			) {
+				return NextResponse.json(
+					{ error: "Loom imports are limited to 10 GB" },
+					{ status: 400 },
+				);
+			}
 
 			const parts = [...payload.data.parts]
 				.sort((a, b) => a.partNumber - b.partNumber)
@@ -152,14 +264,27 @@ export async function POST(
 					PartNumber: part.partNumber,
 					ETag: part.etag,
 				}));
+			if (parts.some((part, index) => part.PartNumber !== index + 1)) {
+				return NextResponse.json(
+					{ error: "Multipart parts must be contiguous and unique" },
+					{ status: 400 },
+				);
+			}
 
 			const result = await multipartContext.bucket.multipart
 				.complete(payload.data.key, payload.data.uploadId, {
 					MultipartUpload: { Parts: parts },
+					...(multipartContext.fenced || multipartContext.loom
+						? { IfNoneMatch: "*" }
+						: {}),
 				})
 				.pipe(runPromise);
 
-			return NextResponse.json({ success: true, location: result.Location });
+			return NextResponse.json({
+				success: true,
+				location: result.Location,
+				objectIdentity: result.ETag,
+			});
 		}
 
 		if (action === "abort") {
@@ -171,7 +296,7 @@ export async function POST(
 				);
 			}
 
-			const multipartContext = await getMultipartContext(payload.data);
+			const multipartContext = await getMultipartContext(payload.data, true);
 			if ("response" in multipartContext) return multipartContext.response;
 
 			await multipartContext.bucket.multipart

@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
+import { enqueueLoopsSync } from "@cap/database/loops/queue";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -49,7 +50,9 @@ export async function provisionOrganizationInvitee({
 		const userId = existingUser?.id ?? User.UserId.make(nanoId());
 
 		if (existingUser) {
-			const userUpdate: Partial<typeof users.$inferInsert> = {};
+			const userUpdate: Partial<typeof users.$inferInsert> = {
+				marketingOrigin: "teammate",
+			};
 
 			if (!existingUser.name) {
 				userUpdate.name = getProvisionedUserName(normalizedEmail);
@@ -68,12 +71,14 @@ export async function provisionOrganizationInvitee({
 			await tx.insert(users).values({
 				id: userId,
 				email: normalizedEmail,
+				marketingOrigin: "teammate",
 				name: getProvisionedUserName(normalizedEmail),
 				activeOrganizationId: organizationId,
 				defaultOrgId: organizationId,
 			});
 		}
 
+		await enqueueLoopsSync(tx, userId);
 		const [existingMember] = await tx
 			.select({
 				id: organizationMembers.id,

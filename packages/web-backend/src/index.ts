@@ -2,12 +2,12 @@ export * from "./AgentAuth.ts";
 export * from "./AgentManagement.ts";
 export * from "./Auth.ts";
 export * from "./Aws.ts";
+export * from "./Comments/CommentMediaToken.ts";
 export * from "./Database.ts";
 export * from "./Extension/index.ts";
 export { Folders } from "./Folders/index.ts";
 export { HttpLive } from "./Http/Live.ts";
 export { ImageUploads } from "./ImageUploads/index.ts";
-export * from "./Loom/index.ts";
 export { Organisations } from "./Organisations/index.ts";
 export { OrganisationsPolicy } from "./Organisations/OrganisationsPolicy.ts";
 export * from "./Rpcs.ts";
@@ -40,8 +40,10 @@ export {
 export { findScreenshotObjectKey, Videos } from "./Videos/index.ts";
 export {
 	buildCanView,
+	buildCanViewLoaded,
 	VideosPolicy,
 	type VideosPolicyDeps,
+	type ViewableVideo,
+	type ViewDecisionDeps,
 } from "./Videos/VideosPolicy.ts";
 export { VideosRepo } from "./Videos/VideosRepo.ts";
-export * as Workflows from "./Workflows.ts";

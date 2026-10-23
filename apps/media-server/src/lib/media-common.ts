@@ -32,6 +32,20 @@ export const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const mediaFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
+export function decodeThreadsFromEnv(
+	name: string,
+	fallback: number,
+	env: Record<string, string | undefined> = process.env,
+): string {
+	const raw = env[name]?.trim();
+	if (!raw) return String(fallback);
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < 0 || value > 64) {
+		return String(fallback);
+	}
+	return String(value);
+}
+
 export async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,
@@ -198,17 +212,29 @@ export function normalizeLocalPath(path: string): string {
 }
 
 export async function getSourceSize(path: string): Promise<number> {
-	try {
-		const url = new URL(path);
-		if (url.protocol === "http:" || url.protocol === "https:") {
-			const response = await mediaFetch(path, {
-				method: "HEAD",
-				signal: AbortSignal.timeout(10_000),
-			});
-			const contentLength = response.headers.get("content-length");
-			return contentLength ? Number.parseInt(contentLength, 10) || 0 : 0;
+	if (/^https?:\/\//i.test(path)) {
+		const response = await mediaFetch(path, {
+			headers: { Range: "bytes=0-0" },
+			signal: AbortSignal.timeout(10_000),
+		});
+		try {
+			const length =
+				response.status === 206
+					? response.headers
+							.get("content-range")
+							?.match(/^bytes 0-0\/(\d+)$/)?.[1]
+					: response.status === 200
+						? response.headers.get("content-length")
+						: undefined;
+			const size = Number(length);
+			if (!Number.isSafeInteger(size) || size <= 0) {
+				throw new Error("Media input size is unavailable");
+			}
+			return size;
+		} finally {
+			await response.body?.cancel().catch(() => {});
 		}
-	} catch {}
+	}
 
 	try {
 		return (await stat(normalizeLocalPath(path))).size;

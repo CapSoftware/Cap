@@ -108,4 +108,5 @@ pub enum PlaybackSkipReason {
 pub enum PlaybackRenderOutputFormat {
     Nv12,
     Rgba,
+    Bgra,
 }

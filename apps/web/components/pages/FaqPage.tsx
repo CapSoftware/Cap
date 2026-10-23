@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { PRICING } from "@/data/pricing";
 
 interface FaqItem {
 	title: string;
@@ -19,8 +20,7 @@ const faqContent: FaqItem[] = [
 	},
 	{
 		title: "How much does it cost?",
-		answer:
-			"Cap offers a free version for personal use. You can upgrade to Cap Pro for just $8.16/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.",
+		answer: `Cap offers a free version for personal use. You can upgrade to Cap Pro for just $${PRICING.pro.annualPerMonth}/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.`,
 	},
 	{
 		title: "Which platforms does Cap support?",
@@ -45,10 +45,19 @@ const faqContent: FaqItem[] = [
 	{
 		title: "Is Cap SOC 2 compliant?",
 		answer:
-			"Yes. Cap is SOC 2 Type II and ISO 27001 compliant. You can request our reports and view our security practices in Cap's Trust Portal.",
+			"Yes. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant. You can request our reports and view our security practices in Cap's Trust Portal.",
 		link: {
 			text: "Visit the Trust Portal",
 			href: "https://trust.cap.so",
+		},
+	},
+	{
+		title: "Is Cap HIPAA compliant?",
+		answer:
+			"Yes. Cap is fully HIPAA compliant. We sign Business Associate Agreements (BAAs) with organizations handling protected health information, and every vendor in Cap's production infrastructure is covered by a BAA. For even more control, you can bring your own storage or self-host Cap entirely.",
+		link: {
+			text: "Learn about HIPAA-compliant recording",
+			href: "/hipaa-compliant-screen-recording",
 		},
 	},
 	{

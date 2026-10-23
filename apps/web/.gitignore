@@ -10,6 +10,9 @@
 
 # next.js
 /.next/
+# isolated build checks (next build with a redirected distDir, so a check
+# can't clobber the live dev server's .next)
+/.next-buildcheck/
 /out/
 
 # production
@@ -33,7 +36,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-pnpm-lock.yaml
 
 # workflow devkit (generated)
 public/.well-known/workflow/

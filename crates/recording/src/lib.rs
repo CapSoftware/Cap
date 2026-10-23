@@ -1,4 +1,5 @@
 pub mod benchmark;
+pub mod camera_placement;
 mod capture_pipeline;
 pub mod cursor;
 pub mod defaults;
@@ -6,6 +7,7 @@ pub mod diagnostics;
 pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
+pub mod log_redaction;
 pub mod memory_profiling;
 mod output_pipeline;
 pub mod output_validation;
@@ -16,7 +18,12 @@ pub mod sources;
 pub mod studio_recording;
 pub mod sync_calibration;
 pub mod track_heal;
+pub mod upload_preparation;
+pub mod upload_resume;
+pub mod upload_verification;
 
+#[cfg(target_os = "linux")]
+pub use capture_pipeline::target_to_display_and_crop;
 pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -82,6 +89,9 @@ pub struct RecordingBaseInputs {
     pub shareable_content: Option<SendableShareableContent>,
     #[cfg(target_os = "macos")]
     pub excluded_windows: Vec<scap_targets::WindowId>,
+    /// Present when the pipeline is primed ahead of the start cue; capture is
+    /// held back until it is armed.
+    pub start_gate: Option<RecordingStartGate>,
 }
 
 #[cfg(target_os = "macos")]

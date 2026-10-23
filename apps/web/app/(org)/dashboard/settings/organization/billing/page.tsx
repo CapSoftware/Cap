@@ -2,6 +2,7 @@
 
 import { buildEnv } from "@cap/env";
 import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import Link from "next/link";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import {
 	canManageOrganizationBilling,
@@ -10,6 +11,7 @@ import {
 import { BillingSummaryCard } from "../components/BillingSummaryCard";
 import { MembersCard } from "../components/MembersCard";
 import { SeatManagementCard } from "../components/SeatManagementCard";
+import { SignedBaaCard } from "../components/SignedBaaCard";
 
 export default function BillingAndMembersPage() {
 	const { activeOrganization, user, setInviteDialogOpen } =
@@ -30,8 +32,31 @@ export default function BillingAndMembersPage() {
 				(canManageBilling ? (
 					<>
 						<BillingSummaryCard />
-						{activeOrganization?.hasActiveProSeatProvider && (
-							<SeatManagementCard />
+						{activeOrganization && (
+							<Card>
+								<CardHeader>
+									<CardTitle>SAML SSO invoices</CardTitle>
+									<CardDescription>
+										If your organization has an SSO subscription, open its
+										invoices from Security settings.
+									</CardDescription>
+								</CardHeader>
+								<Link
+									href={`/dashboard/settings/organization/security?organizationId=${encodeURIComponent(activeOrganization.organization.id)}`}
+									className="mt-3 inline-block text-sm font-medium underline"
+									prefetch={false}
+								>
+									Open SSO invoices in Security settings
+								</Link>
+							</Card>
+						)}
+						{activeOrganization?.hasActiveProSeatProvider ? (
+							<div className="grid gap-6 items-stretch md:grid-cols-2">
+								<SeatManagementCard />
+								<SignedBaaCard />
+							</div>
+						) : (
+							<SignedBaaCard />
 						)}
 					</>
 				) : (

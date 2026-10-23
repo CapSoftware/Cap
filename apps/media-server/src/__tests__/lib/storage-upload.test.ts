@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { uploadFileToStorage } from "../../lib/media-video";
+import {
+	multipartUploadConcurrencyFromEnv,
+	uploadFileToStorage,
+} from "../../lib/media-video";
+import { verifyRemoteRecordingBytes } from "../../lib/recording-verification";
 
 const originalFetch = globalThis.fetch;
 const partSize = 5 * 1024 * 1024;
@@ -26,6 +31,264 @@ describe("uploadFileToStorage", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
 	});
+
+	test("uploads a 10 GB sparse file as 160 bounded parts with its Loom attempt", async () => {
+		const uploadFile = await createTempUploadFile(1);
+		const handle = await open(uploadFile.path, "r+");
+		try {
+			await handle.truncate(10 * 1024 ** 3);
+		} finally {
+			await handle.close();
+		}
+		let uploadedParts = 0;
+		let uploadedBytes = 0;
+		let completed = false;
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign-part")) {
+				const request = JSON.parse(String(init?.body));
+				expect(request.loomImportAttemptId).toBe("loom-run:0");
+				expect(request.contentLength).toBe(64 * 1024 ** 2);
+				return Response.json({
+					url: `https://storage.test/part/${request.partNumber}`,
+				});
+			}
+			if (init?.method === "PUT") {
+				const body = init.body;
+				if (!(body instanceof Blob))
+					throw new Error("Expected a bounded file slice");
+				uploadedParts++;
+				uploadedBytes += body.size;
+				expect(body.size).toBe(64 * 1024 ** 2);
+				return new Response(null, {
+					headers: { ETag: `"part-${uploadedParts}"` },
+				});
+			}
+			if (url.endsWith("/complete")) {
+				const request = JSON.parse(String(init?.body));
+				expect(request.loomImportAttemptId).toBe("loom-run:0");
+				expect(request.parts).toHaveLength(160);
+				completed = true;
+				return Response.json({ objectIdentity: '"multipart-result"' });
+			}
+			throw new Error("Unexpected multipart request");
+		}) as typeof fetch;
+		try {
+			await uploadFileToStorage(
+				uploadFile.path,
+				{
+					type: "multipart",
+					videoId: "video",
+					key: "owner/video/raw-upload.mp4",
+					uploadId: "upload",
+					partSize: 64 * 1024 ** 2,
+					signPartUrl: "https://cap.test/sign-part",
+					completeUrl: "https://cap.test/complete",
+					abortUrl: "https://cap.test/abort",
+					loomImportAttemptId: "loom-run:0",
+				},
+				"video/mp4",
+			);
+			expect(uploadedParts).toBe(160);
+			expect(uploadedBytes).toBe(10 * 1024 ** 3);
+			expect(completed).toBe(true);
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test.each([false, true])(
+		"checks full remote bytes after Drive metadata version drift (corrupt=%s)",
+		async (corrupt) => {
+			const uploadFile = await createTempUploadFile(11);
+			const bytes = new Uint8Array(
+				await Bun.file(uploadFile.path).arrayBuffer(),
+			);
+			const sha256 = createHash("sha256").update(bytes).digest("hex");
+			const identity = `"cap-drive-content-v1:${createHash("sha256")
+				.update(JSON.stringify(["drive-file-1", bytes.length, sha256]))
+				.digest("hex")}"`;
+			globalThis.fetch = (async (_input, init) => {
+				if (init?.method === "PUT")
+					return Response.json({
+						id: "drive-file-1",
+						version: "1",
+						size: "11",
+						sha256Checksum: sha256,
+						headRevisionId: "revision-1",
+					});
+				const headers = new Headers(init?.headers);
+				expect(headers.get("if-match")).toBe(identity);
+				if (headers.has("range"))
+					return new Response(bytes.slice(0, 1), {
+						status: 206,
+						headers: {
+							ETag: identity,
+							"Content-Length": "1",
+							"Content-Range": "bytes 0-0/11",
+						},
+					});
+				const returned = bytes.slice();
+				if (corrupt) returned[5] = 99;
+				return new Response(returned, {
+					headers: { ETag: identity, "Content-Length": "11" },
+				});
+			}) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "put",
+						url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+					},
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBe(identity);
+				const verified = verifyRemoteRecordingBytes(
+					"https://storage.example.com/recording.mp4",
+					{
+						expectedSha256: sha256,
+						expectedFileSize: 11,
+						expectedObjectIdentity: identity,
+					},
+				);
+				if (corrupt)
+					await expect(verified).rejects.toThrow(
+						"Uploaded recording bytes do not match",
+					);
+				else expect((await verified).remoteSha256).toBe(sha256);
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
+
+	test("returns the successful PUT identity without a later HEAD lookup", async () => {
+		const uploadFile = await createTempUploadFile(11);
+		const methods: string[] = [];
+		globalThis.fetch = (async (_input, init) => {
+			methods.push(init?.method ?? "GET");
+			return methods.length === 1
+				? new Response("Unavailable", {
+						status: 503,
+						headers: { ETag: '"failed-attempt"' },
+					})
+				: new Response(null, {
+						status: 200,
+						headers: { ETag: '"written-version"' },
+					});
+		}) as typeof fetch;
+		try {
+			const receipt = await uploadFileToStorage(
+				uploadFile.path,
+				{ type: "put", url: "https://storage.example.com/recording.mp4" },
+				"video/mp4",
+			);
+			expect(receipt.objectIdentity).toBe('"written-version"');
+			expect(methods).toEqual(["PUT", "PUT"]);
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test.each([undefined, 'W/"weak-version"'])(
+		"keeps successful legacy uploads compatible without claiming identity (%s)",
+		async (identity) => {
+			const uploadFile = await createTempUploadFile(11);
+			globalThis.fetch = (async (_input, _init) =>
+				new Response(null, {
+					headers: identity ? { ETag: identity } : {},
+				})) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{ type: "put", url: "https://storage.example.com/recording.mp4" },
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBeUndefined();
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
+
+	test.each(["1", "6", "9007199254740993"])(
+		"binds a Drive upload to content independently of metadata version %s",
+		async (version) => {
+			const uploadFile = await createTempUploadFile(11);
+			const methods: string[] = [];
+			globalThis.fetch = (async (_input, init) => {
+				methods.push(init?.method ?? "GET");
+				expect(new Headers(init?.headers).get("content-range")).toBe(
+					"bytes 0-10/11",
+				);
+				return Response.json({
+					id: "drive-file-1",
+					version,
+					size: "11",
+					sha256Checksum: "a".repeat(64),
+					headRevisionId: "revision-1",
+				});
+			}) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "put",
+						url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+					},
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBe(
+					'"cap-drive-content-v1:9c353d47a7cf9c0f30c3008eb3576c4629a878019572a4d68404cbe0f222b88c"',
+				);
+				expect(methods).toEqual(["PUT"]);
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
+
+	test.each([
+		{ id: "drive-file-1", size: "11" },
+		{ id: "drive-file-1", version: "1", size: "11" },
+		{ id: "drive-file-1", size: "11", sha256Checksum: "a".repeat(64) },
+		{
+			id: "drive-file-1",
+			size: "11",
+			sha256Checksum: "invalid",
+			headRevisionId: "revision-1",
+		},
+		{
+			id: "drive-file-1",
+			size: "12",
+			sha256Checksum: "a".repeat(64),
+			headRevisionId: "revision-1",
+		},
+		{ id: 'invalid"id', version: "1", size: "11" },
+		{ id: "drive-file-1", version: "0", size: "11" },
+		{ id: "drive-file-1", version: "1", size: "12" },
+	])(
+		"withholds incomplete or inconsistent Drive upload identity: %j",
+		async (metadata) => {
+			const uploadFile = await createTempUploadFile(11);
+			globalThis.fetch = (async (_input, _init) =>
+				Response.json(metadata)) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "put",
+						url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+					},
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBeUndefined();
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
 
 	test("uploads multipart files in signed parts and completes them", async () => {
 		const uploadFile = await createTempUploadFile(partSize + 3);
@@ -57,7 +320,10 @@ describe("uploadFileToStorage", () => {
 					});
 				}
 
-				return Response.json({ success: true });
+				return Response.json({
+					success: true,
+					objectIdentity: '"completed-object-version"',
+				});
 			}
 
 			const body = init?.body as Blob;
@@ -75,7 +341,7 @@ describe("uploadFileToStorage", () => {
 		}) as typeof fetch;
 
 		try {
-			await uploadFileToStorage(
+			const receipt = await uploadFileToStorage(
 				uploadFile.path,
 				{
 					type: "multipart",
@@ -90,6 +356,7 @@ describe("uploadFileToStorage", () => {
 				},
 				"video/mp4",
 			);
+			expect(receipt.objectIdentity).toBe('"completed-object-version"');
 		} finally {
 			await uploadFile.cleanup();
 		}
@@ -113,6 +380,74 @@ describe("uploadFileToStorage", () => {
 				{ partNumber: 2, etag: '"etag-2"', size: 3 },
 			],
 		});
+	});
+
+	test("uploads multipart parts concurrently and completes them in order", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 4 + 1);
+		let inFlight = 0;
+		let maxInFlight = 0;
+		let completed: unknown;
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (init?.method === "POST") {
+				const json = JSON.parse(String(init.body));
+				if (url.endsWith("/sign"))
+					return Response.json({
+						url: `https://storage.example.com/part-${json.partNumber}`,
+					});
+				completed = json;
+				return Response.json({ objectIdentity: '"completed"' });
+			}
+			const partNumber = Number(url.split("part-")[1]);
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await Bun.sleep((6 - partNumber) * 5);
+			inFlight--;
+			return new Response(null, {
+				status: 200,
+				headers: { etag: `"etag-${partNumber}"` },
+			});
+		}) as typeof fetch;
+		process.env.MEDIA_SERVER_UPLOAD_CONCURRENCY = "3";
+		try {
+			await uploadFileToStorage(
+				uploadFile.path,
+				{
+					type: "multipart",
+					videoId: "video-id",
+					key: "user-id/video-id/result.mp4",
+					uploadId: "upload-id",
+					partSize,
+					signPartUrl: "https://cap.example.com/sign",
+					completeUrl: "https://cap.example.com/complete",
+					abortUrl: "https://cap.example.com/abort",
+				},
+				"video/mp4",
+			);
+		} finally {
+			delete process.env.MEDIA_SERVER_UPLOAD_CONCURRENCY;
+			await uploadFile.cleanup();
+		}
+		expect(maxInFlight).toBe(3);
+		expect(
+			(completed as { parts: Array<{ partNumber: number }> }).parts.map(
+				(part) => part.partNumber,
+			),
+		).toEqual([1, 2, 3, 4, 5]);
+	});
+
+	test("reads a bounded multipart upload concurrency", () => {
+		expect(multipartUploadConcurrencyFromEnv({})).toBe(1);
+		expect(
+			multipartUploadConcurrencyFromEnv({
+				MEDIA_SERVER_UPLOAD_CONCURRENCY: "8",
+			}),
+		).toBe(8);
+		expect(
+			multipartUploadConcurrencyFromEnv({
+				MEDIA_SERVER_UPLOAD_CONCURRENCY: "99",
+			}),
+		).toBe(16);
 	});
 
 	test("aborts multipart uploads when a part fails", async () => {

@@ -2,7 +2,6 @@ import {
 	createEventListener,
 	createEventListenerMap,
 } from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import {
 	batch,
 	createEffect,
@@ -15,14 +14,11 @@ import {
 import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
-import {
-	useSegmentContext,
-	useTimelineContext,
-	useTrackContext,
-} from "./context";
+import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSetPreviewTime,
@@ -218,11 +214,9 @@ export function SceneTrack(props: {
 			<For
 				each={project.timeline?.sceneSegments}
 				fallback={
-					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-						<div>Click to add scene segment</div>
-						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
-							(Make the camera full screen, or hide it)
-						</div>
+					<div class="cap-empty-lane pointer-events-none">
+						<span>Switch layouts between your screen and camera</span>
+						<span class="cap-empty-lane-action">· Add scene</span>
 					</div>
 				}
 			>
@@ -419,11 +413,9 @@ export function SceneTrack(props: {
 					return (
 						<SegmentRoot
 							segColor="var(--track-scene)"
-							class={cx(
-								"border transition-colors duration-200 group",
-								isSelected() ? "border-gray-12" : "border-transparent",
-							)}
-							innerClass="ring-blue-5"
+							class="group"
+							selected={isSelected()}
+							title={`Scene · ${getSceneLabel(segment.mode)}`}
 							segment={segment}
 							onMouseEnter={() => {
 								setHoveringSegment(true);
@@ -504,7 +496,7 @@ export function SceneTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab"
+								class="flex items-center cursor-grab"
 								onMouseDown={createMouseDownDrag(
 									() => {
 										const original = { ...segment };
@@ -542,25 +534,28 @@ export function SceneTrack(props: {
 									},
 								)}
 							>
-								{(() => {
-									const ctx = useSegmentContext();
-
-									return (
-										<Show when={ctx.width() > 80}>
-											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-												<span class="opacity-70">Scene</span>
-												<div class="flex gap-1 items-center text-md">
-													{getSceneIcon(segment.mode)}
-													{ctx.width() > 120 && (
-														<span class="text-xs">
-															{getSceneLabel(segment.mode)}
-														</span>
-													)}
-												</div>
-											</div>
-										</Show>
-									);
-								})()}
+								<SegmentLabel
+									full={() => (
+										<div class="cap-seg-labels animate-in fade-in">
+											<span class="cap-seg-label">Scene</span>
+											<span class="cap-seg-sublabel truncate">
+												{getSceneLabel(segment.mode)}
+											</span>
+										</div>
+									)}
+									compact={() => (
+										<div class="cap-seg-labels">
+											<span class="cap-seg-label truncate">
+												{getSceneLabel(segment.mode)}
+											</span>
+										</div>
+									)}
+									glyph={() => (
+										<div class="cap-seg-label flex justify-center items-center">
+											{getSceneIcon(segment.mode)}
+										</div>
+									)}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"
@@ -630,17 +625,15 @@ export function SceneTrack(props: {
 				{(time) => (
 					<SegmentRoot
 						class="pointer-events-none"
-						innerClass="ring-blue-300"
+						ghost
 						segColor="var(--track-scene)"
 						segment={{
 							start: time(),
 							end: time() + maxAvailableDuration(),
 						}}
 					>
-						<SegmentContent class="group">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
-								+
-							</p>
+						<SegmentContent class="group justify-center">
+							<p class="cap-seg-label">+</p>
 						</SegmentContent>
 					</SegmentRoot>
 				)}

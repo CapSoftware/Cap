@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cap_project::BackgroundSource;
+use cap_project::{AnimatedGradientConfig, BackgroundSource};
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -9,6 +9,8 @@ use tokio::sync::{Mutex, RwLock};
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline};
+
+use super::AnimatedGradientLayer;
 
 const MAX_BACKGROUND_DIMENSION: u32 = 2560;
 
@@ -262,12 +264,14 @@ pub enum ColorOrGradient {
 pub enum Background {
     Color([f32; 4]),
     Gradient(Gradient),
+    AnimatedGradient(AnimatedGradientConfig),
     Image { path: String },
 }
 
 impl From<BackgroundSource> for Background {
     fn from(value: BackgroundSource) -> Self {
         match value {
+            BackgroundSource::AnimatedGradient { config } => Background::AnimatedGradient(config),
             BackgroundSource::Color { value, alpha } => Background::Color([
                 value[0] as f32 / 255.0,
                 value[1] as f32 / 255.0,
@@ -299,11 +303,7 @@ impl From<BackgroundSource> for Background {
                 noise_scale: noise_scale.unwrap_or(3.0),
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(clean_path) = path.as_deref().and_then(clean_background_path) {
-                    Background::Image { path: clean_path }
-                } else {
-                    Background::Color([1.0, 1.0, 1.0, 1.0])
-                }
+                Background::image_or_white(path.as_deref().and_then(clean_background_path))
             }
         }
     }
@@ -315,11 +315,18 @@ fn background_source_is_empty(source: &BackgroundSource) -> bool {
         BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
             path.as_deref().map(str::is_empty).unwrap_or(true)
         }
-        BackgroundSource::Gradient { .. } => false,
+        BackgroundSource::Gradient { .. } | BackgroundSource::AnimatedGradient { .. } => false,
     }
 }
 
 impl Background {
+    fn image_or_white(path: Option<String>) -> Self {
+        match path {
+            Some(path) => Background::Image { path },
+            None => Background::Color([1.0, 1.0, 1.0, 1.0]),
+        }
+    }
+
     pub fn from_source(source: BackgroundSource, transparent_when_empty: bool) -> Self {
         if transparent_when_empty && background_source_is_empty(&source) {
             Background::Color([0.0, 0.0, 0.0, 0.0])
@@ -329,9 +336,43 @@ impl Background {
     }
 }
 
+/// The last image source path and what it resolved to on disk, so the path
+/// is only cleaned and checked again when the source changes.
+#[derive(Default)]
+struct ResolvedImagePath(Option<(String, Option<String>)>);
+
+impl ResolvedImagePath {
+    fn background(
+        &mut self,
+        source: &BackgroundSource,
+        transparent_when_empty: bool,
+    ) -> Background {
+        let (BackgroundSource::Image { path: Some(path) }
+        | BackgroundSource::Wallpaper { path: Some(path) }) = source
+        else {
+            return Background::from_source(source.clone(), transparent_when_empty);
+        };
+        if path.is_empty() {
+            return Background::from_source(source.clone(), transparent_when_empty);
+        }
+
+        let resolved = match &self.0 {
+            Some((cached, resolved)) if cached == path => resolved.clone(),
+            _ => {
+                let resolved = clean_background_path(path);
+                self.0 = Some((path.clone(), resolved.clone()));
+                resolved
+            }
+        };
+        Background::image_or_white(resolved)
+    }
+}
+
 pub enum Inner {
+    AnimatedGradient(Box<AnimatedGradientLayer>),
     Image {
         path: String,
+        output_size: (u32, u32),
         bind_group: wgpu::BindGroup,
     },
     ColorOrGradient {
@@ -344,6 +385,10 @@ pub enum Inner {
 
 pub struct BackgroundLayer {
     inner: Option<Inner>,
+    /// Bumped whenever `inner` is replaced, so consumers can cache anything
+    /// derived from a static background (e.g. its blurred copy).
+    generation: u64,
+    resolved_image_path: ResolvedImagePath,
     image_pipeline: ImageBackgroundPipeline,
     color_pipeline: GradientOrColorPipeline,
 }
@@ -352,9 +397,20 @@ impl BackgroundLayer {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             inner: None,
+            generation: 0,
+            resolved_image_path: ResolvedImagePath::default(),
             image_pipeline: ImageBackgroundPipeline::new(device),
             color_pipeline: GradientOrColorPipeline::new(device),
         }
+    }
+
+    pub fn background_for(
+        &mut self,
+        source: &BackgroundSource,
+        transparent_when_empty: bool,
+    ) -> Background {
+        self.resolved_image_path
+            .background(source, transparent_when_empty)
     }
 
     pub async fn prepare(
@@ -367,11 +423,24 @@ impl BackgroundLayer {
         let queue = &constants.queue;
 
         match background {
+            Background::AnimatedGradient(config) => match &mut self.inner {
+                Some(Inner::AnimatedGradient(layer)) => {
+                    layer.prepare(device, queue, config, uniforms);
+                }
+                _ => {
+                    self.generation += 1;
+                    self.inner = Some(Inner::AnimatedGradient(Box::new(
+                        AnimatedGradientLayer::new(device, config, uniforms),
+                    )));
+                }
+            },
             Background::Image { path } => {
                 match &self.inner {
                     Some(Inner::Image {
-                        path: current_path, ..
-                    }) if current_path == &path => {}
+                        path: current_path,
+                        output_size,
+                        ..
+                    }) if current_path == &path && *output_size == uniforms.output_size => {}
                     _ => {
                         let texture = match constants
                             .background_textures
@@ -383,6 +452,7 @@ impl BackgroundLayer {
                                 let fallback_background = Background::Color([1.0, 1.0, 1.0, 1.0]);
                                 let buffer = GradientOrColorUniforms::from(fallback_background)
                                     .to_buffer(device);
+                                self.generation += 1;
                                 self.inner = Some(Inner::ColorOrGradient {
                                     value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
                                     bind_group: self.color_pipeline.bind_group(device, &buffer),
@@ -432,8 +502,10 @@ impl BackgroundLayer {
                         let texture_view =
                             texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+                        self.generation += 1;
                         self.inner = Some(Inner::Image {
                             path,
+                            output_size: uniforms.output_size,
                             bind_group: self.image_pipeline.bind_group(
                                 device,
                                 &uniform_buffer,
@@ -450,6 +522,7 @@ impl BackgroundLayer {
                 }) if &color == current_color => {}
                 _ => {
                     let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Color(color),
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
@@ -464,6 +537,7 @@ impl BackgroundLayer {
                 }) if &gradient == current_gradient => {}
                 _ => {
                     let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Gradient(gradient),
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
@@ -476,7 +550,26 @@ impl BackgroundLayer {
         Ok(())
     }
 
+    /// Identifies the current background while it renders the same pixels
+    /// every frame; `None` for animated backgrounds.
+    pub fn static_generation(&self) -> Option<u64> {
+        match &self.inner {
+            Some(Inner::Image { .. } | Inner::ColorOrGradient { .. }) => Some(self.generation),
+            _ => None,
+        }
+    }
+
+    pub fn render_surface(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(Inner::AnimatedGradient(layer)) = &mut self.inner {
+            layer.render_surface(encoder);
+        }
+    }
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(Inner::AnimatedGradient(layer)) = &self.inner {
+            layer.render(pass);
+            return;
+        }
         if let Some(Inner::Image { bind_group, .. }) = &self.inner {
             pass.set_pipeline(&self.image_pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
@@ -698,8 +791,8 @@ impl From<Background> for GradientOrColorUniforms {
                 noise_scale,
                 _padding: 0.0,
             },
-            Background::Image { .. } => {
-                unreachable!("Image backgrounds should be handled separately")
+            Background::Image { .. } | Background::AnimatedGradient(_) => {
+                unreachable!("Textured backgrounds should be handled separately")
             }
         }
     }
@@ -787,6 +880,49 @@ mod tests {
             }
             _ => panic!("Expected Color variant"),
         }
+    }
+
+    #[test]
+    fn image_path_is_checked_on_disk_only_when_the_source_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.png");
+        let second = directory.path().join("second.png");
+        std::fs::write(&first, b"").unwrap();
+        std::fs::write(&second, b"").unwrap();
+        let source = |path: &std::path::Path| BackgroundSource::Wallpaper {
+            path: Some(path.to_string_lossy().into_owned()),
+        };
+        let is_image = |background: Background, path: &std::path::Path| match background {
+            Background::Image { path: resolved } => resolved == path.to_string_lossy(),
+            _ => false,
+        };
+
+        let mut resolved = ResolvedImagePath::default();
+        assert!(is_image(
+            resolved.background(&source(&first), false),
+            &first
+        ));
+
+        std::fs::remove_file(&first).unwrap();
+        for _ in 0..3 {
+            assert!(is_image(
+                resolved.background(&source(&first), false),
+                &first
+            ));
+        }
+
+        assert!(is_image(
+            resolved.background(&source(&second), false),
+            &second
+        ));
+        assert!(matches!(
+            resolved.background(&source(&first), false),
+            Background::Color([1.0, 1.0, 1.0, 1.0])
+        ));
+        assert!(matches!(
+            resolved.background(&BackgroundSource::Wallpaper { path: None }, true),
+            Background::Color([0.0, 0.0, 0.0, 0.0])
+        ));
     }
 
     #[test]

@@ -7,7 +7,6 @@ import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationSettingsManager } from "./authorization";
-import { removeDomain } from "./domain-utils";
 
 export async function removeOrganizationDomain(
 	organizationId: Organisation.OrganisationId,
@@ -29,7 +28,22 @@ export async function removeOrganizationDomain(
 
 	try {
 		if (organization.customDomain) {
-			await removeDomain(organization.customDomain);
+			const response = await fetch(
+				`https://api.vercel.com/v9/projects/${
+					process.env.VERCEL_PROJECT_ID
+				}/domains/${organization.customDomain.toLowerCase()}?teamId=${
+					process.env.VERCEL_TEAM_ID
+				}`,
+				{
+					method: "DELETE",
+					headers: {
+						Authorization: `Bearer ${process.env.VERCEL_AUTH_TOKEN}`,
+					},
+				},
+			);
+			if (!response.ok && response.status !== 404) {
+				throw new Error("Failed to remove domain from hosting provider");
+			}
 		}
 
 		await db()

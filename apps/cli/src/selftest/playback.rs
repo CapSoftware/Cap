@@ -571,7 +571,7 @@ mod fixture {
     use cap_recording::{
         AudioFrame, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
         ChannelVideoSourceConfig, OutputPipeline,
-        ffmpeg::{FFmpegVideoFrame, Mp4Muxer, OggMuxer},
+        ffmpeg::{FFmpegVideoFrame, Mp4Muxer, OggMuxer, OggMuxerConfig},
     };
     use cap_timestamp::{Timestamp, Timestamps};
     use relative_path::RelativePathBuf;
@@ -783,7 +783,7 @@ mod fixture {
                 audio_info, mic_rx,
             ))
             .with_timestamps(timestamps)
-            .build::<OggMuxer>(())
+            .build::<OggMuxer>(OggMuxerConfig::default())
             .await
             .map_err(|e| format!("mic pipeline: {e}"))?;
         let sys_pipeline = OutputPipeline::builder(audio_path.clone())
@@ -794,7 +794,7 @@ mod fixture {
             // System audio anchors at the recording epoch, exactly like the
             // studio recorder configures it.
             .with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch)
-            .build::<OggMuxer>(())
+            .build::<OggMuxer>(OggMuxerConfig::default())
             .await
             .map_err(|e| format!("system audio pipeline: {e}"))?;
 
@@ -869,6 +869,7 @@ mod fixture {
             }),
             cursor: None,
             keyboard: None,
+            display_notch: None,
         };
         // Clip offsets exactly as the studio recorder persists them.
         let offsets = segment.calculate_audio_offsets();
@@ -902,15 +903,20 @@ mod fixture {
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,

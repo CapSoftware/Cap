@@ -1,12 +1,18 @@
+mod animated_gradient;
 mod background;
 mod blur;
 mod camera;
+mod camera3d;
 mod captions;
+mod click_ripple;
+mod color_grade;
 mod cursor;
 mod display;
 mod frame;
+mod image;
 mod keyboard;
 mod mask;
+mod notch;
 mod text;
 
 use std::sync::OnceLock;
@@ -21,11 +27,14 @@ use std::sync::OnceLock;
 /// Instead, scan the system fonts a single time per process, then cheaply clone the
 /// resulting font database (memory-mapped faces are reference counted) for each new
 /// `FontSystem`.
-pub(crate) fn new_font_system() -> glyphon::FontSystem {
+pub fn new_font_system() -> glyphon::FontSystem {
     static FONT_TEMPLATE: OnceLock<(String, glyphon::fontdb::Database)> = OnceLock::new();
 
+    let font_phase = crate::readiness::Phase::start("font.instance");
+    let template_phase = crate::readiness::Phase::start("font.template_lookup");
     let (locale, db) = FONT_TEMPLATE.get_or_init(|| {
-        let font_system = glyphon::FontSystem::new();
+        let init_phase = crate::readiness::Phase::start("font.template_init");
+        let font_system = crate::readiness::measure("font.system_scan", glyphon::FontSystem::new);
         let mut db = font_system.db().clone();
         // Pin the generic families to the fonts the editor webview resolves
         // them to. fontdb's stock defaults (e.g. "Arial") often don't match
@@ -54,21 +63,82 @@ pub(crate) fn new_font_system() -> glyphon::FontSystem {
             db.set_serif_family("DejaVu Serif");
             db.set_monospace_family("DejaVu Sans Mono");
         }
-        (font_system.locale().to_string(), db)
+        let template = (font_system.locale().to_string(), db);
+        init_phase.finish("returned");
+        template
     });
+    template_phase.finish("returned");
 
-    glyphon::FontSystem::new_with_locale_and_db(locale.clone(), db.clone())
+    let result = crate::readiness::measure("font.clone_and_index", || {
+        glyphon::FontSystem::new_with_locale_and_db(locale.clone(), db.clone())
+    });
+    font_phase.finish("returned");
+    result
 }
 
+/// Bind groups for full-frame passes that sample one of the render session's
+/// two textures. Each is keyed by the uniform buffer and source view it binds,
+/// so it is built once per pairing instead of once per frame.
+#[derive(Default)]
+pub struct SourceBindGroups {
+    entries: Vec<(wgpu::Buffer, wgpu::TextureView, wgpu::BindGroup)>,
+    #[cfg(test)]
+    created: usize,
+}
+
+impl SourceBindGroups {
+    pub fn get_or_create(
+        &mut self,
+        buffer: &wgpu::Buffer,
+        view: &wgpu::TextureView,
+        create: impl FnOnce() -> wgpu::BindGroup,
+    ) -> &wgpu::BindGroup {
+        let index = match self
+            .entries
+            .iter()
+            .position(|(cached_buffer, cached_view, _)| {
+                cached_buffer == buffer && cached_view == view
+            }) {
+            Some(index) => index,
+            None => {
+                #[cfg(test)]
+                {
+                    self.created += 1;
+                }
+                self.entries.push((buffer.clone(), view.clone(), create()));
+                self.entries.len() - 1
+            }
+        };
+        &self.entries[index].2
+    }
+
+    /// Drops entries for views the session no longer owns, so a resized
+    /// session's old textures are released.
+    pub fn retain_views(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.entries.retain(|(_, view, _)| views.contains(&view));
+    }
+
+    #[cfg(test)]
+    pub fn created(&self) -> usize {
+        self.created
+    }
+}
+
+pub use animated_gradient::*;
 pub use background::*;
 pub use blur::*;
 pub use camera::*;
+pub use camera3d::*;
 pub use captions::*;
+pub use click_ripple::*;
+pub use color_grade::*;
 pub use cursor::*;
 pub use display::*;
 pub use frame::*;
+pub use image::*;
 pub use keyboard::*;
 pub use mask::*;
+pub use notch::*;
 pub use text::*;
 
 #[cfg(test)]

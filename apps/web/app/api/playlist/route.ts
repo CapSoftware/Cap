@@ -21,6 +21,7 @@ import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
 } from "@/lib/mobile-request-origin";
+import { getSegmentPlaybackState } from "@/lib/segment-playback";
 import { apiToHandler } from "@/lib/server";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
@@ -41,6 +42,7 @@ const GetPlaylistParams = Schema.Struct({
 		"segments-master",
 		"segments-video",
 		"segments-audio",
+		"segments-status",
 	),
 	requireComplete: Schema.OptionFromUndefinedOr(Schema.String),
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
@@ -168,8 +170,11 @@ const getPlaylistResponse = (
 ) =>
 	Effect.gen(function* () {
 		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
-		const isMp4Source =
-			video.source.type === "desktopMP4" || video.source.type === "webMP4";
+		const source = Video.Video.getSource(video);
+		const isMp4Source = source instanceof Video.Mp4Source;
+		const mp4Key = isMp4Source
+			? source.getFileKey()
+			: `${video.ownerId}/${video.id}/result.mp4`;
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
@@ -181,7 +186,8 @@ const getPlaylistResponse = (
 		if (
 			urlParams.videoType === "segments-master" ||
 			urlParams.videoType === "segments-video" ||
-			urlParams.videoType === "segments-audio"
+			urlParams.videoType === "segments-audio" ||
+			urlParams.videoType === "segments-status"
 		) {
 			const segSource = new Video.SegmentsSource({
 				videoId: video.id,
@@ -205,18 +211,56 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.InternalServerError());
 			}
 
-			const manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
+			let manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
+			if (
+				manifest.version === 1 &&
+				manifest.is_complete &&
+				!manifest.audio_init_uploaded &&
+				manifest.audio_segments.length > 0
+			) {
+				const audioInitKey = segSource.getAudioInitKey();
+				const objects = yield* bucket.listObjects({
+					prefix: audioInitKey,
+					maxKeys: 1,
+				});
+				if (
+					objects.Contents?.some(
+						(object) => object.Key === audioInitKey && (object.Size ?? 0) > 0,
+					)
+				) {
+					manifest = { ...manifest, audio_init_uploaded: true };
+				}
+			}
+			const playbackState = getSegmentPlaybackState(manifest);
+			if (playbackState === "incomplete") {
+				return HttpServerResponse.empty({
+					status: 409,
+					headers: CACHE_CONTROL_HEADERS,
+				});
+			}
 			const requireComplete = Option.match(urlParams.requireComplete, {
 				onNone: () => false,
 				onSome: (value) => value === "1" || value === "true",
 			});
+			const hasVideoSegments =
+				manifest.video_init_uploaded && manifest.video_segments.length > 0;
+			if (urlParams.videoType === "segments-status") {
+				return HttpServerResponse.empty({
+					status:
+						hasVideoSegments && (!requireComplete || playbackState === "ready")
+							? 204
+							: 202,
+					headers: {
+						...CACHE_CONTROL_HEADERS,
+						"X-Cap-Recording-Complete": playbackState === "ready" ? "1" : "0",
+					},
+				});
+			}
 			if (requireComplete && !manifest.is_complete) {
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
-			const hasVideoSegments =
-				manifest.video_init_uploaded && manifest.video_segments.length > 0;
 
 			if (urlParams.videoType === "segments-master") {
 				if (!hasVideoSegments) {
@@ -323,8 +367,7 @@ const getPlaylistResponse = (
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
-			if (isMp4Source || urlParams.videoType === "mp4")
-				redirect = `${video.ownerId}/${video.id}/result.mp4`;
+			if (isMp4Source || urlParams.videoType === "mp4") redirect = mp4Key;
 			else if (video.source.type === "MediaConvert")
 				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
 
@@ -402,11 +445,9 @@ const getPlaylistResponse = (
 					},
 				});
 			} else if (isMp4Source) {
-				yield* Effect.log(
-					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
-				);
+				yield* Effect.log(`Returning path ${mp4Key}`);
 				return yield* bucket
-					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
+					.getSignedObjectUrl(mp4Key)
 					.pipe(Effect.map(HttpServerResponse.redirect));
 			}
 

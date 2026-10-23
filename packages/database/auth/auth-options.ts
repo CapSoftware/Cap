@@ -14,8 +14,19 @@ import WorkOSProvider from "next-auth/providers/workos";
 import { sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
 import { users } from "../schema.ts";
-import { isEmailAllowedForSignup } from "./domain-utils.ts";
+import {
+	isBlockedAccountEmail,
+	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
+} from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import {
+	provisionSsoMembership,
+	type SsoAuthContext,
+	type ValidatedSsoIdentity,
+	validateSsoSignIn,
+} from "./sso.ts";
+import { ssoLoginErrorPath } from "./sso-state.ts";
 
 export const maxDuration = 120;
 
@@ -26,6 +37,9 @@ export async function decodeSessionToken(
 ): Promise<JWT | null> {
 	const token = await decode(params);
 	if (!token) return null;
+	// A blocked email loses its existing sessions, not just new sign-ins.
+	if (typeof token.email === "string" && isBlockedAccountEmail(token.email))
+		return null;
 
 	const userId = typeof token.id === "string" ? token.id : null;
 	if (!userId) return token;
@@ -46,14 +60,28 @@ export async function decodeSessionToken(
 	return token;
 }
 
-export const authOptions = (): NextAuthOptions => {
+const OIDC_PROVIDER_ID = "oidc";
+
+type OidcClaims = {
+	sub: string;
+	email?: string;
+	email_verified?: boolean;
+	name?: string;
+	preferred_username?: string;
+	picture?: string;
+};
+
+export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
+	let validatedSsoIdentity: ValidatedSsoIdentity | null = null;
 
 	return {
 		get adapter() {
 			if (_adapter) return _adapter;
-			_adapter = DrizzleAdapter(db());
+			_adapter = DrizzleAdapter(db(), {
+				getSsoIdentity: () => validatedSsoIdentity,
+			});
 			return _adapter;
 		},
 		debug: process.env.NODE_ENV !== "production",
@@ -73,7 +101,42 @@ export const authOptions = (): NextAuthOptions => {
 			if (_providers) return _providers;
 			const appleClientId = serverEnv().APPLE_CLIENT_ID;
 			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
+			const oidcIssuer = serverEnv().OIDC_ISSUER;
+			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
+			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
 			_providers = [
+				...(oidcIssuer && oidcClientId && oidcClientSecret
+					? [
+							{
+								id: OIDC_PROVIDER_ID,
+								name: serverEnv().OIDC_NAME || "SSO",
+								type: "oauth" as const,
+								wellKnown: `${oidcIssuer.replace(/\/$/, "")}/.well-known/openid-configuration`,
+								issuer: oidcIssuer,
+								clientId: oidcClientId,
+								clientSecret: oidcClientSecret,
+								idToken: true,
+								checks: ["state" as const, "pkce" as const],
+								authorization: { params: { scope: "openid email profile" } },
+								// Linking is gated on a verified email in the signIn callback,
+								// because a generic issuer is not known to verify addresses.
+								allowDangerousEmailAccountLinking: true,
+								profile(profile: OidcClaims) {
+									const email = profile.email?.trim().toLowerCase();
+									return {
+										id: profile.sub,
+										name:
+											profile.name ||
+											profile.preferred_username ||
+											email?.split("@")[0] ||
+											profile.sub,
+										email,
+										image: profile.picture ?? null,
+									};
+								},
+							},
+						]
+					: []),
 				...(appleClientId && appleClientSecret
 					? [
 							AppleProvider({
@@ -95,20 +158,29 @@ export const authOptions = (): NextAuthOptions => {
 						},
 					},
 				}),
-				WorkOSProvider({
-					clientId: serverEnv().WORKOS_CLIENT_ID as string,
-					clientSecret: serverEnv().WORKOS_API_KEY as string,
-					profile(profile) {
-						return {
-							id: profile.id,
-							name: profile.first_name
-								? `${profile.first_name} ${profile.last_name || ""}`
-								: profile.email?.split("@")[0] || profile.id,
-							email: profile.email,
-							image: profile.profile_picture_url,
-						};
-					},
-				}),
+				...(serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY
+					? [
+							WorkOSProvider({
+								clientId: serverEnv().WORKOS_CLIENT_ID as string,
+								clientSecret: serverEnv().WORKOS_API_KEY as string,
+								checks: ["state", "pkce"],
+								allowDangerousEmailAccountLinking: true,
+								profile(profile) {
+									return {
+										id: profile.id,
+										name:
+											[profile.first_name, profile.last_name]
+												.filter(Boolean)
+												.join(" ") ||
+											profile.email?.split("@")[0] ||
+											profile.id,
+										email: profile.email?.trim().toLowerCase(),
+										image: null,
+									};
+								},
+							}),
+						]
+					: []),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
@@ -183,10 +255,28 @@ export const authOptions = (): NextAuthOptions => {
 			},
 		},
 		callbacks: {
-			async signIn({ user, email, credentials }) {
-				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
-				if (!allowedDomains) return true;
-
+			async signIn({ user, email, credentials, account, profile }) {
+				if (account?.provider === OIDC_PROVIDER_ID) {
+					const claims = profile as OidcClaims | undefined;
+					if (!claims?.email || claims.email_verified !== true) {
+						return "/login?error=OidcEmailUnverified";
+					}
+				}
+				if (account?.provider === "workos") {
+					validatedSsoIdentity = null;
+					try {
+						validatedSsoIdentity = await validateSsoSignIn(
+							profile,
+							account.providerAccountId,
+							ssoContext,
+						);
+					} catch {
+						return ssoLoginErrorPath(
+							"SsoSignInFailed",
+							ssoContext?.intent?.returnTo,
+						);
+					}
+				}
 				const rawEmail =
 					user?.email ||
 					(typeof email === "string"
@@ -196,6 +286,19 @@ export const authOptions = (): NextAuthOptions => {
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
 				const userEmail = rawEmail.toLowerCase();
+
+				if (
+					isEmailBlockedFromSignup(
+						userEmail,
+						serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS,
+					)
+				) {
+					console.warn(`Sign-in blocked for email: ${userEmail}`);
+					return "/login?error=SignupBlocked";
+				}
+
+				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
+				if (!allowedDomains) return true;
 
 				const [existingUser] = await db()
 					.select()
@@ -226,7 +329,16 @@ export const authOptions = (): NextAuthOptions => {
 
 				return session;
 			},
-			async jwt({ token, user }) {
+			async jwt({ token, user, account }) {
+				if (account?.provider === "workos") {
+					if (!user || !validatedSsoIdentity) {
+						throw new Error("The SSO sign-in was not verified.");
+					}
+					await provisionSsoMembership(
+						User.UserId.make(user.id),
+						validatedSsoIdentity,
+					);
+				}
 				if (user || !token.id) {
 					const [dbUser] = await db()
 						.select({
@@ -238,7 +350,11 @@ export const authOptions = (): NextAuthOptions => {
 							authSessionVersion: users.authSessionVersion,
 						})
 						.from(users)
-						.where(eq(users.email, (token.email || "").toLowerCase()))
+						.where(
+							user
+								? eq(users.id, User.UserId.make(user.id))
+								: eq(users.email, (token.email || "").toLowerCase()),
+						)
 						.limit(1);
 
 					if (!dbUser) {

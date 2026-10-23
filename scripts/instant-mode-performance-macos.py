@@ -4,6 +4,7 @@ import atexit
 import argparse
 import csv
 import ctypes
+import hashlib
 import json
 import platform
 import re
@@ -448,6 +449,20 @@ def process_executable(pid):
 	return executable
 
 
+def executable_identity(executable):
+	digest = hashlib.sha256()
+	with executable.open("rb") as handle:
+		for block in iter(lambda: handle.read(1024 * 1024), b""):
+			digest.update(block)
+	metadata = executable.stat()
+	return {
+		"path": str(executable),
+		"sha256": digest.hexdigest(),
+		"size_bytes": metadata.st_size,
+		"modified_ns": metadata.st_mtime_ns,
+	}
+
+
 def associated_pids(app_pid):
 	result = run(["lsappinfo", "list"])
 	blocks = re.split(r"(?=^\s*\d+\) \")", result.stdout, flags=re.MULTILINE)
@@ -483,6 +498,25 @@ def associated_pids(app_pid):
 		role = f"webkit-{role_match.group(1).lower()}" if role_match else "webkit"
 		pids.append(pid)
 		processes.append({"pid": pid, "role": role, "command": command})
+	process_rows = [
+		line.split(None, 2)
+		for line in run(["ps", "-axo", "pid=,ppid=,comm="]).stdout.splitlines()
+	]
+	known_pids = set(pids)
+	while True:
+		children = [
+			(int(row[0]), row[2])
+			for row in process_rows
+			if len(row) == 3
+			and int(row[1]) in known_pids
+			and int(row[0]) not in known_pids
+		]
+		if not children:
+			break
+		for pid, command in children:
+			known_pids.add(pid)
+			pids.append(pid)
+			processes.append({"pid": pid, "role": "child", "command": command})
 	if len(pids) > 64:
 		raise RuntimeError(f"Too many associated processes to sample: {len(pids)}")
 	return pids, processes
@@ -661,7 +695,17 @@ def system_snapshot():
 	}
 
 
-def summarize_process_csv(csv_path, app_pid):
+def sampled_cpu_seconds(rows):
+	previous_elapsed = 0.0
+	cpu_seconds = 0.0
+	for row in rows:
+		interval = row["elapsed_s"] - previous_elapsed
+		cpu_seconds += row["cpu_pct"] * interval / 100
+		previous_elapsed = row["elapsed_s"]
+	return cpu_seconds
+
+
+def summarize_process_csv(csv_path, app_pid, expected_pids=None):
 	rows = []
 	with csv_path.open(newline="") as handle:
 		for row in csv.DictReader(handle):
@@ -677,6 +721,12 @@ def summarize_process_csv(csv_path, app_pid):
 	by_sample = {}
 	for row in rows:
 		by_sample.setdefault(row["sample"], []).append(row)
+	expected_pids = set(expected_pids or (row["pid"] for row in rows))
+	complete_samples = list(by_sample) == list(range(1, len(by_sample) + 1)) and all(
+		len(sample_rows) == len(expected_pids)
+		and {row["pid"] for row in sample_rows} == expected_pids
+		for sample_rows in by_sample.values()
+	)
 	group_samples = []
 	for sample_rows in by_sample.values():
 		group_samples.append(
@@ -707,13 +757,7 @@ def summarize_process_csv(csv_path, app_pid):
 					row["cpu_pct"] for row in pid_rows
 				),
 				"cpu_average_pct": (
-					(
-						last_by_pid[pid]["user_ns"]
-						+ last_by_pid[pid]["system_ns"]
-						- first_by_pid[pid]["user_ns"]
-						- first_by_pid[pid]["system_ns"]
-					)
-					/ 1_000_000_000
+					sampled_cpu_seconds(pid_rows)
 					/ max(pid_rows[-1]["elapsed_s"], 0.001)
 					* 100
 				),
@@ -731,22 +775,18 @@ def summarize_process_csv(csv_path, app_pid):
 			for pid in last_by_pid
 		)
 	elapsed = max(item["elapsed_s"] for item in group_samples)
-	cpu_time_seconds = sum(
-		max(
-			0,
-			(
-				last_by_pid[pid]["user_ns"]
-				+ last_by_pid[pid]["system_ns"]
-				- first_by_pid[pid]["user_ns"]
-				- first_by_pid[pid]["system_ns"]
-			),
-		)
-		for pid in last_by_pid
-	) / 1_000_000_000
+	counter_elapsed = elapsed - group_samples[0]["elapsed_s"]
+	cpu_time_seconds = sampled_cpu_seconds(group_samples)
+
+	def counter_rate(column, divisor=1):
+		return deltas[column] / divisor / counter_elapsed if counter_elapsed > 0 else None
+
 	return {
 		"sample_count": len(group_samples),
 		"process_count": len(last_by_pid),
+		"complete_samples": complete_samples,
 		"elapsed_seconds": elapsed,
+		"counter_elapsed_seconds": counter_elapsed,
 		"cpu_median_pct": statistics.median(
 			item["cpu_pct"] for item in group_samples
 		),
@@ -777,19 +817,19 @@ def summarize_process_csv(csv_path, app_pid):
 		"thread_median": statistics.median(
 			item["threads"] for item in group_samples
 		),
-		"disk_read_bytes_per_second": deltas["disk_read_bytes"] / elapsed,
-		"disk_write_bytes_per_second": deltas["disk_write_bytes"] / elapsed,
-		"energy_millijoules_per_second": deltas["energy_nj"] / 1_000_000 / elapsed,
-		"instructions_per_second": deltas["instructions"] / elapsed,
-		"cycles_per_second": deltas["cycles"] / elapsed,
-		"faults_per_second": deltas["faults"] / elapsed,
+		"disk_read_bytes_per_second": counter_rate("disk_read_bytes"),
+		"disk_write_bytes_per_second": counter_rate("disk_write_bytes"),
+		"energy_millijoules_per_second": counter_rate("energy_nj", 1_000_000),
+		"instructions_per_second": counter_rate("instructions"),
+		"cycles_per_second": counter_rate("cycles"),
+		"faults_per_second": counter_rate("faults"),
 		"wakeups_per_second": (
-			deltas["idle_wakeups"] + deltas["interrupt_wakeups"]
-		)
-		/ elapsed,
-		"context_switches_per_second": deltas["context_switches"] / elapsed,
-		"mach_syscalls_per_second": deltas["mach_syscalls"] / elapsed,
-		"unix_syscalls_per_second": deltas["unix_syscalls"] / elapsed,
+			(deltas["idle_wakeups"] + deltas["interrupt_wakeups"]) / counter_elapsed
+			if counter_elapsed > 0 else None
+		),
+		"context_switches_per_second": counter_rate("context_switches"),
+		"mach_syscalls_per_second": counter_rate("mach_syscalls"),
+		"unix_syscalls_per_second": counter_rate("unix_syscalls"),
 		"deltas": deltas,
 	}
 
@@ -857,11 +897,16 @@ def measure_phase(
 		network_after["raw"]
 	)
 	system_after = system_snapshot()
-	process_summary = summarize_process_csv(csv_path, app_pid)
+	after_pids, after_processes = associated_pids(app_pid)
+	process_summary = summarize_process_csv(csv_path, app_pid, pids)
+	processes_stable = set(pids) == set(after_pids)
 	return {
 		"name": name,
 		"duration_seconds": elapsed,
 		"processes": processes,
+		"processes_after": after_processes,
+		"processes_stable": processes_stable,
+		"valid_for_comparison": processes_stable and process_summary["complete_samples"],
 		"process_metrics": process_summary,
 		"network": network_delta(network_before, network_after, elapsed),
 		"gpu": summarize_gpu(gpu_samples),
@@ -1118,6 +1163,7 @@ def aggregate_runs(runs):
 				for run_result in runs
 				for phase in run_result["phases"]
 				if phase["name"] == phase_name
+				and phase.get("valid_for_comparison", True)
 				and phase[section].get(metric) is not None
 			]
 			if values:
@@ -1150,6 +1196,9 @@ def print_summary(summary):
 		"phase          cpu median    footprint    disk write    preview IPC     other net"
 	)
 	for name, phase in summary["aggregate"].items():
+		if not phase:
+			print(f"{name:<14} incomplete process coverage; inspect raw phase results")
+			continue
 		cpu = phase.get("cpu_median_pct", {}).get("median", 0)
 		memory = (
 			phase.get("phys_footprint_median_bytes", {}).get("median", 0)
@@ -1260,6 +1309,9 @@ def main():
 		"created_at": datetime.now().astimezone().isoformat(),
 		"repository_root": str(REPO_ROOT),
 		"git_commit": run(["git", "rev-parse", "HEAD"]).stdout.strip(),
+		"git_status": run(["git", "status", "--porcelain"]).stdout.strip(),
+		"app_binary": executable_identity(app_executable),
+		"cap_binary": executable_identity(args.cap_binary),
 		"configuration": configuration,
 		"targets": targets,
 		"artifacts_dir": str(artifacts_dir),

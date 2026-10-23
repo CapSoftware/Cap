@@ -10,6 +10,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
 import {
 	STRIPE_DEVELOPER_CREDITS_PRODUCT_ID,
@@ -127,6 +128,7 @@ import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { transcribeVideo } from "@/lib/transcribe";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { isVideoStorageKey } from "@/lib/video-storage-key";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
 	calculateProSeats,
@@ -2385,7 +2387,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 										storageIntegrationId: Option.getOrNull(
 											writable.storageIntegrationId,
 										),
-										public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+										public: await getNewVideoPublic(input.organizationId),
 										duration: download.durationSeconds,
 										width: download.width,
 										height: download.height,
@@ -6598,7 +6600,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										writable.storageIntegrationId,
 									),
 									folderId: payload.folderId ?? null,
-									public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+									public: await getNewVideoPublic(organizationId),
 									duration: payload.durationSeconds,
 									width: payload.width,
 									height: payload.height,
@@ -7037,6 +7039,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"The upload completion state is unavailable",
 							);
 						}
+						if (
+							!isVideoStorageKey(
+								{ id: path.id, ownerId: principal.id },
+								acceptedRawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						if (payload.rawFileKey !== acceptedRawFileKey) {
 							yield* deleteStoredKeyIfPresent(payload.rawFileKey);
 						}
@@ -7093,6 +7106,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (
+							!isVideoStorageKey(
+								{ id: state.id, ownerId: state.ownerId },
+								state.rawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						const processing = yield* Effect.tryPromise(() =>
 							startVideoProcessingWorkflow({
 								videoId: state.id,

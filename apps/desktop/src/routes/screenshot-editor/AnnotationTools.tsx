@@ -6,6 +6,7 @@ import IconLucideCircle from "~icons/lucide/circle";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideLayers from "~icons/lucide/layers";
 import IconLucideMousePointer2 from "~icons/lucide/mouse-pointer-2";
+import IconLucidePencil from "~icons/lucide/pencil";
 import IconLucideSquare from "~icons/lucide/square";
 import IconLucideType from "~icons/lucide/type";
 import {
@@ -38,6 +39,12 @@ export function AnnotationTools() {
 				icon={IconLucideMousePointer2}
 				label="Select"
 				shortcut="V"
+			/>
+			<ToolButton
+				tool="draw"
+				icon={IconLucidePencil}
+				label="Draw"
+				shortcut="D"
 			/>
 			<ToolButton
 				tool="arrow"

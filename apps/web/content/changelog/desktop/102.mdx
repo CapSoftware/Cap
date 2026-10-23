@@ -1,0 +1,22 @@
+---
+title: MacBook Notch Overlay & Recording Reliability Fixes
+app: Cap Desktop
+publishedAt: "2026-08-09"
+version: 0.5.9
+image:
+---
+
+This release fixes a rare error that could stop a recording partway through on macOS and Windows, makes pause and resume more robust, extends disk-space protection to every recording mode, and adds an optional MacBook notch overlay to Studio Mode.
+
+## Features
+
+- **MacBook notch overlay in Studio Mode** - Screen capture records straight through the physical notch, so recordings of a notched MacBook show an unbroken menu bar where you saw a cutout. Studio Mode can now draw the notch back over the recording, in both the editor preview and exports, and it follows your crop, padding, and zoom automatically. New recordings capture the exact notch geometry at record time; for older recordings you can position the overlay by hand.
+
+## Fixes
+
+- **Recordings no longer stop mid-way with a writer error on macOS** - When screen or microphone capture briefly stalled and then recovered in a burst, two frames could land on the same timestamp and the video writer would fail a few seconds later, ending the recording with an error. Frame timing is now corrected before it reaches the writer, so the recording continues. This affected instant, studio, and camera recordings, and was most likely with USB microphones whose capture clock can stall.
+- **The same timing issue fixed for instant recordings on Windows** - Frames arriving in a burst could collide on a single timestamp tick and be rejected by the recorder. Timestamps are now kept strictly increasing, and a stuck capture clock is surfaced in logs instead of failing silently.
+- **Pause and resume reliability on macOS** - Pausing a recording could occasionally produce overlapping frame timings that made the writer fail sporadically after resume. Recordings now survive repeated pause and resume cycles, including stopping while paused.
+- **Disk-space protection for every recording mode** - Previously only instant recordings checked disk space. Every mode, including the camera track, now refuses to start without enough free space, warns when space runs low mid-recording, and stops cleanly before the disk fills so your recording is finalized and playable instead of corrupted.
+- **Camera recordings survive encoder errors** - If the camera encoder hits an error mid-recording, the camera file is now finalized up to that point instead of being left unreadable.
+- **Fixed a freeze during the macOS screen-recording permission check** - A deadlock in the permission check could hang the app when starting a recording.

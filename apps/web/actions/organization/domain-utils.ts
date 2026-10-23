@@ -84,22 +84,6 @@ export const addDomain = async (domain: string) => {
 	return response;
 };
 
-export const removeDomain = async (domain: string) => {
-	const response = await fetch(
-		`https://api.vercel.com/v9/projects/${
-			process.env.VERCEL_PROJECT_ID
-		}/domains/${domain.toLowerCase()}?teamId=${process.env.VERCEL_TEAM_ID}`,
-		{
-			method: "DELETE",
-			headers: {
-				Authorization: `Bearer ${process.env.VERCEL_AUTH_TOKEN}`,
-			},
-		},
-	).then((res) => res.json());
-
-	return response;
-};
-
 export const getRequiredConfig = async (domain: string) => {
 	// First try to get the records directly
 	try {

@@ -169,6 +169,11 @@ pub struct SourceClockState {
     timing_set: bool,
     timing_adjust: i64,
     next_expected_ns: Option<i64>,
+    last_cadence_output_ns: Option<u64>,
+    detect_skipped_frames: bool,
+    pending_lag_ns: Option<i64>,
+    skip_confirmed: bool,
+    skip_count: u64,
     snap_count: u64,
     hard_reset_count: u64,
     resync_count: u64,
@@ -183,12 +188,30 @@ impl SourceClockState {
             timing_set: false,
             timing_adjust: 0,
             next_expected_ns: None,
+            last_cadence_output_ns: None,
+            detect_skipped_frames: false,
+            pending_lag_ns: None,
+            skip_confirmed: false,
+            skip_count: 0,
             snap_count: 0,
             hard_reset_count: 0,
             resync_count: 0,
             trusted_count: 0,
             frame_count: 0,
         }
+    }
+
+    /// Frames that arrive a whole cadence slot late because the source skipped
+    /// frames are moved onto their real timestamp once the next frame shows the
+    /// source kept its cadence (the lag did not shrink), instead of being
+    /// snapped back a slot for the rest of the recording. A single late frame,
+    /// or a backlog that drains, is still smoothed onto the cadence. Only for
+    /// sources stamped at capture time: on sources stamped on callback arrival
+    /// (Windows cameras), scheduling jitter can persist for a frame and read as
+    /// a skip.
+    pub fn detecting_skipped_frames(mut self) -> Self {
+        self.detect_skipped_frames = true;
+        self
     }
 
     pub fn name(&self) -> &'static str {
@@ -205,6 +228,14 @@ impl SourceClockState {
 
     pub fn next_expected_ns(&self) -> Option<i64> {
         self.next_expected_ns
+    }
+
+    pub fn skip_count(&self) -> u64 {
+        self.skip_count
+    }
+
+    pub fn lag_pending(&self) -> bool {
+        self.pending_lag_ns.is_some()
     }
 
     pub fn snap_count(&self) -> u64 {
@@ -233,8 +264,35 @@ impl SourceClockState {
         source_ts: Timestamp,
         frame_duration_ns: u64,
     ) -> SourceClockRemap {
-        let raw_ns = clock.remap_raw_ns(source_ts);
-        let now_ns = clock.elapsed_ns() as i64;
+        self.remap_ns(
+            clock.remap_raw_ns(source_ts),
+            clock.elapsed_ns() as i64,
+            frame_duration_ns,
+            true,
+        )
+    }
+
+    pub fn remap_preserving_cadence(
+        &mut self,
+        clock: &MasterClock,
+        source_ts: Timestamp,
+        frame_duration_ns: u64,
+    ) -> SourceClockRemap {
+        self.remap_ns(
+            clock.remap_raw_ns(source_ts),
+            clock.elapsed_ns() as i64,
+            frame_duration_ns,
+            false,
+        )
+    }
+
+    fn remap_ns(
+        &mut self,
+        raw_ns: i64,
+        now_ns: i64,
+        frame_duration_ns: u64,
+        smooth: bool,
+    ) -> SourceClockRemap {
         self.frame_count = self.frame_count.saturating_add(1);
 
         let using_direct_ts = abs_diff_u64(raw_ns, now_ns) < MAX_TS_VAR_NS;
@@ -249,6 +307,8 @@ impl SourceClockState {
 
         let mut ts_ns = raw_ns;
         let duration_ns = frame_duration_ns.min(i64::MAX as u64) as i64;
+        let pending_lag_ns = self.pending_lag_ns.take();
+        let skip_confirmed = std::mem::take(&mut self.skip_confirmed);
 
         if !self.timing_set {
             self.timing_adjust = now_ns.saturating_sub(raw_ns);
@@ -262,7 +322,18 @@ impl SourceClockState {
                 self.hard_reset_count = self.hard_reset_count.saturating_add(1);
                 self.resync_count = self.resync_count.saturating_add(1);
                 outcome = SourceClockOutcome::HardReset;
-            } else if diff < TS_SMOOTHING_THRESHOLD_NS {
+            } else if smooth
+                && diff < TS_SMOOTHING_THRESHOLD_NS
+                && self.skipped_frames(
+                    raw_ns - expected,
+                    duration_ns,
+                    pending_lag_ns,
+                    skip_confirmed,
+                )
+            {
+                self.skip_confirmed = true;
+                self.skip_count = self.skip_count.saturating_add(1);
+            } else if smooth && diff < TS_SMOOTHING_THRESHOLD_NS {
                 // Snap jitter onto the expected cadence, but cap how far the
                 // ladder may lead the source clock. Each snap re-anchors
                 // next_expected, so a source delivering faster than the
@@ -288,7 +359,19 @@ impl SourceClockState {
         }
         self.next_expected_ns = Some(ts_ns.saturating_add(duration_ns));
 
-        let output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
+        let mut output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
+        if smooth {
+            self.last_cadence_output_ns = None;
+        } else {
+            if let Some(previous) = self.last_cadence_output_ns
+                && !matches!(outcome, SourceClockOutcome::HardReset)
+                && output_ns < previous
+            {
+                output_ns = previous;
+                outcome = SourceClockOutcome::Smoothed;
+            }
+            self.last_cadence_output_ns = Some(output_ns);
+        }
 
         SourceClockRemap {
             master_ns: output_ns,
@@ -297,10 +380,33 @@ impl SourceClockState {
         }
     }
 
+    fn skipped_frames(
+        &mut self,
+        lag_ns: i64,
+        duration_ns: i64,
+        pending_lag_ns: Option<i64>,
+        skip_confirmed: bool,
+    ) -> bool {
+        let half_frame_ns = duration_ns / 2;
+        if !self.detect_skipped_frames || half_frame_ns == 0 || lag_ns < half_frame_ns {
+            return false;
+        }
+        if skip_confirmed
+            || pending_lag_ns.is_some_and(|previous| lag_ns >= previous - duration_ns / 8)
+        {
+            return true;
+        }
+        self.pending_lag_ns = Some(lag_ns);
+        false
+    }
+
     pub fn reset(&mut self) {
         self.timing_set = false;
         self.timing_adjust = 0;
         self.next_expected_ns = None;
+        self.last_cadence_output_ns = None;
+        self.pending_lag_ns = None;
+        self.skip_confirmed = false;
     }
 }
 
@@ -651,5 +757,408 @@ mod tests {
         );
         let result = state.remap(&clock, ts, frame_ns);
         assert!(result.master_ns == 0 || result.master_ns <= 1_000_000_000);
+    }
+    #[test]
+    fn preserving_cadence_does_not_release_recorded_smoothing_lag() {
+        let samples = [
+            (46154413, 78690394),
+            (65568721, 135377154),
+            (110897087, 172279669),
+            (132556133, 193694100),
+            (194257322, 206714730),
+            (210630064, 228600321),
+            (295866539, 326602031),
+            (331422825, 390005096),
+            (358539718, 429724051),
+            (391572010, 454430003),
+            (419586633, 474622237),
+            (463879066, 499774959),
+            (472447881, 533644768),
+            (513265949, 568866386),
+            (553800082, 589048951),
+            (612231200, 650842341),
+            (659399095, 685934536),
+        ];
+        let mut legacy = SourceClockState::new("legacy-video");
+        let mut preserving = SourceClockState::new("continuous-video");
+        let mut legacy_output = Vec::new();
+        let mut preserved_output = Vec::new();
+        for (raw, now) in samples {
+            legacy_output.push(legacy.remap_ns(raw, now, 33_333_333, true).master_ns);
+            preserved_output.push(preserving.remap_ns(raw, now, 33_333_333, false).master_ns);
+        }
+        assert_eq!(legacy_output[16] - legacy_output[15], 113_244_687);
+        assert_eq!(preserved_output[16] - preserved_output[15], 47_167_895);
+        assert_eq!(legacy_output[0], preserved_output[0]);
+        assert_eq!(preserving.snap_count(), 0);
+        assert_eq!(preserving.hard_reset_count(), 0);
+    }
+
+    #[test]
+    fn preserving_cadence_replays_every_recorded_interval() {
+        let samples: [i64; 166] = [
+            46154413, 65568721, 110897087, 132556133, 194257322, 210630064, 295866539, 331422825,
+            358539718, 391572010, 419586633, 463879066, 472447881, 513265949, 553800082, 612231200,
+            659399095, 684859793, 703765590, 771137903, 816569916, 829567548, 863610545, 926770792,
+            969115079, 983414049, 1040848452, 1050334828, 1099575914, 1159724806, 1175198241,
+            1207247075, 1239602166, 1305713087, 1336115915, 1367591857, 1429003927, 1450650105,
+            1482563646, 1507565298, 1548602526, 1608592995, 1615701319, 1683213311, 1697719775,
+            1742772459, 1775887617, 1801167715, 1858162227, 1910977942, 1955903885, 1977035872,
+            2006647063, 2044937201, 2127620053, 2149847594, 2170967171, 2221614788, 2279627404,
+            2289253362, 2333763286, 2382028011, 2412563172, 2444953954, 2490800736, 2549402425,
+            2584977585, 2615680580, 2650109725, 2665944218, 2745574052, 2781041320, 2820631617,
+            2842908220, 2871194752, 2915919941, 2962020029, 2991660101, 3038647128, 3057869964,
+            3092459053, 3158726868, 3166722481, 3246562870, 3281329262, 3313973509, 3371634807,
+            3398569941, 3461197437, 3499790112, 3509911781, 3588729118, 3626970626, 3632929245,
+            3696523572, 3743563090, 3770569195, 3793558443, 3831804481, 3856646119, 3898780811,
+            3940568105, 3980226504, 4016559191, 4052128431, 4066657406, 4120152494, 4151270637,
+            4184461316, 4206797820, 4275284412, 4307124812, 4323324283, 4350754207, 4400827291,
+            4450575108, 4463290634, 4517560479, 4541563458, 4574001281, 4627021529, 4639667832,
+            4701963641, 4715851742, 4756979912, 4799046093, 4825566377, 4857078700, 4888566231,
+            4915249779, 4957961094, 4987293889, 5048028694, 5071025932, 5112782536, 5148460569,
+            5180622435, 5197751016, 5247952933, 5275295305, 5331623674, 5360745415, 5382814833,
+            5433875878, 5461561168, 5491354103, 5521647539, 5567574883, 5599380402, 5623347371,
+            5664391349, 5692765944, 5731586034, 5753006938, 5774332970, 5848158628, 5884141787,
+            5911433118, 5926586376, 5998337740, 6012802883, 6052260307, 6129125352, 6162385302,
+            6196413748, 6214714645,
+        ];
+        let mut state = SourceClockState::new("recorded-video");
+        let mut previous = None;
+        for raw in samples {
+            let mapped = state.remap_ns(raw, raw + 30_000_000, 33_333_333, false);
+            assert_eq!(mapped.master_ns, raw as u64);
+            if let Some((previous_raw, previous_output)) = previous {
+                assert_eq!(
+                    mapped.master_ns - previous_output,
+                    (raw - previous_raw) as u64
+                );
+                assert!(mapped.master_ns - previous_output < 100_000_000);
+            }
+            previous = Some((raw, mapped.master_ns));
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_matches_each_interval_across_rates_and_jitter() {
+        for nominal in [24.0, 30.0, 60.0] {
+            for actual in [
+                10.0, 15.0, 20.0, 24.0, 25.0, 29.97, 30.0, 48.0, 60.0, 90.0, 120.0, 240.0, 500.0,
+                1000.0,
+            ] {
+                for jitter in [0.0, 0.3] {
+                    let mut state = SourceClockState::new("cadence-matrix");
+                    let mut rng = TestRng(0xCA9_5EED);
+                    let mut previous = None;
+                    for frame in 0..300 {
+                        let raw = ((frame as f64 + (rng.next_f64() * 2.0 - 1.0) * jitter)
+                            * 1_000_000_000.0
+                            / actual)
+                            .max(0.0) as i64;
+                        let mapped = state.remap_ns(
+                            raw,
+                            raw + 25_000_000,
+                            (1_000_000_000.0 / nominal) as u64,
+                            false,
+                        );
+                        assert_eq!(mapped.master_ns, raw as u64);
+                        if let Some((previous_raw, previous_output)) = previous {
+                            assert!(raw >= previous_raw);
+                            assert_eq!(
+                                mapped.master_ns - previous_output,
+                                (raw - previous_raw) as u64
+                            );
+                        }
+                        previous = Some((raw, mapped.master_ns));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_floors_backward_and_duplicate_inputs() {
+        let mut state = SourceClockState::new("backward-video");
+        for (raw, expected) in [
+            (100_000_000, 100_000_000),
+            (120_000_000, 120_000_000),
+            (110_000_000, 120_000_000),
+            (120_000_000, 120_000_000),
+            (130_000_000, 130_000_000),
+        ] {
+            assert_eq!(
+                state
+                    .remap_ns(raw, 200_000_000, 33_333_333, false)
+                    .master_ns,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_retains_real_gaps() {
+        let mut state = SourceClockState::new("gapped-video");
+        for raw in [0, 30_000_000, 430_000_000, 460_000_000, 3_460_000_000] {
+            let mapped = state.remap_ns(raw, raw + 30_000_000, 33_333_333, false);
+            assert_eq!(mapped.master_ns, raw as u64);
+            assert_ne!(mapped.outcome, SourceClockOutcome::HardReset);
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_retains_initial_adjust_and_hard_reset_recovery() {
+        let mut state = SourceClockState::new("reset-video");
+        let first = state.remap_ns(-10_000_000_000, 0, 33_333_333, false);
+        assert_eq!(first.outcome, SourceClockOutcome::InitialAdjust);
+        assert_eq!(first.master_ns, 0);
+        assert_eq!(
+            state
+                .remap_ns(-9_966_666_667, 33_333_333, 33_333_333, false)
+                .master_ns,
+            33_333_333
+        );
+        let reset = state.remap_ns(-4_966_666_667, 66_666_666, 33_333_333, false);
+        assert_eq!(reset.outcome, SourceClockOutcome::HardReset);
+        assert_eq!(reset.master_ns, 66_666_666);
+        assert_eq!(
+            state
+                .remap_ns(-4_933_333_334, 99_999_999, 33_333_333, false)
+                .master_ns,
+            99_999_999
+        );
+        assert_eq!(state.hard_reset_count(), 1);
+    }
+
+    #[test]
+    fn preserving_cadence_reset_releases_previous_epoch_floor() {
+        let mut state = SourceClockState::new("new-epoch");
+        assert_eq!(
+            state
+                .remap_ns(1_000_000_000, 1_000_000_000, 33_333_333, false)
+                .master_ns,
+            1_000_000_000
+        );
+        state.reset();
+        assert_eq!(
+            state
+                .remap_ns(10_000_000, 10_000_000, 33_333_333, false)
+                .master_ns,
+            10_000_000
+        );
+    }
+
+    #[test]
+    fn preserving_cadence_public_method_keeps_source_delta() {
+        let clock = clock();
+        let mut state = SourceClockState::new("public-video");
+        let first = state.remap_preserving_cadence(
+            &clock,
+            Timestamp::Instant(clock.start_instant() + Duration::from_millis(100)),
+            33_333_333,
+        );
+        let second = state.remap_preserving_cadence(
+            &clock,
+            Timestamp::Instant(clock.start_instant() + Duration::from_millis(147)),
+            33_333_333,
+        );
+        assert_eq!(second.master_ns - first.master_ns, 47_000_000);
+    }
+
+    const FRAME_60_NS: u64 = 16_666_666;
+
+    fn frame_raw_ns(frame: u64) -> i64 {
+        (frame * 1_000_000_000 / 60) as i64
+    }
+
+    fn replay(state: &mut SourceClockState, raws: &[i64], frame_ns: u64) -> Vec<u64> {
+        raws.iter()
+            .map(|&raw| {
+                state
+                    .remap_ns(raw, raw + 20_000_000, frame_ns, true)
+                    .master_ns
+            })
+            .collect()
+    }
+
+    fn skip_tracking() -> SourceClockState {
+        SourceClockState::new("video").detecting_skipped_frames()
+    }
+
+    fn frames_with_skips(total: u64, skips: &[(u64, u64)]) -> Vec<i64> {
+        (0..total)
+            .filter(|frame| {
+                !skips
+                    .iter()
+                    .any(|&(start, count)| *frame >= start && *frame < start + count)
+            })
+            .map(frame_raw_ns)
+            .collect()
+    }
+
+    #[test]
+    fn skipped_frames_at_start_return_to_source_time() {
+        for dropped in [1, 2, 3, 4] {
+            let raws = frames_with_skips(240, &[(1, dropped)]);
+            let legacy = replay(&mut SourceClockState::new("legacy"), &raws, FRAME_60_NS);
+            let output = replay(&mut skip_tracking(), &raws, FRAME_60_NS);
+
+            let lag =
+                (raws[239 - dropped as usize] as u64).abs_diff(legacy[239 - dropped as usize]);
+            assert!(
+                lag.abs_diff(dropped * FRAME_60_NS) < 1_000_000,
+                "legacy smoothing keeps {dropped} skipped frames as lag, got {lag}"
+            );
+            for (index, (&raw, &mapped)) in raws.iter().zip(&output).enumerate().skip(2) {
+                assert!(
+                    (raw as u64).abs_diff(mapped) < 1_000,
+                    "dropped={dropped} frame {index}: {mapped} vs source {raw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skipped_frames_beyond_smoothing_threshold_match_legacy() {
+        for dropped in [5, 8] {
+            let raws = frames_with_skips(240, &[(1, dropped)]);
+            let legacy = replay(&mut SourceClockState::new("legacy"), &raws, FRAME_60_NS);
+            assert_eq!(replay(&mut skip_tracking(), &raws, FRAME_60_NS), legacy);
+        }
+    }
+
+    #[test]
+    fn first_frame_after_skip_is_pending_until_lag_persists() {
+        let raws = frames_with_skips(10, &[(3, 2)]);
+        let mut state = skip_tracking();
+        let mut pending = Vec::new();
+        let mut output = Vec::new();
+        for raw in raws.iter().copied() {
+            output.push(state.remap_ns(raw, raw, FRAME_60_NS, true).master_ns);
+            pending.push(state.lag_pending());
+        }
+        assert_eq!(
+            pending,
+            [false, false, false, true, false, false, false, false]
+        );
+        assert_eq!(output[3], output[2] + FRAME_60_NS);
+        assert_eq!(output[4], raws[4] as u64);
+        assert_eq!(state.skip_count(), 1);
+    }
+
+    #[test]
+    fn repeated_mid_recording_skips_never_accumulate_lag() {
+        let raws = frames_with_skips(600, &[(100, 1), (200, 3), (300, 2), (301 + 50, 4)]);
+        let output = replay(&mut skip_tracking(), &raws, FRAME_60_NS);
+        let last = raws.len() - 1;
+        assert!((raws[last] as u64).abs_diff(output[last]) < 1_000);
+        for pair in output.windows(2) {
+            assert!(pair[1] > pair[0]);
+        }
+    }
+
+    #[test]
+    fn skip_tracking_is_identical_to_legacy_without_skips() {
+        for nominal in [24.0, 30.0, 60.0] {
+            let frame_ns = (1_000_000_000.0 / nominal) as u64;
+            for seed in 0..20 {
+                let mut rng = TestRng(0x5EED + seed);
+                let raws: Vec<i64> = (0..600)
+                    .map(|frame| {
+                        let jitter = (rng.next_f64() * 2.0 - 1.0) * 0.24 * frame_ns as f64;
+                        (frame as f64 * 1_000_000_000.0 / nominal + jitter).max(0.0) as i64
+                    })
+                    .collect();
+                assert_eq!(
+                    replay(&mut skip_tracking(), &raws, frame_ns),
+                    replay(&mut SourceClockState::new("legacy"), &raws, frame_ns),
+                    "nominal={nominal} seed={seed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn single_late_frame_is_still_smoothed() {
+        let mut raws: Vec<i64> = (0..120).map(frame_raw_ns).collect();
+        raws[40] += 12_000_000;
+        raws[80] += 60_000_000;
+        let output = replay(&mut skip_tracking(), &raws, FRAME_60_NS);
+        assert_eq!(
+            output,
+            replay(&mut SourceClockState::new("legacy"), &raws, FRAME_60_NS)
+        );
+        assert_eq!(output[40], output[39] + FRAME_60_NS);
+    }
+
+    #[test]
+    fn delivery_backlog_draining_is_still_smoothed() {
+        for (fps, spacings_us) in [
+            (60, [100, 5_000, 10_000, 14_000]),
+            (30, [100, 10_000, 20_000, 28_000]),
+        ] {
+            let frame_ns = 1_000_000_000 / fps;
+            for stall_ms in [20, 40, 60] {
+                for spacing_us in spacings_us {
+                    let resume = 30 * frame_ns as i64 + stall_ms * 1_000_000;
+                    let raws: Vec<i64> = (0..(4 * fps as i64))
+                        .map(|frame| {
+                            let raw = frame * frame_ns as i64;
+                            if frame >= 30 {
+                                raw.max(resume + (frame - 30) * spacing_us * 1_000)
+                            } else {
+                                raw
+                            }
+                        })
+                        .collect();
+                    let mut state = skip_tracking();
+                    let output = replay(&mut state, &raws, frame_ns);
+                    assert_eq!(
+                        output,
+                        replay(&mut SourceClockState::new("legacy"), &raws, frame_ns),
+                        "fps={fps} stall={stall_ms}ms spacing={spacing_us}us"
+                    );
+                    assert_eq!(state.skip_count(), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn skipped_frames_with_timestamp_jitter_return_to_source_time() {
+        let mut rng = TestRng(0xD12);
+        let raws: Vec<i64> = frames_with_skips(240, &[(1, 2), (150, 3)])
+            .into_iter()
+            .map(|raw| raw + ((rng.next_f64() * 2.0 - 1.0) * 500_000.0) as i64)
+            .collect();
+        let mut state = skip_tracking();
+        let output = replay(&mut state, &raws, FRAME_60_NS);
+        assert_eq!(state.skip_count(), 2);
+        let last = raws.len() - 1;
+        assert!((raws[last] as u64).abs_diff(output[last]) < 1_000_000);
+    }
+
+    #[test]
+    fn slow_source_tracks_source_time_after_first_skip() {
+        let raws: Vec<i64> = (0..60).map(|frame| frame * 66_666_666).collect();
+        let output = replay(&mut skip_tracking(), &raws, 33_333_333);
+        for (index, (&raw, &mapped)) in raws.iter().zip(&output).enumerate().skip(2) {
+            assert_eq!(mapped, raw as u64, "frame {index}");
+        }
+    }
+
+    #[test]
+    fn skip_tracking_keeps_fast_source_bounds() {
+        for nominal in [24.0, 30.0, 60.0] {
+            let frame_ns = (1_000_000_000.0 / nominal) as u64;
+            for actual in [60.0, 90.0, 120.0, 240.0, 1000.0] {
+                let raws: Vec<i64> = (0..((1.5 * actual) as i64))
+                    .map(|frame| (frame as f64 * 1_000_000_000.0 / actual) as i64)
+                    .collect();
+                assert_eq!(
+                    replay(&mut skip_tracking(), &raws, frame_ns),
+                    replay(&mut SourceClockState::new("legacy"), &raws, frame_ns),
+                    "nominal={nominal} actual={actual}"
+                );
+            }
+        }
     }
 }
