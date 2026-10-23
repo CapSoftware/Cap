@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
 	startVideoProcessingWorkflow: vi.fn(),
 	selectWhere: vi.fn(),
 	updateSet: vi.fn(),
+	lockedFor: vi.fn(),
+	transaction: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -62,6 +64,21 @@ beforeEach(() => {
 	});
 	mocks.startVideoProcessingWorkflow.mockResolvedValue("started");
 	mocks.updateSet.mockReturnValue({ where: vi.fn().mockResolvedValue([]) });
+	mocks.lockedFor.mockResolvedValue([]);
+	mocks.transaction.mockImplementation((run: (tx: unknown) => unknown) =>
+		run({
+			select: () => ({
+				from: () => ({
+					where: () => ({
+						for: mocks.lockedFor,
+					}),
+				}),
+			}),
+			update: () => ({
+				set: mocks.updateSet,
+			}),
+		}),
+	);
 	mocks.db.mockReturnValue({
 		select: () => ({
 			from: () => ({
@@ -71,6 +88,7 @@ beforeEach(() => {
 		update: () => ({
 			set: mocks.updateSet,
 		}),
+		transaction: mocks.transaction,
 	});
 });
 
@@ -221,6 +239,9 @@ describe("video metadata route", () => {
 		mocks.selectWhere.mockResolvedValue([
 			{ ...video, metadata: { sourceName: "a.mp4", agentUpload } },
 		]);
+		mocks.lockedFor.mockResolvedValue([
+			{ metadata: { sourceName: "a.mp4", agentUpload } },
+		]);
 
 		const response = await put({
 			sourceName: "b.mp4",
@@ -233,8 +254,34 @@ describe("video metadata route", () => {
 		});
 	});
 
+	it("keeps an agent upload accepted after the initial read when metadata is written", async () => {
+		const accepted = {
+			state: "accepted",
+			rawFileKey: `${ownerId}/${videoId}/verified-upload-abc.mp4`,
+		};
+		mocks.selectWhere.mockResolvedValue([
+			{
+				...video,
+				metadata: { sourceName: "a.mp4", agentUpload: { state: "pending" } },
+			},
+		]);
+		mocks.lockedFor.mockResolvedValue([
+			{ metadata: { sourceName: "a.mp4", agentUpload: accepted } },
+		]);
+
+		const response = await put({ sourceName: "b.mp4" });
+
+		expect(response.status).toBe(200);
+		expect(mocks.transaction).toHaveBeenCalledOnce();
+		expect(mocks.lockedFor).toHaveBeenCalledWith("update");
+		expect(mocks.updateSet).toHaveBeenCalledWith({
+			metadata: { sourceName: "b.mp4", agentUpload: accepted },
+		});
+	});
+
 	it("does not add an agent upload state from the request", async () => {
 		mocks.selectWhere.mockResolvedValue([{ ...video, metadata: null }]);
+		mocks.lockedFor.mockResolvedValue([{ metadata: null }]);
 
 		const response = await put({
 			customCreatedAt: "2026-01-01T00:00:00.000Z",
@@ -254,5 +301,6 @@ describe("video metadata route", () => {
 
 		expect(response.status).toBe(400);
 		expect(mocks.updateSet).not.toHaveBeenCalled();
+		expect(mocks.transaction).not.toHaveBeenCalled();
 	});
 });
