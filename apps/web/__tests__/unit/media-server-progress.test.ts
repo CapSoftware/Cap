@@ -256,15 +256,19 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 function request(
 	body: unknown = fixture().payload,
 	secret: string | null = "media-secret",
+	search = "",
 ) {
 	const headers = new Headers({ "Content-Type": "application/json" });
 	if (secret !== null) headers.set("x-media-server-secret", secret);
 	return POST(
-		new NextRequest("https://cap.so/api/webhooks/media-server/progress", {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		}),
+		new NextRequest(
+			`https://cap.so/api/webhooks/media-server/progress${search}`,
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			},
+		),
 	);
 }
 
@@ -747,5 +751,62 @@ describe("media-server recording progress webhook", () => {
 		).toBe(500);
 		expect(database.mutations).toEqual([]);
 		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["a retryable error", "error", "Worker failed", "?retryable=true"],
+		[
+			"a media server shutdown",
+			"cancelled",
+			"Server shutting down",
+			"?retryable=true",
+		],
+	])(
+		"keeps a workflow upload processing for retry after %s",
+		async (_, phase, message, search) => {
+			const database = databaseFixture(null);
+			const response = await request(
+				{ jobId: "web-job", videoId, phase, progress: 37, message },
+				"media-secret",
+				search,
+			);
+			expect(response.status).toBe(200);
+			expect(database.mutations).toEqual([
+				{
+					operation: "update",
+					table: mocks.tables.uploads,
+					values: expect.objectContaining({
+						phase: "processing",
+						processingProgress: 37,
+						processingError: message,
+						processingMessage: "Retrying video processing...",
+					}),
+				},
+			]);
+		},
+	);
+
+	it.each([
+		["a deliberate cancel", "Cancelled by user", "?retryable=true"],
+		["a shutdown cancel without retry support", "Server shutting down", ""],
+	])("marks a workflow upload failed after %s", async (_, message, search) => {
+		const database = databaseFixture(null);
+		const response = await request(
+			{ jobId: "web-job", videoId, phase: "cancelled", progress: 37, message },
+			"media-secret",
+			search,
+		);
+		expect(response.status).toBe(200);
+		expect(database.mutations).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "error",
+					processingError: message,
+					processingMessage: message,
+				}),
+			},
+		]);
 	});
 });

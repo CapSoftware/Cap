@@ -21,7 +21,7 @@ const SHAKE_DETECTION_WINDOW_MS: f64 = 100.0;
 const DECIMATE_FPS: f64 = 60.0;
 const DECIMATE_MIN_DIST_UV: f64 = 1.0 / 1920.0;
 const SIMULATION_STEP_MS: f64 = 1000.0 / 60.0;
-const SPRING_SETTLE_EXTRA_MS: f64 = 300.0;
+const SPRING_SETTLE_TIMEOUT_MS: f64 = 5000.0;
 /// Per-step one-pole coefficient for adapting the phase lead when the active
 /// spring profile changes; ~130ms time constant at the 60Hz simulation step,
 /// so profile switches ease in without popping the target.
@@ -485,9 +485,9 @@ fn build_smoothed_timeline(
     sim.set_target_position(start_pos);
 
     let end_time_ms = moves.last().unwrap().time_ms;
-    let settle_end = end_time_ms + SPRING_SETTLE_EXTRA_MS;
+    let settle_deadline = end_time_ms + SPRING_SETTLE_TIMEOUT_MS;
 
-    let capacity = ((settle_end / SIMULATION_STEP_MS).ceil() as usize) + 2;
+    let capacity = ((settle_deadline / SIMULATION_STEP_MS).ceil() as usize) + 2;
     let mut events = Vec::with_capacity(capacity);
     let mut target_hint: usize = 0;
     let mut cid_hint: usize = 0;
@@ -502,7 +502,7 @@ fn build_smoothed_timeline(
     let mut t_ms = SIMULATION_STEP_MS;
     let mut lead_ms = spring_lag_ms(&smoothing_config);
 
-    while t_ms <= settle_end {
+    while t_ms <= settle_deadline {
         let clamped_t = t_ms.min(end_time_ms);
 
         context.advance_to(t_ms);
@@ -538,6 +538,10 @@ fn build_smoothed_timeline(
             velocity: sim.velocity,
             cursor_id: cid,
         });
+
+        if t_ms >= end_time_ms && sim.is_at_rest() {
+            break;
+        }
 
         t_ms += SIMULATION_STEP_MS;
     }
@@ -938,6 +942,26 @@ mod tests {
             prev = pos;
         }
     }
+
+    #[test]
+    fn smoothed_cursor_reaches_final_recorded_position() {
+        let cursor = CursorEvents {
+            moves: vec![cursor_move(0.0, 0.1, 0.2), cursor_move(1000.0, 0.9, 0.8)],
+            clicks: vec![],
+        };
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 80.0,
+            mass: 2.5,
+            friction: 28.0,
+        };
+
+        let settled = interpolate_cursor(&cursor, 10.0, Some(smoothing)).unwrap();
+
+        assert!((settled.position.coord.x - 0.9).abs() < 1e-6);
+        assert!((settled.position.coord.y - 0.8).abs() < 1e-6);
+        assert_eq!(settled.velocity, XY::new(0.0, 0.0));
+    }
+
     fn linear_position_at_time(moves: &[CursorMoveEvent], time_ms: f64) -> (f64, f64) {
         if moves.is_empty() {
             return (0.0, 0.0);
@@ -997,9 +1021,9 @@ mod tests {
         sim.set_target_position(start_pos);
 
         let end_time_ms = moves.last().unwrap().time_ms;
-        let settle_end = end_time_ms + SPRING_SETTLE_EXTRA_MS;
+        let settle_deadline = end_time_ms + SPRING_SETTLE_TIMEOUT_MS;
 
-        let capacity = ((settle_end / SIMULATION_STEP_MS).ceil() as usize) + 2;
+        let capacity = ((settle_deadline / SIMULATION_STEP_MS).ceil() as usize) + 2;
         let mut events = Vec::with_capacity(capacity);
         let mut target_hint: usize = 0;
         let mut cid_hint: usize = 0;
@@ -1014,7 +1038,7 @@ mod tests {
         let mut t_ms = SIMULATION_STEP_MS;
         let mut lead_ms = spring_lag_ms(&smoothing_config);
 
-        while t_ms <= settle_end {
+        while t_ms <= settle_deadline {
             let clamped_t = t_ms.min(end_time_ms);
 
             context.advance_to(t_ms);
@@ -1046,6 +1070,10 @@ mod tests {
                 velocity: sim.velocity,
                 cursor_id: cid,
             });
+
+            if t_ms >= end_time_ms && sim.is_at_rest() {
+                break;
+            }
 
             t_ms += SIMULATION_STEP_MS;
         }
