@@ -247,5 +247,9 @@ const formatBucketLabel = (bucket: string, hourly: boolean) => {
 			hour: "numeric",
 			minute: undefined,
 		});
-	return date.toLocaleDateString([], { month: "short", day: "numeric" });
+	return date.toLocaleDateString([], {
+		month: "short",
+		day: "numeric",
+		timeZone: "UTC",
+	});
 };
