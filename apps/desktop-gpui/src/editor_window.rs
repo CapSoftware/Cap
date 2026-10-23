@@ -7084,10 +7084,7 @@ impl EditorWindow {
 
     fn open_recording_bundle(&mut self, cx: &mut Context<Self>) {
         self.set_selection(None, cx);
-        crate::library::open_recording_folder(
-            &self.project_path,
-            crate::library::RecordingMode::Studio,
-        );
+        crate::library::reveal_path(&self.project_path, cx);
     }
 
     fn delete_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
