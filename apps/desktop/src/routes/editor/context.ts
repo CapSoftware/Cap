@@ -1823,7 +1823,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 				const visibleOrigin = origin - state.position;
 
-				const originPercentage = Math.min(1, visibleOrigin / state.zoom);
+				const originPercentage = Math.min(
+					1,
+					Math.max(0, visibleOrigin / state.zoom),
+				);
 
 				const newVisibleOrigin = zoom * originPercentage;
 				const newPosition = origin - newVisibleOrigin;
