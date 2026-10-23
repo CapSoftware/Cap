@@ -24,6 +24,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,7 +43,7 @@ jobs:
               - 'crates/**'
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
-              - 'scripts/setup.js'
+              - 'scripts/setup*'
               - 'Cargo.toml'
               - 'Cargo.lock'
             gpui:
@@ -65,6 +66,9 @@ jobs:
               - 'scripts/sync-desktop-versions.mjs'
               - 'scripts/verify-gpui-release-inputs.mjs'
               - 'scripts/verify-windows-stack.mjs'
+            gpui-patches:
+              - 'apps/desktop-gpui/patches/**'
+              - 'scripts/prepare-gpui-dependency.sh'
             tauri-plugins:
               - 'Cargo.lock'
               - 'bun.lock'
@@ -274,6 +278,9 @@ jobs:
           prefix-key: v1-rust-tests
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Test native dependency setup
+        run: node --test scripts/setup.test.mjs
+
       - name: Run setup
         run: node scripts/setup.js
 
@@ -370,6 +377,70 @@ jobs:
             cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+
+  # Cap only builds gpui's crates as dependencies, so their own tests never run
+  # in the app jobs above. Run the ones covering Cap's patches against real
+  # devices: Metal on macOS, WARP on Windows, and Mesa's lavapipe (Vulkan) and
+  # llvmpipe (GL) on Linux. Windows renders with D3D11 and its runners expose
+  # no wgpu adapter, so wgpu's tests run on macOS and Linux only. Zed's lockfile predates the patches' dependency
+  # changes, so these builds cannot use --locked.
+  gpui-patch-tests:
+    name: GPUI patch tests (${{ matrix.settings.name }})
+    needs: changes
+    if: needs.changes.outputs.gpui-patches == 'true'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            runner: blacksmith-6vcpu-macos-15
+          - name: Windows
+            runner: blacksmith-8vcpu-windows-2025
+          - name: Linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install software GPU drivers
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libegl1 libegl-mesa0 libgl1-mesa-dri
+
+      - name: Allow long paths in Zed's git dependencies
+        if: ${{ runner.os == 'Windows' }}
+        run: git config --global core.longpaths true
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      - name: Test GPUI patches
+        shell: bash
+        working-directory: ../zed-cap
+        env:
+          GPUI_REQUIRE_TEST_DEVICE: "1"
+        run: |
+          cargo +1.95.0 test -p gpui --lib stream
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+            WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+            cargo +1.95.0 test -p gpui_macos --lib -- metal_atlas metal_renderer
+          else
+            cargo +1.95.0 test -p gpui_windows --lib directx_atlas
+          fi
 
   tauri-plugins:
     name: Verify Tauri plugin versions
