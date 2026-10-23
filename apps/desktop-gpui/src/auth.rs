@@ -323,12 +323,58 @@ impl UploadRequestContext {
     }
 }
 
-pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
+/// Idle API connections are dropped after 4 s, before the 5 s keep-alive
+/// timeout of a self-hosted Node server, so a request is never sent on a
+/// connection the server is closing.
+pub(crate) const API_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(4);
+/// The shared API client is rebuilt this often, so system proxy changes still
+/// apply. It is wall clock time, which counts a sleep where the pool's idle
+/// clock does not, so calls after a longer sleep start on new connections.
+const API_CLIENT_MAX_AGE: Duration = Duration::from_secs(30);
+
+fn api_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(45))
+}
+
+/// A new client, for a caller that keeps one for a single upload.
+pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
+    api_client_builder()
         .build()
         .map_err(|error| AuthApiError::Other(error.to_string()))
+}
+
+static SHARED_API_CLIENT: Mutex<Option<(std::time::SystemTime, reqwest::Client)>> =
+    Mutex::new(None);
+
+/// Starts the next `authed_request` on a new client, so a test's connection
+/// count cannot see another test's client reach its maximum age.
+#[cfg(test)]
+pub(crate) fn reset_shared_api_client() {
+    *SHARED_API_CLIENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
+}
+
+/// The client `authed_request` uses. Calls close together, like Instant
+/// presigns about once a second or the requests after a recording stops,
+/// reuse its open connections instead of each paying a TCP and TLS handshake.
+fn shared_api_client() -> Result<reqwest::Client, AuthApiError> {
+    let mut shared = SHARED_API_CLIENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some((built, client)) = shared.as_ref()
+        && built.elapsed().is_ok_and(|age| age < API_CLIENT_MAX_AGE)
+    {
+        return Ok(client.clone());
+    }
+    let client = api_client_builder()
+        .pool_idle_timeout(API_POOL_IDLE_TIMEOUT)
+        .build()
+        .map_err(|error| AuthApiError::Other(error.to_string()))?;
+    *shared = Some((std::time::SystemTime::now(), client.clone()));
+    Ok(client)
 }
 
 pub async fn authed_request(
@@ -336,7 +382,7 @@ pub async fn authed_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<reqwest::Response, AuthApiError> {
-    authed_request_with(&api_client()?, method, path, body).await
+    authed_request_with(&shared_api_client()?, method, path, body).await
 }
 
 pub async fn authed_request_with(
