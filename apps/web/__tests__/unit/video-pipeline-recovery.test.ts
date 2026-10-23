@@ -232,7 +232,11 @@ describe("recoverStalledVideoPipeline", () => {
 		expect(result.media.statuses).toEqual({ "already-claimed": 1 });
 	});
 
-	it.each(["Downloading video...", "Queued for Loom import processing..."])(
+	it.each([
+		"Downloading video...",
+		"Queued for Loom import processing...",
+		"Confirming Loom import",
+	])(
 		"restarts orphaned Loom jobs in the %s state through the bulk import workflow",
 		async (processingMessage) => {
 			const mediaCandidate = {

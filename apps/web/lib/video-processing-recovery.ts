@@ -162,7 +162,7 @@ async function recoverLoomCandidate({
 			.update(videoUploads)
 			.set({
 				processingMessage: LOOM_IMPORT_CONFIRMATION_MESSAGE,
-				updatedAt: new Date(),
+				...(phase === "processing" ? {} : { updatedAt: new Date() }),
 			})
 			.where(
 				and(

@@ -451,7 +451,7 @@ describe("recoverFailedVideoProcessing", () => {
 			expect(result.statuses).toEqual({ "reconciliation-required": 1 });
 			expect(update.set).toHaveBeenCalledWith({
 				processingMessage: "Confirmation required",
-				updatedAt: expect.any(Date),
+				...(row.phase === "processing" ? {} : { updatedAt: expect.any(Date) }),
 			});
 			expect(update.where).toHaveBeenCalledWith(
 				expect.arrayContaining([

@@ -45,6 +45,7 @@ const STALLED_MEDIA_PROCESSING_MESSAGES = [
 	"Queued for video processing...",
 	"Queued for Loom import processing...",
 	"Processing recovery will retry automatically",
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
 ] as const;
 
 type PipelineRecoveryStatus =
