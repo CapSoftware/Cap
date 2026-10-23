@@ -90,6 +90,11 @@ describe("operator migration inventory reconciliation", () => {
 		{ ...request, activeOrganizationId: null },
 		{ ...request, activeOrganizationId: "other" },
 		{ ...request, activeImportCount: 1 },
+		{
+			...request,
+			activeImportCount: 1,
+			activeImportLeaseUntil: new Date(Date.now() + 60_000),
+		},
 	])("holds inactive requests and concurrent imports: %j", async (row) => {
 		mocks.rows = [row ? [row] : []];
 		await expect(reconcileMissingLoomMigrationImports(input)).rejects.toThrow(
@@ -105,6 +110,24 @@ describe("operator migration inventory reconciliation", () => {
 		});
 		expect(mocks.delete).not.toHaveBeenCalled();
 		expect(mocks.update).not.toHaveBeenCalled();
+	});
+
+	it("permits inventory-only reconciliation after an import reservation expires", async () => {
+		mocks.rows = [
+			[
+				{
+					...request,
+					activeImportCount: 1,
+					activeImportLeaseUntil: new Date(0),
+				},
+			],
+			[],
+		];
+		await expect(reconcileMissingLoomMigrationImports(input)).resolves.toEqual({
+			removedCount: 0,
+			hasMore: false,
+		});
+		expect(mocks.delete).not.toHaveBeenCalled();
 	});
 
 	it("bounds cleanup, rechecks absent videos and never changes completion or counts", async () => {

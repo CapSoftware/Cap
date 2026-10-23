@@ -35,7 +35,9 @@ export async function reconcileMissingLoomMigrationImports({
 			!request ||
 			request.status === "completed" ||
 			request.activeOrganizationId !== request.organizationId ||
-			request.activeImportCount > 0
+			(request.activeImportCount > 0 &&
+				(!request.activeImportLeaseUntil ||
+					request.activeImportLeaseUntil > new Date()))
 		) {
 			throw new LoomMigrationError(
 				"The migration is inactive or imports are starting. Refresh and try again.",
