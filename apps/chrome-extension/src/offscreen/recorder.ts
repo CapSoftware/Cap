@@ -1174,9 +1174,12 @@ const startRecording = async (request: StartRecordingRequest) => {
 			);
 			await ownedSpool.dispose().catch(() => undefined);
 		}
-		// Reset the "creating" status so later status syncs do not report a
-		// phantom in-progress recording.
-		if (status.phase === "creating") {
+		// Reset the status this attempt set so later status syncs do not report
+		// a phantom in-progress recording. "recording" is already set before
+		// recorder.start(), so a throw there would otherwise leave a capture
+		// phase with no session behind it: stop becomes a no-op and the idle
+		// self-close never fires.
+		if (status.phase === "creating" || status.phase === "recording") {
 			status = isUserCancellationError(error)
 				? { phase: "idle" }
 				: {

@@ -3,7 +3,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import robots from "@/app/robots";
-import { homePageMetadata } from "@/components/pages/HomeTwo/metadata";
+import { DISCORD_URL } from "@/components/pages/about/content";
+import {
+	DiscordLinkPreview,
+	discordLinkPreview,
+} from "@/components/pages/HomeTwo/DiscordLinkPreview";
+import {
+	homePageMetadata,
+	homepageOgImageUrl,
+} from "@/components/pages/HomeTwo/metadata";
 import { HomeTwoSchema } from "@/components/pages/HomeTwo/Schema";
 import { homepageSchema, homepageSeo } from "@/components/pages/HomeTwo/seo";
 import { PRICING } from "@/data/pricing";
@@ -80,5 +88,32 @@ describe("homepage SEO", () => {
 		expect(json).toBeDefined();
 		expect(JSON.parse(json ?? "")).toEqual(homepageSchema);
 		expect(homePageMetadata.description).toBe(homepageSeo.description);
+	});
+
+	it("renders a Discord component link preview with a community button", () => {
+		const html = renderToStaticMarkup(createElement(DiscordLinkPreview));
+		const json = html.match(
+			/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/,
+		)?.[1];
+
+		expect(JSON.parse(json ?? "")).toEqual(discordLinkPreview);
+		expect(JSON.stringify(discordLinkPreview)).toContain("Join our Discord");
+		expect(JSON.stringify(discordLinkPreview)).toContain(DISCORD_URL);
+		expect(JSON.stringify(discordLinkPreview)).toContain(homepageOgImageUrl);
+		expect(JSON.stringify(discordLinkPreview)).not.toContain(
+			"apple-touch-icon",
+		);
+		expect(
+			discordLinkPreview.component.components[0].components[0].content,
+		).toBe(`# [Cap](${homepageSeo.url})\n${homepageSeo.description}`);
+		expect(discordLinkPreview.component.components[0]).toMatchObject({
+			type: 9,
+			accessory: {
+				type: 2,
+				style: 5,
+				label: "Join our Discord",
+				url: DISCORD_URL,
+			},
+		});
 	});
 });
