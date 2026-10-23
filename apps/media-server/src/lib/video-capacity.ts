@@ -13,8 +13,13 @@ const configuredMaxDirectVideoProcesses =
 const MAX_DEFAULT_DIRECT_VIDEO_PROCESSES = 4;
 
 export function getDefaultMaxConcurrentDirectVideoProcesses(
-	cpuCapacity: number = getContainerCpuLimit() || os.availableParallelism(),
+	availableCpus: number = os.availableParallelism(),
+	containerCpuLimit: number = getContainerCpuLimit(),
 ): number {
+	const cpuCapacity =
+		containerCpuLimit > 0
+			? Math.min(availableCpus, containerCpuLimit)
+			: availableCpus;
 	return Math.max(
 		1,
 		Math.min(MAX_DEFAULT_DIRECT_VIDEO_PROCESSES, Math.floor(cpuCapacity / 2)),
