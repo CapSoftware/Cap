@@ -357,12 +357,14 @@ impl Mp4ExportSettings {
             // export starts over once with the software encoder.
             match result {
                 Err(error)
-                    if !mode.software_encoder
-                        && base.sample_timing.is_none()
-                        && hardware_encoder_failed.load(Ordering::Relaxed)
-                        && !user_cancellation
+                    if restart_on_software_encoder(
+                        mode.software_encoder,
+                        base.sample_timing.is_some(),
+                        hardware_encoder_failed.load(Ordering::Relaxed),
+                        user_cancellation
                             .as_ref()
-                            .is_some_and(|cancel| cancel.load(Ordering::Relaxed)) =>
+                            .is_some_and(|cancel| cancel.load(Ordering::Relaxed)),
+                    ) =>
                 {
                     warn!(
                         %error,
@@ -529,11 +531,11 @@ impl Mp4ExportSettings {
             }
 
             let hardware_video = encoder.video().is_hardware();
+            // The injected failure stands in for a hardware encoder's.
+            #[cfg(feature = "test-hooks")]
+            let hardware_video = hardware_video || injected_failure_at.is_some();
             let video_failure = |error: String| {
-                if hardware_video {
-                    hardware_encoder_failed.store(true, Ordering::Relaxed);
-                }
-                Mp4PipelineError::Failure(error)
+                video_encoder_failure(hardware_video, &hardware_encoder_failed, error)
             };
 
             info!(
@@ -653,9 +655,9 @@ impl Mp4ExportSettings {
                 encoded_frames += 1;
                 #[cfg(feature = "test-hooks")]
                 if injected_failure_at == Some(encoded_frames) {
-                    hardware_encoder_failed.store(true, Ordering::Relaxed);
-                    return Err(Mp4PipelineError::Failure(
-                        "Injected hardware encoder failure".to_string(),
+                    return Err(video_failure(
+                        cap_enc_ffmpeg::h264::QueueFrameError::Encode(ffmpeg::Error::External)
+                            .to_string(),
                     ));
                 }
                 if let Some(timing) = &sample_timing {
@@ -812,6 +814,27 @@ impl Mp4ExportSettings {
 
         Ok(output_path)
     }
+}
+
+/// A video encoder error that fails this export attempt. A hardware
+/// encoder's error also sets `restart`, so the export starts over on libx264.
+fn video_encoder_failure(hardware: bool, restart: &AtomicBool, error: String) -> Mp4PipelineError {
+    if hardware {
+        restart.store(true, Ordering::Relaxed);
+    }
+    Mp4PipelineError::Failure(error)
+}
+
+/// Whether a failed attempt starts over on the software encoder: after a
+/// hardware encoder error, once, and not for size-estimate samples or a
+/// cancelled export.
+fn restart_on_software_encoder(
+    attempt_was_software: bool,
+    sampled: bool,
+    hardware_encoder_failed: bool,
+    cancelled: bool,
+) -> bool {
+    hardware_encoder_failed && !attempt_was_software && !sampled && !cancelled
 }
 
 enum ExportFramePayload {
@@ -1684,6 +1707,40 @@ async fn export_render_to_channel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hardware_encoder_errors_restart_on_software() {
+        let queue = cap_enc_ffmpeg::h264::QueueFrameError::Encode(ffmpeg::Error::External);
+        let flush = format!("Video encoding failed: {}", ffmpeg::Error::External);
+        for error in [queue.to_string(), flush] {
+            let restart = AtomicBool::new(false);
+            let failure = video_encoder_failure(true, &restart, error.clone());
+            assert_eq!(failure.message(), error);
+            assert!(restart_on_software_encoder(
+                false,
+                false,
+                restart.load(Ordering::Relaxed),
+                false
+            ));
+        }
+    }
+
+    #[test]
+    fn software_encoder_errors_do_not_restart() {
+        let restart = AtomicBool::new(false);
+        let error = cap_enc_ffmpeg::h264::QueueFrameError::Encode(ffmpeg::Error::External);
+        video_encoder_failure(false, &restart, error.to_string());
+        assert!(!restart_on_software_encoder(
+            false,
+            false,
+            restart.load(Ordering::Relaxed),
+            false
+        ));
+        // Already on libx264, a size-estimate sample, or cancelled.
+        assert!(!restart_on_software_encoder(true, false, true, false));
+        assert!(!restart_on_software_encoder(false, true, true, false));
+        assert!(!restart_on_software_encoder(false, false, true, true));
+    }
 
     fn sum_samples(sample_rate: u64, fps: u64, frames: u64) -> u64 {
         (0..frames)
