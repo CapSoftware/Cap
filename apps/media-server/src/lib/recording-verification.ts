@@ -689,7 +689,6 @@ const DECODED_STREAM_METADATA =
 const metadataOf = (lines: string[]) =>
 	lines.filter((line) => DECODED_STREAM_METADATA.test(line)).join("\n");
 
-// Names the header fields that changed, e.g. "dimensions 0: 1340x720 -> 1344x720".
 function describeHeaderChange(first: string, other: string): string {
 	const fields = (header: string) =>
 		new Map(
