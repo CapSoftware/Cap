@@ -91,7 +91,7 @@ export const Toolbar = ({
 			canReact,
 			user,
 			onRequireAuth: () => setShowAuthOverlay(true),
-			onReact: async (chosenEmoji) => {
+			onReact: async (chosenEmoji, authedUser) => {
 				const videoElement = document.querySelector(
 					"video",
 				) as HTMLVideoElement;
@@ -100,9 +100,9 @@ export const Toolbar = ({
 					: videoElement?.currentTime || 0;
 				const optimisticComment: CommentType = {
 					id: `temp-${Date.now()}` as Comment.CommentId,
-					authorId: user?.id ?? "",
-					authorName: user?.name ?? null,
-					authorImage: user?.imageUrl ?? null,
+					authorId: authedUser.id,
+					authorName: authedUser.name,
+					authorImage: authedUser.imageUrl,
 					content: chosenEmoji,
 					createdAt: new Date(),
 					videoId: data.id,
@@ -122,7 +122,7 @@ export const Toolbar = ({
 					const newCommentData = await newComment({
 						content: chosenEmoji,
 						videoId: data.id,
-						authorImage: user?.imageUrl ?? null,
+						authorImage: authedUser.imageUrl,
 						parentCommentId: "" as Comment.CommentId,
 						type: "emoji",
 						timestamp: currentTime,

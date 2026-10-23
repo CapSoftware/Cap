@@ -30,25 +30,25 @@ export const REACTIONS: readonly ReactionDefinition[] = [
 	},
 ];
 
-export interface HandleEmojiReactionParams {
+export interface HandleEmojiReactionParams<TUser> {
 	emoji: string;
 	canReact: boolean;
-	user: { id: string } | null | undefined;
+	user: TUser | null | undefined;
 	onRequireAuth: () => void;
-	onReact: (emoji: string) => void | Promise<void>;
+	onReact: (emoji: string, user: TUser) => void | Promise<void>;
 }
 
-export function handleEmojiReaction({
+export function handleEmojiReaction<TUser>({
 	emoji,
 	canReact,
 	user,
 	onRequireAuth,
 	onReact,
-}: HandleEmojiReactionParams): void {
+}: HandleEmojiReactionParams<TUser>): void {
 	if (!canReact) return;
 	if (!user) {
 		onRequireAuth();
 		return;
 	}
-	void onReact(emoji);
+	void onReact(emoji, user);
 }

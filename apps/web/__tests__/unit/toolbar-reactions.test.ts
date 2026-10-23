@@ -78,6 +78,6 @@ describe("toolbar reactions", () => {
 
 		expect(onRequireAuth).not.toHaveBeenCalled();
 		expect(onReact).toHaveBeenCalledOnce();
-		expect(onReact).toHaveBeenCalledWith("🙌");
+		expect(onReact).toHaveBeenCalledWith("🙌", { id: "user-123" });
 	});
 });
