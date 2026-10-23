@@ -10,6 +10,7 @@ import {
 	remainingTimeoutMs,
 } from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
+import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
@@ -1831,6 +1832,7 @@ async function runTranscodeCommand(
 
 	const stderrLines: string[] = [];
 	const maxStderrLines = 50;
+	const errorLines: string[] = [];
 
 	try {
 		await withTimeout(
@@ -1857,6 +1859,7 @@ async function runTranscodeCommand(
 							if (stderrLines.length > maxStderrLines) {
 								stderrLines.shift();
 							}
+							collectFfmpegErrorLine(errorLines, line);
 							const progress = parseProgressFromStderr(line, totalDurationUs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
@@ -1869,8 +1872,9 @@ async function runTranscodeCommand(
 
 				const exitCode = await proc.exited;
 				if (exitCode !== 0) {
-					throw new Error(
+					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
+						errorLines,
 					);
 				}
 

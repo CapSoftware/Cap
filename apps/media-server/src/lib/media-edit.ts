@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { file, spawn } from "bun";
+import { FfmpegExitError, ffmpegErrorLines } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
 import {
 	buildNvencEncodeArgs,
@@ -326,8 +327,9 @@ async function runFfmpegCommand(
 				]);
 
 				if (exitCode !== 0) {
-					throw new Error(
+					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrText.slice(-2000)}`,
+						ffmpegErrorLines(stderrText),
 					);
 				}
 			})(),
