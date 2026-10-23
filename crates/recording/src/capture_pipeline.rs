@@ -633,60 +633,6 @@ fn resolve_area_display_notch(
     })
 }
 
-#[cfg(test)]
-mod display_notch_tests {
-    use super::*;
-    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
-
-    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
-        x: 0.4,
-        width: 0.2,
-        height: 0.1,
-    };
-
-    fn display_size() -> LogicalSize {
-        LogicalSize::new(1_000.0, 800.0)
-    }
-
-    #[test]
-    fn area_containing_the_full_notch_rebases_it() {
-        let bounds = LogicalBounds::new(
-            LogicalPosition::new(300.0, 0.0),
-            LogicalSize::new(400.0, 200.0),
-        );
-
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), bounds),
-            Some(cap_project::DisplayNotch {
-                x: 0.25,
-                width: 0.5,
-                height: 0.4,
-            })
-        );
-    }
-
-    #[test]
-    fn partially_intersected_notches_are_omitted() {
-        let horizontal = LogicalBounds::new(
-            LogicalPosition::new(500.0, 0.0),
-            LogicalSize::new(200.0, 200.0),
-        );
-        let vertical = LogicalBounds::new(
-            LogicalPosition::new(300.0, 40.0),
-            LogicalSize::new(400.0, 200.0),
-        );
-
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), horizontal),
-            None
-        );
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), vertical),
-            None
-        );
-    }
-}
-
 #[cfg(windows)]
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
@@ -697,9 +643,11 @@ pub fn create_d3d_device()
 
     let mut device = None;
     let flags = {
-        use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+        };
 
-        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
         if cfg!(feature = "d3ddebug") {
             use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_DEBUG;
 
@@ -783,4 +731,58 @@ pub fn create_d3d_device()
     }
 
     Ok(device.unwrap())
+}
+
+#[cfg(test)]
+mod display_notch_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
+        x: 0.4,
+        width: 0.2,
+        height: 0.1,
+    };
+
+    fn display_size() -> LogicalSize {
+        LogicalSize::new(1_000.0, 800.0)
+    }
+
+    #[test]
+    fn area_containing_the_full_notch_rebases_it() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(300.0, 0.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), bounds),
+            Some(cap_project::DisplayNotch {
+                x: 0.25,
+                width: 0.5,
+                height: 0.4,
+            })
+        );
+    }
+
+    #[test]
+    fn partially_intersected_notches_are_omitted() {
+        let horizontal = LogicalBounds::new(
+            LogicalPosition::new(500.0, 0.0),
+            LogicalSize::new(200.0, 200.0),
+        );
+        let vertical = LogicalBounds::new(
+            LogicalPosition::new(300.0, 40.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), horizontal),
+            None
+        );
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), vertical),
+            None
+        );
+    }
 }
