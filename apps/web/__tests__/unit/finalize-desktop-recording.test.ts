@@ -590,6 +590,77 @@ describe("bounded source commitment steps", () => {
 		expect(mocks.persist).not.toHaveBeenCalled();
 	});
 
+	it("logs the timing of every commit page without storage keys", async () => {
+		let clock = 0;
+		const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+		mocks.commitSource.mockImplementation(
+			async (_video, checkpoint, _verification, onProgress) => {
+				clock += 5;
+				await onProgress();
+				clock += 100;
+				if (checkpoint.revision === 1) return { source };
+				return {
+					checkpoint: {
+						...checkpoint,
+						phase: "copy",
+						revision: checkpoint.revision + 1,
+					},
+				};
+			},
+		);
+		mocks.heartbeat.mockImplementation(async () => {
+			clock += 7;
+			return true;
+		});
+		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
+			clock += 20;
+			withCurrent({ output: checkpoint });
+			return true;
+		});
+		mocks.persist.mockImplementation(async (_attempt, savedSource) => {
+			clock += 30;
+			withCurrent({ source: savedSource, state: "processing" });
+			return true;
+		});
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		try {
+			expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+			const events = info.mock.calls
+				.map(([line]) => JSON.parse(String(line)))
+				.filter((event) => event.event === "desktop_source_commit_advance");
+			expect(events).toEqual([
+				{
+					event: "desktop_source_commit_advance",
+					videoId: "video",
+					attemptId: "attempt",
+					phase: "plan",
+					next: "copy",
+					outcome: "progress",
+					loadMs: 0,
+					heartbeatMs: 7,
+					advanceMs: 112,
+					persistMs: 20,
+				},
+				{
+					event: "desktop_source_commit_advance",
+					videoId: "video",
+					attemptId: "attempt",
+					phase: "copy",
+					next: "committed",
+					outcome: "ready",
+					loadMs: 0,
+					heartbeatMs: 7,
+					advanceMs: 112,
+					persistMs: 30,
+				},
+			]);
+			expect(JSON.stringify(events)).not.toContain(source.inventoryKey);
+		} finally {
+			info.mockRestore();
+			now.mockRestore();
+		}
+	});
+
 	it("includes checkpoint persistence latency in the batch budget", async () => {
 		mocks.commitSource.mockImplementation(advanceCheckpoint);
 		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
