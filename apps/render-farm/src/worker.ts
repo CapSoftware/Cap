@@ -505,110 +505,116 @@ async function runVideo(
 		cache.root,
 		`v${task.chunk}-${randomUUID().slice(0, 6)}.h264`,
 	);
-	const engineStarted = performance.now();
-	const slot = engines.indexOf(engine);
-	const entry = {
-		taskId: task.taskId,
-		kind: "video" as const,
-		frames: 0,
-		total: task.frames[1] - task.frames[0],
-		startedAt: Date.now(),
-		lastProgressAt: Date.now(),
-	};
-	progress.set(slot, entry);
-	const stream = task.hls
-		? new SegmentStream({ ...task, hls: task.hls }, out, engineStarted)
-		: null;
-	engine.onEvent = stream ? (event) => stream.onEvent(event) : null;
-	// Ask for the next task once this one is ~PREFETCH_LEAD_MS from done, so
-	// its sources download while this one finishes instead of after.
-	engine.onProgress = (frames) => {
-		entry.frames = frames;
-		entry.lastProgressAt = Date.now();
-		const elapsed = performance.now() - engineStarted;
-		const remainingMs =
-			((entry.total - frames) * elapsed) / Math.max(1, frames);
-		if (frames > 0 && remainingMs <= PREFETCH_LEAD_MS) nearEnd();
-	};
-	const request = engine.request<{
-		width: number;
-		height: number;
-		sizes: number[];
-		keyframes: number[];
-		extradata: string;
-		bytes: number;
-		timings: Record<string, number>;
-	}>("video", {
-		project: cache.root,
-		fps: task.fps,
-		resolution: task.resolution,
-		bpp: task.bpp,
-		frames: task.frames,
-		threads: task.threads,
-		out,
-	});
-	const threadsPromise: Promise<Record<string, number>> =
-		process.env.RF_PROFILE_THREADS === "1"
-			? sampleThreads(engine.pid, request)
-			: Promise.resolve({});
-	const result = await request.finally(() => {
-		engine.onProgress = null;
-		engine.onEvent = null;
-		progress.delete(slot);
-	});
-	nearEnd();
-	const segmentsDone = stream?.finish(result.sizes, result.extradata);
-	segmentsDone?.catch(() => {});
-	const engineMs = performance.now() - engineStarted;
-	const threads = await threadsPromise;
-	const waitStarted = performance.now();
-	const audio = await audioPromise;
-	const audioWaitMs = performance.now() - waitStarted;
-	const uploadStarted = performance.now();
-	const plan = layout(task, out, result.sizes, audio);
-	const [{ parts, stash }, segments] = await Promise.all([
-		uploadLayout(task, plan.segments, plan.bytes),
-		segmentsDone ?? Promise.resolve(0),
-	]);
-	const uploadMs = performance.now() - uploadStarted;
-	rmSync(out, { force: true });
-	const timings: TaskTimings = {
-		queuedMs,
-		fetch: fetchStats,
-		engine: {
-			...result.timings,
-			...Object.fromEntries(
-				Object.entries(threads).map(([name, value]) => [
-					`thread:${name}`,
-					value,
-				]),
-			),
-			...(stream
-				? { segments, firstSegmentMs: Math.round(stream.firstUploadedMs ?? -1) }
-				: {}),
-		},
-		engineMs,
-		audioWaitMs,
-		uploadMs,
-		totalMs: performance.now() - started,
-		cpuSeconds: (await processCpuSeconds(engine.pid)) - cpuBefore,
-	};
-	return {
-		taskId: task.taskId,
-		worker: WORKER_ID,
-		sizes: result.sizes,
-		keyframes: result.keyframes,
-		extradata: result.extradata,
-		width: result.width,
-		height: result.height,
-		videoRuns: plan.videoRuns,
-		audioRuns: plan.audioRuns,
-		firstPart: task.upload.firstPart,
-		stash,
-		parts,
-		bytes: plan.bytes,
-		timings,
-	};
+	try {
+		const engineStarted = performance.now();
+		const slot = engines.indexOf(engine);
+		const entry = {
+			taskId: task.taskId,
+			kind: "video" as const,
+			frames: 0,
+			total: task.frames[1] - task.frames[0],
+			startedAt: Date.now(),
+			lastProgressAt: Date.now(),
+		};
+		progress.set(slot, entry);
+		const stream = task.hls
+			? new SegmentStream({ ...task, hls: task.hls }, out, engineStarted)
+			: null;
+		engine.onEvent = stream ? (event) => stream.onEvent(event) : null;
+		// Ask for the next task once this one is ~PREFETCH_LEAD_MS from done, so
+		// its sources download while this one finishes instead of after.
+		engine.onProgress = (frames) => {
+			entry.frames = frames;
+			entry.lastProgressAt = Date.now();
+			const elapsed = performance.now() - engineStarted;
+			const remainingMs =
+				((entry.total - frames) * elapsed) / Math.max(1, frames);
+			if (frames > 0 && remainingMs <= PREFETCH_LEAD_MS) nearEnd();
+		};
+		const request = engine.request<{
+			width: number;
+			height: number;
+			sizes: number[];
+			keyframes: number[];
+			extradata: string;
+			bytes: number;
+			timings: Record<string, number>;
+		}>("video", {
+			project: cache.root,
+			fps: task.fps,
+			resolution: task.resolution,
+			bpp: task.bpp,
+			frames: task.frames,
+			threads: task.threads,
+			out,
+		});
+		const threadsPromise: Promise<Record<string, number>> =
+			process.env.RF_PROFILE_THREADS === "1"
+				? sampleThreads(engine.pid, request)
+				: Promise.resolve({});
+		const result = await request.finally(() => {
+			engine.onProgress = null;
+			engine.onEvent = null;
+			progress.delete(slot);
+		});
+		nearEnd();
+		const segmentsDone = stream?.finish(result.sizes, result.extradata);
+		segmentsDone?.catch(() => {});
+		const engineMs = performance.now() - engineStarted;
+		const threads = await threadsPromise;
+		const waitStarted = performance.now();
+		const audio = await audioPromise;
+		const audioWaitMs = performance.now() - waitStarted;
+		const uploadStarted = performance.now();
+		const plan = layout(task, out, result.sizes, audio);
+		const [{ parts, stash }, segments] = await Promise.all([
+			uploadLayout(task, plan.segments, plan.bytes),
+			segmentsDone ?? Promise.resolve(0),
+		]);
+		const uploadMs = performance.now() - uploadStarted;
+		const timings: TaskTimings = {
+			queuedMs,
+			fetch: fetchStats,
+			engine: {
+				...result.timings,
+				...Object.fromEntries(
+					Object.entries(threads).map(([name, value]) => [
+						`thread:${name}`,
+						value,
+					]),
+				),
+				...(stream
+					? {
+							segments,
+							firstSegmentMs: Math.round(stream.firstUploadedMs ?? -1),
+						}
+					: {}),
+			},
+			engineMs,
+			audioWaitMs,
+			uploadMs,
+			totalMs: performance.now() - started,
+			cpuSeconds: (await processCpuSeconds(engine.pid)) - cpuBefore,
+		};
+		return {
+			taskId: task.taskId,
+			worker: WORKER_ID,
+			sizes: result.sizes,
+			keyframes: result.keyframes,
+			extradata: result.extradata,
+			width: result.width,
+			height: result.height,
+			videoRuns: plan.videoRuns,
+			audioRuns: plan.audioRuns,
+			firstPart: task.upload.firstPart,
+			stash,
+			parts,
+			bytes: plan.bytes,
+			timings,
+		};
+	} finally {
+		rmSync(out, { force: true });
+	}
 }
 
 async function runAudio(task: AudioTask, engine: Engine, queuedMs: number) {
