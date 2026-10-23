@@ -11,6 +11,7 @@ import {
 	desktopRecordingSourceCheckpointSchema,
 	SOURCE_COMMIT_AWS_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
+	SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 	SOURCE_COMMIT_PAGE_SIZE,
 	SOURCE_COMMIT_PART_BATCH_SIZE,
 	SOURCE_COMMIT_PART_PAGE_SIZE,
@@ -233,7 +234,10 @@ const treePageSchema = z.discriminatedUnion("type", [
 		kind: z.enum(["plan", "objects", "parts"]),
 		scope: z.string(),
 		start: z.number().int().nonnegative(),
-		entries: z.array(z.unknown()).min(1).max(SOURCE_COMMIT_PART_PAGE_SIZE),
+		entries: z
+			.array(z.unknown())
+			.min(1)
+			.max(SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES),
 	}),
 	z.object({
 		version: z.literal(1),
