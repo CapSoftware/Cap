@@ -420,8 +420,14 @@ export async function materializeHlsPlaylist(
 	return filePath;
 }
 
-function currentDashBase(bases: string[], fallback: string): string {
-	return bases[bases.length - 1] ?? fallback;
+interface DashBaseFrame {
+	inherited: string;
+	effective: string;
+	hasBaseUrl: boolean;
+}
+
+function currentDashBase(frames: DashBaseFrame[], fallback: string): string {
+	return frames[frames.length - 1]?.effective ?? fallback;
 }
 
 function rememberDashResource(
@@ -458,13 +464,21 @@ function rewriteDashAttributes(
 	);
 }
 
+interface DashAlternative {
+	url: string;
+	element: string;
+}
+
 function rewriteDashManifest(
 	content: string,
 	manifestBase: string,
 	query: string,
-): { urls: string[]; xml: string } {
+): { urls: string[]; alternatives: DashAlternative[]; xml: string } {
 	const urls: string[] = [];
-	const bases = [manifestBase];
+	const alternatives: DashAlternative[] = [];
+	const frames: DashBaseFrame[] = [
+		{ inherited: manifestBase, effective: manifestBase, hasBaseUrl: false },
+	];
 	const pattern =
 		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<(BaseURL|Location)\b([^>]*)>([\s\S]*?)<\/\1>|<\/([A-Za-z0-9:_-]+)\s*>|<([A-Za-z0-9:_-]+)\b([^>]*?)(\/)?\s*>/gi;
 	let xml = "";
@@ -481,39 +495,58 @@ function rewriteDashManifest(
 
 		const baseElement = match[1];
 		if (baseElement) {
+			// MPD@Location points at a refreshed manifest, not at media. The
+			// materialized copy is static, so drop it instead of fetching it or
+			// letting it change how segments resolve.
+			if (baseElement.toLowerCase() === "location") continue;
+
+			const frame = frames[frames.length - 1] ?? {
+				inherited: manifestBase,
+				effective: manifestBase,
+				hasBaseUrl: false,
+			};
+			// Sibling BaseURLs are alternatives, so each one resolves against the
+			// enclosing element's base rather than against the previous sibling.
 			const resolved = resolveResourceUrl(
 				decodeXmlAttribute((match[3] ?? "").trim()),
-				currentDashBase(bases, manifestBase),
+				frame.inherited,
 				query,
 			);
 			const directory = new URL(resolved).pathname.endsWith("/");
-			if (directory || baseElement.toLowerCase() === "location") {
-				bases[bases.length - 1] = new URL(".", resolved).toString();
-				continue;
+			const primary = !frame.hasBaseUrl;
+			if (primary) {
+				frame.hasBaseUrl = true;
+				frame.effective = directory
+					? new URL(".", resolved).toString()
+					: resolved;
 			}
+			if (directory) continue;
 			if (resolved.includes("$")) {
 				throw new Error("DASH template URL cannot be fetched locally");
 			}
-			urls.push(resolved);
-			bases[bases.length - 1] = resolved;
-			xml += `<${baseElement}${rewriteDashAttributes(match[2] ?? "", resolved, query, urls)}>${escapeXmlAttribute(resolved)}</${baseElement}>`;
+			const element = `<${baseElement}${rewriteDashAttributes(match[2] ?? "", frame.effective, query, urls)}>${escapeXmlAttribute(resolved)}</${baseElement}>`;
+			if (primary) urls.push(resolved);
+			else alternatives.push({ url: resolved, element });
+			xml += element;
 			continue;
 		}
 
 		if (match[4]) {
-			if (bases.length > 1) bases.pop();
+			if (frames.length > 1) frames.pop();
 			xml += match[0];
 			continue;
 		}
 
-		const base = currentDashBase(bases, manifestBase);
+		const base = currentDashBase(frames, manifestBase);
 		const attributes = rewriteDashAttributes(match[6] ?? "", base, query, urls);
 		const selfClosing = Boolean(match[7]);
 		xml += `<${match[5]}${attributes}${selfClosing ? " />" : ">"}`;
-		if (!selfClosing) bases.push(base);
+		if (!selfClosing) {
+			frames.push({ inherited: base, effective: base, hasBaseUrl: false });
+		}
 	}
 
-	return { urls, xml: xml + content.slice(cursor) };
+	return { urls, alternatives, xml: xml + content.slice(cursor) };
 }
 
 export async function materializeMpdManifest(
@@ -534,15 +567,20 @@ export async function materializeMpdManifest(
 	const content = await response.text();
 	const parsedUrl = new URL(manifestUrl);
 	const filePath = join(dirPath, `${randomUUID()}.mpd`);
-	const { urls: resolvedUrls, xml: rewritten } = rewriteDashManifest(
+	const {
+		urls: resolvedUrls,
+		alternatives,
+		xml: rewritten,
+	} = rewriteDashManifest(
 		content,
 		new URL(".", parsedUrl).toString(),
 		parsedUrl.search,
 	);
 	const limit = createLimiter(4);
 	const localByUrl = new Map<string, string>();
+	const required = new Set(resolvedUrls);
 	await Promise.all(
-		[...new Set(resolvedUrls)].map(async (url) => {
+		[...required].map(async (url) => {
 			localByUrl.set(
 				url,
 				await downloadAllowedResource(url, dirPath, abortSignal, limit),
@@ -550,6 +588,32 @@ export async function materializeMpdManifest(
 		}),
 	);
 	let localized = rewritten;
+	// Alternative BaseURLs are only fallbacks, so one that is blocked or
+	// missing is removed from the local copy instead of failing the job.
+	const optional = [
+		...new Set(
+			alternatives.map(({ url }) => url).filter((url) => !required.has(url)),
+		),
+	];
+	const failedAlternatives = new Set<string>();
+	await Promise.all(
+		optional.map(async (url) => {
+			try {
+				localByUrl.set(
+					url,
+					await downloadAllowedResource(url, dirPath, abortSignal, limit),
+				);
+			} catch (error) {
+				if (abortSignal?.aborted) throw error;
+				failedAlternatives.add(url);
+			}
+		}),
+	);
+	for (const { url, element } of alternatives) {
+		if (failedAlternatives.has(url)) {
+			localized = localized.split(element).join("");
+		}
+	}
 	for (const [url, name] of [...localByUrl.entries()].sort(
 		(left, right) => right[0].length - left[0].length,
 	)) {

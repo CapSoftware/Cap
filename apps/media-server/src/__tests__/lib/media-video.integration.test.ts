@@ -761,6 +761,142 @@ describe("processVideo integration tests", () => {
 		}
 	});
 
+	test("ignores MPD Location and resolves sibling BaseURLs against their parent", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-alternatives-"));
+		const requestedUrls: string[] = [];
+
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = input instanceof Request ? input.url : input.toString();
+			requestedUrls.push(url);
+			if (url.includes("manifest.mpd")) {
+				return new Response(
+					`<MPD>
+						<Location>https://cdn.example/elsewhere/live/updated.mpd</Location>
+						<Period>
+							<AdaptationSet mimeType="video/mp4">
+								<Representation id="v1" bandwidth="800000">
+									<BaseURL>primary/video.mp4</BaseURL>
+									<BaseURL>backup/video.mp4</BaseURL>
+									<SegmentBase indexRange="0-100"/>
+								</Representation>
+							</AdaptationSet>
+						</Period>
+					</MPD>`,
+					{ status: 200, statusText: "OK" },
+				);
+			}
+			return new Response("segment", { status: 200, statusText: "OK" });
+		}) as unknown as typeof fetch;
+
+		try {
+			const path = await materializeStreamingInput(
+				"https://cdn.example/video/manifest.mpd?Policy=a&Signature=b",
+				manifestDir,
+			);
+			const content = readFileSync(path, "utf8");
+
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/primary/video.mp4?Policy=a&Signature=b",
+			);
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/backup/video.mp4?Policy=a&Signature=b",
+			);
+			expect(requestedUrls.some((url) => url.includes("primary/backup"))).toBe(
+				false,
+			);
+			expect(requestedUrls.some((url) => url.includes("elsewhere"))).toBe(
+				false,
+			);
+			expect(content).not.toContain("<Location>");
+			expect(content).not.toContain("https://cdn.example");
+			expect(content.match(/<BaseURL>/g)?.length).toBe(2);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("resolves DASH segments against the parent when MPD Location is in another directory", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-location-"));
+		const requestedUrls: string[] = [];
+
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = input instanceof Request ? input.url : input.toString();
+			requestedUrls.push(url);
+			if (url.includes("manifest.mpd")) {
+				return new Response(
+					`<MPD>
+						<Location>../other/updated.mpd</Location>
+						<Period>
+							<AdaptationSet mimeType="video/mp4">
+								<Representation id="v1" bandwidth="800000">
+									<SegmentList>
+										<Initialization sourceURL="init.mp4"/>
+										<SegmentURL media="seg-1.m4s"/>
+									</SegmentList>
+								</Representation>
+							</AdaptationSet>
+						</Period>
+					</MPD>`,
+					{ status: 200, statusText: "OK" },
+				);
+			}
+			return new Response("segment", { status: 200, statusText: "OK" });
+		}) as unknown as typeof fetch;
+
+		try {
+			await materializeStreamingInput(
+				"https://cdn.example/video/manifest.mpd",
+				manifestDir,
+			);
+
+			expect(requestedUrls).toContain("https://cdn.example/video/init.mp4");
+			expect(requestedUrls).toContain("https://cdn.example/video/seg-1.m4s");
+			expect(requestedUrls.some((url) => url.includes("/other/"))).toBe(false);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("drops a missing alternative BaseURL instead of failing", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-alt-missing-"));
+
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = input instanceof Request ? input.url : input.toString();
+			if (url.includes("manifest.mpd")) {
+				return new Response(
+					`<MPD><Period><AdaptationSet mimeType="video/mp4"><Representation id="v1" bandwidth="800000"><BaseURL>primary/video.mp4</BaseURL><BaseURL>backup/video.mp4</BaseURL><SegmentBase indexRange="0-100"/></Representation></AdaptationSet></Period></MPD>`,
+					{ status: 200, statusText: "OK" },
+				);
+			}
+			if (url.includes("backup/")) {
+				return new Response("missing", {
+					status: 404,
+					statusText: "Not Found",
+				});
+			}
+			return new Response("segment", { status: 200, statusText: "OK" });
+		}) as unknown as typeof fetch;
+
+		try {
+			const path = await materializeStreamingInput(
+				"https://cdn.example/video/manifest.mpd",
+				manifestDir,
+			);
+			const content = readFileSync(path, "utf8");
+
+			expect(content.match(/<BaseURL>/g)?.length).toBe(1);
+			expect(content).not.toContain("https://cdn.example");
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
 	test("does not retry DASH materialization when the manifest fetch fails", async () => {
 		const originalFetch = globalThis.fetch;
 		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-fetch-fail-"));
