@@ -198,9 +198,7 @@ export const checkDomainStatus = async (domain: string) => {
 			recommendedIPv4 = [{ rank: 0, value: [VERCEL_A_RECORD] }];
 		}
 
-		const requiredAValue =
-			requiredConfigJson.aValues?.[0] ??
-			(!subdomain ? VERCEL_A_RECORD : undefined);
+		const requiredAValue = requiredConfigJson.aValues?.[0];
 
 		return {
 			verified,
