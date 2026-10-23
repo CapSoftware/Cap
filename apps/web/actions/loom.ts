@@ -1301,7 +1301,7 @@ export async function resumeConciergeLoomFileUpload(input: {
 			throw new LoomMigrationError("The destination workspace needs Cap Pro.");
 		}
 		const previousRun = record.metadata?.loomImportRun;
-		if (previousRun) {
+		if (previousRun && previousRun.dispatch !== "rejected") {
 			let status: string | null;
 			try {
 				status = await getRun(previousRun.runId).status;

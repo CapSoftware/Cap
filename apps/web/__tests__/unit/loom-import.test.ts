@@ -1716,6 +1716,34 @@ describe("resuming an uploaded concierge Loom file", () => {
 		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
 	});
 
+	it("can resume after a confirmed queue rejection without querying its unqueued run", async () => {
+		whereMock
+			.mockReturnValueOnce(
+				withLimit([
+					{
+						...recording,
+						metadata: {
+							loomImportRun: {
+								runId: "rejected-run",
+								dispatch: "rejected",
+							},
+						},
+					},
+				]),
+			)
+			.mockReturnValueOnce(withLimit([uploaded]));
+		getRunMock.mockImplementation(() => {
+			throw new Error("Unqueued run is unavailable");
+		});
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toEqual({
+			ok: true,
+			value: { status: "started" },
+		});
+		expect(getRunMock).not.toHaveBeenCalled();
+		expect(startLoomFileProcessingWorkflowMock).toHaveBeenCalledOnce();
+	});
+
 	it("processes a large uploaded file in its existing recording", async () => {
 		whereMock
 			.mockReturnValueOnce(withLimit([recording]))
