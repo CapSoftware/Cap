@@ -786,7 +786,7 @@ pub struct Player {
     layers: cap_rendering::RendererLayers,
     zooms: Vec<cap_rendering::ZoomTransformTimeline>,
     outgoing_zooms: std::collections::HashMap<u32, cap_rendering::ZoomTransformTimeline>,
-    config: ProjectConfiguration,
+    config: std::sync::Arc<ProjectConfiguration>,
     duration: f64,
     resolution: XY<u32>,
 }
@@ -848,7 +848,7 @@ impl Player {
             layers,
             zooms,
             outgoing_zooms: Default::default(),
-            config,
+            config: std::sync::Arc::new(config),
             duration,
             resolution: XY::new(resolution.0, resolution.1),
         })

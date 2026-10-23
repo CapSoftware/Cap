@@ -189,6 +189,10 @@ impl SpringMassDamperSimulation {
         self.target_position = target_position;
     }
 
+    pub(crate) fn is_at_rest(&self) -> bool {
+        self.position == self.target_position && self.velocity == XY::new(0.0, 0.0)
+    }
+
     fn step(&mut self, dt_ms: f32) -> SpringStep {
         let key = [dt_ms, self.tension, self.mass, self.friction].map(f32::to_bits);
         if let Some(cached) = self.cached_step
