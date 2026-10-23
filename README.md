@@ -80,6 +80,10 @@ The fastest way to self-host Cap Web is Docker Compose:
 ```bash
 git clone https://github.com/CapSoftware/Cap.git
 cd Cap
+cp .env.self-hosting.example .env
+for name in NEXTAUTH_SECRET DATABASE_ENCRYPTION_KEY MEDIA_SERVER_WEBHOOK_SECRET; do
+  sed -i.bak "s/^$name=.*/$name=$(openssl rand -hex 32)/" .env
+done
 docker compose up -d
 ```
 

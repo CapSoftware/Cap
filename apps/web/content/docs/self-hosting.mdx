@@ -10,27 +10,24 @@ You can upload videos to it from the dashboard or from Cap Desktop.
 
 <CapEmbed src="https://cap.so/embed/k310v2vf41d6ffp" />
 
-## Quick Start (One Command)
+## Quick Start
 
-The fastest way to self-host Cap is with Docker Compose. This single command will start everything you need:
+The fastest way to self-host Cap is with Docker Compose. Generate your secrets, then start the services:
 
 ```bash
 git clone https://github.com/CapSoftware/Cap.git
 cd Cap
+cp .env.self-hosting.example .env
+for name in NEXTAUTH_SECRET DATABASE_ENCRYPTION_KEY MEDIA_SERVER_WEBHOOK_SECRET; do
+  sed -i.bak "s/^$name=.*/$name=$(openssl rand -hex 32)/" .env
+done
 docker compose up -d
 ```
 
 That's it! Cap will be available at `http://localhost:3000`.
 
 <Warning title="Secrets are required">
-`docker compose up` stops with an error until `NEXTAUTH_SECRET`, `DATABASE_ENCRYPTION_KEY` and `MEDIA_SERVER_WEBHOOK_SECRET` are set. cap-web and the media server also refuse to start if any of them is left at a publicly known placeholder, including the example values from older compose files. Upgrading an existing install? Read [Upgrading From an Older Release](#upgrading-from-an-older-release) first. Create your `.env` first:
-
-```bash
-cp .env.self-hosting.example .env
-for name in NEXTAUTH_SECRET DATABASE_ENCRYPTION_KEY MEDIA_SERVER_WEBHOOK_SECRET; do
-  sed -i.bak "s/^$name=.*/$name=$(openssl rand -hex 32)/" .env
-done
-```
+`docker compose up` stops with an error until `NEXTAUTH_SECRET`, `DATABASE_ENCRYPTION_KEY` and `MEDIA_SERVER_WEBHOOK_SECRET` are set. cap-web and the media server also refuse to start if any of them is left at a publicly known placeholder, including the example values from older compose files. Upgrading an existing install? Read [Upgrading From an Older Release](#upgrading-from-an-older-release) first. The Quick Start above creates `.env` and generates a unique value for each required secret.
 </Warning>
 
 Login links will appear in the logs since email isn't configured:
@@ -52,8 +49,9 @@ Best for VPS, home servers, or any Docker-capable host.
 
 **Steps:**
 1. Clone the repository
-2. Run `docker compose up -d`
-3. Access Cap at `http://localhost:3000`
+2. Create `.env` and generate the three secrets using the Quick Start commands above.
+3. Run `docker compose up -d`.
+4. Access Cap at `http://localhost:3000`
 
 > **Note:** The main `docker-compose.yml` builds the media server from source, so a full clone of the repository is required. The Coolify compose file uses a pre-built image from `ghcr.io` instead.
 
@@ -202,7 +200,7 @@ expiration date.
 ## Upgrading From an Older Release
 
 <Warning title="Upgrading can stop Cap from starting">
-Older `docker-compose.yml`, `docker-compose.template.yml` and Coolify files shipped fixed example secrets. Starting with this release, **cap-web and the media server refuse to start** if any of these is missing or still set to one of those public example values:
+Older `docker-compose.yml` and `docker-compose.template.yml` files shipped fixed example secrets. Coolify generates unique secrets per deployment and does not require rotation for this change. Starting with this release, **cap-web and the media server refuse to start** if any of these is missing or still set to one of those public example values:
 
 - `NEXTAUTH_SECRET` (cap-web)
 - `DATABASE_ENCRYPTION_KEY` (cap-web)
@@ -215,13 +213,20 @@ If you never changed the example secrets, do this before you pull the new images
 
 1. Back up MySQL.
 2. Generate a new value for each secret with `openssl rand -hex 32` and put them in the `.env` next to your compose file (or in your platform's variables). Use the same `MEDIA_SERVER_WEBHOOK_SECRET` on cap-web and the media server.
-3. Pull and restart: `docker compose pull && docker compose up -d`.
+3. Update the repository with `git pull`. If you use a copy of `docker-compose.template.yml`, replace the three hardcoded secret values in your copy with the `${VARIABLE:?Set VARIABLE in .env}` entries from the updated template (or switch to the new template). Values in `.env` do not override hardcoded Compose environment values.
+4. Pull the web image, rebuild the media server from the updated source, and restart: `docker compose pull && docker compose up -d --build`. When using a custom template filename, pass `-f your-compose.yml` to each Compose command.
 
 What changes when you replace each secret:
 
 - `NEXTAUTH_SECRET`: everyone is signed out and signs in again.
 - `MEDIA_SERVER_WEBHOOK_SECRET`: nothing, as long as cap-web and the media server get the same new value.
 - `DATABASE_ENCRYPTION_KEY`: values Cap encrypted with the old key can no longer be read. This covers custom S3 storage settings (organization and desktop), developer app API keys, and connected integrations. After switching keys, re-enter your storage settings and regenerate developer app keys.
+
+### Temporarily Keeping the Old Encryption Key
+
+If you need to upgrade before migrating encrypted data, keep the **exact existing** `DATABASE_ENCRYPTION_KEY` in `.env` and set `CAP_ALLOW_INSECURE_SECRETS=true`. The updated Compose files forward this flag to cap-web. For other platforms, set it directly on cap-web. Rotate `NEXTAUTH_SECRET` and `MEDIA_SERVER_WEBHOOK_SECRET` as described above; the media server still requires a unique webhook secret.
+
+This opt-in permits known placeholder values but does not bypass missing-secret or encryption-key format checks. cap-web logs a prominent warning every time it starts with a placeholder. The existing key keeps encrypted storage settings, developer app keys and integrations readable, but a publicly known key leaves that data exposed. Treat this as a temporary upgrade measure: plan the data migration or reconfiguration, rotate the key, then remove `CAP_ALLOW_INSECURE_SECRETS` and restart. Do not generate a new encryption key until you are ready for the encrypted-data consequences described above.
 
 If you already set your own values, nothing changes for you.
 

@@ -16,6 +16,7 @@ services:
       NEXTAUTH_URL: ${CAP_URL:-http://localhost:3000}
       DATABASE_ENCRYPTION_KEY: "${DATABASE_ENCRYPTION_KEY:?Set DATABASE_ENCRYPTION_KEY in .env (run: openssl rand -hex 32)}"
       NEXTAUTH_SECRET: "${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in .env (run: openssl rand -hex 32)}"
+      CAP_ALLOW_INSECURE_SECRETS: ${CAP_ALLOW_INSECURE_SECRETS:-false}
       MEDIA_SERVER_WEBHOOK_SECRET: "${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}"
       CAP_AWS_ACCESS_KEY: ${MINIO_ROOT_USER:-cap-admin}
       CAP_AWS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456}

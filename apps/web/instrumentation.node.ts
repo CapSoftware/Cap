@@ -36,8 +36,17 @@ export async function register() {
 				: ["NEXTAUTH_SECRET", "DATABASE_ENCRYPTION_KEY"],
 		);
 		if (insecureSecrets.length > 0) {
-			console.error(`🚨 ${formatInsecureSecrets(insecureSecrets)}`);
-			process.exit(1);
+			if (
+				process.env.CAP_ALLOW_INSECURE_SECRETS === "true" &&
+				insecureSecrets.every(({ problem }) => problem === "placeholder")
+			) {
+				console.warn(
+					`🚨 CAP_ALLOW_INSECURE_SECRETS=true: starting with publicly known secrets (${insecureSecrets.map(({ name }) => name).join(", ")}). This temporary upgrade override leaves your deployment insecure. Rotate these secrets and remove the override as soon as possible.`,
+				);
+			} else {
+				console.error(`🚨 ${formatInsecureSecrets(insecureSecrets)}`);
+				process.exit(1);
+			}
 		}
 	}
 
