@@ -50,8 +50,16 @@ const objectUrl = (key: string) =>
 
 const upstream = (contentType: string | null, init: ResponseInit = {}) => {
 	const headers = new Headers(init.headers);
-	if (contentType) headers.set("Content-Type", contentType);
-	return new Response("data", { status: init.status ?? 200, headers });
+	const response = new Response("data", {
+		status: init.status ?? 200,
+		headers,
+	});
+	if (contentType) {
+		response.headers.set("Content-Type", contentType);
+	} else {
+		response.headers.delete("Content-Type");
+	}
+	return response;
 };
 
 const expectContentHeaders = (response: Response) => {
@@ -99,9 +107,23 @@ describe("storage object content headers", () => {
 		"application/pdf",
 		"text/plain",
 		"application/javascript",
-		null,
 	])("serves %s as an attachment", async (contentType) => {
 		mocks.read.mockReturnValue(Effect.succeed(upstream(contentType)));
+		const response = await GET(
+			new NextRequest(objectUrl("owner/video/upload.bin")),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toBe(
+			"application/octet-stream",
+		);
+		expect(response.headers.get("Content-Disposition")).toBe("attachment");
+		expectContentHeaders(response);
+	});
+
+	it("serves an upstream without a Content-Type as an attachment", async () => {
+		const source = upstream(null);
+		expect(source.headers.get("Content-Type")).toBeNull();
+		mocks.read.mockReturnValue(Effect.succeed(source));
 		const response = await GET(
 			new NextRequest(objectUrl("owner/video/upload.bin")),
 		);
