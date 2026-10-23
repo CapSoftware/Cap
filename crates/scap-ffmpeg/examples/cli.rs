@@ -109,10 +109,8 @@ pub async fn main() {
         ) {
             use scap_ffmpeg::AsFFmpeg;
 
-            let size = display.physical_size().unwrap();
-            let height = size.height() as usize;
-            let row_length = size.width() as usize * 4;
-            let frame_bytes = (height * row_length) as u64;
+            let initial_size = display.physical_size().unwrap();
+            let mut last_frame_size = (initial_size.width() as u32, initial_size.height() as u32);
 
             let mut old = Samples::default();
             let mut new = Samples::default();
@@ -123,22 +121,39 @@ pub async fn main() {
             let started = Instant::now();
 
             while started.elapsed() < Duration::from_secs_f64(seconds) {
-                let Ok(frame) = frame_rx.recv_timeout(Duration::from_secs(1)) else {
-                    break;
+                let frame = match frame_rx.recv_timeout(Duration::from_secs(1)) {
+                    Ok(frame) => frame,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 };
                 frames_seen += 1;
+                last_frame_size = (frame.width(), frame.height());
 
                 let mut run_old = || {
                     let started = Instant::now();
                     let buffer = frame.as_buffer().ok()?;
+                    let width = buffer.width() as usize;
+                    let height = buffer.height() as usize;
                     let source_stride = buffer.stride() as usize;
+                    let row_length = width * 4;
                     let destination = old_frame.get_or_insert_with(|| {
                         ffmpeg::frame::Video::new(
                             ffmpeg::format::Pixel::RGBA,
-                            size.width() as u32,
-                            size.height() as u32,
+                            width as u32,
+                            height as u32,
                         )
                     });
+
+                    if destination.width() as usize != width
+                        || destination.height() as usize != height
+                    {
+                        *destination = ffmpeg::frame::Video::new(
+                            ffmpeg::format::Pixel::RGBA,
+                            width as u32,
+                            height as u32,
+                        );
+                    }
+
                     let destination_stride = destination.stride(0);
                     let destination_data = destination.data_mut(0);
 
@@ -203,10 +218,12 @@ pub async fn main() {
                 }
             }
 
+            let (last_width, last_height) = last_frame_size;
+            let frame_bytes = last_width as u64 * last_height as u64 * 4;
             println!(
                 "{}x{} RGBA ({:.1} MiB/frame), {seconds:.0}s, path={path}, callback_drops={}, source_frames={frames_seen}",
-                size.width(),
-                size.height(),
+                last_width,
+                last_height,
                 frame_bytes as f64 / (1024.0 * 1024.0),
                 callback_drops.load(Ordering::Relaxed)
             );

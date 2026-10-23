@@ -226,7 +226,16 @@ impl StagingTexturePool {
         }
 
         if inner.live >= STAGING_POOL_LIMIT {
-            return Err(ReadbackError::StagingBusy);
+            // A cached texture at another size is idle, so it can be released. Without this a
+            // geometry change can wedge the pool at the limit while the previous frame is still
+            // mapped, and every frame at the new size is dropped.
+            let stale = inner
+                .free
+                .iter()
+                .position(|pooled| pooled.width != width || pooled.height != height)
+                .ok_or(ReadbackError::StagingBusy)?;
+            inner.free.swap_remove(stale);
+            inner.live -= 1;
         }
 
         let texture = create_staging_texture(
@@ -1189,5 +1198,30 @@ mod tests {
             assert_eq!(inner.live, inner.free.len(), "live after size {index}");
             assert!(inner.live <= STAGING_POOL_LIMIT);
         }
+    }
+
+    #[test]
+    fn pool_evicts_stale_sizes_at_the_limit() {
+        let pool = warp_pool();
+        let held = pool.acquire(320, 240).unwrap();
+        for (width, height) in [(640, 480), (800, 600), (1024, 768)] {
+            drop(pool.acquire(width, height).unwrap());
+        }
+
+        {
+            let inner = pool.inner.lock().unwrap();
+            assert_eq!(inner.live, STAGING_POOL_LIMIT);
+            assert_eq!(inner.free.len(), STAGING_POOL_SIZE);
+        }
+
+        let lease = pool
+            .acquire(1280, 720)
+            .unwrap_or_else(|error| panic!("acquire after a size change: {error}"));
+        drop(lease);
+        drop(held);
+
+        let inner = pool.inner.lock().unwrap();
+        assert_eq!(inner.live, inner.free.len());
+        assert!(inner.live <= STAGING_POOL_LIMIT);
     }
 }
