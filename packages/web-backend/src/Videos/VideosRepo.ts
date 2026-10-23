@@ -130,9 +130,19 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
+						const {
+							createdAt: _createdAt,
+							updatedAt: _updatedAt,
+							id: _id,
+							...insertData
+						} = data as CreateVideoInput & {
+							createdAt?: unknown;
+							updatedAt?: unknown;
+							id?: unknown;
+						};
 						await db.insert(Db.videos).values([
 							{
-								...data,
+								...insertData,
 								id,
 								orgId: data.orgId,
 								bucket: Option.getOrNull(data.bucketId ?? Option.none()),

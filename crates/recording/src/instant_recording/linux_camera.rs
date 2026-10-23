@@ -202,9 +202,34 @@ pub struct LinuxCameraMaskReceipt {
     pub completed_at: Instant,
 }
 
+#[derive(Clone)]
+pub struct LinuxCameraPixels(Arc<dyn AsRef<[u8]> + Send + Sync>);
+
+impl LinuxCameraPixels {
+    pub fn new(pixels: impl AsRef<[u8]> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(pixels))
+    }
+}
+
+impl std::ops::Deref for LinuxCameraPixels {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        (*self.0).as_ref()
+    }
+}
+
+impl std::fmt::Debug for LinuxCameraPixels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinuxCameraPixels")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LinuxProcessedCameraFrame {
-    pub bgra: Arc<[u8]>,
+    pub bgra: LinuxCameraPixels,
     pub dimensions: (u32, u32),
     pub stride: usize,
     pub timestamp: Timestamp,
@@ -1923,9 +1948,9 @@ mod tests {
 
     fn processed_frame(now: Instant, generation: u64) -> LinuxProcessedCameraFrame {
         LinuxProcessedCameraFrame {
-            bgra: Arc::from([
+            bgra: LinuxCameraPixels::new([
                 10, 20, 30, 255, 40, 50, 60, 255, 99, 99, 99, 99, 70, 80, 90, 255, 100, 110, 120,
-                255, 99, 99, 99, 99,
+                255, 99, 99, 99, 99u8,
             ]),
             dimensions: (2, 2),
             stride: 12,
@@ -2008,7 +2033,7 @@ mod tests {
         invalid.stride = 7;
         assert!(validate_processed_frame(&invalid, frame.processing, 7, now, now).is_err());
         invalid = frame.clone();
-        invalid.bgra = Arc::from([0u8; 23]);
+        invalid.bgra = LinuxCameraPixels::new([0u8; 23]);
         assert!(validate_processed_frame(&invalid, frame.processing, 7, now, now).is_err());
         invalid = frame.clone();
         invalid.timestamp = Timestamp::SystemTime(std::time::SystemTime::now());

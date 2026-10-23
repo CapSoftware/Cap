@@ -120,6 +120,7 @@ impl ExporterBuilder {
     ) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
+        cap_editor::release_playback_audio_caches();
         let mut project_config = self.load_project_config()?;
 
         let recording_meta =

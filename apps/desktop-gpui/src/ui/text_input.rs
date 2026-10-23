@@ -75,6 +75,7 @@ use gpui::{
 use smallvec::SmallVec;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::keyboard_nav;
 use crate::theme::Theme;
 
 // -- Actions and key bindings -------------------------------------------------
@@ -139,8 +140,12 @@ pub const KEY_CONTEXT: &str = "TextInput";
 /// matched *before* the IME composes the character, so binding `a` would mean
 /// the letter `a` could never be typed.
 pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys(bindings());
+}
+
+pub(crate) fn bindings() -> Vec<KeyBinding> {
     let ctx = Some(KEY_CONTEXT);
-    cx.bind_keys([
+    let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, ctx),
         KeyBinding::new("delete", DeleteForward, ctx),
         KeyBinding::new("alt-backspace", DeleteWordLeft, ctx),
@@ -181,7 +186,36 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Confirm, ctx),
         KeyBinding::new("escape", Cancel, ctx),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, ctx),
-    ]);
+    ];
+    if cfg!(not(target_os = "macos")) {
+        bindings.extend(ctrl_bindings(ctx));
+    }
+    bindings
+}
+
+/// The fork parses `cmd` as the Windows/Super key off macOS, so the `cmd-*`
+/// chords above never fire there. These are the Windows and Linux spellings of
+/// the same commands.
+fn ctrl_bindings(ctx: Option<&str>) -> [KeyBinding; 17] {
+    [
+        KeyBinding::new("ctrl-a", SelectAll, ctx),
+        KeyBinding::new("ctrl-c", Copy, ctx),
+        KeyBinding::new("ctrl-x", Cut, ctx),
+        KeyBinding::new("ctrl-v", Paste, ctx),
+        KeyBinding::new("ctrl-z", Undo, ctx),
+        KeyBinding::new("ctrl-shift-z", Redo, ctx),
+        KeyBinding::new("ctrl-y", Redo, ctx),
+        KeyBinding::new("ctrl-left", MoveWordLeft, ctx),
+        KeyBinding::new("ctrl-right", MoveWordRight, ctx),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, ctx),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, ctx),
+        KeyBinding::new("ctrl-backspace", DeleteWordLeft, ctx),
+        KeyBinding::new("ctrl-delete", DeleteWordRight, ctx),
+        KeyBinding::new("ctrl-home", MoveToStart, ctx),
+        KeyBinding::new("ctrl-end", MoveToEnd, ctx),
+        KeyBinding::new("ctrl-shift-home", SelectToStart, ctx),
+        KeyBinding::new("ctrl-shift-end", SelectToEnd, ctx),
+    ]
 }
 
 // -- The focus gate for bare printable keys -----------------------------------
@@ -210,6 +244,21 @@ pub fn text_input_has_focus(window: &Window, cx: &App) -> bool {
     inputs.iter().any(|weak| {
         weak.upgrade()
             .is_some_and(|entity| entity.read(cx).focus.is_focused(window))
+    })
+}
+
+/// Is a focused field in this window composing IME text? Tab belongs to the
+/// input method then.
+pub fn text_input_is_composing(window: &Window, cx: &App) -> bool {
+    let Some(live) = cx.try_global::<LiveInputs>() else {
+        return false;
+    };
+    let inputs = live.0.borrow();
+    inputs.iter().any(|weak| {
+        weak.upgrade().is_some_and(|entity| {
+            let input = entity.read(cx);
+            input.marked_range.is_some() && input.focus.is_focused(window)
+        })
     })
 }
 
@@ -1828,7 +1877,11 @@ impl RenderOnce for TextInput {
         let state = self.state.clone();
         let (focus, multi_line, disabled) = {
             let read = state.read(cx);
-            (read.focus.clone(), read.multi_line, read.disabled)
+            (
+                read.focus.clone().tab_stop(!read.disabled),
+                read.multi_line,
+                read.disabled,
+            )
         };
         let focused = focus.is_focused(window);
         // `leading-normal` on a `text-xs` input is 1.35 in this font stack;
@@ -1863,6 +1916,7 @@ impl RenderOnce for TextInput {
             .id(self.id.clone())
             .key_context(KEY_CONTEXT)
             .track_focus(&focus)
+            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
             .relative()
             .flex()
             .flex_row()
@@ -2379,6 +2433,164 @@ impl Element for TextBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Key bindings ---------------------------------------------------------
+
+    fn single_keystroke(binding: &KeyBinding) -> &gpui::Keystroke {
+        assert_eq!(binding.keystrokes().len(), 1, "{binding:?}");
+        binding.keystrokes()[0].inner()
+    }
+
+    fn bound<'a>(bindings: &'a [KeyBinding], source: &str) -> Vec<&'a KeyBinding> {
+        let keystroke = gpui::Keystroke::parse(source).unwrap();
+        bindings
+            .iter()
+            .filter(|binding| single_keystroke(binding) == &keystroke)
+            .collect()
+    }
+
+    fn assert_bound(bindings: &[KeyBinding], source: &str, action: &dyn gpui::Action) {
+        let matches = bound(bindings, source);
+        assert_eq!(matches.len(), 1, "{source} should be bound exactly once");
+        assert!(
+            matches[0].action().partial_eq(action),
+            "{source} is bound to {}, expected {}",
+            matches[0].action().name(),
+            action.name()
+        );
+    }
+
+    const MAC_CHORDS: usize = 40;
+
+    #[test]
+    fn every_binding_is_a_single_keystroke_in_the_text_input_context() {
+        for binding in bindings() {
+            single_keystroke(&binding);
+            assert_eq!(
+                binding.predicate().map(|predicate| predicate.to_string()),
+                Some(KEY_CONTEXT.to_string()),
+                "{binding:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_keystroke_is_bound_twice() {
+        let bindings = bindings();
+        let mut seen = std::collections::HashSet::new();
+        for binding in &bindings {
+            assert!(
+                seen.insert(single_keystroke(binding).unparse()),
+                "{binding:?} is bound twice"
+            );
+        }
+    }
+
+    #[test]
+    fn no_bare_printable_key_is_bound() {
+        for binding in bindings() {
+            let keystroke = single_keystroke(&binding);
+            let modified = keystroke.modifiers.control
+                || keystroke.modifiers.alt
+                || keystroke.modifiers.platform
+                || keystroke.modifiers.function;
+            assert!(
+                modified || keystroke.key.chars().count() > 1,
+                "{binding:?} would swallow a typed character"
+            );
+        }
+    }
+
+    #[test]
+    fn mac_chords_are_unchanged() {
+        let golden: &[(&str, &dyn gpui::Action)] = &[
+            ("backspace", &Backspace),
+            ("delete", &DeleteForward),
+            ("alt-backspace", &DeleteWordLeft),
+            ("alt-delete", &DeleteWordRight),
+            ("cmd-backspace", &DeleteToLineStart),
+            ("cmd-delete", &DeleteToLineEnd),
+            ("left", &MoveLeft),
+            ("right", &MoveRight),
+            ("up", &MoveUp),
+            ("down", &MoveDown),
+            ("alt-left", &MoveWordLeft),
+            ("alt-right", &MoveWordRight),
+            ("cmd-left", &MoveToLineStart),
+            ("cmd-right", &MoveToLineEnd),
+            ("home", &MoveToLineStart),
+            ("end", &MoveToLineEnd),
+            ("cmd-up", &MoveToStart),
+            ("cmd-down", &MoveToEnd),
+            ("shift-left", &SelectLeft),
+            ("shift-right", &SelectRight),
+            ("shift-up", &SelectUp),
+            ("shift-down", &SelectDown),
+            ("alt-shift-left", &SelectWordLeft),
+            ("alt-shift-right", &SelectWordRight),
+            ("cmd-shift-left", &SelectToLineStart),
+            ("cmd-shift-right", &SelectToLineEnd),
+            ("shift-home", &SelectToLineStart),
+            ("shift-end", &SelectToLineEnd),
+            ("cmd-shift-up", &SelectToStart),
+            ("cmd-shift-down", &SelectToEnd),
+            ("cmd-a", &SelectAll),
+            ("cmd-c", &Copy),
+            ("cmd-x", &Cut),
+            ("cmd-v", &Paste),
+            ("cmd-z", &Undo),
+            ("cmd-shift-z", &Redo),
+            ("cmd-y", &Redo),
+            ("enter", &Confirm),
+            ("escape", &Cancel),
+            ("ctrl-cmd-space", &ShowCharacterPalette),
+        ];
+        assert_eq!(golden.len(), MAC_CHORDS);
+        let bindings = bindings();
+        for (source, action) in golden {
+            assert_bound(&bindings, source, *action);
+        }
+        if cfg!(target_os = "macos") {
+            assert_eq!(bindings.len(), MAC_CHORDS);
+        }
+    }
+
+    #[test]
+    fn ctrl_chords_edit_text_only_off_macos() {
+        let chords: &[(&str, &dyn gpui::Action)] = &[
+            ("ctrl-a", &SelectAll),
+            ("ctrl-c", &Copy),
+            ("ctrl-x", &Cut),
+            ("ctrl-v", &Paste),
+            ("ctrl-z", &Undo),
+            ("ctrl-shift-z", &Redo),
+            ("ctrl-y", &Redo),
+            ("ctrl-left", &MoveWordLeft),
+            ("ctrl-right", &MoveWordRight),
+            ("ctrl-shift-left", &SelectWordLeft),
+            ("ctrl-shift-right", &SelectWordRight),
+            ("ctrl-backspace", &DeleteWordLeft),
+            ("ctrl-delete", &DeleteWordRight),
+            ("ctrl-home", &MoveToStart),
+            ("ctrl-end", &MoveToEnd),
+            ("ctrl-shift-home", &SelectToStart),
+            ("ctrl-shift-end", &SelectToEnd),
+        ];
+        let bindings = bindings();
+        for (source, action) in chords {
+            if cfg!(target_os = "macos") {
+                assert!(
+                    bound(&bindings, source).is_empty(),
+                    "{source} is bound on macOS"
+                );
+            } else {
+                assert_bound(&bindings, source, *action);
+            }
+        }
+        if !cfg!(target_os = "macos") {
+            assert_eq!(bindings.len(), MAC_CHORDS + chords.len());
+        }
+    }
 
     // -- Word navigation ------------------------------------------------------
 
