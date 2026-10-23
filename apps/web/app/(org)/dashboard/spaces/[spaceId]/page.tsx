@@ -506,7 +506,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
-							isNull(videos.folderId),
+							isNull(sharedVideos.folderId),
 						),
 					),
 			]);

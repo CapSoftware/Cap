@@ -216,6 +216,11 @@ pub fn pause(cx: &mut App) -> bool {
     true
 }
 
+pub fn is_paused(cx: &App) -> bool {
+    cx.try_global::<Hotkeys>()
+        .is_some_and(|hotkeys| hotkeys.paused)
+}
+
 pub fn editing_blocked(cx: &App) -> bool {
     #[cfg(target_os = "linux")]
     if cx
