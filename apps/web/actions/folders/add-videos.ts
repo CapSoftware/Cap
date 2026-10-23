@@ -50,13 +50,29 @@ export async function addVideosToFolder(
 		}
 
 		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
+		const sharesWithOrganization = isAllSpacesEntry && !!folder.spaceId;
+		const sharingTable = sharesWithOrganization ? sharedVideos : spaceVideos;
+		const existingShares = await db()
+			.select({ videoId: sharingTable.videoId })
+			.from(sharingTable)
+			.where(
+				and(
+					sharesWithOrganization
+						? eq(sharedVideos.organizationId, user.activeOrganizationId)
+						: eq(spaceVideos.spaceId, spaceId),
+					inArray(sharingTable.videoId, validVideoIds),
+				),
+			);
+		const existingVideoIds = new Set(
+			existingShares.map((share) => share.videoId),
+		);
+		const newVideoIds = validVideoIds.filter((id) => !existingVideoIds.has(id));
 
-		//if we're adding videos to a folder from Caps page, then insert the videos into the folder
-		if (isAllSpacesEntry && folder.spaceId) {
+		if (newVideoIds.length > 0 && sharesWithOrganization) {
 			await db()
 				.insert(sharedVideos)
 				.values(
-					validVideoIds.map((videoId) => {
+					newVideoIds.map((videoId) => {
 						const id = nanoId();
 						return {
 							id,
@@ -67,11 +83,11 @@ export async function addVideosToFolder(
 						};
 					}),
 				);
-		} else {
+		} else if (newVideoIds.length > 0) {
 			await db()
 				.insert(spaceVideos)
 				.values(
-					validVideoIds.map((videoId) => {
+					newVideoIds.map((videoId) => {
 						const id = nanoId();
 						return {
 							id,
