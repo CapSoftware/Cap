@@ -1832,6 +1832,7 @@ impl SettingsWindow {
         let theme = self.theme;
         let (update_label, update_ready) = match crate::updates::status(cx) {
             crate::updates::UpdateStatus::Idle => ("Check for updates".to_string(), false),
+            crate::updates::UpdateStatus::Checking => ("Checking for updates…".to_string(), false),
             crate::updates::UpdateStatus::Downloading {
                 version,
                 fraction: Some(fraction),
