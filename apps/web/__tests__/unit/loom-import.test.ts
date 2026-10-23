@@ -5,8 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const whereMock = vi.fn();
 const valuesMock = vi.fn();
 const startMock = vi.fn();
+const getRunMock = vi.hoisted(() => vi.fn());
 const revalidatePathMock = vi.fn();
 const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
+const storageGetAccessForVideoMock = vi.hoisted(() => vi.fn());
+const startVideoProcessingWorkflowMock = vi.hoisted(() => vi.fn());
+const uploadedFileHeadMock = vi.hoisted(() => vi.fn());
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
@@ -164,7 +168,16 @@ vi.mock("@cap/utils", () => ({
 vi.mock("@cap/web-backend", () => ({
 	Storage: {
 		getWritableAccessForUser: storageGetWritableAccessForUserMock,
+		getAccessForVideo: storageGetAccessForVideoMock,
 	},
+}));
+
+vi.mock("@/lib/video-processing", () => ({
+	startVideoProcessingWorkflow: startVideoProcessingWorkflowMock,
+}));
+
+vi.mock("@/lib/video-storage", () => ({
+	decodeStorageVideo: (video: unknown) => video,
 }));
 
 vi.mock("@cap/web-domain", () => ({
@@ -229,6 +242,7 @@ vi.mock("@/actions/organization/space-authorization", () => ({
 
 vi.mock("workflow/api", () => ({
 	start: startMock,
+	getRun: getRunMock,
 }));
 
 vi.mock("@/workflows/import-loom-video", () => ({
@@ -1602,5 +1616,225 @@ describe("importFromLoomCsvForConcierge", () => {
 		expect(mockDb.update).not.toHaveBeenCalled();
 		expect(valuesMock).not.toHaveBeenCalled();
 		expect(startMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("resuming an uploaded concierge Loom file", () => {
+	const input = {
+		requestId: "req000000000001",
+		loomUrl: "https://www.loom.com/share/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		userEmail: "owner@example.com",
+		confirmedPreviousProcessingStopped: true,
+	};
+	const recording = {
+		videoId: "existing-video",
+		ownerId: "owner-id",
+		ownerEmail: "owner@example.com",
+		organizationId: "org-1",
+		metadata: { loomImportRun: { runId: "old-run", dispatch: "accepted" } },
+	};
+	const uploaded = {
+		video: {
+			id: "existing-video",
+			ownerId: "owner-id",
+			orgId: "org-1",
+			bucket: null,
+		},
+		rawFileKey: "owner-id/existing-video/raw-upload.mp4",
+		phase: "error",
+		processingMessage: null,
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		whereMock.mockReset();
+		mockDb.select.mockReturnValue(mockDb);
+		mockDb.from.mockReturnValue(mockDb);
+		mockDb.innerJoin.mockReturnValue(mockDb);
+		mockDb.leftJoin.mockReturnValue(mockDb);
+		conciergeMocks.requireMigrationOperator.mockResolvedValue({
+			id: "operator",
+		});
+		conciergeMocks.reserveConciergeImport.mockResolvedValue("lease");
+		conciergeMocks.releaseConciergeImport.mockResolvedValue(undefined);
+		storageGetAccessForVideoMock.mockReturnValue(
+			Effect.succeed([{ headObject: uploadedFileHeadMock }]),
+		);
+		uploadedFileHeadMock.mockReturnValue(
+			Effect.succeed({ ContentLength: 6 * 1024 ** 3 }),
+		);
+		startVideoProcessingWorkflowMock.mockResolvedValue("started");
+		getRunMock.mockReturnValue({ status: Promise.resolve("failed") });
+	});
+
+	it("requires explicit confirmation before inspecting a recording", async () => {
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(
+			resumeConciergeLoomFileUpload({
+				...input,
+				confirmedPreviousProcessingStopped: false,
+			}),
+		).resolves.toMatchObject({ ok: false });
+		expect(mockDb.select).not.toHaveBeenCalled();
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["running", "pending"])(
+		"refuses a previous workflow that is still %s",
+		async (status) => {
+			whereMock.mockReturnValueOnce(withLimit([recording]));
+			getRunMock.mockReturnValueOnce({ status: Promise.resolve(status) });
+			const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+			await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject(
+				{
+					ok: false,
+					error: expect.stringContaining("active or could not be confirmed"),
+				},
+			);
+			expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("refuses an unconfirmed previous workflow", async () => {
+		whereMock.mockReturnValueOnce(withLimit([recording]));
+		getRunMock.mockImplementationOnce(() => ({
+			status: Promise.reject(new Error("Unavailable")),
+		}));
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject({
+			ok: false,
+			error: expect.stringContaining("active or could not be confirmed"),
+		});
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+
+	it("processes a large uploaded file in its existing recording", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([recording]))
+			.mockReturnValueOnce(withLimit([uploaded]));
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toEqual({
+			ok: true,
+			value: { status: "started" },
+		});
+		expect(startVideoProcessingWorkflowMock).toHaveBeenCalledExactlyOnceWith({
+			videoId: "existing-video",
+			userId: "owner-id",
+			rawFileKey: uploaded.rawFileKey,
+			bucketId: null,
+			processingMessage: "Processing Loom video...",
+			startFailureMessage: "Loom file processing could not start.",
+		});
+		expect(mockDb.insert).not.toHaveBeenCalled();
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(storageGetWritableAccessForUserMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ records: [] },
+		{ records: [{ ...recording, ownerEmail: "another@example.com" }] },
+	])(
+		"refuses missing or differently owned recordings without creating one",
+		async ({ records }) => {
+			whereMock.mockReturnValueOnce(withLimit(records));
+			const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+			await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject(
+				{
+					ok: false,
+					error: expect.stringContaining("matches this request and owner"),
+				},
+			);
+			expect(mockDb.insert).not.toHaveBeenCalled();
+			expect(mockDb.update).not.toHaveBeenCalled();
+			expect(storageGetAccessForVideoMock).not.toHaveBeenCalled();
+			expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["processing", "complete"])(
+		"does not start another job for a recording in phase %s",
+		async (phase) => {
+			whereMock
+				.mockReturnValueOnce(withLimit([recording]))
+				.mockReturnValueOnce(withLimit([{ ...uploaded, phase }]));
+			const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+			await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject(
+				{
+					ok: false,
+					error: expect.stringContaining("no longer available"),
+				},
+			);
+			expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects an empty uploaded file", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([recording]))
+			.mockReturnValueOnce(withLimit([uploaded]));
+		uploadedFileHeadMock.mockReturnValue(Effect.succeed({ ContentLength: 0 }));
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject({
+			ok: false,
+			error: "The uploaded file is empty.",
+		});
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+
+	it("rejects an oversized upload before starting any processing", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([recording]))
+			.mockReturnValueOnce(withLimit([uploaded]));
+		uploadedFileHeadMock.mockReturnValue(
+			Effect.succeed({ ContentLength: 11 * 1024 ** 3 }),
+		);
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject({
+			ok: false,
+			error: expect.stringContaining("exceeds 10 GB"),
+		});
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+
+	it("stops if ownership changes during resume preparation", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([recording]))
+			.mockReturnValueOnce(
+				withLimit([
+					{ ...uploaded, video: { ...uploaded.video, ownerId: "new-owner" } },
+				]),
+			);
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject({
+			ok: false,
+			error: expect.stringContaining("no longer available"),
+		});
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+
+	it("does not start when the stored upload cannot be found", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([recording]))
+			.mockReturnValueOnce(withLimit([uploaded]));
+		uploadedFileHeadMock.mockReturnValue(Effect.fail(new Error("Not found")));
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).resolves.toMatchObject({
+			ok: false,
+			error: expect.stringContaining("not found in storage"),
+		});
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+
+	it("requires an operator before reading any recording", async () => {
+		conciergeMocks.requireMigrationOperator.mockRejectedValueOnce(
+			new Error("Unauthorized"),
+		);
+		const { resumeConciergeLoomFileUpload } = await import("@/actions/loom");
+		await expect(resumeConciergeLoomFileUpload(input)).rejects.toThrow(
+			"Unauthorized",
+		);
+		expect(mockDb.select).not.toHaveBeenCalled();
+		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
 	});
 });
