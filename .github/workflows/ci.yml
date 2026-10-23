@@ -123,6 +123,7 @@ jobs:
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
           __tests__/unit/media-player-store-refs.test.ts
+          __tests__/unit/playback-store.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/summary-editor.test.ts
@@ -281,6 +282,7 @@ jobs:
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
+          cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
 
   build-gpui:
@@ -294,6 +296,9 @@ jobs:
         settings:
           - target: aarch64-apple-darwin
             runner: blacksmith-6vcpu-macos-15
+          # Cap still ships an Intel build, and Blacksmith has no Intel Macs.
+          - target: x86_64-apple-darwin
+            runner: macos-26-intel
           - target: x86_64-pc-windows-msvc
             runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-unknown-linux-gnu

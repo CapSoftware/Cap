@@ -13,7 +13,9 @@
 //! - AVAssetReader: a reader started at time `T` vends the sample on screen at
 //!   `T` (the newest at or before it) and every later one. When that sample
 //!   starts before `T` its presentation time is trimmed to `T`. A reader started
-//!   at or after the end of the track vends nothing.
+//!   at or after the end of the track vends nothing. A read set up with
+//!   [`Registration::fail_avf_read_at`] fails like a decode error: the reader
+//!   vends nothing more and reports the failure.
 //!
 //! Every vended frame carries its sample index in its first luma row, see
 //! [`frame_id`].
@@ -96,6 +98,7 @@ pub(crate) struct ScriptState {
     pub(crate) script: Script,
     counters: Counters,
     vended: Mutex<Vec<u32>>,
+    failing_samples: Mutex<Vec<usize>>,
     #[cfg(target_os = "macos")]
     samples: Mutex<HashMap<usize, avf::SharedSample>>,
 }
@@ -103,6 +106,16 @@ pub(crate) struct ScriptState {
 impl ScriptState {
     fn record_vend(&self, index: usize) {
         self.vended.lock().unwrap().push(index as u32);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn take_failure(&self, index: usize) -> bool {
+        let mut failing = self.failing_samples.lock().unwrap();
+        let Some(position) = failing.iter().position(|&sample| sample == index) else {
+            return false;
+        };
+        failing.swap_remove(position);
+        true
     }
 
     /// Whether `pts` (in stream ticks) is at or before `value / scale` seconds.
@@ -165,6 +178,13 @@ impl Registration {
     pub fn seeks(&self) -> u64 {
         self.state.counters.seeks.load(Ordering::Relaxed)
     }
+
+    /// The next AVAssetReader that reaches `index` fails there instead of
+    /// vending it, as a native reader does with a decode error: it vends
+    /// nothing more and reports the failure. Once per call.
+    pub fn fail_avf_read_at(&self, index: usize) {
+        self.state.failing_samples.lock().unwrap().push(index);
+    }
 }
 
 impl Drop for Registration {
@@ -185,6 +205,7 @@ pub fn register(script: Script) -> Registration {
         script,
         counters: Counters::default(),
         vended: Mutex::new(Vec::new()),
+        failing_samples: Mutex::new(Vec::new()),
         #[cfg(target_os = "macos")]
         samples: Mutex::new(HashMap::new()),
     });
@@ -314,6 +335,7 @@ mod avf {
         state: Arc<ScriptState>,
         next: usize,
         trimmed_start: Option<cm::Time>,
+        failed: bool,
     }
 
     impl AvfReader {
@@ -339,12 +361,24 @@ mod avf {
                 state,
                 next,
                 trimmed_start,
+                failed: false,
             }
         }
 
+        pub(crate) fn failed(&self) -> bool {
+            self.failed
+        }
+
         pub(crate) fn next_sample_buf(&mut self) -> Option<R<cm::SampleBuf>> {
+            if self.failed {
+                return None;
+            }
             let script = &self.state.script;
             let frame = script.frames.get(self.next)?;
+            if self.state.take_failure(self.next) {
+                self.failed = true;
+                return None;
+            }
             let index = self.next;
             self.next += 1;
             self.state.record_vend(index);

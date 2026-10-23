@@ -667,6 +667,9 @@ impl AVAssetReaderDecoder {
             if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
                 return Ok((width, height, YuvMatrix::default()));
             }
+            if let Some(dimensions) = crate::project_recordings::header_video_metadata(&path) {
+                return Ok(dimensions);
+            }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
                 .streams()
@@ -969,9 +972,9 @@ impl AVAssetReaderDecoder {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2)
             };
             let cache_max = if is_scrubbing {
-                max_requested_frame + FRAME_CACHE_SIZE as u32 / 4
+                max_requested_frame.saturating_add(FRAME_CACHE_SIZE as u32 / 4)
             } else {
-                max_requested_frame + FRAME_CACHE_SIZE as u32
+                max_requested_frame.saturating_add(FRAME_CACHE_SIZE as u32)
             };
 
             // The last frame each other pooled reader vended is the answer for a
@@ -1215,6 +1218,32 @@ impl AVAssetReaderDecoder {
                 }
 
                 decoder.is_done = true;
+
+                // A failed reader (a decode error, seen with many decode
+                // sessions on a loaded machine) vends nothing more, and the
+                // newest cached frame is stale for every request still
+                // waiting. Read them again from a fresh reader; when that one
+                // fails too, leave them unanswered so the handle switches to
+                // software decoding instead of showing an older frame.
+                if !pending_requests.is_empty()
+                    && let Some(error) = decoder.inner.failure()
+                {
+                    tracing::warn!(
+                        decoder_idx,
+                        requested_frame,
+                        %error,
+                        "Video reader failed; reading the requests again from a fresh reader"
+                    );
+                    retry_requests.extend(
+                        pending_requests
+                            .drain(..)
+                            .filter(|request| !request.retried)
+                            .map(|request| PendingRequest {
+                                retried: true,
+                                ..request
+                            }),
+                    );
+                }
             }
 
             for request in retry_requests.into_iter().rev() {

@@ -41,6 +41,20 @@ const mediaFetch: typeof fetch = (input, init) => {
 	return fetchAllowed(url, init);
 };
 
+export function decodeThreadsFromEnv(
+	name: string,
+	fallback: number,
+	env: Record<string, string | undefined> = process.env,
+): string {
+	const raw = env[name]?.trim();
+	if (!raw) return String(fallback);
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < 0 || value > 64) {
+		return String(fallback);
+	}
+	return String(value);
+}
+
 export async function withTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,

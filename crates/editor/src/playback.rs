@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use crate::{
     audio_output::{AudioOutput, PlaySpec},
     editor,
-    editor_instance::SegmentMedia,
+    editor_instance::{SegmentMedia, cursor_timeline_settings},
     segments::get_audio_segments,
     telemetry::{
         PlaybackFrameSource, PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent,
@@ -1090,7 +1090,7 @@ impl Playback {
                 .sort_by_key(|p| p.frame_number);
 
             let playback_start_frame = frame_number;
-            let mut cached_project = self.project.borrow().clone();
+            let mut cached_project = Arc::new(self.project.borrow().clone());
 
             let build_cursor_timelines =
                 |project: &ProjectConfiguration| -> Vec<Arc<PrecomputedCursorTimeline>> {
@@ -1387,7 +1387,7 @@ impl Playback {
                     drop(adopted.take());
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
-                    cached_project.audio = project.audio.clone();
+                    Arc::make_mut(&mut cached_project).audio = project.audio.clone();
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
                         music: self.music.clone(),
@@ -1458,7 +1458,14 @@ impl Playback {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
                         || clip_audio_changed(&cached_project, &next_project);
-                    cached_project = next_project;
+                    let cursor_changed = cursor_timeline_settings(&cached_project.cursor)
+                        != cursor_timeline_settings(&next_project.cursor);
+                    let zoom_changed = !ZoomTransformTimeline::project_inputs_match(
+                        &cached_project,
+                        &next_project,
+                        self.render_constants.options.screen_size,
+                    );
+                    cached_project = Arc::new(next_project);
                     if adopted.is_none()
                         && audio_changed
                         && let Some(generation) = audio_generation
@@ -1467,7 +1474,7 @@ impl Playback {
                             PlaySpec {
                                 segments: audio_segments.clone(),
                                 music: self.music.clone(),
-                                project: cached_project.clone(),
+                                project: (*cached_project).clone(),
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
@@ -1475,9 +1482,13 @@ impl Playback {
                             generation,
                         );
                     }
-                    cursor_timelines = build_cursor_timelines(&cached_project);
-                    zoom_timelines = build_zoom_timelines(&cached_project);
-                    outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    if cursor_changed {
+                        cursor_timelines = build_cursor_timelines(&cached_project);
+                    }
+                    if zoom_changed {
+                        zoom_timelines = build_zoom_timelines(&cached_project);
+                        outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    }
                 }
 
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;

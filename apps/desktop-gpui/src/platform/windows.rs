@@ -660,7 +660,27 @@ pub fn copy_image_bytes_to_clipboard(bytes: &[u8], _cx: &gpui::App) -> Result<()
 }
 
 pub fn desktop_picture_path() -> Option<PathBuf> {
-    None
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETDESKWALLPAPER, SystemParametersInfoW,
+    };
+
+    let mut buffer = vec![0u16; 32_768];
+    let success = unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            buffer.len() as u32,
+            buffer.as_mut_ptr().cast(),
+            0,
+        )
+    };
+    if success == 0 {
+        tracing::warn!(error = %std::io::Error::last_os_error(), "failed to read desktop wallpaper path");
+        return None;
+    }
+    let length = buffer.iter().position(|character| *character == 0)?;
+    (length > 0).then(|| PathBuf::from(OsString::from_wide(&buffer[..length])))
 }
 
 pub fn set_activation_policy(_regular: bool) -> bool {
@@ -725,4 +745,20 @@ mod tests {
         ));
         assert!(!overlap_is_visible(to_rect(0., 0., 0., 100.), monitor));
     }
+}
+
+pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
+    false
+}
+
+pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+    None
+}
+
+pub fn system_settings_frontmost() -> bool {
+    false
+}
+
+pub fn window_is_closable(_window: &Window) -> bool {
+    false
 }

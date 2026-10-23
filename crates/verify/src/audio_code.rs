@@ -238,6 +238,11 @@ pub struct LocatedMarker {
 }
 
 const MIN_CORRELATION: f64 = 0.55;
+/// Quieter than this (RMS over a chirp, -80 dBFS) is silence. Correlation is
+/// normalised, so without a floor an encoder's rounding noise passes for a
+/// chirp: AudioToolbox AAC leaves -141 dBFS between markers, which decoded
+/// as a CRC-valid index 0 (Verify recording, recording/studio-screen/gated).
+const SILENCE_RMS: f64 = 1e-4;
 
 /// Finds every marker of `source` in a mono signal.
 pub fn locate_markers(
@@ -261,7 +266,7 @@ pub fn locate_markers(
     let lags = samples.len() - m + 1;
     let norm = |lag: usize| -> f64 {
         let energy = prefix[lag + m] - prefix[lag];
-        if energy <= 1e-12 {
+        if energy <= SILENCE_RMS * SILENCE_RMS * m as f64 {
             0.0
         } else {
             corr[lag] / (energy * template_energy).sqrt()
@@ -428,6 +433,23 @@ fn cross_correlate(signal: &[f32], template: &[f32]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markers_at_rounding_noise_level_are_silence() {
+        let rate = 48_000;
+        let wave = marker_waveform(AudioSource::Mic, 0, rate);
+        for (scale, found) in [(1e-7f32, 0), (1e-3, 1)] {
+            let mut signal = vec![0.0f32; rate as usize];
+            for (i, v) in wave.iter().enumerate() {
+                signal[rate as usize / 4 + i] = v * scale;
+            }
+            assert_eq!(
+                locate_markers(&signal, rate, AudioSource::Mic).len(),
+                found,
+                "marker scaled by {scale}"
+            );
+        }
+    }
 
     #[test]
     fn locates_markers_of_each_source_in_a_mix() {

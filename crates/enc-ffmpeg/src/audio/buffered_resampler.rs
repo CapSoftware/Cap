@@ -61,7 +61,51 @@ impl BufferedResampler {
         *self.resampler.input()
     }
 
+    fn accepts(&self, frame: &ffmpeg::frame::Audio) -> bool {
+        let input = self.resampler.input();
+        frame.format() == input.format
+            && frame.channel_layout() == input.channel_layout
+            && frame.rate() == input.rate
+    }
+
+    // A source can change format mid-stream (a device reopening with another
+    // config); swr rejects any frame that differs from the input it was built
+    // for, so rebuild it for the new input and keep the same output.
+    fn rebuild_for(&mut self, frame: &ffmpeg::frame::Audio) -> bool {
+        let output = self.output();
+        match ffmpeg::software::resampler(
+            (frame.format(), frame.channel_layout(), frame.rate()),
+            (output.format, output.channel_layout, output.rate),
+        ) {
+            Ok(resampler) => {
+                let previous_rate = self.resampler.input().rate;
+                if previous_rate > 0 && frame.rate() > 0 {
+                    self.min_next_pts = self.min_next_pts.map(|pts| {
+                        (pts as f64 * f64::from(frame.rate()) / f64::from(previous_rate)).round()
+                            as i64
+                    });
+                }
+                self.resampler = resampler;
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    format = ?frame.format(),
+                    channels = frame.channels(),
+                    rate = frame.rate(),
+                    "Dropping an audio frame no resampler accepts"
+                );
+                false
+            }
+        }
+    }
+
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
+        if !self.accepts(&frame) && !self.rebuild_for(&frame) {
+            return;
+        }
+
         if let Some(min_next_pts) = self.min_next_pts
             && let Some(pts) = frame.pts()
         {
@@ -72,7 +116,10 @@ impl BufferedResampler {
 
         let mut resampled_frame = ffmpeg::frame::Audio::empty();
 
-        self.resampler.run(&frame, &mut resampled_frame).unwrap();
+        if let Err(error) = self.resampler.run(&frame, &mut resampled_frame) {
+            tracing::warn!(?error, "Dropping an audio frame the resampler rejected");
+            return;
+        }
 
         let resampled_pts =
             (pts as f64 * (resampled_frame.rate() as f64 / frame.rate() as f64)) as i64;
@@ -411,6 +458,99 @@ mod test {
                 ((total as isize) - expected).abs() < 2_000,
                 "drained {total} output samples, expected about {expected}"
             );
+        }
+    }
+
+    mod input_changes {
+        use super::*;
+
+        fn frame(
+            format: format::Sample,
+            channels: i32,
+            rate: u32,
+            samples: usize,
+            pts: i64,
+        ) -> ffmpeg::frame::Audio {
+            let mut frame =
+                ffmpeg::frame::Audio::new(format, samples, ChannelLayout::default(channels));
+            frame.set_rate(rate);
+            frame.set_pts(Some(pts));
+            frame
+        }
+
+        #[test]
+        fn a_new_input_format_rebuilds_the_resampler_and_keeps_the_output() {
+            let packed_u8 = format::Sample::U8(cap_media_info::Type::Packed);
+            let mut bufferer = create_resampler(IN_RATE);
+            let output = bufferer.output();
+
+            bufferer.add_frame(make_input_frame(100, 0));
+            bufferer.add_frame(frame(
+                format::Sample::I16(cap_media_info::Type::Packed),
+                2,
+                200,
+                200,
+                100,
+            ));
+            bufferer.add_frame(frame(
+                format::Sample::F32(cap_media_info::Type::Planar),
+                3,
+                IN_RATE,
+                100,
+                200,
+            ));
+            bufferer.add_frame(frame(packed_u8, 8, IN_RATE, 100, 300));
+
+            let output_after = bufferer.output();
+            assert_eq!(output_after.format, output.format);
+            assert_eq!(output_after.channel_layout, output.channel_layout);
+            assert_eq!(output_after.rate, output.rate);
+            let samples = bufferer.buffer.iter().map(|f| f.0.samples()).sum::<usize>();
+            assert_eq!(samples, 400);
+        }
+
+        #[test]
+        fn a_rate_change_keeps_the_timeline_continuous() {
+            let packed_u8 = format::Sample::U8(cap_media_info::Type::Packed);
+            let mut bufferer = BufferedResampler::new(
+                AudioInfo::new_raw(packed_u8, 48_000, 1),
+                AudioInfo::new_raw(packed_u8, 48_000, 1),
+            )
+            .unwrap();
+            for k in 0..100i64 {
+                bufferer.add_frame(frame(packed_u8, 1, 48_000, 4_800, k * 4_800));
+            }
+            bufferer.add_frame(frame(packed_u8, 1, 8_000, 800, 80_000));
+
+            let (last, pts) = bufferer
+                .buffer
+                .iter()
+                .rev()
+                .find(|(frame, _)| frame.samples() > 0)
+                .unwrap();
+            let end_secs = (*pts as f64 + last.samples() as f64) / 48_000.0;
+            assert!(
+                (10.0..10.3).contains(&end_secs),
+                "the 8 kHz frame ends at {end_secs} s, not right after the 10 s at 48 kHz"
+            );
+        }
+
+        #[test]
+        fn frames_no_resampler_accepts_are_dropped() {
+            let mut bufferer = create_resampler(IN_RATE);
+
+            bufferer.add_frame(make_input_frame(100, 0));
+            bufferer.add_frame(frame(
+                format::Sample::U8(cap_media_info::Type::Packed),
+                1,
+                0,
+                100,
+                100,
+            ));
+            bufferer.add_frame(make_input_frame(100, 200));
+
+            let samples = bufferer.buffer.iter().map(|f| f.0.samples()).sum::<usize>();
+            assert_eq!(samples, 200);
         }
     }
 

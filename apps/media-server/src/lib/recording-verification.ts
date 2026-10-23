@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
-import { PROCESS_TIMEOUT_MS } from "./media-common";
+import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
 	fetchMedia,
 	MediaTransferBudgetError,
@@ -54,6 +54,9 @@ export interface RecordingVerificationOptions {
 	hasAudio?: boolean;
 	sourceEvidence?: RecordingSourceEvidence;
 	allowObservedDuration?: boolean;
+	// Hashing every decoded frame costs as much as the decode; skip it when the
+	// caller has no source evidence to compare against.
+	hashDecodedContent?: boolean;
 	abortSignal?: AbortSignal;
 	timeoutMs?: number;
 	onProgress?: (progress: { frames: number; totalFrames?: number }) => void;
@@ -927,8 +930,11 @@ async function decodeRecording(
 				? Boolean(options.sourceEvidence.audio)
 				: options.hasAudio
 			: sourceAudioInput !== null;
+	const hashContent =
+		!packetProof &&
+		(options.hashDecodedContent !== false || Boolean(options.sourceEvidence));
 	const streamDecodedContent =
-		!packetProof && process.platform !== "win32" && knownAudio !== undefined;
+		hashContent && process.platform !== "win32" && knownAudio !== undefined;
 	if (streamDecodedContent && !Bun.semver.satisfies(Bun.version, ">=1.4.0")) {
 		throw new Error(
 			"Recording content verification requires Bun 1.4.0 or newer; upgrade the media-server runtime to avoid double-closing decoded-content pipes",
@@ -971,8 +977,9 @@ async function decodeRecording(
 				"1",
 				"-filter_complex_threads",
 				"1",
+				// FFmpeg's H.264/HEVC decoders are bit-exact across thread counts, so decoded hashes do not depend on this.
 				"-threads",
-				"1",
+				decodeThreadsFromEnv("MEDIA_SERVER_VERIFY_DECODE_THREADS", 1),
 				"-protocol_whitelist",
 				"file",
 				"-f",
@@ -1033,7 +1040,7 @@ async function decodeRecording(
 									]
 								: []),
 						]
-					: packetProof
+					: !hashContent
 						? []
 						: [
 								...outputOptions,
@@ -1164,7 +1171,7 @@ async function decodeRecording(
 				}
 				stream.contentSha256 = digest.sha256;
 			}
-		} else if (!packetProof) {
+		} else if (hashContent) {
 			for (const digest of diagnostics.digests) decodeLine(digest, streams);
 		}
 		result = validateEvidence(
@@ -1172,7 +1179,7 @@ async function decodeRecording(
 			options,
 			sourceAudioInput !== undefined || packetProof !== undefined,
 			videoTiming,
-			!packetProof,
+			hashContent,
 		);
 	} catch (error) {
 		throw failure ?? error;

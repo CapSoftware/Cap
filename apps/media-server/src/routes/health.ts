@@ -1,11 +1,15 @@
 import os from "node:os";
 import { Hono } from "hono";
-import { getSystemResources, isDraining } from "../lib/job-manager";
+import { hasMediaServerSecret } from "../lib/auth";
+import { getSystemResources } from "../lib/job-manager";
+import { isDraining } from "../lib/lifecycle";
 import { getMediaEngineStatus } from "../lib/media-engine";
+import { getVideoEncoderStatus } from "../lib/nvenc-encoder";
+import { getRuntimeReport } from "../lib/runtime-report";
 
 const health = new Hono();
 
-health.get("/", (c) => {
+health.get("/", async (c) => {
 	const mediaEngine = getMediaEngineStatus();
 	const [, loadAvg5m, loadAvg15m] = os.loadavg();
 	const totalMemoryBytes = os.totalmem();
@@ -16,8 +20,8 @@ health.get("/", (c) => {
 		(1 - freeMemoryBytes / totalMemoryBytes) * 100,
 	);
 	const resources = getSystemResources();
-
 	const draining = isDraining();
+	const authenticated = hasMediaServerSecret(c);
 
 	return c.json(
 		{
@@ -31,6 +35,7 @@ health.get("/", (c) => {
 				available: mediaEngine.available,
 				version: mediaEngine.version,
 			},
+			videoEncoder: getVideoEncoderStatus(process.env, authenticated),
 			system: {
 				...resources,
 				loadAvg5m,
@@ -41,8 +46,9 @@ health.get("/", (c) => {
 				uptimeSeconds: Math.round(os.uptime()),
 				processUptimeSeconds: Math.round(process.uptime()),
 			},
+			...(authenticated && { runtime: await getRuntimeReport() }),
 		},
-		200,
+		draining ? 503 : 200,
 	);
 });
 

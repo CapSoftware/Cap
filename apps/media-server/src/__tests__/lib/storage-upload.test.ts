@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { uploadFileToStorage } from "../../lib/media-video";
+import {
+	multipartUploadConcurrencyFromEnv,
+	uploadFileToStorage,
+} from "../../lib/media-video";
 import { verifyRemoteRecordingBytes } from "../../lib/recording-verification";
 
 const originalFetch = globalThis.fetch;
@@ -312,6 +315,74 @@ describe("uploadFileToStorage", () => {
 				{ partNumber: 2, etag: '"etag-2"', size: 3 },
 			],
 		});
+	});
+
+	test("uploads multipart parts concurrently and completes them in order", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 4 + 1);
+		let inFlight = 0;
+		let maxInFlight = 0;
+		let completed: unknown;
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (init?.method === "POST") {
+				const json = JSON.parse(String(init.body));
+				if (url.endsWith("/sign"))
+					return Response.json({
+						url: `https://storage.example.com/part-${json.partNumber}`,
+					});
+				completed = json;
+				return Response.json({ objectIdentity: '"completed"' });
+			}
+			const partNumber = Number(url.split("part-")[1]);
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await Bun.sleep((6 - partNumber) * 5);
+			inFlight--;
+			return new Response(null, {
+				status: 200,
+				headers: { etag: `"etag-${partNumber}"` },
+			});
+		}) as typeof fetch;
+		process.env.MEDIA_SERVER_UPLOAD_CONCURRENCY = "3";
+		try {
+			await uploadFileToStorage(
+				uploadFile.path,
+				{
+					type: "multipart",
+					videoId: "video-id",
+					key: "user-id/video-id/result.mp4",
+					uploadId: "upload-id",
+					partSize,
+					signPartUrl: "https://cap.example.com/sign",
+					completeUrl: "https://cap.example.com/complete",
+					abortUrl: "https://cap.example.com/abort",
+				},
+				"video/mp4",
+			);
+		} finally {
+			delete process.env.MEDIA_SERVER_UPLOAD_CONCURRENCY;
+			await uploadFile.cleanup();
+		}
+		expect(maxInFlight).toBe(3);
+		expect(
+			(completed as { parts: Array<{ partNumber: number }> }).parts.map(
+				(part) => part.partNumber,
+			),
+		).toEqual([1, 2, 3, 4, 5]);
+	});
+
+	test("reads a bounded multipart upload concurrency", () => {
+		expect(multipartUploadConcurrencyFromEnv({})).toBe(1);
+		expect(
+			multipartUploadConcurrencyFromEnv({
+				MEDIA_SERVER_UPLOAD_CONCURRENCY: "8",
+			}),
+		).toBe(8);
+		expect(
+			multipartUploadConcurrencyFromEnv({
+				MEDIA_SERVER_UPLOAD_CONCURRENCY: "99",
+			}),
+		).toBe(16);
 	});
 
 	test("aborts multipart uploads when a part fails", async () => {

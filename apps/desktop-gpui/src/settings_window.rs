@@ -26,6 +26,7 @@ use crate::{
     devices::WindowOption,
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     main_window::Mode,
+    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
@@ -659,11 +660,11 @@ pub struct SettingsWindow {
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
     /// its own so the window has something focused when nothing else does.
     pub(crate) focus: FocusHandle,
-    sign_in_pending: bool,
-    sign_in_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    sign_in_task: Option<gpui::Task<()>>,
+    _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 impl SettingsWindow {
@@ -728,8 +729,31 @@ impl SettingsWindow {
             }),
         ];
 
+        let sign_in = SignIn::global(cx);
+        let sign_in_subscriptions = [
+            cx.observe_in(&sign_in, window, |_, _, window, cx| {
+                cx.notify();
+                window.refresh();
+            }),
+            cx.subscribe_in(&sign_in, window, |this, _, event, window, cx| match event {
+                SignInEvent::Finished {
+                    outcome: SignInOutcome::SignedIn,
+                    ..
+                } => this.refresh_user_profile(window, cx),
+                SignInEvent::AccountRefreshed => {
+                    this.has_cap_pro = store::auth_snapshot().is_upgraded();
+                    cx.notify();
+                    window.refresh();
+                }
+                SignInEvent::Finished { .. } => {}
+            }),
+        ];
+
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
+            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
+        });
 
         Self {
             theme,
@@ -762,11 +786,11 @@ impl SettingsWindow {
             slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
-            sign_in_pending: false,
-            sign_in_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            sign_in_task: None,
+            _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
     }
 
@@ -1536,6 +1560,10 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.switch_back_running() {
+            ui::keyboard_nav::leave(window, cx);
+        }
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
             && let Some(mode) = self.quality_scroll_request.take()
@@ -1550,6 +1578,7 @@ impl Render for SettingsWindow {
 
         let shell = div()
             .track_focus(&self.focus)
+            .child(ui::keyboard_nav::pointer_watcher())
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
@@ -1757,6 +1786,7 @@ impl SettingsWindow {
 
         div()
             .id("settings-nav")
+            .role(gpui::Role::TabList)
             .flex()
             .flex_col()
             // `.cap-settings-nav { padding: 0 var(--sidebar-padding-x)
@@ -1771,6 +1801,10 @@ impl SettingsWindow {
                 let selected = page == self.page;
                 div()
                     .id(SharedString::from(page.slug()))
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Tab)
+                    .aria_label(page.label())
+                    .aria_selected(selected)
                     .flex()
                     .flex_row()
                     .items_center()
@@ -1892,7 +1926,7 @@ impl SettingsWindow {
             .child(update_links)
             .child({
                 let signed_in = store::auth_snapshot().signed_in();
-                let (variant, label) = if self.sign_in_pending {
+                let (variant, label) = if SignIn::global(cx).read(cx).is_pending() {
                     (ui::ButtonVariant::Gray, "Cancel Sign In")
                 } else if signed_in {
                     (ui::ButtonVariant::Gray, "Sign Out")
@@ -1913,53 +1947,16 @@ impl SettingsWindow {
     }
 
     fn toggle_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use std::sync::atomic::Ordering;
-
-        if self.sign_in_pending {
-            self.sign_in_cancel.store(true, Ordering::Relaxed);
-            self.sign_in_pending = false;
-            cx.notify();
+        let sign_in = SignIn::global(cx);
+        if sign_in.read(cx).is_pending() {
+            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
             return;
         }
         if store::auth_snapshot().signed_in() {
             self.clear_local_auth(window, cx);
             return;
         }
-
-        self.sign_in_cancel.store(false, Ordering::Relaxed);
-        let cancel = self.sign_in_cancel.clone();
-        let session = match crate::auth::begin_sign_in(cancel.clone()) {
-            Ok(session) => session,
-            Err(error) => {
-                tracing::error!("starting sign-in: {error}");
-                return;
-            }
-        };
-        cx.open_url(&session.url);
-        self.sign_in_pending = true;
-        self.sign_in_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let signed_in = cx
-                .background_executor()
-                .spawn(async move { session.complete() })
-                .await;
-            if matches!(signed_in, Ok(true))
-                && let Ok(plan) =
-                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
-                && let Err(error) = plan
-            {
-                tracing::warn!("updating auth plan after sign-in: {error}");
-            }
-            crate::platform::activate_app();
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.sign_in_pending = false;
-                if store::auth_snapshot().signed_in() {
-                    this.refresh_user_profile(window, cx);
-                }
-                cx.notify();
-                window.refresh();
-            });
-        }));
-        cx.notify();
+        sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Settings, cx));
     }
 
     pub(crate) fn refresh_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3071,6 +3068,7 @@ impl SettingsWindow {
                         // The row is the *inverse* of the stored key.
                         self.toggle(
                             "hide-dock-icon",
+                            "Always show dock icon",
                             !self.settings.hide_dock_icon,
                             cx,
                             |this, cx| {
@@ -3094,6 +3092,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "enable-notifications",
+                            "System notifications",
                             self.settings.enable_notifications,
                             cx,
                             |this, cx| {
@@ -3153,6 +3152,7 @@ impl SettingsWindow {
                             Some("Open the link in your browser when an upload finishes."),
                             self.toggle(
                                 "auto-open-links",
+                                "Open share links automatically",
                                 !self.settings.disable_auto_open_links,
                                 cx,
                                 |this, cx| {
@@ -3435,6 +3435,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "confirm-without-mic",
+                            "Confirm before recording without a microphone",
                             settings.confirm_without_microphone,
                             cx,
                             |this, cx| {
@@ -3461,6 +3462,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "studio-sound-default",
+                            "Studio Sound on new recordings",
                             settings.studio_sound_by_default,
                             cx,
                             |this, cx| {
@@ -3505,6 +3507,7 @@ impl SettingsWindow {
                         Some("Cap removes the local file once it has uploaded successfully."),
                         self.toggle(
                             "delete-after-upload",
+                            "Delete Instant recordings after upload",
                             settings.delete_instant_recordings_after_upload,
                             cx,
                             |this, cx| {
@@ -3524,6 +3527,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "crash-recovery",
+                            "Crash-recoverable recording",
                             settings.crash_recovery_recording,
                             cx,
                             |this, cx| {
@@ -3543,6 +3547,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "custom-cursor",
+                            "Custom cursor capture (Studio)",
                             settings.custom_cursor_capture,
                             cx,
                             |this, cx| {
@@ -3560,11 +3565,18 @@ impl SettingsWindow {
                             "Automatically add zoom segments around mouse clicks in Studio \
                              recordings.",
                         ),
-                        self.toggle("auto-zoom", settings.auto_zoom_on_clicks, cx, |this, cx| {
-                            this.settings.auto_zoom_on_clicks = !this.settings.auto_zoom_on_clicks;
-                            let value = this.settings.auto_zoom_on_clicks;
-                            this.write_bool("autoZoomOnClicks", value, cx);
-                        })
+                        self.toggle(
+                            "auto-zoom",
+                            "Auto zoom on clicks",
+                            settings.auto_zoom_on_clicks,
+                            cx,
+                            |this, cx| {
+                                this.settings.auto_zoom_on_clicks =
+                                    !this.settings.auto_zoom_on_clicks;
+                                let value = this.settings.auto_zoom_on_clicks;
+                                this.write_bool("autoZoomOnClicks", value, cx);
+                            },
+                        )
                         .into_any_element(),
                     ),
                     self.setting_row(
@@ -3593,6 +3605,7 @@ impl SettingsWindow {
                         Some("Record key presses so you can add keyboard overlays in the editor."),
                         self.toggle(
                             "capture-keyboard",
+                            "Capture keyboard presses",
                             settings.capture_keyboard_events,
                             cx,
                             |this, cx| {
@@ -3614,6 +3627,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "notch-overlay",
+                            "Draw the MacBook notch on screen recordings",
                             settings.macbook_notch_overlay,
                             cx,
                             |this, cx| {
@@ -3802,6 +3816,11 @@ impl SettingsWindow {
             ("", "{target_name}", "Monitor name or window title."),
             ("Date & time", "{date}", "the recording's date"),
             ("", "{time}", "the recording's time"),
+            (
+                "Random",
+                "{random}",
+                "10 filename-safe hexadecimal characters; use {random:N} for 1–32.",
+            ),
         ];
 
         let body = div()
@@ -4293,6 +4312,7 @@ impl SettingsWindow {
                         ),
                         self.toggle(
                             "telemetry",
+                            "Share anonymous telemetry",
                             self.settings.enable_telemetry,
                             cx,
                             |this, cx| {
@@ -4361,11 +4381,13 @@ impl SettingsWindow {
     pub(crate) fn toggle(
         &self,
         id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> ui::Toggle {
         ui::Toggle::settings(&self.theme, id, checked)
+            .label(label)
             .on_click(cx.listener(move |this, _, _window, cx| on_change(this, cx)))
     }
 
@@ -4636,13 +4658,11 @@ const ZOOM_MAX: f32 = 4.5;
 /// origin before storing it, and throws (leaving the setting alone) when it
 /// does not parse.
 fn origin_of(value: &str) -> Option<String> {
-    let value = value.trim();
-    let (scheme, rest) = value.split_once("://")?;
-    if !matches!(scheme, "http" | "https") || rest.is_empty() {
+    let url = reqwest::Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
-    let authority = rest.split(['/', '?', '#']).next()?;
-    (!authority.is_empty()).then(|| format!("{scheme}://{authority}"))
+    Some(url.origin().ascii_serialization())
 }
 
 /// The preview under the project-name template.
@@ -4697,6 +4717,37 @@ mod tests {
         assert_eq!(origin_of("cap.so"), None);
         assert_eq!(origin_of("ftp://cap.so"), None);
         assert_eq!(origin_of(""), None);
+    }
+
+    #[test]
+    fn invalid_server_authorities_are_rejected_before_saving() {
+        for value in [
+            "https://cap.example.com:invalid",
+            "https://cap.example.com:65536",
+            "https://cap example.com",
+            "http://[::1",
+            "https://user@",
+        ] {
+            assert_eq!(origin_of(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn server_origins_are_normalised_for_api_requests() {
+        for (value, expected) in [
+            ("https://cap.example.com/", "https://cap.example.com"),
+            (
+                "https://user:password@cap.example.com/dashboard?x=1#top",
+                "https://cap.example.com",
+            ),
+            (" HTTPS://CAP.EXAMPLE.COM:443/ ", "https://cap.example.com"),
+            ("http://localhost:3000/path", "http://localhost:3000"),
+            ("http://[::1]:3000/path", "http://[::1]:3000"),
+        ] {
+            let origin = origin_of(value).expect(value);
+            assert_eq!(origin, expected);
+            assert!(reqwest::Url::parse(&format!("{origin}/api/desktop/feedback")).is_ok());
+        }
     }
 
     #[test]

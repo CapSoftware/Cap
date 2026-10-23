@@ -21,6 +21,14 @@ import { logMediaServerUrlCheck } from "./lib/media-server-startup-check";
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;
 
+	// Exit, not throw: Next.js catches a throwing register() and serves 500s.
+	try {
+		serverEnv();
+	} catch {
+		console.error("🚨 Environment validation failed, exiting");
+		process.exit(1);
+	}
+
 	if (process.env.NODE_ENV === "production") {
 		const insecureSecrets = findInsecureSecrets(
 			process.env,

@@ -11,7 +11,7 @@ use ffmpeg::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::base::EncoderBase;
+use crate::base::{EncoderBase, PacketSink};
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
@@ -896,9 +896,18 @@ impl H264Encoder {
 
     pub fn queue_frame(
         &mut self,
-        mut frame: frame::Video,
+        frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
+        self.queue_frame_to(frame, timestamp, output)
+    }
+
+    pub fn queue_frame_to<S: PacketSink + ?Sized>(
+        &mut self,
+        mut frame: frame::Video,
+        timestamp: Duration,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
@@ -980,6 +989,28 @@ impl H264Encoder {
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.process_eof(output, &mut self.encoder)
+    }
+
+    pub fn flush_to<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.process_eof(output, &mut self.encoder)
+    }
+
+    /// Configured target bitrate in bits per second, estimated from the
+    /// output geometry when the encoder runs without a bitrate target.
+    pub fn bit_rate(&self) -> u64 {
+        let configured = unsafe { (*self.encoder.as_ptr()).bit_rate };
+        if configured > 0 {
+            return configured as u64;
+        }
+        get_bitrate(
+            self.output_width,
+            self.output_height,
+            30.0,
+            H264EncoderBuilder::QUALITY_BPP,
+        ) as u64
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
@@ -1627,8 +1658,12 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     let area = (width as f64) * (height as f64);
     let pixels_per_second = area * frame_rate_multiplier;
 
-    (pixels_per_second * bpp as f64) as usize
+    // 1 Gbit/s is far past any real H.264 stream; the cap keeps a hostile
+    // bpp from overflowing the max-bitrate math below.
+    ((pixels_per_second * bpp as f64) as usize).min(MAX_BITRATE)
 }
+
+const MAX_BITRATE: usize = 1_000_000_000;
 
 #[cfg(test)]
 mod self_test_tests {

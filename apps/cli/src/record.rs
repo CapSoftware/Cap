@@ -173,6 +173,18 @@ pub struct RecordStopArgs {
 impl RecordStart {
     pub async fn run(self, json: bool) -> Result<(), String> {
         let format = resolve_format(json, self.format);
+        match self.run_inner(format).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if format == OutputFormat::Json {
+                    let _ = write_json_line(&RecordEvent::Error { error: &error });
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
         self.params.validate()?;
         if self.detach {
             run_detached(self.params, format).await
@@ -183,18 +195,6 @@ impl RecordStart {
 }
 
 async fn run_foreground(params: RecordParams, format: OutputFormat) -> Result<(), String> {
-    match foreground_inner(params, format).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if format == OutputFormat::Json {
-                let _ = write_json_line(&RecordEvent::Error { error: &error });
-            }
-            Err(error)
-        }
-    }
-}
-
-async fn foreground_inner(params: RecordParams, format: OutputFormat) -> Result<(), String> {
     let interactive = std::io::stdin().is_terminal();
 
     // Without --duration the recorder blocks for a stop signal. A non-interactive caller (agent, CI,
@@ -250,18 +250,6 @@ fn automation_mode(mode: RecordMode) -> cap_automation::AutomationRecordingMode 
 }
 
 async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), String> {
-    match detached_inner(params, format).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if format == OutputFormat::Json {
-                let _ = write_json_line(&RecordEvent::Error { error: &error });
-            }
-            Err(error)
-        }
-    }
-}
-
-async fn detached_inner(params: RecordParams, format: OutputFormat) -> Result<(), String> {
     let recording_id = new_recording_id();
     // Validate the target up front so a bad --screen/--window fails fast with a clear message rather
     // than surfacing later from the background worker's log.

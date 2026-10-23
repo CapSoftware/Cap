@@ -1,6 +1,7 @@
 import { serverEnv } from "@cap/env";
-import { stripe } from "@cap/utils";
+import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
+import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { trackServerEvent } from "@/lib/server-analytics";
 
@@ -11,9 +12,22 @@ export async function POST(request: NextRequest) {
 
 	console.log("Received guest checkout request:", { priceId, quantity });
 
-	if (!priceId) {
-		console.error("Missing required priceId");
-		return Response.json({ error: "priceId is required" }, { status: 400 });
+	const environment =
+		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
+
+	if (
+		!priceId ||
+		typeof priceId !== "string" ||
+		!isValidStripePlanPriceId(priceId, environment)
+	) {
+		console.error("Invalid or missing priceId");
+		return Response.json({ error: "Invalid priceId" }, { status: 400 });
+	}
+
+	const safeQuantity = parseCheckoutQuantity(quantity);
+	if (safeQuantity === null) {
+		console.error("Invalid quantity");
+		return Response.json({ error: "Invalid quantity" }, { status: 400 });
 	}
 
 	try {
@@ -23,7 +37,7 @@ export async function POST(request: NextRequest) {
 			serverEnv().WEB_URL,
 		);
 		const checkoutSession = await stripe().checkout.sessions.create({
-			line_items: [{ price: priceId, quantity: quantity || 1 }],
+			line_items: [{ price: priceId, quantity: safeQuantity }],
 			mode: "subscription",
 			success_url: redirects.successUrl,
 			cancel_url: redirects.cancelUrl,
@@ -42,7 +56,7 @@ export async function POST(request: NextRequest) {
 				"guest_checkout_started",
 				{
 					price_id: priceId,
-					quantity: quantity || 1,
+					quantity: safeQuantity,
 					platform: checkoutPlatform,
 					session_id: checkoutSession.id,
 				},
