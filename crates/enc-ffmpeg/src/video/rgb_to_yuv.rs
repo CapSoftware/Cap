@@ -114,17 +114,26 @@ unsafe fn convert_range(job: &Job, x0: usize, x1: usize, y0: usize, y1: usize) {
     }
 }
 
+fn avx2_runtime() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
 fn execute(job: &Job) {
     #[cfg(target_arch = "x86_64")]
     {
-        if std::arch::is_x86_feature_detected!("avx2") {
-            // SAFETY: feature detection passed, and `job` came from `try_convert`.
-            unsafe { avx2::execute(job) };
-            return;
-        }
+        // SAFETY: `try_convert` calls this only after `avx2_runtime`, and each
+        // plane covers the active rectangle.
+        unsafe { avx2::execute(job) };
     }
-    // SAFETY: `try_convert` checked each plane covers the active rectangle.
-    unsafe { convert_range(job, 0, job.width, 0, job.height) };
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = job;
 }
 
 fn positive_linesize(frame: &frame::Video, plane: usize) -> Option<usize> {
@@ -149,8 +158,9 @@ fn covers(stride: usize, row_bytes: usize, height: usize, len: usize) -> bool {
 }
 
 /// Converts same-size packed BGRZ/BGRA/RGBZ/RGBA into `dst` when both
-/// dimensions are even and `dst` is YUV420P or NV12. Returns false so the
-/// caller keeps swscale, including for an odd width or height.
+/// dimensions are even, `dst` is YUV420P or NV12, and AVX2 is available at
+/// runtime. Returns false so the caller keeps swscale. That includes an odd
+/// width or height, and every machine without AVX2.
 pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     if src.width() != dst.width() || src.height() != dst.height() {
         return false;
@@ -172,6 +182,9 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     }
     if width == 0 || height == 0 {
         return true;
+    }
+    if !avx2_runtime() {
+        return false;
     }
     let Some(src_stride) = positive_linesize(src, 0) else {
         return false;
@@ -361,8 +374,6 @@ mod avx2 {
         unsafe {
             let row0 = job.src.add(y * job.src_stride + x * 4);
             let row1 = job.src.add((y + 1) * job.src_stride + x * 4);
-            _mm_prefetch(row0.add(128) as *const i8, _MM_HINT_T0);
-            _mm_prefetch(row1.add(128) as *const i8, _MM_HINT_T0);
             let (r0, g0, b0) =
                 unpack8::<BGR>(_mm256_loadu_si256(row0 as *const __m256i), coeffs.mask);
             let (r1, g1, b1) =
@@ -598,14 +609,7 @@ mod tests {
     }
 
     fn avx2_ready() -> bool {
-        #[cfg(target_arch = "x86_64")]
-        {
-            std::arch::is_x86_feature_detected!("avx2")
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            false
-        }
+        avx2_runtime()
     }
 
     #[test]
@@ -827,21 +831,24 @@ mod tests {
     #[test]
     fn swscale_fast_bilinear_stays_within_tolerance() {
         ffmpeg::init().unwrap();
+        let gradient = |x: usize, y: usize, width: usize, height: usize| {
+            let width = width.max(1);
+            let height = height.max(1);
+            (
+                (x * 255 / width) as u8,
+                (y * 255 / height) as u8,
+                ((x + y) * 255 / (width + height)) as u8,
+            )
+        };
         for (width, height) in [(32u32, 32u32), (64, 48), (320, 180)] {
-            compare_swscale(width, height, |x, y, width, height| {
-                let width = width.max(1);
-                let height = height.max(1);
-                (
-                    (x * 255 / width) as u8,
-                    (y * 255 / height) as u8,
-                    ((x + y) * 255 / (width + height)) as u8,
-                )
-            });
+            compare_swscale(Pixel::YUV420P, width, height, gradient);
         }
-        compare_swscale(48, 24, |_, _, _, _| (220, 40, 40));
+        compare_swscale(Pixel::YUV420P, 48, 24, |_, _, _, _| (220, 40, 40));
+        compare_swscale(Pixel::NV12, 320, 180, gradient);
     }
 
     fn compare_swscale(
+        format: Pixel,
         width: u32,
         height: u32,
         rgb: impl Fn(usize, usize, usize, usize) -> (u8, u8, u8),
@@ -849,6 +856,11 @@ mod tests {
         let width_px = width as usize;
         let height_px = height as usize;
         let mut src = frame::Video::new(Pixel::BGRZ, width, height);
+        if !avx2_ready() {
+            let mut dst = frame::Video::new(format, width, height);
+            assert!(!try_convert(&src, &mut dst), "{format:?} {width}x{height}");
+            return;
+        }
         let stride = src.stride(0);
         for y in 0..height_px {
             for x in 0..width_px {
@@ -857,39 +869,51 @@ mod tests {
                 src.data_mut(0)[offset..offset + 4].copy_from_slice(&[b, g, r, 255]);
             }
         }
-        let mut scaler = bt709_scaler(width, height);
-        let mut sws = frame::Video::new(Pixel::YUV420P, width, height);
+        let mut scaler = bt709_scaler(format, width, height);
+        let mut sws = frame::Video::new(format, width, height);
         scaler.run(&src, &mut sws).unwrap();
-        let mut ours = frame::Video::new(Pixel::YUV420P, width, height);
-        assert!(try_convert(&src, &mut ours));
+        let mut ours = frame::Video::new(format, width, height);
+        assert!(try_convert(&src, &mut ours), "{format:?} {width}x{height}");
         let y_stats = plane_delta(&ours, &sws, 0, width as usize, height as usize);
-        let chroma_w = (width as usize).div_ceil(2);
         let chroma_h = (height as usize).div_ceil(2);
-        let u_stats = plane_delta(&ours, &sws, 1, chroma_w, chroma_h);
-        let v_stats = plane_delta(&ours, &sws, 2, chroma_w, chroma_h);
         assert!(
             y_stats.max_diff <= 2 && y_stats.mean < 1.0,
-            "{width}x{height} luma max {} mean {:.3} at {},{}",
+            "{format:?} {width}x{height} luma max {} mean {:.3} at {},{}",
             y_stats.max_diff,
             y_stats.mean,
             y_stats.col,
             y_stats.row
         );
-        assert!(
-            u_stats.max_diff <= 3
-                && v_stats.max_diff <= 3
-                && u_stats.mean < 1.5
-                && v_stats.mean < 1.5,
-            "{width}x{height} chroma u max {} mean {:.3} at {},{} v max {} mean {:.3} at {},{}",
-            u_stats.max_diff,
-            u_stats.mean,
-            u_stats.col,
-            u_stats.row,
-            v_stats.max_diff,
-            v_stats.mean,
-            v_stats.col,
-            v_stats.row
-        );
+        if format == Pixel::NV12 {
+            let uv_stats = plane_delta(&ours, &sws, 1, width as usize, chroma_h);
+            assert!(
+                uv_stats.max_diff <= 3 && uv_stats.mean < 1.5,
+                "{format:?} {width}x{height} chroma max {} mean {:.3} at {},{}",
+                uv_stats.max_diff,
+                uv_stats.mean,
+                uv_stats.col,
+                uv_stats.row
+            );
+        } else {
+            let chroma_w = (width as usize).div_ceil(2);
+            let u_stats = plane_delta(&ours, &sws, 1, chroma_w, chroma_h);
+            let v_stats = plane_delta(&ours, &sws, 2, chroma_w, chroma_h);
+            assert!(
+                u_stats.max_diff <= 3
+                    && v_stats.max_diff <= 3
+                    && u_stats.mean < 1.5
+                    && v_stats.mean < 1.5,
+                "{format:?} {width}x{height} chroma u max {} mean {:.3} at {},{} v max {} mean {:.3} at {},{}",
+                u_stats.max_diff,
+                u_stats.mean,
+                u_stats.col,
+                u_stats.row,
+                v_stats.max_diff,
+                v_stats.mean,
+                v_stats.col,
+                v_stats.row
+            );
+        }
     }
 
     struct PlaneStats {
@@ -955,29 +979,28 @@ mod tests {
             let mut nv12 = frame::Video::new(Pixel::NV12, width, height);
             assert!(!try_convert(&src, &mut nv12), "{width}x{height} nv12");
 
-            let mut via_scaler = bt709_scaler(width, height);
+            let mut via_scaler = bt709_scaler(Pixel::YUV420P, width, height);
             let mut via = frame::Video::new(Pixel::YUV420P, width, height);
             convert_or_scale(&src, &mut via, &mut via_scaler).unwrap();
-            let mut direct_scaler = bt709_scaler(width, height);
+            let mut direct_scaler = bt709_scaler(Pixel::YUV420P, width, height);
             let mut direct = frame::Video::new(Pixel::YUV420P, width, height);
             direct_scaler.run(&src, &mut direct).unwrap();
             assert_frames_eq(&via, &direct, width, height);
         }
     }
 
-    fn bt709_scaler(width: u32, height: u32) -> ffmpeg::software::scaling::Context {
+    fn bt709_scaler(format: Pixel, width: u32, height: u32) -> ffmpeg::software::scaling::Context {
         let mut scaler = ffmpeg::software::scaling::Context::get(
             Pixel::BGRZ,
             width,
             height,
-            Pixel::YUV420P,
+            format,
             width,
             height,
             ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
         )
         .unwrap();
-        super::super::colour::use_bt709_for_rgb_input(&mut scaler, Pixel::BGRZ, Pixel::YUV420P)
-            .unwrap();
+        super::super::colour::use_bt709_for_rgb_input(&mut scaler, Pixel::BGRZ, format).unwrap();
         scaler
     }
 
