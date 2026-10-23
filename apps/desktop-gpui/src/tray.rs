@@ -693,6 +693,7 @@ mod mac {
         actions: Vec<TrayItem>,
         mode: Mode,
         previous: Vec<PreviousItem>,
+        previous_generation: u64,
         recording: bool,
     }
 
@@ -770,6 +771,7 @@ mod mac {
                 actions: Vec::new(),
                 mode,
                 previous: Vec::new(),
+                previous_generation: 0,
                 recording: false,
             };
             set_button_image(&tray, mode_icon(mode));
@@ -1042,13 +1044,17 @@ mod mac {
         if !cx.has_global::<Tray>() {
             return;
         }
+        let tray = cx.global_mut::<Tray>();
+        tray.previous_generation = tray.previous_generation.wrapping_add(1);
+        let generation = tray.previous_generation;
         cx.spawn(async move |cx| {
             let previous = cx
                 .background_executor()
                 .spawn(async { scan_previous(true) })
                 .await;
             cx.update(|cx| {
-                if !cx.has_global::<Tray>() {
+                if !cx.has_global::<Tray>() || cx.global::<Tray>().previous_generation != generation
+                {
                     return;
                 }
                 cx.global_mut::<Tray>().previous = previous;
