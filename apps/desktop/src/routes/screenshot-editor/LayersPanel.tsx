@@ -5,6 +5,7 @@ import IconLucideCircle from "~icons/lucide/circle";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideGripVertical from "~icons/lucide/grip-vertical";
 import IconLucideLayers from "~icons/lucide/layers";
+import IconLucidePencil from "~icons/lucide/pencil";
 import IconLucideSquare from "~icons/lucide/square";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideX from "~icons/lucide/x";
@@ -16,6 +17,7 @@ const ANNOTATION_TYPE_ICONS = {
 	circle: IconLucideCircle,
 	mask: IconLucideEyeOff,
 	text: IconLucideType,
+	draw: IconLucidePencil,
 };
 
 const ANNOTATION_TYPE_LABELS = {
@@ -24,6 +26,7 @@ const ANNOTATION_TYPE_LABELS = {
 	circle: "Circle",
 	mask: "Mask",
 	text: "Text",
+	draw: "Draw",
 };
 
 export function LayersPanel() {
@@ -256,7 +259,7 @@ export function LayersPanel() {
 										onMouseDown={(e) => handleMouseDown(ann, e)}
 										onClick={(e) => handleLayerClick(ann, e)}
 										class={cx(
-											"flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer transition-all group",
+											"flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md transition-all group",
 											isSelected()
 												? "bg-blue-3 dark:bg-blue-4"
 												: "hover:bg-gray-3",

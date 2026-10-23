@@ -3,9 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
+	organizationInvites,
 	organizationMembers,
 	spaceMembers,
 	spaces,
+	users,
 } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
@@ -33,8 +35,10 @@ export async function removeOrganizationMember(
 			id: organizationMembers.id,
 			userId: organizationMembers.userId,
 			role: organizationMembers.role,
+			email: users.email,
 		})
 		.from(organizationMembers)
+		.innerJoin(users, eq(organizationMembers.userId, users.id))
 		.where(
 			and(
 				eq(organizationMembers.id, memberId),
@@ -82,6 +86,15 @@ export async function removeOrganizationMember(
 					),
 				);
 		}
+
+		await tx
+			.delete(organizationInvites)
+			.where(
+				and(
+					eq(organizationInvites.organizationId, organizationId),
+					eq(organizationInvites.invitedEmail, member.email.toLowerCase()),
+				),
+			);
 
 		const [result] = await tx
 			.delete(organizationMembers)

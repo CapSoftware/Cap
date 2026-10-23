@@ -1,4 +1,4 @@
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { type ClassValue, clsx } from "clsx";
 import type { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
 import type { NextRequest } from "next/server";
@@ -15,11 +15,44 @@ export const allowedOrigins = [
 	"cap.link",
 ];
 
-export function getHeaders(origin: string | null) {
-	// Allow "*" for custom domains or allowedOrigins for main domains
+// Origins that are trusted to make credentialed (cookie-bearing) cross-origin
+// reads. Only these may receive `Access-Control-Allow-Credentials: true` with a
+// reflected origin. Any other origin gets a wildcard, credential-less response
+// so a malicious site cannot read authenticated responses cross-origin.
+function isTrustedCredentialedOrigin(origin: string) {
+	let host: string;
+	try {
+		host = new URL(origin).hostname;
+	} catch {
+		return false;
+	}
+
+	if (host === "localhost" || host === "cap.so" || host === "cap.link")
+		return true;
+	if (host.endsWith(".cap.so")) return true;
+
+	try {
+		if (host === new URL(serverEnv().WEB_URL).hostname) return true;
+	} catch {}
+
+	return false;
+}
+
+export function getHeaders(origin: string | null): Record<string, string> {
+	// Only reflect the specific origin + allow credentials for trusted origins.
+	// Everyone else gets a wildcard with NO credentials so authenticated
+	// responses can't be read cross-origin (credential-read CSRF).
+	if (origin && isTrustedCredentialedOrigin(origin)) {
+		return {
+			"Access-Control-Allow-Origin": origin,
+			"Access-Control-Allow-Credentials": "true",
+			"Access-Control-Allow-Methods": "GET, OPTIONS",
+			"Access-Control-Allow-Headers": "Content-Type, Authorization",
+		};
+	}
+
 	return {
-		"Access-Control-Allow-Origin": origin || "*",
-		"Access-Control-Allow-Credentials": "true",
+		"Access-Control-Allow-Origin": "*",
 		"Access-Control-Allow-Methods": "GET, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
 	};

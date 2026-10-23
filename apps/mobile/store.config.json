@@ -1,0 +1,31 @@
+{
+	"configVersion": 0,
+	"apple": {
+		"copyright": "2026 Cap Software, Inc.",
+		"categories": ["PRODUCTIVITY", "PHOTO_AND_VIDEO"],
+		"info": {
+			"en-US": {
+				"title": "Cap",
+				"subtitle": "Record, share, collaborate",
+				"description": "Cap makes clear async communication simple. Record with your iPhone camera or import videos and images, upload them to a shareable Cap link, and keep work moving without another meeting.\n\nUse Cap for iPhone to:\n\n• Record high-quality camera and microphone video\n• Import media from Photos or Files\n• Create and share Cap links\n• Browse personal, organization, and space libraries\n• Watch Caps with native playback controls\n• Manage link visibility, titles, and passwords\n• Follow comments, reactions, and viewer analytics\n• Import existing Loom videos\n• Pick up work started in Cap for desktop or web\n\nA free Cap account includes recordings up to five minutes. Existing Cap Pro subscribers get unlimited recording time and advanced collaboration features.\n\nCap is open source and built for creators, teams, educators, and anyone who wants a faster way to show, explain, and share.",
+				"keywords": [
+					"camera recorder",
+					"video recorder",
+					"async video",
+					"video message",
+					"teleprompter",
+					"video sharing",
+					"analytics"
+				],
+				"promoText": "Record or import a video, turn it into a shareable Cap, and stay on top of comments, reactions, analytics, and team spaces from your iPhone.",
+				"marketingUrl": "https://cap.so",
+				"supportUrl": "https://cap.so/docs",
+				"privacyPolicyUrl": "https://cap.so/privacy"
+			}
+		},
+		"release": {
+			"automaticRelease": false,
+			"phasedRelease": false
+		}
+	}
+}

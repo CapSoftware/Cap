@@ -38,6 +38,7 @@ const GoogleDriveOAuthState = z.object({
 	expiresAt: z.number(),
 	scope: z.enum(["user", "organization"]).default("user"),
 	organizationId: z.string().optional(),
+	agent: z.boolean().optional(),
 });
 
 const googleDriveProvider = "googleDrive";
@@ -107,6 +108,7 @@ const verifyGoogleDriveState = (state: string) => {
 			parsed.scope === "organization" && parsed.organizationId
 				? Organisation.OrganisationId.make(parsed.organizationId)
 				: undefined,
+		agent: parsed.agent === true,
 	};
 };
 
@@ -410,10 +412,34 @@ app.route("/", protectedApp);
 
 app.get("/google-drive/callback", async (c) => {
 	const orgRedirectUrl = "/dashboard/settings/organization/integrations";
+	const agentSuccessRedirectUrl = "/cli/complete?googleDrive=connected";
+	const agentCancelledRedirectUrl = "/cli/complete?googleDrive=cancelled";
 	let organizationIdForRedirect: Organisation.OrganisationId | undefined;
+	let agentRedirect = false;
 	try {
 		const error = c.req.query("error");
 		if (error) {
+			const state = c.req.query("state");
+			if (state) {
+				let agentRequest = false;
+				try {
+					agentRequest = verifyGoogleDriveState(state).agent;
+				} catch {
+					agentRequest = false;
+				}
+				if (agentRequest) {
+					return c.html(
+						htmlResponse({
+							title: "Google Drive was not connected",
+							body: "No changes were made. You can return to your terminal and try again.",
+							redirectUrl: agentCancelledRedirectUrl,
+							redirectLabel: "Finish",
+							redirectSeconds: 5,
+						}),
+						400,
+					);
+				}
+			}
 			return c.html(
 				htmlResponse({
 					title: "Google Drive was not connected",
@@ -435,8 +461,9 @@ app.get("/google-drive/callback", async (c) => {
 			);
 		}
 
-		const { userId, organizationId } = verifyGoogleDriveState(state);
+		const { userId, organizationId, agent } = verifyGoogleDriveState(state);
 		organizationIdForRedirect = organizationId;
+		agentRedirect = agent;
 		if (organizationId) {
 			const organization = await requireOrganizationOwner(
 				userId,
@@ -558,8 +585,10 @@ app.get("/google-drive/callback", async (c) => {
 					? {
 							title: "Google Drive connected",
 							body: 'Your Google account is now linked to Cap. We\'ve created a "Cap" folder in your Drive to store your recordings.',
-							redirectUrl: orgRedirectUrl,
-							redirectLabel: "Back to settings",
+							redirectUrl: agentRedirect
+								? agentSuccessRedirectUrl
+								: orgRedirectUrl,
+							redirectLabel: agentRedirect ? "Finish" : "Back to settings",
 							redirectSeconds: 5,
 						}
 					: {
@@ -575,9 +604,13 @@ app.get("/google-drive/callback", async (c) => {
 				organizationIdForRedirect
 					? {
 							title: "Google Drive was not connected",
-							body: "Something went wrong while linking your Google account. You can try again from Cap settings.",
-							redirectUrl: orgRedirectUrl,
-							redirectLabel: "Back to settings",
+							body: agentRedirect
+								? "Something went wrong while linking your Google account. You can return to your terminal and try again."
+								: "Something went wrong while linking your Google account. You can try again from Cap settings.",
+							redirectUrl: agentRedirect
+								? agentCancelledRedirectUrl
+								: orgRedirectUrl,
+							redirectLabel: agentRedirect ? "Finish" : "Back to settings",
 							redirectSeconds: 8,
 						}
 					: {

@@ -3,7 +3,13 @@ import {
 	BestScreenRecorderPage,
 	bestScreenRecorderContent,
 } from "@/components/pages/seo/BestScreenRecorderPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "The best screen recorder for Mac & Windows",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Best Screen Recorder in 2026 — Free, No Watermark, 4K Quality | Cap",
@@ -21,7 +27,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Best Screen Recorder for Mac and Windows",
@@ -36,7 +42,7 @@ export const metadata: Metadata = {
 			"Best Screen Recorder in 2026 — Free, No Watermark, 4K Quality | Cap",
 		description:
 			"Cap is the best screen recorder for Mac and Windows. Record in 4K with audio and webcam overlay, then share instantly. Free, open-source, no watermarks.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

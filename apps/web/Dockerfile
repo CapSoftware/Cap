@@ -1,19 +1,20 @@
 # syntax=docker.io/docker/dockerfile:1
 
+FROM oven/bun:1.4.0-alpine AS bun
+
 FROM node:24-alpine AS base
-RUN corepack enable
 
 FROM base AS builder
 WORKDIR /app
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY . .
 
-RUN corepack enable pnpm
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm i --frozen-lockfile
+RUN --mount=type=cache,id=bun-1.4.0,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 ARG NEXT_PUBLIC_DOCKER_BUILD=true
 ENV NEXT_PUBLIC_WEB_URL=http://localhost:3000
 
-RUN pnpm run build:web
+RUN bun run build:web
 
 
 # 3. Production image, copy all the files and run next

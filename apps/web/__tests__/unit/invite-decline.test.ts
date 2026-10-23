@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = {
 	select: vi.fn(),
+	update: vi.fn(),
 	delete: vi.fn(),
 	from: vi.fn(),
 	where: vi.fn(),
 	for: vi.fn(),
+	limit: vi.fn(),
+	set: vi.fn(),
 	transaction: vi.fn(),
 };
 
@@ -22,11 +25,32 @@ vi.mock("@cap/database/schema", () => ({
 	organizationInvites: {
 		id: "id",
 		invitedEmail: "invitedEmail",
+		organizationId: "organizationId",
+	},
+	organizationMembers: {
+		id: "memberId",
+		userId: "memberUserId",
+		organizationId: "memberOrganizationId",
+		hasProSeat: "memberHasProSeat",
+	},
+	spaceMembers: {
+		userId: "spaceMemberUserId",
+		spaceId: "spaceMemberSpaceId",
+	},
+	spaces: {
+		id: "spaceId",
+		organizationId: "spaceOrganizationId",
+	},
+	users: {
+		id: "userId",
+		thirdPartyStripeSubscriptionId: "thirdPartyStripeSubscriptionId",
 	},
 }));
 
 vi.mock("drizzle-orm", () => ({
+	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+	inArray: vi.fn((field: unknown, values: unknown[]) => ({ field, values })),
 }));
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
@@ -39,10 +63,13 @@ function resetMockDb() {
 		}
 	}
 	mockDb.select.mockReturnValue(mockDb);
+	mockDb.update.mockReturnValue(mockDb);
 	mockDb.delete.mockReturnValue(mockDb);
 	mockDb.from.mockReturnValue(mockDb);
 	mockDb.where.mockReturnValue(mockDb);
+	mockDb.set.mockReturnValue(mockDb);
 	mockDb.for.mockResolvedValue([]);
+	mockDb.limit.mockResolvedValue([]);
 	mockDb.transaction.mockImplementation((fn) => fn(mockDb));
 }
 
@@ -117,10 +144,17 @@ describe("POST /api/invite/decline", () => {
 		mockGetCurrentUser.mockResolvedValue({
 			id: "user-1",
 			email: "Invitee@Example.com",
+			activeOrganizationId: null,
+			defaultOrgId: null,
 		});
 		mockDb.for.mockResolvedValueOnce([
-			{ id: "invite-1", invitedEmail: "invitee@example.com" },
+			{
+				id: "invite-1",
+				invitedEmail: "invitee@example.com",
+				organizationId: "org-1",
+			},
 		]);
+		mockDb.limit.mockResolvedValueOnce([]);
 
 		const response = await POST(makeRequest({ inviteId: "invite-1" }));
 

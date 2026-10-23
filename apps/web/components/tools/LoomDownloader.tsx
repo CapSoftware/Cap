@@ -1,9 +1,15 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
-import { downloadLoomVideo } from "@/actions/loom";
+import {
+	getLoomBrowserConversionErrorMessage,
+	getLoomBrowserConversionSupport,
+	isLoomBrowserConversionAbort,
+	saveLoomStreamAsMp4,
+} from "@/lib/loom-browser-conversion";
+import { resolveLoomBrowserDownload } from "@/lib/loom-browser-download";
 
 type Status =
 	| "idle"
@@ -13,8 +19,28 @@ type Status =
 	| "success"
 	| "error";
 
+type BrowserConversion = {
+	url: string;
+	filename: string;
+	videoName: string;
+};
+
+type CompletionKind = "download-started" | "ready";
+
 const MIGRATE_PROMO_CODE = "MIGRATE20";
 const MIGRATE_CHECKOUT_HREF = `/pricing?promo=${MIGRATE_PROMO_CODE}&utm_source=loom-downloader&utm_campaign=migrate20`;
+
+function triggerUrlDownload(url: string, filename: string) {
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = filename;
+	link.rel = "noreferrer";
+	link.target = "_blank";
+	link.referrerPolicy = "no-referrer";
+	document.body.appendChild(link);
+	link.click();
+	document.body.removeChild(link);
+}
 
 function triggerBlobDownload(blob: Blob, filename: string) {
 	const blobUrl = URL.createObjectURL(blob);
@@ -24,56 +50,14 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 	document.body.appendChild(link);
 	link.click();
 	document.body.removeChild(link);
-	URL.revokeObjectURL(blobUrl);
+	return blobUrl;
 }
 
-function needsConversion(contentType: string): boolean {
-	return (
-		contentType.includes("mp2t") ||
-		contentType.includes("mpeg") ||
-		contentType.includes("webm")
-	);
-}
-
-function getInputFilename(contentType: string): string {
-	if (contentType.includes("mp2t") || contentType.includes("mpeg")) {
-		return "video.ts";
-	}
-	if (contentType.includes("webm")) {
-		return "video.webm";
-	}
-	return "video.mp4";
-}
-
-async function convertBlobToMp4(
-	blob: Blob,
-	contentType: string,
-	onProgress: (percent: number) => void,
-): Promise<Blob> {
-	const file = new File([blob], getInputFilename(contentType), {
-		type: contentType,
-	});
-	const { convertMedia } = await import("@remotion/webcodecs");
-
-	const result = await convertMedia({
-		src: file,
-		container: "mp4",
-		videoCodec: "h264",
-		audioCodec: "aac" as const,
-		onProgress: ({ overallProgress }) => {
-			if (overallProgress !== null) {
-				onProgress(
-					Math.min(100, Math.max(0, Math.round(overallProgress * 100))),
-				);
-			}
-		},
-	});
-
-	const saved = await result.save();
-	if (saved.size === 0) {
-		throw new Error("Conversion produced an empty file");
-	}
-	return saved;
+function getDownloadFilename(videoName: string | undefined, fallback: string) {
+	const sanitizedName = videoName
+		? videoName.replace(/[^a-zA-Z0-9\s-]/g, "").trim()
+		: "";
+	return `${sanitizedName || fallback}.mp4`;
 }
 
 function PromoCodeChip() {
@@ -141,12 +125,18 @@ function MigrationBanner() {
 }
 
 function MigrationSuccessState({
+	completionKind,
 	downloadedName,
+	openUrl,
 	onDownloadAnother,
 }: {
+	completionKind: CompletionKind;
 	downloadedName: string;
+	openUrl: string | null;
 	onDownloadAnother: () => void;
 }) {
+	const isReady = completionKind === "ready";
+
 	return (
 		<div className="flex flex-col gap-6">
 			<div className="flex items-start gap-3 p-4 rounded-xl border border-green-200 bg-green-50">
@@ -167,14 +157,30 @@ function MigrationSuccessState({
 				</svg>
 				<div className="flex flex-col gap-1">
 					<p className="text-sm font-semibold text-green-900 sm:text-base">
-						Your Loom video is downloading
+						{isReady ? "Your MP4 is ready" : "Your download has started"}
 					</p>
 					<p className="text-xs leading-relaxed text-green-800 sm:text-sm">
-						{downloadedName
-							? `"${downloadedName}" is saving as an MP4.`
-							: "Your MP4 is saving now."}{" "}
-						Why stop at one?
+						{isReady
+							? downloadedName
+								? `"${downloadedName}" finished saving as an MP4.`
+								: "Your MP4 finished saving."
+							: downloadedName
+								? `"${downloadedName}" is downloading as an MP4.`
+								: "Your browser is downloading the MP4."}{" "}
+						{openUrl
+							? "You can open it now."
+							: "Open it from your Downloads folder or chosen save location."}
 					</p>
+					{openUrl && (
+						<a
+							href={openUrl}
+							target="_blank"
+							rel="noreferrer"
+							className="inline-flex self-start mt-2 px-3 py-1.5 text-xs font-semibold rounded-lg border border-green-300 bg-white text-green-800 transition-colors hover:bg-green-100"
+						>
+							Open MP4
+						</a>
+					)}
 				</div>
 			</div>
 
@@ -273,7 +279,78 @@ export function LoomDownloader() {
 	const [errorMessage, setErrorMessage] = useState("");
 	const [convertProgress, setConvertProgress] = useState(0);
 	const [lastDownloadedName, setLastDownloadedName] = useState("");
+	const [lastCompletionKind, setLastCompletionKind] =
+		useState<CompletionKind>("ready");
+	const [lastDownloadObjectUrl, setLastDownloadObjectUrl] = useState<
+		string | null
+	>(null);
 	const abortRef = useRef<AbortController | null>(null);
+	const downloadObjectUrlRef = useRef<string | null>(null);
+
+	const updateDownloadObjectUrl = useCallback((objectUrl: string | null) => {
+		if (downloadObjectUrlRef.current) {
+			URL.revokeObjectURL(downloadObjectUrlRef.current);
+		}
+
+		downloadObjectUrlRef.current = objectUrl;
+		setLastDownloadObjectUrl(objectUrl);
+	}, []);
+
+	useEffect(
+		() => () => {
+			if (downloadObjectUrlRef.current) {
+				URL.revokeObjectURL(downloadObjectUrlRef.current);
+			}
+		},
+		[],
+	);
+
+	const runBrowserConversion = useCallback(
+		async (conversion: BrowserConversion) => {
+			setStatus("converting");
+			setErrorMessage("");
+			setConvertProgress(0);
+			const controller = new AbortController();
+			abortRef.current = controller;
+
+			try {
+				const convertedBlob = await saveLoomStreamAsMp4({
+					url: conversion.url,
+					filename: conversion.filename,
+					signal: controller.signal,
+					onProgress: ({ percent }) => {
+						setConvertProgress(percent);
+					},
+				});
+				let objectUrl: string | null = null;
+				if (convertedBlob) {
+					objectUrl = triggerBlobDownload(convertedBlob, conversion.filename);
+				}
+
+				updateDownloadObjectUrl(objectUrl);
+				setLastCompletionKind("ready");
+				setLastDownloadedName(conversion.videoName);
+				setStatus("success");
+			} catch (err) {
+				if (
+					(err instanceof DOMException && err.name === "AbortError") ||
+					isLoomBrowserConversionAbort(err)
+				) {
+					setStatus("idle");
+					return;
+				}
+
+				setStatus("error");
+				setErrorMessage(
+					getLoomBrowserConversionErrorMessage(err) ??
+						"An unexpected error occurred. Please try again.",
+				);
+			} finally {
+				abortRef.current = null;
+			}
+		},
+		[updateDownloadObjectUrl],
+	);
 
 	const handleDownload = useCallback(async () => {
 		if (!url.trim()) return;
@@ -283,7 +360,7 @@ export function LoomDownloader() {
 		setConvertProgress(0);
 
 		try {
-			const result = await downloadLoomVideo(url.trim());
+			const result = await resolveLoomBrowserDownload(url.trim());
 
 			if (!result.success || !result.videoId) {
 				setStatus("error");
@@ -291,64 +368,60 @@ export function LoomDownloader() {
 				return;
 			}
 
-			const params = new URLSearchParams({ id: result.videoId });
-			if (result.videoName) params.set("name", result.videoName);
-			const proxyUrl = `/api/tools/loom-download?${params.toString()}`;
+			const filename = getDownloadFilename(
+				result.videoName,
+				`loom-video-${Date.now()}`,
+			);
 
-			setStatus("downloading");
-
-			const controller = new AbortController();
-			abortRef.current = controller;
-
-			const response = await fetch(proxyUrl, {
-				signal: controller.signal,
-			});
-
-			if (!response.ok) {
+			if (!result.downloadUrl) {
 				setStatus("error");
-				setErrorMessage("Failed to download the video. Please try again.");
+				setErrorMessage("Could not retrieve a video download URL.");
 				return;
 			}
 
-			const contentType = response.headers.get("Content-Type") ?? "video/mp4";
-			const blob = await response.blob();
-
-			const sanitizedName = result.videoName
-				? result.videoName.replace(/[^a-zA-Z0-9\s-]/g, "").trim()
-				: `loom-video-${Date.now()}`;
-
-			if (needsConversion(contentType)) {
-				setStatus("converting");
-				setConvertProgress(0);
-
-				try {
-					const mp4Blob = await convertBlobToMp4(
-						blob,
-						contentType,
-						setConvertProgress,
-					);
-					triggerBlobDownload(mp4Blob, `${sanitizedName}.mp4`);
-				} catch {
-					const fallbackExt = contentType.includes("webm") ? "webm" : "ts";
-					triggerBlobDownload(blob, `${sanitizedName}.${fallbackExt}`);
-				}
-			} else {
-				triggerBlobDownload(blob, `${sanitizedName}.mp4`);
+			if (result.downloadMode === "direct-download") {
+				setStatus("downloading");
+				triggerUrlDownload(result.downloadUrl, filename);
+				updateDownloadObjectUrl(null);
+				setLastCompletionKind("download-started");
+				setLastDownloadedName(result.videoName ?? "");
+				setStatus("success");
+				return;
 			}
 
-			setLastDownloadedName(result.videoName ?? "");
-			setStatus("success");
+			const support = getLoomBrowserConversionSupport();
+			if (!support.supported) {
+				setStatus("error");
+				setErrorMessage(
+					support.message ??
+						"Streaming Loom downloads need the latest desktop Chrome or Edge.",
+				);
+				return;
+			}
+
+			await runBrowserConversion({
+				url: result.downloadUrl,
+				filename,
+				videoName: result.videoName ?? "",
+			});
 		} catch (err) {
 			if (err instanceof DOMException && err.name === "AbortError") {
 				setStatus("idle");
 				return;
 			}
+			if (isLoomBrowserConversionAbort(err)) {
+				setStatus("idle");
+				return;
+			}
 			setStatus("error");
-			setErrorMessage("An unexpected error occurred. Please try again.");
+			setErrorMessage(
+				getLoomBrowserConversionErrorMessage(err) ??
+					"An unexpected error occurred. Please try again.",
+			);
 		} finally {
 			abortRef.current = null;
 		}
-	}, [url]);
+	}, [runBrowserConversion, updateDownloadObjectUrl, url]);
 
 	const handleDownloadAnother = useCallback(() => {
 		setUrl("");
@@ -356,7 +429,9 @@ export function LoomDownloader() {
 		setErrorMessage("");
 		setConvertProgress(0);
 		setLastDownloadedName("");
-	}, []);
+		setLastCompletionKind("ready");
+		updateDownloadObjectUrl(null);
+	}, [updateDownloadObjectUrl]);
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		if (e.key === "Enter") {
@@ -376,13 +451,15 @@ export function LoomDownloader() {
 			: status === "downloading"
 				? "Downloading..."
 				: status === "converting"
-					? `Converting to MP4... ${convertProgress}%`
+					? `Downloading... ${convertProgress}%`
 					: "Download Video";
 
 	if (status === "success") {
 		return (
 			<MigrationSuccessState
+				completionKind={lastCompletionKind}
 				downloadedName={lastDownloadedName}
+				openUrl={lastDownloadObjectUrl}
 				onDownloadAnother={handleDownloadAnother}
 			/>
 		);
@@ -435,7 +512,7 @@ export function LoomDownloader() {
 						/>
 					</div>
 					<p className="text-xs text-gray-500 text-center">
-						Converting video to MP4 in your browser...
+						Preparing your MP4...
 					</p>
 				</div>
 			)}
@@ -478,7 +555,7 @@ export function LoomDownloader() {
 							d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"
 						/>
 					</svg>
-					Paste any public Loom link. Your video is never stored on our servers.
+					Paste any public Loom link. The free downloader runs in your browser.
 				</div>
 				<a
 					href={MIGRATE_CHECKOUT_HREF}

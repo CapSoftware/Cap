@@ -80,7 +80,11 @@ pub enum QueueFrameError {
     AppendError(arc::R<ns::Exception>),
     #[error("Failed")]
     Failed,
-    #[error("WriterFailed/{0}")]
+    // Debug-format the NSError: Display is only the localized description
+    // ("The operation could not be completed"), which hides the code and the
+    // NSUnderlyingError (e.g. -11800/-16364 InvalidTimestamp) needed to
+    // diagnose field reports.
+    #[error("WriterFailed/{0:?}")]
     WriterFailed(arc::R<ns::Error>),
     #[error("Finished")]
     Finished,
@@ -509,6 +513,16 @@ impl MP4Encoder {
         {
             self.timestamp_offset += gap;
             self.pause_timestamp = None;
+            // A frame held across the pause may carry a deferred offset
+            // snapshotted before the gap existed; applying it verbatim on
+            // append would overwrite the gap-adjusted offset and re-insert
+            // the pause into every later video and audio timestamp. Shift it
+            // by the gap so apply-on-append stays correct.
+            if let Some(pending) = self.pending_video_frame.as_mut()
+                && let Some(deferred) = pending.deferred_offset
+            {
+                pending.deferred_offset = Some(deferred + gap);
+            }
         }
 
         if !self.instant_mode
@@ -525,25 +539,45 @@ impl MP4Encoder {
             }
         }
 
-        let mut pts_duration = timestamp
-            .checked_sub(self.timestamp_offset)
-            .unwrap_or(Duration::ZERO);
+        // The writer only sees whole microseconds (write_pending_frame builds
+        // SampleTimingInfo on a 1MHz timescale via as_micros), while remapped
+        // capture timestamps carry nanosecond precision. During stall-recovery
+        // bursts two frames can land inside the same microsecond: they pass a
+        // nanosecond-space monotonicity check but collapse into duplicate
+        // writer PTS, which AVAssetWriter reports asynchronously a few frames
+        // later as -11800/-16364 (InvalidTimestamp), killing the recording.
+        // Truncate first so the tie correction below operates in the same
+        // units the writer sees.
+        let mut pts_duration = Duration::from_micros(
+            timestamp
+                .checked_sub(self.timestamp_offset)
+                .unwrap_or(Duration::ZERO)
+                .as_micros() as u64,
+        );
 
         let mut deferred_offset: Option<Duration> = None;
 
         let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
-            && pts_duration <= last_pts.saturating_add(self.minimum_video_pts_step())
+            && pts_duration <= last_pts
         {
-            let frame_duration = self.video_frame_duration();
-            let adjusted_pts = last_pts + frame_duration;
+            // Only true monotonicity violations (ties/backwards) are
+            // corrected, and only by the smallest amount the mp4 timescale
+            // needs. Anything larger re-times legitimate content: a bump
+            // window scaled from the nominal rate treated every frame of a
+            // faster-than-nominal source as an anomaly (a 1000fps camera on
+            // a 30fps config has 1ms deltas), and a large bump outruns the
+            // incoming timestamps so every subsequent frame needs correcting
+            // too, stretching the recording. A tie carries no time — advance
+            // one tick and let the real timestamps take over again.
+            let step = Duration::from_micros(1);
+            let adjusted_pts = last_pts + step;
 
             trace!(
                 ?timestamp,
                 ?last_pts,
                 adjusted_pts = ?adjusted_pts,
-                frame_duration_ns = frame_duration.as_nanos(),
                 "Monotonic video pts correction",
             );
 
@@ -598,6 +632,13 @@ impl MP4Encoder {
         {
             self.timestamp_offset += gap;
             self.pause_timestamp = None;
+            // Same as the video path: keep a held frame's deferred offset in
+            // step with the consumed pause gap.
+            if let Some(pending) = self.pending_video_frame.as_mut()
+                && let Some(deferred) = pending.deferred_offset
+            {
+                pending.deferred_offset = Some(deferred + gap);
+            }
         }
 
         if !self.session_started {
@@ -762,6 +803,7 @@ impl MP4Encoder {
             Ok(()) => {}
             Err(QueueFrameError::WriterFailed(err)) => {
                 error!(
+                    error = ?err,
                     video_frames = self.video_frames_appended,
                     audio_frames = self.audio_frames_appended,
                     audio_pts_value = pts_value,
@@ -823,6 +865,7 @@ impl MP4Encoder {
             }
             Err(QueueFrameError::WriterFailed(err)) => {
                 error!(
+                    error = ?err,
                     video_frames = self.video_frames_appended,
                     audio_frames = self.audio_frames_appended,
                     pts_us = pending.pts.as_micros() as i64,
@@ -863,11 +906,6 @@ impl MP4Encoder {
         Duration::from_nanos(nanos as u64)
     }
 
-    fn minimum_video_pts_step(&self) -> Duration {
-        let nanos = (self.video_frame_duration().as_nanos() / 4).max(1);
-        Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
-    }
-
     pub fn pause(&mut self) {
         if self.is_paused || !self.is_writing {
             return;
@@ -877,8 +915,23 @@ impl MP4Encoder {
             return;
         };
 
-        self.flush_pending_video();
-
+        // Deliberately keep the pending frame instead of flushing it here.
+        // Flushing wrote it with the full nominal duration, and the first
+        // post-resume frame ties against its pts and gets bumped +1us —
+        // landing inside the flushed sample's extent. Overlapping extents are
+        // the sporadic AVAssetWriter failure shape reproduced in the
+        // overlapping-extents tests. Held until resume, the pending frame is
+        // written with the real (clamped) forward gap and extents stay
+        // disjoint. The trade: when the last pre-pause sample was video, the
+        // first post-resume frame maps to exactly the held frame's pts, ties,
+        // and bumps +1us — the final pre-pause frame keeps a 1us extent and
+        // is effectively never displayed. Total timeline length is preserved
+        // (the 1us comes out of the resume frame's slot), which the
+        // container-duration assertions pin.
+        // finish_start still flushes it with nominal duration when the
+        // recording stops while paused. Holding it retains one capture-pool
+        // pixel buffer for the pause duration; upstream drops paused frames
+        // before they reach us, so the pool never contends on it.
         self.pause_timestamp = Some(timestamp);
         self.is_paused = true;
     }
@@ -1280,7 +1333,9 @@ mod tests {
     }
 
     fn test_output_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("cap_test_{name}.mp4"));
+        // Namespaced per process: two concurrent runs of this binary sharing
+        // a fixed path fail AVAssetWriter init with "Cannot Save" mid-suite.
+        let path = std::env::temp_dir().join(format!("cap_test_{name}_{}.mp4", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
@@ -1320,6 +1375,27 @@ mod tests {
 
     fn create_pixel_buffer_pool(width: usize, height: usize) -> arc::R<cidre::cv::PixelBufPool> {
         create_pixel_buffer_pool_with_format(width, height, cidre::cv::PixelFormat::_420V)
+    }
+
+    // Mirrors the production encoder-thread retry loop: paravirtualized CI
+    // runners have no hardware VideoToolbox, so the writer input reports
+    // NotReadyForMore often enough that single-shot queue calls drop frames
+    // and count-based assertions flake.
+    fn queue_video_frame_with_retry(
+        encoder: &mut MP4Encoder,
+        frame: arc::R<cidre::cm::SampleBuf>,
+        timestamp: Duration,
+    ) -> Result<bool, QueueFrameError> {
+        for _ in 0..1000 {
+            match encoder.queue_video_frame(frame.clone(), timestamp) {
+                Ok(()) => return Ok(true),
+                Err(QueueFrameError::NotReadyForMore) => {
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(false)
     }
 
     fn create_test_video_frame(
@@ -1637,6 +1713,147 @@ mod tests {
                 })
                 .unwrap()
         }
+    }
+
+    fn container_duration_secs(path: &PathBuf) -> f64 {
+        let input = ffmpeg::format::input(path).expect("open encoded output");
+        let duration = input.duration();
+        assert!(duration > 0, "container has no duration");
+        duration as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
+    }
+
+    /// A source delivering 60fps into a pipeline that believes 30fps used to
+    /// reach the encoder as a non-monotonic sawtooth (the smoothing ladder
+    /// re-timed 4 of every 5 frames to the nominal cadence, then dropped back
+    /// to the source clock). The encoder's monotonic pts correction then
+    /// bumped every "backwards" frame a full nominal frame duration forward,
+    /// locking into nominal-CFR output and doubling the recording's length.
+    /// The encoder must keep the written duration close to the real span even
+    /// for such inputs.
+    #[test]
+    fn non_monotonic_sawtooth_input_does_not_stretch_duration() {
+        let output = test_output_path("sawtooth_duration");
+        let config = VideoInfo::from_raw(RawVideoFormat::Nv12, 640, 360, 30);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(640, 360);
+
+        const REAL_DELTA_US: i64 = 16_667; // 60fps delivery
+        const NOMINAL_DELTA_US: i64 = 33_333; // 30fps belief
+        const FRAMES: i64 = 300; // 5s of real time
+
+        let mut expected: Option<i64> = None;
+        for i in 0..FRAMES {
+            let raw_us = i * REAL_DELTA_US;
+            // Reproduce the legacy smoothing ladder's output.
+            let ts_us = match expected {
+                Some(exp) if (exp - raw_us).abs() < 70_000 => exp,
+                _ => raw_us,
+            };
+            expected = Some(ts_us + NOMINAL_DELTA_US);
+
+            let frame = create_test_video_frame(&pool, ts_us, REAL_DELTA_US);
+            let timestamp = Duration::from_micros(ts_us.max(0) as u64);
+            loop {
+                match encoder.queue_video_frame(frame.clone(), timestamp) {
+                    Ok(()) => break,
+                    Err(QueueFrameError::NotReadyForMore) => {
+                        std::thread::sleep(Duration::from_micros(500));
+                    }
+                    Err(e) => panic!("queue failed at frame {i}: {e}"),
+                }
+            }
+        }
+
+        let real_span_secs = (FRAMES * REAL_DELTA_US) as f64 / 1_000_000.0;
+        encoder
+            .finish(Some(Duration::from_micros((FRAMES * REAL_DELTA_US) as u64)))
+            .unwrap();
+
+        let duration_secs = container_duration_secs(&output);
+        let _ = std::fs::remove_file(&output);
+
+        assert!(
+            duration_secs < real_span_secs * 1.25,
+            "encoded duration {duration_secs:.2}s stretched beyond real span {real_span_secs:.2}s"
+        );
+        assert!(
+            duration_secs > real_span_secs * 0.75,
+            "encoded duration {duration_secs:.2}s collapsed below real span {real_span_secs:.2}s"
+        );
+    }
+
+    /// Encodes `span_secs` of clean `actual_fps` timestamps into an encoder
+    /// configured for `config_fps` and asserts the written duration matches
+    /// the real span — the configured rate only sizes bitrate/keyframes, it
+    /// must never re-time content delivered at a different rate.
+    fn assert_duration_tracks_input(actual_fps: f64, config_fps: u32, span_secs: f64) {
+        let output = test_output_path(&format!(
+            "duration_tracks_{}fps_in_{}cfg",
+            actual_fps.round() as u64,
+            config_fps
+        ));
+        let config = VideoInfo::from_raw(RawVideoFormat::Nv12, 640, 360, config_fps);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(640, 360);
+
+        let real_delta_us = 1_000_000.0 / actual_fps;
+        let frames = (span_secs * actual_fps) as i64;
+
+        for i in 0..frames {
+            let ts_us = (i as f64 * real_delta_us) as i64;
+            let frame = create_test_video_frame(&pool, ts_us, real_delta_us as i64);
+            loop {
+                match encoder.queue_video_frame(frame.clone(), Duration::from_micros(ts_us as u64))
+                {
+                    Ok(()) => break,
+                    Err(QueueFrameError::NotReadyForMore) => {
+                        std::thread::sleep(Duration::from_micros(500));
+                    }
+                    Err(e) => panic!(
+                        "[{actual_fps}fps into {config_fps}cfg] queue failed at frame {i}: {e}"
+                    ),
+                }
+            }
+        }
+
+        let real_span_secs = (frames as f64 * real_delta_us) / 1_000_000.0;
+        encoder
+            .finish(Some(Duration::from_secs_f64(real_span_secs)))
+            .unwrap();
+
+        let duration_secs = container_duration_secs(&output);
+        let _ = std::fs::remove_file(&output);
+
+        assert!(
+            (duration_secs - real_span_secs).abs() < real_span_secs * 0.1,
+            "[{actual_fps}fps into {config_fps}cfg] encoded duration {duration_secs:.2}s \
+             should match real span {real_span_secs:.2}s"
+        );
+    }
+
+    /// Clean 60fps timestamps with a 30fps-configured encoder must be written
+    /// at their real times.
+    #[test]
+    fn faster_than_nominal_monotonic_input_keeps_real_duration() {
+        assert_duration_tracks_input(60.0, 30, 5.0);
+    }
+
+    /// Whatever rate frames actually arrive at — down to slow trickles and up
+    /// to a 1000fps camera — the encoder must write them at their real times.
+    #[test]
+    fn encoder_duration_tracks_input_across_fps_matrix() {
+        assert_duration_tracks_input(15.0, 30, 3.0);
+        assert_duration_tracks_input(24.0, 30, 3.0);
+        assert_duration_tracks_input(120.0, 30, 2.0);
+        assert_duration_tracks_input(240.0, 30, 1.5);
+        assert_duration_tracks_input(1000.0, 30, 1.2);
+        assert_duration_tracks_input(1000.0, 60, 1.2);
+        // Seeded-random rate: an arbitrary camera cadence nothing was tuned
+        // for.
+        let random_fps = 5.0
+            + (0x5EEDu64.wrapping_mul(6364136223846793005) >> 11) as f64 / (1u64 << 53) as f64
+                * 995.0;
+        assert_duration_tracks_input(random_fps, 30, 1.5);
     }
 
     #[test]
@@ -3535,6 +3752,304 @@ mod tests {
 
         let result = encoder.finish(Some(Duration::from_micros(166_666)));
         assert!(result.is_ok(), "Finish failed: {result:?}");
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_same_microsecond_pts_pair_is_bumped_apart() {
+        let output = test_output_path("same_us_pts_bump");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let base = Duration::from_micros(33_333);
+        let first = base + Duration::from_nanos(200);
+        let second = base + Duration::from_nanos(800);
+
+        let frame_a = create_test_video_frame(&pool, 33_333, 33_333);
+        let frame_b = create_test_video_frame(&pool, 33_333, 33_333);
+        assert!(queue_video_frame_with_retry(&mut encoder, frame_a, first).unwrap());
+        assert!(queue_video_frame_with_retry(&mut encoder, frame_b, second).unwrap());
+
+        assert_eq!(
+            encoder.last_video_pts,
+            Some(Duration::from_micros(33_333)),
+            "first frame must be written at the truncated microsecond"
+        );
+        assert_eq!(
+            encoder.pending_video_frame.as_ref().map(|p| p.pts),
+            Some(Duration::from_micros(33_334)),
+            "second frame in the same microsecond must be bumped one whole microsecond"
+        );
+
+        let _ = encoder.finish(Some(Duration::from_micros(66_666)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_same_microsecond_pts_bursts_survive_writer() {
+        // Field failure from the 0.5.8 reports (studio + camera on macOS):
+        // remapped capture timestamps carry nanosecond precision, and a
+        // stall-recovery burst can put two frames inside the same
+        // microsecond. The writer quantizes PTS to whole microseconds, so
+        // without entry quantization the pair reaches AVAssetWriter as
+        // duplicate timestamps and the writer dies asynchronously with
+        // -11800/-16364 (InvalidTimestamp) a few frames later.
+        let output = test_output_path("same_us_pts_bursts");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let mut errors = Vec::new();
+        let mut appended = 0u64;
+        let mut attempted = 0u64;
+
+        'frames: for i in 0..360u64 {
+            let base_us = i * 33_333;
+            let mut timestamps = vec![Duration::from_micros(base_us) + Duration::from_nanos(200)];
+            if i % 30 == 10 {
+                timestamps.push(Duration::from_micros(base_us) + Duration::from_nanos(800));
+            }
+
+            for ts in timestamps {
+                let frame = create_test_video_frame(&pool, base_us as i64, 33_333);
+                attempted += 1;
+                match queue_video_frame_with_retry(&mut encoder, frame, ts) {
+                    Ok(true) => appended += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        errors.push(format!("{e:?} at frame {i}"));
+                        break 'frames;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            errors.is_empty(),
+            "Same-microsecond PTS bursts must not fail the writer: {errors:?}"
+        );
+        assert!(
+            appended >= attempted * 9 / 10,
+            "expected most frames to queue, got {appended}/{attempted}"
+        );
+
+        let finish = encoder.finish(Some(Duration::from_secs(13)));
+        assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_pause_resume_keeps_sample_extents_disjoint() {
+        let output = test_output_path("pause_resume_extents");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let mut errors = Vec::new();
+        let mut queue = |encoder: &mut MP4Encoder, ts: Duration, label: &str| {
+            let frame = create_test_video_frame(&pool, ts.as_micros() as i64, 33_333);
+            match queue_video_frame_with_retry(encoder, frame, ts) {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{e:?} at {label}")),
+            }
+        };
+
+        for i in 0..60u64 {
+            queue(
+                &mut encoder,
+                Duration::from_micros(i * 33_333) + Duration::from_nanos(400),
+                "pre-pause",
+            );
+        }
+
+        let pre_pause_last = Duration::from_micros(59 * 33_333) + Duration::from_nanos(400);
+        encoder.pause();
+        assert!(
+            encoder.pending_video_frame.is_some(),
+            "pause must hold the pending frame instead of flushing it with nominal duration"
+        );
+        encoder.resume();
+
+        // Upstream excises the pause from the timeline, so the first resumed
+        // frame can tie the last pre-pause frame within the same microsecond.
+        queue(
+            &mut encoder,
+            pre_pause_last + Duration::from_nanos(200),
+            "resume-tie",
+        );
+
+        for i in 61..120u64 {
+            queue(
+                &mut encoder,
+                Duration::from_micros(i * 33_333) + Duration::from_nanos(400),
+                "post-resume",
+            );
+        }
+
+        assert!(
+            errors.is_empty(),
+            "pause/resume with a same-microsecond resume tie must not fail the writer: {errors:?}"
+        );
+
+        let finish = encoder.finish(Some(Duration::from_micros(120 * 33_333)));
+        assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let duration = container_duration_secs(&output);
+        assert!(
+            (3.8..=4.2).contains(&duration),
+            "held-frame pause must not distort the muxed timeline: 120 frames at 30fps \
+             should span ~4.0s, container reports {duration:.3}s"
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_stop_while_paused_flushes_pending_frame() {
+        let output = test_output_path("stop_while_paused");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        for i in 0..30u64 {
+            let ts = Duration::from_micros(i * 33_333);
+            let frame = create_test_video_frame(&pool, (i * 33_333) as i64, 33_333);
+            let queued = queue_video_frame_with_retry(&mut encoder, frame, ts).unwrap();
+            assert!(queued, "frame {i} exhausted the writer-ready retry budget");
+        }
+
+        encoder.pause();
+        assert!(encoder.pending_video_frame.is_some());
+        let appended_before_finish = encoder.video_frames_appended;
+        assert_eq!(
+            appended_before_finish, 29,
+            "all queued frames but the held one should be appended before finish"
+        );
+
+        // The finish-time flush appends without a readiness check; wait for
+        // the input to drain so the held frame cannot be dropped on a slow
+        // runner.
+        for _ in 0..1000 {
+            if encoder.video_input.is_ready_for_more_media_data() {
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
+
+        let finish = encoder.finish(Some(Duration::from_secs(1)));
+        assert!(
+            finish.is_ok(),
+            "stopping while paused must flush the held frame and finalize: {finish:?}"
+        );
+        assert!(encoder.pending_video_frame.is_none());
+        assert_eq!(
+            encoder.video_frames_appended,
+            appended_before_finish + 1,
+            "the held frame must reach the writer during finish"
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_deferred_offset_shifts_with_pause_gap_across_hold() {
+        // Covers the deferred-offset gap shift: a frame that was tie-bumped
+        // (so it carries deferred_offset = Some) held across a SECOND pause
+        // must have that snapshot shifted by the consumed gap. Applied
+        // verbatim on append, the stale snapshot overwrites the gap-adjusted
+        // timestamp_offset and every later timestamp jumps forward by the
+        // pause length.
+        let output = test_output_path("deferred_offset_pause_gap");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let step = Duration::from_micros(33_333);
+        let mut errors: Vec<String> = Vec::new();
+        let mut queue = |encoder: &mut MP4Encoder, ts: Duration, label: &str| {
+            let frame = create_test_video_frame(&pool, ts.as_micros() as i64, 33_333);
+            match queue_video_frame_with_retry(encoder, frame, ts) {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{e:?} at {label}")),
+            }
+        };
+
+        for i in 0..30u64 {
+            queue(
+                &mut encoder,
+                step * i as u32 + Duration::from_nanos(400),
+                "pre",
+            );
+        }
+        let t29 = step * 29 + Duration::from_nanos(400);
+
+        encoder.pause();
+        encoder.resume();
+
+        // Pause excision maps this frame back onto t29's microsecond: it
+        // tie-bumps and becomes the held frame with deferred_offset = Some.
+        let gap1 = Duration::from_secs(2) + Duration::from_nanos(100);
+        let resume1 = t29 + gap1;
+        queue(&mut encoder, resume1, "resume-tie");
+        assert!(
+            encoder
+                .pending_video_frame
+                .as_ref()
+                .is_some_and(|p| p.deferred_offset.is_some()),
+            "the tie-bumped resume frame must carry a deferred offset for this test to bite"
+        );
+
+        // Second pause with the deferred-carrying frame still held.
+        encoder.pause();
+        encoder.resume();
+
+        let gap2 = Duration::from_secs(1) + step;
+        let resume2 = resume1 + gap2;
+        queue(&mut encoder, resume2, "second-resume");
+
+        for k in 1..=10u64 {
+            queue(&mut encoder, resume2 + step * k as u32, "post");
+        }
+
+        assert!(errors.is_empty(), "no queue call may fail: {errors:?}");
+
+        // Both pause gaps must be excised from the mapping. A stale deferred
+        // snapshot (missing gap2) would leave timestamp_offset ~1s short and
+        // push every later pts forward by that much.
+        let expected_offset = gap1 + gap2;
+        let offset_error = encoder.timestamp_offset.abs_diff(expected_offset);
+        assert!(
+            offset_error < Duration::from_micros(5),
+            "timestamp_offset must track both consumed gaps: expected ~{expected_offset:?}, \
+             got {:?}",
+            encoder.timestamp_offset
+        );
+
+        let last_pts = encoder.last_video_pts.expect("frames were written");
+        assert!(
+            last_pts < step * 41,
+            "written pts must continue at frame cadence after the held-frame pauses, \
+             got {last_pts:?} (a value ~1s larger means the stale deferred offset \
+             re-inserted the second pause)"
+        );
+
+        let finish = encoder.finish(Some(resume2 + step * 11));
+        assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let duration = container_duration_secs(&output);
+        assert!(
+            (1.2..=1.7).contains(&duration),
+            "42 frames at 30fps must span ~1.4s regardless of pauses, container reports \
+             {duration:.3}s"
+        );
 
         let _ = std::fs::remove_file(&output);
     }

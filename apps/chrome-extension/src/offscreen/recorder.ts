@@ -3,12 +3,9 @@ import {
 	type ChunkUploadState,
 	DEFAULT_API_REQUEST_TIMEOUT_MS,
 	DISPLAY_MEDIA_IDEAL,
-	DISPLAY_MEDIA_VIDEO_CONSTRAINTS,
-	DISPLAY_MODE_PREFERENCES,
 	deleteRecoveredRecordingSpool,
 	describeRecordingCodecs,
 	detectRecordingModeFromTrack,
-	type ExtendedDisplayMediaStreamOptions,
 	InstantRecordingUploader,
 	initialLocalRecordingState,
 	initiateMultipartUpload,
@@ -20,7 +17,6 @@ import {
 	RecordingSpool,
 	recoverRecordingSpoolSession,
 	selectRecordingPipeline,
-	shouldRetryDisplayMediaWithoutPreferences,
 	type VideoId,
 } from "@cap/recorder-core";
 
@@ -46,6 +42,8 @@ import {
 import type {
 	ConnectCameraPreviewRequest,
 	ExtensionSettings,
+	MediaPermissionSnapshot,
+	MediaPermissionState,
 	MicrophoneProbeResult,
 	MicrophoneSettings,
 	OffscreenRequest,
@@ -67,6 +65,7 @@ import {
 	toSessionDescriptionInit,
 	waitForIceGatheringComplete,
 } from "../shared/webrtc";
+import { captureDisplayStream } from "./display-capture";
 
 const RECORDING_TIMESLICE_MS = 1000;
 const RECORDING_TIMESLICE_GUARD_MS = RECORDING_TIMESLICE_MS * 3;
@@ -151,7 +150,19 @@ let retryInProgress = false;
 let lastProgressBroadcastAt = 0;
 let cameraPreviewStream: MediaStream | null = null;
 let cameraPreviewDeviceId: string | null = null;
+let cameraPreviewStreamRequest: {
+	deviceId: string | null;
+	promise: Promise<MediaStream>;
+} | null = null;
+let cameraPreviewReleaseTimer: number | null = null;
 const cameraPreviewSessions = new Map<string, RTCPeerConnection>();
+// A tab hand-off disconnects the old tab's session before the new tab's
+// connect arrives. Releasing the camera the instant the session count hits
+// zero closes and reopens the physical device on every tab switch — and a
+// reopen that lands too soon after the close fails with NotReadableError on
+// exclusive-access platforms. Keep the stream warm across that gap instead.
+const CAMERA_PREVIEW_RELEASE_GRACE_MS = 2000;
+const CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS = 5000;
 const activeRecordingSounds = new Set<HTMLAudioElement>();
 
 const playRecordingSound = (
@@ -266,7 +277,15 @@ const stopTracks = (stream: MediaStream) => {
 	}
 };
 
+const cancelCameraPreviewRelease = () => {
+	if (cameraPreviewReleaseTimer !== null) {
+		window.clearTimeout(cameraPreviewReleaseTimer);
+		cameraPreviewReleaseTimer = null;
+	}
+};
+
 const stopCameraPreviewStream = () => {
+	cancelCameraPreviewRelease();
 	if (!cameraPreviewStream) return;
 	stopTracks(cameraPreviewStream);
 	cameraPreviewStream = null;
@@ -279,29 +298,78 @@ const disconnectCameraPreview = (sessionId: string) => {
 	cameraPreviewSessions.delete(sessionId);
 	peer.close();
 	if (cameraPreviewSessions.size === 0) {
-		stopCameraPreviewStream();
+		cancelCameraPreviewRelease();
+		cameraPreviewReleaseTimer = window.setTimeout(() => {
+			cameraPreviewReleaseTimer = null;
+			if (cameraPreviewSessions.size === 0) {
+				stopCameraPreviewStream();
+			}
+		}, CAMERA_PREVIEW_RELEASE_GRACE_MS);
 	}
 };
 
-const disconnectCameraPreviews = () => {
+const disconnectCameraPreviewsExcept = (keepSessionId?: string) => {
 	for (const sessionId of Array.from(cameraPreviewSessions.keys())) {
+		if (sessionId === keepSessionId) continue;
 		disconnectCameraPreview(sessionId);
 	}
 	stopCameraPreviewStream();
 };
 
-const getCameraPreviewStream = async (settings: WebcamSettings) => {
+const disconnectCameraPreviews = () => {
+	disconnectCameraPreviewsExcept();
+};
+
+const getCameraPreviewStream = async (
+	settings: WebcamSettings,
+	keepSessionId?: string,
+) => {
+	const videoTrack = cameraPreviewStream?.getVideoTracks()[0];
 	if (
 		cameraPreviewStream?.active &&
+		videoTrack &&
+		videoTrack.readyState === "live" &&
 		cameraPreviewDeviceId === settings.deviceId
 	) {
 		return cameraPreviewStream;
 	}
 
-	disconnectCameraPreviews();
-	cameraPreviewStream = await getCameraMediaStream(settings, false);
-	cameraPreviewDeviceId = settings.deviceId;
-	return cameraPreviewStream;
+	if (cameraPreviewStreamRequest?.deviceId === settings.deviceId) {
+		return cameraPreviewStreamRequest.promise;
+	}
+
+	if (cameraPreviewStreamRequest) {
+		await cameraPreviewStreamRequest.promise.catch(() => undefined);
+	}
+
+	disconnectCameraPreviewsExcept(keepSessionId);
+	const promise = getCameraMediaStream(settings, false).then((stream) => {
+		// The camera can take long enough to open that every waiting session
+		// may have disconnected (or moved to another device) in the meantime;
+		// adopting the stream then would leave the camera lit with no consumer.
+		if (
+			cameraPreviewStreamRequest?.promise !== promise ||
+			cameraPreviewSessions.size === 0
+		) {
+			stopTracks(stream);
+			throw new Error("Camera preview was disconnected while opening.");
+		}
+		cameraPreviewStream = stream;
+		cameraPreviewDeviceId = settings.deviceId;
+		return stream;
+	});
+	cameraPreviewStreamRequest = {
+		deviceId: settings.deviceId,
+		promise,
+	};
+
+	try {
+		return await promise;
+	} finally {
+		if (cameraPreviewStreamRequest?.promise === promise) {
+			cameraPreviewStreamRequest = null;
+		}
+	}
 };
 
 const getStreamSize = (stream: MediaStream) => {
@@ -352,38 +420,39 @@ const broadcastCaptureSource = (source: RecordingCaptureSource) => {
 	);
 };
 
-const getVideoConstraint = (webcam: WebcamSettings) =>
-	webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID
-		? {
-				deviceId: { exact: webcam.deviceId },
-			}
-		: true;
-
-const shouldRetryDefaultCamera = (webcam: WebcamSettings, error: unknown) =>
-	webcam.deviceId !== null &&
-	webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID &&
-	error instanceof DOMException &&
-	(error.name === "NotFoundError" || error.name === "OverconstrainedError");
-
 const getCameraMediaStream = async (
 	webcam: WebcamSettings,
 	audio: boolean | MediaTrackConstraints,
 ) => {
-	try {
-		return await navigator.mediaDevices.getUserMedia({
-			video: getVideoConstraint(webcam),
+	const constraints: MediaStreamConstraints[] = [];
+	if (webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID) {
+		constraints.push({
+			video: { deviceId: { exact: webcam.deviceId } },
 			audio,
 		});
-	} catch (error) {
-		if (!shouldRetryDefaultCamera(webcam, error)) {
-			throw error;
-		}
-
-		return navigator.mediaDevices.getUserMedia({
-			video: true,
+		constraints.push({
+			video: { deviceId: { ideal: webcam.deviceId } },
 			audio,
 		});
 	}
+	constraints.push({
+		video: true,
+		audio,
+	});
+
+	let lastError: unknown = null;
+	for (const constraint of constraints) {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia(constraint);
+			const videoTrack = stream.getVideoTracks()[0];
+			if (videoTrack && videoTrack.readyState === "live") {
+				return stream;
+			}
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError ?? new Error("Failed to acquire camera stream");
 };
 
 const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
@@ -406,61 +475,6 @@ const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
 		},
 	}) as unknown as MediaStreamConstraints;
 
-const requestDisplayMedia = (
-	options: Partial<ExtendedDisplayMediaStreamOptions>,
-) =>
-	navigator.mediaDevices.getDisplayMedia(options as DisplayMediaStreamOptions);
-
-const getDisplayStream = async (
-	mode: Exclude<RecordingMode, "tab" | "camera">,
-	includeAudio: boolean,
-) => {
-	const preferences = DISPLAY_MODE_PREFERENCES[mode];
-	const video = DISPLAY_MEDIA_VIDEO_CONSTRAINTS;
-
-	try {
-		return await requestDisplayMedia({
-			...preferences,
-			video,
-			audio: includeAudio,
-		});
-	} catch (error) {
-		if (isUserCancellationError(error)) throw error;
-
-		// Some browsers/OSes reject the advanced surface preferences
-		// (monitorTypeSurfaces, surfaceSwitching, preferCurrentTab, …) or a
-		// system-audio request the picker cannot satisfy. Fall back the way the
-		// dashboard recorder does instead of failing the whole capture.
-		if (shouldRetryDisplayMediaWithoutPreferences(error)) {
-			try {
-				return await requestDisplayMedia({ video, audio: includeAudio });
-			} catch (retryError) {
-				if (
-					includeAudio &&
-					shouldRetryDisplayMediaWithoutPreferences(retryError)
-				) {
-					return requestDisplayMedia({ video, audio: false });
-				}
-				throw retryError;
-			}
-		}
-
-		if (includeAudio) {
-			try {
-				return await requestDisplayMedia({
-					...preferences,
-					video,
-					audio: false,
-				});
-			} catch {
-				throw error;
-			}
-		}
-
-		throw error;
-	}
-};
-
 const getMainStream = async (request: StartRecordingRequest) => {
 	if (request.mode === "tab") {
 		if (!request.tabStreamId) throw new Error("Tab stream id is missing");
@@ -479,7 +493,14 @@ const getMainStream = async (request: StartRecordingRequest) => {
 		);
 	}
 
-	return getDisplayStream(request.mode, request.settings.systemAudio.enabled);
+	return captureDisplayStream(
+		request.mode,
+		request.settings.systemAudio.enabled,
+		(options) =>
+			navigator.mediaDevices.getDisplayMedia(
+				options as DisplayMediaStreamOptions,
+			),
+	);
 };
 
 const getAudioConstraint = (
@@ -524,8 +545,8 @@ const getMicrophoneStream = async (
 // amplitude (time-domain, 0..1) that counts as sound. A muted/dead device
 // flat-lines near 0; a working mic's noise floor clears this threshold, so it
 // only flags an effectively-silent input.
-const MIC_PROBE_WINDOW_MS = 1200;
-const MIC_PROBE_SAMPLE_INTERVAL_MS = 50;
+const MIC_PROBE_WINDOW_MS = 250;
+const MIC_PROBE_SAMPLE_INTERVAL_MS = 20;
 const MIC_SOUND_MIN_PEAK = 0.0015;
 
 // Opens the selected mic and listens for any signal so the recorder can warn
@@ -831,6 +852,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 	let ownedVideoId: string | null = null;
 	let ownedSpool: RecordingSpool | null = null;
 	let ownedRecording: ActiveRecording | null = null;
+	let countdownPromise: Promise<void> | null = null;
 
 	try {
 		status = { phase: "creating" };
@@ -842,6 +864,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		if (captureSource) {
 			broadcastCaptureSource(captureSource);
 		}
+		countdownPromise = runStartCountdown(request);
 		const microphoneStream = await getMicrophoneStream(
 			request.settings.microphone,
 			request.mode,
@@ -962,11 +985,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			mimeType: pipeline.mimeType,
 		});
 
-		// Pre-roll countdown is the last step before capture: the picker and every
-		// server round-trip are already done, so recording begins the moment the
-		// count ends. `startedAt` is read afterwards so the countdown is excluded
-		// from the recording duration.
-		await runStartCountdown(request);
+		await countdownPromise;
 		throwIfStartCanceled();
 
 		const startedAt = Date.now();
@@ -1119,6 +1138,17 @@ const startRecording = async (request: StartRecordingRequest) => {
 		broadcastStatus();
 		return status;
 	} catch (error) {
+		chrome.runtime.sendMessage(
+			{
+				target: "service-worker",
+				type: "hide-recording-start-overlays",
+			} satisfies ServiceWorkerRequest,
+			() => {
+				void chrome.runtime.lastError;
+			},
+		);
+		countdownResolve?.();
+		await countdownPromise?.catch(() => undefined);
 		// Release only what this attempt acquired. No chunk can have been
 		// captured yet — chunks only flow once recorder.start() succeeds, after
 		// which nothing here throws — so the spool holds no recoverable data.
@@ -1144,9 +1174,12 @@ const startRecording = async (request: StartRecordingRequest) => {
 			);
 			await ownedSpool.dispose().catch(() => undefined);
 		}
-		// Reset the "creating" status so later status syncs do not report a
-		// phantom in-progress recording.
-		if (status.phase === "creating") {
+		// Reset the status this attempt set so later status syncs do not report
+		// a phantom in-progress recording. "recording" is already set before
+		// recorder.start(), so a throw there would otherwise leave a capture
+		// phase with no session behind it: stop becomes a no-op and the idle
+		// self-close never fires.
+		if (status.phase === "creating" || status.phase === "recording") {
 			status = isUserCancellationError(error)
 				? { phase: "idle" }
 				: {
@@ -1601,20 +1634,70 @@ const enumerateMediaDevices = async () => {
 	};
 };
 
+// The recorder panel is a cross-origin iframe whose own permission query is
+// delegated from the host page, so it cannot tell when Chrome has reset the
+// extension's camera/mic grant (which happens automatically after the
+// extension goes unused for a while). This top-level page shares the grant
+// with the recording pipeline, so its query is the authoritative source.
+const queryMediaPermission = async (
+	name: PermissionName,
+): Promise<MediaPermissionState> => {
+	if (!navigator.permissions?.query) return "unknown";
+	try {
+		const status = await navigator.permissions.query({ name });
+		return status.state;
+	} catch {
+		return "unknown";
+	}
+};
+
+const queryMediaPermissions = async (): Promise<MediaPermissionSnapshot> => {
+	const [camera, microphone] = await Promise.all([
+		queryMediaPermission("camera" as PermissionName),
+		queryMediaPermission("microphone" as PermissionName),
+	]);
+	return { camera, microphone };
+};
+
 const connectCameraPreview = async (request: ConnectCameraPreviewRequest) => {
 	disconnectCameraPreview(request.sessionId);
-	const stream = await getCameraPreviewStream(request.settings);
 	const peer = new RTCPeerConnection();
+	// Register before the first await: once the previous tab's session
+	// disconnects, only a registered successor keeps the shared camera
+	// stream from being released mid-connect.
 	cameraPreviewSessions.set(request.sessionId, peer);
 
 	try {
+		const stream = await getCameraPreviewStream(
+			request.settings,
+			request.sessionId,
+		);
+		let disconnectTimer: number | null = null;
 		peer.addEventListener("connectionstatechange", () => {
+			if (disconnectTimer !== null) {
+				window.clearTimeout(disconnectTimer);
+				disconnectTimer = null;
+			}
 			if (
 				peer.connectionState === "closed" ||
-				peer.connectionState === "disconnected" ||
 				peer.connectionState === "failed"
 			) {
 				disconnectCameraPreview(request.sessionId);
+				return;
+			}
+			// The preview page drives recovery from a transient disconnect with
+			// its own shorter grace; this only reaps a peer whose page died
+			// without sending disconnect-camera-preview.
+			if (peer.connectionState === "disconnected") {
+				disconnectTimer = window.setTimeout(() => {
+					disconnectTimer = null;
+					if (
+						peer.connectionState === "disconnected" &&
+						cameraPreviewSessions.get(request.sessionId) === peer
+					) {
+						disconnectCameraPreview(request.sessionId);
+					}
+				}, CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS);
 			}
 		});
 
@@ -1679,11 +1762,30 @@ const handleRequest = async (
 	}
 
 	if (message.type === "enumerate-devices") {
-		return { ok: true, devices: await enumerateMediaDevices() };
+		const [devices, permissions] = await Promise.all([
+			enumerateMediaDevices(),
+			queryMediaPermissions(),
+		]);
+		return { ok: true, devices, permissions };
 	}
 
 	if (message.type === "probe-microphone") {
 		return { ok: true, micProbe: await probeMicrophone(message.microphone) };
+	}
+
+	if (message.type === "toggle-microphone-mute") {
+		const recording = activeRecording;
+		if (recording) {
+			for (const stream of recording.streams) {
+				for (const track of stream.getAudioTracks()) {
+					track.enabled = !message.muted;
+				}
+			}
+			for (const track of recording.recordingStream.getAudioTracks()) {
+				track.enabled = !message.muted;
+			}
+		}
+		return { ok: true };
 	}
 
 	return { ok: true, status };

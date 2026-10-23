@@ -12,6 +12,29 @@ describe("desktop segment recovery markers", () => {
 		expect(parseDesktopSegmentsRecoveryMarker(marker)).toEqual({
 			observedAtMs: 12345,
 			signature: "abc123",
+			attempts: 0,
+		});
+	});
+
+	it("round trips attempt counts", () => {
+		const marker = buildDesktopSegmentsRecoveryMarker("abc123", 12345, 2);
+
+		expect(parseDesktopSegmentsRecoveryMarker(marker)).toEqual({
+			observedAtMs: 12345,
+			signature: "abc123",
+			attempts: 2,
+		});
+	});
+
+	it("parses legacy markers without attempts", () => {
+		expect(
+			parseDesktopSegmentsRecoveryMarker(
+				"desktop-segments-recovery:v1:12345:abc123",
+			),
+		).toEqual({
+			observedAtMs: 12345,
+			signature: "abc123",
+			attempts: 0,
 		});
 	});
 

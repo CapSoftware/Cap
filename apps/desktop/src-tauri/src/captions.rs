@@ -1,5 +1,8 @@
 use anyhow::Result;
-use cap_audio::AudioData;
+use cap_audio::{
+    AudioData, TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,
+};
+use cap_rendering::Video;
 use ffmpeg::{
     ChannelLayout, codec as avcodec,
     format::{self as avformat},
@@ -10,6 +13,7 @@ use futures::StreamExt;
 use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -19,11 +23,13 @@ use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-pub use cap_project::{CaptionSegment, CaptionSettings, CaptionWord};
+pub use cap_project::{
+    CaptionSegment, CaptionSettings, CaptionWord, RecordingMeta, StudioRecordingMeta,
+};
 
 use crate::{general_settings::GeneralSettingsStore, http_client};
 
@@ -52,7 +58,14 @@ impl Default for CaptionData {
 }
 
 lazy_static::lazy_static! {
-    static ref WHISPER_CONTEXT: Arc<Mutex<Option<Arc<WhisperContext>>>> = Arc::new(Mutex::new(None));
+    static ref WHISPER_CONTEXT: Arc<Mutex<Option<CachedWhisperContext>>> = Arc::new(Mutex::new(None));
+    static ref MODEL_DOWNLOADS: Mutex<HashMap<String, ActiveModelDownload>> = Mutex::new(HashMap::new());
+    static ref TRANSCRIPTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
+struct CachedWhisperContext {
+    model_path: String,
+    context: Arc<WhisperContext>,
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -64,6 +77,12 @@ const WHISPER_SAMPLE_RATE: u32 = 16000;
 const TARGET_CAPTION_WORDS_PER_SEGMENT: usize = 6;
 const MAX_CAPTION_WORDS_PER_SEGMENT: usize = 8;
 const MIN_FINAL_CAPTION_WORDS: usize = 3;
+// Whisper/Parakeet sometimes stretch a trailing word's end across a following
+// silence (e.g. a 16s "seconds."), which leaves the rendered caption stuck on
+// screen and duplicates the word across timeline cuts once projected. Real
+// spoken words never approach this, so cap each word's duration to keep timing
+// tied to speech rather than silence.
+const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 struct CachedParakeetContext {
@@ -93,6 +112,22 @@ async fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 async fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
+
+async fn invalidate_whisper_cache_for_path(model_path: &Path) {
+    let cached_context = {
+        let mut context = WHISPER_CONTEXT.lock().await;
+        if context
+            .as_ref()
+            .is_some_and(|cached| Path::new(&cached.model_path) == model_path)
+        {
+            tracing::info!("Releasing deleted Whisper model from cache");
+            context.take()
+        } else {
+            None
+        }
+    };
+    drop(cached_context);
+}
 
 pub async fn release_ml_models() {
     {
@@ -201,416 +236,292 @@ pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> 
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write model file: {e}"))
 }
 
+enum AudioExtractionSource {
+    ProjectDirectory { base_path: PathBuf },
+    MediaFile(PathBuf),
+}
+
+fn resolve_audio_extraction_source(video_path: &str) -> Result<AudioExtractionSource, String> {
+    let path = PathBuf::from(video_path);
+    let metadata =
+        std::fs::metadata(&path).map_err(|e| format!("Failed to read video path metadata: {e}"))?;
+
+    if metadata.is_dir() {
+        let meta_path = path.join("recording-meta.json");
+        if !meta_path.is_file() {
+            return Err("Recording directory is missing recording-meta.json".to_string());
+        }
+
+        return Ok(AudioExtractionSource::ProjectDirectory { base_path: path });
+    }
+
+    if metadata.is_file() {
+        return Ok(AudioExtractionSource::MediaFile(path));
+    }
+
+    Err("Video path is neither a file nor a recording directory".to_string())
+}
+
 async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Result<(), String> {
     log::info!("=== EXTRACT AUDIO START ===");
     log::info!("Attempting to extract audio from: {video_path}");
     log::info!("Output path: {output_path:?}");
 
-    if video_path.ends_with(".cap") {
-        log::info!("Detected .cap project directory");
+    match resolve_audio_extraction_source(video_path)? {
+        AudioExtractionSource::ProjectDirectory { base_path } => {
+            log::info!("Detected recording project directory");
 
-        let meta_path = std::path::Path::new(video_path).join("recording-meta.json");
-        let meta_content = std::fs::read_to_string(&meta_path)
-            .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
+            let recording_meta = RecordingMeta::load_for_project(&base_path)
+                .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
+            let studio = recording_meta
+                .studio_meta()
+                .ok_or_else(|| "Only studio recordings can be transcribed".to_string())?;
+            studio.ensure_ordinary_media_access(&base_path)?;
 
-        let meta: serde_json::Value = serde_json::from_str(&meta_content)
-            .map_err(|e| format!("Failed to parse recording metadata: {e}"))?;
-
-        let base_path = std::path::Path::new(video_path);
-
-        struct SegmentAudio {
-            sources: Vec<PathBuf>,
-        }
-
-        let mut segment_audios: Vec<SegmentAudio> = Vec::new();
-
-        if let Some(segments) = meta["segments"].as_array() {
-            for segment in segments {
-                let mut sources = Vec::new();
-                let mut push_source = |path: Option<&str>| {
-                    if let Some(path) = path {
-                        let full_path = base_path.join(path);
-                        if full_path.exists() && !sources.contains(&full_path) {
-                            sources.push(full_path);
+            let mut final_samples = Vec::new();
+            let mut any_audio = false;
+            match studio {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    let display_duration = Video::new(
+                        segment.display.path.to_path(&base_path),
+                        segment.display.start_time.unwrap_or_default(),
+                    )
+                    .map_err(|error| format!("Failed to read display video: {error}"))?
+                    .duration;
+                    let mut sources = Vec::new();
+                    if let Some(audio) = &segment.audio {
+                        let path = audio.path.to_path(&base_path);
+                        if path.exists() {
+                            match AudioData::from_file(&path) {
+                                Ok(decoded) => {
+                                    any_audio = true;
+                                    sources.push(TranscriptionAudioSource {
+                                        samples: decoded.samples().to_vec(),
+                                        channels: decoded.channels() as usize,
+                                        offset_secs: 0.0,
+                                    });
+                                }
+                                Err(error) => {
+                                    log::warn!("Failed to process audio source {path:?}: {error}")
+                                }
+                            }
                         }
                     }
-                };
-
-                push_source(segment["system_audio"]["path"].as_str());
-                push_source(segment["mic"]["path"].as_str());
-                push_source(segment["audio"]["path"].as_str());
-
-                if !sources.is_empty() {
-                    segment_audios.push(SegmentAudio { sources });
+                    let take = TranscriptionAudioTake {
+                        display_duration_secs: display_duration,
+                        sources,
+                    };
+                    append_transcription_audio(&mut final_samples, &take, AudioData::SAMPLE_RATE)
+                        .map_err(|e| format!("Failed to assemble transcription audio: {e}"))?;
                 }
-            }
-        }
-
-        if segment_audios.is_empty() {
-            return Err("No audio sources found in the recording metadata".to_string());
-        }
-
-        log::info!("Found {} segments with audio sources", segment_audios.len());
-
-        let mut final_samples: Vec<f32> = Vec::new();
-
-        for (segment_idx, segment_audio) in segment_audios.iter().enumerate() {
-            log::info!(
-                "Processing segment {} with {} audio sources",
-                segment_idx,
-                segment_audio.sources.len()
-            );
-
-            let mut segment_samples: Vec<f32> = Vec::new();
-
-            for source in &segment_audio.sources {
-                match AudioData::from_file(source) {
-                    Ok(audio) => {
-                        log::info!(
-                            "Processing audio source {:?}: {} channels, {} samples",
-                            source,
-                            audio.channels(),
-                            audio.sample_count()
-                        );
-
-                        let mono_samples = if audio.channels() > 1 {
-                            convert_to_mono(audio.samples(), audio.channels() as usize)
-                        } else {
-                            audio.samples().to_vec()
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    for (segment_idx, segment) in inner.segments.iter().enumerate() {
+                        let display_duration = Video::new(
+                            segment.display.path.to_path(&base_path),
+                            segment.display.start_time.unwrap_or_default(),
+                        )
+                        .map_err(|error| {
+                            format!(
+                                "Failed to read display video for segment {segment_idx}: {error}"
+                            )
+                        })?
+                        .duration;
+                        let offsets = segment.calculate_audio_offsets();
+                        let mut sources = Vec::new();
+                        let mut push_source = |path: &cap_project::AudioMeta, offset_secs: f64| {
+                            let path = path.path.to_path(&base_path);
+                            if !path.exists() {
+                                return;
+                            }
+                            match AudioData::from_file(&path) {
+                                Ok(decoded) => {
+                                    any_audio = true;
+                                    sources.push(TranscriptionAudioSource {
+                                        samples: decoded.samples().to_vec(),
+                                        channels: decoded.channels() as usize,
+                                        offset_secs,
+                                    });
+                                }
+                                Err(error) => {
+                                    log::warn!("Failed to process audio source {path:?}: {error}")
+                                }
+                            }
                         };
 
-                        if segment_samples.is_empty() {
-                            segment_samples = mono_samples;
-                        } else {
-                            mix_samples(&mut segment_samples, &mono_samples);
+                        if let Some(system_audio) = &segment.system_audio {
+                            push_source(system_audio, f64::from(offsets.system_audio));
                         }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to process audio source {source:?}: {e}");
-                        continue;
-                    }
-                }
-            }
-
-            if !segment_samples.is_empty() {
-                log::info!(
-                    "Segment {} produced {} samples, appending to final audio",
-                    segment_idx,
-                    segment_samples.len()
-                );
-                final_samples.extend(segment_samples);
-            }
-        }
-
-        let mut mixed_samples = final_samples;
-        let channel_count = 1_usize;
-
-        if mixed_samples.is_empty() {
-            log::error!("No audio samples after processing all sources");
-            return Err("Failed to process any audio sources".to_string());
-        }
-
-        let gain = normalize_audio_for_transcription(&mut mixed_samples);
-        if (gain - 1.0).abs() > 0.01 {
-            log::info!("Applied transcription audio gain: {gain:.2}x");
-        }
-
-        log::info!("Final mixed audio: {} samples", mixed_samples.len());
-        let mix_rms =
-            (mixed_samples.iter().map(|&s| s * s).sum::<f32>() / mixed_samples.len() as f32).sqrt();
-        log::info!("Mixed audio RMS: {mix_rms:.4}");
-
-        if mix_rms < 0.001 {
-            log::warn!(
-                "WARNING: Mixed audio RMS is very low ({mix_rms:.6}) - audio may be nearly silent!"
-            );
-        }
-
-        let mut output = avformat::output(&output_path)
-            .map_err(|e| format!("Failed to create output file: {e}"))?;
-
-        let codec = avcodec::encoder::find_by_name("pcm_s16le")
-            .ok_or_else(|| "PCM encoder not found".to_string())?;
-
-        let mut encoder = avcodec::Context::new()
-            .encoder()
-            .audio()
-            .map_err(|e| format!("Failed to create encoder: {e}"))?;
-
-        encoder.set_rate(WHISPER_SAMPLE_RATE as i32);
-        let channel_layout = ChannelLayout::MONO;
-        encoder.set_channel_layout(channel_layout);
-        encoder.set_format(avformat::Sample::I16(avformat::sample::Type::Packed));
-
-        let mut encoder = encoder
-            .open_as(codec)
-            .map_err(|e| format!("Failed to open encoder: {e}"))?;
-
-        let mut stream = output
-            .add_stream(codec)
-            .map_err(|e| format!("Failed to add stream: {e}"))?;
-        stream.set_parameters(&encoder);
-
-        output
-            .write_header()
-            .map_err(|e| format!("Failed to write header: {e}"))?;
-
-        let mut resampler = resampling::Context::get(
-            avformat::Sample::F32(avformat::sample::Type::Packed),
-            channel_layout,
-            AudioData::SAMPLE_RATE,
-            avformat::Sample::I16(avformat::sample::Type::Packed),
-            channel_layout,
-            WHISPER_SAMPLE_RATE,
-        )
-        .map_err(|e| format!("Failed to create resampler: {e}"))?;
-
-        let frame_size = encoder.frame_size() as usize;
-        let frame_size = if frame_size == 0 { 1024 } else { frame_size };
-
-        log::info!(
-            "Using frame size: {}, total samples: {}, channel count: {}",
-            frame_size,
-            mixed_samples.len(),
-            channel_count
-        );
-
-        let mut frame = ffmpeg::frame::Audio::new(
-            avformat::Sample::I16(avformat::sample::Type::Packed),
-            frame_size,
-            ChannelLayout::MONO,
-        );
-        frame.set_rate(WHISPER_SAMPLE_RATE);
-
-        if !mixed_samples.is_empty() && frame_size * channel_count > 0 {
-            for (chunk_idx, chunk) in mixed_samples.chunks(frame_size * channel_count).enumerate() {
-                if chunk_idx % 100 == 0 {
-                    log::info!("Processing chunk {}, size: {}", chunk_idx, chunk.len());
-                }
-
-                let mut input_frame = ffmpeg::frame::Audio::new(
-                    avformat::Sample::F32(avformat::sample::Type::Packed),
-                    chunk.len() / channel_count,
-                    channel_layout,
-                );
-                input_frame.set_rate(AudioData::SAMPLE_RATE);
-
-                let bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        chunk.as_ptr() as *const u8,
-                        std::mem::size_of_val(chunk),
-                    )
-                };
-                input_frame.data_mut(0)[0..bytes.len()].copy_from_slice(bytes);
-
-                let mut output_frame = ffmpeg::frame::Audio::new(
-                    avformat::Sample::I16(avformat::sample::Type::Packed),
-                    frame_size,
-                    ChannelLayout::MONO,
-                );
-                output_frame.set_rate(WHISPER_SAMPLE_RATE);
-
-                match resampler.run(&input_frame, &mut output_frame) {
-                    Ok(_) => {
-                        if chunk_idx % 100 == 0 {
-                            log::info!(
-                                "Successfully resampled chunk {}, output samples: {}",
-                                chunk_idx,
-                                output_frame.samples()
-                            );
+                        if let Some(mic) = &segment.mic {
+                            push_source(mic, f64::from(offsets.mic));
                         }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to resample chunk {chunk_idx}: {e}");
-                        continue;
-                    }
-                }
 
-                if let Err(e) = encoder.send_frame(&output_frame) {
-                    log::error!("Failed to send frame to encoder: {e}");
-                    continue;
-                }
-
-                loop {
-                    let mut packet = ffmpeg::Packet::empty();
-                    match encoder.receive_packet(&mut packet) {
-                        Ok(_) => {
-                            if let Err(e) = packet.write_interleaved(&mut output) {
-                                log::error!("Failed to write packet: {e}");
-                            }
-                        }
-                        Err(_) => break,
+                        let take = TranscriptionAudioTake {
+                            display_duration_secs: display_duration,
+                            sources,
+                        };
+                        append_transcription_audio(
+                            &mut final_samples,
+                            &take,
+                            AudioData::SAMPLE_RATE,
+                        )
+                        .map_err(|e| format!("Failed to assemble transcription audio: {e}"))?;
                     }
                 }
             }
-        }
 
-        encoder
-            .send_eof()
-            .map_err(|e| format!("Failed to send EOF: {e}"))?;
-
-        loop {
-            let mut packet = ffmpeg::Packet::empty();
-            let received = encoder.receive_packet(&mut packet);
-
-            if received.is_err() {
-                break;
+            if !any_audio {
+                return Err("No audio sources found in the recording metadata".to_string());
             }
 
-            {
-                if let Err(e) = packet.write_interleaved(&mut output) {
-                    return Err(format!("Failed to write final packet: {e}"));
-                }
+            let mut mixed_samples = final_samples;
+            let channel_count = 1_usize;
+
+            if mixed_samples.is_empty() {
+                log::error!("No audio samples after processing all sources");
+                return Err("Failed to process any audio sources".to_string());
             }
-        }
 
-        output
-            .write_trailer()
-            .map_err(|e| format!("Failed to write trailer: {e}"))?;
+            let gain = normalize_audio_for_transcription(&mut mixed_samples);
+            if (gain - 1.0).abs() > 0.01 {
+                log::info!("Applied transcription audio gain: {gain:.2}x");
+            }
 
-        log::info!("=== EXTRACT AUDIO END (from .cap) ===");
-        Ok(())
-    } else {
-        let mut input =
-            avformat::input(&video_path).map_err(|e| format!("Failed to open video file: {e}"))?;
+            log::info!("Final mixed audio: {} samples", mixed_samples.len());
+            let mix_rms = (mixed_samples.iter().map(|&s| s * s).sum::<f32>()
+                / mixed_samples.len() as f32)
+                .sqrt();
+            log::info!("Mixed audio RMS: {mix_rms:.4}");
 
-        let stream = input
-            .streams()
-            .best(ffmpeg::media::Type::Audio)
-            .ok_or_else(|| "No audio stream found".to_string())?;
+            if mix_rms < 0.001 {
+                log::warn!(
+                    "WARNING: Mixed audio RMS is very low ({mix_rms:.6}) - audio may be nearly silent!"
+                );
+            }
 
-        let codec_params = stream.parameters();
+            let mut output = avformat::output(&output_path)
+                .map_err(|e| format!("Failed to create output file: {e}"))?;
 
-        let decoder_ctx = avcodec::Context::from_parameters(codec_params.clone())
-            .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+            let codec = avcodec::encoder::find_by_name("pcm_s16le")
+                .ok_or_else(|| "PCM encoder not found".to_string())?;
 
-        let mut decoder = decoder_ctx
-            .decoder()
-            .audio()
-            .map_err(|e| format!("Failed to create decoder: {e}"))?;
+            let mut encoder = avcodec::Context::new()
+                .encoder()
+                .audio()
+                .map_err(|e| format!("Failed to create encoder: {e}"))?;
 
-        let decoder_format = decoder.format();
-        let decoder_channel_layout = decoder.channel_layout();
-        let decoder_rate = decoder.rate();
+            encoder.set_rate(WHISPER_SAMPLE_RATE as i32);
+            let channel_layout = ChannelLayout::MONO;
+            encoder.set_channel_layout(channel_layout);
+            encoder.set_format(avformat::Sample::I16(avformat::sample::Type::Packed));
 
-        let channel_layout = ChannelLayout::MONO;
+            let mut encoder = encoder
+                .open_as(codec)
+                .map_err(|e| format!("Failed to open encoder: {e}"))?;
 
-        let mut encoder_ctx = avcodec::Context::new()
-            .encoder()
-            .audio()
-            .map_err(|e| format!("Failed to create encoder: {e}"))?;
-
-        encoder_ctx.set_rate(WHISPER_SAMPLE_RATE as i32);
-        encoder_ctx.set_channel_layout(channel_layout);
-        encoder_ctx.set_format(avformat::Sample::I16(avformat::sample::Type::Packed));
-
-        let codec = avcodec::encoder::find_by_name("pcm_s16le")
-            .ok_or_else(|| "PCM encoder not found".to_string())?;
-
-        let mut encoder = encoder_ctx
-            .open_as(codec)
-            .map_err(|e| format!("Failed to open encoder: {e}"))?;
-
-        let mut output = avformat::output(&output_path)
-            .map_err(|e| format!("Failed to create output file: {e}"))?;
-
-        let stream_params = {
-            let mut output_stream = output
+            let mut stream = output
                 .add_stream(codec)
                 .map_err(|e| format!("Failed to add stream: {e}"))?;
+            stream.set_parameters(&encoder);
 
-            output_stream.set_parameters(&encoder);
+            output
+                .write_header()
+                .map_err(|e| format!("Failed to write header: {e}"))?;
 
-            (output_stream.index(), output_stream.id())
-        };
+            let mut resampler = resampling::Context::get(
+                avformat::Sample::F32(avformat::sample::Type::Packed),
+                channel_layout,
+                AudioData::SAMPLE_RATE,
+                avformat::Sample::I16(avformat::sample::Type::Packed),
+                channel_layout,
+                WHISPER_SAMPLE_RATE,
+            )
+            .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
-        output
-            .write_header()
-            .map_err(|e| format!("Failed to write header: {e}"))?;
+            let frame_size = encoder.frame_size() as usize;
+            let frame_size = if frame_size == 0 { 1024 } else { frame_size };
 
-        let mut resampler = resampling::Context::get(
-            decoder_format,
-            decoder_channel_layout,
-            decoder_rate,
-            avformat::Sample::I16(avformat::sample::Type::Packed),
-            channel_layout,
-            WHISPER_SAMPLE_RATE,
-        )
-        .map_err(|e| format!("Failed to create resampler: {e}"))?;
+            log::info!(
+                "Using frame size: {}, total samples: {}, channel count: {}",
+                frame_size,
+                mixed_samples.len(),
+                channel_count
+            );
 
-        let mut decoded_frame = ffmpeg::frame::Audio::empty();
-        let mut resampled_frame = ffmpeg::frame::Audio::new(
-            avformat::Sample::I16(avformat::sample::Type::Packed),
-            encoder.frame_size() as usize,
-            channel_layout,
-        );
+            let mut frame = ffmpeg::frame::Audio::new(
+                avformat::Sample::I16(avformat::sample::Type::Packed),
+                frame_size,
+                ChannelLayout::MONO,
+            );
+            frame.set_rate(WHISPER_SAMPLE_RATE);
 
-        let input_stream_index = stream.index();
-
-        let mut packet_queue = Vec::new();
-
-        {
-            for (stream_idx, packet) in input.packets() {
-                if stream_idx.index() == input_stream_index
-                    && let Some(data) = packet.data()
+            if !mixed_samples.is_empty() && frame_size * channel_count > 0 {
+                for (chunk_idx, chunk) in
+                    mixed_samples.chunks(frame_size * channel_count).enumerate()
                 {
-                    let mut cloned_packet = ffmpeg::Packet::copy(data);
-                    if let Some(pts) = packet.pts() {
-                        cloned_packet.set_pts(Some(pts));
+                    if chunk_idx % 100 == 0 {
+                        log::info!("Processing chunk {}, size: {}", chunk_idx, chunk.len());
                     }
-                    if let Some(dts) = packet.dts() {
-                        cloned_packet.set_dts(Some(dts));
-                    }
-                    packet_queue.push(cloned_packet);
-                }
-            }
-        }
 
-        for packet_res in packet_queue {
-            if let Err(e) = decoder.send_packet(&packet_res) {
-                log::warn!("Failed to send packet to decoder: {e}");
-                continue;
-            }
+                    let mut input_frame = ffmpeg::frame::Audio::new(
+                        avformat::Sample::F32(avformat::sample::Type::Packed),
+                        chunk.len() / channel_count,
+                        channel_layout,
+                    );
+                    input_frame.set_rate(AudioData::SAMPLE_RATE);
 
-            while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
-                    log::warn!("Failed to resample audio: {e}");
-                    continue;
-                }
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            chunk.as_ptr() as *const u8,
+                            std::mem::size_of_val(chunk),
+                        )
+                    };
+                    input_frame.data_mut(0)[0..bytes.len()].copy_from_slice(bytes);
 
-                if let Err(e) = encoder.send_frame(&resampled_frame) {
-                    log::warn!("Failed to send frame to encoder: {e}");
-                    continue;
-                }
+                    let mut output_frame = ffmpeg::frame::Audio::new(
+                        avformat::Sample::I16(avformat::sample::Type::Packed),
+                        frame_size,
+                        ChannelLayout::MONO,
+                    );
+                    output_frame.set_rate(WHISPER_SAMPLE_RATE);
 
-                loop {
-                    let mut packet = ffmpeg::Packet::empty();
-                    match encoder.receive_packet(&mut packet) {
+                    match resampler.run(&input_frame, &mut output_frame) {
                         Ok(_) => {
-                            packet.set_stream(stream_params.0);
-
-                            if let Err(e) = packet.write_interleaved(&mut output) {
-                                log::error!("Failed to write packet: {e}");
+                            if chunk_idx % 100 == 0 {
+                                log::info!(
+                                    "Successfully resampled chunk {}, output samples: {}",
+                                    chunk_idx,
+                                    output_frame.samples()
+                                );
                             }
                         }
-                        Err(_) => break,
+                        Err(e) => {
+                            log::error!("Failed to resample chunk {chunk_idx}: {e}");
+                            continue;
+                        }
+                    }
+
+                    if let Err(e) = encoder.send_frame(&output_frame) {
+                        log::error!("Failed to send frame to encoder: {e}");
+                        continue;
+                    }
+
+                    loop {
+                        let mut packet = ffmpeg::Packet::empty();
+                        match encoder.receive_packet(&mut packet) {
+                            Ok(_) => {
+                                if let Err(e) = packet.write_interleaved(&mut output) {
+                                    log::error!("Failed to write packet: {e}");
+                                }
+                            }
+                            Err(_) => break,
+                        }
                     }
                 }
             }
-        }
-
-        decoder
-            .send_eof()
-            .map_err(|e| format!("Failed to send EOF to decoder: {e}"))?;
-
-        while decoder.receive_frame(&mut decoded_frame).is_ok() {
-            resampler
-                .run(&decoded_frame, &mut resampled_frame)
-                .map_err(|e| format!("Failed to resample final audio: {e}"))?;
 
             encoder
-                .send_frame(&resampled_frame)
-                .map_err(|e| format!("Failed to send final frame: {e}"))?;
+                .send_eof()
+                .map_err(|e| format!("Failed to send EOF: {e}"))?;
 
             loop {
                 let mut packet = ffmpeg::Packet::empty();
@@ -620,27 +531,201 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     break;
                 }
 
-                packet
-                    .write_interleaved(&mut output)
-                    .map_err(|e| format!("Failed to write final packet: {e}"))?;
+                {
+                    if let Err(e) = packet.write_interleaved(&mut output) {
+                        return Err(format!("Failed to write final packet: {e}"));
+                    }
+                }
             }
+
+            output
+                .write_trailer()
+                .map_err(|e| format!("Failed to write trailer: {e}"))?;
+
+            log::info!("=== EXTRACT AUDIO END (from recording project) ===");
+            Ok(())
         }
+        AudioExtractionSource::MediaFile(video_path) => {
+            let mut input = avformat::input(&video_path)
+                .map_err(|e| format!("Failed to open video file: {e}"))?;
 
-        output
-            .write_trailer()
-            .map_err(|e| format!("Failed to write trailer: {e}"))?;
+            let stream = input
+                .streams()
+                .best(ffmpeg::media::Type::Audio)
+                .ok_or_else(|| "No audio stream found".to_string())?;
 
-        log::info!("=== EXTRACT AUDIO END (from video) ===");
-        Ok(())
+            let codec_params = stream.parameters();
+
+            let decoder_ctx = avcodec::Context::from_parameters(codec_params.clone())
+                .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+
+            let mut decoder = decoder_ctx
+                .decoder()
+                .audio()
+                .map_err(|e| format!("Failed to create decoder: {e}"))?;
+
+            let decoder_format = decoder.format();
+            let decoder_channel_layout = decoder.channel_layout();
+            let decoder_rate = decoder.rate();
+
+            let channel_layout = ChannelLayout::MONO;
+
+            let mut encoder_ctx = avcodec::Context::new()
+                .encoder()
+                .audio()
+                .map_err(|e| format!("Failed to create encoder: {e}"))?;
+
+            encoder_ctx.set_rate(WHISPER_SAMPLE_RATE as i32);
+            encoder_ctx.set_channel_layout(channel_layout);
+            encoder_ctx.set_format(avformat::Sample::I16(avformat::sample::Type::Packed));
+
+            let codec = avcodec::encoder::find_by_name("pcm_s16le")
+                .ok_or_else(|| "PCM encoder not found".to_string())?;
+
+            let mut encoder = encoder_ctx
+                .open_as(codec)
+                .map_err(|e| format!("Failed to open encoder: {e}"))?;
+
+            let mut output = avformat::output(&output_path)
+                .map_err(|e| format!("Failed to create output file: {e}"))?;
+
+            let stream_params = {
+                let mut output_stream = output
+                    .add_stream(codec)
+                    .map_err(|e| format!("Failed to add stream: {e}"))?;
+
+                output_stream.set_parameters(&encoder);
+
+                (output_stream.index(), output_stream.id())
+            };
+
+            output
+                .write_header()
+                .map_err(|e| format!("Failed to write header: {e}"))?;
+
+            let mut resampler = resampling::Context::get(
+                decoder_format,
+                decoder_channel_layout,
+                decoder_rate,
+                avformat::Sample::I16(avformat::sample::Type::Packed),
+                channel_layout,
+                WHISPER_SAMPLE_RATE,
+            )
+            .map_err(|e| format!("Failed to create resampler: {e}"))?;
+
+            let mut decoded_frame = ffmpeg::frame::Audio::empty();
+            let mut resampled_frame = ffmpeg::frame::Audio::new(
+                avformat::Sample::I16(avformat::sample::Type::Packed),
+                encoder.frame_size() as usize,
+                channel_layout,
+            );
+
+            let input_stream_index = stream.index();
+
+            let mut packet_queue = Vec::new();
+
+            {
+                for (stream_idx, packet) in input.packets() {
+                    if stream_idx.index() == input_stream_index
+                        && let Some(data) = packet.data()
+                    {
+                        let mut cloned_packet = ffmpeg::Packet::copy(data);
+                        if let Some(pts) = packet.pts() {
+                            cloned_packet.set_pts(Some(pts));
+                        }
+                        if let Some(dts) = packet.dts() {
+                            cloned_packet.set_dts(Some(dts));
+                        }
+                        packet_queue.push(cloned_packet);
+                    }
+                }
+            }
+
+            for packet_res in packet_queue {
+                if let Err(e) = decoder.send_packet(&packet_res) {
+                    log::warn!("Failed to send packet to decoder: {e}");
+                    continue;
+                }
+
+                while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                    if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
+                        log::warn!("Failed to resample audio: {e}");
+                        continue;
+                    }
+
+                    if let Err(e) = encoder.send_frame(&resampled_frame) {
+                        log::warn!("Failed to send frame to encoder: {e}");
+                        continue;
+                    }
+
+                    loop {
+                        let mut packet = ffmpeg::Packet::empty();
+                        match encoder.receive_packet(&mut packet) {
+                            Ok(_) => {
+                                packet.set_stream(stream_params.0);
+
+                                if let Err(e) = packet.write_interleaved(&mut output) {
+                                    log::error!("Failed to write packet: {e}");
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+
+            decoder
+                .send_eof()
+                .map_err(|e| format!("Failed to send EOF to decoder: {e}"))?;
+
+            while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                resampler
+                    .run(&decoded_frame, &mut resampled_frame)
+                    .map_err(|e| format!("Failed to resample final audio: {e}"))?;
+
+                encoder
+                    .send_frame(&resampled_frame)
+                    .map_err(|e| format!("Failed to send final frame: {e}"))?;
+
+                loop {
+                    let mut packet = ffmpeg::Packet::empty();
+                    let received = encoder.receive_packet(&mut packet);
+
+                    if received.is_err() {
+                        break;
+                    }
+
+                    packet
+                        .write_interleaved(&mut output)
+                        .map_err(|e| format!("Failed to write final packet: {e}"))?;
+                }
+            }
+
+            output
+                .write_trailer()
+                .map_err(|e| format!("Failed to write trailer: {e}"))?;
+
+            log::info!("=== EXTRACT AUDIO END (from video) ===");
+            Ok(())
+        }
     }
 }
 
-async fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, String> {
-    let mut context_guard = WHISPER_CONTEXT.lock().await;
+fn lock_transcription_worker_slot() -> std::sync::MutexGuard<'static, ()> {
+    TRANSCRIPTION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
-    if let Some(ref existing) = *context_guard {
+fn get_whisper_context_blocking(model_path: &str) -> Result<Arc<WhisperContext>, String> {
+    cap_utils::local_captions::ensure_whisper_cpu_support()?;
+    let mut context_guard = WHISPER_CONTEXT.blocking_lock();
+
+    if let Some(ref existing) = *context_guard
+        && existing.model_path == model_path
+    {
         log::info!("Reusing cached Whisper context");
-        return Ok(existing.clone());
+        return Ok(existing.context.clone());
     }
 
     log::info!("Initializing Whisper context with model: {model_path}");
@@ -648,10 +733,22 @@ async fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, St
         .map_err(|e| format!("Failed to load Whisper model: {e}"))?;
 
     let ctx_arc = Arc::new(ctx);
-    *context_guard = Some(ctx_arc.clone());
+    *context_guard = Some(CachedWhisperContext {
+        model_path: model_path.to_string(),
+        context: ctx_arc.clone(),
+    });
 
     Ok(ctx_arc)
 }
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn release_whisper_context_after_transcription() {
+    let mut ctx = WHISPER_CONTEXT.blocking_lock();
+    *ctx = None;
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+fn release_whisper_context_after_transcription() {}
 
 fn is_special_token(token_text: &str) -> bool {
     let trimmed = token_text.trim();
@@ -759,6 +856,10 @@ fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
                 end: word.end,
             });
         }
+    }
+
+    for word in &mut normalized {
+        word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
     }
 
     normalized
@@ -961,12 +1062,15 @@ fn process_with_whisper(
         let start_time = (start_i64 as f32) / 100.0;
         let end_time = (end_i64 as f32) / 100.0;
 
+        // The transcript text itself stays out of the log: log files are
+        // uploaded from the Feedback page, and this is a verbatim record of
+        // what the user said on camera.
         log::info!(
-            "=== Segment {}: start={:.2}s, end={:.2}s, raw_text='{}'",
+            "=== Segment {}: start={:.2}s, end={:.2}s, chars={}",
             i,
             start_time,
             end_time,
-            raw_text.trim()
+            raw_text.trim().chars().count()
         );
 
         let mut words = Vec::new();
@@ -998,7 +1102,9 @@ fn process_with_whisper(
                 let token_start = (data.t0 as f32) / 100.0;
                 let token_end = (data.t1 as f32) / 100.0;
 
-                log::info!(
+                // debug, not info: release builds filter at info, and these
+                // carry the transcript verbatim into an uploadable log.
+                log::debug!(
                     "  Token[{t}]: id={token_id}, text={token_text:?}, t0={token_start:.2}s, t1={token_end:.2}s, prob={token_prob:.4}"
                 );
 
@@ -1006,7 +1112,7 @@ fn process_with_whisper(
                     if !current_word.is_empty()
                         && let Some(ws) = word_start
                     {
-                        log::info!(
+                        log::debug!(
                             "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
                             current_word.trim(),
                             ws,
@@ -1157,6 +1263,7 @@ fn process_with_parakeet(
         model
     } else {
         tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
         let model = ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
         let loaded_model = Arc::new(std::sync::Mutex::new(model));
 
@@ -1302,22 +1409,14 @@ pub async fn transcribe_audio(
         TranscriptionEngine::Parakeet => {
             log::info!("Using Parakeet TDT engine");
             let model_dir = model_path.clone();
-            tokio::task::spawn_blocking(move || process_with_parakeet(&audio_path, &model_dir))
-                .await
-                .map_err(|e| format!("Parakeet task panicked: {e}"))?
+            tokio::task::spawn_blocking(move || {
+                let _guard = lock_transcription_worker_slot();
+                process_with_parakeet(&audio_path, &model_dir)
+            })
+            .await
+            .map_err(|e| format!("Parakeet task panicked: {e}"))?
         }
         TranscriptionEngine::Whisper => {
-            let context = match get_whisper_context(&model_path).await {
-                Ok(ctx) => {
-                    log::info!("Whisper context ready");
-                    ctx
-                }
-                Err(e) => {
-                    log::error!("Failed to initialize Whisper context: {e}");
-                    return Err(format!("Failed to initialize transcription model: {e}"));
-                }
-            };
-
             let transcription_hints = GeneralSettingsStore::get(&app)
                 .ok()
                 .flatten()
@@ -1326,7 +1425,21 @@ pub async fn transcribe_audio(
 
             log::info!("Starting Whisper transcription in blocking task...");
             tokio::task::spawn_blocking(move || {
-                process_with_whisper(&audio_path, context, &language, &transcription_hints)
+                let _guard = lock_transcription_worker_slot();
+                let context = match get_whisper_context_blocking(&model_path) {
+                    Ok(ctx) => {
+                        log::info!("Whisper context ready");
+                        ctx
+                    }
+                    Err(e) => {
+                        log::error!("Failed to initialize Whisper context: {e}");
+                        return Err(format!("Failed to initialize transcription model: {e}"));
+                    }
+                };
+                let result =
+                    process_with_whisper(&audio_path, context, &language, &transcription_hints);
+                release_whisper_context_after_transcription();
+                result
             })
             .await
             .map_err(|e| format!("Whisper task panicked: {e}"))?
@@ -1694,6 +1807,30 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
+                    let preset = settings_obj
+                        .get("preset")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("classic")
+                        .to_string();
+
+                    let animation = settings_obj
+                        .get("animation")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("bounce")
+                        .to_string();
+
+                    let highlight_style = settings_obj
+                        .get("highlightStyle")
+                        .or_else(|| settings_obj.get("highlight_style"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("color")
+                        .to_string();
+
+                    let uppercase = settings_obj
+                        .get("uppercase")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
                     let manual_position = settings_obj
                         .get("manualPosition")
                         .or_else(|| settings_obj.get("manual_position"))
@@ -1723,12 +1860,20 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         word_transition_duration,
                         active_word_highlight,
                         manual_position,
+                        preset,
+                        animation,
+                        highlight_style,
+                        uppercase,
                     }
                 } else {
                     cap_project::CaptionSettings::default()
                 };
 
-                Ok(cap_project::CaptionsData { segments, settings })
+                Ok(cap_project::CaptionsData {
+                    segments,
+                    settings,
+                    ..Default::default()
+                })
             } else {
                 Err("Missing or invalid segments array in captions file".to_string())
             }
@@ -1824,6 +1969,137 @@ pub struct DownloadProgress {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Type, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelDownloadState {
+    Downloading,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Serialize, Type, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDownloadStatus {
+    pub state: ModelDownloadState,
+    pub progress: f64,
+    pub message: String,
+}
+
+#[derive(Clone)]
+struct ActiveModelDownload {
+    status: ModelDownloadStatus,
+    notify: Arc<Notify>,
+}
+
+fn model_download_key(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn model_download_status(
+    state: ModelDownloadState,
+    progress: f64,
+    message: String,
+) -> ModelDownloadStatus {
+    ModelDownloadStatus {
+        state,
+        progress: progress.clamp(0.0, 100.0),
+        message,
+    }
+}
+
+async fn begin_model_download(key: &str, message: String) -> bool {
+    let mut downloads = MODEL_DOWNLOADS.lock().await;
+    if downloads
+        .get(key)
+        .is_some_and(|entry| entry.status.state == ModelDownloadState::Downloading)
+    {
+        return false;
+    }
+
+    downloads.insert(
+        key.to_string(),
+        ActiveModelDownload {
+            status: model_download_status(ModelDownloadState::Downloading, 0.0, message),
+            notify: Arc::new(Notify::new()),
+        },
+    );
+    true
+}
+
+async fn wait_for_model_download(key: &str) -> Result<(), String> {
+    loop {
+        let entry = {
+            let downloads = MODEL_DOWNLOADS.lock().await;
+            downloads.get(key).cloned()
+        };
+
+        let Some(entry) = entry else {
+            return Ok(());
+        };
+
+        match entry.status.state {
+            ModelDownloadState::Downloading => {
+                tokio::select! {
+                    _ = entry.notify.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                }
+            }
+            ModelDownloadState::Completed => return Ok(()),
+            ModelDownloadState::Failed => return Err(entry.status.message),
+        }
+    }
+}
+
+async fn set_model_download_status(app: &AppHandle, key: &str, status: ModelDownloadStatus) {
+    let notify = {
+        let mut downloads = MODEL_DOWNLOADS.lock().await;
+        downloads.get_mut(key).map(|entry| {
+            entry.status = status.clone();
+            entry.notify.clone()
+        })
+    };
+
+    let _ = DownloadProgress {
+        progress: status.progress,
+        message: status.message.clone(),
+    }
+    .emit(app);
+
+    if status.state != ModelDownloadState::Downloading
+        && let Some(notify) = notify
+    {
+        notify.notify_waiters();
+    }
+}
+
+async fn set_model_download_progress(app: &AppHandle, key: &str, progress: f64, message: String) {
+    set_model_download_status(
+        app,
+        key,
+        model_download_status(ModelDownloadState::Downloading, progress, message),
+    )
+    .await;
+}
+
+async fn clear_model_download_status(path: &Path) {
+    let key = model_download_key(path);
+    let mut downloads = MODEL_DOWNLOADS.lock().await;
+    let _ = downloads.remove(&key);
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+pub async fn get_model_download_status(
+    app: AppHandle,
+    target_path: String,
+) -> Result<Option<ModelDownloadStatus>, String> {
+    let validated_path = validate_model_path(&app, &target_path)?;
+    let key = model_download_key(&validated_path);
+    let downloads = MODEL_DOWNLOADS.lock().await;
+    Ok(downloads.get(&key).map(|entry| entry.status.clone()))
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -1833,8 +2109,47 @@ pub async fn download_whisper_model(
     output_path: String,
 ) -> Result<(), String> {
     let validated_path = validate_model_path(&app, &output_path)?;
+    let key = model_download_key(&validated_path);
 
-    let model_parts: &[&str] = match model_name.as_str() {
+    if !begin_model_download(&key, "Preparing model download".to_string()).await {
+        return wait_for_model_download(&key).await;
+    }
+
+    let download_app = app.clone();
+    let download_key = key.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = download_whisper_model_to_path(
+            &download_app,
+            &model_name,
+            &validated_path,
+            &download_key,
+        )
+        .await;
+        let final_status = match &result {
+            Ok(_) => model_download_status(
+                ModelDownloadState::Completed,
+                100.0,
+                "Download complete".to_string(),
+            ),
+            Err(error) => model_download_status(
+                ModelDownloadState::Failed,
+                0.0,
+                format!("Download failed: {error}"),
+            ),
+        };
+        set_model_download_status(&download_app, &download_key, final_status).await;
+    });
+
+    wait_for_model_download(&key).await
+}
+
+async fn download_whisper_model_to_path(
+    app: &AppHandle,
+    model_name: &str,
+    validated_path: &Path,
+    download_key: &str,
+) -> Result<(), String> {
+    let model_parts: &[&str] = match model_name {
         "tiny" => &[
             "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-tiny.bin",
         ],
@@ -1866,8 +2181,9 @@ pub async fn download_whisper_model(
         .map_err(|e| format!("Failed to create file: {e}"))?;
 
     let mut downloaded: u64 = 0;
+    let part_count = model_parts.len() as f64;
 
-    for url in model_parts {
+    for (idx, url) in model_parts.iter().enumerate() {
         let response = http_client
             .get(*url)
             .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT)
@@ -1882,6 +2198,8 @@ pub async fn download_whisper_model(
             ));
         }
 
+        let part_size = response.content_length().unwrap_or(0);
+        let mut downloaded_part: u64 = 0;
         let mut stream = response.bytes_stream();
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| format!("Error while downloading: {e}"))?;
@@ -1891,19 +2209,23 @@ pub async fn download_whisper_model(
                 .map_err(|e| format!("Error while writing to file: {e}"))?;
 
             downloaded = downloaded.saturating_add(chunk.len() as u64);
+            downloaded_part = downloaded_part.saturating_add(chunk.len() as u64);
 
             let progress = if total_size > 0 {
                 (downloaded as f64 / total_size as f64) * 100.0
+            } else if part_size > 0 {
+                ((idx as f64 + downloaded_part as f64 / part_size as f64) / part_count) * 100.0
             } else {
-                0.0
+                (idx as f64 / part_count) * 100.0
             };
 
-            DownloadProgress {
+            set_model_download_progress(
+                app,
+                download_key,
                 progress,
-                message: format!("Downloading model: {progress:.1}%"),
-            }
-            .emit(&app)
-            .ok();
+                format!("Downloading model: {progress:.0}%"),
+            )
+            .await;
         }
     }
 
@@ -1954,9 +2276,13 @@ pub async fn delete_whisper_model(app: AppHandle, model_path: String) -> Result<
         return Err(format!("Model file not found: {model_path}"));
     }
 
+    clear_model_download_status(&validated_path).await;
+
     tokio::fs::remove_file(&validated_path)
         .await
         .map_err(|e| format!("Failed to delete model file: {e}"))?;
+
+    invalidate_whisper_cache_for_path(&validated_path).await;
 
     Ok(())
 }
@@ -2022,6 +2348,26 @@ const PARAKEET_MODEL_CLEANUP_FILES: &[&str] = &[
     "vocab.txt",
 ];
 
+const PARAKEET_KNOWN_PART_SIZES: &[(&str, u64)] = &[
+    ("encoder-model.int8.onnx", 652_183_999),
+    ("decoder_joint-model.int8.onnx", 18_202_004),
+    ("encoder-model.onnx", 41_770_866),
+    ("encoder-model.onnx.data.part0", 1_300_000_000),
+    ("encoder-model.onnx.data.part1", 1_135_420_160),
+    ("decoder_joint-model.onnx", 72_520_893),
+    ("vocab.txt", 93_939),
+];
+
+fn parakeet_known_part_size(url: &str) -> Option<u64> {
+    PARAKEET_KNOWN_PART_SIZES.iter().find_map(|(name, size)| {
+        if url.ends_with(name) {
+            Some(*size)
+        } else {
+            None
+        }
+    })
+}
+
 fn parakeet_model_files_for_dir(
     output_dir: &std::path::Path,
 ) -> &'static [(&'static str, &'static [&'static str])] {
@@ -2065,7 +2411,12 @@ async fn parakeet_model_file_sizes(
                 ));
             }
 
-            file_size = file_size.saturating_add(resp.content_length().unwrap_or(0));
+            let part_size = resp
+                .content_length()
+                .filter(|size| *size > 0)
+                .or_else(|| parakeet_known_part_size(url))
+                .unwrap_or(0);
+            file_size = file_size.saturating_add(part_size);
         }
         sizes.push((*filename, file_size));
     }
@@ -2115,19 +2466,53 @@ fn finalize_parakeet_model_download(
 #[instrument(skip(app))]
 pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Result<(), String> {
     let validated_dir = validate_model_path(&app, &output_dir)?;
+    let key = model_download_key(&validated_dir);
 
-    std::fs::create_dir_all(&validated_dir)
+    if !begin_model_download(&key, "Preparing model download".to_string()).await {
+        return wait_for_model_download(&key).await;
+    }
+
+    let download_app = app.clone();
+    let download_key = key.clone();
+    tauri::async_runtime::spawn(async move {
+        let result =
+            download_parakeet_model_to_dir(&download_app, &validated_dir, &download_key).await;
+        let final_status = match &result {
+            Ok(_) => model_download_status(
+                ModelDownloadState::Completed,
+                100.0,
+                "Download complete".to_string(),
+            ),
+            Err(error) => model_download_status(
+                ModelDownloadState::Failed,
+                0.0,
+                format!("Download failed: {error}"),
+            ),
+        };
+        set_model_download_status(&download_app, &download_key, final_status).await;
+    });
+
+    wait_for_model_download(&key).await
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+async fn download_parakeet_model_to_dir(
+    app: &AppHandle,
+    validated_dir: &Path,
+    download_key: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(validated_dir)
         .map_err(|e| format!("Failed to create model directory: {e}"))?;
 
     let http_client = app.state::<http_client::HttpClient>();
-    let model_files = parakeet_model_files_for_dir(&validated_dir);
+    let model_files = parakeet_model_files_for_dir(validated_dir);
     let expected_file_sizes = parakeet_model_file_sizes(&http_client, model_files).await?;
 
-    let staging_dir = parakeet_staging_dir(&validated_dir);
+    let staging_dir = parakeet_staging_dir(validated_dir);
     if parakeet_model_files_match(&staging_dir, &expected_file_sizes) {
         tracing::info!("Finalizing previously completed Parakeet model download");
-        finalize_parakeet_model_download(&validated_dir, &staging_dir, model_files)?;
-        invalidate_parakeet_cache_for_dir(&validated_dir).await;
+        finalize_parakeet_model_download(validated_dir, &staging_dir, model_files)?;
+        invalidate_parakeet_cache_for_dir(validated_dir).await;
         return Ok(());
     }
 
@@ -2184,12 +2569,13 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
                         ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
                     };
 
-                    DownloadProgress {
+                    set_model_download_progress(
+                        app,
+                        download_key,
                         progress,
-                        message: format!("Downloading {filename}: {progress:.1}%"),
-                    }
-                    .emit(&app)
-                    .ok();
+                        format!("Downloading {filename}: {progress:.0}%"),
+                    )
+                    .await;
                 }
             }
 
@@ -2214,9 +2600,9 @@ pub async fn download_parakeet_model(app: AppHandle, output_dir: String) -> Resu
         return Err("Downloaded model files did not match expected sizes".to_string());
     }
 
-    finalize_parakeet_model_download(&validated_dir, &staging_dir, model_files)?;
+    finalize_parakeet_model_download(validated_dir, &staging_dir, model_files)?;
 
-    invalidate_parakeet_cache_for_dir(&validated_dir).await;
+    invalidate_parakeet_cache_for_dir(validated_dir).await;
 
     Ok(())
 }
@@ -2275,6 +2661,7 @@ pub async fn delete_parakeet_model(app: AppHandle, model_dir: String) -> Result<
     }
 
     invalidate_parakeet_cache_for_dir(&validated_dir).await;
+    clear_model_download_status(&validated_dir).await;
 
     tokio::fs::remove_dir_all(&validated_dir)
         .await
@@ -2354,38 +2741,11 @@ pub async fn export_captions_srt(
     }
 }
 
-fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
-    if channels == 1 {
-        return samples.to_vec();
-    }
-
-    let sample_count = samples.len() / channels;
-    let mut mono_samples = Vec::with_capacity(sample_count);
-
-    for i in 0..sample_count {
-        let mut sample_sum = 0.0;
-        for c in 0..channels {
-            sample_sum += samples[i * channels + c];
-        }
-        mono_samples.push(sample_sum / channels as f32);
-    }
-
-    mono_samples
-}
-
-fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
-    let length = dest.len().min(source.len());
-    for i in 0..length {
-        dest[i] = (dest[i] + source[i]) * 0.5;
-    }
-    length
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptionWord, caption_text_from_words, caption_word_chunks, normalize_caption_words,
-        resolve_path_with_base,
+        AudioExtractionSource, CaptionWord, caption_text_from_words, caption_word_chunks,
+        normalize_caption_words, resolve_audio_extraction_source, resolve_path_with_base,
     };
     use tempfile::tempdir;
 
@@ -2430,6 +2790,44 @@ mod tests {
     }
 
     #[test]
+    fn audio_extraction_source_accepts_project_directory_without_cap_extension() {
+        let dir = tempdir().unwrap();
+        let project_dir = dir.path().join("recording");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("recording-meta.json"), "{}").unwrap();
+
+        match resolve_audio_extraction_source(project_dir.to_string_lossy().as_ref()).unwrap() {
+            AudioExtractionSource::ProjectDirectory { base_path } => {
+                assert_eq!(base_path, project_dir);
+            }
+            AudioExtractionSource::MediaFile(_) => panic!("expected project directory"),
+        }
+    }
+
+    #[test]
+    fn audio_extraction_source_rejects_directory_without_recording_metadata() {
+        let dir = tempdir().unwrap();
+        let result = resolve_audio_extraction_source(dir.path().to_string_lossy().as_ref());
+
+        match result {
+            Ok(_) => panic!("expected missing metadata error"),
+            Err(error) => assert_eq!(error, "Recording directory is missing recording-meta.json"),
+        }
+    }
+
+    #[test]
+    fn audio_extraction_source_accepts_media_file() {
+        let dir = tempdir().unwrap();
+        let media_file = dir.path().join("recording.mp4");
+        std::fs::write(&media_file, []).unwrap();
+
+        match resolve_audio_extraction_source(media_file.to_string_lossy().as_ref()).unwrap() {
+            AudioExtractionSource::MediaFile(path) => assert_eq!(path, media_file),
+            AudioExtractionSource::ProjectDirectory { .. } => panic!("expected media file"),
+        }
+    }
+
+    #[test]
     fn normalize_caption_words_attaches_punctuation() {
         let words = normalize_caption_words(vec![
             word("test", 0),
@@ -2440,6 +2838,30 @@ mod tests {
 
         assert_eq!(caption_text_from_words(&words), "test, test.");
         assert_eq!(words.len(), 2);
+    }
+
+    #[test]
+    fn normalize_caption_words_clamps_inflated_trailing_word() {
+        let words = normalize_caption_words(vec![CaptionWord {
+            text: "seconds.".to_string(),
+            start: 53.92,
+            end: 70.16,
+        }]);
+
+        assert_eq!(words.len(), 1);
+        assert!((words[0].end - (53.92 + super::MAX_CAPTION_WORD_DURATION)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn normalize_caption_words_keeps_normal_word_durations() {
+        let words = normalize_caption_words(vec![CaptionWord {
+            text: "hello".to_string(),
+            start: 1.0,
+            end: 1.4,
+        }]);
+
+        assert_eq!(words.len(), 1);
+        assert!((words[0].end - 1.4).abs() < 1e-4);
     }
 
     #[test]

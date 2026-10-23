@@ -3,7 +3,7 @@ import { cva } from "cva";
 import { type ComponentProps, splitProps } from "solid-js";
 
 const toggleControlStyles = cva(
-	"cap-toggle rounded-full bg-gray-6 data-disabled:bg-gray-3 data-checked:bg-blue-500 transition-[background-color,box-shadow]",
+	"cap-toggle rounded-full bg-ed-ctl-active data-disabled:bg-ed-ctl data-checked:bg-ed-accent transition-[background-color,box-shadow]",
 	{
 		variants: {
 			size: {
@@ -41,7 +41,7 @@ export function Toggle(
 
 	return (
 		<KSwitch class="relative" {...others}>
-			<KSwitch.Input class="peer absolute inset-0 opacity-0 cursor-pointer" />
+			<KSwitch.Input class="peer absolute inset-0 opacity-0" />
 			<KSwitch.Control class={toggleControlStyles({ size: local.size })}>
 				<KSwitch.Thumb class={toggleThumbStyles({ size: local.size })} />
 			</KSwitch.Control>

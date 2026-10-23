@@ -1,11 +1,13 @@
 use super::core::{
     BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
-    wait_for_blocking_thread_finish,
+    resolve_oop_thread_finish, wait_for_blocking_thread_finish,
 };
+use super::frame_pacing::{FramePacer, Paced};
 use super::oop_muxer::{
     MuxerSubprocessConfig, MuxerSubprocessError, RespawningMuxerSubprocess, VideoStreamInit,
     resolve_muxer_binary,
 };
+use super::win::reference_video_frame;
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer, screen_capture,
 };
@@ -210,12 +212,10 @@ impl Muxer for WindowsOOPFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(state) = self.state.take()
-            && let Err(error) = finish_oop_encoder(state, timestamp)
-        {
-            return Ok(Err(error));
+        match self.state.take() {
+            Some(state) => finish_oop_encoder(state, timestamp),
+            None => Ok(Ok(())),
         }
-        Ok(Ok(()))
     }
 
     fn set_health_sender(&mut self, tx: HealthSender) {
@@ -224,7 +224,10 @@ impl Muxer for WindowsOOPFragmentedM4SMuxer {
     }
 }
 
-fn finish_oop_encoder(mut state: EncoderState, _timestamp: Duration) -> anyhow::Result<()> {
+fn finish_oop_encoder(
+    mut state: EncoderState,
+    _timestamp: Duration,
+) -> anyhow::Result<anyhow::Result<()>> {
     if let Err(error) = state.video_tx.send(None) {
         trace!("Windows OOP encoder channel already closed during finish: {error}");
     }
@@ -237,11 +240,7 @@ fn finish_oop_encoder(mut state: EncoderState, _timestamp: Duration) -> anyhow::
         })
         .unwrap_or(BlockingThreadFinish::Clean);
 
-    match thread_result {
-        BlockingThreadFinish::Clean => Ok(()),
-        BlockingThreadFinish::Failed(error) => Err(error),
-        BlockingThreadFinish::TimedOut(error) => Err(error),
-    }
+    resolve_oop_thread_finish(thread_result)
 }
 
 impl WindowsOOPFragmentedM4SMuxer {
@@ -260,6 +259,7 @@ impl WindowsOOPFragmentedM4SMuxer {
 
         let base_path = self.base_path.clone();
         let video_config = self.video_config;
+        let pause_flag = self.pause.flag();
         let segment_duration = self.segment_duration;
         let preset = self.preset;
         let bpp = self.bpp;
@@ -365,7 +365,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                     return Err(err);
                 }
 
-                let frame_interval = Duration::from_secs_f64(1.0 / video_config.fps() as f64);
+                let mut pacer = FramePacer::new(video_config.fps());
                 let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                 let mut last_timestamp: Option<Duration> = None;
                 let mut first_timestamp: Option<Duration> = None;
@@ -462,27 +462,30 @@ impl WindowsOOPFragmentedM4SMuxer {
 
                     let convert_start = std::time::Instant::now();
 
-                    let (ffmpeg_frame, timestamp) = match video_rx.recv_timeout(frame_interval) {
-                        Ok(Some((frame, ts))) => match frame.as_ffmpeg() {
-                            Ok(f) => {
-                                last_ffmpeg_frame = Some(f.clone());
-                                last_timestamp = Some(ts);
-                                (Some(f), ts)
-                            }
-                            Err(e) => {
-                                warn!("Windows OOP failed to convert D3D11 frame: {e:?}");
-                                match (&last_ffmpeg_frame, last_timestamp) {
-                                    (Some(f), Some(last_ts)) => {
-                                        let new_ts = last_ts.saturating_add(frame_interval);
-                                        last_timestamp = Some(new_ts);
-                                        duplicated_frames += 1;
-                                        (Some(f.clone()), new_ts)
-                                    }
-                                    _ => (None, Duration::ZERO),
+                    let (ffmpeg_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
+                        Paced::Frame(frame, ts) => {
+                            last_timestamp = Some(ts);
+                            match frame.as_ffmpeg() {
+                                Ok(f) => {
+                                    last_ffmpeg_frame = Some(reference_video_frame(&f));
+                                    (Some(f), ts)
+                                }
+                                Err(e) => {
+                                    warn!("Windows OOP failed to convert D3D11 frame: {e:?}");
+                                    duplicated_frames += 1;
+                                    (last_ffmpeg_frame.as_ref().map(reference_video_frame), ts)
                                 }
                             }
-                        },
-                        Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                        }
+                        Paced::Repeat(ts) => {
+                            let Some(f) = &last_ffmpeg_frame else {
+                                continue;
+                            };
+                            last_timestamp = Some(ts);
+                            duplicated_frames += 1;
+                            (Some(reference_video_frame(f)), ts)
+                        }
+                        Paced::End => {
                             let drain_start = std::time::Instant::now();
                             let drain_timeout = Duration::from_millis(500);
                             loop {
@@ -518,17 +521,6 @@ impl WindowsOOPFragmentedM4SMuxer {
                             }
                             break;
                         }
-                        Err(RecvTimeoutError::Timeout) => {
-                            match (&last_ffmpeg_frame, last_timestamp) {
-                                (Some(f), Some(last_ts)) => {
-                                    let new_ts = last_ts.saturating_add(frame_interval);
-                                    last_timestamp = Some(new_ts);
-                                    duplicated_frames += 1;
-                                    (Some(f.clone()), new_ts)
-                                }
-                                _ => continue,
-                            }
-                        }
                     };
 
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
@@ -545,15 +537,6 @@ impl WindowsOOPFragmentedM4SMuxer {
                     }
 
                     let Some(ffmpeg_frame) = ffmpeg_frame else {
-                        match video_rx.recv() {
-                            Ok(Some((frame, ts))) => {
-                                if let Ok(f) = frame.as_ffmpeg() {
-                                    last_ffmpeg_frame = Some(f);
-                                    last_timestamp = Some(ts);
-                                }
-                            }
-                            Ok(None) | Err(_) => break,
-                        }
                         continue;
                     };
 
@@ -578,16 +561,18 @@ impl WindowsOOPFragmentedM4SMuxer {
                     warn!("Windows OOP encoder flush error: {e:?}");
                 }
 
-                let subprocess_report = match subprocess.finish() {
-                    Ok(report) => Some(report),
-                    Err(e) => {
-                        warn!("Windows OOP subprocess finish error: {e:#}");
-                        None
-                    }
-                };
+                let subprocess_result = subprocess.finish();
 
                 tracker.flush_pending_segments();
                 tracker.finalize(final_ts);
+
+                let subprocess_report = match subprocess_result {
+                    Ok(report) => Some(report),
+                    Err(error) => {
+                        warn!("Windows OOP subprocess finish error: {error:#}");
+                        return Err(error.into());
+                    }
+                };
 
                 if total_frames > 0 {
                     debug!(
@@ -712,5 +697,30 @@ impl VideoMuxer for WindowsOOPFragmentedM4SMuxer {
 impl AudioMuxer for WindowsOOPFragmentedM4SMuxer {
     fn send_audio_frame(&mut self, _frame: AudioFrame, _timestamp: Duration) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reference_video_frame;
+
+    #[test]
+    fn out_of_process_fragment_frames_reuse_reference_counted_pixels() {
+        let mut original = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 16, 12);
+        original.set_pts(Some(173));
+        original.data_mut(0)[0] = 84;
+        let retained = reference_video_frame(&original);
+        let replay = reference_video_frame(&retained);
+
+        assert_eq!(retained.data(0).as_ptr(), original.data(0).as_ptr());
+        assert_eq!(replay.data(0).as_ptr(), original.data(0).as_ptr());
+        assert_eq!(replay.pts(), Some(173));
+        let buffer = unsafe { (*original.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 3);
+
+        drop(original);
+        drop(retained);
+
+        assert_eq!(replay.data(0)[0], 84);
     }
 }

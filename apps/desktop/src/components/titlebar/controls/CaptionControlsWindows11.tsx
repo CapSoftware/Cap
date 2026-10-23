@@ -9,23 +9,58 @@ import {
 	Show,
 	splitProps,
 } from "solid-js";
-import titlebarState from "~/utils/titlebar-state";
+import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
 import { WindowControlButton as ControlButton } from "./WindowControlButton";
 
 export default function (
-	props: ComponentProps<"div"> & { maximizable?: boolean },
+	props: ComponentProps<"div"> & {
+		maximizable?: boolean;
+		maximized?: boolean;
+		onMaximize?: () => void;
+	},
 ) {
-	const [local, otherProps] = splitProps(props, ["class"]);
+	const [local, otherProps] = splitProps(props, [
+		"class",
+		"maximizable",
+		"maximized",
+		"onMaximize",
+	]);
 	const currentWindow = getCurrentWindow();
 	const [focused, setFocus] = createSignal(true);
+	const hasCustomMaximize = () => local.onMaximize !== undefined;
+	const maximizable = () =>
+		local.maximizable !== false &&
+		(hasCustomMaximize() || titlebarState.maximizable);
+	const maximized = () => local.maximized ?? titlebarState.maximized;
 
-	let unlisten: (() => void) | undefined;
-	onMount(async () => {
-		unlisten = await currentWindow.onFocusChanged(({ payload: focused }) =>
-			setFocus(focused),
-		);
+	let disposed = false;
+	const unlisteners: (() => void)[] = [];
+	const retainListener = (unlisten: (() => void) | undefined) => {
+		if (!unlisten) return;
+		if (disposed) unlisten();
+		else unlisteners.push(unlisten);
+	};
+
+	onMount(() => {
+		void Promise.allSettled([
+			currentWindow
+				.onFocusChanged(({ payload: focused }) => {
+					if (!disposed) setFocus(focused);
+				})
+				.then(retainListener),
+			initializeTitlebar().then(retainListener),
+		]).then((results) => {
+			for (const result of results) {
+				if (result.status === "rejected") {
+					console.error("Failed to initialize window controls:", result.reason);
+				}
+			}
+		});
 	});
-	onCleanup(() => unlisten?.());
+	onCleanup(() => {
+		disposed = true;
+		for (const unlisten of unlisteners) unlisten();
+	});
 
 	const handleClose = async () => {
 		currentWindow.close();
@@ -54,19 +89,16 @@ export default function (
 				<icons.minimizeWin />
 			</ControlButton>
 			<Show
-				when={
-					titlebarState.maximizable ||
-					!titlebarState.hideMaximize ||
-					props.maximizable
-				}
+				when={maximizable() || !titlebarState.hideMaximize || local.maximizable}
 			>
 				<ControlButton
-					disabled={!titlebarState.maximizable || props.maximizable === false}
+					disabled={!maximizable()}
 					onClick={
-						titlebarState.maximizable
-							? titlebarState.maximized
-								? currentWindow.unmaximize
-								: currentWindow.maximize
+						maximizable()
+							? (local.onMaximize ??
+								(maximized()
+									? currentWindow.unmaximize
+									: currentWindow.maximize))
 							: undefined
 					}
 					class={cx(
@@ -75,11 +107,7 @@ export default function (
 						"disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
 					)}
 				>
-					{titlebarState.maximized ? (
-						<icons.maximizeRestoreWin />
-					) : (
-						<icons.maximizeWin />
-					)}
+					{maximized() ? <icons.maximizeRestoreWin /> : <icons.maximizeWin />}
 				</ControlButton>
 			</Show>
 			<ControlButton
@@ -87,7 +115,7 @@ export default function (
 				disabled={!titlebarState.closable}
 				class={cx(
 					"max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-1",
-					"hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
+					"hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c] active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
 					"disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
 				)}
 			>

@@ -1,16 +1,13 @@
 "use client";
 
-import { Logo } from "@cap/ui";
-import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
-import {
-	faDiscord,
-	faLinkedinIn,
-	faXTwitter,
-} from "@fortawesome/free-brands-svg-icons";
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { Logo } from "@cap/ui/logo";
+import { faDiscord } from "@fortawesome/free-brands-svg-icons/faDiscord";
+import { faLinkedinIn } from "@fortawesome/free-brands-svg-icons/faLinkedinIn";
+import { faXTwitter } from "@fortawesome/free-brands-svg-icons/faXTwitter";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
 
 type FooterLink = {
@@ -22,7 +19,9 @@ type FooterLink = {
 const footerLinks = {
 	product: [
 		{ label: "Blog", href: "/blog" },
+		{ label: "Changelog", href: "/changelog" },
 		{ label: "Docs", href: "/docs" },
+		{ label: "Cap for Agents", href: "/agents" },
 		{ label: "Pricing", href: "/pricing" },
 		{ label: "Download", href: "/download" },
 		{
@@ -55,7 +54,7 @@ const footerLinks = {
 		},
 		{
 			label: "System Status",
-			href: "https://cap.openstatus.dev/",
+			href: "https://status.cap.so",
 			isExternal: true,
 		},
 	] as FooterLink[],
@@ -101,6 +100,10 @@ const footerLinks = {
 		{ label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
 		{ label: "Screen Recording Software", href: "/screen-recording-software" },
 		{
+			label: "Chrome Screen Recorder",
+			href: "/google-chrome-screen-recorder",
+		},
+		{
 			label: "Google Drive Screen Recorder",
 			href: "/google-drive-screen-recorder",
 		},
@@ -109,9 +112,17 @@ const footerLinks = {
 	] as FooterLink[],
 };
 
-const socialLinks: { label: string; href: string; icon: IconDefinition }[] = [
+const socialLinks: {
+	label: string;
+	href: string;
+	icon: ComponentProps<typeof FontAwesomeIcon>["icon"];
+}[] = [
 	{ label: "X (@Cap)", href: "https://x.com/cap", icon: faXTwitter },
-	{ label: "Discord", href: "https://discord.gg/y8gdQ3WRN3", icon: faDiscord },
+	{
+		label: "Discord",
+		href: "https://discord.gg/y8gdQ3WRN3",
+		icon: faDiscord,
+	},
 	{
 		label: "LinkedIn",
 		href: "https://www.linkedin.com/company/caprecorder/",
@@ -119,9 +130,14 @@ const socialLinks: { label: string; href: string; icon: IconDefinition }[] = [
 	},
 ];
 
-const complianceBadges: { label: string; content: ReactNode }[] = [
+const complianceBadges: {
+	label: string;
+	status: "compliant" | "in progress";
+	content: ReactNode;
+}[] = [
 	{
 		label: "SOC 2",
+		status: "compliant",
 		content: (
 			<text
 				x="22"
@@ -138,6 +154,7 @@ const complianceBadges: { label: string; content: ReactNode }[] = [
 	},
 	{
 		label: "HIPAA",
+		status: "compliant",
 		content: (
 			<text
 				x="22"
@@ -154,6 +171,7 @@ const complianceBadges: { label: string; content: ReactNode }[] = [
 	},
 	{
 		label: "ISO 27001",
+		status: "compliant",
 		content: (
 			<>
 				<text
@@ -185,14 +203,14 @@ const complianceBadges: { label: string; content: ReactNode }[] = [
 const ComplianceBadges = () => (
 	<div>
 		<div className="flex flex-wrap gap-2.5 items-center text-gray-10">
-			{complianceBadges.map(({ label, content }) => (
+			{complianceBadges.map(({ label, status, content }) => (
 				<Link
 					key={label}
 					href="https://trust.cap.so"
 					target="_blank"
 					rel="noopener noreferrer"
-					title={`${label} — in progress`}
-					aria-label={`${label} compliance in progress. View Cap's Trust Portal`}
+					title={`${label} — ${status}`}
+					aria-label={`${label} ${status}. View Cap's Trust Portal`}
 					className="transition-colors text-gray-9 hover:text-gray-12"
 				>
 					<svg
@@ -214,7 +232,9 @@ const ComplianceBadges = () => (
 				</Link>
 			))}
 		</div>
-		<p className="mt-2 text-[11px] text-gray-9">Certifications in progress</p>
+		<p className="mt-2 text-[11px] text-gray-9">
+			SOC 2 Type II, ISO 27001 & HIPAA compliant
+		</p>
 	</div>
 );
 

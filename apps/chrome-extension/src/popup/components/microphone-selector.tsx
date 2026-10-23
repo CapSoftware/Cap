@@ -39,14 +39,14 @@ export const MicrophoneSelector = ({
 }: MicrophoneSelectorProps) => {
 	const micEnabled = selectedMicId !== null;
 	const triggerRef = useRef<HTMLButtonElement>(null);
-	const { state: permissionState, requestPermission } =
-		useMediaPermission("microphone");
+	const { requestPermission } = useMediaPermission("microphone");
 
-	const permissionSupported = permissionState !== "unsupported";
-	const hasDeviceAccess = availableMics.length > 0;
-	const hasAccess = permissionGranted || hasDeviceAccess || micEnabled;
-	const shouldRequestPermission =
-		permissionSupported && permissionState !== "granted" && !hasAccess;
+	// "Has access" tracks only the real browser grant — a live device or the
+	// authoritative permission flag the offscreen document reports — never a
+	// remembered/default mic selection. The mic defaults to on, so keying off
+	// the selection would permanently hide a reset grant behind an "On" pill.
+	const hasAccess = permissionGranted || availableMics.length > 0;
+	const shouldRequestPermission = !hasAccess;
 
 	const statusPillDisabled =
 		disabled || (!shouldRequestPermission && !micEnabled);

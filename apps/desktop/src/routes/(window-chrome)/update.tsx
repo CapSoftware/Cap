@@ -1,17 +1,55 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check } from "@tauri-apps/plugin-updater";
-import { createResource, createSignal, Match, Show, Switch } from "solid-js";
+import {
+	createResource,
+	createSignal,
+	Match,
+	onCleanup,
+	Show,
+	Switch,
+} from "solid-js";
+import { commands, events } from "~/utils/tauri";
+import { restartAfterUpdate, returnToGpui } from "~/utils/updater";
 
 export default function () {
 	const navigate = useNavigate();
 	const [updateError, setUpdateError] = createSignal<string | null>(null);
+	const searchParams = new URLSearchParams(window.location.search);
+	const fromGpui = searchParams.get("source") === "gpui";
+	const simulatedUpdate =
+		import.meta.env.DEV &&
+		fromGpui &&
+		searchParams.get("simulateUpdate") === "1";
+	const restart = async () => {
+		try {
+			if (simulatedUpdate) await returnToGpui();
+			else await restartAfterUpdate();
+		} catch (error) {
+			console.error("Failed to restart after update:", error);
+			setUpdateError(
+				typeof error === "string" ? error : "Unable to restart Cap safely.",
+			);
+		}
+	};
+	const returnSafelyToGpui = async () => {
+		try {
+			await returnToGpui();
+		} catch (error) {
+			console.error("Failed to return to Cap GPUI:", error);
+			setUpdateError(
+				typeof error === "string"
+					? error
+					: "Unable to return to Cap GPUI safely.",
+			);
+		}
+	};
 
 	const [update] = createResource(async () => {
+		if (simulatedUpdate) return { version: "99.0.0" };
+
 		try {
-			const update = await check();
+			const update = await commands.updatesCheck();
 			if (!update) return;
 			return update;
 		} catch (e) {
@@ -33,63 +71,93 @@ export default function () {
 					<p class="text-(--text-tertiary) text-xs">
 						If this issue persists, please contact support.
 					</p>
-					<Button onClick={() => navigate("/")}>Go Back</Button>
+					<Button
+						onClick={() =>
+							fromGpui ? void returnSafelyToGpui() : navigate("/")
+						}
+					>
+						{fromGpui ? "Return to Cap GPUI" : "Go Back"}
+					</Button>
 				</div>
+			</Show>
+			<Show when={!updateError() && update.loading}>
+				<IconCapLogo class="size-4 animate-spin text-(--text-primary)" />
 			</Show>
 			<Show
 				when={!updateError() && update()}
 				fallback={
-					!updateError() && (
-						<span class="text-(--text-tertiary)">No update available</span>
+					!updateError() &&
+					!update.loading && (
+						<div class="flex flex-col items-center gap-4">
+							<span class="text-(--text-tertiary)">No update available</span>
+							<Show when={fromGpui}>
+								<Button onClick={() => void returnSafelyToGpui()}>
+									Return to Cap GPUI
+								</Button>
+							</Show>
+						</div>
 					)
 				}
 				keyed
 			>
-				{(update) => {
+				{(_update) => {
 					type UpdateStatus =
 						| { type: "downloading"; progress: number; contentLength?: number }
 						| { type: "done" };
 
-					const [updateStatus, updateStatusActions] =
-						createResource<UpdateStatus>(
-							() =>
-								new Promise<UpdateStatus>((resolve) => {
-									update
-										.downloadAndInstall((e) => {
-											if (e.event === "Started") {
-												resolve({
-													type: "downloading",
-													progress: 0,
-													contentLength: e.data.contentLength,
-												});
-											} else if (e.event === "Progress") {
-												const status = updateStatus();
-												if (
-													!status ||
-													status.type !== "downloading" ||
-													status.contentLength === undefined
-												)
-													return;
-												updateStatusActions.mutate({
-													...status,
-													progress: e.data.chunkLength + status.progress,
-												});
-											}
-										})
-										.then(async () => {
-											updateStatusActions.mutate({ type: "done" });
-											getCurrentWindow().requestUserAttention(
-												UserAttentionType.Informational,
-											);
-										})
-										.catch((e) => {
-											console.error("Failed to download/install update:", e);
-											setUpdateError(
-												"Failed to download or install the update.",
-											);
-										});
-								}),
-						);
+					const [updateStatus, setUpdateStatus] = createSignal<UpdateStatus>();
+
+					if (simulatedUpdate) {
+						let progress = 0;
+						setUpdateStatus({
+							type: "downloading",
+							progress,
+							contentLength: 100,
+						});
+						const interval = window.setInterval(() => {
+							progress = Math.min(progress + 4, 100);
+							if (progress === 100) {
+								window.clearInterval(interval);
+								setUpdateStatus({ type: "done" });
+								return;
+							}
+							setUpdateStatus({
+								type: "downloading",
+								progress,
+								contentLength: 100,
+							});
+						}, 120);
+						onCleanup(() => window.clearInterval(interval));
+					} else {
+						const unlisten = events.updateDownloadProgress.listen((e) => {
+							if (updateStatus()?.type === "done") return;
+							setUpdateStatus({
+								type: "downloading",
+								progress: e.payload.downloaded,
+								contentLength: e.payload.total ?? undefined,
+							});
+						});
+						onCleanup(() => {
+							unlisten.then((cleanup) => cleanup());
+						});
+
+						commands
+							.updatesDownloadAndInstall()
+							.then(() => {
+								setUpdateStatus({ type: "done" });
+								getCurrentWindow().requestUserAttention(
+									UserAttentionType.Informational,
+								);
+							})
+							.catch((e) => {
+								console.error("Failed to download/install update:", e);
+								setUpdateError(
+									typeof e === "string"
+										? e
+										: "Failed to download or install the update.",
+								);
+							});
+					}
 
 					return (
 						<div>
@@ -103,7 +171,7 @@ export default function () {
 										<p class="text-(--text-tertiary)">
 											Update has been installed. Restart Cap to finish updating.
 										</p>
-										<Button onClick={() => relaunch()}>Restart Now</Button>
+										<Button onClick={restart}>Restart Now</Button>
 									</div>
 								</Match>
 								<Match

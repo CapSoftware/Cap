@@ -1,0 +1,490 @@
+name: Verify recording (real capture)
+
+# Records a marker stimulus through Cap's real Studio and Instant pipelines
+# on macOS (ScreenCaptureKit + VideoToolbox) and GitHub-hosted Windows
+# (Windows Graphics Capture + Media Foundation) and checks every frame and
+# audio marker against the host-clock truth. See
+# crates/verify/tests/recording.rs.
+#
+# Every pull request gets a "Verify recording" verdict (the job to require):
+# - Scope decides from the diff whether the change reaches the recorder's or
+#   the stimulus's dependency closure or the harness (scripts/verify/plan.py
+#   recording); a pull request that does not is green without running;
+# - one that does runs the FAST tier on Blacksmith macOS 26, or, once it is
+#   ready for review (not a draft), the FULL tier there when it touches a
+#   high-risk region or an engine crate. Blacksmith macOS 15 runs nightly
+#   only: its Instant recordings with system audio lose a microphone marker
+#   in every run (on main too), which is under investigation; nightly runs FULL on Blacksmith and GitHub-hosted macOS 15
+#   and 26, dispatch FULL on the chosen runners.
+#
+# Runners: Blacksmith macOS (M4 Pro VM, 6 vCPU, no concurrency cap) for pull
+# requests, pushes and dispatch: jobs start at once and every run gets the
+# same machine. Blacksmith VMs have no VideoToolbox hardware H.264 encoder
+# (VTCompressionSessionCreate with RequireHardwareAcceleratedVideoEncoder
+# returns -12903, probe run 38847791287), so recordings there take the
+# software (libx264) path; the nightly run adds GitHub-hosted macOS 15 and
+# 26, which record through the hardware encoder real Macs use (dispatch
+# runners=hosted or both for the same). Blacksmith needs Screen Recording and
+# Microphone granted in TCC, its display woken, and an audio device
+# (BlackHole), which the setup step below does.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "Runs of each case"
+        default: "1"
+      tier:
+        description: "fast or full"
+        default: "full"
+      case_filter:
+        description: "Case globs, comma-separated (empty runs all)"
+        default: ""
+      keep_artifacts:
+        description: "Preserve recordings and raw crash snapshots for passing cases"
+        type: boolean
+        default: false
+      system_audio:
+        description: "Blacksmith only: play and require system audio through BlackHole (not yet characterised)"
+        type: boolean
+        default: false
+      runners:
+        description: "blacksmith (default, software encoder path), hosted (VideoToolbox hardware encoder) or both"
+        type: choice
+        options: [blacksmith, hosted, both]
+        default: blacksmith
+      soak_secs:
+        description: "Adds the recording/soak/* cases at this length (seconds, at most 1800); set case_filter to recording/soak/* to run only them"
+        default: ""
+  schedule:
+    - cron: "41 3 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - ci/verify-ci
+      - ci/verify-recording
+
+concurrency:
+  group: verify-recording-${{ github.event.pull_request.number || github.ref_name }}-${{ github.event_name }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scope:
+    name: Scope
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      runners: ${{ steps.scope.outputs.runners }}
+      tier: ${{ steps.scope.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_TIER: ${{ inputs.tier }}
+          INPUT_RUNNERS: ${{ inputs.runners }}
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          set -euo pipefail
+          files="$RUNNER_TEMP/changed.txt"
+          hosted='["macos-15","macos-26"]'
+          blacksmith='["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]'
+          both='["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26","macos-15","macos-26"]'
+          case "$EVENT" in
+            schedule) run=true; runners="$both"; tier=full ;;
+            workflow_dispatch)
+              run=true
+              tier="${INPUT_TIER:-full}"
+              case "${INPUT_RUNNERS:-blacksmith}" in
+                hosted) runners="$hosted" ;;
+                both) runners="$both" ;;
+                *) runners="$blacksmith" ;;
+              esac ;;
+            *)
+              if [[ "$EVENT" == pull_request ]]; then
+                gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$files"
+                max=3000
+              elif [[ "$BEFORE" =~ ^0+$ ]]; then
+                : > "$files"; echo Cargo.toml >> "$files"
+                max=300
+              else
+                gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' > "$files"
+                max=300
+              fi
+              python3 scripts/verify/plan.py recording --files "$files" --max-files "$max" > "$RUNNER_TEMP/scope.txt"
+              cat "$RUNNER_TEMP/scope.txt"
+              run="$(sed -n 's/^run=//p' "$RUNNER_TEMP/scope.txt")"
+              python3 scripts/verify/plan.py risk --files "$files" --summary "$GITHUB_STEP_SUMMARY" --output "$RUNNER_TEMP/risk.txt"
+              if [[ "${DRAFT:-false}" != true ]] && { grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt" || grep -qx 'engine=true' "$RUNNER_TEMP/risk.txt"; }; then
+                runners='["blacksmith-6vcpu-macos-26"]'; tier=full
+              else
+                runners='["blacksmith-6vcpu-macos-26"]'; tier=fast
+              fi ;;
+          esac
+          {
+            echo "run=$run"
+            echo "runners=$runners"
+            echo "tier=$tier"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$run" == true ]]; then
+            echo "real capture: $tier tier on $runners" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "real capture: no recording code changed, nothing to run" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  real-capture:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(needs.scope.outputs.runners) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ inputs.soak_secs != '' && 180 || 45 }}
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_SOAK_SECS: ${{ inputs.soak_secs || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_VERIFY_HOST: ${{ startsWith(matrix.runner, 'blacksmith-') && 'blacksmith' || 'github-hosted' }}
+      # A case this runner cannot run fails, except system audio as the only
+      # audio while the stimulus stays silent (see below).
+      CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+      CAP_VERIFY_UNSUPPORTED_ALLOW: ${{ !(startsWith(matrix.runner, 'blacksmith-') && inputs.system_audio) && 'recording/instant/system-only' || '' }}
+      # Hosted runners' output devices give ScreenCaptureKit only silence, so
+      # system audio is not checked there. Blacksmith gets BlackHole (set up
+      # below), which does carry the stimulus's audio on macOS 15 (not on
+      # 26), but its system-audio timing is not characterised yet (run
+      # 38843005408: system audio +31 to +44 ms against the mic, BlackHole
+      # latency not in the truth), so by default the stimulus stays silent
+      # there too; dispatch system_audio=true plays and requires it.
+      CAP_VERIFY_AUDIO_OUTPUT: ${{ startsWith(matrix.runner, 'blacksmith-') && 'BlackHole 2ch' || matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
+      CAP_VERIFY_STIMULUS_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && !inputs.system_audio && '0' || '' }}
+      CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && inputs.system_audio && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-verify-recording-${{ matrix.runner }}
+          save-cache: "true"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Runner devices
+        run: |
+          sw_vers
+          system_profiler SPDisplaysDataType SPAudioDataType 2>/dev/null | sed -n 1,80p
+          sysctl hw.memsize hw.ncpu
+
+      # Spotlight indexes the build and every recording the suite writes:
+      # mds (priority 50) plus a dozen mdworkers averaged 1 to 1.8 of the 3
+      # cores during the tests (ps samples, run 38736744971).
+      - name: Disable Spotlight indexing
+        run: |
+          sudo mdutil -a -i off || true
+          sudo mdutil -as || true
+
+      - name: Build
+        run: |
+          start=$(date +%s)
+          cargo build --locked -p cap-verify-stimulus
+          cargo test --locked -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      # Blacksmith runs a logged-in GUI session with SIP disabled, but:
+      # - ScreenCaptureKit is denied until TCC grants the responsible process
+      #   (Runner.Worker), so Screen Recording and Microphone are granted to
+      #   every binary that captures plus the whole runner ancestry, in the
+      #   system and the user TCC database (Microphone is a per-user
+      #   service: without it CoreAudio blocks the stimulus forever in
+      #   AudioDeviceCreateIOProcID waiting for coreaudiod), then tccd
+      #   restarts;
+      # - the display starts asleep (CGDisplayIsAsleep, no active display),
+      #   so ScreenCaptureKit lists windows but no display: wake it and keep
+      #   it awake for the job;
+      # - there is no audio device: BlackHole provides input and output.
+      - name: Blacksmith capture permissions and audio device
+        if: startsWith(matrix.runner, 'blacksmith-')
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx
+          sudo killall coreaudiod || true
+          for _ in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          # macOS 15 plays alert and interface sounds through the default
+          # output, BlackHole, so ScreenCaptureKit records them as system
+          # audio and Instant's mixed track and every export carry them over
+          # the microphone markers. Hosted runners and macOS 26 capture
+          # silence there; silence these too so every runner records the same.
+          osascript -e 'set volume alert volume 0' || true
+          defaults write -g com.apple.sound.uiaudio.enabled -int 0
+          defaults write -g com.apple.sound.beep.volume -float 0
+          defaults write -g com.apple.sound.beep.feedback -int 0
+          echo "outputs:"; SwitchAudioSource -a -t output
+          echo "default output: $(SwitchAudioSource -c -t output)"
+
+          { cargo build --locked -p cap-verify-stimulus --message-format=json 2>/dev/null; \
+            cargo test --locked -p cap-verify --test recording --no-run --message-format=json 2>/dev/null; } \
+            | python3 -c 'import json, sys
+          for line in sys.stdin:
+              m = json.loads(line)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] in ("recording", "cap-verify-stimulus"):
+                  print(m["executable"])' > "$RUNNER_TEMP/capture-binaries"
+          test "$(wc -l < "$RUNNER_TEMP/capture-binaries")" -ge 2
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/capture-binaries"
+          for c in "$(rustup which cargo)" "$HOME/.cargo/bin/cargo"; do echo "$c"; done >> "$RUNNER_TEMP/capture-binaries"
+
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+          cat > "$RUNNER_TEMP/display.swift" <<'SWIFT'
+          import CoreGraphics
+          let main = CGMainDisplayID()
+          print("display \(main): asleep \(CGDisplayIsAsleep(main)), active \(CGDisplayIsActive(main)), \(CGDisplayBounds(main)), screen capture \(CGPreflightScreenCaptureAccess())")
+          SWIFT
+          swiftc "$RUNNER_TEMP/display.swift" -o "$RUNNER_TEMP/display"
+          "$RUNNER_TEMP/display"
+
+      - name: Real-capture recording oracle
+        run: |
+          mkdir -p "$CAP_VERIFY_DUMP"
+          # One-second process samples (CPU, scheduler priority) so an
+          # environment failure can be attributed.
+          (while sleep 1; do
+            date -u +%H:%M:%S
+            ps -A -o pid,pri,%cpu,comm -r | head -14
+            for p in $(pgrep -f cap-verify-stimulus | head -1) $(pgrep -f 'deps/recording-' | head -1); do
+              ps -M -p "$p" | awk 'NR == 1 || $4 > 0.5 || NR < 4' | cut -c1-90
+            done
+          done) > "$CAP_VERIFY_DUMP/ps.log" 2>&1 &
+          top_pid=$!
+          start=$(date +%s)
+          set +e
+          cargo test --locked -p cap-verify --test recording -- --nocapture
+          status=$?
+          set -e
+          kill "$top_pid" || true
+          echo "test seconds: $(( $(date +%s) - start ))"
+          exit "$status"
+
+      - name: Summary
+        if: always()
+        run: |
+          python3 scripts/verify/summary.py --title "real capture ${{ matrix.runner }} ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-report-${{ matrix.runner }}
+          path: ${{ github.workspace }}/verify-report
+          if-no-files-found: ignore
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-${{ matrix.runner }}
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch
+          if-no-files-found: ignore
+
+  # GitHub-hosted Windows runs jobs in the runner's interactive console
+  # session, where Windows Graphics Capture records the desktop; Blacksmith
+  # Windows VMs run jobs in session 0, which has no desktop (probe runs
+  # 38997642473, 38997747111). Hosted Windows has no audio endpoints, so the
+  # stimulus stays silent and system audio is not recorded.
+  real-capture-windows:
+    name: real-capture (windows-2022)
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_VERIFY_HOST: github-hosted
+      CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+      CAP_VERIFY_UNSUPPORTED_ALLOW: recording/instant/system-only
+      CAP_VERIFY_STIMULUS_AUDIO: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        id: setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+
+      - name: Build
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo build --locked --profile ci-verify -p cap-verify-stimulus
+          cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      # Without the manifest the next restore cannot tell which sources the
+      # cached build came from (scripts/verify/mtime.py).
+      - name: Record sources of the cached build
+        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
+      - name: Save build cache
+        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
+
+      - name: Real-capture recording oracle
+        shell: bash
+        run: cargo test --locked --profile ci-verify -p cap-verify --test recording -- --nocapture
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: python scripts/verify/summary.py --title "real capture windows-2022 ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-windows-2022
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch
+          if-no-files-found: ignore
+
+  # The check to require: green when the change is out of scope or every
+  # planned runner passed with at least the tier's case count.
+  gate:
+    name: Verify recording
+    needs: [scope, real-capture, real-capture-windows]
+    if: always()
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/verify
+
+      - uses: actions/download-artifact@v4
+        if: needs.scope.outputs.run == 'true'
+        with:
+          pattern: verify-recording-*
+          path: ${{ runner.temp }}/reports
+
+      - name: Verdict
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          RUN: ${{ needs.scope.outputs.run }}
+          CAPTURE: ${{ needs.real-capture.result }}
+          CAPTURE_WINDOWS: ${{ needs.real-capture-windows.result }}
+          TIER: ${{ needs.scope.outputs.tier }}
+          RUNNERS: ${{ needs.scope.outputs.runners }}
+          CASE_FILTER: ${{ inputs.case_filter }}
+        run: |
+          if [[ "$SCOPE" != success ]]; then
+            echo "scoping failed" >&2
+            exit 1
+          fi
+          if [[ "$RUN" != true ]]; then
+            echo "No recording code changed: nothing to verify." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$CAPTURE" != success || "$CAPTURE_WINDOWS" != success ]]; then
+            echo "real capture: macOS $CAPTURE, Windows $CAPTURE_WINDOWS ($TIER tier): see the runner jobs" >&2
+            exit 1
+          fi
+          RUNNERS=$(python3 -c 'import json, sys; print(json.dumps(json.loads(sys.argv[1]) + ["windows-2022"]))' "$RUNNERS")
+          if [[ -n "$CASE_FILTER" ]]; then
+            echo "case filter set: executed-case floor not applied"
+            exit 0
+          fi
+          floor=0
+          python3 scripts/verify/floor.py --recording --tier "$TIER" --runners "$RUNNERS" "$RUNNER_TEMP/reports" > "$RUNNER_TEMP/floor.txt" || floor=$?
+          cat "$RUNNER_TEMP/floor.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ $floor != 0 ]]; then
+            echo "::error::fewer real-capture cases ran than planned"
+            exit 1
+          fi

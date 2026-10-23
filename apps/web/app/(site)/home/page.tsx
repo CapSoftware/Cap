@@ -1,16 +1,9 @@
 import type { Metadata } from "next";
-import { HomePage } from "@/components/pages/HomePage";
+import { HomeTwoPage } from "@/components/pages/HomeTwo";
+import { homePageMetadata } from "@/components/pages/HomeTwo/metadata";
 
-export const metadata: Metadata = {
-	robots: {
-		index: false,
-		follow: false,
-	},
-	alternates: {
-		canonical: "https://cap.so/",
-	},
-};
+export const metadata: Metadata = homePageMetadata;
 
-export default async function Home() {
-	return <HomePage />;
+export default function Home() {
+	return <HomeTwoPage />;
 }

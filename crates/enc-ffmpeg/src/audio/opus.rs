@@ -67,6 +67,11 @@ impl OpusEncoder {
         let mut output_config = input_config;
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
+        // libopus rejects surround layouts without an explicit mapping
+        // family; multichannel interfaces (5.1 mics) would fail to start a
+        // recording at all. Voice capture doesn't need surround: downmix to
+        // stereo via the resampler instead.
+        output_config.channels = output_config.channels.min(2);
 
         let resampler = BufferedResampler::new(input_config, output_config)
             .map_err(OpusEncoderError::Resampler)?;
@@ -101,6 +106,19 @@ impl OpusEncoder {
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.flush(output)
     }
+
+    pub fn queue_frame_to(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+        sink: &mut impl crate::PacketSink,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.send_frame(frame, timestamp, sink)
+    }
+
+    pub fn flush_to(&mut self, sink: &mut impl crate::PacketSink) -> Result<(), ffmpeg::Error> {
+        self.base.flush(sink)
+    }
 }
 
 fn select_output_rate(input_rate: i32, supported_rates: &[i32]) -> Option<i32> {
@@ -114,6 +132,14 @@ fn select_output_rate(input_rate: i32, supported_rates: &[i32]) -> Option<i32> {
 impl AudioEncoder for OpusEncoder {
     fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
         let _ = self.queue_frame(frame, Duration::MAX, output);
+    }
+
+    fn try_send_frame(
+        &mut self,
+        frame: frame::Audio,
+        output: &mut format::context::Output,
+    ) -> Result<(), ffmpeg::Error> {
+        self.queue_frame(frame, Duration::MAX, output)
     }
 
     fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {

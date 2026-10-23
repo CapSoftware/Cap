@@ -6,10 +6,12 @@ export type PostMetadata = {
 	title: string;
 	author: string;
 	publishedAt: string;
+	updatedAt?: string;
 	summary: string;
 	description: string;
 	tags?: string;
 	image?: string;
+	video?: string;
 };
 
 export type DocMetadata = {
@@ -32,10 +34,11 @@ interface InteractiveBlogPost {
 	title: string;
 	description: string;
 	publishedAt: string;
+	updatedAt?: string;
 	author: string;
 	tags?: string[];
 	image?: string;
-	[key: string]: any;
+	[key: string]: unknown;
 }
 
 function parseFrontmatter(fileContent: string) {
@@ -120,7 +123,8 @@ function getMDXData(dir: string): BlogPost[] {
 
 function getInteractiveBlogPosts(): BlogPost[] {
 	try {
-		const interactivePosts = getAllInteractiveBlogPosts();
+		const interactivePosts: InteractiveBlogPost[] =
+			getAllInteractiveBlogPosts();
 
 		return interactivePosts.map((post) => ({
 			slug: post.slug,
@@ -128,9 +132,11 @@ function getInteractiveBlogPosts(): BlogPost[] {
 				title: post.title,
 				author: post.author,
 				publishedAt: post.publishedAt,
+				updatedAt: post.updatedAt,
 				summary: post.description,
 				description: post.description,
 				tags: post.tags?.join(", ") || "",
+				image: post.image ?? "/og.png",
 			},
 			content: "",
 			isManual: true,

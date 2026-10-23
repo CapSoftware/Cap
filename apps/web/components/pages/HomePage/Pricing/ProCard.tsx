@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
+import { useCurrency } from "hooks/useCurrency";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
@@ -17,6 +18,7 @@ const copy = homepageCopy.pricing.pro;
 
 export const ProCard = () => {
 	const stripeCtx = useStripeContext();
+	const { symbol } = useCurrency();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(false);
 	const artRef = useRef<ProArtRef>(null);
@@ -103,7 +105,8 @@ export const ProCard = () => {
 
 			<div className="flex gap-1.5 items-baseline mt-6">
 				<span className="text-4xl font-semibold tracking-tight tabular-nums text-gray-12">
-					$<NumberFlow value={perUser} />
+					{symbol}
+					<NumberFlow value={perUser} />
 				</span>
 				<span className="text-sm text-gray-10">/ user / month</span>
 			</div>
@@ -132,7 +135,8 @@ export const ProCard = () => {
 				<p className="text-sm text-gray-10">
 					Total:{" "}
 					<span className="font-medium text-gray-12">
-						$<NumberFlow value={isAnnually ? yearlyTotal : monthlyTotal} />
+						{symbol}
+						<NumberFlow value={isAnnually ? yearlyTotal : monthlyTotal} />
 					</span>{" "}
 					{isAnnually ? "/ year" : "/ month"}
 				</p>

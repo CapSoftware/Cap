@@ -34,8 +34,8 @@ const supportChannels: SupportChannel[] = [
 		description:
 			"Have a question, billing issue, or something you'd rather keep private? Send us an email and we'll get back to you.",
 		icon: Mail,
-		href: "mailto:support@cap.so",
-		cta: "support@cap.so",
+		href: "mailto:hello@cap.so",
+		cta: "hello@cap.so",
 	},
 	{
 		title: "Read the docs",

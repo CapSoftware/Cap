@@ -27,6 +27,7 @@ import {
 import { and, desc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { cache } from "react";
+import { sortFolders } from "@/lib/folder-sort";
 import { getVerifiedPasswordHashes } from "@/lib/password-cookie";
 import {
 	PUBLIC_COLLECTION_PAGE_SIZE,
@@ -426,9 +427,10 @@ const videoSelect = {
 		sql`${videos.id}`,
 		sql`${videos.password}`,
 	).mapWith(Boolean),
-	hasActiveUpload: sql`MAX(${videoUploads.videoId} IS NOT NULL)`.mapWith(
-		Boolean,
-	),
+	hasActiveUpload:
+		sql`MAX(${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false)`.mapWith(
+			Boolean,
+		),
 };
 
 const videoGroupBy = [
@@ -474,6 +476,7 @@ async function getPublicSpaceVideos(
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
 		eq(spaceVideos.spaceId, collection.id as Space.SpaceIdOrOrganisationId),
+		isNull(spaceVideos.folderId),
 		eq(videos.public, true),
 		isNull(organizations.tombstoneAt),
 		videoPasswordPredicate(
@@ -662,17 +665,21 @@ async function getPublicChildFolders(
 					isNull(organizations.tombstoneAt),
 				);
 
-	const childFolders = await db()
-		.select({
-			id: folders.id,
-			name: folders.name,
-			color: folders.color,
-			parentId: folders.parentId,
-		})
-		.from(folders)
-		.innerJoin(organizations, eq(folders.organizationId, organizations.id))
-		.where(where)
-		.orderBy(folders.name);
+	// Sorted in JS rather than ORDER BY so numbered names ("2_", "10_") come
+	// out in numeric order, matching the dashboard's default folder sort.
+	const childFolders = sortFolders(
+		await db()
+			.select({
+				id: folders.id,
+				name: folders.name,
+				color: folders.color,
+				parentId: folders.parentId,
+				createdAt: folders.createdAt,
+			})
+			.from(folders)
+			.innerJoin(organizations, eq(folders.organizationId, organizations.id))
+			.where(where),
+	);
 
 	if (childFolders.length === 0) return [];
 

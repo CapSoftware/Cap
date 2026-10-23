@@ -43,6 +43,7 @@ const BACKGROUND_SOURCES = {
 	image: "Image",
 	color: "Color",
 	gradient: "Gradient",
+	animatedGradient: "Animated",
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
@@ -276,6 +277,8 @@ export function BackgroundSettingsPopover() {
 												to: DEFAULT_GRADIENT_TO,
 											};
 											break;
+										default:
+											return;
 									}
 
 									// Try to preserve existing if type matches
@@ -364,7 +367,7 @@ export function BackgroundSettingsPopover() {
 													onFocusIn={() => prewarmBackground(photo.rawPath)}
 												>
 													<KRadioGroup.ItemInput class="peer" />
-													<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
+													<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
 														<img
 															src={photo.url}
 															loading="eager"
@@ -483,7 +486,7 @@ export function BackgroundSettingsPopover() {
 															}}
 														/>
 														<div
-															class="rounded-lg transition-all duration-200 cursor-pointer size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+															class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
 															style={{ background: color }}
 														/>
 													</label>
@@ -538,7 +541,7 @@ export function BackgroundSettingsPopover() {
 																		}}
 																	/>
 																	<div
-																		class="rounded-lg transition-all duration-200 cursor-pointer size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+																		class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
 																		style={{
 																			background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
 																				",",
@@ -553,6 +556,12 @@ export function BackgroundSettingsPopover() {
 											);
 										}}
 									</Show>
+								</KTabs.Content>
+								<KTabs.Content value="animatedGradient">
+									<p class="text-xs text-gray-11">
+										This screenshot uses a still frame of the animated gradient.
+										Choose another background above to replace it.
+									</p>
 								</KTabs.Content>
 							</KTabs>
 						</Field>

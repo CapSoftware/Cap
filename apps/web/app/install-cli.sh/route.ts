@@ -23,8 +23,6 @@ TMP_BASE="${tmpDirParameter}"
 TMP_ROOT=""
 MOUNT_DIR=""
 APP_TMP=""
-APPIMAGE_PATH=""
-APPDIR_PATH=""
 CLI_TARGET=""
 MOUNTED=0
 OS_NAME="$(uname -s)"
@@ -54,16 +52,6 @@ cleanup_desktop_install() {
 	fi
 }
 
-linux_app_data_dir() {
-	if [ -n "$DESKTOP_INSTALL_DIR_OVERRIDE" ]; then
-		printf '%s\n' "$DESKTOP_INSTALL_DIR_OVERRIDE"
-	elif [ -n "$XDG_DATA_HOME_DIR" ]; then
-		printf '%s\n' "$XDG_DATA_HOME_DIR/cap"
-	else
-		printf '%s\n' "$HOME_DIR/.local/share/cap"
-	fi
-}
-
 linux_require_supported_arch() {
 	case "$(uname -m)" in
 		x86_64|amd64)
@@ -81,7 +69,7 @@ run_as_root() {
 	elif command -v sudo >/dev/null 2>&1; then
 		sudo "$@"
 	else
-		echo "Installing this package requires root. Re-run with sudo installed, or use CAP_DESKTOP_INSTALL_FORMAT=appimage." >&2
+		echo "Installing this package requires root. Re-run with sudo installed." >&2
 		exit 1
 	fi
 }
@@ -111,52 +99,6 @@ find_cli_in_dir() {
 	return 1
 }
 
-prepare_appimage_cli() {
-	if [ -z "$APPIMAGE_PATH" ] || [ ! -f "$APPIMAGE_PATH" ]; then
-		return 1
-	fi
-
-	if [ -z "$APPDIR_PATH" ]; then
-		APPDIR_PATH="$(linux_app_data_dir)/Cap.AppDir"
-	fi
-
-	if [ -d "$APPDIR_PATH" ] && find_cli_in_dir "$APPDIR_PATH"; then
-		if [ ! "$APPIMAGE_PATH" -nt "$CLI_TARGET" ]; then
-			return 0
-		fi
-	fi
-
-	chmod +x "$APPIMAGE_PATH"
-	TMP_ROOT="$(mktemp -d "$TMP_BASE/cap-cli-install.XXXXXX")"
-	EXTRACT_DIR="$TMP_ROOT/appimage"
-	APP_TMP="$APPDIR_PATH.installing"
-	mkdir -p "$EXTRACT_DIR" "$(dirname "$APPDIR_PATH")"
-
-	trap cleanup_desktop_install EXIT HUP INT TERM
-
-	echo "Extracting Cap Desktop AppImage..."
-	if ! (cd "$EXTRACT_DIR" && "$APPIMAGE_PATH" --appimage-extract >/dev/null); then
-		echo "Could not extract Cap Desktop AppImage." >&2
-		exit 1
-	fi
-
-	if [ ! -d "$EXTRACT_DIR/squashfs-root" ]; then
-		echo "Cap Desktop AppImage extraction did not produce an AppDir." >&2
-		exit 1
-	fi
-
-	rm -rf "$APP_TMP"
-	mv "$EXTRACT_DIR/squashfs-root" "$APP_TMP"
-	rm -rf "$APPDIR_PATH"
-	mv "$APP_TMP" "$APPDIR_PATH"
-	APP_TMP=""
-	rm -rf "$TMP_ROOT"
-	TMP_ROOT=""
-	trap - EXIT HUP INT TERM
-
-	find_cli_in_dir "$APPDIR_PATH"
-}
-
 find_linux_system_cli() {
 	for root in /usr/bin /usr/local/bin /usr/lib/cap /usr/lib/Cap /usr/lib64/cap /opt/Cap /opt/cap /usr/share/cap /usr/share/Cap; do
 		if find_cli_in_dir "$root"; then
@@ -180,51 +122,24 @@ find_linux_cli_target() {
 				return 0
 			fi
 		elif [ -f "$APP_PATH" ]; then
-			case "$APP_PATH" in
-				*.AppImage|*.appimage)
-					APPIMAGE_PATH="$APP_PATH"
-					APPDIR_PATH="$(dirname "$APP_PATH")/Cap.AppDir"
-					if prepare_appimage_cli; then
+			if [ -x "$APP_PATH" ]; then
+				case "$(basename "$APP_PATH")" in
+					cap-cli|cap-cli-*linux*)
+						CLI_TARGET="$APP_PATH"
 						return 0
-					fi
-					;;
-				*)
-					if [ -x "$APP_PATH" ]; then
-						case "$(basename "$APP_PATH")" in
-							cap-cli|cap-cli-*linux*)
-								CLI_TARGET="$APP_PATH"
-								return 0
-								;;
-						esac
-					fi
+						;;
+				esac
+			fi
 
-					if find_cli_in_dir "$(dirname "$APP_PATH")"; then
-						return 0
-					fi
-					;;
-			esac
+			if find_cli_in_dir "$(dirname "$APP_PATH")"; then
+				return 0
+			fi
 		fi
 	fi
 
 	if find_linux_system_cli; then
 		return 0
 	fi
-
-	DATA_DIR="$(linux_app_data_dir)"
-	APPDIR_PATH="$DATA_DIR/Cap.AppDir"
-	if [ -d "$APPDIR_PATH" ] && find_cli_in_dir "$APPDIR_PATH"; then
-		return 0
-	fi
-
-	for candidate in "$DATA_DIR/Cap.AppImage" "$HOME_DIR/Applications/Cap.AppImage" "$HOME_DIR/Cap.AppImage"; do
-		if [ -f "$candidate" ]; then
-			APPIMAGE_PATH="$candidate"
-			APPDIR_PATH="$(dirname "$candidate")/Cap.AppDir"
-			if prepare_appimage_cli; then
-				return 0
-			fi
-		fi
-	done
 
 	return 1
 }
@@ -289,23 +204,6 @@ install_cap_desktop_macos() {
 	trap - EXIT HUP INT TERM
 }
 
-install_cap_desktop_linux_appimage() {
-	linux_require_supported_arch
-	APP_DIR="$(linux_app_data_dir)"
-	APPIMAGE_PATH="$APP_DIR/Cap.AppImage"
-	APPDIR_PATH="$APP_DIR/Cap.AppDir"
-	mkdir -p "$APP_DIR"
-
-	echo "Downloading Cap Desktop AppImage..."
-	curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fL "https://cap.so/download/linux-appimage" -o "$APPIMAGE_PATH"
-	chmod +x "$APPIMAGE_PATH"
-
-	if ! prepare_appimage_cli; then
-		echo "This Cap Desktop AppImage does not include the CLI." >&2
-		exit 1
-	fi
-}
-
 install_cap_desktop_linux_deb() {
 	linux_require_supported_arch
 	TMP_ROOT="$(mktemp -d "$TMP_BASE/cap-cli-install.XXXXXX")"
@@ -320,39 +218,7 @@ install_cap_desktop_linux_deb() {
 	elif command -v dpkg >/dev/null 2>&1; then
 		run_as_root dpkg -i "$DEB_PATH"
 	else
-		echo "Could not find apt-get or dpkg. Use CAP_DESKTOP_INSTALL_FORMAT=appimage on this system." >&2
-		exit 1
-	fi
-
-	rm -rf "$TMP_ROOT"
-	TMP_ROOT=""
-	trap - EXIT HUP INT TERM
-
-	if ! find_linux_cli_target; then
-		echo "This Cap Desktop package does not include the CLI." >&2
-		exit 1
-	fi
-}
-
-install_cap_desktop_linux_rpm() {
-	linux_require_supported_arch
-	TMP_ROOT="$(mktemp -d "$TMP_BASE/cap-cli-install.XXXXXX")"
-	RPM_PATH="$TMP_ROOT/Cap.rpm"
-	trap cleanup_desktop_install EXIT HUP INT TERM
-
-	echo "Downloading Cap Desktop RPM package..."
-	curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fL "https://cap.so/download/linux-rpm" -o "$RPM_PATH"
-
-	if command -v dnf >/dev/null 2>&1; then
-		run_as_root dnf install -y "$RPM_PATH"
-	elif command -v yum >/dev/null 2>&1; then
-		run_as_root yum install -y "$RPM_PATH"
-	elif command -v zypper >/dev/null 2>&1; then
-		run_as_root zypper --non-interactive install "$RPM_PATH"
-	elif command -v rpm >/dev/null 2>&1; then
-		run_as_root rpm -Uvh "$RPM_PATH"
-	else
-		echo "Could not find dnf, yum, zypper, or rpm. Use CAP_DESKTOP_INSTALL_FORMAT=appimage on this system." >&2
+		echo "Could not find apt-get or dpkg. Cap for Linux currently ships as a Debian package." >&2
 		exit 1
 	fi
 
@@ -369,21 +235,15 @@ install_cap_desktop_linux_rpm() {
 install_cap_desktop_linux() {
 	FORMAT="$(printf '%s' "$DESKTOP_INSTALL_FORMAT" | tr '[:upper:]' '[:lower:]')"
 	if [ -z "$FORMAT" ]; then
-		FORMAT="appimage"
+		FORMAT="deb"
 	fi
 
 	case "$FORMAT" in
-		appimage|app-image|linux)
-			install_cap_desktop_linux_appimage
-			;;
-		deb|debian|ubuntu)
+		deb|debian|ubuntu|linux)
 			install_cap_desktop_linux_deb
 			;;
-		rpm|fedora|rhel|redhat)
-			install_cap_desktop_linux_rpm
-			;;
 		*)
-			echo "Unsupported Linux install format: $DESKTOP_INSTALL_FORMAT. Use appimage, deb, or rpm." >&2
+			echo "Unsupported Linux install format: $DESKTOP_INSTALL_FORMAT. Use deb, debian, or ubuntu." >&2
 			exit 1
 			;;
 	esac

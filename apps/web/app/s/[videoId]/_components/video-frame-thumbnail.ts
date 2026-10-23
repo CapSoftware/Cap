@@ -20,7 +20,34 @@ export function captureVideoFrameDataUrl(
 	const ctx = canvas.getContext("2d");
 	if (!ctx) return undefined;
 	try {
-		ctx.drawImage(video, 0, 0, width, height);
+		const sourceWidth = video.videoWidth || width;
+		const sourceHeight = video.videoHeight || height;
+		const sourceAspectRatio = sourceWidth / sourceHeight;
+		const outputAspectRatio = width / height;
+		let sourceX = 0;
+		let sourceY = 0;
+		let croppedWidth = sourceWidth;
+		let croppedHeight = sourceHeight;
+
+		if (sourceAspectRatio > outputAspectRatio) {
+			croppedWidth = sourceHeight * outputAspectRatio;
+			sourceX = (sourceWidth - croppedWidth) / 2;
+		} else if (sourceAspectRatio < outputAspectRatio) {
+			croppedHeight = sourceWidth / outputAspectRatio;
+			sourceY = (sourceHeight - croppedHeight) / 2;
+		}
+
+		ctx.drawImage(
+			video,
+			sourceX,
+			sourceY,
+			croppedWidth,
+			croppedHeight,
+			0,
+			0,
+			width,
+			height,
+		);
 		return canvas.toDataURL("image/jpeg", quality);
 	} catch {
 		return undefined;

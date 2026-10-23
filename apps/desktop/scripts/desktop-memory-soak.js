@@ -162,7 +162,7 @@ function printHelp() {
 	console.log("Cap desktop memory soak test");
 	console.log("");
 	console.log("Usage:");
-	console.log("  pnpm --dir apps/desktop test:memory [options]");
+	console.log("  bun run --cwd apps/desktop test:memory [options]");
 	console.log("");
 	console.log("Options:");
 	console.log(

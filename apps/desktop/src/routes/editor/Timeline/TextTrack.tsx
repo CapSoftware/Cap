@@ -1,15 +1,16 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import { createMemo, createRoot, createSignal, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
+import { cssFontFamily } from "~/utils/fonts";
 import { useEditorContext } from "../context";
-import { defaultTextSegment } from "../text";
+import { autoTextColorAt, defaultTextSegment } from "../text";
 import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
 import { useTimelineContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSetPreviewTime,
@@ -36,6 +37,7 @@ export function TextTrack(props: {
 		totalDuration,
 		projectHistory,
 		projectActions,
+		canvasControls,
 	} = useEditorContext();
 	const { secsPerPixel, timelineBounds } = useTimelineContext();
 	const [draggingSegment, setDraggingSegment] = createSignal(false);
@@ -119,10 +121,10 @@ export function TextTrack(props: {
 
 	const addSegmentAt = (time: number) => {
 		const length = Math.min(minDuration(), totalDuration());
-		if (length <= 0) return;
+		if (length <= 0) return false;
 
 		const placement = findPlacement(time, length);
-		if (!placement) return;
+		if (!placement) return false;
 
 		setProject(
 			"timeline",
@@ -131,11 +133,28 @@ export function TextTrack(props: {
 				segments ??= [];
 				segments.push({
 					...defaultTextSegment(placement.start, placement.end),
+					color: autoTextColorAt(canvasControls()),
 					track: props.laneIndex,
 				});
 				sortTrackSegments(segments);
 			}),
 		);
+
+		// Select the new segment right away so its canvas box and config
+		// sidebar appear without an extra click.
+		const newIndex = (project.timeline?.textSegments ?? []).findIndex(
+			(segment) =>
+				segment.start === placement.start &&
+				getSegmentTrack(segment) === props.laneIndex,
+		);
+		if (newIndex !== -1) {
+			setEditorState("timeline", "selection", {
+				type: "text",
+				indices: [newIndex],
+			});
+		}
+
+		return true;
 	};
 
 	const newSegmentDetails = createMemo(() => {
@@ -161,7 +180,13 @@ export function TextTrack(props: {
 			editorState.previewTime ??
 			editorState.playbackTime ??
 			secsPerPixel() * (e.clientX - (timelineBounds.left ?? 0));
-		addSegmentAt(timelineTime);
+		if (!addSegmentAt(timelineTime)) return;
+		// This click created and selected a segment — stop it reaching the
+		// timeline container, whose mouseup handler would immediately clear
+		// the selection again. Take over its playhead update instead.
+		e.stopPropagation();
+		setEditorState("timeline", "audioPicker", null);
+		props.handleUpdatePlayhead(e);
 	};
 
 	function createMouseDownDrag<T>(
@@ -278,13 +303,11 @@ export function TextTrack(props: {
 				fallback={
 					<Show
 						when={!newSegmentDetails()}
-						fallback={<div class="w-full rounded-xl bg-transparent" />}
+						fallback={<div class="w-full rounded-lg bg-transparent" />}
 					>
-						<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-							<div>Click to add text</div>
-							<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
-								(Set a label over your video)
-							</div>
+						<div class="cap-empty-lane pointer-events-none">
+							<span>Set a label over your video</span>
+							<span class="cap-empty-lane-action">· Add text</span>
 						</div>
 					</Show>
 				}
@@ -298,17 +321,45 @@ export function TextTrack(props: {
 
 					const segmentWidth = () => segment.end - segment.start;
 
+					const textContentRow = () => (
+						<div class="cap-seg-labels max-w-full">
+							<span
+								class="size-2 shrink-0 rounded-full ring-1 ring-ed-line-strong"
+								style={{
+									"background-color": segment.color ?? "#ffffff",
+								}}
+							/>
+							<span
+								class="cap-seg-label truncate max-w-full"
+								style={{
+									"font-family": cssFontFamily(
+										segment.fontFamily ?? "sans-serif",
+									),
+									"font-style": segment.italic ? "italic" : "normal",
+									"font-weight": segment.fontWeight ?? 700,
+								}}
+							>
+								{segment.content || "Label"}
+							</span>
+						</div>
+					);
+
+					const textTitle = () => {
+						const base = `Text · ${segment.content || "Label"}`;
+						return segment.layout === "fullscreen"
+							? `${base} · Fullscreen: pauses the video while shown`
+							: base;
+					};
+
 					return (
 						<SegmentRoot
 							data-text-segment
 							data-index={index}
-							class={cx(
-								"border duration-200 hover:border-blue-6 transition-colors group",
-								"bg-linear-to-r from-[#111826] via-[#1c2232] to-[#111826]",
-								isSelected() ? "border-blue-7" : "border-transparent",
-								!segment.enabled && "opacity-60",
-							)}
-							innerClass="ring-blue-6"
+							segColor="var(--track-text)"
+							class="group"
+							selected={isSelected()}
+							muted={!segment.enabled}
+							title={textTitle()}
 							segment={segment}
 							onMouseDown={(e) => {
 								e.stopPropagation();
@@ -362,7 +413,7 @@ export function TextTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab px-3 overflow-hidden"
+								class="flex items-center cursor-grab overflow-hidden"
 								onMouseDown={createMouseDownDrag(
 									() => index,
 									() => {
@@ -399,14 +450,25 @@ export function TextTrack(props: {
 									},
 								)}
 							>
-								<div class="flex flex-col gap-0.5 justify-center items-center text-xs text-gray-1 dark:text-gray-12 w-full min-w-0 overflow-hidden">
-									<span class="opacity-70">Text</span>
-									<div class="flex gap-1 items-center text-md w-full min-w-0 justify-center">
-										<span class="truncate max-w-full">
-											{segment.content || "Label"}
-										</span>
-									</div>
-								</div>
+								<SegmentLabel
+									full={() => (
+										<div class="cap-seg-labels">
+											<span class="cap-seg-label flex gap-1 items-center">
+												Text
+												<Show when={segment.layout === "fullscreen"}>
+													<IconLucidePause class="size-2.5" />
+												</Show>
+											</span>
+											{textContentRow()}
+										</div>
+									)}
+									compact={() => textContentRow()}
+									glyph={
+										segment.layout === "fullscreen"
+											? () => <IconLucidePause class="size-2.5 cap-seg-label" />
+											: undefined
+									}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"
@@ -444,14 +506,13 @@ export function TextTrack(props: {
 			<Show when={!draggingSegment() && newSegmentDetails()}>
 				{(details) => (
 					<SegmentRoot
-						class="pointer-events-none z-10 border border-transparent"
-						innerClass="ring-blue-300"
+						class="pointer-events-none z-10"
+						ghost
+						segColor="var(--track-text)"
 						segment={details()}
 					>
-						<SegmentContent class="bg-linear-to-r from-[#111826] via-[#1c2232] to-[#111826] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
-								+
-							</p>
+						<SegmentContent class="justify-center">
+							<p class="cap-seg-label">+</p>
 						</SegmentContent>
 					</SegmentRoot>
 				)}

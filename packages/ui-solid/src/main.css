@@ -32,6 +32,19 @@
 	--color-gray-a-a11: var(--gray-a11);
 	--color-gray-a-a12: var(--gray-a12);
 
+	--color-emerald-1: var(--jade-1);
+	--color-emerald-2: var(--jade-2);
+	--color-emerald-3: var(--jade-3);
+	--color-emerald-4: var(--jade-4);
+	--color-emerald-5: var(--jade-5);
+	--color-emerald-6: var(--jade-6);
+	--color-emerald-7: var(--jade-7);
+	--color-emerald-8: var(--jade-8);
+	--color-emerald-9: var(--jade-9);
+	--color-emerald-10: var(--jade-10);
+	--color-emerald-11: var(--jade-11);
+	--color-emerald-12: var(--jade-12);
+
 	--color-indigo-1: var(--indigo-1);
 	--color-indigo-2: var(--indigo-2);
 	--color-indigo-3: var(--indigo-3);
@@ -47,6 +60,24 @@
 
 	--color-transparent: rgba(0, 0, 0, 0);
 	--color-solid-white: #ffffff;
+	--color-ed-window: var(--ed-window);
+	--color-ed-card: var(--ed-card);
+	--color-ed-card-2: var(--ed-card-2);
+	--color-ed-stage: var(--ed-stage);
+	--color-ed-line: var(--ed-line);
+	--color-ed-line-strong: var(--ed-line-strong);
+	--color-ed-text-1: var(--ed-text-1);
+	--color-ed-text-2: var(--ed-text-2);
+	--color-ed-text-3: var(--ed-text-3);
+	--color-ed-ctl: var(--ed-ctl);
+	--color-ed-ctl-hover: var(--ed-ctl-hover);
+	--color-ed-ctl-active: var(--ed-ctl-active);
+	--color-ed-accent: var(--ed-accent);
+	--color-ed-accent-2: var(--ed-accent-2);
+	--color-ed-playhead: var(--ed-playhead);
+	--color-ed-thumb: var(--ed-thumb);
+	--shadow-ed-card: var(--ed-card-shadow);
+	--shadow-ed-pop: var(--ed-pop-shadow);
 	--color-transparent-window: var(--transparent-window);
 
 	--color-gray-1: var(--gray-1);

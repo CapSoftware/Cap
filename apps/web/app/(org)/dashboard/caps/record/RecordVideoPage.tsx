@@ -6,6 +6,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useId, useRef, useState } from "react";
+import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
+import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { FREE_PLAN_MAX_RECORDING_MS } from "../components/web-recorder-dialog/web-recorder-constants";
 import { WebRecorderDialog } from "../components/web-recorder-dialog/web-recorder-dialog";
 
@@ -61,6 +63,10 @@ export const RecordVideoPage = () => {
 							</Button>
 							<p className="text-sm text-gray-10">or</p>
 							<WebRecorderDialog />
+							<ChromeRecorderButton
+								size="sm"
+								className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
+							/>
 						</div>
 						<FaqAccordion />
 					</div>

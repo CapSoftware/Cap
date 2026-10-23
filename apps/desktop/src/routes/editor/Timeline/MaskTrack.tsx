@@ -1,5 +1,4 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import { createMemo, createRoot, createSignal, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
@@ -10,6 +9,7 @@ import { useTimelineContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSetPreviewTime,
@@ -119,10 +119,10 @@ export function MaskTrack(props: {
 
 	const addSegmentAt = (time: number) => {
 		const length = Math.min(minDuration(), totalDuration());
-		if (length <= 0) return;
+		if (length <= 0) return false;
 
 		const placement = findPlacement(time, length);
-		if (!placement) return;
+		if (!placement) return false;
 
 		setProject(
 			"timeline",
@@ -136,6 +136,22 @@ export function MaskTrack(props: {
 				sortTrackSegments(segments);
 			}),
 		);
+
+		// Select the new segment right away so its canvas handles and config
+		// sidebar appear without an extra click.
+		const newIndex = (project.timeline?.maskSegments ?? []).findIndex(
+			(segment) =>
+				segment.start === placement.start &&
+				getSegmentTrack(segment) === props.laneIndex,
+		);
+		if (newIndex !== -1) {
+			setEditorState("timeline", "selection", {
+				type: "mask",
+				indices: [newIndex],
+			});
+		}
+
+		return true;
 	};
 
 	const newSegmentDetails = createMemo(() => {
@@ -161,7 +177,13 @@ export function MaskTrack(props: {
 			editorState.previewTime ??
 			editorState.playbackTime ??
 			secsPerPixel() * (e.clientX - (timelineBounds.left ?? 0));
-		addSegmentAt(timelineTime);
+		if (!addSegmentAt(timelineTime)) return;
+		// This click created and selected a segment — stop it reaching the
+		// timeline container, whose mouseup handler would immediately clear
+		// the selection again. Take over its playhead update instead.
+		e.stopPropagation();
+		setEditorState("timeline", "audioPicker", null);
+		props.handleUpdatePlayhead(e);
 	};
 
 	const syncPreviewTimeToSegment = (
@@ -305,13 +327,11 @@ export function MaskTrack(props: {
 				fallback={
 					<Show
 						when={!newSegmentDetails()}
-						fallback={<div class="w-full rounded-xl bg-transparent" />}
+						fallback={<div class="w-full rounded-lg bg-transparent" />}
 					>
-						<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-							<div>Click to add a mask</div>
-							<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
-								(Combine sensitive blur or highlight masks)
-							</div>
+						<div class="cap-empty-lane pointer-events-none">
+							<span>Combine sensitive blur or highlight masks</span>
+							<span class="cap-empty-lane-action">· Add mask</span>
 						</div>
 					</Show>
 				}
@@ -332,14 +352,10 @@ export function MaskTrack(props: {
 						<SegmentRoot
 							data-mask-segment
 							data-index={index}
-							class={cx(
-								"duration-200 transition-colors group",
-								"bg-linear-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022]",
-								isSelected()
-									? "border border-gray-12"
-									: "border-0! hover:border! hover:border-gray-12",
-							)}
-							innerClass="ring-red-5"
+							segColor="var(--track-mask)"
+							class="group"
+							selected={isSelected()}
+							title={`Mask · ${contentLabel()}`}
 							segment={segment}
 							onMouseEnter={(e) => {
 								setHoveredSegmentState(e, index, segment);
@@ -417,7 +433,7 @@ export function MaskTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab px-3"
+								class="flex items-center cursor-grab"
 								onMouseDown={createMouseDownDrag(
 									() => index,
 									() => {
@@ -454,16 +470,21 @@ export function MaskTrack(props: {
 									},
 								)}
 							>
-								{(() => {
-									return (
-										<div class="flex flex-col gap-0.5 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-											<span class="opacity-70">Mask</span>
-											<div class="flex gap-1 items-center text-md">
-												<span>{contentLabel()}</span>
-											</div>
+								<SegmentLabel
+									full={() => (
+										<div class="cap-seg-labels">
+											<span class="cap-seg-label">Mask</span>
+											<span class="cap-seg-sublabel">{contentLabel()}</span>
 										</div>
-									);
-								})()}
+									)}
+									compact={() => (
+										<div class="cap-seg-labels">
+											<span class="cap-seg-label truncate">
+												{contentLabel()}
+											</span>
+										</div>
+									)}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"
@@ -501,14 +522,13 @@ export function MaskTrack(props: {
 			<Show when={!draggingSegment() && newSegmentDetails()}>
 				{(details) => (
 					<SegmentRoot
-						class="pointer-events-none z-10 border border-transparent"
-						innerClass="ring-red-300"
+						class="pointer-events-none z-10"
+						ghost
+						segColor="var(--track-mask)"
 						segment={details()}
 					>
-						<SegmentContent class="bg-linear-to-r from-[#1f2022] via-[#2c2d30] to-[#1f2022] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.16)]">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
-								+
-							</p>
+						<SegmentContent class="justify-center">
+							<p class="cap-seg-label">+</p>
 						</SegmentContent>
 					</SegmentRoot>
 				)}

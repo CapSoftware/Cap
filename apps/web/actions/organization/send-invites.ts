@@ -15,6 +15,7 @@ import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
 	type AssignableOrganizationRole,
 	normalizeAssignableOrganizationRole,
@@ -30,6 +31,7 @@ export async function sendOrganizationInvites(
 	inviteInputs: string[] | OrganizationInviteInput[],
 	organizationId: Organisation.OrganisationId,
 	roleInput = "member",
+	options: { sendEmailNotifications?: boolean } = {},
 ) {
 	const user = await getCurrentUser();
 
@@ -87,6 +89,26 @@ export async function sendOrganizationInvites(
 
 	if (validEmails.length === 0) {
 		return { success: true, failedEmails: [] as string[] };
+	}
+
+	if (options.sendEmailNotifications === false) {
+		const provisionResults = await Promise.allSettled(
+			validInvites.map((invite) =>
+				provisionOrganizationInvitee({
+					organizationId,
+					email: invite.email,
+					invitedByUserId: user.id,
+					role: invite.role,
+				}),
+			),
+		);
+		const failedEmails = validInvites
+			.filter((_, index) => provisionResults[index]?.status === "rejected")
+			.map((invite) => invite.email);
+
+		revalidatePath("/dashboard/settings/organization");
+
+		return { success: true, failedEmails };
 	}
 
 	const inviteRecords = await db().transaction(async (tx) => {

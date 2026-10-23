@@ -4,6 +4,7 @@ module.exports = {
 	...sharedConfig,
 	content: [
 		"./popup.html",
+		"./popup-window.html",
 		"./options.html",
 		"./camera-preview.html",
 		"./camera-permission.html",

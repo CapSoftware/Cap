@@ -98,7 +98,7 @@ describe("bindCaptionTrackCueText", () => {
 			cueTexts.push(text);
 		});
 
-		video.dispatch("loadedmetadata");
+		(video as unknown as FakeVideo).dispatch("loadedmetadata");
 		textTracks.addSilently(captionTrack);
 		trackElement.readyState = 2;
 		trackElement.dispatch("load");
