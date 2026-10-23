@@ -2459,7 +2459,7 @@ impl ScreenshotEditorWindow {
             MenuKind::More => {
                 self.menu = None;
                 match index {
-                    0 => crate::library::reveal_in_folder(&self.bundle.join("original.png")),
+                    0 => crate::library::reveal_path(&self.bundle.join("original.png"), cx),
                     1 => self.delete_screenshot(window, cx),
                     _ => {}
                 }

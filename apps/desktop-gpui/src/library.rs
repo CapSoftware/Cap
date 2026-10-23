@@ -28,7 +28,7 @@ use cap_project::{
     StudioRecordingStatus,
 };
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
-use gpui::RenderImage;
+use gpui::{App, RenderImage};
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
@@ -593,61 +593,23 @@ pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
 /// An instant recording opens its `content` directory --
 /// `commands.openFilePath` is `open <dir>` on macOS -- and anything else, or a
 /// bundle with no `content` directory, is revealed in the file manager.
-pub fn open_recording_folder(path: &Path, mode: RecordingMode) {
+pub fn open_recording_folder(path: &Path, mode: RecordingMode, cx: &App) {
     let content = path.join("content");
     if mode == RecordingMode::Instant && content.is_dir() {
-        open_path(&content);
+        open_with_system(&content, cx);
     } else {
-        reveal_in_folder(path);
+        reveal_path(path, cx);
     }
 }
 
-pub fn open_path(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open").arg(path).spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", &path.to_string_lossy()])
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            std::process::Command::new("xdg-open").arg(path).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "opening a path failed: {error}");
-    }
+// `std::fs::canonicalize` yields `\\?\` verbatim paths on Windows, which the
+// shell APIs behind GPUI's reveal and open reject with E_INVALIDARG.
+pub fn reveal_path(path: &Path, cx: &App) {
+    cx.reveal_path(dunce::simplified(path));
 }
 
-pub fn reveal_in_folder(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(path)
-                .spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path.display()))
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            let parent = path.parent().unwrap_or(path);
-            std::process::Command::new("xdg-open").arg(parent).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "revealing a path failed: {error}");
-    }
+pub fn open_with_system(path: &Path, cx: &App) {
+    cx.open_with_system(dunce::simplified(path));
 }
 
 pub fn copy_file_to_path(src: &Path, dest: &Path) -> Result<(), String> {
