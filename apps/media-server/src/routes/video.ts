@@ -54,6 +54,7 @@ import {
 	downloadVideoToTemp,
 	generatePreviewGif,
 	generateThumbnail,
+	LOOM_IMPORT_MAX_BYTES,
 	muxMediaTracksToMp4,
 	processVideo,
 	repairContainer,
@@ -111,6 +112,31 @@ const convertSchema = z.object({
 	inputExtension: z.string().optional(),
 });
 
+const storageUploadSchema = z.discriminatedUnion("type", [
+	z.object({
+		type: z.literal("put"),
+		url: z.string().url(),
+		ifNoneMatch: z.literal("*").optional(),
+	}),
+	z.object({
+		type: z.literal("multipart"),
+		videoId: z.string(),
+		generation: z.string().min(1).max(200).optional(),
+		attemptId: z.string().min(1).max(200).optional(),
+		key: z.string().min(1),
+		uploadId: z.string().min(1),
+		partSize: z
+			.number()
+			.int()
+			.min(5 * 1024 * 1024),
+		signPartUrl: z.string().url(),
+		completeUrl: z.string().url(),
+		abortUrl: z.string().url(),
+		webhookSecret: z.string().optional(),
+		loomImportAttemptId: z.string().min(1).max(200).optional(),
+	}),
+]);
+
 const processSchema = z.object({
 	audioLevels: z.boolean().optional(),
 	videoId: z.string(),
@@ -118,6 +144,9 @@ const processSchema = z.object({
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
 	sourcePresignedUrl: z.string().url().optional(),
+	sourceUpload: storageUploadSchema.optional(),
+	outputUpload: storageUploadSchema.optional(),
+	maxImportBytes: z.literal(LOOM_IMPORT_MAX_BYTES).optional(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
@@ -380,6 +409,8 @@ video.get("/status", (c) => {
 	return c.json({
 		instanceId: getInstanceId(),
 		pid: process.pid,
+		loomImportMaxBytes: LOOM_IMPORT_MAX_BYTES,
+		loomMultipartUploads: true,
 		activeVideoProcesses: getActiveVideoProcessCount(),
 		maxConcurrentVideoProcesses: getMaxConcurrentVideoProcesses(),
 		effectiveMaxVideoProcesses: resources.effectiveMax,
@@ -676,7 +707,10 @@ video.on("POST", ["/process", "/import"], async (c) => {
 	const body = await c.req.json();
 	const result = (
 		c.req.path.endsWith("/import")
-			? processSchema.extend({ sourcePresignedUrl: z.string().url() })
+			? processSchema.refine(
+					(input) => input.sourcePresignedUrl || input.sourceUpload,
+					{ message: "An original video upload target is required" },
+				)
 			: processSchema
 	).safeParse(body);
 
@@ -1292,6 +1326,21 @@ async function processVideoAsync(
 
 	let repairedTempFile: TempFileHandle | null = null;
 	let lastResortRepairFile: TempFileHandle | null = null;
+	let sourceUploaded = false;
+	let outputUploaded = false;
+	const abortPendingUploads = async () => {
+		const targets = [
+			!sourceUploaded ? options.sourceUpload : undefined,
+			!outputUploaded ? options.outputUpload : undefined,
+		].filter((target): target is StorageUploadTarget => target !== undefined);
+		await Promise.all(
+			targets.map((target) =>
+				abortStorageUploadTarget(target).catch((error) => {
+					console.warn("Loom multipart cleanup failed", error);
+				}),
+			),
+		);
+	};
 
 	try {
 		updateJob(jobId, {
@@ -1306,22 +1355,27 @@ async function processVideoAsync(
 				videoUrl,
 				options.inputExtension,
 				abortController.signal,
+				options.maxImportBytes,
 			),
 		);
 		updateJob(jobId, { inputTempFile });
 
 		const sourcePresignedUrl = options.sourcePresignedUrl;
-		if (sourcePresignedUrl) {
+		if (sourcePresignedUrl || options.sourceUpload) {
 			updateJob(jobId, { message: "Saving original video..." });
 			await sendWebhook(job);
 			await withJobHeartbeat(jobId, () =>
-				uploadFileToS3(
+				uploadFileToStorage(
 					inputTempFile.path,
-					sourcePresignedUrl,
+					options.sourceUpload ?? {
+						type: "put",
+						url: sourcePresignedUrl as string,
+					},
 					"video/mp4",
 					abortController.signal,
 				),
 			);
+			sourceUploaded = true;
 		}
 
 		const isWebm = isWebmInput(options.inputExtension);
@@ -1372,6 +1426,12 @@ async function processVideoAsync(
 			);
 		lastResortRepairFile = lrrf;
 		updateJob(jobId, { outputTempFile });
+		if (
+			options.maxImportBytes &&
+			file(outputTempFile.path).size > options.maxImportBytes
+		) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		updateJob(jobId, {
 			phase: "uploading",
@@ -1380,12 +1440,13 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const uploadReceipt = await uploadFileToS3(
+		const uploadReceipt = await uploadFileToStorage(
 			outputTempFile.path,
-			outputPresignedUrl,
+			options.outputUpload ?? { type: "put", url: outputPresignedUrl },
 			"video/mp4",
 			abortController.signal,
 		);
+		outputUploaded = true;
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
@@ -1459,6 +1520,7 @@ async function processVideoAsync(
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
+		await abortPendingUploads();
 		if (!abortController.signal.aborted) {
 			console.error(`[video/process] Error processing job ${jobId}:`, err);
 		}
@@ -1647,30 +1709,6 @@ video.post("/force-cleanup", (c) => {
 		message: `Force-cleaned ${cleaned} active jobs`,
 	});
 });
-
-const muxSegmentsOutputUploadSchema = z.discriminatedUnion("type", [
-	z.object({
-		type: z.literal("put"),
-		url: z.string().url(),
-		ifNoneMatch: z.literal("*").optional(),
-	}),
-	z.object({
-		type: z.literal("multipart"),
-		videoId: z.string(),
-		generation: z.string().min(1).max(200).optional(),
-		attemptId: z.string().min(1).max(200).optional(),
-		key: z.string().min(1),
-		uploadId: z.string().min(1),
-		partSize: z
-			.number()
-			.int()
-			.min(5 * 1024 * 1024),
-		signPartUrl: z.string().url(),
-		completeUrl: z.string().url(),
-		abortUrl: z.string().url(),
-		webhookSecret: z.string().optional(),
-	}),
-]);
 
 const strongObjectIdentitySchema = z
 	.string()
@@ -2013,7 +2051,7 @@ const muxSegmentsSchema = z
 		videoId: z.string(),
 		userId: z.string(),
 		outputPresignedUrl: z.string().url().optional(),
-		outputUpload: muxSegmentsOutputUploadSchema.optional(),
+		outputUpload: storageUploadSchema.optional(),
 		thumbnailPresignedUrl: z.string().url().optional(),
 		previewGifPresignedUrl: z.string().url().optional(),
 		webhookUrl: z.string().url().optional(),

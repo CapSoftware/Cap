@@ -9,6 +9,19 @@ export interface VideoMetadata {
 	loomImportRun?: {
 		runId: string;
 		dispatch: "pending" | "accepted" | "rejected" | "uncertain";
+		mediaDispatch?: {
+			attemptId: string;
+			videoId?: string;
+			state: "accepted" | "rejected" | "uncertain";
+			jobId?: string;
+		};
+	};
+	loomImportUpload?: {
+		attemptId: string;
+		ownerId: string;
+		organizationId: string | null;
+		source?: { key: string; uploadId: string };
+		output: { key: string; uploadId: string };
 	};
 	editProcessing?: {
 		token: string;

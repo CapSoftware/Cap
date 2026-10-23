@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
 	head: vi.fn(),
 	remove: vi.fn(),
 	fetch: vi.fn(),
+	statusFetch: vi.fn(),
+	dispatch: vi.fn(),
+	mediaJobFailed: vi.fn(),
 	sleep: vi.fn(),
 }));
 
@@ -62,7 +65,13 @@ vi.mock("@/lib/ai-generation-entitlement", () => ({
 vi.mock("workflow", () => ({
 	sleep: mocks.sleep,
 	FatalError: class FatalError extends Error {},
+	getWorkflowMetadata: () => ({ workflowRunId: "run-import" }),
 	RetryableError: class RetryableError extends Error {},
+}));
+
+vi.mock("@/lib/loom-media-dispatch", () => ({
+	recordLoomMediaDispatch: mocks.dispatch,
+	isLoomMediaJobFailed: mocks.mediaJobFailed,
 }));
 
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
@@ -77,6 +86,7 @@ const payload = {
 };
 const video = {
 	id: "video",
+	ownerId: "owner",
 	source: { type: "webMP4" },
 	createdAt: new Date(),
 	updatedAt: new Date(),
@@ -122,8 +132,20 @@ describe("media processing workflows", () => {
 			Effect.succeed({ ContentLength: 2048 }),
 		);
 		mocks.remove.mockImplementation(() => Effect.void);
+		mocks.dispatch.mockReset().mockResolvedValue(undefined);
+		mocks.mediaJobFailed.mockReset().mockResolvedValue(true);
 		mocks.sleep.mockResolvedValue(undefined);
-		vi.stubGlobal("fetch", mocks.fetch);
+		mocks.statusFetch.mockReset().mockImplementation(async () =>
+			Response.json({
+				loomMultipartUploads: true,
+				loomImportMaxBytes: 10 * 1024 ** 3,
+			}),
+		);
+		vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+			url.endsWith("/video/status")
+				? mocks.statusFetch(url, init)
+				: mocks.fetch(url, init),
+		);
 		mocks.fetch.mockReset().mockImplementation(async (url: string) => {
 			if (url.startsWith("https://www.loom.com/")) {
 				return Response.json({ url: "https://cdn.loom.com/original.mp4" });
@@ -363,6 +385,56 @@ describe("media processing workflows", () => {
 			payload.rawFileKey,
 			expect.anything(),
 		);
+	});
+
+	it("does not retry a failed workflow while its accepted worker is unconfirmed", async () => {
+		mocks.mediaJobFailed.mockResolvedValue(false);
+		mocks.rows = [
+			[video],
+			[{ ...pending, processingError: "Processing status interrupted" }],
+		];
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+			"must be reconciled before retrying",
+		);
+		expect(mocks.mediaJobFailed).toHaveBeenCalledWith("job-1", "video");
+		expect(
+			mocks.fetch.mock.calls.filter(([url]) =>
+				url.startsWith("https://worker.example.com/"),
+			),
+		).toHaveLength(1);
+	});
+
+	it("blocks an old worker before creating upload targets or dispatching", async () => {
+		mocks.statusFetch.mockResolvedValue(Response.json({}));
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+			"must be updated for 10 GB",
+		);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.put).not.toHaveBeenCalled();
+		expect(mocks.dispatch).not.toHaveBeenCalled();
+	});
+
+	it("leaves an uncertain dispatch receipt after a worker request times out", async () => {
+		mocks.rows = [[video]];
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.startsWith("https://www.loom.com/"))
+				return Response.json({ url: "https://cdn.loom.com/original.mp4" });
+			throw new Error("Response timed out after dispatch");
+		});
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow("timed out");
+		expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+		expect(mocks.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				runId: "run-import",
+				attemptId: "run-import:0",
+				state: "uncertain",
+			}),
+		);
+		expect(
+			mocks.fetch.mock.calls.filter(([url]) =>
+				String(url).startsWith("https://worker.example.com/"),
+			),
+		).toHaveLength(1);
 	});
 
 	it("supports Loom streaming fallbacks without reading a nonexistent raw object", async () => {

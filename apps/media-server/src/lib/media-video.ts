@@ -58,6 +58,7 @@ const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
 const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
+export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
 
 export type StorageUploadTarget =
 	| {
@@ -77,6 +78,7 @@ export type StorageUploadTarget =
 			completeUrl: string;
 			abortUrl: string;
 			webhookSecret?: string;
+			loomImportAttemptId?: string;
 	  };
 
 export interface StorageUploadReceipt {
@@ -1186,10 +1188,24 @@ function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
 async function downloadStreamingVideoToTemp(
 	videoUrl: string,
 	abortSignal?: AbortSignal,
+	maxBytes?: number,
 ): Promise<TempFileHandle> {
 	await ensureTempDir();
 	const manifestDir = await mkdtemp(join(getTempDir(), "stream-"));
 	const tempFile = await createTempFile(".mkv");
+	const sizeController = new AbortController();
+	const signal = AbortSignal.any([
+		sizeController.signal,
+		...(abortSignal ? [abortSignal] : []),
+	]);
+	const sizeCheck = maxBytes
+		? setInterval(() => {
+				if (file(tempFile.path).size > maxBytes) {
+					sizeController.abort(new Error("Loom imports are limited to 10 GB"));
+				}
+			}, 250)
+		: undefined;
+	sizeCheck?.unref();
 	const cleanup = async () => {
 		await tempFile.cleanup();
 		await rm(manifestDir, { force: true, recursive: true }).catch(() => {});
@@ -1200,7 +1216,7 @@ async function downloadStreamingVideoToTemp(
 		const inputPath = await materializeStreamingInput(
 			videoUrl,
 			manifestDir,
-			abortSignal,
+			signal,
 		);
 		const durationSeconds =
 			await estimateMaterializedStreamingDurationSeconds(manifestDir);
@@ -1213,8 +1229,11 @@ async function downloadStreamingVideoToTemp(
 				ffmpegHlsCapabilities,
 			),
 			downloadTimeoutMs,
-			abortSignal,
+			signal,
 		);
+		if (maxBytes && file(tempFile.path).size > maxBytes) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		if (file(tempFile.path).size === 0) {
 			throw new Error("Streaming download produced empty file");
@@ -1226,7 +1245,10 @@ async function downloadStreamingVideoToTemp(
 		};
 	} catch (err) {
 		await cleanup();
+		if (sizeController.signal.aborted) throw sizeController.signal.reason;
 		throw err;
+	} finally {
+		if (sizeCheck) clearInterval(sizeCheck);
 	}
 }
 
@@ -1234,13 +1256,19 @@ export async function downloadVideoToTemp(
 	videoUrl: string,
 	inputExtension?: string,
 	abortSignal?: AbortSignal,
+	maxBytes?: number,
 ): Promise<TempFileHandle> {
 	if (isStreamingUrl(videoUrl)) {
-		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
+		return await downloadStreamingVideoToTemp(videoUrl, abortSignal, maxBytes);
 	}
 
 	const local = await materializeMedia(videoUrl, abortSignal);
-	if (local) return { path: local.path, cleanup: async () => {} };
+	if (local) {
+		if (maxBytes && file(local.path).size > maxBytes) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
+		return { path: local.path, cleanup: async () => {} };
+	}
 
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
@@ -1266,17 +1294,27 @@ export async function downloadVideoToTemp(
 		if (!response.body) {
 			throw new Error("No response body");
 		}
+		if (maxBytes && Number(response.headers.get("content-length")) > maxBytes) {
+			await response.body.cancel();
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		const reader = response.body.getReader();
 		const writer = file(tempFile.path).writer();
+		let downloadedBytes = 0;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
+				downloadedBytes += value.byteLength;
+				if (maxBytes && downloadedBytes > maxBytes) {
+					throw new Error("Loom imports are limited to 10 GB");
+				}
 				writer.write(value);
 			}
-			await writer.end();
 		} finally {
+			await reader.cancel().catch(() => {});
+			await writer.end();
 			reader.releaseLock();
 		}
 
@@ -2389,6 +2427,7 @@ async function getMultipartPartUrl(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			partNumber,
@@ -2490,6 +2529,7 @@ async function completeMultipartUpload(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			parts,
@@ -2524,6 +2564,7 @@ async function abortMultipartUpload(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 		},

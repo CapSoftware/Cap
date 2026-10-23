@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	start: vi.fn(),
 	getRun: vi.fn(),
 	getWorld: vi.fn(),
+	mediaJobFailed: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -34,6 +35,9 @@ vi.mock("drizzle-orm", () => ({
 }));
 vi.mock("workflow/api", () => ({ start: mocks.start, getRun: mocks.getRun }));
 vi.mock("workflow/runtime", () => ({ getWorld: mocks.getWorld }));
+vi.mock("@/lib/loom-media-dispatch", () => ({
+	isLoomMediaJobFailed: mocks.mediaJobFailed,
+}));
 vi.mock("@/workflows/import-loom-video", () => ({
 	importLoomVideoWorkflow: vi.fn(),
 }));
@@ -60,6 +64,7 @@ describe("Loom workflow startup receipts", () => {
 		mocks.where.mockResolvedValue([{ affectedRows: 1 }]);
 		mocks.queue.mockResolvedValue({ messageId: "message-1" });
 		mocks.getWorld.mockReturnValue({ queue: mocks.queue });
+		mocks.mediaJobFailed.mockResolvedValue(false);
 		mocks.start.mockImplementation(
 			async (
 				_workflow: unknown,
@@ -78,11 +83,32 @@ describe("Loom workflow startup receipts", () => {
 		);
 	});
 
+	it.each([false, true])(
+		"requires a matching failed worker before releasing an accepted dispatch: %s",
+		async (failed) => {
+			mocks.getRun.mockReturnValue({ status: Promise.resolve("failed") });
+			mocks.mediaJobFailed.mockResolvedValue(failed);
+			expect(
+				await getLoomImportRunState({
+					runId: "run-1",
+					dispatch: "accepted",
+					mediaDispatch: {
+						attemptId: "run-1:0",
+						videoId: "video-1",
+						jobId: "worker-1",
+						state: "accepted",
+					},
+				}),
+			).toBe(failed ? "inactive" : "unconfirmed");
+			expect(mocks.mediaJobFailed).toHaveBeenCalledWith("worker-1", "video-1");
+		},
+	);
+
 	it("records the run before dispatch and stores queue acceptance", async () => {
 		await startLoomImportWorkflow(payload);
 		expect(
 			mocks.set.mock.calls.map(([value]) =>
-				JSON.parse(value.metadata.values[1]),
+				JSON.parse(value.metadata.values.at(-1)),
 			),
 		).toEqual([
 			{ runId: "run-1", dispatch: "pending" },
@@ -116,7 +142,7 @@ describe("Loom workflow startup receipts", () => {
 			canRetry: true,
 		});
 		expect(
-			JSON.parse(mocks.set.mock.calls.at(-1)?.[0].metadata.values[1]),
+			JSON.parse(mocks.set.mock.calls.at(-1)?.[0].metadata.values.at(-1)),
 		).toEqual({ runId: "run-1", dispatch: "rejected" });
 	});
 
@@ -126,7 +152,7 @@ describe("Loom workflow startup receipts", () => {
 			canRetry: false,
 		});
 		expect(
-			JSON.parse(mocks.set.mock.calls.at(-1)?.[0].metadata.values[1]),
+			JSON.parse(mocks.set.mock.calls.at(-1)?.[0].metadata.values.at(-1)),
 		).toEqual({ runId: "run-1", dispatch: "uncertain" });
 	});
 
@@ -152,7 +178,8 @@ describe("Loom workflow startup receipts", () => {
 		);
 		await expect(startLoomImportWorkflow(payload)).resolves.toBeUndefined();
 		expect(
-			JSON.parse(mocks.set.mock.calls.at(-1)?.[0].metadata.values[1]).dispatch,
+			JSON.parse(mocks.set.mock.calls.at(-1)?.[0].metadata.values.at(-1))
+				.dispatch,
 		).toBe("accepted");
 	});
 
@@ -209,6 +236,20 @@ describe("Loom workflow startup receipts", () => {
 			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
 		).toBe("unconfirmed");
 	});
+
+	it.each(["completed", "failed", "cancelled"])(
+		"holds an uncertain media dispatch after the workflow is %s",
+		async (status) => {
+			mocks.getRun.mockReturnValue({ status: Promise.resolve(status) });
+			expect(
+				await getLoomImportRunState({
+					runId: "run-1",
+					dispatch: "accepted",
+					mediaDispatch: { attemptId: "run-1:0", state: "uncertain" },
+				}),
+			).toBe("unconfirmed");
+		},
+	);
 
 	it("allows rejected and legacy imports without an active run check", async () => {
 		expect(

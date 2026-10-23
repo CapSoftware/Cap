@@ -5,6 +5,7 @@ import { User, Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { getRun, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
+import { isLoomMediaJobFailed } from "@/lib/loom-media-dispatch";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 type LoomImportRun = NonNullable<VideoMetadata["loomImportRun"]>;
@@ -63,7 +64,20 @@ export async function getLoomImportRunState(
 			status === "failed" ||
 			status === "cancelled"
 		) {
-			return "inactive";
+			const mediaDispatch = receipt.mediaDispatch;
+			if (mediaDispatch?.state === "accepted") {
+				return mediaDispatch.jobId &&
+					mediaDispatch.videoId &&
+					(await isLoomMediaJobFailed(
+						mediaDispatch.jobId,
+						mediaDispatch.videoId,
+					))
+					? "inactive"
+					: "unconfirmed";
+			}
+			return receipt.mediaDispatch?.state === "uncertain"
+				? "unconfirmed"
+				: "inactive";
 		}
 		return status === "pending" ? "pending" : "active";
 	} catch {
@@ -75,7 +89,10 @@ async function saveReceipt(payload: ImportPayload, receipt: LoomImportRun) {
 	const result = await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.loomImportRun', JSON_EXTRACT(${JSON.stringify(receipt)}, '$'))`,
+			metadata:
+				receipt.dispatch === "pending"
+					? sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.loomImportRun', JSON_EXTRACT(${JSON.stringify(receipt)}, '$'))`
+					: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.loomImportRun', JSON_MERGE_PATCH(COALESCE(JSON_EXTRACT(${videos.metadata}, '$.loomImportRun'), JSON_OBJECT()), JSON_EXTRACT(${JSON.stringify(receipt)}, '$')))`,
 		})
 		.where(
 			and(
