@@ -3,6 +3,10 @@ name = "cap-export"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Encoder failure injection for the cap-verify suite. Never enabled by the app.
+test-hooks = []
+
 [dependencies]
 cap-utils = { path = "../utils" }
 cap-project = { path = "../project" }

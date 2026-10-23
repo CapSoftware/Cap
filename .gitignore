@@ -38,6 +38,7 @@ outputs
 .zed
 .output
 .vinxi
+*.config.timestamp_*.js
 native-deps*
 .tinyb
 

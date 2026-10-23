@@ -205,14 +205,10 @@ fn map_captions_to_edited_timeline(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<MappedCaption> {
-    let sanitized: Vec<CaptionSegment> = raw_segments
-        .iter()
-        .map(clamp_caption_segment_words)
-        .collect();
-
     if timeline.segments.is_empty() || recording_durations.is_empty() {
-        return sanitized
-            .into_iter()
+        return raw_segments
+            .iter()
+            .map(clamp_caption_segment_words)
             .map(|segment| MappedCaption {
                 id: segment.id,
                 start: f64::from(segment.start),
@@ -238,7 +234,7 @@ fn map_captions_to_edited_timeline(
 
     let mut result = Vec::new();
 
-    for caption in &sanitized {
+    for caption in raw_segments {
         let mut mapped_caption_segments: Vec<MappedCaption> = Vec::new();
         let word_bounds = if caption.words.is_empty() {
             None
@@ -247,7 +243,7 @@ fn map_captions_to_edited_timeline(
                 (f64::INFINITY, f64::NEG_INFINITY),
                 |(start, end), word| {
                     let word_start = f64::from(word.start);
-                    let word_end = f64::from(word.end);
+                    let word_end = f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION));
                     if word_start.is_nan() || word_end.is_nan() {
                         None
                     } else {
@@ -269,7 +265,7 @@ fn map_captions_to_edited_timeline(
                 for word in &caption.words {
                     let Some((start, end)) = map_time_range_within_mapping(
                         f64::from(word.start),
-                        f64::from(word.end),
+                        f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION)),
                         mapping,
                     ) else {
                         continue;
@@ -445,6 +441,9 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
     timeline.caption_segments =
         derive_caption_track_segments(&captions.segments, timeline, recording_durations);
 }
+
+#[cfg(test)]
+mod projection_tests;
 
 #[cfg(test)]
 mod tests {
