@@ -46,7 +46,10 @@ services:
   media-server:
     image: 'ghcr.io/capsoftware/cap-media-server:latest'
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
+      # Finish active work for up to 25s on stop (below stop_grace_period).
+      MEDIA_SERVER_SHUTDOWN_GRACE_MS: '25000'
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: '${SERVICE_HEX_32_MEDIASERVER}'
     healthcheck:

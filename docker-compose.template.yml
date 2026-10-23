@@ -55,7 +55,10 @@ services:
       context: ./apps/media-server
       dockerfile: Dockerfile.standalone
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
+      # Finish active work for up to 25s on stop (below stop_grace_period).
+      MEDIA_SERVER_SHUTDOWN_GRACE_MS: "25000"
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
     ports:
