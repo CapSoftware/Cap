@@ -12549,6 +12549,8 @@ mod tests {
         }
     }
 
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     fn preview_click_returns_focus_to_the_editor(cx: &mut gpui::TestAppContext) {
         let project = tempfile::tempdir().unwrap();
@@ -12578,6 +12580,8 @@ mod tests {
         });
     }
 
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     fn dialog_click_over_the_preview_keeps_its_focus(cx: &mut gpui::TestAppContext) {
         let project = tempfile::tempdir().unwrap();
