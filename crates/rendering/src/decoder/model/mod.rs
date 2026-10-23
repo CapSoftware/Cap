@@ -1094,6 +1094,7 @@ fn run_suite(decoder: Decoder) {
 fn avassetreader_answers_match_the_reference_model() {
     // Engine verify runs only this test of the module on macOS.
     avassetreader_answers_stay_exact_when_its_reader_fails();
+    avassetreader_switches_to_software_only_when_its_reader_stops_answering();
     run_suite(Decoder::Avf);
     avassetreader_scrubbing_backwards_reuses_the_frames_below_each_seek();
     avassetreader_stops_reading_only_once_every_request_is_abandoned();
@@ -1154,6 +1155,120 @@ fn avassetreader_answers_stay_exact_when_its_reader_fails() {
             });
         }
     }
+}
+
+/// A busy machine can miss one decode deadline without anything being
+/// wrong with the reader: that request gets no frame, and hardware decoding
+/// stays. Only a reader that answers without a frame, or misses every
+/// deadline round after round, is replaced by software decoding.
+#[cfg(target_os = "macos")]
+#[test]
+fn avassetreader_switches_to_software_only_when_its_reader_stops_answering() {
+    use super::{FrameDeadline, MacOsDecoderFallback};
+
+    let script = Script {
+        time_base: (1, 30),
+        frames: (0..120)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 30 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let runtime = runtime();
+    let time = |frame: u32| frame as f32 / 30.0;
+    let slow_vend = Duration::from_millis(300);
+    let deadline_ms = 50;
+
+    let registration = scripted::register(script.clone());
+    let path = registration.path().to_path_buf();
+    runtime.block_on(async {
+        let handle = spawn_decoder("model", path, 30, 0.0, false)
+            .await
+            .unwrap()
+            .with_max_fallback_distance(2);
+        let mut frame = 0;
+        for episode in 0..3 {
+            registration.set_vend_delay(slow_vend);
+            for _ in 1..MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
+                frame += 1;
+                let late = handle
+                    .get_frame_with_timeout(time(frame), deadline_ms, 2, FrameDeadline::Drop)
+                    .await;
+                assert!(
+                    matches!(late, Ok(None)),
+                    "slow episode {episode}: request {frame} beat a {deadline_ms} ms deadline"
+                );
+                assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
+            }
+            registration.set_vend_delay(Duration::ZERO);
+            frame += 1;
+            assert_eq!(
+                handle
+                    .get_frame(time(frame))
+                    .await
+                    .as_ref()
+                    .and_then(frame_identity),
+                Some(frame),
+                "after slow episode {episode}"
+            );
+            assert_eq!(
+                handle.decoder_type(),
+                DecoderType::AVAssetReader,
+                "slow episode {episode} switched to {}",
+                handle.decoder_type()
+            );
+        }
+
+        registration.set_vend_delay(slow_vend);
+        for _ in 0..MacOsDecoderFallback::MAX_TIMED_OUT_ROUNDS {
+            frame += 1;
+            handle
+                .get_frame_with_timeout(time(frame), deadline_ms, 2, FrameDeadline::Drop)
+                .await
+                .unwrap();
+        }
+        registration.set_vend_delay(Duration::ZERO);
+        assert_eq!(handle.decoder_type(), DecoderType::FFmpegSoftware);
+        assert_eq!(
+            handle.fallback_reason(),
+            Some("AVAssetReader stopped answering")
+        );
+        frame += 1;
+        assert_eq!(
+            handle
+                .get_frame(time(frame))
+                .await
+                .as_ref()
+                .and_then(frame_identity),
+            Some(frame)
+        );
+    });
+
+    let registration = scripted::register(script);
+    registration.fail_avf_read_at(40);
+    registration.fail_avf_read_at(40);
+    let path = registration.path().to_path_buf();
+    runtime.block_on(async {
+        let handle = spawn_decoder("model", path, 30, 0.0, false)
+            .await
+            .unwrap()
+            .with_max_fallback_distance(2);
+        assert_eq!(
+            handle
+                .get_frame(time(45))
+                .await
+                .as_ref()
+                .and_then(frame_identity),
+            Some(45)
+        );
+        assert_eq!(handle.decoder_type(), DecoderType::FFmpegSoftware);
+        assert_eq!(
+            handle.fallback_reason(),
+            Some("AVAssetReader returned no frame")
+        );
+    });
 }
 
 #[test]
