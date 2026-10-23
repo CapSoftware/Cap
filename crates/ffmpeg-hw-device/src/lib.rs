@@ -9,16 +9,18 @@ use ffmpeg::{
     sys::{
         AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX, AVBufferRef, AVCodecContext, AVCodecHWConfig,
         AVHWDeviceType, AVPixelFormat, av_buffer_ref, av_buffer_unref, av_dict_free, av_dict_set,
-        av_hwdevice_ctx_create, av_hwframe_transfer_data, avcodec_get_hw_config,
+        av_hwdevice_ctx_create, av_hwframe_transfer_data, avcodec_default_get_format,
+        avcodec_get_hw_config,
     },
 };
+use tracing::warn;
 
 thread_local! {
     static HW_PIX_FMT: Cell<AVPixelFormat> = const { Cell::new(AVPixelFormat::AV_PIX_FMT_NONE) };
 }
 
 unsafe extern "C" fn get_format(
-    _: *mut AVCodecContext,
+    ctx: *mut AVCodecContext,
     pix_fmts: *const AVPixelFormat,
 ) -> AVPixelFormat {
     unsafe {
@@ -36,7 +38,15 @@ unsafe extern "C" fn get_format(
             fmt = fmt.offset(1);
         }
 
-        AVPixelFormat::AV_PIX_FMT_NONE
+        // When the hardware format's setup fails (a busy or reset media
+        // engine), FFmpeg drops it from the list and asks again. Choosing
+        // nothing here would fail every packet, so take FFmpeg's default
+        // software format and keep decoding on the CPU.
+        warn!(
+            hw_pix_fmt = ?HW_PIX_FMT.get(),
+            "Hardware decoder setup failed, falling back to software decode"
+        );
+        avcodec_default_get_format(ctx, pix_fmts)
     }
 }
 
@@ -194,3 +204,32 @@ impl CodecExt for codec::codec::Codec {
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ffmpeg::sys::{avcodec_alloc_context3, avcodec_free_context};
+
+    #[test]
+    fn get_format_falls_back_to_software_when_hardware_setup_fails() {
+        HW_PIX_FMT.set(AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX);
+        let offered = [
+            AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX,
+            AVPixelFormat::AV_PIX_FMT_YUV420P,
+            AVPixelFormat::AV_PIX_FMT_NONE,
+        ];
+        unsafe {
+            let mut ctx = avcodec_alloc_context3(null());
+            assert_eq!(
+                get_format(ctx, offered.as_ptr()),
+                AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX
+            );
+            // FFmpeg drops a hardware format whose setup failed and asks again.
+            assert_eq!(
+                get_format(ctx, offered[1..].as_ptr()),
+                AVPixelFormat::AV_PIX_FMT_YUV420P
+            );
+            avcodec_free_context(&mut ctx);
+        }
+    }
+}
