@@ -1641,7 +1641,6 @@ mod tests {
             &[
                 "Open Main Window",
                 "-",
-                mode_label,
                 "-",
                 "Screenshot Display",
                 "Screenshot Window",
