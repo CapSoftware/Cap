@@ -30,10 +30,19 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 401 });
 	}
 
+	if (typeof metadata !== "object" || Array.isArray(metadata)) {
+		return Response.json({ error: true }, { status: 400 });
+	}
+
+	const { agentUpload: _agentUpload, ...clientMetadata } = metadata;
+	const storedAgentUpload = result.metadata?.agentUpload;
+
 	await db()
 		.update(videos)
 		.set({
-			metadata: metadata,
+			metadata: storedAgentUpload
+				? { ...clientMetadata, agentUpload: storedAgentUpload }
+				: clientMetadata,
 		})
 		.where(eq(videos.id, videoId));
 
