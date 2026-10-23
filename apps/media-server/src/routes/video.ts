@@ -80,6 +80,7 @@ import {
 	uploadToS3,
 } from "../lib/media-video";
 import { encodeAttemptsBudgetMs } from "../lib/nvenc-encoder";
+import { findJobOnPeer, isPeerLookup } from "../lib/peer-jobs";
 import { RecordingTimingError } from "../lib/recording-timing";
 import {
 	hashRecordingFile,
@@ -1771,8 +1772,20 @@ video.get("/process/:jobId/status", async (c) => {
 	}
 	const jobId = c.req.param("jobId");
 	const job = getJob(jobId);
+	const accept = c.req.header("Accept");
 
 	if (!job) {
+		if (
+			hasMediaServerSecret(c) &&
+			!isPeerLookup(c.req.raw) &&
+			!accept?.includes("text/event-stream")
+		) {
+			const owner = await findJobOnPeer(
+				`/video/process/${encodeURIComponent(jobId)}/status`,
+				"GET",
+			);
+			if (owner) return owner;
+		}
 		return c.json(
 			{
 				error: "Job not found",
@@ -1783,8 +1796,6 @@ video.get("/process/:jobId/status", async (c) => {
 			404,
 		);
 	}
-
-	const accept = c.req.header("Accept");
 
 	if (accept?.includes("text/event-stream")) {
 		const stream = new ReadableStream({
@@ -1855,6 +1866,13 @@ video.post("/process/:jobId/cancel", async (c) => {
 	const job = getJob(jobId);
 
 	if (!job) {
+		if (!isPeerLookup(c.req.raw)) {
+			const owner = await findJobOnPeer(
+				`/video/process/${encodeURIComponent(jobId)}/cancel`,
+				"POST",
+			);
+			if (owner) return owner;
+		}
 		return c.json(
 			{
 				error: "Job not found",
