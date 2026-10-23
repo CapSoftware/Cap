@@ -5,7 +5,7 @@ const READ_ONLY_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export type SiteCheckedRequest = {
 	method: string;
 	url: string;
-	headers: Pick<Headers, "get" | "has">;
+	headers: Pick<Headers, "get">;
 };
 
 const parseUrl = (value: string | null | undefined) => {
@@ -34,9 +34,12 @@ const isOwnOrigin = (origin: URL, request: SiteCheckedRequest) => {
 	return parseUrl(webUrl)?.origin === origin.origin;
 };
 
+// Callers must only consult this on the cookie-auth path: a successfully
+// authenticated bearer token returns before the check is reached. The presence
+// of an Authorization header is not proof of bearer auth, so it is ignored
+// here — an invalid bearer that falls back to the cookie still gets checked.
 export const isCrossSiteCookieWrite = (request: SiteCheckedRequest) => {
 	if (READ_ONLY_METHODS.has(request.method.toUpperCase())) return false;
-	if (request.headers.has("authorization")) return false;
 
 	// Sec-Fetch-Site is set by the browser and cannot be forged by page script,
 	// so it decides when present. Origin is the fallback for clients that

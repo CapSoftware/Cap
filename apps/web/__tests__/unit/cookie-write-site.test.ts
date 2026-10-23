@@ -170,12 +170,17 @@ describe("isCrossSiteCookieWrite", () => {
 		).toBe(false);
 	});
 
-	it("leaves requests with an Authorization header alone", () => {
+	it("still flags a cross-site write that carries an Authorization header", () => {
 		expect(
 			isCrossSiteCookieWrite(
 				request("POST", { ...crossSite, authorization: `Bearer ${API_KEY}` }),
 			),
-		).toBe(false);
+		).toBe(true);
+		expect(
+			isCrossSiteCookieWrite(
+				request("POST", { ...crossSite, authorization: "Bearer bogus" }),
+			),
+		).toBe(true);
 	});
 
 	it.each(["GET", "HEAD", "OPTIONS"])("leaves %s alone", (method) => {
@@ -203,8 +208,26 @@ describe("Hono cookie fallback", () => {
 		expect(mocks.getSessionUser).not.toHaveBeenCalled();
 	});
 
+	it("does not authenticate a cross-site cookie write carrying a bogus bearer", async () => {
+		const response = await send("/required", "POST", {
+			...crossSite,
+			authorization: "Bearer bogus",
+		});
+		expect(response.status).toBe(401);
+		expect(mocks.getSessionUser).not.toHaveBeenCalled();
+	});
+
 	it("keeps optional endpoints working anonymously for cross-site writes", async () => {
 		const response = await send("/optional", "POST", crossSite);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ user: null });
+	});
+
+	it("keeps optional endpoints anonymous for a cross-site write with a bogus bearer", async () => {
+		const response = await send("/optional", "POST", {
+			...crossSite,
+			authorization: "Bearer bogus",
+		});
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ user: null });
 	});
@@ -285,8 +308,14 @@ describe("Effect getCurrentUser", () => {
 			),
 		);
 
-	it("returns no user for a cross-site cookie write", async () => {
-		expect(await run(request("POST", crossSite))).toEqual(Option.none());
+	it.each([
+		["plain cross-site write", request("POST", crossSite)],
+		[
+			"cross-site write carrying a bogus bearer",
+			request("POST", { ...crossSite, authorization: "Bearer other" }),
+		],
+	])("returns no user for a %s", async (_label, web) => {
+		expect(await run(web)).toEqual(Option.none());
 		expect(mocks.getServerSession).not.toHaveBeenCalled();
 	});
 
@@ -294,10 +323,6 @@ describe("Effect getCurrentUser", () => {
 		["same-origin write", request("POST", sameOrigin)],
 		["same-site write", request("POST", sameSite)],
 		["cross-site GET", request("GET", crossSite)],
-		[
-			"cross-site write with an Authorization header",
-			request("POST", { ...crossSite, authorization: "Bearer other" }),
-		],
 		["call outside a request", undefined],
 	])("returns the cookie user for a %s", async (_label, web) => {
 		expect(await run(web)).toEqual(Option.some("cookie-user"));
@@ -358,6 +383,14 @@ describe("HttpApi auth middleware", () => {
 
 	it("does not authenticate a cross-site cookie write", async () => {
 		const response = await send("POST", crossSite);
+		expect(response.status).toBe(401);
+	});
+
+	it("does not authenticate a cross-site cookie write carrying a bogus bearer", async () => {
+		const response = await send("POST", {
+			...crossSite,
+			authorization: "Bearer bogus",
+		});
 		expect(response.status).toBe(401);
 	});
 
