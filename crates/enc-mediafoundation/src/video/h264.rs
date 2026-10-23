@@ -664,6 +664,11 @@ impl H264Encoder {
         mut on_sample: impl FnMut(IMFSample) -> windows::core::Result<()>,
     ) -> Result<EncoderHealthStatus, EncoderRuntimeError> {
         let mut health_monitor = EncoderHealthMonitor::new();
+        let mut frames = 0u64;
+        let mut wait_ns = 0u64;
+        let mut input_ns = 0u64;
+        let mut process_ns = 0u64;
+        let mut output_ns = 0u64;
 
         unsafe {
             self.transform
@@ -689,13 +694,17 @@ impl H264Encoder {
                     });
                 }
 
+                let wait_started = Instant::now();
                 let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
+                wait_ns += wait_started.elapsed().as_nanos() as u64;
 
                 let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
                 match event_type {
                     MediaFoundation::METransformNeedInput => {
                         health_monitor.record_input();
+                        frames += 1;
                         should_exit = true;
+                        let input_started = Instant::now();
                         let get_frame_started = Instant::now();
                         if !should_stop.load(Ordering::SeqCst)
                             && let Some((texture, timestamp)) = get_frame()?
@@ -709,6 +718,7 @@ impl H264Encoder {
                                 health_monitor.notify_input_stall_recovered();
                             }
 
+                            let process_started = Instant::now();
                             let process_result = (|| -> windows::core::Result<()> {
                                 self.video_processor.process_texture(&texture)?;
                                 let input_buffer = MFCreateDXGISurfaceBuffer(
@@ -724,6 +734,7 @@ impl H264Encoder {
                                     .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
                                 Ok(())
                             })();
+                            process_ns += process_started.elapsed().as_nanos() as u64;
 
                             match process_result {
                                 Ok(()) => {
@@ -750,8 +761,22 @@ impl H264Encoder {
                                 }
                             }
                         }
+
+                        input_ns += input_started.elapsed().as_nanos() as u64;
+                        if frames.is_multiple_of(60) {
+                            let frame_count = frames as f64;
+                            tracing::debug!(
+                                frames,
+                                wait_ms = wait_ns as f64 / frame_count / 1_000_000.0,
+                                input_ms = input_ns as f64 / frame_count / 1_000_000.0,
+                                process_ms = process_ns as f64 / frame_count / 1_000_000.0,
+                                output_ms = output_ns as f64 / frame_count / 1_000_000.0,
+                                "MF H264 loop timings"
+                            );
+                        }
                     }
                     MediaFoundation::METransformHaveOutput => {
+                        let output_started = Instant::now();
                         let mut status = 0;
                         let output_buffer = MFT_OUTPUT_DATA_BUFFER {
                             dwStreamID: self.output_stream_id,
@@ -778,6 +803,7 @@ impl H264Encoder {
                                 });
                             }
                         }
+                        output_ns += output_started.elapsed().as_nanos() as u64;
                     }
                     _ => {
                         panic!("Unknown media event type: {}", event_type.0);

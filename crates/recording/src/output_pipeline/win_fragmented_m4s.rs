@@ -479,96 +479,109 @@ impl WindowsFragmentedM4SMuxer {
                         break;
                     }
 
-                    let convert_start = std::time::Instant::now();
-
-                    let (ffmpeg_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
-                        Paced::Frame(frame, ts) => match frame.as_ffmpeg() {
-                            Ok(f) => {
-                                last_ffmpeg_frame = Some(reference_video_frame(&f));
-                                (Some(f), ts)
-                            }
-                            Err(e) => {
-                                let readback_miss = matches!(
-                                    e,
-                                    scap_ffmpeg::AsFFmpegError::NotReady
-                                        | scap_ffmpeg::AsFFmpegError::StagingBusy
-                                );
-                                if !readback_miss {
-                                    warn!("Failed to convert D3D11 frame: {e:?}");
-                                } else {
-                                    readback_misses += 1;
-                                    if readback_misses == 1 || readback_misses.is_multiple_of(90) {
-                                        warn!(
-                                            readback_misses,
-                                            "Screen readback is missing deadlines; the encoder is duplicating the last frame"
+                    let (ffmpeg_frame, timestamp, readback_elapsed) =
+                        match pacer.next(&video_rx, &pause_flag) {
+                            Paced::Frame(frame, ts) => {
+                                let readback_start = std::time::Instant::now();
+                                let ffmpeg_frame = frame.as_ffmpeg();
+                                let readback_elapsed = readback_start.elapsed();
+                                match ffmpeg_frame {
+                                    Ok(f) => {
+                                        last_ffmpeg_frame = Some(reference_video_frame(&f));
+                                        (Some(f), ts, Some(readback_elapsed))
+                                    }
+                                    Err(e) => {
+                                        let readback_miss = matches!(
+                                            e,
+                                            scap_ffmpeg::AsFFmpegError::NotReady
+                                                | scap_ffmpeg::AsFFmpegError::StagingBusy
                                         );
+                                        if !readback_miss {
+                                            warn!("Failed to convert D3D11 frame: {e:?}");
+                                        } else {
+                                            readback_misses += 1;
+                                            if readback_misses == 1
+                                                || readback_misses.is_multiple_of(90)
+                                            {
+                                                warn!(
+                                                    readback_misses,
+                                                    "Screen readback is missing deadlines; the encoder is duplicating the last frame"
+                                                );
+                                            }
+                                        }
+                                        duplicated_frames += 1;
+                                        (
+                                            last_ffmpeg_frame.as_ref().map(reference_video_frame),
+                                            ts,
+                                            Some(readback_elapsed),
+                                        )
                                     }
                                 }
-                                duplicated_frames += 1;
-                                (last_ffmpeg_frame.as_ref().map(reference_video_frame), ts)
                             }
-                        },
-                        Paced::Repeat(ts) => {
-                            let Some(f) = &last_ffmpeg_frame else {
-                                continue;
-                            };
-                            duplicated_frames += 1;
-                            (Some(reference_video_frame(f)), ts)
-                        }
-                        Paced::End => {
-                            let mut drained = 0u64;
-                            let drain_start = std::time::Instant::now();
-                            let drain_timeout = Duration::from_millis(500);
+                            Paced::Repeat(ts) => {
+                                let Some(f) = &last_ffmpeg_frame else {
+                                    continue;
+                                };
+                                duplicated_frames += 1;
+                                (Some(reference_video_frame(f)), ts, None)
+                            }
+                            Paced::End => {
+                                let mut drained = 0u64;
+                                let drain_start = std::time::Instant::now();
+                                let drain_timeout = Duration::from_millis(500);
 
-                            loop {
-                                match video_rx.recv_timeout(Duration::from_millis(10)) {
-                                    Ok(Some((frame, ts))) => {
-                                        if let Ok(f) = frame.as_ffmpeg() {
-                                            let normalized_ts =
-                                                normalize_timestamp(ts, &mut first_timestamp);
-                                            if let Err(e) = encode_frame_fn(
-                                                f,
-                                                normalized_ts,
-                                                &mut slow_encode_count,
-                                                &mut total_frames,
-                                                &encoder_clone,
-                                            ) {
-                                                warn!("Failed to encode drained frame: {e}");
+                                loop {
+                                    match video_rx.recv_timeout(Duration::from_millis(10)) {
+                                        Ok(Some((frame, ts))) => {
+                                            if let Ok(f) = frame.as_ffmpeg() {
+                                                let normalized_ts =
+                                                    normalize_timestamp(ts, &mut first_timestamp);
+                                                if let Err(e) = encode_frame_fn(
+                                                    f,
+                                                    normalized_ts,
+                                                    &mut slow_encode_count,
+                                                    &mut total_frames,
+                                                    &encoder_clone,
+                                                ) {
+                                                    warn!("Failed to encode drained frame: {e}");
+                                                    break;
+                                                }
+                                                drained += 1;
+                                            }
+                                        }
+                                        Ok(None) => break,
+                                        Err(RecvTimeoutError::Timeout) => {
+                                            if drain_start.elapsed() > drain_timeout {
                                                 break;
                                             }
-                                            drained += 1;
                                         }
+                                        Err(RecvTimeoutError::Disconnected) => break,
                                     }
-                                    Ok(None) => break,
-                                    Err(RecvTimeoutError::Timeout) => {
-                                        if drain_start.elapsed() > drain_timeout {
-                                            break;
-                                        }
-                                    }
-                                    Err(RecvTimeoutError::Disconnected) => break,
                                 }
-                            }
 
-                            if drained > 0 {
-                                debug!(drained = drained, "Drained remaining frames before exit");
+                                if drained > 0 {
+                                    debug!(
+                                        drained = drained,
+                                        "Drained remaining frames before exit"
+                                    );
+                                }
+                                break;
                             }
-                            break;
-                        }
-                    };
-
-                    let convert_elapsed_ms = convert_start.elapsed().as_millis();
+                        };
 
                     let Some(ffmpeg_frame) = ffmpeg_frame else {
                         continue;
                     };
 
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
+                    if let Some(readback_elapsed) = readback_elapsed
+                        && readback_elapsed.as_millis() > SLOW_THRESHOLD_MS
+                    {
                         slow_convert_count += 1;
                         if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
                             debug!(
-                                elapsed_ms = convert_elapsed_ms,
+                                elapsed_ms = readback_elapsed.as_millis(),
                                 count = slow_convert_count,
-                                "D3D11 frame conversion exceeded {}ms threshold",
+                                "D3D11 frame readback exceeded {}ms threshold",
                                 SLOW_THRESHOLD_MS
                             );
                         }

@@ -13,13 +13,14 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use futures::channel::oneshot;
 use std::{
+    cell::Cell,
     path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::AtomicBool,
         mpsc::{SyncSender, TrySendError, sync_channel},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::*;
 
@@ -897,6 +898,8 @@ impl Muxer for WindowsCameraMuxer {
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
                         let mut camera_buffers = CameraBuffers::new();
+                        let upload_ns = Cell::new(0u64);
+                        let mux_ns = Cell::new(0u64);
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
@@ -918,11 +921,21 @@ impl Muxer for WindowsCameraMuxer {
                                 let normalized_ts =
                                     normalize_camera_timestamp(timestamp, &mut first_timestamp);
                                 frame_count += 1;
-                                if frame_count.is_multiple_of(30) {
-                                    debug!("Windows camera encoder: processed {} frames", frame_count);
-                                }
+                                let upload_start = Instant::now();
                                 let texture =
                                     upload_mf_buffer_to_texture(&d3d_device, frame, &mut camera_buffers)?;
+                                upload_ns
+                                    .set(upload_ns.get() + upload_start.elapsed().as_nanos() as u64);
+                                if frame_count.is_multiple_of(30) {
+                                    let upload_avg =
+                                        upload_ns.get() as f64 / frame_count as f64 / 1_000_000.0;
+                                    let mux_avg =
+                                        mux_ns.get() as f64 / frame_count as f64 / 1_000_000.0;
+                                    debug!(
+                                        "Windows camera encoder: processed {} frames (upload {:.3}ms, mux {:.3}ms)",
+                                        frame_count, upload_avg, mux_avg
+                                    );
+                                }
                                 return Ok(Some((texture, duration_to_timespan(normalized_ts))));
                             },
                             |output_sample| {
@@ -936,10 +949,12 @@ impl Muxer for WindowsCameraMuxer {
                                         ));
                                     }
                                 };
+                                let mux_start = Instant::now();
                                 if let Err(e) = muxer.write_sample(&output_sample, &mut output)
                                 {
                                     tracing::error!("Camera WriteSample failed: {e}");
                                 }
+                                mux_ns.set(mux_ns.get() + mux_start.elapsed().as_nanos() as u64);
                                 Ok(())
                             },
                         );
