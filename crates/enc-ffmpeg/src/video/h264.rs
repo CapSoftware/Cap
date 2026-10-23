@@ -341,7 +341,7 @@ impl H264EncoderBuilder {
                 height: output_height,
             });
         }
-        if force_software_encoder()
+        if force_software_encoder(self.is_export)
             || requires_software_encoder(&input_config, self.preset, self.is_export)
         {
             return Err(H264EncoderError::VideoToolboxHwInput(
@@ -1189,7 +1189,7 @@ fn get_encoder_priority_with_override(
     override_priority: Option<&'static [&'static str]>,
     is_export: bool,
 ) -> &'static [&'static str] {
-    if force_software_encoder() {
+    if force_software_encoder(is_export) {
         return &["libx264"];
     }
 
@@ -1200,7 +1200,7 @@ fn get_encoder_priority_with_override(
     override_priority.unwrap_or_else(|| get_default_encoder_priority(config))
 }
 
-fn force_software_encoder() -> bool {
+fn force_software_encoder(is_export: bool) -> bool {
     let enabled = |name: &str| {
         std::env::var(name).is_ok_and(|value| {
             matches!(
@@ -1211,7 +1211,7 @@ fn force_software_encoder() -> bool {
     };
 
     enabled("CAP_EXPORT_FORCE_SOFTWARE_ENCODER")
-        || (cfg!(target_os = "macos") && enabled("CAP_MACOS_SOFTWARE_CODECS"))
+        || (is_export && cfg!(target_os = "macos") && enabled("CAP_MACOS_SOFTWARE_CODECS"))
 }
 
 fn export_encoder_priority_override(
@@ -1682,6 +1682,34 @@ const MAX_BITRATE: usize = 1_000_000_000;
 mod self_test_tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests in this module serialize environment access with ENV_LOCK.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: tests in this module serialize environment access with ENV_LOCK.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     fn yuv420p_frame(y: u8, u: u8, v: u8) -> frame::Video {
         let mut frame = frame::Video::new(format::Pixel::YUV420P, 64, 48);
         frame.data_mut(0).fill(y);
@@ -1715,7 +1743,8 @@ mod self_test_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn videotoolbox_export_uses_the_default_keyframe_interval() {
-        if force_software_encoder() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if force_software_encoder(true) {
             return;
         }
         ffmpeg::init().ok();
@@ -1740,6 +1769,28 @@ mod self_test_tests {
 
         let realtime = videotoolbox_options(false);
         assert_eq!(realtime.get("g"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn software_codec_env_only_forces_export_encoder_priority() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _export_guard = EnvVarGuard::set("CAP_EXPORT_FORCE_SOFTWARE_ENCODER", "0");
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1920, 1080, 30);
+        let recording =
+            get_encoder_priority_with_override(&config, H264Preset::Medium, None, false);
+        assert_ne!(recording, &["libx264"]);
+
+        let _software_guard = EnvVarGuard::set("CAP_MACOS_SOFTWARE_CODECS", "1");
+
+        assert_eq!(
+            get_encoder_priority_with_override(&config, H264Preset::Medium, None, false),
+            recording
+        );
+        assert_eq!(
+            get_encoder_priority_with_override(&config, H264Preset::Medium, None, true),
+            &["libx264"]
+        );
     }
 
     #[cfg(target_os = "linux")]
