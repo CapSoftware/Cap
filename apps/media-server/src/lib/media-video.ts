@@ -10,6 +10,7 @@ import {
 	remainingTimeoutMs,
 } from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
+import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
@@ -59,7 +60,7 @@ const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 // flat 10-minute budget is enough for typical short recordings but not for a
 // long (e.g. 60+ minute) manifest with 1000+ segments.
 const STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS = 5_000;
-const MAX_STREAMING_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const MAX_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
 const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
@@ -76,6 +77,7 @@ const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
 const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
+export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
 
 export type StorageUploadTarget =
 	| {
@@ -95,6 +97,7 @@ export type StorageUploadTarget =
 			completeUrl: string;
 			abortUrl: string;
 			webhookSecret?: string;
+			loomImportAttemptId?: string;
 	  };
 
 export interface StorageUploadReceipt {
@@ -1193,7 +1196,7 @@ function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
 	if (!durationSeconds) return DOWNLOAD_TIMEOUT_MS;
 
 	return Math.min(
-		MAX_STREAMING_DOWNLOAD_TIMEOUT_MS,
+		MAX_DOWNLOAD_TIMEOUT_MS,
 		Math.max(
 			DOWNLOAD_TIMEOUT_MS,
 			Math.ceil(durationSeconds * STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS),
@@ -1204,10 +1207,24 @@ function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
 async function downloadStreamingVideoToTemp(
 	videoUrl: string,
 	abortSignal?: AbortSignal,
+	maxBytes?: number,
 ): Promise<TempFileHandle> {
 	await ensureTempDir();
 	const manifestDir = await mkdtemp(join(getTempDir(), "stream-"));
 	const tempFile = await createTempFile(".mkv");
+	const sizeController = new AbortController();
+	const signal = AbortSignal.any([
+		sizeController.signal,
+		...(abortSignal ? [abortSignal] : []),
+	]);
+	const sizeCheck = maxBytes
+		? setInterval(() => {
+				if (file(tempFile.path).size > maxBytes) {
+					sizeController.abort(new Error("Loom imports are limited to 10 GB"));
+				}
+			}, 250)
+		: undefined;
+	sizeCheck?.unref();
 	const cleanup = async () => {
 		await tempFile.cleanup();
 		await rm(manifestDir, { force: true, recursive: true }).catch(() => {});
@@ -1218,7 +1235,7 @@ async function downloadStreamingVideoToTemp(
 		const inputPath = await materializeStreamingInput(
 			videoUrl,
 			manifestDir,
-			abortSignal,
+			signal,
 		);
 		const durationSeconds =
 			await estimateMaterializedStreamingDurationSeconds(manifestDir);
@@ -1231,8 +1248,11 @@ async function downloadStreamingVideoToTemp(
 				ffmpegHlsCapabilities,
 			),
 			downloadTimeoutMs,
-			abortSignal,
+			signal,
 		);
+		if (maxBytes && file(tempFile.path).size > maxBytes) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		if (file(tempFile.path).size === 0) {
 			throw new Error("Streaming download produced empty file");
@@ -1244,7 +1264,10 @@ async function downloadStreamingVideoToTemp(
 		};
 	} catch (err) {
 		await cleanup();
+		if (sizeController.signal.aborted) throw sizeController.signal.reason;
 		throw err;
+	} finally {
+		if (sizeCheck) clearInterval(sizeCheck);
 	}
 }
 
@@ -1252,26 +1275,34 @@ export async function downloadVideoToTemp(
 	videoUrl: string,
 	inputExtension?: string,
 	abortSignal?: AbortSignal,
+	maxBytes?: number,
 ): Promise<TempFileHandle> {
 	if (isStreamingUrl(videoUrl)) {
-		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
+		return await downloadStreamingVideoToTemp(videoUrl, abortSignal, maxBytes);
 	}
 
 	const local = await materializeMedia(videoUrl, abortSignal);
-	if (local) return { path: local.path, cleanup: async () => {} };
+	if (local) {
+		if (maxBytes && file(local.path).size > maxBytes) {
+			throw new Error("Loom imports are limited to 10 GB");
+		}
+		return { path: local.path, cleanup: async () => {} };
+	}
 
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
 	);
 
 	try {
-		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+		const timeoutSignal = AbortSignal.timeout(
+			maxBytes === undefined ? DOWNLOAD_TIMEOUT_MS : MAX_DOWNLOAD_TIMEOUT_MS,
+		);
 		const combinedSignal = abortSignal
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;
 
 		const parallel = parallelDownloadOptionsFromEnv();
-		if (parallel.concurrency > 1) {
+		if (parallel.concurrency > 1 && maxBytes === undefined) {
 			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
 				...parallel,
 				signal: combinedSignal,
@@ -1296,19 +1327,29 @@ export async function downloadVideoToTemp(
 		if (!response.body) {
 			throw new Error("No response body");
 		}
+		if (maxBytes && Number(response.headers.get("content-length")) > maxBytes) {
+			await response.body.cancel();
+			throw new Error("Loom imports are limited to 10 GB");
+		}
 
 		const reader = response.body.getReader();
 		const writer = file(tempFile.path).writer();
+		let downloadedBytes = 0;
 		let writerEnded = false;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
+				downloadedBytes += value.byteLength;
+				if (maxBytes && downloadedBytes > maxBytes) {
+					throw new Error("Loom imports are limited to 10 GB");
+				}
 				writer.write(value);
 			}
 			writerEnded = true;
 			await writer.end();
 		} finally {
+			await reader.cancel().catch(() => {});
 			reader.releaseLock();
 			if (!writerEnded) await Promise.resolve(writer.end()).catch(() => {});
 		}
@@ -1831,6 +1872,7 @@ async function runTranscodeCommand(
 
 	const stderrLines: string[] = [];
 	const maxStderrLines = 50;
+	const errorLines: string[] = [];
 
 	try {
 		await withTimeout(
@@ -1857,6 +1899,7 @@ async function runTranscodeCommand(
 							if (stderrLines.length > maxStderrLines) {
 								stderrLines.shift();
 							}
+							collectFfmpegErrorLine(errorLines, line);
 							const progress = parseProgressFromStderr(line, totalDurationUs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
@@ -1869,8 +1912,9 @@ async function runTranscodeCommand(
 
 				const exitCode = await proc.exited;
 				if (exitCode !== 0) {
-					throw new Error(
+					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
+						errorLines,
 					);
 				}
 
@@ -2588,6 +2632,7 @@ async function getMultipartPartUrl(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			partNumber,
@@ -2689,6 +2734,7 @@ async function completeMultipartUpload(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			parts,
@@ -2723,6 +2769,7 @@ async function abortMultipartUpload(
 			videoId: target.videoId,
 			generation: target.generation,
 			attemptId: target.attemptId,
+			loomImportAttemptId: target.loomImportAttemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 		},
