@@ -11,7 +11,7 @@ import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
-import { sendEmail } from "../emails/config.ts";
+import { getEmailDeliveryStatus, sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
 import { users } from "../schema.ts";
 import {
@@ -191,12 +191,14 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
 					async sendVerificationRequest({ identifier, token }) {
-						if (!serverEnv().RESEND_API_KEY) {
+						const emailStatus = getEmailDeliveryStatus();
+						if (!emailStatus.configured) {
 							console.log("\n");
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
-							console.log("🔐 VERIFICATION CODE (Development Mode)");
+							console.log("🔐 VERIFICATION CODE (email delivery disabled)");
+							console.log(`ℹ️  ${emailStatus.reason}`);
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
@@ -212,11 +214,16 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						} else {
 							const { OTPEmail } = await import("../emails/otp-email");
 							const email = OTPEmail({ code: token, email: identifier });
-							await sendEmail({
+							const delivery = await sendEmail({
 								email: identifier,
 								subject: `Your Cap Verification Code`,
 								react: email,
 							});
+							if (delivery?.error) {
+								throw new Error(
+									`Failed to send verification email: ${delivery.error.message}`,
+								);
+							}
 						}
 					},
 				}),
