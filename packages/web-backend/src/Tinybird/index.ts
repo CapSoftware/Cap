@@ -268,6 +268,20 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			});
 		};
 
-		return { enabled, appendEvents, queryPipe, querySql } as const;
+		const deleteData = (name: string, deleteCondition: string) => {
+			if (!enabled || !deleteCondition.trim()) return Effect.void;
+			const body = new URLSearchParams({
+				delete_condition: deleteCondition,
+			});
+			return request(`/datasources/${encodeURIComponent(name)}/delete`, {
+				method: "POST",
+				body,
+				headers: {
+					"Content-Type": "application/x-www-form-urlencoded",
+				},
+			}).pipe(Effect.asVoid);
+		};
+
+		return { enabled, appendEvents, queryPipe, querySql, deleteData } as const;
 	}),
 }) {}

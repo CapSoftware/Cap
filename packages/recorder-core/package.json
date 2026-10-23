@@ -4,6 +4,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./capture-streams": "./src/capture-streams.ts",
 		"./instant-mp4-uploader": "./src/instant-mp4-uploader.ts",
 		"./local-recording-backup": "./src/local-recording-backup.ts",
 		"./recorder-constants": "./src/recorder-constants.ts",

@@ -1,0 +1,37 @@
+---
+title: "S3-compatible Storage"
+summary: "Connect private object storage for new Cap uploads"
+tags: "Storage, S3, Integrations"
+---
+
+Cap Pro can store new shareable-link uploads in your own S3-compatible bucket. Cap Desktop currently offers presets for AWS S3, Cloudflare R2, Supabase, MinIO, and other S3-compatible providers.
+
+## How it works
+
+- The active configuration applies to new uploads.
+- Existing recordings stay on their current storage provider.
+- Viewers still use Cap share and embed routes, with normal access checks.
+- Personal storage can be configured in Cap Desktop.
+- Organization owners and admins can manage storage centrally for members.
+
+Changing or removing a configuration does not automatically copy existing objects to another provider.
+
+## Configure a provider
+
+1. Create a private bucket and dedicated credentials with the object and multipart permissions Cap needs.
+2. Configure browser CORS for every trusted Cap web origin and expose the `ETag` response header.
+3. Open **Cap Desktop > Settings > Integrations > S3 Config**.
+4. Choose the provider and enter the access-key ID, secret access key, endpoint, bucket name, and region.
+5. Click **Test Connection**, then save.
+6. Upload and play a non-sensitive sample before using the bucket for the team.
+
+Use the provider-specific instructions:
+
+- [AWS S3](/docs/s3-config/aws-s3)
+- [Cloudflare R2](/docs/s3-config/cloudflare-r2)
+
+For Google Drive rather than S3, read [Google Drive](/docs/teams/google-drive).
+
+## Security boundary
+
+Keep the bucket private and scope credentials to the intended bucket or prefix. Enter secrets through Cap's protected configuration surface, not through chat or source control. A successful connection test proves bucket access; the sample upload verifies object permissions, multipart CORS, storage, and playback together.

@@ -7,12 +7,18 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
+import { useIsChromium } from "hooks/useIsChromium";
 import Image from "next/image";
 import Link from "next/link";
 import { Fragment, useEffect, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
+import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
 import { LoomMark } from "@/components/icons/LoomMark";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
+import {
+	CAP_CHROME_EXTENSION_URL,
+	CHROME_EXTENSION_BUTTON_CLASS,
+} from "@/lib/chrome-extension";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -108,6 +114,7 @@ interface HeaderProps {
 const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 	const [videoToggled, setVideoToggled] = useState(false);
 	const { platform, isIntel } = useDetectPlatform();
+	const isChromium = useIsChromium();
 	// Render the button at its final size on first paint to avoid a layout shift
 	// once the platform resolves: the label is "Download for free" for every
 	// platform and the icon is always the same size, so defaulting the display to
@@ -139,9 +146,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			const result = await sendDownloadLink(email);
 			if (result.success) {
 				setEmailStatus("sent");
-				if (typeof window !== "undefined" && window.bento) {
-					window.bento.identify(email);
-				}
 			} else {
 				setEmailStatus("error");
 				setEmailError(result.error ?? "Something went wrong.");
@@ -177,11 +181,61 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 		return () => clearInterval(interval);
 	}, [modePickerInteracted, heroModes.length]);
 
+	const downloadButton = (
+		<Button
+			variant="dark"
+			href={primaryDownloadUrl}
+			onClick={() =>
+				trackHomepageEvent("download_cta_clicked", {
+					source_page: "home_header",
+					cta_location: "primary",
+					target_url: primaryDownloadUrl,
+					detected_platform: platform ?? "unknown",
+					is_intel: Boolean(isIntel),
+				})
+			}
+			size="lg"
+			className="flex justify-center items-center font-medium max-w-fit"
+		>
+			{getPlatformIcon(displayPlatform)}
+			{getDownloadButtonText(displayPlatform, false, isIntel)}
+		</Button>
+	);
+
+	const upgradeButton = (
+		<UpgradeToPro
+			text={homepageCopy.header.cta.primaryButton}
+			onClick={() =>
+				trackHomepageEvent("pricing_cta_clicked", {
+					source_page: "home_header",
+					cta_location: "secondary",
+					target_url: "/pricing",
+				})
+			}
+		/>
+	);
+
 	return (
 		<div className="mt-[90px] mb-[60px] sm:mb-[100px] md:mb-[160px] w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[140px] xl:min-h-[700px]">
 			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-0">
 				<div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
 					<div className="flex flex-col text-center md:text-left w-full max-w-[650px]">
+						<div className="flex justify-center mb-4 md:justify-start">
+							<Link
+								href="/hipaa-compliant-screen-recording"
+								className="inline-flex gap-2 items-center px-3.5 py-1.5 rounded-full border transition-colors group bg-gray-2 border-gray-4 hover:bg-gray-3 hover:border-gray-5"
+							>
+								<span className="text-xs font-medium text-gray-12">
+									<span className="font-semibold text-blue-500">New</span>
+									<span className="mx-1.5 text-gray-7">·</span>
+									Cap is now HIPAA compliant
+								</span>
+								<FontAwesomeIcon
+									icon={faArrowRight}
+									className="size-2.5 text-gray-10 transition-transform group-hover:translate-x-0.5"
+								/>
+							</Link>
+						</div>
 						<div className="flex justify-center mb-5 md:justify-start">
 							<div className="inline-flex gap-1 p-1 rounded-full border border-gray-4 bg-gray-2">
 								{heroModes.map((mode, index) => {
@@ -275,36 +329,43 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						</p>
 					</div>
 
-					<div className="hidden md:flex flex-wrap gap-4 items-center mb-5">
-						<Button
-							variant="dark"
-							href={primaryDownloadUrl}
-							onClick={() =>
-								trackHomepageEvent("download_cta_clicked", {
-									source_page: "home_header",
-									cta_location: "primary",
-									target_url: primaryDownloadUrl,
-									detected_platform: platform ?? "unknown",
-									is_intel: Boolean(isIntel),
-								})
-							}
-							size="lg"
-							className="flex justify-center items-center font-medium max-w-fit"
-						>
-							{getPlatformIcon(displayPlatform)}
-							{getDownloadButtonText(displayPlatform, false, isIntel)}
-						</Button>
-						<UpgradeToPro
-							text={homepageCopy.header.cta.primaryButton}
-							onClick={() =>
-								trackHomepageEvent("pricing_cta_clicked", {
-									source_page: "home_header",
-									cta_location: "secondary",
-									target_url: "/pricing",
-								})
-							}
-						/>
-					</div>
+					{isChromium ? (
+						<div className="hidden md:flex flex-col gap-4 mb-5">
+							<div className="flex flex-wrap gap-4 items-center">
+								{downloadButton}
+								<span className="text-sm font-medium text-gray-500">or</span>
+								<ChromeExtensionButton
+									variant="white"
+									onClick={() =>
+										trackHomepageEvent("download_cta_clicked", {
+											source_page: "home_header",
+											cta_location: "chrome_extension_secondary",
+											target: "chrome_extension",
+											target_url: CAP_CHROME_EXTENSION_URL,
+											detected_platform: platform ?? "unknown",
+											is_intel: Boolean(isIntel),
+										})
+									}
+									className={clsx(
+										CHROME_EXTENSION_BUTTON_CLASS,
+										"font-medium max-w-fit",
+									)}
+								/>
+							</div>
+							<div className="flex gap-2 items-center">
+								{upgradeButton}
+								<span className="max-w-[240px] text-sm leading-snug text-gray-10">
+									Cap Pro gives you unlimited cloud sharing, AI summaries &amp;
+									team features
+								</span>
+							</div>
+						</div>
+					) : (
+						<div className="hidden md:flex flex-wrap gap-4 items-center mb-5">
+							{downloadButton}
+							{upgradeButton}
+						</div>
+					)}
 
 					<div className="flex md:hidden flex-col gap-3 mb-5">
 						{emailStatus === "sent" ? (
@@ -339,12 +400,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 								)}
 							</form>
 						)}
-						<div className="flex items-center gap-3 my-1">
-							<div className="h-px flex-1 bg-gray-300" />
-							<span className="text-sm font-medium text-gray-500">or</span>
-							<div className="h-px flex-1 bg-gray-300" />
-						</div>
-						<div className="flex justify-center">
+						<div className="flex flex-col gap-2 items-center mt-1">
 							<UpgradeToPro
 								text={homepageCopy.header.cta.primaryButton}
 								onClick={() =>
@@ -355,6 +411,10 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 									})
 								}
 							/>
+							<span className="text-xs text-center text-gray-10">
+								Cap Pro gives you unlimited cloud sharing, AI summaries &amp;
+								team features
+							</span>
 						</div>
 					</div>
 
@@ -398,7 +458,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 
 					<div className="mt-14">
 						<p className="mb-4 text-sm italic text-gray-10 text-center md:text-left">
-							Trusted by <strong>40,000+</strong> teams, builders and creators
+							Trusted by <strong>80,000+</strong> teams, builders and creators
 						</p>
 						<LogoMarquee />
 					</div>
@@ -420,8 +480,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</motion.div>
 					<Image
 						src="/illustrations/app.webp"
-						width={1000}
-						height={1000}
+						width={2108}
+						height={1284}
 						quality={75}
 						priority
 						sizes="(min-width: 1536px) 1200px, (min-width: 1280px) 1000px, 100vw"

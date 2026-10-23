@@ -274,6 +274,16 @@ export type MediaDeviceList = {
 	microphones: MicrophoneDevice[];
 };
 
+// "unknown" covers browsers without the Permissions API; every other value is
+// the live PermissionState reported by the offscreen document, the top-level
+// extension page that actually holds the camera/mic grant.
+export type MediaPermissionState = PermissionState | "unknown";
+
+export type MediaPermissionSnapshot = {
+	camera: MediaPermissionState;
+	microphone: MediaPermissionState;
+};
+
 export type OffscreenRequest =
 	| StartRecordingRequest
 	| StopRecordingRequest
@@ -286,7 +296,12 @@ export type OffscreenRequest =
 	| AcknowledgeErrorRequest
 	| RetryUploadRequest
 	| EnumerateDevicesRequest
-	| ProbeMicrophoneRequest;
+	| ProbeMicrophoneRequest
+	| {
+			target: "offscreen";
+			type: "toggle-microphone-mute";
+			muted: boolean;
+	  };
 
 export type OffscreenResponse =
 	| {
@@ -294,6 +309,7 @@ export type OffscreenResponse =
 			status?: RecordingStatus;
 			answer?: RTCSessionDescriptionInit;
 			devices?: MediaDeviceList;
+			permissions?: MediaPermissionSnapshot;
 			micProbe?: MicrophoneProbeResult;
 	  }
 	| {
@@ -360,6 +376,10 @@ export type ServiceWorkerRequest =
 	  }
 	| {
 			target: "service-worker";
+			type: "open-recorder-panel";
+	  }
+	| {
+			target: "service-worker";
 			type: "open-options";
 	  }
 	| {
@@ -378,6 +398,11 @@ export type ServiceWorkerRequest =
 	| {
 			target: "service-worker";
 			type: "close-webcam-preview";
+	  }
+	| {
+			target: "service-worker";
+			type: "toggle-microphone-mute";
+			muted: boolean;
 	  }
 	| {
 			target: "service-worker";
@@ -446,6 +471,10 @@ export type ServiceWorkerRequest =
 			durationMs: number;
 	  }
 	| {
+			target: "service-worker";
+			type: "hide-recording-start-overlays";
+	  }
+	| {
 			// The recorded tab's confirm overlay reports the user's decision back to
 			// the service worker, which is blocking the recording start on it.
 			target: "service-worker";
@@ -465,6 +494,7 @@ export type ServiceWorkerResponse =
 			bootstrap?: BootstrapData;
 			cameraDevices?: CameraDevice[];
 			microphoneDevices?: MicrophoneDevice[];
+			mediaPermissions?: MediaPermissionSnapshot;
 			status?: RecordingStatus;
 			settings?: ExtensionSettings;
 			plan?: RecordingPlan;
@@ -556,6 +586,7 @@ export type CameraPreviewEvent =
 	| { type: "frame"; frame: WebcamPreviewFrame }
 	| { type: "error"; reason: CameraPreviewErrorReason; message: string }
 	| { type: "pip-state"; active: boolean; supported: boolean }
+	| { type: "pointer-presence"; inside: boolean }
 	| { type: "drag-start"; clientX: number; clientY: number }
 	| { type: "drag-move"; clientX: number; clientY: number }
 	| { type: "drag-end" };

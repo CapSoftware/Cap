@@ -6,7 +6,7 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -27,6 +27,7 @@ import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { importVideoFromPicker, showImportError } from "~/utils/importMedia";
 import { openRecordingFolder } from "~/utils/recording";
+import { createRecordingThumbnail } from "~/utils/recording-thumbnail";
 import {
 	commands,
 	events,
@@ -41,7 +42,6 @@ type Recording = {
 	meta: RecordingMetaWithMetadata;
 	path: string;
 	prettyName: string;
-	thumbnailPath: string;
 };
 
 const Tabs = [
@@ -80,13 +80,11 @@ const recordingsQuery = queryOptions<Recording[]>({
 		const recordings = await Promise.all(
 			result.map(async (file) => {
 				const [path, meta] = file;
-				const thumbnailPath = `${path}/screenshots/display.jpg`;
 
 				return {
 					meta,
 					path,
 					prettyName: meta.pretty_name,
-					thumbnailPath,
 				};
 			}),
 		);
@@ -233,7 +231,7 @@ export default function Recordings() {
 												"flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
 												activeTab() === tab.id
 													? "bg-gray-5 cursor-default border-gray-5"
-													: "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-5",
+													: "bg-transparent hover:bg-gray-3 border-gray-5",
 											)}
 											onClick={() => setActiveTab(tab.id)}
 										>
@@ -329,6 +327,11 @@ function RecordingItem(props: {
 	uploadProgress: number | undefined;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
+	const thumbnail = createRecordingThumbnail(() => props.recording.path);
+	createEffect(() => {
+		thumbnail();
+		setImageExists(true);
+	});
 	const mode = () => props.recording.meta.mode;
 	const firstLetterUpperCase = () =>
 		mode().charAt(0).toUpperCase() + mode().slice(1);
@@ -346,9 +349,7 @@ function RecordingItem(props: {
 			}}
 			class={cx(
 				"flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full  transition-colors duration-200",
-				studioCompleteCheck()
-					? "cursor-pointer hover:bg-gray-3"
-					: "cursor-default",
+				studioCompleteCheck() ? "hover:bg-gray-3" : "cursor-default",
 			)}
 		>
 			<div class="flex gap-5 items-center">
@@ -359,9 +360,7 @@ function RecordingItem(props: {
 					<img
 						class="object-cover rounded-sm size-12"
 						alt="Recording thumbnail"
-						src={`${convertFileSrc(
-							props.recording.thumbnailPath,
-						)}?t=${Date.now()}`}
+						src={thumbnail()}
 						onError={() => setImageExists(false)}
 					/>
 				</Show>
@@ -381,6 +380,12 @@ function RecordingItem(props: {
 							)}
 							<p>{firstLetterUpperCase()}</p>
 						</div>
+
+						<Show when={props.recording.meta.clip_count > 1}>
+							<div class="px-2 py-0.5 flex items-center font-medium text-[11px] text-gray-12 rounded-full w-fit bg-gray-4">
+								<p>{props.recording.meta.clip_count} clips</p>
+							</div>
+						</Show>
 
 						<Show when={props.recording.meta.status.status === "InProgress"}>
 							<div

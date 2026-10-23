@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { organizations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { start } from "workflow/api";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
 
@@ -11,13 +11,42 @@ type TranscribeResult = {
 	message: string;
 };
 
+export type TranscribeVideoOptions = {
+	/**
+	 * The recording's segments are fully uploaded but post-processing (the mux
+	 * into result.mp4) has not finished. Skips the active-upload guard — the
+	 * upload row is in "processing" during the mux — and makes the workflow
+	 * transcribe straight from the segment audio, deferring back to the normal
+	 * post-mux queue if that isn't possible.
+	 */
+	earlyFromSegments?: boolean;
+};
+
+const TRANSCRIPTION_ALREADY_HANDLED_MESSAGE =
+	"Transcription already completed, in progress, or awaiting manual retry";
+
+/** How recently a live-transcription claim must have been stamped to defer
+ * to it. Chunks stamp every ~10s; 3 minutes tolerates long retries without
+ * letting a dead workflow block transcription forever. */
+const LIVE_CLAIM_FRESHNESS_MS = 3 * 60 * 1000;
+
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
+
 export async function transcribeVideo(
 	videoId: Video.VideoId,
 	userId: string,
 	aiGenerationEnabled = false,
-	_isRetry = false,
+	options: TranscribeVideoOptions = {},
 ): Promise<TranscribeResult> {
-	if (!serverEnv().DEEPGRAM_API_KEY) {
+	if (!serverEnv().ASSEMBLY_API_KEY) {
 		return {
 			success: false,
 			message: "Missing necessary environment variables",
@@ -85,32 +114,68 @@ export async function transcribeVideo(
 		video.transcriptionStatus === "COMPLETE" ||
 		video.transcriptionStatus === "PROCESSING" ||
 		video.transcriptionStatus === "SKIPPED" ||
-		video.transcriptionStatus === "NO_AUDIO"
+		video.transcriptionStatus === "NO_AUDIO" ||
+		video.transcriptionStatus === "ERROR"
 	) {
 		return {
 			success: true,
-			message: "Transcription already completed or in progress",
+			message: TRANSCRIPTION_ALREADY_HANDLED_MESSAGE,
 		};
 	}
 
-	const upload = await db()
-		.select({ phase: videoUploads.phase })
-		.from(videoUploads)
-		.where(eq(videoUploads.videoId, videoId))
-		.limit(1);
+	// A live transcription that is provably still running (its claim is
+	// freshness-stamped every chunk) is seconds away from promoting itself to
+	// canonical; claiming now would race it and transcribe the same audio
+	// twice. A stale stamp means the workflow died - proceed normally. The
+	// live workflow's own full-pass fallback uses earlyFromSegments, which is
+	// exempt so it can never deadlock against its opener.
+	if (!options.earlyFromSegments) {
+		const live = video.metadata?.liveTranscript;
+		const stampedAt = live?.updatedAt ? Date.parse(live.updatedAt) : Number.NaN;
+		if (
+			live?.status === "active" &&
+			Number.isFinite(stampedAt) &&
+			Date.now() - stampedAt < LIVE_CLAIM_FRESHNESS_MS
+		) {
+			return {
+				success: true,
+				message: "Live transcription in progress",
+			};
+		}
+	}
 
-	if (
-		upload[0]?.phase === "uploading" ||
-		upload[0]?.phase === "processing" ||
-		upload[0]?.phase === "generating_thumbnail"
-	) {
-		return {
-			success: true,
-			message: "Video upload is still in progress",
-		};
+	if (!options.earlyFromSegments) {
+		const upload = await db()
+			.select({ phase: videoUploads.phase })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId))
+			.limit(1);
+
+		if (
+			upload[0]?.phase === "uploading" ||
+			upload[0]?.phase === "processing" ||
+			upload[0]?.phase === "generating_thumbnail"
+		) {
+			return {
+				success: true,
+				message: "Video upload is still in progress",
+			};
+		}
 	}
 
 	try {
+		const transitionResult = await db()
+			.update(videos)
+			.set({ transcriptionStatus: "PROCESSING" })
+			.where(and(eq(videos.id, videoId), isNull(videos.transcriptionStatus)));
+
+		if (getAffectedRows(transitionResult) === 0) {
+			return {
+				success: true,
+				message: TRANSCRIPTION_ALREADY_HANDLED_MESSAGE,
+			};
+		}
+
 		console.log(
 			`[transcribeVideo] Triggering transcription workflow for video ${videoId}`,
 		);
@@ -120,6 +185,7 @@ export async function transcribeVideo(
 				videoId,
 				userId,
 				aiGenerationEnabled,
+				...(options.earlyFromSegments ? { earlyFromSegments: true } : {}),
 			},
 		]);
 

@@ -9,12 +9,7 @@ import {
 import { classNames } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { Download, MoreVertical } from "lucide-react";
-import { useState } from "react";
-import { toast } from "sonner";
-import {
-	getVideoDownloadInfo,
-	type VideoDownloadVariant,
-} from "@/actions/videos/download";
+import { useVideoDownload } from "./use-video-download";
 
 export function VideoDownloadMenu({
 	videoId,
@@ -22,47 +17,17 @@ export function VideoDownloadMenu({
 	align = "end",
 	triggerClassName,
 	triggerLabel = "Video options",
+	trigger,
 }: {
 	videoId: Video.VideoId;
 	hasEdits: boolean;
 	align?: "start" | "center" | "end";
 	triggerClassName?: string;
 	triggerLabel?: string;
+	/** Trigger contents. Defaults to the editor's dots glyph. */
+	trigger?: React.ReactNode;
 }) {
-	const [isDownloading, setIsDownloading] = useState(false);
-
-	const handleDownload = (variant: VideoDownloadVariant) => {
-		if (isDownloading) return;
-		setIsDownloading(true);
-
-		const run = async () => {
-			const { downloadUrl, filename } = await getVideoDownloadInfo(
-				videoId,
-				variant,
-			);
-			const response = await fetch(downloadUrl);
-			if (!response.ok) throw new Error("Failed to download video");
-			const blob = await response.blob();
-			const blobUrl = window.URL.createObjectURL(blob);
-			const link = document.createElement("a");
-			link.href = blobUrl;
-			link.download = filename;
-			link.style.display = "none";
-			document.body.appendChild(link);
-			link.click();
-			document.body.removeChild(link);
-			window.URL.revokeObjectURL(blobUrl);
-		};
-
-		const promise = run();
-		toast.promise(promise, {
-			loading: "Preparing download...",
-			success: "Download started",
-			error: (error) =>
-				error instanceof Error ? error.message : "Failed to download video",
-		});
-		promise.catch(() => undefined).finally(() => setIsDownloading(false));
-	};
+	const { download, isDownloading } = useVideoDownload(videoId);
 
 	return (
 		<DropdownMenu modal={false}>
@@ -78,7 +43,7 @@ export function VideoDownloadMenu({
 							"size-9 rounded-full text-gray-12 hover:bg-gray-3 active:bg-gray-4",
 					)}
 				>
-					<MoreVertical className="size-4" aria-hidden />
+					{trigger ?? <MoreVertical className="size-4" aria-hidden />}
 				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align={align} sideOffset={6} className="min-w-52">
@@ -86,7 +51,7 @@ export function VideoDownloadMenu({
 					<>
 						<DropdownMenuItem
 							className="flex gap-2 items-center"
-							onClick={() => handleDownload("current")}
+							onClick={() => download("current")}
 						>
 							<Download className="size-3.5 shrink-0" aria-hidden />
 							<span className="text-sm text-gray-12">
@@ -95,7 +60,7 @@ export function VideoDownloadMenu({
 						</DropdownMenuItem>
 						<DropdownMenuItem
 							className="flex gap-2 items-center"
-							onClick={() => handleDownload("original")}
+							onClick={() => download("original")}
 						>
 							<Download className="size-3.5 shrink-0" aria-hidden />
 							<span className="text-sm text-gray-12">
@@ -106,7 +71,7 @@ export function VideoDownloadMenu({
 				) : (
 					<DropdownMenuItem
 						className="flex gap-2 items-center"
-						onClick={() => handleDownload("current")}
+						onClick={() => download("current")}
 					>
 						<Download className="size-3.5 shrink-0" aria-hidden />
 						<span className="text-sm text-gray-12">Download video</span>

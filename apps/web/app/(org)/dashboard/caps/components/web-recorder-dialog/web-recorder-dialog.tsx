@@ -12,12 +12,16 @@ import { MonitorIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
-import { CameraPreviewWindow } from "./CameraPreviewWindow";
+import {
+	CameraPreviewWindow,
+	type CameraPreviewWindowHandle,
+} from "./CameraPreviewWindow";
 import { CameraSelector } from "./CameraSelector";
 import { HowItWorksButton } from "./HowItWorksButton";
 import { HowItWorksPanel } from "./HowItWorksPanel";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import { MicrophoneSelector } from "./MicrophoneSelector";
+import { MicrophoneUnavailablePrompt } from "./MicrophoneUnavailablePrompt";
 import { RecordingButton } from "./RecordingButton";
 import {
 	type RecordingMode,
@@ -42,6 +46,16 @@ const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	timeStyle: "short",
 });
 
+const waitForNextFrame = () =>
+	new Promise<void>((resolve) => {
+		if (typeof window === "undefined") {
+			resolve();
+			return;
+		}
+
+		window.requestAnimationFrame(() => resolve());
+	});
+
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -53,6 +67,7 @@ export const WebRecorderDialog = () => {
 	const dialogContentRef = useRef<HTMLDivElement>(null);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
+	const cameraPreviewRef = useRef<CameraPreviewWindowHandle>(null);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {
@@ -134,8 +149,14 @@ export const WebRecorderDialog = () => {
 		hasAudioTrack,
 		chunkUploads,
 		errorDownload,
+		canRetryUpload,
+		retryUpload,
+		prepareNewRecording,
 		completedShareUrl,
 		recoveredDownloads,
+		isSettingUp,
+		isMicrophoneUnavailable,
+		respondToMicrophoneFailure,
 		isRecording,
 		isBusy,
 		isRestarting,
@@ -219,6 +240,15 @@ export const WebRecorderDialog = () => {
 		});
 	};
 
+	const handleStartClick = useCallback(async () => {
+		if (recordingMode === "camera") {
+			cameraPreviewRef.current?.stopStream();
+			await waitForNextFrame();
+		}
+
+		await startRecording();
+	}, [recordingMode, startRecording]);
+
 	const handleClose = () => {
 		if (!isBusy) {
 			handleOpenChange(false);
@@ -236,6 +266,9 @@ export const WebRecorderDialog = () => {
 	};
 
 	const showInProgressBar = isRecording || isBusy || phase === "error";
+	const showCameraPreview =
+		selectedCameraId &&
+		(recordingMode !== "camera" || (!isSettingUp && !isBusy));
 	const recordingTimerDisplayMs = user.isPro
 		? durationMs
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
@@ -332,12 +365,20 @@ export const WebRecorderDialog = () => {
 										onToggle={handleSystemAudioChange}
 									/>
 								)}
-								<RecordingButton
-									isRecording={isRecording}
-									disabled={!canStartRecording || (isBusy && !isRecording)}
-									onStart={startRecording}
-									onStop={handleStopClick}
-								/>
+								{isMicrophoneUnavailable ? (
+									<MicrophoneUnavailablePrompt
+										onRespond={respondToMicrophoneFailure}
+									/>
+								) : (
+									<RecordingButton
+										isRecording={isRecording}
+										disabled={
+											isRecording ? isRestarting : !canStartRecording || isBusy
+										}
+										onStart={handleStartClick}
+										onStop={handleStopClick}
+									/>
+								)}
 								{!isBrowserSupported && unsupportedReason && (
 									<div className="rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
 										{unsupportedReason}
@@ -385,12 +426,6 @@ export const WebRecorderDialog = () => {
 															href={download.url}
 															download={download.fileName}
 															className="font-medium text-blue-11 hover:text-blue-12"
-															onClick={() =>
-																setTimeout(
-																	() => dismissRecoveredDownload(download.id),
-																	500,
-																)
-															}
 														>
 															Download
 														</a>
@@ -422,6 +457,11 @@ export const WebRecorderDialog = () => {
 					hasAudioTrack={hasAudioTrack}
 					chunkUploads={chunkUploads}
 					errorDownload={errorDownload}
+					onRetryUpload={canRetryUpload ? retryUpload : undefined}
+					onNewRecording={async () => {
+						if (await prepareNewRecording()) setOpen(true);
+					}}
+					shareUrl={completedShareUrl}
 					onStop={handleStopClick}
 					onPause={pauseRecording}
 					onResume={resumeRecording}
@@ -429,8 +469,9 @@ export const WebRecorderDialog = () => {
 					isRestarting={isRestarting}
 				/>
 			)}
-			{selectedCameraId && (
+			{showCameraPreview && (
 				<CameraPreviewWindow
+					ref={cameraPreviewRef}
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
 				/>

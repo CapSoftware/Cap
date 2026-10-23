@@ -1,29 +1,49 @@
-import { buildEnv, serverEnv } from "@cap/env";
-import { stripe } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
-import { PostHog } from "posthog-node";
+import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
+import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting guest checkout process");
-	const { priceId, quantity } = await request.json();
+	const { priceId, quantity, platform } = await request.json();
+	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";
 
 	console.log("Received guest checkout request:", { priceId, quantity });
 
-	if (!priceId) {
-		console.error("Missing required priceId");
-		return Response.json({ error: "priceId is required" }, { status: 400 });
+	const environment =
+		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
+
+	if (
+		!priceId ||
+		typeof priceId !== "string" ||
+		!isValidStripePlanPriceId(priceId, environment)
+	) {
+		console.error("Invalid or missing priceId");
+		return Response.json({ error: "Invalid priceId" }, { status: 400 });
+	}
+
+	const safeQuantity = parseCheckoutQuantity(quantity);
+	if (safeQuantity === null) {
+		console.error("Invalid quantity");
+		return Response.json({ error: "Invalid quantity" }, { status: 400 });
 	}
 
 	try {
 		console.log("Creating guest checkout session");
+		const redirects = getCheckoutRedirectUrls(
+			checkoutPlatform,
+			serverEnv().WEB_URL,
+		);
 		const checkoutSession = await stripe().checkout.sessions.create({
-			line_items: [{ price: priceId, quantity: quantity || 1 }],
+			line_items: [{ price: priceId, quantity: safeQuantity }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&guest=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: redirects.successUrl,
+			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
 			metadata: {
-				platform: "web",
+				platform: checkoutPlatform,
 				guestCheckout: "true",
 			},
 		});
@@ -31,26 +51,16 @@ export async function POST(request: NextRequest) {
 		if (checkoutSession.url) {
 			console.log("Successfully created guest checkout session");
 
-			try {
-				const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
-					host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
-				});
-
-				ph.capture({
-					distinctId: `guest-${checkoutSession.id}`,
-					event: "guest_checkout_started",
-					properties: {
-						price_id: priceId,
-						quantity: quantity || 1,
-						platform: "web",
-						session_id: checkoutSession.id,
-					},
-				});
-
-				await ph.shutdown();
-			} catch (e) {
-				console.error("Failed to capture guest_checkout_started in PostHog", e);
-			}
+			trackServerEvent(
+				`guest-${checkoutSession.id}`,
+				"guest_checkout_started",
+				{
+					price_id: priceId,
+					quantity: safeQuantity,
+					platform: checkoutPlatform,
+					session_id: checkoutSession.id,
+				},
+			);
 
 			return Response.json({ url: checkoutSession.url }, { status: 200 });
 		}

@@ -18,6 +18,12 @@ const MAX_ZOOM = 3;
 // An outward drag of roughly one pane-extent maps to this much zoom change.
 const ZOOM_DRAG_RANGE = 2.5;
 
+// Floating-cards geometry. Matches the renderer's FLOATING_* constants
+// (crates/rendering/src/lib.rs) so the drag panes line up with the cards.
+const FLOATING_PADDING_FRAC = 0.05;
+const FLOATING_CAMERA_FRAC = 0.3;
+const FLOATING_CAMERA_FRAC_STACKED = 0.4;
+
 const clamp = (v: number, min: number, max: number) =>
 	Math.max(min, Math.min(max, v));
 
@@ -62,12 +68,13 @@ const HANDLES: { dir: Dir; class: string }[] = [
 	},
 ];
 
-// In-canvas controls for the split-screen panes. Drag a pane to pan its focal
-// point; drag a resize handle to scale (zoom) its content. Writes the same
-// `splitLayout` fields the sidebar sliders use, so the two stay in sync. The
-// pane outline and handles only appear on hover, and the overlay is shown only
-// while a split-screen scene segment is selected with the playhead inside it
-// (so the handles line up with the rendered halves).
+// In-canvas controls for the split-screen and floating-cards panes. Drag a
+// pane to pan its focal point; drag a resize handle to scale (zoom) its
+// content. Writes the same `splitLayout` fields the sidebar sliders use, so
+// the two stay in sync. The pane outline and handles only appear on hover, and
+// the overlay is shown only while a split-screen/floating scene segment is
+// selected with the playhead inside it (so the handles line up with the
+// rendered panes).
 export function SplitScreenOverlay(props: Props) {
 	const { project, setProject, editorState, projectHistory } =
 		useEditorContext();
@@ -81,7 +88,11 @@ export function SplitScreenOverlay(props: Props) {
 		const index = selection.indices[0];
 		if (index === undefined) return null;
 		const segment = project.timeline?.sceneSegments?.[index];
-		if (!segment || segment.mode !== "splitScreen") return null;
+		if (
+			!segment ||
+			(segment.mode !== "splitScreen" && segment.mode !== "floating")
+		)
+			return null;
 		const time = currentTime();
 		if (time < segment.start || time >= segment.end) return null;
 		return { index, segment };
@@ -90,38 +101,67 @@ export function SplitScreenOverlay(props: Props) {
 	const split = (): SplitLayout =>
 		active()?.segment.splitLayout ?? DEFAULT_SPLIT_LAYOUT;
 
+	const floating = () => active()?.segment.mode === "floating";
+
 	// Matches the renderer: landscape output lays panes left/right, portrait
 	// stacks them top/bottom (crates/rendering SPLIT_STACK_ASPECT_THRESHOLD).
 	const horizontal = () => props.size.width >= props.size.height;
 
-	const screenRect = (): Rect =>
-		horizontal()
+	// Screen + camera pane rects, mirroring the renderer's geometry for the
+	// active mode: full-bleed halves for split-screen, padded cards for
+	// floating.
+	const rects = (): { screen: Rect; camera: Rect } => {
+		const { width: w, height: h } = props.size;
+		if (floating()) {
+			const pad = Math.min(w, h) * FLOATING_PADDING_FRAC;
+			if (horizontal()) {
+				const contentW = Math.max(w - pad * 3, 2);
+				const cameraW = contentW * FLOATING_CAMERA_FRAC;
+				return {
+					screen: {
+						left: pad,
+						top: pad,
+						width: contentW - cameraW,
+						height: h - pad * 2,
+					},
+					camera: {
+						left: w - pad - cameraW,
+						top: pad,
+						width: cameraW,
+						height: h - pad * 2,
+					},
+				};
+			}
+			const contentH = Math.max(h - pad * 3, 2);
+			const cameraH = contentH * FLOATING_CAMERA_FRAC_STACKED;
+			return {
+				screen: {
+					left: pad,
+					top: pad,
+					width: w - pad * 2,
+					height: contentH - cameraH,
+				},
+				camera: {
+					left: pad,
+					top: h - pad - cameraH,
+					width: w - pad * 2,
+					height: cameraH,
+				},
+			};
+		}
+		return horizontal()
 			? {
-					left: 0,
-					top: 0,
-					width: props.size.width / 2,
-					height: props.size.height,
+					screen: { left: 0, top: 0, width: w / 2, height: h },
+					camera: { left: w / 2, top: 0, width: w / 2, height: h },
 				}
 			: {
-					left: 0,
-					top: 0,
-					width: props.size.width,
-					height: props.size.height / 2,
+					screen: { left: 0, top: 0, width: w, height: h / 2 },
+					camera: { left: 0, top: h / 2, width: w, height: h / 2 },
 				};
-	const cameraRect = (): Rect =>
-		horizontal()
-			? {
-					left: props.size.width / 2,
-					top: 0,
-					width: props.size.width / 2,
-					height: props.size.height,
-				}
-			: {
-					left: 0,
-					top: props.size.height / 2,
-					width: props.size.width,
-					height: props.size.height / 2,
-				};
+	};
+
+	const screenRect = (): Rect => rects().screen;
+	const cameraRect = (): Rect => rects().camera;
 
 	const updateSplit = (patch: Partial<SplitLayout>) => {
 		const a = active();
@@ -200,6 +240,7 @@ export function SplitScreenOverlay(props: Props) {
 			<div class="absolute inset-0 pointer-events-none">
 				<Pane
 					rect={screenRect()}
+					rounded={floating()}
 					onPan={makePan(
 						() => split().screenPosition,
 						() => split().screenZoom,
@@ -217,6 +258,7 @@ export function SplitScreenOverlay(props: Props) {
 				/>
 				<Pane
 					rect={cameraRect()}
+					rounded={floating()}
 					onPan={makePan(
 						() => split().cameraPosition,
 						() => split().cameraZoom,
@@ -239,6 +281,7 @@ export function SplitScreenOverlay(props: Props) {
 
 function Pane(props: {
 	rect: Rect;
+	rounded?: boolean;
 	onPan: (e: MouseEvent) => void;
 	makeResize: (dir: Dir) => (e: MouseEvent) => void;
 }) {
@@ -253,7 +296,12 @@ function Pane(props: {
 			}}
 			onMouseDown={props.onPan}
 		>
-			<div class="absolute inset-0 rounded-sm border-2 border-blue-9/80 bg-blue-9/10 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:opacity-100" />
+			<div
+				class={cx(
+					"absolute inset-0 border-2 border-blue-9/80 bg-blue-9/10 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:opacity-100",
+					props.rounded ? "rounded-2xl" : "rounded-sm",
+				)}
+			/>
 			<For each={HANDLES}>
 				{(handle) => (
 					<div

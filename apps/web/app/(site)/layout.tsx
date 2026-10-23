@@ -1,4 +1,5 @@
 import { buildEnv } from "@cap/env";
+import "@cap/ui/style";
 import type { PropsWithChildren } from "react";
 import { formatStarCount, getGitHubStars } from "@/utils/github";
 import { DeferredMessengerWidget } from "../Layout/DeferredMessengerWidget";

@@ -3,8 +3,12 @@ name = "cap-audio"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+test-support = []
 
 [dependencies]
+cap-rnnoise = { path = "../rnnoise" }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 ffmpeg = { workspace = true }
 cpal = { workspace = true }
 tokio.workspace = true
@@ -29,6 +33,9 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
 
 [lints]
 workspace = true

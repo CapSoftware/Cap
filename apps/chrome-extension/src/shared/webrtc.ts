@@ -11,15 +11,20 @@ export const toSessionDescriptionInit = (
 	};
 };
 
-export const waitForIceGatheringComplete = (peer: RTCPeerConnection) =>
+const ICE_GATHERING_TIMEOUT_MS = 2000;
+
+export const waitForIceGatheringComplete = (
+	peer: RTCPeerConnection,
+	timeoutMs = ICE_GATHERING_TIMEOUT_MS,
+) =>
 	new Promise<void>((resolve) => {
 		if (peer.iceGatheringState === "complete") {
 			resolve();
 			return;
 		}
 
-		const handleIceGatheringStateChange = () => {
-			if (peer.iceGatheringState !== "complete") return;
+		const finish = () => {
+			globalThis.clearTimeout(timeout);
 			peer.removeEventListener(
 				"icegatheringstatechange",
 				handleIceGatheringStateChange,
@@ -27,6 +32,12 @@ export const waitForIceGatheringComplete = (peer: RTCPeerConnection) =>
 			resolve();
 		};
 
+		const handleIceGatheringStateChange = () => {
+			if (peer.iceGatheringState !== "complete") return;
+			finish();
+		};
+
+		const timeout = globalThis.setTimeout(finish, timeoutMs);
 		peer.addEventListener(
 			"icegatheringstatechange",
 			handleIceGatheringStateChange,

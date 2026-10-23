@@ -13,6 +13,12 @@ type BuiltAvcCFixture = {
 	spsLevelOffset: number;
 };
 
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+	const buffer = new ArrayBuffer(bytes.byteLength);
+	new Uint8Array(buffer).set(bytes);
+	return buffer;
+};
+
 function buildAvcCFixture(level: number): BuiltAvcCFixture {
 	const prefix = [0x00, 0x00, 0x00, 0x30];
 	const fourcc = [0x61, 0x76, 0x63, 0x43];
@@ -152,7 +158,7 @@ describe("probeAvcLevelFromUrl", () => {
 	it("reads the level from a Range response", async () => {
 		const { bytes } = buildAvcCFixture(0x3d);
 		const fetchImpl = vi.fn(async () => {
-			return new Response(bytes, {
+			return new Response(toArrayBuffer(bytes), {
 				status: 206,
 				headers: { "content-range": `bytes 0-${bytes.byteLength - 1}/99999` },
 			});

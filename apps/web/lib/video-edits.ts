@@ -520,8 +520,17 @@ export function getTimelineDisplaySegments(
 	const normalized = normalizeTimelineState(state);
 	const keepRanges = getTimelineKeepRanges(normalized);
 	const segments: VideoTimelineDisplaySegment[] = [];
+	let deletedRangeIndex = 0;
+	let deletedBefore = 0;
 
 	for (const range of keepRanges) {
+		let deletedRange = normalized.deletedRanges[deletedRangeIndex];
+		while (deletedRange && deletedRange.end <= range.start + EPSILON) {
+			deletedBefore += deletedRange.end - deletedRange.start;
+			deletedRangeIndex++;
+			deletedRange = normalized.deletedRanges[deletedRangeIndex];
+		}
+
 		const boundaries = [
 			range.start,
 			...normalized.splitPoints.filter(
@@ -536,11 +545,8 @@ export function getTimelineDisplaySegments(
 			if (end - start < MIN_RANGE_DURATION) continue;
 
 			const id = getSegmentId(start, end);
-			const displayStart = mapTimelineSourceTimeToDisplayTime(
-				normalized,
-				start,
-			);
-			const displayEnd = mapTimelineSourceTimeToDisplayTime(normalized, end);
+			const displayStart = roundEditTime(Math.max(0, start - deletedBefore));
+			const displayEnd = roundEditTime(Math.max(0, end - deletedBefore));
 			if (displayEnd - displayStart < MIN_RANGE_DURATION) continue;
 
 			segments.push({
@@ -565,6 +571,7 @@ export function getTimelineDisplaySplitPoints(
 	const segments = getTimelineDisplaySegments(normalized);
 	const sortedSplitPoints = [...normalized.splitPoints].sort((a, b) => a - b);
 	const markers: VideoTimelineDisplaySplitPoint[] = [];
+	let splitIndex = 0;
 
 	for (let index = 0; index < segments.length - 1; index++) {
 		const current = segments[index];
@@ -576,11 +583,17 @@ export function getTimelineDisplaySplitPoints(
 			sourceTimes.push(next.start);
 		}
 
-		const splitIndices = sortedSplitPoints.flatMap((point, splitIndex) =>
-			sourceTimes.some((sourceTime) => Math.abs(point - sourceTime) <= EPSILON)
-				? [splitIndex]
-				: [],
-		);
+		const splitIndices: number[] = [];
+		for (const sourceTime of sourceTimes) {
+			let point = sortedSplitPoints[splitIndex];
+			while (point !== undefined && point - sourceTime <= EPSILON) {
+				if (Math.abs(point - sourceTime) <= EPSILON) {
+					splitIndices.push(splitIndex);
+				}
+				splitIndex++;
+				point = sortedSplitPoints[splitIndex];
+			}
+		}
 		const time = current.displayEnd;
 		markers.push({
 			id: `${roundEditTime(time)}:${sourceTimes.map(roundEditTime).join(":")}`,
@@ -763,6 +776,37 @@ export function deleteSelectedTimelineSegment(
 	});
 }
 
+export function deleteTimelineRanges(
+	state: VideoTimelineState,
+	ranges: readonly VideoEditRange[],
+): VideoTimelineState {
+	const normalized = normalizeTimelineState(state);
+	const deletionRanges = normalizeKeepRanges(
+		ranges.map((range) => ({
+			start: clampEditTime(
+				range.start,
+				normalized.trimStart,
+				normalized.trimEnd,
+			),
+			end: clampEditTime(range.end, normalized.trimStart, normalized.trimEnd),
+		})),
+		normalized.duration,
+	).keepRanges;
+	if (deletionRanges.length === 0) return normalized;
+
+	const nextState = normalizeTimelineState({
+		...normalized,
+		splitPoints: [
+			...normalized.splitPoints,
+			...deletionRanges.flatMap((range) => [range.start, range.end]),
+		],
+		deletedRanges: [...normalized.deletedRanges, ...deletionRanges],
+		selectedSegmentId: null,
+	});
+
+	return getTimelineKeepRanges(nextState).length > 0 ? nextState : normalized;
+}
+
 export function setTimelineTrim(
 	state: VideoTimelineState,
 	start: number,
@@ -871,6 +915,75 @@ export function dragSplitForShrink(
 	});
 }
 
+/**
+ * Trim a single clip (display segment) from one of its edges, Loom-style.
+ *
+ * Outer edges (the first clip's left edge, the last clip's right edge) move the
+ * global in/out point (`trimStart`/`trimEnd`). Inner edges carve footage off the
+ * clip via {@link dragSplitForShrink}, leaving the neighbouring clips untouched.
+ * The carve only ever shrinks the clip it belongs to — it can never eat into an
+ * adjacent clip — so dragging clip A's right edge and clip B's left edge are
+ * independent operations even when A and B touch at a pure split.
+ */
+export function trimTimelineClipEdge(
+	state: VideoTimelineState,
+	clipId: string,
+	edge: "start" | "end",
+	sourceTime: number,
+): VideoTimelineState {
+	if (!isFiniteNumber(sourceTime)) return state;
+
+	const normalized = normalizeTimelineState(state);
+	const segments = getTimelineDisplaySegments(normalized);
+	const clip = segments.find((segment) => segment.id === clipId);
+	if (!clip) return state;
+
+	// An outer edge moves the global in/out point ONLY when the clip actually sits
+	// at that boundary. If footage was already carved off the front/back (a
+	// collapsed deletedRange before/after this clip), moving the trim would
+	// un-collapse it and balloon the timeline — so we carve instead, keeping the
+	// display tight like every other clip edge.
+	const movesTrimStart =
+		segments[0]?.id === clipId && clip.start <= normalized.trimStart + EPSILON;
+	const movesTrimEnd =
+		segments[segments.length - 1]?.id === clipId &&
+		clip.end >= normalized.trimEnd - EPSILON;
+
+	if (edge === "start") {
+		if (movesTrimStart) {
+			const target = clampEditTime(
+				sourceTime,
+				0,
+				clip.end - MIN_RANGE_DURATION,
+			);
+			return setTimelineTrim(normalized, target, normalized.trimEnd);
+		}
+		const target = clampEditTime(
+			sourceTime,
+			clip.start,
+			clip.end - MIN_RANGE_DURATION,
+		);
+		if (target - clip.start < MIN_RANGE_DURATION) return normalized;
+		return dragSplitForShrink(normalized, clip.start, target);
+	}
+
+	if (movesTrimEnd) {
+		const target = clampEditTime(
+			sourceTime,
+			clip.start + MIN_RANGE_DURATION,
+			normalized.duration,
+		);
+		return setTimelineTrim(normalized, normalized.trimStart, target);
+	}
+	const target = clampEditTime(
+		sourceTime,
+		clip.start + MIN_RANGE_DURATION,
+		clip.end,
+	);
+	if (clip.end - target < MIN_RANGE_DURATION) return normalized;
+	return dragSplitForShrink(normalized, clip.end, target);
+}
+
 export function getTimelineKeepRanges(
 	state: VideoTimelineState,
 ): VideoEditRange[] {
@@ -898,19 +1011,50 @@ export function findNextPlayableTime(
 		editSpec.keepRanges,
 		editSpec.sourceDuration,
 	);
-	if (normalized.keepRanges.length === 0) return null;
+	return findNextPlayableTimeInRanges(currentTime, normalized.keepRanges);
+}
 
-	for (const range of normalized.keepRanges) {
-		if (currentTime < range.start - EPSILON) return range.start;
-		if (
-			currentTime >= range.start - EPSILON &&
-			currentTime < range.end - EPSILON
-		) {
-			return currentTime;
+export function findNextPlayableTimeInRanges(
+	currentTime: number,
+	keepRanges: readonly VideoEditRange[],
+) {
+	const rangeIndex = findNextPlayableRangeIndex(currentTime, keepRanges);
+	if (rangeIndex < 0) return null;
+	const range = keepRanges[rangeIndex];
+	if (!range) return null;
+	return currentTime < range.start - EPSILON ? range.start : currentTime;
+}
+
+function findNextPlayableRangeIndex(
+	currentTime: number,
+	keepRanges: readonly VideoEditRange[],
+) {
+	if (!isFiniteNumber(currentTime) || keepRanges.length === 0) return -1;
+
+	let low = 0;
+	let high = keepRanges.length;
+	while (low < high) {
+		const middle = Math.floor((low + high) / 2);
+		const range = keepRanges[middle];
+		if (range && currentTime < range.end - EPSILON) {
+			high = middle;
+		} else {
+			low = middle + 1;
 		}
 	}
 
-	return null;
+	return low < keepRanges.length ? low : -1;
+}
+
+export function findPlayableRangeIndex(
+	currentTime: number,
+	keepRanges: readonly VideoEditRange[],
+) {
+	const rangeIndex = findNextPlayableRangeIndex(currentTime, keepRanges);
+	if (rangeIndex < 0) return -1;
+	const range = keepRanges[rangeIndex];
+	if (!range || currentTime < range.start - EPSILON) return -1;
+	return rangeIndex;
 }
 
 export function createTimelineHistory(

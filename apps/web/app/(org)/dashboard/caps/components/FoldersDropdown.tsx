@@ -7,12 +7,13 @@ import {
 import {
 	faCopy,
 	faEllipsis,
+	faFolderTree,
 	faGlobe,
 	faPencil,
 	faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import type { RefObject } from "react";
+import { type RefObject, useRef } from "react";
 
 interface FoldersDropdownProps {
 	id: string;
@@ -23,6 +24,8 @@ interface FoldersDropdownProps {
 	public: boolean;
 	onPublicToggle: () => void;
 	onCopyPublicLink: () => void;
+	canMove: boolean;
+	onMove: () => void;
 }
 
 export const FoldersDropdown = ({
@@ -32,7 +35,11 @@ export const FoldersDropdown = ({
 	public: isPublic,
 	onPublicToggle,
 	onCopyPublicLink,
+	canMove,
+	onMove,
 }: FoldersDropdownProps) => {
+	const renameRequestedRef = useRef(false);
+
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
@@ -50,7 +57,25 @@ export const FoldersDropdown = ({
 					<FontAwesomeIcon className="text-gray-12 size-4" icon={faEllipsis} />
 				</button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent>
+			<DropdownMenuContent
+				onCloseAutoFocus={(event) => {
+					// Radix restores focus to the trigger on close from a setTimeout(0)
+					// scheduled when the menu unmounts, so it always lands after the
+					// rename focus calls below. That blur makes the textarea's onBlur
+					// exit rename mode instantly (reported as "flashes then can't
+					// type"). Opt out for rename only; other items still restore focus
+					// to the trigger.
+					if (!renameRequestedRef.current) return;
+					renameRequestedRef.current = false;
+					event.preventDefault();
+					// Fallback only: never take focus back off wherever the user has
+					// since clicked.
+					if (document.activeElement === document.body) {
+						nameRef.current?.focus();
+						nameRef.current?.select();
+					}
+				}}
+			>
 				{(() => {
 					type FolderDropdownItem = {
 						label: string;
@@ -62,6 +87,7 @@ export const FoldersDropdown = ({
 							label: "Rename",
 							icon: faPencil,
 							onClick: () => {
+								renameRequestedRef.current = true;
 								setIsRenaming(true);
 								setTimeout(() => {
 									nameRef.current?.focus();
@@ -80,6 +106,15 @@ export const FoldersDropdown = ({
 										label: "Copy public link",
 										icon: faCopy,
 										onClick: onCopyPublicLink,
+									},
+								]
+							: []),
+						...(canMove
+							? [
+									{
+										label: "Move",
+										icon: faFolderTree,
+										onClick: onMove,
 									},
 								]
 							: []),

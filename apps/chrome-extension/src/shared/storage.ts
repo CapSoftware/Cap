@@ -481,7 +481,9 @@ export const loadSharedRecordingState =
 	};
 
 export const saveSharedRecordingState = (state: SharedRecordingState) =>
-	setSession({ [RECORDING_STATE_KEY]: state });
+	withKeyLock(RECORDING_STATE_KEY, () =>
+		setSession({ [RECORDING_STATE_KEY]: state }),
+	);
 
 export const loadSharedUiState = async (): Promise<SharedUiState> => {
 	const result = await getSession([SHARED_UI_STATE_KEY]);

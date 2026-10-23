@@ -1,33 +1,55 @@
 import { db } from "@cap/database";
-import { videos, videoUploads } from "@cap/database/schema";
+import {
+	videoProcessingJobs,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	lte,
+	notLike,
+	or,
+	sql,
+} from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
+import {
+	DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED,
+	DesktopRecordingSourceBlockedError,
+	listRecoverableSegmentJobs,
+	SourceCommitPendingError,
+} from "@/lib/desktop-recording-jobs";
+import { readCompletedRecordingManifest } from "@/lib/desktop-recording-verification";
 import {
 	type DesktopSegmentsFinalizationStatus,
 	queueDesktopSegmentsFinalization,
 } from "@/lib/desktop-segments-finalization";
-import {
-	buildDesktopSegmentsRecoveryMarker,
-	getDesktopSegmentsManifestSignature,
-	parseDesktopSegmentsRecoveryMarker,
-} from "@/lib/desktop-segments-recovery-marker";
+import { getDesktopSegmentsManifestSignature } from "@/lib/desktop-segments-recovery-marker";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
-const MINUTE = 60 * 1000;
-
-export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * MINUTE;
-export const DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS = 15 * MINUTE;
+export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * 60 * 1_000;
 export const DESKTOP_SEGMENTS_RECOVERY_BATCH_SIZE = 20;
+export const DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS =
+	7 * 24 * 60 * 60 * 1_000;
 
-const RECOVERABLE_UPLOAD_PHASES = ["uploading", "error"] as const;
+const RECOVERABLE_UPLOAD_PHASES = [
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+	"error",
+] as const;
 
 type DesktopSegmentsRecoveryResult =
 	| {
 			status: DesktopSegmentsFinalizationStatus;
-			manifestCompleted: boolean;
+			manifestCompleted: false;
 			videoSegments: number;
 			audioSegments: number;
 	  }
@@ -37,12 +59,12 @@ type DesktopSegmentsRecoveryResult =
 	| { status: "missing-manifest" }
 	| { status: "invalid-manifest"; error: string }
 	| { status: "no-video-segments" }
-	| { status: "manifest-changed" };
+	| { status: "manifest-changed" }
+	| { status: "source-incomplete" }
+	| { status: "source-committing" };
 
 export type StaleDesktopSegmentsRecoveryStatus =
 	| DesktopSegmentsRecoveryResult["status"]
-	| "observing"
-	| "waiting-for-stability"
 	| "failed";
 
 export type StaleDesktopSegmentsRecoverySummary = {
@@ -54,23 +76,12 @@ export type StaleDesktopSegmentsRecoverySummary = {
 	}>;
 };
 
-type DesktopSegmentsVideo = typeof videos.$inferSelect;
-
 type LoadedDesktopSegmentsManifest =
 	| {
 			status: "loaded";
-			video: DesktopSegmentsVideo;
-			manifestKey: string;
+			video: typeof videos.$inferSelect;
 			manifest: Video.SegmentManifestType;
-			bucket: Awaited<
-				ReturnType<typeof Storage.getAccessForVideo> extends Effect.Effect<
-					infer A,
-					unknown,
-					unknown
-				>
-					? Promise<A>
-					: never
-			>[0];
+			manifestJson: string;
 	  }
 	| { status: "already-finalized" }
 	| { status: "not-found" }
@@ -82,30 +93,6 @@ function getErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
 
-async function decodeSegmentManifest(
-	manifestJson: string,
-): Promise<
-	| { status: "loaded"; manifest: Video.SegmentManifestType }
-	| { status: "invalid-manifest"; error: string }
-> {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(manifestJson);
-	} catch (error) {
-		return { status: "invalid-manifest", error: getErrorMessage(error) };
-	}
-
-	try {
-		const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
-			.pipe(Effect.mapError(getErrorMessage))
-			.pipe(runPromise);
-
-		return { status: "loaded", manifest };
-	} catch (error) {
-		return { status: "invalid-manifest", error: getErrorMessage(error) };
-	}
-}
-
 async function loadDesktopSegmentsManifest({
 	videoId,
 	userId,
@@ -113,41 +100,40 @@ async function loadDesktopSegmentsManifest({
 	videoId: Video.VideoId;
 	userId?: User.UserId;
 }): Promise<LoadedDesktopSegmentsManifest> {
-	const where = userId
-		? and(eq(videos.id, videoId), eq(videos.ownerId, userId))
-		: eq(videos.id, videoId);
-
-	const [video] = await db().select().from(videos).where(where).limit(1);
-
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(
+			and(
+				eq(videos.id, videoId),
+				userId ? eq(videos.ownerId, userId) : undefined,
+			),
+		)
+		.limit(1);
 	if (!video) return { status: "not-found" };
-	if (video.source?.type === "desktopMP4")
+	if (video.source.type === "desktopMP4")
 		return { status: "already-finalized" };
-	if (video.source?.type !== "desktopSegments")
+	if (video.source.type !== "desktopSegments")
 		return { status: "not-segmented" };
-
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runPromise);
-	const segSource = new Video.SegmentsSource({
-		videoId,
-		ownerId: video.ownerId,
-	});
-	const manifestKey = segSource.getManifestKey();
-	const manifestContent = await bucket.getObject(manifestKey).pipe(runPromise);
-	const manifestJson = Option.getOrNull(manifestContent);
-
-	if (!manifestJson) return { status: "missing-manifest" };
-
-	const decoded = await decodeSegmentManifest(manifestJson);
-	if (decoded.status !== "loaded") return decoded;
-
-	return {
-		status: "loaded",
-		video,
-		manifestKey,
-		manifest: decoded.manifest,
-		bucket,
-	};
+	const source = new Video.SegmentsSource({ videoId, ownerId: video.ownerId });
+	const content = await bucket
+		.getObject(source.getManifestKey())
+		.pipe(runPromise);
+	const json = Option.getOrNull(content);
+	if (!json) return { status: "missing-manifest" };
+	try {
+		const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(
+			JSON.parse(json),
+		)
+			.pipe(Effect.mapError(getErrorMessage))
+			.pipe(runPromise);
+		return { status: "loaded", video, manifest, manifestJson: json };
+	} catch (error) {
+		return { status: "invalid-manifest", error: getErrorMessage(error) };
+	}
 }
 
 export async function completeDesktopSegmentsManifestAndQueue({
@@ -160,127 +146,69 @@ export async function completeDesktopSegmentsManifestAndQueue({
 	expectedManifestSignature?: string;
 }): Promise<DesktopSegmentsRecoveryResult> {
 	const loaded = await loadDesktopSegmentsManifest({ videoId, userId });
-
 	if (loaded.status !== "loaded") return loaded;
-
 	if (
 		!loaded.manifest.video_init_uploaded ||
 		loaded.manifest.video_segments.length === 0
 	) {
 		return { status: "no-video-segments" };
 	}
-
-	const signature = getDesktopSegmentsManifestSignature(loaded.manifest);
-	if (expectedManifestSignature && signature !== expectedManifestSignature) {
+	if (
+		expectedManifestSignature &&
+		getDesktopSegmentsManifestSignature(loaded.manifest) !==
+			expectedManifestSignature
+	) {
 		return { status: "manifest-changed" };
 	}
-
-	let manifestCompleted = false;
-	if (!loaded.manifest.is_complete) {
-		const completedManifest = {
-			...loaded.manifest,
-			is_complete: true,
-		};
-		const body = JSON.stringify(completedManifest, null, 2);
-		await loaded.bucket
-			.putObject(loaded.manifestKey, body, {
-				contentType: "application/json",
-				contentLength: Buffer.byteLength(body),
-			})
-			.pipe(runPromise);
-		manifestCompleted = true;
+	if (!loaded.manifest.is_complete) return { status: "source-incomplete" };
+	try {
+		readCompletedRecordingManifest(loaded.manifestJson);
+	} catch {
+		return { status: "source-incomplete" };
 	}
-
-	const status = await queueDesktopSegmentsFinalization({
-		videoId,
-		userId: loaded.video.ownerId,
-	});
-
-	return {
-		status,
-		manifestCompleted,
-		videoSegments: loaded.manifest.video_segments.length,
-		audioSegments: loaded.manifest.audio_segments.length,
-	};
-}
-
-async function markCandidateObserved({
-	videoId,
-	signature,
-	now,
-}: {
-	videoId: Video.VideoId;
-	signature: string;
-	now: Date;
-}) {
-	await db()
-		.update(videoUploads)
-		.set({
-			processingMessage: buildDesktopSegmentsRecoveryMarker(
-				signature,
-				now.getTime(),
-			),
-		})
-		.where(
-			and(
-				eq(videoUploads.videoId, videoId),
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-			),
-		);
-}
-
-async function recoverStaleDesktopSegmentsCandidate({
-	videoId,
-	processingMessage,
-	now,
-}: {
-	videoId: Video.VideoId;
-	processingMessage: string | null;
-	now: Date;
-}): Promise<StaleDesktopSegmentsRecoveryStatus> {
-	const loaded = await loadDesktopSegmentsManifest({ videoId });
-
-	if (loaded.status !== "loaded") return loaded.status;
-
-	if (
-		!loaded.manifest.video_init_uploaded ||
-		loaded.manifest.video_segments.length === 0
-	) {
-		return "no-video-segments";
-	}
-
-	if (loaded.manifest.is_complete) {
-		return (
-			await completeDesktopSegmentsManifestAndQueue({
-				videoId,
-				expectedManifestSignature: getDesktopSegmentsManifestSignature(
-					loaded.manifest,
-				),
-			})
-		).status;
-	}
-
-	const signature = getDesktopSegmentsManifestSignature(loaded.manifest);
-	const marker = parseDesktopSegmentsRecoveryMarker(processingMessage);
-
-	if (marker?.signature !== signature) {
-		await markCandidateObserved({ videoId, signature, now });
-		return "observing";
-	}
-
-	if (
-		now.getTime() - marker.observedAtMs <
-		DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS
-	) {
-		return "waiting-for-stability";
-	}
-
-	return (
-		await completeDesktopSegmentsManifestAndQueue({
+	try {
+		const status = await queueDesktopSegmentsFinalization({
 			videoId,
-			expectedManifestSignature: signature,
-		})
-	).status;
+			userId: loaded.video.ownerId,
+		});
+		return {
+			status,
+			manifestCompleted: false,
+			videoSegments: loaded.manifest.video_segments.length,
+			audioSegments: loaded.manifest.audio_segments.length,
+		};
+	} catch (error) {
+		if (error instanceof SourceCommitPendingError)
+			return { status: "source-committing" };
+		if (error instanceof DesktopRecordingSourceBlockedError)
+			return { status: "source-incomplete" };
+		throw error;
+	}
+}
+
+async function recoverRecording({
+	videoId,
+	userId,
+	verification,
+}: Parameters<
+	typeof queueDesktopSegmentsFinalization
+>[0]): Promise<StaleDesktopSegmentsRecoveryStatus> {
+	try {
+		return await queueDesktopSegmentsFinalization({
+			videoId,
+			userId,
+			verification,
+		});
+	} catch (error) {
+		if (error instanceof SourceCommitPendingError) return "source-committing";
+		if (error instanceof DesktopRecordingSourceBlockedError)
+			return "source-incomplete";
+		console.error(
+			"[desktop-segments-recovery] Durable recovery dispatch failed",
+			{ videoId, error },
+		);
+		return "failed";
+	}
 }
 
 export async function recoverStaleDesktopSegments({
@@ -290,52 +218,87 @@ export async function recoverStaleDesktopSegments({
 	now?: Date;
 	limit?: number;
 } = {}): Promise<StaleDesktopSegmentsRecoverySummary> {
-	const staleBefore = new Date(
-		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS,
-	);
-	const candidates = await db()
-		.select({
-			videoId: videos.id,
-			processingMessage: videoUploads.processingMessage,
-		})
-		.from(videos)
-		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(
-			and(
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
-				lte(videos.createdAt, staleBefore),
-				lte(videoUploads.updatedAt, staleBefore),
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-			),
-		)
-		.orderBy(asc(videoUploads.updatedAt))
-		.limit(limit);
-
+	const batchSize = Math.max(1, Math.min(limit, 100));
+	const legacyReserve =
+		batchSize > 1 ? Math.max(1, Math.floor(batchSize / 4)) : 0;
+	const jobs = await listRecoverableSegmentJobs({
+		now,
+		limit: batchSize - legacyReserve,
+	});
 	const summary: StaleDesktopSegmentsRecoverySummary = {
-		checked: candidates.length,
+		checked: 0,
 		statuses: {},
 		results: [],
 	};
-
-	for (const candidate of candidates) {
-		let status: StaleDesktopSegmentsRecoveryStatus;
-		try {
-			status = await recoverStaleDesktopSegmentsCandidate({
-				videoId: candidate.videoId,
-				processingMessage: candidate.processingMessage,
-				now,
-			});
-		} catch (error) {
-			status = "failed";
-			console.error(
-				`[desktop-segments-recovery] Failed to recover ${candidate.videoId}:`,
-				error,
-			);
-		}
-
+	const record = (
+		videoId: Video.VideoId,
+		status: StaleDesktopSegmentsRecoveryStatus,
+	) => {
+		summary.checked++;
 		summary.statuses[status] = (summary.statuses[status] ?? 0) + 1;
-		summary.results.push({ videoId: candidate.videoId, status });
+		summary.results.push({ videoId, status });
+	};
+	for (const job of jobs) {
+		record(
+			job.videoId,
+			await recoverRecording({
+				videoId: job.videoId,
+				userId: job.ownerId,
+				verification: job.verification ?? undefined,
+			}),
+		);
 	}
-
+	const remaining = batchSize - jobs.length;
+	if (remaining <= 0) return summary;
+	const staleBefore = new Date(
+		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS,
+	);
+	const legacy = await db()
+		.select({ videoId: videos.id, ownerId: videos.ownerId })
+		.from(videoUploads)
+		.innerJoin(videos, eq(videoUploads.videoId, videos.id))
+		.leftJoin(
+			videoProcessingJobs,
+			eq(videoUploads.videoId, videoProcessingJobs.videoId),
+		)
+		.where(
+			and(
+				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
+				lte(videoUploads.updatedAt, staleBefore),
+				gte(
+					videoUploads.startedAt,
+					new Date(now.getTime() - DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS),
+				),
+				isNull(videoProcessingJobs.videoId),
+				or(
+					isNull(videoUploads.processingError),
+					notLike(
+						videoUploads.processingError,
+						`${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED}:%`,
+					),
+				),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
+			),
+		)
+		.orderBy(asc(videoUploads.updatedAt), asc(videoUploads.videoId))
+		.limit(remaining);
+	for (const candidate of legacy) {
+		try {
+			const result = await completeDesktopSegmentsManifestAndQueue({
+				videoId: candidate.videoId,
+				userId: candidate.ownerId,
+			});
+			record(candidate.videoId, result.status);
+		} catch (error) {
+			console.error(
+				"[desktop-segments-recovery] Legacy source inspection failed",
+				{
+					videoId: candidate.videoId,
+					error,
+				},
+			);
+			record(candidate.videoId, "failed");
+		}
+	}
 	return summary;
 }

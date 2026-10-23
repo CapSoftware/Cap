@@ -39,14 +39,15 @@ export const CameraSelector = ({
 }: CameraSelectorProps) => {
 	const cameraEnabled = selectedCameraId !== null;
 	const triggerRef = useRef<HTMLButtonElement>(null);
-	const { state: permissionState, requestPermission } =
-		useMediaPermission("camera");
+	const { requestPermission } = useMediaPermission("camera");
 
-	const permissionSupported = permissionState !== "unsupported";
-	const hasDeviceAccess = availableCameras.length > 0;
-	const hasAccess = permissionGranted || hasDeviceAccess || cameraEnabled;
-	const shouldRequestPermission =
-		permissionSupported && permissionState !== "granted" && !hasAccess;
+	// "Has access" tracks only the real browser grant — a live device or the
+	// authoritative permission flag the offscreen document reports — never a
+	// remembered device selection. A remembered camera must not hide that
+	// Chrome has reset the grant, otherwise the panel shows an empty picker
+	// with no way to recover from here.
+	const hasAccess = permissionGranted || availableCameras.length > 0;
+	const shouldRequestPermission = !hasAccess;
 
 	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
 

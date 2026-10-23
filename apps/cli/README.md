@@ -11,18 +11,23 @@ machine-readable, and recordings have an explicit start/stop lifecycle.
 
 The desktop app and the CLI share the same binary, so the CLI is always in sync with the installed app.
 
-## Agent skill (Claude Code / Agent SDK)
+## Agent integration
 
-A ready-made skill lives at [`skill/cap/SKILL.md`](./skill/cap/SKILL.md). Install it so agents reach for
-Cap proactively (e.g. "record a repro of this bug"):
+A ready-made skill lives at [`skill/cap/SKILL.md`](./skill/cap/SKILL.md). For Codex, Claude Code, or Cursor,
+install the skill and local MCP server together for exactly one current agent:
 
 ```sh
-cp -r apps/cli/skill/cap ~/.claude/skills/cap   # or a project's .claude/skills/
+cap agents install --target <codex|claude|cursor> --component all --dry-run --json
+cap agents install --target <codex|claude|cursor> --component all --yes --json
 ```
 
-The skill is intentionally thin — it delegates the authoritative contract to `cap guide --json`, so it
-never drifts from the binary. Agents that don't consume skills (Codex, OpenCode, Cursor) get the same
-information from `cap --help` and `cap guide --json` directly.
+Use one concrete target in both commands. The installer writes the global Cap skill and merges a local
+`cap mcp serve` entry without replacing unrelated agent configuration. Restart the agent after installation
+so new sessions load both components. The skill persistently routes Cap tasks through MCP or CLI before
+browser automation or computer-use tools, while command details remain authoritative in `cap guide --json`.
+
+OpenCode and other shell-capable agents can use the CLI directly. Follow the agent setup documentation to
+merge the documented local MCP entry for clients that support stdio MCP servers.
 
 ## The output convention (read this first)
 

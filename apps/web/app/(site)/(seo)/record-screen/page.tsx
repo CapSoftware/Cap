@@ -3,7 +3,13 @@ import {
 	RecordScreenPage,
 	recordScreenContent,
 } from "@/components/pages/seo/RecordScreenPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Record your screen for free",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Record Screen — Free HD Screen Recorder with Instant Sharing | Cap",
@@ -20,7 +26,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Record Your Screen for Free",
@@ -34,7 +40,7 @@ export const metadata: Metadata = {
 		title: "Record Screen — Free HD Screen Recorder with Instant Sharing | Cap",
 		description:
 			"Record your screen in HD on Mac or Windows. Capture audio and webcam, then share with a link instantly. Free, open-source, no watermarks.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

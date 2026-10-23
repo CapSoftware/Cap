@@ -40,19 +40,24 @@ impl From<QualityArg> for cap_export::mp4::ExportCompression {
 }
 
 #[derive(Args)]
-#[command(long_about = "Render a '.cap' project to a video file.
+#[command(long_about = "Render one or more '.cap' projects to video files.
+
+Pass one project for a single export, or several to export them all in one run. With more than
+one project the output must be a directory (--output, or a trailing directory argument), and
+each project is written as '<project name>.<ext>'. Every positional is read as a project; a
+trailing path that cannot be read as one is taken as the output location (as in
+`cap export project.cap out.mp4`); with --output, every positional is a project.
 
 NOTE: here --format selects the CONTAINER (mp4/gif/mov), NOT the output mode. For machine-readable
 output pass --json (the global flag), which streams NDJSON progress + completion events to stdout.
 The NDJSON uses PascalCase type tags and snake_case fields ({\"type\":\"Progress\",\"rendered_count\":N,
 \"total_frames\":N} then {\"type\":\"Completed\",\"path\":\"...\"}); on failure a final
-{\"type\":\"Error\",\"error\":\"...\"} is emitted.")]
+{\"type\":\"Error\",\"error\":\"...\"} is emitted. Batch runs also emit {\"type\":\"FileStarted\",...} and {\"type\":\"FileFailed\",...} per project plus a closing {\"type\":\"BatchCompleted\",...}.")]
 pub struct Export {
-    /// Path to a '.cap' project directory (as produced by `cap record`)
-    project_path: PathBuf,
-    /// Output file (positional alternative to --output)
-    output_path: Option<PathBuf>,
-    /// Output file to write the export to
+    /// One or more '.cap' project directories (as produced by `cap record`)
+    #[arg(required = true, num_args = 1..)]
+    project_paths: Vec<PathBuf>,
+    /// Output file for a single project, or directory for several
     #[arg(long, short = 'o')]
     output: Option<PathBuf>,
     /// Container to export: mp4 (default), gif, or mov. NOT the output mode — use --json for JSON
@@ -104,7 +109,7 @@ impl ExportFlags {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "format")]
 pub enum CliExportSettings {
     #[serde(alias = "mp4")]
@@ -135,6 +140,14 @@ impl CliExportSettings {
         match self {
             Self::Mov(settings) => settings.cursor_only,
             Self::Mp4(_) | Self::Gif(_) => false,
+        }
+    }
+
+    fn extension(&self) -> &'static str {
+        match self {
+            Self::Mp4(_) => "mp4",
+            Self::Gif(_) => "gif",
+            Self::Mov(_) => "mov",
         }
     }
 }
@@ -229,6 +242,19 @@ enum ExportProgressMessage<'a> {
     Completed {
         path: &'a std::path::Path,
     },
+    FileStarted {
+        path: &'a std::path::Path,
+        index: u32,
+        total: u32,
+    },
+    FileFailed {
+        path: &'a std::path::Path,
+        error: &'a str,
+    },
+    BatchCompleted {
+        succeeded: u32,
+        failed: u32,
+    },
     // Field is named `error` (not `message`) so a single `"error" in obj` predicate detects failure
     // across every JSON-emitting command. The desktop sidecar only parses Progress/Completed, so the
     // PascalCase `type` tag stays for back-compat while this terminal field is free to standardize.
@@ -237,18 +263,73 @@ enum ExportProgressMessage<'a> {
     },
 }
 
-impl Export {
-    fn resolve_output(&self) -> Result<Option<PathBuf>, String> {
-        match (&self.output, &self.output_path) {
-            (Some(_), Some(_)) => Err(
-                "Specify the output path either positionally or with --output, not both"
-                    .to_string(),
-            ),
-            (Some(path), None) | (None, Some(path)) => Ok(Some(path.clone())),
-            (None, None) => Ok(None),
-        }
+/// Distinguishes a project argument from a trailing output path.
+fn looks_like_project(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cap"))
+    {
+        return true;
+    }
+    path.join("recording-meta.json").is_file()
+}
+
+/// Positionals are projects, except that a trailing path that cannot be read as one is the
+/// output location. With --output present every positional is a project, so a mistyped or
+/// missing project still reaches the per-file failure path.
+fn split_projects_and_output(
+    mut paths: Vec<PathBuf>,
+    flag_output: Option<PathBuf>,
+) -> Result<(Vec<PathBuf>, Option<PathBuf>), String> {
+    if let Some(output) = flag_output {
+        return Ok((paths, Some(output)));
     }
 
+    let trailing_output =
+        paths.len() >= 2 && paths.last().is_some_and(|path| !looks_like_project(path));
+    let output = if trailing_output { paths.pop() } else { None };
+    Ok((paths, output))
+}
+
+fn batch_output_name(project: &Path, extension: &str) -> String {
+    let name = project
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("export");
+    let stem = match project.extension() {
+        Some(ext) if ext.eq_ignore_ascii_case("cap") => project
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or(name),
+        _ => name,
+    };
+    format!("{stem}.{extension}")
+}
+
+fn plan_batch_outputs(
+    projects: Vec<PathBuf>,
+    dir: &Path,
+    extension: &str,
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let mut planned = Vec::with_capacity(projects.len());
+    let mut claimed = std::collections::HashMap::new();
+    for project in projects {
+        let name = batch_output_name(&project, extension);
+        if let Some(previous) = claimed.insert(name.to_lowercase(), project.clone()) {
+            return Err(format!(
+                "Two projects would both export to '{name}' ({} and {}); rename one of them or export it separately",
+                previous.display(),
+                project.display()
+            ));
+        }
+        planned.push((project, dir.join(name)));
+    }
+    Ok(planned)
+}
+
+impl Export {
     fn resolve_settings(&self) -> Result<CliExportSettings, String> {
         let flags = ExportFlags {
             format: self.format,
@@ -306,16 +387,128 @@ impl Export {
         completion_json: bool,
         stdout: &Arc<Mutex<std::io::Stdout>>,
     ) -> Result<(), String> {
-        let output = self.resolve_output()?;
         let settings = self.resolve_settings()?;
+        let (projects, output) = split_projects_and_output(self.project_paths, self.output)?;
 
-        ensure_remuxed(self.project_path.clone()).await?;
-        let meta = RecordingMeta::load_for_project(&self.project_path)
+        if projects.len() == 1 {
+            return Self::export_project(
+                &projects[0],
+                output,
+                settings,
+                self.force_ffmpeg_decoder,
+                progress_json,
+                completion_json,
+                stdout,
+            )
+            .await;
+        }
+
+        let dir = output.ok_or_else(|| {
+            format!(
+                "Exporting {} projects needs an output directory: pass --output <DIR>, or a trailing directory",
+                projects.len()
+            )
+        })?;
+        if dir.exists() && !dir.is_dir() {
+            return Err(format!(
+                "--output {} is a file; exporting several projects needs a directory",
+                dir.display()
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|error| {
+            format!(
+                "Failed to create output directory {}: {error}",
+                dir.display()
+            )
+        })?;
+
+        let planned = plan_batch_outputs(projects, &dir, settings.extension())?;
+        let total = planned.len();
+        let mut succeeded = 0u32;
+        let mut failed = 0u32;
+        let mut first_error: Option<String> = None;
+
+        for (index, (project, destination)) in planned.iter().enumerate() {
+            if progress_json || completion_json {
+                emit_export_message(
+                    stdout,
+                    &ExportProgressMessage::FileStarted {
+                        path: project,
+                        index: index as u32 + 1,
+                        total: total as u32,
+                    },
+                )?;
+            } else {
+                println!("Exporting {}/{}: {}", index + 1, total, project.display());
+            }
+
+            match Self::export_project(
+                project,
+                Some(destination.clone()),
+                settings,
+                self.force_ffmpeg_decoder,
+                progress_json,
+                completion_json,
+                stdout,
+            )
+            .await
+            {
+                Ok(()) => succeeded += 1,
+                Err(error) => {
+                    failed += 1;
+                    if progress_json || completion_json {
+                        emit_export_message(
+                            stdout,
+                            &ExportProgressMessage::FileFailed {
+                                path: project,
+                                error: &error,
+                            },
+                        )?;
+                    } else {
+                        eprintln!("Failed to export {}: {error}", project.display());
+                    }
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+
+        if progress_json || completion_json {
+            emit_export_message(
+                stdout,
+                &ExportProgressMessage::BatchCompleted { succeeded, failed },
+            )?;
+        } else if failed > 0 {
+            println!("Exported {succeeded} of {total} projects ({failed} failed).");
+        } else {
+            println!("Exported {succeeded} of {total} projects.");
+        }
+
+        if failed > 0 {
+            return Err(match first_error {
+                Some(first) => format!("{failed} of {total} exports failed; first error: {first}"),
+                None => format!("{failed} of {total} exports failed"),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn export_project(
+        project_path: &Path,
+        output: Option<PathBuf>,
+        settings: CliExportSettings,
+        force_ffmpeg_decoder: bool,
+        progress_json: bool,
+        completion_json: bool,
+        stdout: &Arc<Mutex<std::io::Stdout>>,
+    ) -> Result<(), String> {
+        ensure_remuxed(project_path.to_path_buf()).await?;
+        let meta = RecordingMeta::load_for_project(project_path)
             .map_err(|e| format!("Failed to load recording meta: {e}"))?;
 
         if matches!(&meta.inner, RecordingMetaInner::Instant(_)) {
             return export_instant_project(
-                self.project_path,
+                project_path.to_path_buf(),
                 output,
                 &settings,
                 progress_json,
@@ -325,8 +518,8 @@ impl Export {
             .await;
         }
 
-        let force_ffmpeg_decoder = self.force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
-        let mut builder = ExporterBase::builder(self.project_path.clone())
+        let force_ffmpeg_decoder = force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
+        let mut builder = ExporterBase::builder(project_path.to_path_buf())
             .with_force_ffmpeg_decoder(force_ffmpeg_decoder);
 
         if let Some(output_path) = output {
@@ -426,27 +619,132 @@ async fn ensure_remuxed(project_path: PathBuf) -> Result<(), String> {
 }
 
 async fn prepare_instant_output(project_path: PathBuf) -> Result<PathBuf, String> {
-    let output_path = project_path.join("content/output.mp4");
-    let audio_dir = project_path.join("content/audio");
-    if std::fs::metadata(&output_path)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false)
-        && !audio_dir.exists()
-    {
-        return Ok(output_path);
-    }
-
-    let display_dir = project_path.join("content/display");
     tokio::task::spawn_blocking(move || {
+        if let Some(output) = completed_instant_output(&project_path)? {
+            return Ok(output);
+        }
+        let ownership = cap_recording::upload_resume::UploadLock::acquire(&project_path).map_err(
+            |error| {
+                format!(
+                    "Instant output needs repair, but upload ownership is unavailable: {error}; local recording retained"
+                )
+            },
+        )?;
+        let project_path = ownership.project_path();
+        if let Some(output) = completed_instant_output(project_path)? {
+            return Ok(output);
+        }
         cap_recording::recovery::RecoveryManager::finalize_instant_output(
-            &display_dir,
-            &audio_dir,
-            &output_path,
+            &project_path.join("content/display"),
+            &project_path.join("content/audio"),
+            &project_path.join("content/output.mp4"),
         )
+        .map_err(|error| format!("Failed to finalize instant recording before export: {error}"))
     })
     .await
-    .map_err(|e| format!("instant export finalize task failed: {e}"))?
-    .map_err(|e| format!("Failed to finalize instant recording before export: {e}"))
+    .map_err(|error| format!("instant export finalize task failed: {error}"))?
+}
+
+fn completed_instant_output(project_path: &Path) -> Result<Option<PathBuf>, String> {
+    for path in [project_path.to_path_buf(), project_path.join("content")] {
+        if let Some(metadata) = instant_input_metadata(&path)?
+            && !metadata.is_dir()
+        {
+            return Err("Invalid Instant recording directory; local recording retained".into());
+        }
+    }
+    let meta = RecordingMeta::load_for_project(project_path)
+        .map_err(|error| format!("Failed to load Instant recording metadata: {error}"))?;
+    let RecordingMetaInner::Instant(cap_project::InstantRecordingMeta::Complete {
+        sample_rate,
+        ..
+    }) = meta.inner
+    else {
+        return Ok(None);
+    };
+    let mut required_audio = sample_rate.is_some();
+    for (name, field) in [
+        ("tauri-upload.json", "required_audio"),
+        ("instant-upload.json", "requested_audio"),
+    ] {
+        let path = project_path.join(name);
+        if let Some(metadata) = instant_input_metadata(&path)? {
+            if !metadata.is_file() || metadata.len() > 65536 {
+                return Err("Invalid Instant upload intent; local recording retained".into());
+            }
+            let intent: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).map_err(|error| error.to_string())?)
+                    .map_err(|error| format!("Invalid Instant upload intent: {error}"))?;
+            if let Some(value) = intent.get(field).filter(|value| !value.is_null()) {
+                required_audio |= value
+                    .as_bool()
+                    .ok_or("Invalid Instant audio intent; local recording retained")?;
+            }
+        }
+    }
+    let audio_dir = project_path.join("content/audio");
+    let audio_metadata = instant_input_metadata(&audio_dir)?;
+    let has_audio_directory = audio_metadata.is_some();
+    let mut has_audio_sources = false;
+    if let Some(metadata) = audio_metadata {
+        if !metadata.is_dir() {
+            return Err("Invalid Instant audio directory; local recording retained".into());
+        }
+        for entry in std::fs::read_dir(audio_dir).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let is_audio_media = path.extension().is_some_and(|extension| {
+                ["m4s", "mp4", "ogg", "aac", "wav", "webm", "m4a"]
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            });
+            if let Some(metadata) = instant_input_metadata(&path)?
+                && is_audio_media
+                && metadata.is_file()
+                && metadata.len() > 0
+            {
+                required_audio = true;
+                has_audio_sources = true;
+            }
+        }
+    }
+    let output = project_path.join("content/output.mp4");
+    if !required_audio
+        && !has_audio_directory
+        && instant_input_metadata(&output)?
+            .is_some_and(|metadata| metadata.is_file() && metadata.len() > 0)
+    {
+        return Ok(Some(output));
+    }
+    match cap_recording::recovery::RecoveryManager::validate_instant_output(
+        project_path,
+        required_audio,
+    ) {
+        Ok(output) => Ok(Some(output)),
+        Err(error) if required_audio && !has_audio_sources => Err(format!(
+            "Instant output failed validation and required audio cannot be repaired: {error}; local recording retained"
+        )),
+        Err(_) => Ok(None),
+    }
+}
+
+fn instant_input_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Instant input is a reparse point; local recording retained".into());
+        }
+    }
+    if metadata.file_type().is_symlink() {
+        return Err("Instant input is a symbolic link; local recording retained".into());
+    }
+    Ok(Some(metadata))
 }
 
 fn instant_export_settings_supported(settings: &CliExportSettings) -> bool {
@@ -668,6 +966,147 @@ fn emit_export_message(
 mod tests {
     use super::*;
 
+    fn playable_instant_project() -> tempfile::TempDir {
+        ffmpeg::init().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let content = project.path().join("content");
+        std::fs::create_dir(&content).unwrap();
+        let mut output = ffmpeg::format::output(&content.join("output.mp4")).unwrap();
+        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::MPEG4).unwrap();
+        let mut encoder = ffmpeg::codec::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        encoder.set_width(32);
+        encoder.set_height(32);
+        encoder.set_format(ffmpeg::format::Pixel::YUV420P);
+        encoder.set_time_base((1, 30));
+        encoder.set_frame_rate(Some((30, 1)));
+        encoder.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
+        let mut encoder = encoder.open_as(codec).unwrap();
+        output.add_stream(codec).unwrap().set_parameters(&encoder);
+        output.write_header().unwrap();
+        let output_time_base = output.stream(0).unwrap().time_base();
+        {
+            let mut drain = |encoder: &mut ffmpeg::encoder::video::Encoder, finished: bool| loop {
+                let mut packet = ffmpeg::Packet::empty();
+                match encoder.receive_packet(&mut packet) {
+                    Ok(()) => {
+                        packet.set_stream(0);
+                        packet.rescale_ts((1, 30), output_time_base);
+                        packet.write_interleaved(&mut output).unwrap();
+                    }
+                    Err(ffmpeg::Error::Other { errno })
+                        if !finished && errno == ffmpeg::ffi::EAGAIN =>
+                    {
+                        break;
+                    }
+                    Err(ffmpeg::Error::Eof) if finished => break,
+                    Err(error) => panic!("Synthetic video encoding failed: {error}"),
+                }
+            };
+            for index in 0..30 {
+                let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 32, 32);
+                frame.data_mut(0).fill(32 + index as u8);
+                frame.data_mut(1).fill(128);
+                frame.data_mut(2).fill(128);
+                frame.set_pts(Some(index));
+                encoder.send_frame(&frame).unwrap();
+                drain(&mut encoder, false);
+            }
+            encoder.send_eof().unwrap();
+            drain(&mut encoder, true);
+        }
+        output.write_trailer().unwrap();
+        drop(output);
+        RecordingMeta {
+            project_path: project.path().to_path_buf(),
+            platform: None,
+            pretty_name: "Owned Instant fixture".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Instant(cap_project::InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            }),
+            upload: None,
+        }
+        .save_for_project()
+        .unwrap();
+        project
+    }
+
+    #[tokio::test]
+    async fn completed_instant_export_is_read_only_while_upload_owns_the_project() {
+        let project = playable_instant_project();
+        std::fs::create_dir(project.path().join("content/audio")).unwrap();
+        let output = project.path().join("content/output.mp4");
+        let before = std::fs::read(&output).unwrap();
+        let _upload = cap_recording::upload_resume::UploadLock::acquire(project.path()).unwrap();
+        assert_eq!(
+            prepare_instant_output(project.path().to_path_buf())
+                .await
+                .unwrap(),
+            output
+        );
+        let exported = project.path().join("copy.mp4");
+        assert_eq!(
+            copy_instant_output(&output, exported.clone()).unwrap(),
+            exported
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), before);
+        assert_eq!(std::fs::read(&exported).unwrap(), before);
+        assert!(!project.path().join(".recovery.lock").exists());
+    }
+
+    #[tokio::test]
+    async fn instant_export_needing_repair_cannot_rewrite_an_owned_upload() {
+        let project = playable_instant_project();
+        std::fs::create_dir(project.path().join("content/audio")).unwrap();
+        let output = project.path().join("content/output.mp4");
+        std::fs::write(&output, b"broken media must remain available for repair").unwrap();
+        let before = std::fs::read(&output).unwrap();
+        let _upload = cap_recording::upload_resume::UploadLock::acquire(project.path()).unwrap();
+        let error = prepare_instant_output(project.path().to_path_buf())
+            .await
+            .unwrap_err();
+        assert!(error.contains("Another upload owns this recording"));
+        assert_eq!(std::fs::read(&output).unwrap(), before);
+        assert!(!project.path().join(".recovery.lock").exists());
+    }
+
+    #[tokio::test]
+    async fn instant_export_cannot_ignore_persisted_or_recorded_audio() {
+        for intent in ["tauri-upload.json", "instant-upload.json", "audio-media"] {
+            let project = playable_instant_project();
+            let output = project.path().join("content/output.mp4");
+            let before = std::fs::read(&output).unwrap();
+            match intent {
+                "tauri-upload.json" => {
+                    std::fs::write(project.path().join(intent), br#"{"required_audio":true}"#)
+                        .unwrap();
+                }
+                "instant-upload.json" => {
+                    std::fs::write(project.path().join(intent), br#"{"requested_audio":true}"#)
+                        .unwrap();
+                }
+                _ => {
+                    let audio = project.path().join("content/audio");
+                    std::fs::create_dir(&audio).unwrap();
+                    std::fs::write(audio.join("segment_001.m4s"), b"retained audio source")
+                        .unwrap();
+                }
+            }
+            let _upload =
+                cap_recording::upload_resume::UploadLock::acquire(project.path()).unwrap();
+            assert!(
+                prepare_instant_output(project.path().to_path_buf())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(output).unwrap(), before);
+        }
+    }
+
     #[test]
     fn default_flags_produce_maximum_mp4_1080p60() {
         let settings = settings_from_flags(&ExportFlags::default()).unwrap();
@@ -785,5 +1224,101 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn single_project_keeps_output_and_default_forms() {
+        let (projects, output) =
+            split_projects_and_output(vec![PathBuf::from("/tmp/a.cap")], None).unwrap();
+        assert_eq!(projects, vec![PathBuf::from("/tmp/a.cap")]);
+        assert_eq!(output, None);
+
+        let (projects, output) = split_projects_and_output(
+            vec![PathBuf::from("/tmp/a.cap"), PathBuf::from("/tmp/out.mp4")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(projects, vec![PathBuf::from("/tmp/a.cap")]);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out.mp4")));
+    }
+
+    #[test]
+    fn several_projects_are_all_inputs_with_optional_trailing_output() {
+        let (projects, output) = split_projects_and_output(
+            vec![
+                PathBuf::from("/tmp/a.cap"),
+                PathBuf::from("/tmp/b.cap"),
+                PathBuf::from("/tmp/out"),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out")));
+
+        let (projects, output) = split_projects_and_output(
+            vec![PathBuf::from("/tmp/a.cap"), PathBuf::from("/tmp/b.cap")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn output_flag_makes_every_positional_a_project() {
+        let (projects, output) = split_projects_and_output(
+            vec![
+                PathBuf::from("/tmp/a.cap"),
+                PathBuf::from("/tmp/missing-project"),
+            ],
+            Some(PathBuf::from("/tmp/out")),
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out")));
+    }
+
+    #[test]
+    fn batch_plans_one_output_per_project() {
+        let planned = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/Talk.cap"),
+                PathBuf::from("/tmp/two/Demo.cap"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(planned[0].1, PathBuf::from("/tmp/exports/Talk.mp4"));
+        assert_eq!(planned[1].1, PathBuf::from("/tmp/exports/Demo.mp4"));
+    }
+
+    #[test]
+    fn batch_rejects_duplicate_output_names() {
+        let result = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/Talk.cap"),
+                PathBuf::from("/tmp/two/talk.cap"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn batch_keeps_dotted_project_names() {
+        let planned = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/release.v1"),
+                PathBuf::from("/tmp/two/release.v2"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(planned[0].1, PathBuf::from("/tmp/exports/release.v1.mp4"));
+        assert_eq!(planned[1].1, PathBuf::from("/tmp/exports/release.v2.mp4"));
     }
 }

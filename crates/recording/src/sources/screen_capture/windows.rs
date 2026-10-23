@@ -1,6 +1,6 @@
 use crate::{
     AudioFrame, SetupCtx, output_pipeline,
-    screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat},
+    screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate},
 };
 use ::windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
@@ -422,6 +422,33 @@ pub struct VideoSourceConfig {
 pub struct VideoSource {
     video_info: VideoInfo,
     ctrl_tx: std::sync::mpsc::SyncSender<VideoControl>,
+    first_frame: Option<oneshot::Receiver<Result<(), String>>>,
+}
+
+type SharedFirstScreenFrameSender = Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>;
+
+#[derive(Clone)]
+struct FirstScreenFrame(SharedFirstScreenFrameSender);
+
+impl FirstScreenFrame {
+    fn complete(&self, result: Result<(), String>) {
+        if let Ok(mut sender) = self.0.lock()
+            && let Some(sender) = sender.take()
+        {
+            let _ = sender.send(result);
+        }
+    }
+}
+
+async fn wait_for_first_screen_frame(
+    receiver: oneshot::Receiver<Result<(), String>>,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(timeout, receiver)
+        .await
+        .map_err(|_| anyhow!("Windows screen capture produced no accepted frame within 5s"))?
+        .map_err(|_| anyhow!("Windows screen capture closed before its first frame"))?
+        .map_err(anyhow::Error::msg)
 }
 
 enum VideoControl {
@@ -465,12 +492,19 @@ struct CreateCapturerParams<'a> {
     video_tx: &'a mpsc::Sender<VideoFrame>,
     video_frame_counter: &'a Arc<AtomicU32>,
     video_drop_counter: &'a Arc<AtomicU32>,
+    /// Decimated by the cadence gate: expected on high-refresh monitors,
+    /// tracked separately from drops so it never trips drop-rate health.
+    video_decimated_counter: &'a Arc<AtomicU32>,
+    /// Nominal frame interval in QPC hundred-nanosecond units; `None`
+    /// disables rate capping.
+    cadence_interval_hns: Option<i64>,
     expected_width: u32,
     expected_height: u32,
     frame_scaler: Arc<Mutex<WindowsFrameScaler>>,
     scaling_logged: Arc<AtomicBool>,
     scaled_frame_count: Arc<AtomicU32>,
     stall_health_tx: output_pipeline::HealthSender,
+    first_frame: FirstScreenFrame,
 }
 
 fn create_d3d_capturer(
@@ -489,6 +523,8 @@ fn create_d3d_capturer(
         {
             let video_frame_counter = params.video_frame_counter.clone();
             let video_drop_counter = params.video_drop_counter.clone();
+            let video_decimated_counter = params.video_decimated_counter.clone();
+            let mut cadence_gate = params.cadence_interval_hns.map(FrameCadenceGate::new);
             let mut tx = params.video_tx.clone();
             let expected_width = params.expected_width;
             let expected_height = params.expected_height;
@@ -496,11 +532,28 @@ fn create_d3d_capturer(
             let scaling_logged = params.scaling_logged.clone();
             let scaled_frame_count = params.scaled_frame_count.clone();
             let stall_health_tx = params.stall_health_tx.clone();
+            let first_frame = params.first_frame.clone();
             move |frame| {
-                let timestamp = frame.inner().SystemRelativeTime()?;
-                let timestamp = Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
-                    timestamp.Duration,
-                ));
+                let result = (|| {
+                let capture_time = frame.inner().SystemRelativeTime()?;
+                if frame.width() == 0 || frame.height() == 0 {
+                    return Err(windows::core::Error::new(windows::Win32::Foundation::E_INVALIDARG, "Empty screen frame"));
+                }
+
+                // WGC delivers a frame per screen update — up to the monitor
+                // refresh rate on systems without MinUpdateInterval support —
+                // so cap delivery at the nominal rate before any conversion
+                // or channel work.
+                if let Some(gate) = cadence_gate.as_mut()
+                    && !gate.admit(capture_time.Duration)
+                {
+                    video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                    return Ok(());
+                }
+
+                let timestamp = Timestamp::PerformanceCounter(
+                    PerformanceCounterTimestamp::from_100ns(capture_time.Duration),
+                );
 
                 let frame_width = frame.width();
                 let frame_height = frame.height();
@@ -562,6 +615,7 @@ fn create_d3d_capturer(
                 ) {
                     output_pipeline::StallSendOutcome::Sent => {
                         video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                        first_frame.complete(Ok(()));
                     }
                     output_pipeline::StallSendOutcome::StalledAndDropped { .. }
                     | output_pipeline::StallSendOutcome::Disconnected => {
@@ -569,9 +623,15 @@ fn create_d3d_capturer(
                     }
                 }
                 Ok(())
+                })();
+                if let Err(error) = &result {
+                    first_frame.complete(Err(format!("Windows first screen frame failed: {error}")));
+                }
+                result
             }
         },
         {
+            let first_frame = params.first_frame.clone();
             let mut err_tx = error_tx.clone();
             let device_for_callback = params.d3d_device.clone();
             move || {
@@ -583,6 +643,7 @@ fn create_d3d_capturer(
                     CaptureClosureKind::TargetLost => "capture target lost".to_string(),
                     CaptureClosureKind::Transient => "capture closed".to_string(),
                 };
+                first_frame.complete(Err(message.clone()));
                 drop(err_tx.try_send(CaptureClosureEvent { kind, message }));
                 Ok(())
             }
@@ -613,6 +674,8 @@ impl output_pipeline::VideoSource for VideoSource {
         let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(4);
         let monitor_ctrl_tx = ctrl_tx.clone();
 
+        let (first_tx, first_rx) = oneshot::channel();
+        let first_frame = FirstScreenFrame(Arc::new(Mutex::new(Some(first_tx))));
         let tokio_rt = tokio::runtime::Handle::current();
         let restart_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
@@ -627,6 +690,18 @@ impl output_pipeline::VideoSource for VideoSource {
         let scaling_logged: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let scaled_frame_count: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
+        // Belt-and-braces alongside WGC's MinUpdateInterval: on systems where
+        // that API is unsupported (or silently ineffective) the gate keeps
+        // high-refresh monitors from recording far more frames than the
+        // nominal rate. For sources at or below nominal it admits everything.
+        let cadence_interval_hns = if std::env::var("CAP_DISABLE_CAPTURE_CADENCE").is_ok() {
+            info!("Capture cadence gate disabled via CAP_DISABLE_CAPTURE_CADENCE");
+            None
+        } else {
+            let fps = video_info.fps();
+            (fps > 0).then(|| 10_000_000i64 / fps as i64)
+        };
+
         let stats_health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn_thread("d3d-capture-thread", {
             let restart_counter = restart_counter.clone();
@@ -639,6 +714,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
                 let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
                 let video_drop_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+                let video_decimated_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
                 let cancel_token = CancellationToken::new();
                 let mut error_tx = error_tx;
                 let mut d3d_device = d3d_device;
@@ -652,12 +728,15 @@ impl output_pipeline::VideoSource for VideoSource {
                             video_tx: &video_tx,
                             video_frame_counter: &video_frame_counter,
                             video_drop_counter: &video_drop_counter,
+                            video_decimated_counter: &video_decimated_counter,
+                            cadence_interval_hns,
                             expected_width,
                             expected_height,
                             frame_scaler: frame_scaler.clone(),
                             scaling_logged: scaling_logged.clone(),
                             scaled_frame_count: scaled_frame_count.clone(),
                             stall_health_tx: stats_health_tx.clone(),
+                            first_frame: first_frame.clone(),
                         }
                     };
                 }
@@ -682,6 +761,7 @@ impl output_pipeline::VideoSource for VideoSource {
                     {
                         let video_frame_counter = video_frame_counter.clone();
                         let video_drop_counter = video_drop_counter.clone();
+                        let video_decimated_counter = video_decimated_counter.clone();
                         let restart_counter = restart_counter.clone();
                         let scaled_frame_count = scaled_frame_count.clone();
                         let stats_health_tx = stats_health_tx.clone();
@@ -690,8 +770,13 @@ impl output_pipeline::VideoSource for VideoSource {
                                 tokio::time::sleep(Duration::from_secs(5)).await;
                                 let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
                                 let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
+                                let decimated =
+                                    video_decimated_counter.load(atomic::Ordering::Relaxed);
                                 let restarts = restart_counter.load(atomic::Ordering::Relaxed);
                                 let scaled = scaled_frame_count.load(atomic::Ordering::Relaxed);
+                                // Decimated frames are the cadence gate doing
+                                // its job on a high-refresh monitor, not a
+                                // health problem; keep them out of drop rate.
                                 let total = captured + dropped;
                                 if dropped > 0 || restarts > 0 || scaled > 0 {
                                     let drop_pct = if total > 0 {
@@ -703,6 +788,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                         captured = captured,
                                         dropped = dropped,
                                         drop_pct = format!("{:.1}%", drop_pct),
+                                        decimated = decimated,
                                         restarts = restarts,
                                         scaled_frames = scaled,
                                         "Screen capture stats"
@@ -717,7 +803,11 @@ impl output_pipeline::VideoSource for VideoSource {
                                         );
                                     }
                                 } else {
-                                    debug!(captured = captured, "Screen capture frames");
+                                    debug!(
+                                        captured = captured,
+                                        decimated = decimated,
+                                        "Screen capture frames"
+                                    );
                                 }
                             }
                         }
@@ -920,6 +1010,7 @@ impl output_pipeline::VideoSource for VideoSource {
         Ok(Self {
             video_info,
             ctrl_tx,
+            first_frame: Some(first_rx),
         })
     }
 
@@ -931,9 +1022,20 @@ impl output_pipeline::VideoSource for VideoSource {
         let (tx, rx) = oneshot::channel();
         let _ = self.ctrl_tx.send(VideoControl::Start(tx));
 
-        async {
-            rx.await??;
-            Ok(())
+        let first_frame = self.first_frame.take();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async move {
+                rx.await??;
+                wait_for_first_screen_frame(
+                    first_frame.ok_or_else(|| anyhow!("Windows screen source already started"))?,
+                    Duration::from_secs(5),
+                )
+                .await
+            })
+            .await
+            .map_err(|_| {
+                anyhow!("Windows screen startup did not acknowledge an accepted frame within 5s")
+            })?
         }
         .boxed()
     }
@@ -1072,6 +1174,8 @@ fn create_system_audio_capturer(
     let device_info = Direct3DCapture::audio_info();
     let target_info = crate::sources::audio_mixer::AudioMixer::INFO;
     let device_differs_from_target = !device_info.matches_format(&target_info);
+    let mut capture_clock =
+        crate::sources::capture_clock::CaptureClock::new(cap_timestamp::Timestamps::now());
 
     let mut resampler = if device_differs_from_target {
         info!(
@@ -1108,7 +1212,16 @@ fn create_system_audio_capturer(
                     }
                 });
 
-                let timestamp = Timestamp::from_cpal(info.timestamp().capture);
+                let buffer_duration = Duration::from_secs_f64(
+                    data.len() as f64
+                        / f64::from(config.channels.max(1))
+                        / f64::from(config.sample_rate.0.max(1)),
+                );
+                let timestamp = capture_clock.timestamp(
+                    Timestamp::from_cpal(info.timestamp().capture),
+                    std::time::Instant::now(),
+                    buffer_duration,
+                );
                 let raw_frame = data.as_ffmpeg(config);
 
                 let frame = if let Some(ref mut ctx) = resampler {
@@ -1164,7 +1277,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     where
         Self: Sized,
     {
-        let cancel_token = CancellationToken::new();
+        let cancel_token = ctx.stop_token().child_token();
 
         ctx.tasks().spawn("system-audio", {
             let cancel = cancel_token.clone();
@@ -1203,6 +1316,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         }));
 
         let stall_health_tx_for_watcher = ctx.health_tx().clone();
+        let runtime = tokio::runtime::Handle::current();
         ctx.tasks().spawn_thread("system-audio-watcher", {
             let state = state.clone();
             let mut watcher_tx = tx.clone();
@@ -1221,9 +1335,12 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                 .ceil() as usize;
 
                 loop {
-                    std::thread::sleep(DEVICE_POLL_INTERVAL);
-
-                    if cancel.is_cancelled() {
+                    if runtime
+                        .block_on(async {
+                            tokio::time::timeout(DEVICE_POLL_INTERVAL, cancel.cancelled()).await
+                        })
+                        .is_ok()
+                    {
                         break;
                     }
 
@@ -1344,6 +1461,14 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
         async move {
             let capturer = setup_result.map_err(|e| anyhow!("{e}"))?;
+            if capturer.has_silence_keepalive() {
+                info!("System audio loopback silence keepalive active");
+            } else {
+                warn!(
+                    "System audio loopback has no silence keepalive; \
+                     capture will only produce packets while other apps play audio"
+                );
+            }
             if let Ok(mut guard) = state.lock() {
                 guard.capturer = Some(capturer);
             }
@@ -1418,5 +1543,58 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             warn!("system audio capturer pause failed: {err}");
         }
         async { Ok(()) }
+    }
+}
+
+#[cfg(test)]
+mod first_screen_frame_tests {
+    use super::*;
+
+    fn signal() -> (FirstScreenFrame, oneshot::Receiver<Result<(), String>>) {
+        let (sender, receiver) = oneshot::channel();
+        (
+            FirstScreenFrame(Arc::new(Mutex::new(Some(sender)))),
+            receiver,
+        )
+    }
+
+    #[tokio::test]
+    async fn accepted_frame_acknowledges_startup_once() {
+        let (signal, receiver) = signal();
+        signal.complete(Ok(()));
+        signal.complete(Err("later close".into()));
+        wait_for_first_screen_frame(receiver, Duration::from_millis(20))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn early_closed_source_cannot_become_ready_on_a_late_frame() {
+        let (signal, receiver) = signal();
+        signal.complete(Err("capture target lost".into()));
+        signal.complete(Ok(()));
+        let error = wait_for_first_screen_frame(receiver, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("capture target lost"));
+    }
+
+    #[tokio::test]
+    async fn no_accepted_screen_frame_is_a_startup_error() {
+        let (_signal, receiver) = signal();
+        let error = wait_for_first_screen_frame(receiver, Duration::from_millis(1))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no accepted frame"));
+    }
+
+    #[tokio::test]
+    async fn dropped_capture_thread_is_not_startup_success() {
+        let (signal, receiver) = signal();
+        drop(signal);
+        let error = wait_for_first_screen_frame(receiver, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("closed before its first frame"));
     }
 }

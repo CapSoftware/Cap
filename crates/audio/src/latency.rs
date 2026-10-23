@@ -452,6 +452,22 @@ pub fn default_output_latency_hint(
     }
 }
 
+/// Whether the default output device is the built-in output, whose stream can
+/// be stopped while idle and restarted within a callback period or two.
+/// External, wireless, AirPlay and display outputs keep running because some
+/// drop the start of audio or take seconds to wake after their stream stops.
+pub fn default_output_supports_idle_pause() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::default_output_supports_idle_pause()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InputLatencyInfo {
     pub device_latency_secs: f64,
@@ -571,13 +587,40 @@ mod macos {
         compute_latency_hint(&device, sample_rate, fallback_buffer_frames).ok()
     }
 
+    pub(super) fn default_output_supports_idle_pause() -> bool {
+        System::default_output_device()
+            .ok()
+            .and_then(|device| device.transport_type().ok())
+            .is_some_and(|transport| transport == DeviceTransportType::BUILT_IN)
+    }
+
     pub(super) fn estimate_input_latency(
         sample_rate: u32,
         buffer_size_frames: u32,
-        _device_name: Option<&str>,
+        device_name: Option<&str>,
     ) -> Option<InputLatencyInfo> {
-        let device = System::default_input_device().ok()?;
+        // Resolve the actual device being recorded from; the system-default
+        // input may be a different device with very different latency
+        // characteristics (e.g. a Bluetooth headset while recording from a
+        // wired interface).
+        let device =
+            input_device_by_name(device_name).or_else(|| System::default_input_device().ok())?;
         compute_input_latency(&device, sample_rate, buffer_size_frames).ok()
+    }
+
+    fn input_device_by_name(device_name: Option<&str>) -> Option<Device> {
+        let target = device_name?;
+        System::devices().ok()?.into_iter().find(|device| {
+            has_input_streams(device) && device.name().is_ok_and(|name| name.to_string() == target)
+        })
+    }
+
+    fn has_input_streams(device: &Device) -> bool {
+        device.streams().is_ok_and(|streams| {
+            streams
+                .iter()
+                .any(|stream| is_input_stream(stream).unwrap_or(false))
+        })
     }
 
     fn compute_input_latency(

@@ -1,0 +1,161 @@
+name: Baseline diff
+
+# Report artifacts expire after 90 days and the baseline branch never
+# changes, so the baseline is re-run weekly.
+
+on:
+  workflow_run:
+    workflows: ["Engine verify", "Verify recording (real capture)"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      main-run:
+        description: "Run id on main to compare (Engine verify or real capture)"
+        required: true
+      baseline-run:
+        description: "Baseline run id (default: the latest of the same workflow on scratch/prod-baseline)"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: baseline-diff-${{ github.event.workflow_run.id || inputs.main-run || 'refresh' }}
+  cancel-in-progress: false
+
+env:
+  BASELINE_BRANCH: scratch/prod-baseline
+
+jobs:
+  refresh:
+    if: github.event_name == 'schedule'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      actions: write
+    steps:
+      - name: Re-run the baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run engine-verify.yml --repo "$GITHUB_REPOSITORY" --ref "$BASELINE_BRANCH" --raw-field tier=full
+          gh workflow run verify-recording.yml --repo "$GITHUB_REPOSITORY" --ref "$BASELINE_BRANCH" \
+            --raw-field tier=full --raw-field repeat=3 --raw-field runners=both
+
+  diff:
+    permissions:
+      contents: read
+      actions: read
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'schedule')
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Runs
+        id: runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN_RUN: ${{ github.event.workflow_run.id || inputs.main-run }}
+          BASELINE_INPUT: ${{ inputs.baseline-run }}
+        run: |
+          set -euo pipefail
+          workflow=$(gh run view "$MAIN_RUN" --repo "$GITHUB_REPOSITORY" --json workflowDatabaseId --jq .workflowDatabaseId)
+          baseline="$BASELINE_INPUT"
+          if [[ -z "$baseline" ]]; then
+            # Baseline runs fail (0.6.0 has known bugs), but a run with a
+            # cancelled or timed-out job stopped before reporting every case.
+            for candidate in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASELINE_BRANCH" \
+              --limit 20 --json databaseId,conclusion \
+              --jq '.[] | select(.conclusion == "success" or .conclusion == "failure") | .databaseId'); do
+              stopped=$(gh run view "$candidate" --repo "$GITHUB_REPOSITORY" --json conclusion,jobs \
+                --jq '[.conclusion, .jobs[].conclusion] | map(select(. == "cancelled" or . == "timed_out")) | length')
+              if [[ "$stopped" == 0 ]]; then
+                baseline="$candidate"
+                break
+              fi
+            done
+          fi
+          if [[ -z "$baseline" ]]; then
+            echo "::error::no completed baseline run of workflow $workflow on $BASELINE_BRANCH"
+            exit 1
+          fi
+          echo "main=$MAIN_RUN" >> "$GITHUB_OUTPUT"
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+          echo "Comparing main run $MAIN_RUN with baseline run $baseline" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Download reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN_RUN: ${{ steps.runs.outputs.main }}
+          BASELINE_RUN: ${{ steps.runs.outputs.baseline }}
+        run: |
+          set -euo pipefail
+          for side in main baseline; do
+            run=$([[ $side == main ]] && echo "$MAIN_RUN" || echo "$BASELINE_RUN")
+            dest="$RUNNER_TEMP/reports/$side"
+            mkdir -p "$dest"
+            # Real capture also uploads its reports alone; runs from before
+            # that only have the artifact with the recordings.
+            names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --paginate --jq '.artifacts[].name')
+            if grep -q '^verify-report-' <<< "$names"; then
+              pattern='verify-report-*'
+            elif grep -q '^verify-recording-report-' <<< "$names"; then
+              pattern='verify-recording-report-*'
+            elif grep -q '^verify-recording-' <<< "$names"; then
+              pattern='verify-recording-*'
+            else
+              echo "::error::run $run has no verification reports"
+              exit 1
+            fi
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "$dest" --pattern "$pattern"
+            find "$dest" -type d -name verify-scratch -prune -exec rm -r {} +
+            echo "$side: $(find "$dest" -name '*.jsonl' | wc -l) report files"
+          done
+
+      - name: Baseline covers main's runners
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Lanes as diff.py names them: shard numbers and tiers dropped.
+          lanes() {
+            local dir
+            for dir in "$1"/verify-*/; do
+              if [[ -d "$dir" ]]; then basename "$dir"; fi
+            done | sed -E 's/^verify-recording-report-/verify-recording-/; s/-(fast|full)(-[0-9]+)?$//' | sort -u
+          }
+          main_lanes=$(lanes "$RUNNER_TEMP/reports/main")
+          baseline_lanes=$(lanes "$RUNNER_TEMP/reports/baseline")
+          if [[ -z "$main_lanes" ]]; then
+            echo "::error::main's run has no report directories"
+            exit 1
+          fi
+          missing=$(comm -23 <(echo "$main_lanes") <(echo "$baseline_lanes"))
+          if [[ -n "$missing" ]]; then
+            echo "::error::the baseline run has no reports for: $(echo $missing)"
+            exit 1
+          fi
+
+      - name: Diff
+        run: |
+          python3 scripts/verify/diff.py \
+            "$RUNNER_TEMP/reports/baseline" "$RUNNER_TEMP/reports/main" \
+            --na scripts/verify/baseline-na.tsv \
+            --title "cap-v0.6.0 baseline vs main" \
+            --fail-on-worse > "$RUNNER_TEMP/baseline-diff.md"
+          status=$?
+          cat "$RUNNER_TEMP/baseline-diff.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+        shell: bash {0}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: baseline-diff
+          path: ${{ runner.temp }}/baseline-diff.md
+          if-no-files-found: ignore

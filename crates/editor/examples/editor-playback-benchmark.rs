@@ -6,7 +6,7 @@ use std::{
 };
 
 use cap_editor::{
-    EditorFrameOutput, Playback, PlaybackFrameSource, PlaybackRenderOutputFormat,
+    EditorFrameOutput, FrameLayout, Playback, PlaybackFrameSource, PlaybackRenderOutputFormat,
     PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent, Renderer,
     finish_renderer_layers_creation, start_renderer_layers_creation,
 };
@@ -80,9 +80,17 @@ struct BenchmarkSummary {
     warmup_ms: f64,
     warmup_buffered_frames: usize,
     warmup_target_frames: usize,
+    audio_resolved_ms: Option<f64>,
+    audio_pipeline_ms: Option<f64>,
+    audio_pipeline_has_audio: bool,
+    clock_started_ms: Option<f64>,
+    first_submit_ms: Option<f64>,
+    first_renderer_frame_ms: Option<f64>,
     submitted_frames: u64,
     rendered_frames: u64,
     callback_frames: u64,
+    last_callback: Option<Instant>,
+    callback_gaps: DurationStats,
     dropped_by_renderer: u64,
     send_failures: u64,
     skipped_frames: u64,
@@ -130,7 +138,21 @@ struct RenderSample {
 
 impl BenchmarkSummary {
     fn record_event(&mut self, event: PlaybackTelemetryEvent) {
+        self.record_event_at(event, None);
+    }
+
+    fn record_event_at(&mut self, event: PlaybackTelemetryEvent, press_elapsed_ms: Option<f64>) {
         match event {
+            PlaybackTelemetryEvent::AudioSegmentsResolved { elapsed } => {
+                self.audio_resolved_ms = Some(elapsed.as_secs_f64() * 1000.0);
+            }
+            PlaybackTelemetryEvent::AudioPipelineReady { elapsed, has_audio } => {
+                self.audio_pipeline_ms = Some(elapsed.as_secs_f64() * 1000.0);
+                self.audio_pipeline_has_audio = has_audio;
+            }
+            PlaybackTelemetryEvent::ClockStarted { elapsed } => {
+                self.clock_started_ms = Some(elapsed.as_secs_f64() * 1000.0);
+            }
             PlaybackTelemetryEvent::WarmupComplete {
                 elapsed,
                 buffered_frames,
@@ -152,6 +174,9 @@ impl BenchmarkSummary {
                 total_frames_skipped: _,
             } => {
                 self.submitted_frames += 1;
+                if self.first_submit_ms.is_none() {
+                    self.first_submit_ms = press_elapsed_ms;
+                }
                 *self.sources.entry(source).or_insert(0) += 1;
                 self.schedule_overshoot.push(schedule_overshoot);
                 self.frame_acquire.push(frame_acquire_duration);
@@ -181,6 +206,9 @@ impl BenchmarkSummary {
             } => {
                 let render_stage_timings = *render_stage_timings;
                 self.rendered_frames += 1;
+                if self.first_renderer_frame_ms.is_none() {
+                    self.first_renderer_frame_ms = press_elapsed_ms;
+                }
                 *self.output_formats.entry(output_format).or_insert(0) += 1;
                 self.queue_wait.push(queue_wait);
                 self.drain.push(drain_duration);
@@ -247,7 +275,12 @@ impl BenchmarkSummary {
         }
     }
 
-    fn record_callback_frame(&mut self, bytes: usize) {
+    fn record_callback_frame(&mut self, bytes: usize, received_at: Instant) {
+        if let Some(previous) = self.last_callback {
+            self.callback_gaps
+                .push(received_at.saturating_duration_since(previous));
+        }
+        self.last_callback = Some(received_at);
         self.callback_frames += 1;
         self.bytes_from_callback = self.bytes_from_callback.saturating_add(bytes as u64);
     }
@@ -325,6 +358,10 @@ async fn load_recording(
                     start: 0.0,
                     end: duration,
                     timescale: 1.0,
+                    name: None,
+                    speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -342,6 +379,10 @@ async fn load_recording(
                         start: 0.0,
                         end: duration,
                         timescale: 1.0,
+                        name: None,
+                        speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     })
                 })
                 .collect(),
@@ -350,12 +391,17 @@ async fn load_recording(
         if !timeline_segments.is_empty() {
             project.timeline = Some(TimelineConfiguration {
                 segments: timeline_segments,
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             });
         }
     }
@@ -396,6 +442,12 @@ fn parse_resolution(args: &[String]) -> XY<u32> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LiveEdit {
+    Background,
+    CursorSpring,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -408,6 +460,19 @@ async fn main() {
     ffmpeg::init().expect("Failed to initialize FFmpeg");
 
     let args: Vec<String> = std::env::args().collect();
+    let live_edit = arg_value(&args, "--live-edit").map(|kind| match kind {
+        "background" => LiveEdit::Background,
+        "cursor-spring" => LiveEdit::CursorSpring,
+        _ => panic!("--live-edit must be background or cursor-spring"),
+    });
+    let edit_interval_ms = arg_value(&args, "--edit-interval-ms")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .expect("--edit-interval-ms must be an integer")
+        })
+        .unwrap_or(50);
+    assert!(edit_interval_ms > 0, "--edit-interval-ms must be positive");
 
     let recording_path = arg_value(&args, "--recording-path")
         .map(PathBuf::from)
@@ -428,6 +493,18 @@ async fn main() {
                 .map(|seconds| (seconds * fps as f64).round() as u32)
         })
         .unwrap_or(0);
+    // `--press-gap <secs>` idles between presses, e.g. to exercise the audio
+    // output's idle pause before the next play.
+    let press_gap = arg_value(&args, "--press-gap").map(|value| {
+        value
+            .parse::<f64>()
+            .ok()
+            .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+            .unwrap_or_else(|| {
+                eprintln!("--press-gap expects a non-negative number of seconds, got {value:?}");
+                std::process::exit(2);
+            })
+    });
 
     println!("{}", "=".repeat(64));
     println!("  CAP EDITOR LIVE PLAYBACK BENCHMARK");
@@ -482,8 +559,8 @@ async fn main() {
     let layers_rx = finish_renderer_layers_creation(layers_rx).await;
 
     let (telemetry, mut telemetry_rx) = PlaybackTelemetry::channel();
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<usize>();
-    let frame_cb = Box::new(move |output: EditorFrameOutput| {
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(usize, Instant)>();
+    let frame_cb = Box::new(move |output: EditorFrameOutput, _: FrameLayout| {
         let bytes = match output {
             EditorFrameOutput::Nv12(frame) => {
                 let metadata_bytes = match frame.format {
@@ -494,8 +571,10 @@ async fn main() {
                 data.len() + metadata_bytes
             }
             EditorFrameOutput::Rgba(frame) => frame.data.len() + 24,
+            #[cfg(target_os = "macos")]
+            EditorFrameOutput::Surface(_) => return,
         };
-        let _ = frame_tx.send(bytes);
+        let _ = frame_tx.send((bytes, Instant::now()));
     });
 
     let renderer = match Renderer::spawn_with_telemetry(
@@ -511,65 +590,173 @@ async fn main() {
         }
     };
 
-    let (_project_tx, project_rx) = watch::channel(project);
-    let playback = Playback {
-        renderer: renderer.clone(),
-        render_constants,
-        start_frame_number,
-        project: project_rx,
-        segment_medias,
-        telemetry: Some(telemetry),
+    // Sequential play presses: `--press-starts "0,45,0"` presses play at each
+    // listed time (seconds), running a short burst of frames per press. This
+    // mirrors play → scrub ahead → play. Without the flag there is a single
+    // press at --start-frame/--start-time.
+    let press_start_frames: Vec<u32> = arg_value(&args, "--press-starts")
+        .map(|s| {
+            s.split(',')
+                .filter_map(|v| v.trim().parse::<f64>().ok())
+                .map(|secs| (secs * fps as f64).round() as u32)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let presses: Vec<(u32, u64)> = if press_start_frames.is_empty() {
+        vec![(start_frame_number, target_frames)]
+    } else {
+        press_start_frames
+            .iter()
+            .map(|frame| (*frame, target_frames.min(90)))
+            .collect()
     };
 
-    let playback_handle = match playback.start(fps, resolution_base).await {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("Failed to start playback: {e:?}");
-            std::process::exit(1);
-        }
-    };
+    let base_padding = project.background.padding;
+    let base_tension = project.cursor.tension;
+    let (project_tx, project_rx) = watch::channel(project);
 
-    let start = Instant::now();
-    let timeout = Duration::from_secs_f64(target_frames as f64 / fps as f64 + 15.0);
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
+    // One persistent output stream shared across presses, like the real app.
+    let audio_output = Arc::new(if args.iter().any(|arg| arg == "--headless") {
+        cap_editor::AudioOutput::new_headless(Box::new(|_, _| {}))
+    } else {
+        cap_editor::AudioOutput::new()
+    });
+    audio_output.prewarm();
 
     let mut summary = BenchmarkSummary::default();
+    let mut measured_elapsed = 0.0f64;
+    let mut live_edit_high = false;
 
-    loop {
-        if summary.submitted_frames >= target_frames {
-            break;
+    for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
+        if press_idx > 0
+            && let Some(gap) = press_gap
+        {
+            tokio::time::sleep(gap).await;
         }
+        let playback = Playback {
+            renderer: renderer.clone(),
+            render_constants: render_constants.clone(),
+            start_frame_number: press_start_frame,
+            project: project_rx.clone(),
+            segment_medias: segment_medias.clone(),
+            music: cap_editor::MusicTracks::new(),
+            audio_output: audio_output.clone(),
+            telemetry: Some(telemetry.clone()),
+        };
 
-        tokio::select! {
-            event = telemetry_rx.recv() => {
-                if let Some(event) = event {
-                    summary.record_event(event);
-                } else {
+        let press_instant = Instant::now();
+        let playback_handle = match playback.start(fps, resolution_base).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                eprintln!("Failed to start playback: {e:?}");
+                std::process::exit(1);
+            }
+        };
+        let start_await_ms = press_instant.elapsed().as_secs_f64() * 1000.0;
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs_f64(press_frames as f64 / fps as f64 + 15.0);
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        let mut press_summary = BenchmarkSummary::default();
+        let mut live_edit_count = 0_u64;
+        let mut edit_timer = live_edit.map(|_| {
+            let mut timer = tokio::time::interval_at(
+                tokio::time::Instant::now() + Duration::from_millis(500),
+                Duration::from_millis(edit_interval_ms),
+            );
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            timer
+        });
+
+        loop {
+            if press_summary.submitted_frames >= press_frames {
+                break;
+            }
+
+            tokio::select! {
+                event = telemetry_rx.recv() => {
+                    if let Some(event) = event {
+                        let press_elapsed_ms = press_instant.elapsed().as_secs_f64() * 1000.0;
+                        press_summary.record_event_at(event, Some(press_elapsed_ms));
+                    } else {
+                        break;
+                    }
+                }
+                frame = frame_rx.recv() => {
+                    if let Some((bytes, received_at)) = frame {
+                        press_summary.record_callback_frame(bytes, received_at);
+                    }
+                }
+                _ = async { edit_timer.as_mut().unwrap().tick().await }, if edit_timer.is_some() => {
+                    live_edit_high = !live_edit_high;
+                    let offset = if live_edit_high { 1.0 } else { 0.0 };
+                    project_tx.send_modify(|project| match live_edit.unwrap() {
+                        LiveEdit::Background => project.background.padding = base_padding + offset,
+                        LiveEdit::CursorSpring => project.cursor.tension = base_tension + offset as f32,
+                    });
+                    live_edit_count += 1;
+                }
+                _ = &mut deadline => {
                     break;
                 }
             }
-            bytes = frame_rx.recv() => {
-                if let Some(bytes) = bytes {
-                    summary.record_callback_frame(bytes);
-                }
-            }
-            _ = &mut deadline => {
-                break;
-            }
         }
-    }
 
-    let measured_elapsed = start.elapsed().as_secs_f64();
+        let press_elapsed = start.elapsed().as_secs_f64();
 
-    playback_handle.stop();
-    tokio::time::sleep(Duration::from_millis(250)).await;
+        playback_handle.stop();
+        tokio::time::sleep(Duration::from_millis(250)).await;
 
-    while let Ok(event) = telemetry_rx.try_recv() {
-        summary.record_event(event);
-    }
-    while let Ok(bytes) = frame_rx.try_recv() {
-        summary.record_callback_frame(bytes);
+        while let Ok(event) = telemetry_rx.try_recv() {
+            press_summary.record_event(event);
+        }
+        while let Ok((bytes, received_at)) = frame_rx.try_recv() {
+            press_summary.record_callback_frame(bytes, received_at);
+        }
+        if let Some(kind) = live_edit {
+            println!(
+                "Live edits: kind={kind:?} interval_ms={edit_interval_ms} sent={live_edit_count}"
+            );
+        }
+
+        let press_time_secs = press_start_frame as f64 / fps as f64;
+        println!(
+            "\nPlay-start latency (press {} at t={:.1}s, frame {}):",
+            press_idx + 1,
+            press_time_secs,
+            press_start_frame
+        );
+        println!("  start() await:          {start_await_ms:>8.1}ms");
+        if let Some(ms) = press_summary.audio_resolved_ms {
+            println!("    audio decode wait:    {ms:>8.1}ms");
+        }
+        println!(
+            "  warmup (frame prefetch):{:>8.1}ms",
+            press_summary.warmup_ms
+        );
+        if let Some(ms) = press_summary.first_submit_ms {
+            println!("  first frame submitted:  {ms:>8.1}ms");
+        }
+        if let Some(ms) = press_summary.first_renderer_frame_ms {
+            println!("  first frame rendered:   {ms:>8.1}ms");
+        }
+        if let Some(ms) = press_summary.audio_pipeline_ms {
+            println!(
+                "  audio pipeline ready:   {ms:>8.1}ms (has_audio={})",
+                press_summary.audio_pipeline_has_audio
+            );
+        }
+        if let Some(ms) = press_summary.clock_started_ms {
+            println!("  TOTAL press-to-clock:   {ms:>8.1}ms");
+        } else {
+            println!("  TOTAL press-to-clock:   (clock start not observed)");
+        }
+
+        summary = press_summary;
+        measured_elapsed = press_elapsed;
     }
 
     renderer.stop().await;
@@ -630,6 +817,7 @@ async fn main() {
     summary.render_finish_submit.print("finish submit");
     summary.render_immediate_flush.print("immediate flush");
     summary.callback.print("callback packing");
+    summary.callback_gaps.print("callback gap");
     DurationStats::print_values("render steady", steady_render_values);
 
     println!("\nRenderer prepare stages:");
