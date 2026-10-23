@@ -2802,6 +2802,7 @@ async function muxSegmentsAsync(
 		: undefined;
 	const startedAt = Date.now();
 	let previewAssets: Promise<PreviewAssets> | undefined;
+	const previewAbort = new AbortController();
 
 	try {
 		if (!beginRecordingProcessing(jobId, SEGMENTED_RECORDING_TIMEOUT_MS))
@@ -3017,7 +3018,7 @@ async function muxSegmentsAsync(
 			localVerified.video.duration,
 			Boolean(thumbnailPresignedUrl),
 			Boolean(previewGifPresignedUrl),
-			abortController.signal,
+			AbortSignal.any([abortController.signal, previewAbort.signal]),
 			videoId,
 		);
 
@@ -3247,6 +3248,8 @@ async function muxSegmentsAsync(
 		sendCurrentJobWebhook(jobId);
 	} finally {
 		if (processingTimeout) clearTimeout(processingTimeout);
+		// Previews still rendering here belong to a job that failed before using them.
+		previewAbort.abort();
 		await (await previewAssets)?.previewGif?.cleanup();
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});
 		releaseWorkDir();

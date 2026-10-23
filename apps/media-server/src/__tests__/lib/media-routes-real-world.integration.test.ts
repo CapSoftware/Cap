@@ -982,6 +982,28 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
+	test("skips mux previews when the uploaded recording fails its remote check", async () => {
+		corruptRecordingReadback = true;
+		const body = {
+			...fencedMuxRequest("mux-previews-corrupt"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews-corrupt.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews-corrupt.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(job.errorCode).toBe("output-invalid");
+			expect(uploadRequests).toEqual(["/uploads/mux-previews-corrupt.mp4"]);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
 	test("does not overwrite an existing immutable candidate", async () => {
 		const original = new Uint8Array([1, 2, 3]);
 		uploadedArtifacts.set("/uploads/fenced-existing.mp4", original);
