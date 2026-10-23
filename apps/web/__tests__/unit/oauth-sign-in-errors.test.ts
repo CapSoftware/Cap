@@ -132,15 +132,30 @@ describe.each([
 	});
 });
 
-it.each(["apple", "google"])(
-	"handles failed automatic mobile %s sign-in without an unhandled rejection",
-	async (provider) => {
-		mocks.searchParams.set("mobileProvider", provider);
-		mocks.signIn.mockRejectedValueOnce(new TypeError("Load failed"));
-		await act(async () => root.render(createElement(LoginForm)));
-		expect(mocks.signIn).toHaveBeenCalledWith(provider, {});
-		expect(mocks.error).toHaveBeenCalledWith(
-			"Could not start sign-in. Check your connection and try again.",
-		);
-	},
-);
+it("handles failed automatic mobile google sign-in without an unhandled rejection", async () => {
+	mocks.searchParams.set("mobileProvider", "google");
+	mocks.signIn.mockRejectedValueOnce(new TypeError("Load failed"));
+	await act(async () => root.render(createElement(LoginForm)));
+	expect(mocks.signIn).toHaveBeenCalledWith("google", {});
+	expect(mocks.error).toHaveBeenCalledWith(
+		"Could not start sign-in. Check your connection and try again.",
+	);
+});
+
+it("offers a retry after failed automatic mobile apple sign-in", async () => {
+	mocks.searchParams.set("mobileProvider", "apple");
+	mocks.signIn.mockRejectedValueOnce(new TypeError("Load failed"));
+	await act(async () => root.render(createElement(LoginForm)));
+	expect(mocks.signIn).toHaveBeenCalledWith("apple", {});
+	expect(mocks.error).toHaveBeenLastCalledWith(
+		"Could not start sign-in. Check your connection and try again.",
+		{ action: { label: "Try again", onClick: expect.any(Function) } },
+	);
+
+	const options = mocks.error.mock.lastCall?.[1] as
+		| { action: { onClick: () => void } }
+		| undefined;
+	await act(async () => options?.action.onClick());
+	expect(mocks.signIn).toHaveBeenCalledTimes(2);
+	expect(mocks.signIn).toHaveBeenLastCalledWith("apple", {});
+});

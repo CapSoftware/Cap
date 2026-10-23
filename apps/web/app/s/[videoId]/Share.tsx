@@ -8,7 +8,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	Suspense,
 	startTransition,
@@ -360,7 +360,7 @@ export const Share = ({
 		},
 	);
 
-	const { data: videoStatus } = useVideoStatus(
+	const { data: videoStatus, error: videoStatusError } = useVideoStatus(
 		data.id,
 		{
 			aiGeneration: aiGenerationAvailable,
@@ -373,6 +373,11 @@ export const Share = ({
 		},
 		!isScreenshot,
 	);
+	const router = useRouter();
+	const videoWasDeleted = videoStatusError instanceof VideoStatusNotFoundError;
+	useEffect(() => {
+		if (videoWasDeleted) router.refresh();
+	}, [videoWasDeleted, router]);
 
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;
