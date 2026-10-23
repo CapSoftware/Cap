@@ -1734,10 +1734,10 @@ async function processVideoAsync(
 			});
 		} finally {
 			previewAbort.abort();
-			await previewGifRender?.then(
-				(gif) => gif.cleanup(),
-				() => {},
-			);
+			await Promise.allSettled([
+				thumbnailRender,
+				previewGifRender?.then((gif) => gif.cleanup()),
+			]);
 		}
 		signal.throwIfAborted();
 

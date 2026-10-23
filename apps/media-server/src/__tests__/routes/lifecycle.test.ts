@@ -402,6 +402,31 @@ describe("process jobs", () => {
 		expect(preview.gifs.every((gif) => !existsSync(gif.path))).toBe(true);
 	});
 
+	test("reports an upload failure only after the thumbnail render has stopped", async () => {
+		const preview = mockPreviewJob();
+		let thumbnailStopped = false;
+		spyOn(mediaVideo, "generateThumbnail").mockImplementation(
+			(_path, _duration, _options, signal) =>
+				new Promise((_resolve, reject) => {
+					signal?.addEventListener("abort", () => {
+						setTimeout(() => {
+							thumbnailStopped = true;
+							reject(new Error("Thumbnail render stopped"));
+						}, 100);
+					});
+				}),
+		);
+		const response = await app.fetch(previewJob("video-preview-thumb-stop"));
+		const { jobId } = await response.json();
+		createdJobs.push(jobId);
+		await preview.outputStarted.promise;
+
+		preview.outputFailure.resolve(new Error("Storage upload failed: 403"));
+		await waitFor(() => getJob(jobId)?.phase === "error");
+		expect(thumbnailStopped).toBe(true);
+		expect(await waitForDrain(2_000)).toBe(true);
+	});
+
 	test("uploads no previews and stops rendering when the output upload fails", async () => {
 		const preview = mockPreviewJob();
 		const response = await app.fetch(previewJob("video-preview-upload-fails"));
