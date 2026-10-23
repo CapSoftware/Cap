@@ -12,9 +12,9 @@ permissions:
   actions: read
 
 env:
-  ROUNDS: "1"
-  SAMPLE: "sample"
-  BASE_REF: ""
+  ROUNDS: "3"
+  SAMPLE: "none"
+  BASE_REF: "ci/editor-playback-profile"
   MODES: "profile"
   FIXTURES: "display camera"
   ROUNDS_OVERRIDE: "1"
