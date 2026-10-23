@@ -808,22 +808,20 @@ mod mac {
     use gpui::{App, Global};
     use objc2::rc::Retained;
     use objc2::runtime::{NSObjectProtocol, ProtocolObject, Sel};
-    use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+    use objc2::{AnyThread, MainThreadOnly, define_class, msg_send, sel};
     use objc2_app_kit::{
-        NSControlStateValueOff, NSControlStateValueOn, NSEventModifierFlags, NSFont,
-        NSFontAttributeName, NSFontManager, NSFontTraitMask, NSImage, NSMenu, NSMenuDelegate,
-        NSMenuItem, NSMenuPresentationStyle, NSStatusBar, NSStatusBarButton, NSStatusItem,
-        NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
+        NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate,
+        NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem,
     };
     use objc2_foundation::{
-        MainThreadMarker, NSData, NSDictionary, NSPoint, NSRect, NSSize, NSString,
+        MainThreadMarker, NSData, NSString,
     };
-    use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
+    
 
     use super::mac_mode_picker::{append_mode_picker, install_key_hook};
     use super::{
         Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem, current_menu_entries,
-        handle_item, mode_icon, mode_name, mode_submenu, row_symbol, scan_previous, stop_recording,
+        handle_item, mode_icon, mode_submenu, row_symbol, scan_previous, stop_recording,
     };
     use crate::main_window::Mode;
 

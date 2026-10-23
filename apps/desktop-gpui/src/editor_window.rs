@@ -4445,9 +4445,7 @@ impl EditorWindow {
             return;
         }
         let valid_target = self.lane_reorder_position_valid(current.source, x, y);
-        let target_index = valid_target
-            .then(|| self.lane_reorder_target_index(current.source, y))
-            .unwrap_or(current.target_index);
+        let target_index = if valid_target { self.lane_reorder_target_index(current.source, y) } else { current.target_index };
         if promote {
             self.history.pause();
         }

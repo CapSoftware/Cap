@@ -12,10 +12,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSColor, NSEvent, NSEventType, NSFont,
-    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightMedium, NSFontWeightSemibold,
-    NSForegroundColorAttributeName, NSImageScaling, NSImageSymbolConfiguration, NSImageView,
-    NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSAppearance, NSColor, NSEvent, NSEventType, NSFont, NSFontAttributeName, NSFontManager,
+    NSFontTraitMask, NSFontWeightMedium, NSFontWeightSemibold, NSForegroundColorAttributeName,
+    NSImageScaling, NSImageSymbolConfiguration, NSImageView, NSMenu, NSMenuItem, NSStringDrawing,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSAppearanceCustomization,
 };
 use objc2_foundation::{MainThreadMarker, NSDictionary, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
@@ -157,10 +157,7 @@ impl ModePickerView {
         };
         *this.ivars().capsule.borrow_mut() = Some(make_layer(CAPSULE_RADIUS));
         for _ in PICKER_MODES.iter() {
-            this.ivars()
-                .pills
-                .borrow_mut()
-                .push(make_layer(PILL_RADIUS));
+            this.ivars().pills.borrow_mut().push(make_layer(PILL_RADIUS));
         }
 
         for (_, _, symbol) in PICKER_MODES.iter() {
@@ -204,10 +201,7 @@ impl ModePickerView {
         let h = PILL_H + 2.0 * CAPSULE_PAD;
         let bounds = self.bounds();
         NSRect::new(
-            NSPoint::new(
-                bounds.size.width - RIGHT_INSET - w,
-                (bounds.size.height - h) / 2.0,
-            ),
+            NSPoint::new(bounds.size.width - RIGHT_INSET - w, (bounds.size.height - h) / 2.0),
             NSSize::new(w, h),
         )
     }
@@ -250,9 +244,7 @@ impl ModePickerView {
         // CGColors don't follow appearance, so resolve the dynamic colours under this
         // view's appearance. (Deprecated, but it has no block-free replacement.)
         #[allow(deprecated)]
-        unsafe {
-            NSAppearance::setCurrentAppearance(Some(&self.effectiveAppearance()))
-        };
+        unsafe { NSAppearance::setCurrentAppearance(Some(&self.effectiveAppearance())) };
 
         let label = NSColor::labelColor();
         CATransaction::begin();
@@ -301,8 +293,7 @@ impl ModePickerView {
         let shown = focused.unwrap_or(selected);
 
         let menu_size = NSFont::menuFontOfSize(0.0).pointSize();
-        let title_font =
-            NSFont::systemFontOfSize_weight(menu_size, unsafe { NSFontWeightSemibold });
+        let title_font = NSFont::systemFontOfSize_weight(menu_size, unsafe { NSFontWeightSemibold });
         let mut sub_font = NSFont::systemFontOfSize(menu_size - 2.0);
         if shown != selected {
             sub_font = NSFontManager::sharedFontManager(
@@ -316,15 +307,11 @@ impl ModePickerView {
         let title = NSString::from_str(PICKER_TITLE);
         let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
         let title_attrs = NSDictionary::from_slices(
-            &[unsafe { NSFontAttributeName }, unsafe {
-                NSForegroundColorAttributeName
-            }],
+            &[unsafe { NSFontAttributeName }, unsafe { NSForegroundColorAttributeName }],
             &[&*title_font as &AnyObject, &*label as &AnyObject],
         );
         let sub_attrs = NSDictionary::from_slices(
-            &[unsafe { NSFontAttributeName }, unsafe {
-                NSForegroundColorAttributeName
-            }],
+            &[unsafe { NSFontAttributeName }, unsafe { NSForegroundColorAttributeName }],
             &[&*sub_font as &AnyObject, &*secondary as &AnyObject],
         );
 
@@ -354,11 +341,7 @@ impl ModePickerView {
     /// Moves keyboard focus one pill. Returns false at either end, so the key falls
     /// through to the menu and moves to the neighbouring tray menu.
     fn move_focus(&self, delta: isize) -> bool {
-        let cur = self
-            .ivars()
-            .focused
-            .get()
-            .unwrap_or(self.ivars().selected.get()) as isize;
+        let cur = self.ivars().focused.get().unwrap_or(self.ivars().selected.get()) as isize;
         let next = cur + delta;
         if next < 0 || next >= PICKER_MODES.len() as isize {
             return false;
@@ -369,11 +352,7 @@ impl ModePickerView {
     }
 
     fn activate_focused(&self) {
-        let i = self
-            .ivars()
-            .focused
-            .get()
-            .unwrap_or(self.ivars().selected.get());
+        let i = self.ivars().focused.get().unwrap_or(self.ivars().selected.get());
         self.choose(i);
     }
 }
@@ -389,10 +368,7 @@ pub(super) fn append_mode_picker(
     let tag_base = actions.len() as isize;
     actions.extend(PICKER_MODES.iter().map(|(_, item, _)| item.clone()));
 
-    let index = PICKER_MODES
-        .iter()
-        .position(|(m, _, _)| *m == selected)
-        .unwrap_or(0);
+    let index = PICKER_MODES.iter().position(|(m, _, _)| *m == selected).unwrap_or(0);
     let view = ModePickerView::new(mtm, index, tag_base);
 
     let item = NSMenuItem::new(mtm);
@@ -442,11 +418,10 @@ pub(super) fn install_key_hook() {
         return;
     };
     let enc = unsafe {
-        let p =
-            objc2::ffi::method_getTypeEncoding(method as *const _ as *const objc2::runtime::Imp);
-        if p.is_null() {
-            return;
-        }
+        let p = objc2::ffi::method_getTypeEncoding(
+            method as *const _ as *const objc2::ffi::objc_method,
+        );
+        if p.is_null() { return; }
         std::ffi::CStr::from_ptr(p)
     };
     if enc.to_bytes() != b"B24@0:8@16" {
@@ -465,7 +440,9 @@ pub(super) fn install_key_hook() {
         unsafe { orig(this, sel, event) }
     });
     unsafe {
-        let imp = objc2::ffi::imp_implementationWithBlock(&*block as *const _ as *mut AnyObject);
+        let imp = objc2::ffi::imp_implementationWithBlock(
+            &*block as *const _ as *mut AnyObject,
+        );
         method.set_implementation(std::mem::transmute(imp));
     }
     std::mem::forget(block); // the replacement must outlive the process
