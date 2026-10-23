@@ -1,11 +1,12 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 export async function PUT(request: NextRequest) {
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	const { videoId, metadata } = await request.json();
 	const userId = user?.id as string;
 
