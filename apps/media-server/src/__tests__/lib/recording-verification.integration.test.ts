@@ -2645,6 +2645,102 @@ describe("chunked packet-proven verification", () => {
 		expect(chunked.video.frameCount).toBe(120);
 	});
 
+	test("falls back as soon as a later chunk starts at a different resolution", async () => {
+		const name = "chunk-resize";
+		const halves: string[] = [];
+		for (const size of ["320x180", "352x180"]) {
+			const half = join(directory, `${name}-${size}.h264`);
+			await run([
+				"ffmpeg",
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				`testsrc2=size=${size}:rate=30`,
+				"-frames:v",
+				"90",
+				"-c:v",
+				"libx264",
+				"-preset",
+				"ultrafast",
+				"-g",
+				"15",
+				"-keyint_min",
+				"15",
+				"-sc_threshold",
+				"0",
+				"-pix_fmt",
+				"yuv420p",
+				"-bsf:v",
+				"h264_mp4toannexb",
+				"-f",
+				"h264",
+				half,
+			]);
+			halves.push(half);
+		}
+		const stream = join(directory, `${name}.h264`);
+		await writeFile(
+			stream,
+			Buffer.concat(await Promise.all(halves.map((path) => readFile(path)))),
+		);
+		const fragments = await mkdtemp(join(directory, `${name}-`));
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-framerate",
+			"30",
+			"-f",
+			"h264",
+			"-i",
+			stream,
+			"-c",
+			"copy",
+			"-f",
+			"dash",
+			"-seg_duration",
+			"0.5",
+			"-use_template",
+			"1",
+			"-use_timeline",
+			"1",
+			"-init_seg_name",
+			"init.mp4",
+			"-media_seg_name",
+			"fragment-$Number%05d$.m4s",
+			join(fragments, "manifest.mpd"),
+		]);
+		const init = join(fragments, "init.mp4");
+		const segments = (await readdir(fragments))
+			.filter((file) => /^fragment-\d+\.m4s$/.test(file))
+			.sort()
+			.map((file) => join(fragments, file));
+		expect(segments.length).toBeGreaterThanOrEqual(6);
+		const combined = join(directory, `${name}-combined.mp4`);
+		await writeFile(
+			combined,
+			Buffer.concat(
+				await Promise.all([init, ...segments].map((path) => readFile(path))),
+			),
+		);
+		const output = join(directory, `${name}-output.mp4`);
+		await muxMediaTracksToMp4(combined, silent, output);
+		const { single, chunked, fallbacks } = await both({
+			init,
+			segments,
+			combined,
+			output,
+		});
+		expect(fallbacks).toHaveLength(1);
+		expect(String(fallbacks[0][0])).toContain(
+			"dimensions 0: 320x180 -> 352x180",
+		);
+		expect(chunked).toEqual(single);
+		expect(chunked.video.frameCount).toBe(180);
+	});
+
 	test("copies many fragments into one run without piling up stream listeners", async () => {
 		const recording = await segmentedRecording("chunk-many", 6, 240, 0.2);
 		expect(recording.segments.length).toBeGreaterThanOrEqual(30);
