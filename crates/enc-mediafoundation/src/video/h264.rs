@@ -218,12 +218,14 @@ pub enum EncoderRuntimeError {
         process_failures: u32,
         frames_encoded: u64,
     },
+    #[error("Media Foundation encoder did not confirm drain completion")]
+    DrainIncomplete,
 }
 
 impl EncoderRuntimeError {
     pub fn should_fallback(&self) -> bool {
         match self {
-            EncoderRuntimeError::Windows(_) => false,
+            EncoderRuntimeError::Windows(_) | EncoderRuntimeError::DrainIncomplete => false,
             EncoderRuntimeError::EncoderUnhealthy { .. } => true,
         }
     }
@@ -786,6 +788,7 @@ impl H264Encoder {
             let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
 
             let drain_deadline = Instant::now() + Duration::from_millis(250);
+            let mut drain_complete = false;
             let mut drained = 0u64;
             while Instant::now() < drain_deadline {
                 let event = match self.event_generator.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
@@ -815,23 +818,31 @@ impl H264Encoder {
                         {
                             Ok(()) => {
                                 if let Some(sample) = output_buffers[0].pSample.take() {
+                                    health_monitor.record_output();
                                     on_sample(sample)?;
                                     drained += 1;
                                 }
                             }
-                            Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
+                            Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {}
                             Err(error) => {
-                                debug!(%error, "Media Foundation drain output stopped early");
-                                break;
+                                let _ = self.cleanup_encoder();
+                                return Err(error.into());
                             }
                         }
                     }
-                    MediaFoundation::METransformDrainComplete => break,
+                    MediaFoundation::METransformDrainComplete => {
+                        drain_complete = true;
+                        break;
+                    }
                     _ => {}
                 }
             }
             if drained > 0 {
                 debug!(drained, "Drained Media Foundation samples before shutdown");
+            }
+            if !drain_complete {
+                let _ = self.cleanup_encoder();
+                return Err(EncoderRuntimeError::DrainIncomplete);
             }
 
             self.transform
