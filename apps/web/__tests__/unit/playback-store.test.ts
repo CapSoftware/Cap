@@ -48,15 +48,12 @@ describe("createPlaybackStore", () => {
 
 		const subscriber = vi.fn();
 		store.subscribe(subscriber);
-		// Initial subscription call gives currentTime (0)
 		expect(subscriber).toHaveBeenCalledTimes(1);
 		expect(subscriber).toHaveBeenLastCalledWith(0);
 
-		// Video loads metadata and reports its duration while paused at 0
 		(element as { duration: number }).duration = 2.0;
 		dispatchEvent("loadedmetadata");
 
-		// Subscriber must be notified so the timeline window updates to the real duration
 		expect(subscriber).toHaveBeenCalledTimes(2);
 		expect(store.getDuration()).toBe(2.0);
 	});
@@ -96,7 +93,6 @@ describe("createPlaybackStore", () => {
 		store.subscribe(subscriber);
 		expect(subscriber).toHaveBeenCalledTimes(1);
 
-		// Firing timeupdate when position and duration haven't moved should be suppressed
 		dispatchEvent("timeupdate");
 		expect(subscriber).toHaveBeenCalledTimes(1);
 	});
@@ -112,7 +108,6 @@ describe("createPlaybackStore", () => {
 		expect(subscriber).toHaveBeenCalledTimes(2);
 		expect(store.getDuration()).toBe(10.0);
 
-		// Setting the same fallback again should not emit redundantly
 		store.setFallbackDuration(10.0);
 		expect(subscriber).toHaveBeenCalledTimes(2);
 	});
