@@ -2707,6 +2707,137 @@ mod tests {
         );
     }
 
+    fn plane_buffer_refcount(frame: &ffmpeg::frame::Video) -> i32 {
+        let buffer = unsafe { (*frame.as_ptr()).buf[0] };
+        assert!(!buffer.is_null());
+        unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }
+    }
+
+    #[test]
+    fn shared_camera_pixels_survive_one_opaque_composite() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let now = Instant::now();
+        let size = 16u32;
+        let row = size as usize * 4;
+        let mut bytes = vec![0u8; row * size as usize];
+        for pixel in bytes.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[11, 22, 33, 255]);
+        }
+        let bgra = LinuxCameraPixels::new(bytes);
+        let shared_pixels = bgra.clone();
+        let source = shared_pixels.as_ptr();
+        let processed = LinuxProcessedCameraFrame {
+            bgra,
+            dimensions: (size, size),
+            stride: row,
+            timestamp: Timestamp::Instant(now),
+            generation: 3,
+            processing: LinuxCameraProcessing {
+                mirrored: false,
+                blur: LinuxCameraBlur::Off,
+            },
+            mask: None,
+        };
+        let converted = processed_to_ffmpeg(&processed).expect("processed frame");
+        assert_eq!(processed.bgra.as_ptr(), source);
+        assert_eq!(shared_pixels.as_ptr(), source);
+        assert_ne!(converted.inner.data(0).as_ptr(), source);
+        let camera_pixels = converted.inner.data(0).as_ptr();
+        let shared_frame = shared_ref(&converted.inner);
+        assert_eq!(plane_buffer_refcount(&converted.inner), 2);
+        assert_eq!(shared_frame.data(0).as_ptr(), camera_pixels);
+
+        let timestamp = converted.timestamp;
+        let camera_frame = FFmpegVideoFrame {
+            inner: converted.inner,
+            timestamp,
+        };
+        let screen_size = 20u32;
+        let origin_x = 2usize;
+        let origin_y = 1usize;
+        let info = VideoInfo::from_raw_ffmpeg(Pixel::BGRA, screen_size, screen_size, 30);
+        let presentation = LinuxCameraPresentation {
+            rect: LinuxCameraRect {
+                x: origin_x as u32,
+                y: origin_y as u32,
+                width: size,
+                height: size,
+            },
+            shape: LinuxCameraShape::Round,
+            mirrored: false,
+            effect: LinuxCameraEffect::None,
+        };
+        let mut template = ffmpeg::frame::Video::new(Pixel::BGRA, screen_size, screen_size);
+        template.data_mut(0).fill(9);
+        template.set_pts(Some(42));
+        let mut compositor = Compositor::new(info, presentation);
+        let layout = PackedRgbLayout::of(Pixel::BGRA).expect("bgra layout");
+        let first = compositor
+            .compose(
+                FFmpegVideoFrame {
+                    inner: copy_frame(&template),
+                    timestamp,
+                },
+                &camera_frame,
+                4,
+            )
+            .expect("first composite");
+        assert_eq!(compositor.run_cache.builds, 1);
+        assert!(
+            compositor
+                .run_cache
+                .runs
+                .spans
+                .iter()
+                .any(|span| span.kind == OverlaySpanKind::Opaque)
+        );
+        let overlay_pixels = compositor
+            .camera_overlay
+            .as_ref()
+            .expect("overlay")
+            .1
+            .data(0)
+            .as_ptr();
+        let mut expected = copy_frame(&template);
+        formula_blend_packed(
+            &mut expected,
+            layout,
+            &compositor.camera_overlay.as_ref().expect("overlay").1,
+            origin_x,
+            origin_y,
+        );
+        assert_planes_equal(&first.inner, &expected);
+
+        let second = compositor
+            .compose(
+                FFmpegVideoFrame {
+                    inner: copy_frame(&template),
+                    timestamp,
+                },
+                &camera_frame,
+                4,
+            )
+            .expect("second composite");
+        assert_eq!(compositor.run_cache.builds, 1);
+        assert_eq!(
+            compositor
+                .camera_overlay
+                .as_ref()
+                .expect("overlay")
+                .1
+                .data(0)
+                .as_ptr(),
+            overlay_pixels
+        );
+        assert_planes_equal(&second.inner, &expected);
+        assert_eq!(camera_frame.inner.data(0).as_ptr(), camera_pixels);
+        assert_eq!(shared_frame.data(0).as_ptr(), camera_pixels);
+        assert_eq!(plane_buffer_refcount(&camera_frame.inner), 2);
+        assert_eq!(processed.bgra.as_ptr(), source);
+        assert_eq!(shared_pixels.as_ptr(), source);
+        assert_eq!(&shared_pixels[..4], &[11, 22, 33, 255]);
+    }
+
     #[test]
     fn compositor_converts_nv12_screen_and_preserves_input() {
         ffmpeg::init().expect("FFmpeg initializes");
