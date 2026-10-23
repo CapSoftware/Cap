@@ -58,6 +58,8 @@ interface ProgressWebhookPayload {
 	};
 }
 
+const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
+
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
 }
@@ -146,7 +148,9 @@ export async function POST(request: NextRequest) {
 		}
 		const isRetryableWorkflowError =
 			request.nextUrl.searchParams.get("retryable") === "true" &&
-			payload.phase === "error";
+			(payload.phase === "error" ||
+				(payload.phase === "cancelled" &&
+					payload.message === MEDIA_SERVER_SHUTDOWN_MESSAGE));
 
 		console.log(
 			"[media-server-webhook] Received progress update for video %s: %s (%d%%)",
