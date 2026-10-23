@@ -187,6 +187,7 @@ mod benchmark {
 
             match cap_frame_converter::D3D11Converter::new(config.clone()) {
                 Ok(d3d11) => {
+                    println!("d3d11 gpu: {}", d3d11.gpu_info().description);
                     if let Some(swscale_per_frame) = swscale_per_frame {
                         let d3d11_time = benchmark_single_threaded(&d3d11, &config);
                         let d3d11_per_frame = d3d11_time / MEASURED_FRAMES as u32;
