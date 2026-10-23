@@ -84,6 +84,7 @@ import { RecordingTimingError } from "../lib/recording-timing";
 import {
 	hashRecordingFile,
 	isRetryableRecordingVerificationError,
+	verifyDecodeChunks,
 	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
@@ -3005,7 +3006,12 @@ async function muxSegmentsAsync(
 				abortController.signal,
 			),
 		);
-		await rm(videoDir, { recursive: true, force: true });
+		// Parallel verification decodes runs of these fragments; otherwise free them now.
+		const videoChunks =
+			verifyDecodeChunks() > 1
+				? { init: videoInitPath, segments: videoSegmentFiles }
+				: undefined;
+		if (!videoChunks) await rm(videoDir, { recursive: true, force: true });
 
 		let combinedAudioPath: string | null = null;
 
@@ -3081,9 +3087,11 @@ async function muxSegmentsAsync(
 							});
 						},
 					},
+					videoChunks,
 				),
 			),
 		);
+		if (videoChunks) await rm(videoDir, { recursive: true, force: true });
 		logVideoEvent("video_mux_verification_complete", {
 			jobId,
 			videoId,
