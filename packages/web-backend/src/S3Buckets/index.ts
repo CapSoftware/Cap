@@ -10,13 +10,17 @@ import { createCloudFrontSignedUrl } from "./cloudfront-signed-url.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
-import { s3ConnectionPool } from "./S3ConnectionPool.ts";
+import {
+	defaultBucketS3ConnectionPool,
+	s3ConnectionPool,
+} from "./S3ConnectionPool.ts";
 
 export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 	scoped: Effect.gen(function* () {
 		const repo = yield* S3BucketsRepo;
 		const { credentials } = yield* AwsCredentials;
 		const requestHandler = yield* s3ConnectionPool;
+		const defaultBucketRequestHandler = yield* defaultBucketS3ConnectionPool;
 
 		const defaultConfigs = {
 			publicEndpoint: yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
@@ -45,7 +49,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
 				requestStreamBufferSize: 16 * 1024,
-				requestHandler,
+				requestHandler: defaultBucketRequestHandler,
 			});
 		const defaultInternalClient = createDefaultClient(true);
 		const defaultPublicClient = createDefaultClient(false);

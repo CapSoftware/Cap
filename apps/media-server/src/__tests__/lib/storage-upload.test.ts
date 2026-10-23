@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +30,71 @@ async function createTempUploadFile(size: number) {
 describe("uploadFileToStorage", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+	});
+
+	test("uploads a 10 GB sparse file as 160 bounded parts with its Loom attempt", async () => {
+		const uploadFile = await createTempUploadFile(1);
+		const handle = await open(uploadFile.path, "r+");
+		try {
+			await handle.truncate(10 * 1024 ** 3);
+		} finally {
+			await handle.close();
+		}
+		let uploadedParts = 0;
+		let uploadedBytes = 0;
+		let completed = false;
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign-part")) {
+				const request = JSON.parse(String(init?.body));
+				expect(request.loomImportAttemptId).toBe("loom-run:0");
+				expect(request.contentLength).toBe(64 * 1024 ** 2);
+				return Response.json({
+					url: `https://storage.test/part/${request.partNumber}`,
+				});
+			}
+			if (init?.method === "PUT") {
+				const body = init.body;
+				if (!(body instanceof Blob))
+					throw new Error("Expected a bounded file slice");
+				uploadedParts++;
+				uploadedBytes += body.size;
+				expect(body.size).toBe(64 * 1024 ** 2);
+				return new Response(null, {
+					headers: { ETag: `"part-${uploadedParts}"` },
+				});
+			}
+			if (url.endsWith("/complete")) {
+				const request = JSON.parse(String(init?.body));
+				expect(request.loomImportAttemptId).toBe("loom-run:0");
+				expect(request.parts).toHaveLength(160);
+				completed = true;
+				return Response.json({ objectIdentity: '"multipart-result"' });
+			}
+			throw new Error("Unexpected multipart request");
+		}) as typeof fetch;
+		try {
+			await uploadFileToStorage(
+				uploadFile.path,
+				{
+					type: "multipart",
+					videoId: "video",
+					key: "owner/video/raw-upload.mp4",
+					uploadId: "upload",
+					partSize: 64 * 1024 ** 2,
+					signPartUrl: "https://cap.test/sign-part",
+					completeUrl: "https://cap.test/complete",
+					abortUrl: "https://cap.test/abort",
+					loomImportAttemptId: "loom-run:0",
+				},
+				"video/mp4",
+			);
+			expect(uploadedParts).toBe(160);
+			expect(uploadedBytes).toBe(10 * 1024 ** 3);
+			expect(completed).toBe(true);
+		} finally {
+			await uploadFile.cleanup();
+		}
 	});
 
 	test.each([false, true])(
