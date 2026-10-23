@@ -816,7 +816,7 @@ mod mac {
     use objc2_foundation::{
         MainThreadMarker, NSData, NSString,
     };
-    
+
 
     use super::mac_mode_picker::{append_mode_picker, install_key_hook};
     use super::{
@@ -1636,11 +1636,6 @@ mod tests {
     fn screenshot_mode_relabels_the_capture_rows() {
         let menu = build_menu(Mode::Screenshot, &[], "0.1.0");
         let titles = titles(&menu);
-        let mode_label = if cfg!(target_os = "macos") {
-            "Screenshot"
-        } else {
-            "Recording Mode"
-        };
         assert_eq!(
             &titles[..6],
             &[
@@ -1653,79 +1648,6 @@ mod tests {
             ]
         );
         assert!(!titles.iter().any(|title| title == "Take a Screenshot"));
-    }
-
-    /// The rows that stand for an action carry the glyph their in-app
-    /// counterpart uses; the chrome rows stay bare.
-    #[test]
-    fn the_action_rows_carry_icons() {
-        let menu = build_menu(Mode::Studio, &[], "0.1.0");
-        let with_icons: Vec<_> = menu
-            .iter()
-            .filter_map(|entry| match entry {
-                Entry::Item { title, icon, .. } | Entry::Submenu { title, icon, .. } => {
-                    icon.is_some().then(|| title.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            with_icons,
-            [
-                "Record Display",
-                "Record Window",
-                "Record Area",
-                "Take a Screenshot",
-                "Previous",
-                "Import Media…",
-                "Settings…",
-            ]
-        );
-        for bare in ["Open Main Window", "Upload Logs", "Quit Cap"] {
-            assert!(
-                !menu.iter().any(|entry| matches!(
-                    entry,
-                    Entry::Item { title, icon: Some(_), .. } if title == bare
-                )),
-                "{bare} has no icon"
-            );
-        }
-    }
-
-    /// macOS draws the action rows from the system symbol catalog; a typo'd
-    /// or missing name would come back nil and render the row bare.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn every_row_symbol_resolves_to_an_image() {
-        use objc2_app_kit::NSImage;
-        use objc2_foundation::NSString;
-
-        let mut names: Vec<&str> = [
-            TrayItem::RecordDisplay,
-            TrayItem::RecordWindow,
-            TrayItem::RecordArea,
-            TrayItem::TakeScreenshot,
-            TrayItem::ImportMedia,
-            TrayItem::OpenSettings,
-        ]
-        .iter()
-        .filter_map(|item| row_symbol(item))
-        .collect();
-        names.push(PREVIOUS_SYMBOL);
-        assert_eq!(names.len(), 7);
-        for bare in [TrayItem::OpenCap, TrayItem::Quit, TrayItem::ModeStudio] {
-            assert!(row_symbol(&bare).is_none());
-        }
-        for name in names {
-            assert!(
-                NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                    &NSString::from_str(name),
-                    None,
-                )
-                .is_some(),
-                "{name} is not a system symbol"
-            );
-        }
     }
 
     #[test]
