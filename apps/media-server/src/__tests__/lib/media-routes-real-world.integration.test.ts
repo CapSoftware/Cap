@@ -858,7 +858,8 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
-	test("refuses a local output changed between full decode and byte binding", async () => {
+	// Hashing now overlaps the decode check, so whichever check reads the changed bytes first refuses it.
+	test("refuses a local output changed while it is decoded and hashed", async () => {
 		const originalHash = recordingVerification.hashRecordingFile;
 		const hashing = spyOn(
 			recordingVerification,
@@ -882,8 +883,8 @@ describe("media routes real-world integration tests", () => {
 			jobId = ((await response.json()) as { jobId: string }).jobId;
 			const job = await waitForTerminalJob(jobId);
 			expect(job.phase).toBe("error");
-			expect(job.error).toContain(
-				"Local recording changed during verification",
+			expect(job.error).toMatch(
+				/Local recording changed during verification|does not preserve the source/,
 			);
 			expect(job.errorCode).toBe("output-invalid");
 			expect(job.recordingVerification).toBeUndefined();
@@ -923,6 +924,31 @@ describe("media routes real-world integration tests", () => {
 					expect(job.recordingVerification?.sourceProof?.sourcePreserved).toBe(
 						true,
 					);
+			} finally {
+				deleteJob(jobId);
+			}
+		},
+		30_000,
+	);
+
+	test.each(["corrupt", "corrupt-audio"] as const)(
+		"never completes a multipart output whose source fails verification (%s)",
+		async (fault) => {
+			sourceFault = fault;
+			const body = multipartMuxRequest(`multipart-unverified-${fault}`);
+			const response = await app.fetch(
+				mediaPostRequest("/video/mux-segments", body),
+			);
+			expect(response.status).toBe(200);
+			const { jobId } = (await response.json()) as { jobId: string };
+			try {
+				const job = await waitForTerminalJob(jobId);
+				expect(job.phase).toBe("error");
+				expect(job.recordingVerification).toBeUndefined();
+				const actions = multipartCallbacks.map(({ action }) => action);
+				// Parts may already be uploaded while the check runs, but the object is never created.
+				expect(actions).not.toContain("complete");
+				expect(actions.at(-1)).toBe("abort");
 			} finally {
 				deleteJob(jobId);
 			}
