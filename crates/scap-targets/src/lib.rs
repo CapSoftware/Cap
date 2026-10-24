@@ -147,6 +147,15 @@ impl Window {
         Self::list().into_iter().find(|d| &d.id() == id)
     }
 
+    /// Like [`Window::from_id`], but resolves the handle directly instead of
+    /// searching `list()`. Prefer it when the window was already chosen and
+    /// only needs to still exist: enumeration drops minimized windows, so
+    /// `from_id` reports a minimized target as gone.
+    #[cfg(windows)]
+    pub fn from_id_direct(id: &WindowId) -> Option<Self> {
+        WindowImpl::from_id_direct(&id.0).map(Self)
+    }
+
     pub fn physical_size(&self) -> Option<PhysicalSize> {
         self.0.physical_size()
     }
