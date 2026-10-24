@@ -1587,6 +1587,7 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "parakeet-rs",
  "raw-window-handle",
+ "relative-path",
  "reqwest 0.12.28",
  "resvg 0.45.1",
  "rfd",

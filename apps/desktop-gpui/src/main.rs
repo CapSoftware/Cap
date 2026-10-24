@@ -63,6 +63,7 @@ mod platform;
 mod presets;
 mod project_save;
 mod recording;
+mod screen_studio_import;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;

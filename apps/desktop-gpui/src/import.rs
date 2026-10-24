@@ -32,8 +32,23 @@ pub const IMAGE_IMPORT_EXTENSIONS: &[&str] =
     &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
 /// The tray's combined "Media Files" filter (`src-tauri/src/tray.rs:845-851`).
 const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
-    "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png", "jpg", "jpeg", "webp", "gif",
-    "bmp", "tif", "tiff",
+    "mp4",
+    "mov",
+    "avi",
+    "mkv",
+    "webm",
+    "wmv",
+    "m4v",
+    "flv",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+    "tif",
+    "tiff",
+    "screenstudio",
 ];
 pub(crate) const OVERLAY_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
@@ -329,7 +344,9 @@ pub fn pick_and_import_media(cx: &mut App) {
         else {
             return;
         };
-        if is_supported_video_import_path(&path) {
+        if has_supported_extension(&path, &["screenstudio"]) {
+            cx.update(|cx| import_screen_studio_from_path(path, cx));
+        } else if is_supported_video_import_path(&path) {
             cx.update(|cx| import_video_from_path(path, cx));
         } else if is_supported_image_import_path(&path) {
             cx.update(|cx| import_image_from_path(path, cx));
@@ -346,6 +363,41 @@ pub fn pick_and_import_media(cx: &mut App) {
 pub fn import_video_from_path(source_path: PathBuf, cx: &mut App) {
     tracing::info!(source = %source_path.display(), "starting video import");
     spawn_import(cx, move |tx| run_video_import(&source_path, &tx));
+}
+
+/// Turns a Screen Studio project (`.screenstudio` bundle) into a Cap
+/// recording on a worker thread and opens it in the editor.
+pub fn import_screen_studio_from_path(source_path: PathBuf, cx: &mut App) {
+    tracing::info!(source = %source_path.display(), "starting Screen Studio import");
+    spawn_import(cx, move |tx| {
+        let recordings_dir = crate::recording::recordings_dir();
+        let update = match std::fs::create_dir_all(&recordings_dir)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                crate::screen_studio_import::import_project(&recordings_dir, &source_path)
+            }) {
+            Ok(project_path) => ImportProgress {
+                kind: ImportKind::Video,
+                pretty_name: project_path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                project_path,
+                stage: ImportStage::Complete,
+                progress: 100.0,
+                message: "Import complete".to_string(),
+            },
+            Err(error) => ImportProgress {
+                kind: ImportKind::Video,
+                project_path: source_path.clone(),
+                pretty_name: String::new(),
+                stage: ImportStage::Failed,
+                progress: 0.0,
+                message: error,
+            },
+        };
+        let _ = tx.send(update);
+    });
 }
 
 /// `start_image_import`: decodes on a worker thread and writes a screenshot
