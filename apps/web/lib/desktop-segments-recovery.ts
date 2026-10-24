@@ -39,6 +39,7 @@ export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * 60 * 1_000;
 export const DESKTOP_SEGMENTS_RECOVERY_BATCH_SIZE = 20;
 export const DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS =
 	7 * 24 * 60 * 60 * 1_000;
+export const DESKTOP_SEGMENTS_LEGACY_NEWEST_BATCH_SIZE = 5;
 
 const RECOVERABLE_UPLOAD_PHASES = [
 	"uploading",
@@ -286,18 +287,17 @@ export async function recoverStaleDesktopSegments({
 			)
 			.orderBy(order(videoUploads.updatedAt), order(videoUploads.videoId))
 			.limit(limit);
-	// Legacy rows that never finish keep their oldest `updatedAt`, so an
-	// oldest-first pass alone checks each recording only shortly before it
-	// leaves the window. Most slots keep that pass; the rest go to the newest
-	// eligible rows, so a recording is first checked soon after it qualifies.
-	const newestSlots = Math.floor(remaining / 2);
-	const newest = newestSlots > 0 ? await listLegacy(desc, newestSlots) : [];
+	// Legacy rows that never finish keep their oldest `updatedAt`, so the
+	// oldest-first pass checks each recording only shortly before it leaves
+	// the window. That pass keeps every slot it had; a few of the newest
+	// eligible rows are checked on top, so a recording is first checked soon
+	// after it qualifies.
 	const oldest = await listLegacy(asc, remaining);
-	const picked = new Set(newest.map((candidate) => candidate.videoId));
-	const legacy = [
-		...newest,
-		...oldest.filter((candidate) => !picked.has(candidate.videoId)),
-	].slice(0, remaining);
+	const picked = new Set(oldest.map((candidate) => candidate.videoId));
+	const newest = (
+		await listLegacy(desc, DESKTOP_SEGMENTS_LEGACY_NEWEST_BATCH_SIZE)
+	).filter((candidate) => !picked.has(candidate.videoId));
+	const legacy = [...oldest, ...newest];
 	for (const candidate of legacy) {
 		try {
 			const result = await completeDesktopSegmentsManifestAndQueue({
