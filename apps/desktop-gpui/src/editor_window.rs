@@ -1586,6 +1586,9 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
+    /// The lane being renamed (double-click on its label), and the input.
+    track_rename: Option<TrackRow>,
+    track_name_input: Entity<ui::TextInputState>,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
     pub(crate) sharing: Option<cap_project::SharingMeta>,
@@ -2002,6 +2005,23 @@ impl EditorWindow {
                 _ => {}
             },
         ));
+        let track_name_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_placeholder("Track name");
+            input
+        });
+        text_events.push(cx.subscribe_in(
+            &track_name_input,
+            window,
+            |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| match event {
+                ui::TextInputEvent::Confirmed => this.commit_track_rename(window, cx),
+                ui::TextInputEvent::Cancelled => {
+                    this.track_rename = None;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        ));
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
         let editor = cx.entity();
@@ -2113,6 +2133,8 @@ impl EditorWindow {
             hex_inputs,
             picker_hex,
             preset_name_input,
+            track_rename: None,
+            track_name_input,
             fields: HashMap::new(),
             field_editing: None,
             _text_events: text_events,
@@ -7294,6 +7316,141 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// Double-click on a lane's label: rename it. An empty name restores the
+    /// track's own label.
+    fn open_track_rename(&mut self, row: TrackRow, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
+        let current = self
+            .project
+            .track_names
+            .get(&timeline::track_name_key(row))
+            .cloned()
+            .unwrap_or_else(|| row.kind.label().to_string());
+        self.track_rename = Some(row);
+        self.track_name_input.update(cx, |input, cx| {
+            input.set_text(current, cx);
+            input.focus_and_select_all(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn commit_track_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.track_rename.take() else {
+            return;
+        };
+        let name = self.track_name_input.read(cx).text().trim().to_string();
+        let key = timeline::track_name_key(row);
+        let default = name.is_empty() || name == row.kind.label();
+        self.edit_project("track-rename", window, cx, move |project| {
+            if default {
+                project.track_names.remove(&key).is_some()
+            } else if project.track_names.get(&key) == Some(&name) {
+                false
+            } else {
+                project.track_names.insert(key, name);
+                true
+            }
+        });
+        let focus = self.focus.clone();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn render_track_rename(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        self.track_rename?;
+        let theme = self.theme;
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id("track-rename-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(gpui::hsla(0., 0., 0., 0.5))
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.track_rename = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .w(px(360.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .p(px(16.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(Hsla::from(theme.editor.line))
+                        .bg(Hsla::from(theme.editor.card))
+                        .shadow(theme.editor.pop_shadow())
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(Hsla::from(theme.editor.text_1))
+                                .child("Rename track"),
+                        )
+                        .child(
+                            ui::TextInput::plain(&theme, "track-name", &self.track_name_input)
+                                .padding_x(px(12.))
+                                .height(px(36.))
+                                .radius(px(8.))
+                                .text_size(px(14.)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_end()
+                                .gap(px(8.))
+                                .child(
+                                    ui::Button::plain(
+                                        &theme,
+                                        "track-rename-cancel",
+                                        ui::ButtonVariant::Gray,
+                                        ui::ButtonSize::Md,
+                                    )
+                                    .label("Cancel")
+                                    .on_click(cx.listener(
+                                        |this, _, _window, cx| {
+                                            this.track_rename = None;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    ui::Button::plain(
+                                        &theme,
+                                        "track-rename-confirm",
+                                        ui::ButtonVariant::Blue,
+                                        ui::ButtonSize::Md,
+                                    )
+                                    .label("Rename")
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            this.commit_track_rename(window, cx);
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn scene_available(&self) -> bool {
         timeline::scene_available(&self.project, self.has_camera)
     }
@@ -10988,7 +11145,9 @@ impl EditorWindow {
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             if f32::from(event.position.x) < timeline::content_left() {
-                                if can_reorder {
+                                if event.click_count == 2 {
+                                    this.open_track_rename(track_row, window, cx);
+                                } else if can_reorder {
                                     this.begin_lane_reorder(track_row, event.position, window, cx);
                                 } else {
                                     this.select_lane_header(kind, lane, cx);
@@ -12020,6 +12179,7 @@ impl Render for EditorWindow {
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
+            .children(self.render_track_rename(cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
