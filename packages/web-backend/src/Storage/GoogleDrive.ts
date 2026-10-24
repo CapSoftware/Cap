@@ -503,6 +503,8 @@ const sendDriveRequest = (
 const DRIVE_RATE_LIMIT_RETRIES = 4;
 const DRIVE_RATE_LIMIT_BASE_DELAY_MS = 1_000;
 const DRIVE_RATE_LIMIT_MAX_DELAY_MS = 16_000;
+// Callers such as the source commit give each storage call 60 s, so every retry must still fit inside it.
+const DRIVE_RATE_LIMIT_TOTAL_DELAY_MS = 30_000;
 const DRIVE_RATE_LIMIT_REASONS = new Set([
 	"userRateLimitExceeded",
 	"rateLimitExceeded",
@@ -530,16 +532,22 @@ export const isGoogleDriveRateLimited = async (response: Response) => {
 	);
 };
 
+const getRetryAfterMs = (retryAfter: string | null, now: number) => {
+	if (!retryAfter) return undefined;
+	if (/^\d+$/.test(retryAfter.trim())) return Number(retryAfter) * 1_000;
+	const date = Date.parse(retryAfter);
+	return Number.isNaN(date) ? undefined : Math.max(0, date - now);
+};
+
 export const getGoogleDriveRateLimitDelayMs = (
 	attempt: number,
 	retryAfter: string | null,
 	random = Math.random,
+	now = Date.now(),
 ) => {
-	const seconds = retryAfter ? Number(retryAfter) : Number.NaN;
 	const requested =
-		Number.isFinite(seconds) && seconds >= 0
-			? seconds * 1_000
-			: DRIVE_RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt + random() * 1_000;
+		getRetryAfterMs(retryAfter, now) ??
+		DRIVE_RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt + random() * 1_000;
 	return Math.min(Math.round(requested), DRIVE_RATE_LIMIT_MAX_DELAY_MS);
 };
 
@@ -551,6 +559,7 @@ const driveFetch = (
 ) =>
 	Effect.gen(function* () {
 		let response = yield* authorizedDriveFetch(config, url, init, tokenStore);
+		let waitedMs = 0;
 		for (let attempt = 0; attempt < DRIVE_RATE_LIMIT_RETRIES; attempt++) {
 			const limited = yield* Effect.promise(() =>
 				isGoogleDriveRateLimited(response),
@@ -560,6 +569,8 @@ const driveFetch = (
 				attempt,
 				response.headers.get("retry-after"),
 			);
+			if (waitedMs + delayMs > DRIVE_RATE_LIMIT_TOTAL_DELAY_MS) break;
+			waitedMs += delayMs;
 			console.warn(
 				JSON.stringify({
 					event: "google_drive_rate_limited",

@@ -2314,4 +2314,58 @@ describe("Google Drive rate limits", () => {
 		expect(getGoogleDriveRateLimitDelayMs(0, "600", () => 0)).toBe(16_000);
 		expect(getGoogleDriveRateLimitDelayMs(1, "soon", () => 0)).toBe(2_000);
 	});
+
+	it("reads an HTTP-date Retry-After against the current time", () => {
+		const now = Date.parse("Sat, 24 Oct 2026 11:00:00 GMT");
+		expect(
+			getGoogleDriveRateLimitDelayMs(
+				0,
+				"Sat, 24 Oct 2026 11:00:05 GMT",
+				() => 0.9,
+				now,
+			),
+		).toBe(5_000);
+		expect(
+			getGoogleDriveRateLimitDelayMs(
+				0,
+				"Sat, 24 Oct 2026 11:05:00 GMT",
+				() => 0,
+				now,
+			),
+		).toBe(16_000);
+		expect(
+			getGoogleDriveRateLimitDelayMs(
+				0,
+				"Sat, 24 Oct 2026 10:59:00 GMT",
+				() => 0,
+				now,
+			),
+		).toBe(0);
+	});
+
+	it("stops retrying before the waits would outlast a 60 s caller deadline", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockImplementation(async () =>
+					jsonResponse(
+						{ error: { code: 429 } },
+						{ status: 429, headers: { "Retry-After": "16" } },
+					),
+				),
+		);
+		let settled = false;
+		const pending = copy(copyHarness()).then((exit) => {
+			settled = true;
+			return exit;
+		});
+		await vi.advanceTimersByTimeAsync(31_000);
+		expect(settled).toBe(true);
+		const exit = await pending;
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
 });
