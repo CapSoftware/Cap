@@ -399,11 +399,29 @@ async function writeSourceText(
 }
 
 async function writeReference(context: SourceContext, value: unknown) {
-	return writeSourceText(
-		context,
-		`${context.prefix}/pages/${randomUUID()}.json`,
-		JSON.stringify(value),
-	);
+	const key = `${context.prefix}/pages/${randomUUID()}.json`;
+	const content = JSON.stringify(value);
+	const bucket = context.bucket;
+	// Pages get a fresh random key, so no other writer can replace them; a SHA-256 Drive computed from the
+	// stored bytes proves the write as well as reading it back, which costs another Drive round trip.
+	if (bucket.provider === "googleDrive" && "putObjectWithChecksum" in bucket) {
+		assertContextKey(context, key);
+		const sha256 = hash(content);
+		const stored = await context.run(
+			bucket.putObjectWithChecksum(key, content, {
+				contentType: "application/json",
+			}),
+		);
+		if (stored.sha256Checksum !== sha256) {
+			if (stored.sha256Checksum !== null)
+				throw new Error("Durable recording source readback did not match");
+			if ((await readSourceText(context, key)) !== content)
+				throw new Error("Durable recording source readback did not match");
+		}
+		rememberVerifiedPage(key, sha256, content);
+		return { key, sha256 };
+	}
+	return writeSourceText(context, key, content);
 }
 
 function treeCount(roots: SourceCommitPageReference[]) {

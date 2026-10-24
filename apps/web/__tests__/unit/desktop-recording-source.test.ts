@@ -180,6 +180,18 @@ function storageFixture(provider = "s3", customBucket = false) {
 				seed(key, body);
 			}),
 		),
+		...(provider === "googleDrive"
+			? {
+					putObjectWithChecksum: vi.fn((key: string, body: string) =>
+						checked(() => {
+							seed(key, body);
+							return {
+								sha256Checksum: hash(objects.get(key)?.body ?? ""),
+							} as { sha256Checksum: string | null };
+						}),
+					),
+				}
+			: {}),
 		copyObject: vi.fn((source: string, target: string, options: CopyOptions) =>
 			checked(() => {
 				const { value } = copiedSource(source, options);
@@ -1315,8 +1327,12 @@ describe("durable desktop recording source commit", () => {
 			for (const [key] of storage.bucket.getObject.mock.calls)
 				if (key.includes("/pages/"))
 					pageReads.set(key, (pageReads.get(key) ?? 0) + 1);
-			expect(pageReads.size).toBeGreaterThan(1);
-			expect(Math.max(...pageReads.values())).toBe(1);
+			const pagesWritten = [
+				...storage.bucket.putObject.mock.calls,
+				...(storage.bucket.putObjectWithChecksum?.mock.calls ?? []),
+			].filter(([key]) => key.includes("/pages/")).length;
+			expect(pagesWritten).toBeGreaterThan(1);
+			expect(Math.max(0, ...pageReads.values())).toBeLessThanOrEqual(1);
 		},
 	);
 
@@ -1331,6 +1347,67 @@ describe("durable desktop recording source commit", () => {
 				.slice(before)
 				.some(([key]) => key.includes("/pages/")),
 		).toBe(true);
+	});
+	it("trusts Drive's stored SHA-256 for checkpoint pages instead of reading them back", async () => {
+		const pageReads = async (checksum: boolean) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(
+				storage,
+				Array.from({ length: 150 }, (_, index) => index + 1),
+			);
+			const put = storage.bucket.putObjectWithChecksum;
+			const store = put?.getMockImplementation();
+			if (!put || !store) throw new Error("Missing fixture operation");
+			if (!checksum)
+				put.mockImplementation((key, body) =>
+					store(key, body).pipe(Effect.as({ sha256Checksum: null })),
+				);
+			await commitDesktopRecordingSource(recording(), generation);
+			return {
+				written: put.mock.calls.length,
+				reads: storage.bucket.getObject.mock.calls.filter(([key]) =>
+					key.includes("/pages/"),
+				).length,
+			};
+		};
+		const trusted = await pageReads(true);
+		const fallback = await pageReads(false);
+		expect(trusted.written).toBeGreaterThan(3);
+		expect(trusted.written).toBe(fallback.written);
+		expect(trusted.reads).toBe(fallback.reads - fallback.written);
+	});
+
+	it("reads a Drive checkpoint page back when Drive returns no checksum", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const put = storage.bucket.putObjectWithChecksum;
+		const store = put?.getMockImplementation();
+		if (!put || !store) throw new Error("Missing fixture operation");
+		put.mockImplementation((key, body) =>
+			store(key, body).pipe(Effect.as({ sha256Checksum: null })),
+		);
+		await commitDesktopRecordingSource(recording(), generation);
+		const reads = new Set(
+			storage.bucket.getObject.mock.calls.map(([key]) => key),
+		);
+		expect(put.mock.calls.every(([key]) => reads.has(key))).toBe(true);
+	});
+
+	it("does not commit a Drive checkpoint page stored with different bytes", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const put = storage.bucket.putObjectWithChecksum;
+		const store = put?.getMockImplementation();
+		if (!put || !store) throw new Error("Missing fixture operation");
+		put.mockImplementation((key, body) => store(key, `${body}\ncorrupt`));
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toThrow("Durable recording source readback did not match");
+		expect(
+			storage.bucket.putObject.mock.calls.some(([key]) =>
+				key.endsWith("/inventory.json"),
+			),
+		).toBe(false);
 	});
 });
 
