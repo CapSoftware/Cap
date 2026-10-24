@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
 	selects: [] as unknown[][],
 	updates: [] as Array<Record<string, unknown>>,
 	inserts: [] as Array<Record<string, unknown>>,
+	shares: [] as unknown[][],
+	deletes: 0,
 	member: vi.fn(),
 	provision: vi.fn(),
 	reassign: vi.fn(),
@@ -16,9 +18,35 @@ vi.mock("@cap/database", () => {
 		innerJoin: () => selection,
 		where: () => selection,
 		limit: async () => mocks.selects.shift() ?? [],
+		for: async () => [],
+		then: (resolve: (rows: unknown[]) => void) =>
+			resolve(mocks.shares.shift() ?? []),
+	};
+	const handle = {
+		select: () => selection,
+		update: () => ({
+			set: (values: Record<string, unknown>) => ({
+				where: async () => {
+					mocks.updates.push(values);
+				},
+			}),
+		}),
+		insert: () => ({
+			values: async (values: Record<string, unknown>) => {
+				mocks.inserts.push(values);
+			},
+		}),
+		delete: () => ({
+			where: async () => {
+				mocks.deletes++;
+			},
+		}),
 	};
 	return {
 		db: () => ({
+			...handle,
+			transaction: async (run: (tx: typeof handle) => Promise<unknown>) =>
+				run(handle),
 			select: () => selection,
 			update: () => ({
 				set: (values: Record<string, unknown>) => ({
@@ -57,6 +85,9 @@ vi.mock("@cap/database/schema", () => ({
 }));
 vi.mock("@/lib/loom-csv-import", () => ({
 	getOrganizationMemberByEmail: mocks.member,
+	normalizeImportEmail: (email: string) => email.trim().toLowerCase(),
+	isValidImportEmail: (email: string) =>
+		/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),
 }));
 vi.mock("@/lib/organization-provisioning", () => ({
 	provisionOrganizationInvitee: mocks.provision,
@@ -80,6 +111,8 @@ beforeEach(() => {
 	mocks.selects = [];
 	mocks.updates = [];
 	mocks.inserts = [];
+	mocks.shares = [];
+	mocks.deletes = 0;
 	mocks.member.mockReset().mockResolvedValue({ userId: "mdaueraaaaaaaaa" });
 	mocks.provision.mockReset().mockResolvedValue({ userId: "newaaaaaaaaaaaa" });
 	mocks.reassign
@@ -87,9 +120,18 @@ beforeEach(() => {
 		.mockResolvedValue({ status: "moved", copiedObjects: 3, cleanup: "done" });
 });
 
+const lukeFolder = (id = "folderbbbbbbbbb") => ({
+	id,
+	createdById: "lukeaaaaaaaaaaa",
+});
+
 describe("backfillLoomImport", () => {
-	it("moves the owner without touching sharing, keeping the sheet folder", async () => {
-		mocks.selects = [[video()], [{ id: "folderbbbbbbbbb" }]];
+	it("moves the owner without touching sharing, into the sheet folder", async () => {
+		mocks.selects = [
+			[video()],
+			[lukeFolder()],
+			[lukeFolder("folderaaaaaaaaa")],
+		];
 		await expect(
 			backfillLoomImport(org, {
 				videoId: "videoaaaaaaaaaa",
@@ -115,8 +157,24 @@ describe("backfillLoomImport", () => {
 		expect(mocks.updates).toEqual([]);
 	});
 
+	it("clears an inherited folder the new owner could not open", async () => {
+		mocks.selects = [
+			[video({ orgOwnerId: "owneraaaaaaaaaa" })],
+			[{ id: "folderaaaaaaaaa", createdById: "lukeaaaaaaaaaaa" }],
+		];
+		await backfillLoomImport(org, {
+			videoId: "videoaaaaaaaaaa",
+			ownerEmail: "mdauer@greenprojecttech.com",
+		});
+		expect(mocks.reassign).toHaveBeenCalledWith(
+			expect.objectContaining({
+				options: { keepSharing: true, folderId: null },
+			}),
+		);
+	});
+
 	it("adds an owner who is not in the workspace yet", async () => {
-		mocks.selects = [[video()]];
+		mocks.selects = [[video()], [lukeFolder("folderaaaaaaaaa")]];
 		mocks.member.mockResolvedValue(null);
 		await backfillLoomImport(org, {
 			videoId: "videoaaaaaaaaaa",
@@ -133,8 +191,23 @@ describe("backfillLoomImport", () => {
 		);
 	});
 
-	it("leaves the owner alone when it already matches", async () => {
+	it("never creates accounts for invalid owner emails", async () => {
 		mocks.selects = [[video()]];
+		await expect(
+			backfillLoomImport(org, {
+				videoId: "videoaaaaaaaaaa",
+				ownerEmail: "unknown",
+			}),
+		).resolves.toMatchObject({
+			status: "skipped",
+			reason: "invalid owner email",
+		});
+		expect(mocks.member).not.toHaveBeenCalled();
+		expect(mocks.provision).not.toHaveBeenCalled();
+	});
+
+	it("leaves the owner alone when it already matches", async () => {
+		mocks.selects = [[video()], [lukeFolder("folderaaaaaaaaa")]];
 		mocks.member.mockResolvedValue({ userId: "lukeaaaaaaaaaaa" });
 		await expect(
 			backfillLoomImport(org, {
@@ -146,7 +219,7 @@ describe("backfillLoomImport", () => {
 	});
 
 	it("sets the original date and the folder", async () => {
-		mocks.selects = [[video({ folderId: null })], [{ id: "folderbbbbbbbbb" }]];
+		mocks.selects = [[video({ folderId: null })], [lukeFolder()]];
 		await expect(
 			backfillLoomImport(org, {
 				videoId: "videoaaaaaaaaaa",
@@ -159,7 +232,7 @@ describe("backfillLoomImport", () => {
 	});
 
 	it("skips a date that already matches", async () => {
-		mocks.selects = [[video()]];
+		mocks.selects = [[video()], [lukeFolder("folderaaaaaaaaa")]];
 		await expect(
 			backfillLoomImport(org, {
 				videoId: "videoaaaaaaaaaa",
@@ -168,8 +241,13 @@ describe("backfillLoomImport", () => {
 		).resolves.toMatchObject({ status: "unchanged" });
 	});
 
-	it("shares into the team folder once", async () => {
-		mocks.selects = [[video()], [{ id: "teamfolderaaaaa" }], []];
+	it("shares into the team folder once and folds duplicate shares", async () => {
+		mocks.selects = [
+			[video()],
+			[lukeFolder("teamfolderaaaaa")],
+			[lukeFolder("folderaaaaaaaaa")],
+		];
+		mocks.shares = [[]];
 		await expect(
 			backfillLoomImport(org, {
 				videoId: "videoaaaaaaaaaa",
@@ -183,21 +261,32 @@ describe("backfillLoomImport", () => {
 		});
 		mocks.selects = [
 			[video()],
-			[{ id: "teamfolderaaaaa" }],
-			[{ id: "share", folderId: "teamfolderaaaaa" }],
+			[lukeFolder("teamfolderaaaaa")],
+			[lukeFolder("folderaaaaaaaaa")],
+		];
+		mocks.shares = [
+			[
+				{ id: "share1", folderId: "teamfolderaaaaa" },
+				{ id: "share2", folderId: "otherfolderaaaa" },
+			],
 		];
 		await expect(
 			backfillLoomImport(org, {
 				videoId: "videoaaaaaaaaaa",
 				shareFolderId: "teamfolderaaaaa",
 			}),
-		).resolves.toMatchObject({ status: "unchanged" });
+		).resolves.toMatchObject({ changes: ["shared"] });
+		expect(mocks.deletes).toBe(1);
 		expect(mocks.inserts).toHaveLength(1);
 	});
 
 	it.each([
 		[[], "not a Loom import here"],
 		[[video(), []], "folder not in this workspace"],
+		[
+			[video(), [{ id: "folderbbbbbbbbb", createdById: "someoneaaaaaaaa" }]],
+			"folder belongs to someone other than the owner",
+		],
 	])("refuses unsafe changes: %#", async (selects, reason) => {
 		mocks.selects = (selects as unknown[]).map((row) =>
 			Array.isArray(row) ? row : [row],
@@ -212,8 +301,8 @@ describe("backfillLoomImport", () => {
 		expect(mocks.reassign).not.toHaveBeenCalled();
 	});
 
-	it("reports a move it could not make", async () => {
-		mocks.selects = [[video()]];
+	it("reports moves it could not make or finish cleaning up", async () => {
+		mocks.selects = [[video()], [lukeFolder("folderaaaaaaaaa")]];
 		mocks.reassign.mockResolvedValue({
 			status: "skipped",
 			reason: "edited video",
@@ -224,5 +313,20 @@ describe("backfillLoomImport", () => {
 				ownerEmail: "mdauer@greenprojecttech.com",
 			}),
 		).resolves.toMatchObject({ status: "skipped", reason: "edited video" });
+		mocks.selects = [[video()], [lukeFolder("folderaaaaaaaaa")]];
+		mocks.reassign.mockResolvedValue({
+			status: "moved",
+			copiedObjects: 3,
+			cleanup: "failed",
+		});
+		await expect(
+			backfillLoomImport(org, {
+				videoId: "videoaaaaaaaaaa",
+				ownerEmail: "mdauer@greenprojecttech.com",
+			}),
+		).resolves.toMatchObject({
+			status: "updated",
+			warning: "old owner's files could not be removed",
+		});
 	});
 });

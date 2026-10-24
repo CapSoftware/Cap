@@ -52,6 +52,7 @@ class Api extends HttpApi.make("LoomImportBackfillApi").add(
 							),
 							changes: Schema.Array(Schema.String),
 							reason: Schema.optional(Schema.String),
+							warning: Schema.optional(Schema.String),
 						}),
 					),
 				}),

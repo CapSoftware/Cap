@@ -11,7 +11,11 @@ import {
 } from "@cap/database/schema";
 import { Folder, Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { getOrganizationMemberByEmail } from "@/lib/loom-csv-import";
+import {
+	getOrganizationMemberByEmail,
+	isValidImportEmail,
+	normalizeImportEmail,
+} from "@/lib/loom-csv-import";
 import { reassignLoomImport } from "@/lib/loom-import-reassign";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 
@@ -28,7 +32,10 @@ export type LoomBackfillOutcome = {
 	status: "updated" | "unchanged" | "skipped" | "failed";
 	changes: string[];
 	reason?: string;
+	warning?: string;
 };
+
+type FolderRow = { id: Folder.FolderId; createdById: User.UserId };
 
 export async function backfillLoomImport(
 	organizationId: string,
@@ -37,6 +44,15 @@ export async function backfillLoomImport(
 	const orgId = Organisation.OrganisationId.make(organizationId);
 	const id = Video.VideoId.make(item.videoId);
 	const changes: string[] = [];
+	const result = (
+		status: LoomBackfillOutcome["status"],
+		extra: Partial<LoomBackfillOutcome> = {},
+	): LoomBackfillOutcome => ({
+		videoId: item.videoId,
+		status,
+		changes,
+		...extra,
+	});
 	const [video] = await db()
 		.select({
 			ownerId: videos.ownerId,
@@ -56,41 +72,38 @@ export async function backfillLoomImport(
 		.innerJoin(organizations, eq(organizations.id, videos.orgId))
 		.where(and(eq(videos.id, id), eq(videos.orgId, orgId)))
 		.limit(1);
-	if (!video)
-		return {
-			videoId: item.videoId,
-			status: "skipped",
-			changes,
-			reason: "not a Loom import here",
-		};
+	if (!video) return result("skipped", { reason: "not a Loom import here" });
+
+	const date = item.effectiveCreatedAt
+		? new Date(item.effectiveCreatedAt)
+		: undefined;
+	if (date && Number.isNaN(date.getTime()))
+		return result("failed", { reason: "invalid date" });
+
+	const email =
+		item.ownerEmail !== undefined
+			? normalizeImportEmail(item.ownerEmail)
+			: undefined;
+	if (email !== undefined && !isValidImportEmail(email))
+		return result("skipped", { reason: "invalid owner email" });
 
 	const personalFolder = item.folderId
 		? await findFolder(orgId, item.folderId, false)
 		: undefined;
 	if (item.folderId && !personalFolder)
-		return {
-			videoId: item.videoId,
-			status: "skipped",
-			changes,
-			reason: "folder not in this workspace",
-		};
+		return result("skipped", { reason: "folder not in this workspace" });
 	const sharedFolder = item.shareFolderId
 		? await findFolder(orgId, item.shareFolderId, true)
 		: undefined;
 	if (item.shareFolderId && !sharedFolder)
-		return {
-			videoId: item.videoId,
-			status: "skipped",
-			changes,
+		return result("skipped", {
 			reason: "shared folder not in this workspace",
-		};
+		});
 
 	let ownerId = video.ownerId;
-	if (item.ownerEmail) {
-		const email = item.ownerEmail.trim().toLowerCase();
-		const existingMember = await getOrganizationMemberByEmail(orgId, email);
+	if (email) {
 		const member =
-			existingMember ??
+			(await getOrganizationMemberByEmail(orgId, email)) ??
 			(await provisionOrganizationInvitee({
 				organizationId: orgId,
 				email,
@@ -98,112 +111,108 @@ export async function backfillLoomImport(
 				role: "member",
 			}).then((provisioned) => ({ userId: provisioned.userId, email })));
 		if (!member)
-			return {
-				videoId: item.videoId,
-				status: "failed",
-				changes,
+			return result("failed", {
 				reason: "could not add the owner to the workspace",
-			};
-		if (member.userId !== video.ownerId) {
-			const moved = await reassignLoomImport({
-				organizationId,
-				videoId: item.videoId,
-				fromUserId: video.ownerId,
-				toUserId: member.userId,
-				options: {
-					keepSharing: true,
-					folderId: personalFolder?.id ?? video.folderId,
-				},
 			});
-			if (moved.status !== "moved")
-				return {
-					videoId: item.videoId,
-					status: moved.status,
-					changes,
-					reason: moved.reason,
-				};
-			ownerId = User.UserId.make(member.userId);
-			changes.push("owner");
-			if (personalFolder && personalFolder.id !== video.folderId)
-				changes.push("folder");
-		}
+		ownerId = User.UserId.make(member.userId);
 	}
 
-	if (
-		personalFolder &&
-		personalFolder.id !== video.folderId &&
-		!changes.includes("folder")
-	) {
+	const canUseFolder = (folder: FolderRow) =>
+		folder.createdById === ownerId || folder.createdById === video.orgOwnerId;
+	if (personalFolder && !canUseFolder(personalFolder))
+		return result("skipped", {
+			reason: "folder belongs to someone other than the owner",
+		});
+	const currentFolder = video.folderId
+		? await findFolder(orgId, video.folderId, false)
+		: undefined;
+	const targetFolderId =
+		personalFolder?.id ??
+		(currentFolder && canUseFolder(currentFolder) ? currentFolder.id : null);
+
+	let warning: string | undefined;
+	if (ownerId !== video.ownerId) {
+		const moved = await reassignLoomImport({
+			organizationId,
+			videoId: item.videoId,
+			fromUserId: video.ownerId,
+			toUserId: ownerId,
+			options: { keepSharing: true, folderId: targetFolderId },
+		});
+		if (moved.status !== "moved")
+			return result(moved.status, { reason: moved.reason });
+		if (moved.cleanup === "failed")
+			warning = "old owner's files could not be removed";
+		changes.push("owner");
+		if (targetFolderId !== video.folderId) changes.push("folder");
+	} else if (targetFolderId !== video.folderId) {
 		await db()
 			.update(videos)
-			.set({ folderId: personalFolder.id })
+			.set({ folderId: targetFolderId })
 			.where(and(eq(videos.id, id), eq(videos.ownerId, ownerId)));
 		changes.push("folder");
 	}
 
-	if (item.effectiveCreatedAt) {
-		const date = new Date(item.effectiveCreatedAt);
-		if (Number.isNaN(date.getTime()))
-			return {
-				videoId: item.videoId,
-				status: "failed",
-				changes,
-				reason: "invalid date",
-			};
-		if (video.effectiveCreatedAt?.getTime() !== date.getTime()) {
-			await db()
-				.update(videos)
-				.set({
-					metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.customCreatedAt', ${date.toISOString()})`,
-				})
-				.where(eq(videos.id, id));
-			changes.push("date");
-		}
+	if (date && video.effectiveCreatedAt?.getTime() !== date.getTime()) {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.customCreatedAt', ${date.toISOString()})`,
+			})
+			.where(eq(videos.id, id));
+		changes.push("date");
 	}
 
 	if (sharedFolder) {
-		const [share] = await db()
-			.select({ id: sharedVideos.id, folderId: sharedVideos.folderId })
-			.from(sharedVideos)
-			.where(
-				and(
-					eq(sharedVideos.videoId, id),
-					eq(sharedVideos.organizationId, orgId),
-				),
-			)
-			.limit(1);
-		if (!share) {
-			await db().insert(sharedVideos).values({
-				id: nanoId(),
-				videoId: id,
-				organizationId: orgId,
-				folderId: sharedFolder.id,
-				sharedByUserId: ownerId,
-			});
-			changes.push("shared");
-		} else if (share.folderId !== sharedFolder.id) {
-			await db()
+		const shared = await db().transaction(async (tx) => {
+			await tx
+				.select({ id: videos.id })
+				.from(videos)
+				.where(eq(videos.id, id))
+				.for("update");
+			const shares = await tx
+				.select({ id: sharedVideos.id, folderId: sharedVideos.folderId })
+				.from(sharedVideos)
+				.where(
+					and(
+						eq(sharedVideos.videoId, id),
+						eq(sharedVideos.organizationId, orgId),
+					),
+				);
+			const [keep, ...duplicates] = shares;
+			for (const duplicate of duplicates)
+				await tx.delete(sharedVideos).where(eq(sharedVideos.id, duplicate.id));
+			if (!keep) {
+				await tx.insert(sharedVideos).values({
+					id: nanoId(),
+					videoId: id,
+					organizationId: orgId,
+					folderId: sharedFolder.id,
+					sharedByUserId: ownerId,
+				});
+				return true;
+			}
+			if (keep.folderId === sharedFolder.id && duplicates.length === 0)
+				return false;
+			await tx
 				.update(sharedVideos)
 				.set({ folderId: sharedFolder.id })
-				.where(eq(sharedVideos.id, share.id));
-			changes.push("shared");
-		}
+				.where(eq(sharedVideos.id, keep.id));
+			return true;
+		});
+		if (shared) changes.push("shared");
 	}
 
-	return {
-		videoId: item.videoId,
-		status: changes.length > 0 ? "updated" : "unchanged",
-		changes,
-	};
+	return result(changes.length > 0 ? "updated" : "unchanged", { warning });
 }
 
 async function findFolder(
 	organizationId: Organisation.OrganisationId,
 	folderId: string,
 	shared: boolean,
-) {
+): Promise<FolderRow | undefined> {
 	const [folder] = await db()
-		.select({ id: folders.id })
+		.select({ id: folders.id, createdById: folders.createdById })
 		.from(folders)
 		.where(
 			and(
