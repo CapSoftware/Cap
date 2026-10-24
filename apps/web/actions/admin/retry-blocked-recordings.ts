@@ -2,7 +2,10 @@
 
 import { serverEnv } from "@cap/env";
 import { parseAdminVideoId, requireAdmin } from "@/lib/admin-access";
-import { retryBlockedDesktopRecording } from "@/lib/desktop-recording-jobs";
+import {
+	getProcessingState,
+	retryBlockedDesktopRecording,
+} from "@/lib/desktop-recording-jobs";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 
 const MAX_RECORDINGS_PER_REQUEST = 25;
@@ -10,7 +13,13 @@ const MAX_RECORDINGS_PER_REQUEST = 25;
 export type RetryBlockedRecordingResult = {
 	input: string;
 	videoId?: string;
-	status: "queued" | "not-found" | "not-retryable" | "failed";
+	status:
+		| "queued"
+		| "dispatch-failed"
+		| "already-processing"
+		| "not-found"
+		| "not-retryable"
+		| "failed";
 	detail?: string;
 	shareUrl?: string;
 };
@@ -58,12 +67,29 @@ export async function adminRetryBlockedRecordings(
 				videoId,
 				userId: retried.ownerId,
 			});
+			const shareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
+			if (queued === "queued") {
+				results.push({
+					input: entry,
+					videoId,
+					status: "queued",
+					detail: `was ${retried.previousErrorCode}`,
+					shareUrl,
+				});
+				continue;
+			}
+			// The job was just reset with no workflow, so "already-processing" means the start failed
+			// unless another run claimed it first.
+			const current = await getProcessingState({ videoId });
+			const dispatchFailed = current?.errorCode === "workflow-dispatch-failed";
 			results.push({
 				input: entry,
 				videoId,
-				status: "queued",
-				detail: `was ${retried.previousErrorCode}; ${queued}`,
-				shareUrl: `${serverEnv().WEB_URL}/s/${videoId}`,
+				status: dispatchFailed ? "dispatch-failed" : "already-processing",
+				detail: dispatchFailed
+					? "the workflow did not start; automatic recovery will retry it"
+					: `was ${retried.previousErrorCode}; another workflow already owns it`,
+				shareUrl,
 			});
 		} catch (error) {
 			results.push({
