@@ -20,6 +20,8 @@ pub(crate) mod instant_cleanup;
 mod multipart_tests;
 pub(crate) mod queue;
 #[cfg(test)]
+mod real_app_tests;
+#[cfg(test)]
 mod verify_tests;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;

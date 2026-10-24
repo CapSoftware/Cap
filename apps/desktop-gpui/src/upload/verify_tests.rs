@@ -207,6 +207,8 @@ struct MockState {
     next_id: u32,
     confirmations: Vec<Value>,
     deletes: u32,
+    created: Vec<String>,
+    deleted: Vec<String>,
     problems: Vec<String>,
 }
 
@@ -431,6 +433,14 @@ impl MockCap {
 
     pub(super) fn confirmations(&self) -> Vec<Value> {
         self.lock().confirmations.clone()
+    }
+
+    pub(super) fn created(&self) -> Vec<String> {
+        self.lock().created.clone()
+    }
+
+    pub(super) fn deleted(&self) -> Vec<String> {
+        self.lock().deleted.clone()
     }
 
     pub(super) fn deletes(&self) -> u32 {
@@ -792,6 +802,7 @@ impl Server {
                     state.next_id += 1;
                     format!("verifyvideo{:04}", state.next_id)
                 });
+                state.created.push(id.clone());
                 reply(200, json!({ "id": id }))
             }
             ("POST", "/api/upload/multipart/initiate") => {
@@ -924,6 +935,9 @@ impl Server {
             }
             ("DELETE", "/api/desktop/video/delete") => {
                 state.deletes += 1;
+                if let Some(id) = query.get("videoId") {
+                    state.deleted.push(id.clone());
+                }
                 reply(200, json!({ "success": true }))
             }
             _ => {
