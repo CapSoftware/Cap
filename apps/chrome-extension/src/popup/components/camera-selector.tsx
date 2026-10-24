@@ -49,7 +49,8 @@ export const CameraSelector = ({
 	const hasAccess = permissionGranted || availableCameras.length > 0;
 	const shouldRequestPermission = !hasAccess;
 
-	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
+	const statusPillDisabled =
+		disabled || (!shouldRequestPermission && !cameraEnabled);
 
 	const currentValue = selectedCameraId ?? NO_CAMERA_VALUE;
 
