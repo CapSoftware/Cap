@@ -78,18 +78,20 @@ pub fn interpolate_masks(
     frame_time: f64,
     segments: &[MaskSegment],
 ) -> Vec<PreparedMask> {
+    if segments.is_empty() {
+        return Vec::new();
+    }
+
     let mut prepared = Vec::new();
 
     let mut ordered = segments
         .iter()
-        .filter(|segment| segment.enabled)
+        .filter(|segment| {
+            segment.enabled && !(frame_time < segment.start || frame_time > segment.end)
+        })
         .collect::<Vec<_>>();
     ordered.sort_by_key(|segment| segment.track);
     for segment in ordered {
-        if frame_time < segment.start || frame_time > segment.end {
-            continue;
-        }
-
         let relative_time = (frame_time - segment.start).max(0.0);
 
         let position =
@@ -412,6 +414,53 @@ mod tests {
         );
         assert!(masks[0].center.x < masks[2].center.x);
         assert!(masks[2].center.x < masks[1].center.x);
+    }
+
+    #[test]
+    fn active_masks_preserve_order_and_include_time_boundaries() {
+        let mut first = sample_segment();
+        first.track = 2;
+        first.center.x = 0.25;
+        let mut inactive = first.clone();
+        inactive.start = 20.0;
+        inactive.end = 30.0;
+        inactive.track = 0;
+        let mut last = first.clone();
+        last.center.x = 0.75;
+        let mut disabled = first.clone();
+        disabled.enabled = false;
+        disabled.track = 0;
+        let segments = [first, inactive, last, disabled];
+
+        for time in [0.0, 5.0, 10.0] {
+            let masks = interpolate_masks(XY::new(1920, 1080), time, &segments);
+            assert_eq!(masks.len(), 2);
+            assert_eq!(masks[0].center.x, 0.25);
+            assert_eq!(masks[1].center.x, 0.75);
+        }
+        for time in [-1.0, 15.0, 31.0] {
+            assert!(interpolate_masks(XY::new(1920, 1080), time, &segments).is_empty());
+        }
+    }
+
+    #[test]
+    fn mask_time_filter_preserves_nonfinite_comparison_behavior() {
+        let mut segment = sample_segment();
+        segment.start = f64::NAN;
+        let masks = interpolate_masks(XY::new(1920, 1080), 5.0, std::slice::from_ref(&segment));
+        assert_eq!(masks.len(), 1);
+        assert!(interpolate_masks(XY::new(1920, 1080), 11.0, &[segment]).is_empty());
+
+        let mut disabled = sample_segment();
+        disabled.enabled = false;
+        let segments = [sample_segment(), disabled];
+        assert_eq!(
+            interpolate_masks(XY::new(1920, 1080), f64::NAN, &segments).len(),
+            1
+        );
+        for time in [f64::NEG_INFINITY, f64::INFINITY] {
+            assert!(interpolate_masks(XY::new(1920, 1080), time, &segments).is_empty());
+        }
     }
 
     #[test]
