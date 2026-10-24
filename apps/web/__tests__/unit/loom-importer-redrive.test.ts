@@ -1,3 +1,5 @@
+import type { HttpApi } from "@effect/platform";
+import type { Layer as EffectLayer } from "effect";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -70,11 +72,13 @@ vi.mock("@/lib/loom-import-start", () => ({
 		}
 	},
 }));
+type ApiLayer = EffectLayer.Layer<HttpApi.Api>;
+
 vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
 	const { Layer } = await import("effect");
 	return {
-		apiToHandler: (api: Layer.Layer<never>) => {
+		apiToHandler: (api: ApiLayer) => {
 			const { handler } = HttpApiBuilder.toWebHandler(
 				Layer.mergeAll(api, HttpServer.layerContext),
 			);
@@ -156,6 +160,15 @@ describe("redriveLoomImport", () => {
 		});
 		expect(mocks.start).not.toHaveBeenCalled();
 		expect(mocks.updates).toEqual([]);
+	});
+
+	it("restarts imports stuck uploading for over a week", async () => {
+		mocks.rows = [
+			failedImport({ phase: "uploading", uploadUpdatedAt: hoursAgo(24 * 8) }),
+		];
+		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
+			status: "restarted",
+		});
 	});
 
 	it("restarts imports stuck processing for over a week", async () => {

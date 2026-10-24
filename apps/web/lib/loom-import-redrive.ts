@@ -55,9 +55,10 @@ export async function redriveLoomImport(
 			reason: "not an unfinished Loom import",
 		};
 	const age = now.getTime() - row.uploadUpdatedAt.getTime();
-	const staleProcessing =
-		row.phase === "processing" && age > STALE_PROCESSING_AGE_MS;
-	if (row.phase !== "error" && !staleProcessing)
+	const stalled =
+		(row.phase === "processing" || row.phase === "uploading") &&
+		age > STALE_PROCESSING_AGE_MS;
+	if (row.phase !== "error" && !stalled)
 		return { videoId, status: "skipped", reason: `phase ${row.phase}` };
 	const runState = await getLoomImportRunState(row.metadata?.loomImportRun);
 	if (runState === "pending" || runState === "active")
