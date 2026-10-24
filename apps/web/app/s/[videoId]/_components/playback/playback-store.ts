@@ -175,8 +175,12 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 	const getPlaying = () => playing;
 
 	const setFallbackDuration = (next: number | null) => {
+		const previousDuration = getDuration();
 		fallback = normalizeDuration(next);
 		if (!isFiniteDuration(duration)) duration = fallback;
+		if (getDuration() !== previousDuration) {
+			emitTime();
+		}
 	};
 
 	const seek = (target: number) => {

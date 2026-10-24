@@ -291,16 +291,13 @@ pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     true
 }
 
+#[cfg(test)]
 pub(crate) fn convert_or_scale(
     src: &frame::Video,
     dst: &mut frame::Video,
     scaler: &mut ffmpeg::software::scaling::Context,
 ) -> Result<(), ffmpeg::Error> {
-    if try_convert(src, dst) {
-        Ok(())
-    } else {
-        scaler.run(src, dst)
-    }
+    super::convert_or_scale(src, dst, scaler)
 }
 
 #[cfg(target_arch = "x86_64")]

@@ -136,7 +136,7 @@ export const asyncVideoCodeReviewsContent: SeoPageContent = {
 			],
 			[
 				"Open source",
-				{ text: "Yes — MIT", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "Open source (GitHub)", status: "positive" },
 				{ text: "No", status: "negative" },
@@ -159,7 +159,7 @@ export const asyncVideoCodeReviewsContent: SeoPageContent = {
 		{
 			title: "Cap vs Loom for Code Reviews",
 			description:
-				"Loom is a capable async video tool but limits recording length and quality on its free plan, and stores all video on Loom's servers with no self-hosting option. Cap records at 4K with no recording-length limits in Studio Mode and supports <a href='/self-hosted-screen-recording'>self-hosted S3 storage</a> for teams with data residency requirements. Cap is also MIT-licensed and fully open source.",
+				"Loom is a capable async video tool but limits recording length and quality on its free plan, and stores all video on Loom's servers with no self-hosting option. Cap records at 4K with no recording-length limits in Studio Mode and supports <a href='/self-hosted-screen-recording'>self-hosted S3 storage</a> for teams with data residency requirements. Cap is also open source, with most code under AGPLv3 and specified Rust crates under MIT.",
 		},
 		{
 			title: "Cap vs Written PR Comments",
@@ -271,7 +271,7 @@ export const asyncVideoCodeReviewsContent: SeoPageContent = {
 		{
 			question: "What is the best tool for async video code reviews?",
 			answer:
-				"Cap is the best tool for async video code reviews for engineering teams that want 4K quality, instant shareable links, timestamped commenting, and the option to self-host recordings. It's free, open-source under the MIT license, and available for Mac and Windows. Unlike general async video tools, Cap's instant-mode and studio-mode workflows are optimized for the review cycle engineers actually use.",
+				"Cap is the best tool for async video code reviews for engineering teams that want 4K quality, instant shareable links, timestamped commenting, and the option to self-host recordings. It's free and open source, with most code under AGPLv3, and available for Mac and Windows. Unlike general async video tools, Cap's instant-mode and studio-mode workflows are optimized for the review cycle engineers actually use.",
 		},
 	],
 

@@ -118,7 +118,7 @@ describe("S3 connection reuse", () => {
 				}),
 			);
 			expect(fixture.authorizations).toHaveLength(192);
-			expect(fixture.connections()).toBeLessThanOrEqual(50);
+			expect(fixture.connections()).toBeLessThanOrEqual(128);
 		} finally {
 			await fixture.close();
 		}
@@ -227,7 +227,7 @@ describe("S3 connection reuse", () => {
 		expect(pools.map((pool) => pool.httpsAgent.maxFreeSockets)).toEqual([
 			8, 32,
 		]);
-		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 50]);
+		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 128]);
 	});
 
 	it("reuses custom bucket connections while using current credentials", async () => {

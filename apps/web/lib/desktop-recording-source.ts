@@ -11,9 +11,11 @@ import {
 	desktopRecordingSourceCheckpointSchema,
 	SOURCE_COMMIT_AWS_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
+	SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 	SOURCE_COMMIT_PAGE_SIZE,
 	SOURCE_COMMIT_PART_BATCH_SIZE,
 	SOURCE_COMMIT_PART_PAGE_SIZE,
+	SOURCE_COMMIT_TREE_PAGE_SIZE,
 	type SourceCommitPageReference,
 	type SourceCommitReference,
 	sourceCommitPageReferenceSchema,
@@ -233,7 +235,10 @@ const treePageSchema = z.discriminatedUnion("type", [
 		kind: z.enum(["plan", "objects", "parts"]),
 		scope: z.string(),
 		start: z.number().int().nonnegative(),
-		entries: z.array(z.unknown()).min(1).max(SOURCE_COMMIT_PART_PAGE_SIZE),
+		entries: z
+			.array(z.unknown())
+			.min(1)
+			.max(SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES),
 	}),
 	z.object({
 		version: z.literal(1),
@@ -261,7 +266,7 @@ const committedInventorySchema = z.union([
 const SOURCE_COMMIT_STEP_TIMEOUT_MS = 180_000;
 const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
 const SOURCE_COMMIT_CONCURRENCY = 8;
-const SOURCE_COMMIT_AWS_CONCURRENCY = 32;
+const SOURCE_COMMIT_AWS_CONCURRENCY = 128;
 
 function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
 	return bucket.provider === "s3" && Option.isNone(customBucket)
@@ -386,7 +391,7 @@ async function appendTree(
 	scope: string,
 	entries: unknown[],
 ) {
-	if (entries.length === 0 || entries.length > SOURCE_COMMIT_PART_PAGE_SIZE)
+	if (entries.length === 0 || entries.length > SOURCE_COMMIT_TREE_PAGE_SIZE)
 		invalidSource("Invalid source page size");
 	const start = treeCount(roots);
 	const leaf = await writeReference(context, {

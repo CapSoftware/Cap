@@ -1834,7 +1834,14 @@ mod memory_pressure {
 
     /// Installs one process-wide memory pressure source. It lives for the
     /// rest of the process, so it is never released.
+    ///
+    /// Not installed in unit tests: a real pressure event on the host would
+    /// release the caches of every test running in the process at once.
+    /// Tests drive `on_memory_pressure` directly instead.
     pub(super) fn watch() {
+        if cfg!(test) {
+            return;
+        }
         static WATCH: std::sync::Once = std::sync::Once::new();
         WATCH.call_once(|| unsafe {
             let source = dispatch_source_create(
