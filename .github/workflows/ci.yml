@@ -132,6 +132,7 @@ jobs:
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
+          __tests__/unit/transcript-numbers.test.ts
 
       - name: Typecheck
         run: bun run typecheck
