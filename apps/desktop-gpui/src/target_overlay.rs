@@ -37,6 +37,7 @@ use scap_targets::{
     bounds::{LogicalBounds, LogicalPosition, LogicalSize},
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     app_windows,
     editor_canvas::{
@@ -1076,6 +1077,7 @@ impl Render for OverlayWindow {
             .size_full()
             .relative()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
@@ -1243,7 +1245,8 @@ impl OverlayWindow {
             return div().into_any_element();
         };
         let selected = if camera {
-            view.camera_selection().map(|camera| camera.label.clone())
+            view.camera_selection()
+                .map(|camera| crate::main_window::camera_label(&camera.label))
         } else {
             view.microphone_selection().map(|mic| mic.name.clone())
         };

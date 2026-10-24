@@ -15,6 +15,7 @@ import {
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
+import { signalLoomImportFinished } from "@/lib/loom-import-signal";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
@@ -380,6 +381,13 @@ export async function POST(request: NextRequest) {
 				})
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 		}
+
+		if (dbPhase === "complete" || dbPhase === "error")
+			await signalLoomImportFinished(
+				request.nextUrl.searchParams.get("signal"),
+				payload.videoId,
+				payload.phase,
+			);
 
 		return NextResponse.json({ success: true });
 	} catch (error) {
