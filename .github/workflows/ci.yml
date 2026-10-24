@@ -114,6 +114,9 @@ jobs:
           bun test scripts/loops/profile.test.ts scripts/loops/lifecycle.test.ts
           bun run tsc --noEmit --strict --jsx react-jsx --allowImportingTsExtensions --target ESNext --module ESNext --moduleResolution bundler --resolveJsonModule --types bun --skipLibCheck scripts/loops/*.ts
 
+      - name: Test Chrome extension
+        run: bun run --cwd apps/chrome-extension test
+
       - name: Test render farm orchestration
         run: |
           bun test apps/render-farm
