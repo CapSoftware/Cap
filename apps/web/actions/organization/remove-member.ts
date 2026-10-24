@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	organizationInvites,
 	organizationMembers,
+	organizations,
 	spaceMembers,
 	spaces,
 	users,
@@ -35,6 +36,7 @@ export async function removeOrganizationMember(
 			id: organizationMembers.id,
 			userId: organizationMembers.userId,
 			role: organizationMembers.role,
+			hasProSeat: organizationMembers.hasProSeat,
 			email: users.email,
 		})
 		.from(organizationMembers)
@@ -106,6 +108,34 @@ export async function removeOrganizationMember(
 			);
 
 		if (result.affectedRows === 0) throw new Error("Member not found");
+
+		if (member.hasProSeat) {
+			const [remainingOrg] = await tx
+				.select({ stripeSubscriptionId: users.stripeSubscriptionId })
+				.from(organizationMembers)
+				.innerJoin(
+					organizations,
+					eq(organizationMembers.organizationId, organizations.id),
+				)
+				.innerJoin(users, eq(organizations.ownerId, users.id))
+				.where(
+					and(
+						eq(organizationMembers.userId, member.userId),
+						eq(organizationMembers.hasProSeat, true),
+					),
+				)
+				.limit(1);
+
+			if (!remainingOrg || remainingOrg.stripeSubscriptionId) {
+				await tx
+					.update(users)
+					.set({
+						thirdPartyStripeSubscriptionId:
+							remainingOrg?.stripeSubscriptionId ?? null,
+					})
+					.where(eq(users.id, member.userId));
+			}
+		}
 	});
 
 	revalidatePath("/dashboard/settings/organization");

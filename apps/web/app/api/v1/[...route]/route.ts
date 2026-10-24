@@ -5301,6 +5301,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.select({
 										userId: Db.organizationMembers.userId,
 										role: Db.organizationMembers.role,
+										hasProSeat: Db.organizationMembers.hasProSeat,
 										email: Db.users.email,
 									})
 									.from(Db.organizationMembers)
@@ -5374,6 +5375,40 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										),
 									);
 								if (affectedRows(result) === 0) return { state: "not_found" };
+								if (member.hasProSeat) {
+									const [remainingOrg] = await tx
+										.select({
+											stripeSubscriptionId: Db.users.stripeSubscriptionId,
+										})
+										.from(Db.organizationMembers)
+										.innerJoin(
+											Db.organizations,
+											eq(
+												Db.organizationMembers.organizationId,
+												Db.organizations.id,
+											),
+										)
+										.innerJoin(
+											Db.users,
+											eq(Db.organizations.ownerId, Db.users.id),
+										)
+										.where(
+											and(
+												eq(Db.organizationMembers.userId, member.userId),
+												eq(Db.organizationMembers.hasProSeat, true),
+											),
+										)
+										.limit(1);
+									if (!remainingOrg || remainingOrg.stripeSubscriptionId) {
+										await tx
+											.update(Db.users)
+											.set({
+												thirdPartyStripeSubscriptionId:
+													remainingOrg?.stripeSubscriptionId ?? null,
+											})
+											.where(eq(Db.users.id, member.userId));
+									}
+								}
 								const now = new Date();
 								return {
 									state: "success",
