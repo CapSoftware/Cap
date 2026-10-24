@@ -286,6 +286,8 @@ function firstPacketDifference(source: PacketLog, output: PacketLog) {
 	return "packet proof differs, but the compact packet log did not capture the difference";
 }
 
+const MISMATCH_EXPLANATION_TIMEOUT_MS = 20_000;
+
 // Packet logs are only collected in this second read, after a mismatch, so passing recordings pay nothing.
 async function explainTrackMismatch(
 	sourcePath: string,
@@ -293,10 +295,15 @@ async function explainTrackMismatch(
 	kind: "video" | "audio",
 	signal: AbortSignal,
 ): Promise<string> {
+	// Bounded so explaining a mismatch cannot run the verification into its deadline and hide the mismatch.
+	const explainSignal = AbortSignal.any([
+		signal,
+		AbortSignal.timeout(MISMATCH_EXPLANATION_TIMEOUT_MS),
+	]);
 	try {
 		const [source, output] = await Promise.all([
-			readTrack(sourcePath, kind, signal, true),
-			readTrack(outputPath, kind, signal, true),
+			readTrack(sourcePath, kind, explainSignal, true),
+			readTrack(outputPath, kind, explainSignal, true),
 		]);
 		return describeTrackDifference(source, output);
 	} catch {
