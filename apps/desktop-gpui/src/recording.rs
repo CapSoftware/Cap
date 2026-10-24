@@ -1467,8 +1467,15 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
 /// upload resume only accepts finished ones. Recovery stands if sealing fails;
 /// the recording is saved locally either way, and its upload then fails as it
 /// did before sealing existed.
+///
+/// Recovery can rescue a final fragment the manifest never listed, so the
+/// recovered `output.mp4` may hold more than the sealed tracks. Whenever
+/// sealing sets any media aside, or fails, the local recording is kept after
+/// its upload verifies, so it is never the only complete copy that gets
+/// deleted.
 pub(crate) fn seal_recovered_instant_tracks(project_path: &std::path::Path) {
     use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
+    let mut omitted = false;
     for (track, media_type) in [
         ("display", SegmentMediaType::Video),
         ("audio", SegmentMediaType::Audio),
@@ -1480,9 +1487,18 @@ pub(crate) fn seal_recovered_instant_tracks(project_path: &std::path::Path) {
         match cap_recording::upload_resume::seal_interrupted_track(&directory, media_type) {
             Ok(segments) => tracing::info!(track, segments, "Sealed a recovered Instant track"),
             Err(error) => {
+                omitted = true;
                 tracing::warn!(track, %error, "Could not seal a recovered Instant track")
             }
         }
+        omitted |= std::fs::read_dir(&directory).map_or(true, |entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".unsealed"))
+        });
+    }
+    if omitted && let Err(error) = crate::upload::queue::record_preserve_local(project_path) {
+        tracing::warn!(%error, "Could not keep a recovered recording after its upload");
     }
 }
 

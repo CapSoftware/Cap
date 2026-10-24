@@ -227,7 +227,9 @@ fn recover(project: &Path) {
 
 /// The app crashes mid-recording and the user recovers the recording on the
 /// next launch. The queue then uploads every segment the crash saved under
-/// the same video id and verifies it; the unfinished tail is kept on disk.
+/// the same video id and verifies it. The unfinished tail is kept on disk, and
+/// so is the whole recording, even with delete-after-upload on, because the
+/// upload leaves that tail out.
 #[test]
 fn recovered_instant_recording_uploads_what_the_crash_saved() {
     let case = "queue_recovered_instant_upload";
@@ -236,9 +238,20 @@ fn recovered_instant_recording_uploads_what_the_crash_saved() {
     virtual_time(async {
         let mock = MockCap::start(Vec::new()).await;
         scratch.sign_in(&mock.url);
+        let store = scratch.0.join("store");
+        let mut settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+        settings["general_settings"]["deleteInstantRecordingsAfterUpload"] =
+            serde_json::json!(true);
+        std::fs::write(&store, serde_json::to_vec(&settings).unwrap()).unwrap();
         let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
         let partials = crash_mid_recording(&project);
         recover(&project);
+
+        assert!(
+            read_state(&project).unwrap().unwrap().preserve_local,
+            "a recording whose sealed tracks leave media out must stay local"
+        );
 
         let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
         launch(&manager, &project).await;

@@ -284,6 +284,16 @@ pub(super) fn record_cancelled(project: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps the local recording after its upload verifies, whatever the
+/// delete-after-upload setting says.
+pub(crate) fn record_preserve_local(project: &Path) -> Result<(), String> {
+    if let Some(mut state) = read_state(project)? {
+        state.preserve_local = true;
+        write_state(project, &state)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn record_failure(project: &Path, error: &str) -> Result<(), String> {
     if let Some(mut state) = read_state(project)? {
         state.fail(error.to_string(), now());
