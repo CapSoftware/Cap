@@ -35,6 +35,9 @@ class Api extends HttpApi.make("LoomOperatorCsvImportApi").add(
 							spaceName: Schema.optional(
 								Schema.String.pipe(Schema.maxLength(255)),
 							),
+							folderName: Schema.optional(
+								Schema.String.pipe(Schema.maxLength(255)),
+							),
 						}),
 					).pipe(Schema.minItems(1), Schema.maxItems(MAX_ROWS_PER_REQUEST)),
 				}),
@@ -107,9 +110,11 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								loomUrl: row.loomUrl,
 								userEmail: row.userEmail,
 								spaceName: row.spaceName ?? "",
+								folderName: row.folderName,
 							})),
 							orgId: organizationId,
 							actorId: organization.ownerId,
+							allowFolders: true,
 						}),
 					);
 					return {

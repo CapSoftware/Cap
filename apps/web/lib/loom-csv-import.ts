@@ -3,6 +3,7 @@ import "server-only";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import {
+	folders,
 	importedVideos,
 	loomMigrationImports,
 	loomMigrationRequests,
@@ -20,13 +21,14 @@ import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import {
+	Folder,
 	type Organisation,
 	Space,
 	SpaceMemberId,
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { renewConciergeImport } from "@/lib/loom-concierge";
@@ -75,6 +77,7 @@ export interface LoomCsvImportRow {
 	loomUrl: string;
 	userEmail: string;
 	spaceName?: string;
+	folderName?: string;
 }
 
 export interface LoomCsvImportRowResult {
@@ -732,18 +735,58 @@ export async function addImportOwnerToSpace({
 		});
 }
 
+async function getOrCreatePersonalImportFolder({
+	orgId,
+	ownerId,
+	name,
+}: {
+	orgId: Organisation.OrganisationId;
+	ownerId: User.UserId;
+	name: string;
+}) {
+	const match = () =>
+		db()
+			.select({ id: folders.id })
+			.from(folders)
+			.where(
+				and(
+					eq(folders.organizationId, orgId),
+					eq(folders.createdById, ownerId),
+					eq(folders.name, name),
+					isNull(folders.spaceId),
+					isNull(folders.parentId),
+				),
+			)
+			.orderBy(asc(folders.createdAt))
+			.limit(1);
+	const [existing] = await match();
+	if (existing) return existing.id;
+	await db()
+		.insert(folders)
+		.values({
+			id: Folder.FolderId.make(nanoId()),
+			name,
+			organizationId: orgId,
+			createdById: ownerId,
+		});
+	const [created] = await match();
+	return created?.id;
+}
+
 export async function processLoomCsvRows({
 	rows,
 	orgId,
 	actorId,
 	migrationRequestId,
 	migrationLeaseToken,
+	allowFolders = false,
 }: {
 	rows: LoomCsvImportRow[];
 	orgId: Organisation.OrganisationId;
 	actorId: User.UserId;
 	migrationRequestId?: string;
 	migrationLeaseToken?: string;
+	allowFolders?: boolean;
 }): Promise<LoomCsvImportResult> {
 	const inputRows = Array.isArray(rows) ? rows : [];
 	const normalizedRows = inputRows
@@ -760,6 +803,10 @@ export async function processLoomCsvRows({
 			spaceName:
 				typeof row.spaceName === "string"
 					? normalizeImportSpaceName(row.spaceName)
+					: "",
+			folderName:
+				allowFolders && typeof row.folderName === "string"
+					? normalizeImportSpaceName(row.folderName)
 					: "",
 		}))
 		.filter((row) => row.loomUrl || row.userEmail || row.spaceName);
@@ -857,10 +904,18 @@ export async function processLoomCsvRows({
 		}
 
 		try {
+			const folderId = row.folderName
+				? await getOrCreatePersonalImportFolder({
+						orgId,
+						ownerId: member.userId,
+						name: row.folderName,
+					})
+				: undefined;
 			const result = await importLoomVideoForOwner({
 				loomUrl: row.loomUrl,
 				orgId,
 				ownerId: member.userId,
+				destination: folderId ? { folderId } : {},
 				migrationRequestId,
 				migrationLeaseToken,
 			});

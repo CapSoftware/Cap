@@ -243,6 +243,7 @@ describe("operator CSV import", () => {
 			rows: [{ ...body.rows[0], spaceName: "" }],
 			orgId: ids.org,
 			actorId: "owneraaaaaaaaaa",
+			allowFolders: true,
 		});
 	});
 
