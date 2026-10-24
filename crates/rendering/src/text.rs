@@ -5,7 +5,7 @@ use cap_project::{TextAlign, TextAnimation, TextBackgroundStyle, TextSegment, XY
 /// export resolution. `size` only positions and wraps the text — it never
 /// affects glyph size (that coupling is baked away by the config migration
 /// in cap_project).
-const REFERENCE_HEIGHT: f32 = 1080.0;
+pub(crate) const REFERENCE_HEIGHT: f32 = 1080.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 480.0;
 

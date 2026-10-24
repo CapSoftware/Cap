@@ -1,0 +1,585 @@
+[common]
+add = "Ajouter"
+back = "Retour"
+cancel = "Annuler"
+choose_allow_prompt = "Choisissez Autoriser dans la fenêtre de macOS."
+close = "Fermer"
+copied = "Copié"
+dismiss = "Fermer"
+go_back = "Retour"
+loading = "Chargement..."
+no = "Non"
+ok = "OK"
+reset = "Réinitialiser"
+reset_to_default = "Rétablir par défaut"
+save = "Enregistrer"
+search = "Rechercher"
+yes = "Oui"
+
+[menu.app]
+about = "À propos de Cap"
+hide = "Masquer Cap"
+hide_others = "Masquer les autres"
+quit = "Quitter Cap"
+services = "Services"
+settings = "Paramètres…"
+
+[menu.file]
+close_window = "Fermer la fenêtre"
+title = "Fichier"
+
+[menu.edit]
+copy = "Copier"
+cut = "Couper"
+paste = "Coller"
+redo = "Rétablir"
+select_all = "Tout sélectionner"
+title = "Édition"
+undo = "Annuler"
+
+[menu.view]
+enter_full_screen = "Passer en mode plein écran"
+title = "Présentation"
+
+[menu.window]
+close_window = "Fermer la fenêtre"
+minimize = "Placer dans le Dock"
+title = "Fenêtre"
+zoom = "Réduire/agrandir"
+
+[menu.help]
+title = "Aide"
+
+[tray]
+import_media = "Importer des médias..."
+no_recent_items = "Aucun élément récent"
+open_main_window = "Ouvrir la fenêtre principale"
+previous = "Récents"
+quit = "Quitter Cap"
+record_area = "Enregistrer une zone"
+record_display = "Enregistrer l'écran"
+record_window = "Enregistrer une fenêtre"
+request_permissions = "Demander les autorisations"
+screenshot_area = "Capturer une zone"
+screenshot_display = "Capturer l'écran"
+screenshot_window = "Capturer une fenêtre"
+select_mode = "Choisir le mode"
+settings = "Paramètres"
+take_screenshot = "Prendre une capture d'écran"
+tooltip_recording = "Cap - Arrêter l'enregistrement"
+upload_logs = "Envoyer les journaux"
+version = "Cap v{version}"
+view_all_recordings = "Voir tous les enregistrements"
+view_all_screenshots = "Voir toutes les captures d'écran"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "Capture d'écran"
+studio = "Studio"
+
+[settings.nav]
+automations = "Automatisations"
+changelog = "Nouveautés"
+cli = "CLI"
+experimental = "Expérimental"
+feedback = "Commentaires"
+general = "Général"
+integrations = "Intégrations"
+license = "Forfait et licence"
+quality = "Qualité d'enregistrement"
+recordings = "Enregistrements"
+screenshots = "Captures d'écran"
+shortcuts = "Raccourcis"
+transcription = "Transcription"
+
+[settings.general.language]
+description = "Choisissez la langue d'affichage de Cap."
+label = "Langue de l'app"
+system_default = "Langue du système ({language})"
+title = "Langue"
+
+[settings.general.appearance]
+description = "Adaptez Cap au thème de votre système ou choisissez une apparence fixe."
+title = "Apparence"
+
+[settings.general.app]
+description = "Choisissez comment Cap apparaît sur votre système."
+title = "App"
+
+[settings.general.app.dock_icon]
+description = "Garder Cap dans le Dock même lorsqu'aucune fenêtre n'est ouverte."
+label = "Toujours afficher l'icône dans le Dock"
+
+[settings.general.app.notifications]
+description = "Afficher des notifications pour les copies dans le presse-papiers, les fichiers enregistrés, etc. Vous devrez peut-être autoriser Cap dans les réglages de notifications de votre système."
+label = "Notifications système"
+
+[settings.general.recording]
+description = "Comportement pendant l'enregistrement et après l'arrêt."
+title = "Enregistrement"
+
+[settings.general.recording.countdown]
+description = "Délai avant le début de l'enregistrement."
+label = "Compte à rebours"
+off = "Désactivé"
+seconds_10 = "10 secondes"
+seconds_3 = "3 secondes"
+seconds_5 = "5 secondes"
+
+[settings.general.recording.confirm_without_mic]
+description = "Demander une confirmation si aucun micro n'est sélectionné ou si le micro sélectionné est indisponible."
+label = "Confirmer avant d'enregistrer sans micro"
+
+[settings.general.recording.studio_sound]
+description = "Nettoie automatiquement l'audio du micro. Vous pouvez toujours le désactiver pour un enregistrement dans l'éditeur."
+label = "Studio Sound sur les nouveaux enregistrements"
+
+[settings.general.recording.main_window_start]
+description = "Ce que devient la fenêtre principale lorsqu'un enregistrement commence."
+label = "Fenêtre principale au début de l'enregistrement"
+
+[settings.general.recording.post_deletion]
+description = "Indique si la fenêtre d'enregistrement doit se rouvrir."
+label = "Après la suppression d'un enregistrement"
+
+[settings.general.recording.delete_after_upload]
+description = "Cap supprime le fichier local une fois la mise en ligne réussie."
+label = "Supprimer les enregistrements Instant après la mise en ligne"
+
+[settings.general.recording.crash_recovery]
+description = "Enregistrer par fragments récupérables après un plantage ou une coupure de courant. Fichiers légèrement plus volumineux pendant la capture."
+label = "Enregistrement récupérable après un plantage"
+
+[settings.general.recording.custom_cursor]
+description = "Capturer l'état du curseur séparément pour pouvoir ajuster sa taille et son lissage dans l'éditeur."
+label = "Capture séparée du curseur (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Ajouter automatiquement des segments de zoom autour des clics de souris dans les enregistrements Studio."
+label = "Zoom automatique sur les clics"
+
+[settings.general.recording.default_zoom]
+description = "Niveau de zoom des segments de zoom créés manuellement ou automatiquement."
+label = "Niveau de zoom par défaut"
+
+[settings.general.recording.capture_keyboard]
+description = "Enregistrer les frappes au clavier pour pouvoir ajouter des incrustations de touches dans l'éditeur."
+label = "Capturer les frappes au clavier"
+
+[settings.general.recording.notch_overlay]
+description = "Restaure automatiquement l'encoche pour les nouveaux enregistrements d'écran et de zone lorsque la région sélectionnée contient toute l'encoche. Les écrans externes, les zones partielles et les enregistrements de fenêtre ne sont pas modifiés. Chaque enregistrement peut remplacer ce réglage dans l'éditeur."
+label = "Afficher l'encoche du MacBook dans les enregistrements d'écran"
+
+[settings.general.recording.max_fps]
+description = "Fréquence d'images maximale de la capture d'écran."
+description_high = "Fréquence d'images maximale de la capture d'écran. Des valeurs plus élevées peuvent provoquer des pertes d'images ou une hausse de l'utilisation du processeur sur certains systèmes."
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (recommandé)"
+label = "Fréquence d'images maximale"
+
+[settings.general.storage]
+choose_folder = "Choisir un dossier"
+default_location = "Par défaut (Application Support)"
+description = "Le dossier où Cap sauvegarde vos enregistrements."
+title = "Stockage"
+
+[settings.general.project_name]
+available_placeholders = "Variables disponibles"
+description = "Modèle utilisé pour les nouveaux enregistrements et les fichiers exportés."
+title = "Nom de projet par défaut"
+
+[settings.general.project_name.placeholders]
+date_time = "Date et heure"
+date_values = "la date de l'enregistrement"
+mode_values = "\"studio\", \"instant\" ou \"screenshot\""
+random = "Aléatoire"
+random_values = "10 caractères hexadécimaux compatibles avec les noms de fichier ; utilisez {{random:N}} pour 1–32."
+recording_mode = "Mode d'enregistrement"
+recording_mode_values = "\"Studio\", \"Instant\" ou \"Screenshot\""
+target = "Cible"
+target_kind_values = "\"Display\", \"Window\" ou \"Area\""
+target_name_values = "Nom de l'écran ou titre de la fenêtre."
+time_values = "l'heure de l'enregistrement"
+
+[settings.general.excluded_windows]
+description = "Masquer des fenêtres dans les enregistrements."
+empty = "Aucune fenêtre n'est exclue pour le moment."
+missing_body = "Les fenêtres de caméra, de paramètres ou d'enregistrement peuvent apparaître comme des rectangles noirs dans les enregistrements d'écran. Manquantes : {names}."
+missing_title = "Des fenêtres Cap recommandées ne sont pas exclues"
+restore = "Restaurer"
+title = "Fenêtres exclues"
+
+[settings.general.updates]
+description = "Choisissez les versions de Cap que vous recevez."
+nightly_description = "Les versions les plus récentes, mises à jour automatiquement en arrière-plan lorsque vous n'enregistrez pas et n'exportez pas. Peuvent être instables."
+nightly_switch_back = "Revenir au canal Stable vous ramènera à la dernière version stable, qui peut être plus ancienne que votre version actuelle."
+stable_description = "Versions numérotées (recommandé)"
+title = "Mises à jour"
+
+[settings.general.updates.channel]
+description = "Le canal de publication à partir duquel Cap se met à jour."
+label = "Canal de mise à jour"
+
+[settings.general.self_host]
+confirm_change = "Voulez-vous vraiment remplacer l'URL du serveur par « {origin} » ? Vous devrez vous reconnecter."
+description = "Ne modifiez ce réglage que si vous hébergez votre propre instance de Cap Web."
+server_url = "URL du serveur Cap"
+title = "Auto-hébergement"
+update = "Mettre à jour"
+
+[settings.general.privacy]
+title = "Confidentialité"
+
+[settings.general.privacy.telemetry]
+description = "Cap utilise une télémétrie anonyme pour améliorer sa fiabilité et corriger des bugs. Nous ne collectons jamais le contenu des enregistrements, les titres de fenêtres, les chemins de fichiers ni aucune information personnelle."
+label = "Partager la télémétrie anonyme"
+
+[main]
+delete_recording_confirm = "Voulez-vous vraiment supprimer cet enregistrement ?"
+delete_screenshot_confirm = "Voulez-vous vraiment supprimer cette capture d'écran ?"
+
+[main.clean_capture]
+title = "Gardez votre capture propre"
+
+[main.clip]
+add_to_project = "Ajouter à votre projet actuel"
+record_new = "Enregistrer un nouveau clip"
+
+[main.device]
+camera = "Caméra"
+fallback_camera = "Caméra"
+heading = "Choisissez votre caméra et votre micro"
+microphone = "Micro"
+no_camera = "Aucune caméra"
+no_cameras = "Aucune caméra trouvée"
+no_matching_cameras = "Aucune caméra correspondante"
+no_matching_microphones = "Aucun micro correspondant"
+no_microphone = "Aucun micro"
+no_microphones = "Aucun micro trouvé"
+system_audio_off = "Sans audio système"
+system_audio_on = "Avec l'audio système"
+
+[main.device.access]
+allow_access = "Autoriser l'accès"
+camera_denied = "Cap ne peut pas utiliser votre caméra. Activez-la dans Réglages Système."
+camera_needed = "Cap a besoin de votre accord pour utiliser votre caméra."
+microphone_denied = "Cap ne peut pas utiliser votre micro. Activez-le dans Réglages Système."
+microphone_needed = "Cap a besoin de votre accord pour utiliser votre micro."
+open_system_settings = "Ouvrir Réglages Système"
+turn_on_in_settings = "Activer dans Réglages"
+
+[main.device.format]
+apply_failed = "Impossible d'appliquer le format de l'appareil : {error}"
+applying = "Application du format..."
+available = "Disponible : {format}"
+camera_changed = "La caméra a changé ou a été déconnectée. Rouvrez ses réglages de format."
+channels = { one = "{count} canal", many = "{count} de canaux", other = "{count} canaux" }
+current = "Actuel : {format}"
+default = "Par défaut"
+loading = "Chargement des formats..."
+mono = "Mono"
+preferred = "Format préféré"
+save_failed = "Impossible d'enregistrer le format préféré de l'appareil. Réessayez."
+stereo = "Stéréo"
+
+[main.device.pill]
+allow = "Autoriser"
+allow_in_settings = "Activer dans Réglages"
+asking = "Demande…"
+not_connected = "Déconnecté"
+off = "Désactivé"
+on = "Activé"
+
+[main.error]
+camera_only_needs_camera = "L'enregistrement caméra seule nécessite une caméra sélectionnée."
+copy = "Copier l'erreur"
+devices_not_ready = "Les appareils d'enregistrement ne sont pas prêts. Ouvrez l'enregistreur et réessayez."
+title = "Un problème est survenu"
+
+[main.header]
+changelog = "Nouveautés"
+help = "Aide et visite guidée"
+recordings = "Enregistrements"
+screenshots = "Captures d'écran"
+settings = "Paramètres"
+teleprompter = "Prompteur"
+
+[main.library]
+clips = { one = "{count} clip", many = "{count} de clips", other = "{count} clips" }
+copy_screenshot_failed = "Impossible de copier la capture d'écran"
+import_recordings = "Importer"
+import_screenshots = "Importer une image"
+importing = "Importation"
+no_matching_recordings = "Aucun enregistrement correspondant"
+no_matching_screenshots = "Aucune capture d'écran correspondante"
+no_recordings = "Aucun enregistrement pour l'instant"
+no_screenshots = "Aucune capture d'écran pour l'instant"
+recordings_description = "Vos enregistrements d'écran apparaîtront ici. Lancez un enregistrement pour commencer !"
+screenshots_description = "Vos captures d'écran apparaîtront ici. Prenez une capture d'écran pour commencer !"
+view_all_recordings = "Voir tous les enregistrements"
+view_all_screenshots = "Voir toutes les captures d'écran"
+
+[main.mic_warning]
+body = "Cet enregistrement n'inclura pas votre voix. Sélectionnez un micro ou continuez sans."
+dont_show_again = "Ne plus afficher"
+record_without = "Enregistrer sans micro"
+save_failed = "Impossible d'enregistrer votre préférence. Réessayez ou laissez la case décochée."
+title = "Aucun micro détecté"
+
+[main.mode]
+info_tooltip = "Infos sur les modes d'enregistrement"
+
+[main.mode.header]
+instant = "Mode Instant"
+screenshot = "Mode Capture d'écran"
+studio = "Mode Studio"
+
+[main.mode.hover]
+instant = "Mode Instant"
+instant_description = "Aucun rendu nécessaire : la mise en ligne se fait en direct pour partager le lien dès l'arrêt."
+quality_settings = "Réglages de qualité"
+screenshot = "Mode Capture d'écran"
+screenshot_description = "Capturez et annotez des images fixes."
+studio = "Mode Studio"
+studio_description = "Enregistre sur votre ordinateur et ouvre l'éditeur à l'arrêt. Choisissez la qualité d'enregistrement dans les paramètres."
+
+[main.mode.info]
+instant = "Partagez instantanément avec un lien. Votre enregistrement est mis en ligne pendant que vous enregistrez, pour le partager dès que vous avez terminé."
+screenshot = "Capturez et annotez des captures d'écran en un instant. Idéal pour les captures rapides, les rapports de bugs et la communication visuelle."
+studio = "Enregistrez localement dans la meilleure qualité pour monter plus tard. Parfait pour créer des contenus soignés avec effets et transitions."
+title = "Modes d'enregistrement"
+
+[main.mode.name]
+instant = "Instant"
+screenshot = "Capture d'écran"
+studio = "Studio"
+
+[main.plan]
+commercial = "Commercial"
+personal = "Personnel"
+
+[main.recording]
+cancel = "Annuler l'enregistrement"
+paused_notice = "Enregistrement en pause. Cap se masquera avant de reprendre."
+resume = "Reprendre"
+starting = "Démarrage..."
+starts_in = "L'enregistrement commence dans {remaining}"
+stop = "Arrêter l'enregistrement"
+stopping = "Arrêt..."
+
+[main.recovery]
+discard = "Supprimer"
+duration_minutes = "~{minutes} min"
+duration_minutes_seconds = "~{minutes} min {seconds} s"
+duration_seconds = "~{seconds} s"
+recover = "Récupérer"
+segments = { one = "{count} segment", many = "{count} de segments", other = "{count} segments" }
+segments_with_duration = { one = "{count} segment · {duration}", many = "{count} de segments · {duration}", other = "{count} segments · {duration}" }
+title = "Enregistrement incomplet"
+
+[main.sign_in]
+message = "Le mode Instant met en ligne pendant l'enregistrement : votre lien de partage est prêt dès l'arrêt."
+not_now = "Pas maintenant"
+open_browser_again = "Rouvrir le navigateur"
+pending_message = "Terminez la connexion à Cap dans votre navigateur. Cap reviendra ici et ouvrira l'enregistreur une fois que ce sera fait."
+sign_in = "Se connecter"
+timed_out = "Le délai de connexion a expiré. Réessayez."
+title = "Connectez-vous pour utiliser le mode Instant"
+use_studio = "Utiliser Studio"
+waiting = "En attente de votre navigateur"
+
+[main.storage]
+blocked = "Seulement {available} Go disponibles sur le disque d'enregistrement. Libérez de l'espace pour avoir au moins 512 Mo disponibles avant d'enregistrer."
+can_start = "Seulement {available} Go disponibles sur le disque d'enregistrement. Cap s'arrêtera automatiquement si l'espace devient trop faible, en préservant votre enregistrement."
+check_failed = "Impossible de vérifier l'espace d'enregistrement : {error}"
+record_anyway = "Enregistrer quand même"
+title = "Espace de stockage faible"
+
+[main.target]
+area = "Zone"
+camera_only = "Caméra seule"
+choose_display = "Choisir un écran"
+choose_window = "Choisir une fenêtre"
+display = "Écran"
+heading = "Choisissez une source de capture"
+no_displays = "Aucun écran trouvé"
+no_matching_displays = "Aucun écran correspondant"
+no_matching_windows = "Aucune fenêtre correspondante"
+no_windows = "Aucune fenêtre trouvée"
+window = "Fenêtre"
+
+[controls]
+disk_full_resume = "Espace disque insuffisant pour reprendre. Libérez de l'espace et réessayez, ou appuyez sur Arrêter pour enregistrer."
+low_storage = "Espace de stockage faible. Cap va bientôt s'arrêter pour préserver votre enregistrement."
+
+[controls.confirm]
+delete = "Supprimer"
+delete_message = "Voulez-vous vraiment supprimer l'enregistrement ?"
+delete_title = "Confirmer la suppression"
+restart = "Recommencer"
+restart_message = "Voulez-vous vraiment recommencer l'enregistrement ? L'enregistrement actuel sera supprimé."
+restart_title = "Confirmer le redémarrage"
+
+[controls.pause]
+pause = "Mettre en pause"
+pausing = "Mise en pause…"
+resume = "Reprendre l'enregistrement"
+resuming = "Reprise de l'enregistrement…"
+unconfirmed = "L'état de la capture n'est pas confirmé. Utilisez Arrêter."
+
+[controls.stop]
+error = "Erreur"
+paused = "En pause"
+pausing = "Pause…"
+resuming = "Reprise…"
+saving = "Arrêt…"
+starting = "Début…"
+
+[camera]
+waiting_title = "En attente de l'accès à la caméra"
+
+[camera.effects]
+blur_message = "Votre caméra n'est pas floutée."
+blur_title = "Flou d'arrière-plan indisponible"
+both_message = "Votre caméra n'est ni floutée ni en miroir."
+both_title = "Effets de caméra indisponibles"
+mirror_message = "L'aperçu de votre caméra n'est pas en miroir."
+mirror_title = "Miroir indisponible"
+
+[camera.issue]
+access_message = "Cliquez pour autoriser Cap à utiliser votre caméra dans Réglages Système."
+access_title = "Accès à la caméra requis"
+generic = "La caméra sélectionnée n'a pas pu démarrer. Choisissez une autre caméra ou reconnectez celle-ci."
+invalid_format = "Cette caméra n'a signalé aucun format de capture utilisable."
+not_found = "Cette caméra n'est plus disponible. Vérifiez qu'elle est connectée et autorisée dans les autorisations du système."
+start_failed = "Le système n'a pas pu démarrer cette caméra. Elle est peut-être indisponible ou utilisée par une autre app."
+timeout = "Aucune image n'a été reçue de cette caméra. Elle est peut-être fermée, déconnectée, masquée ou utilisée par une autre app."
+unavailable_title = "Caméra indisponible"
+
+[onboarding.customize]
+footer = "Vous pouvez modifier tout cela à tout moment dans les paramètres"
+subtitle = "Personnalisez tout, des raccourcis clavier au stockage. Cap s'adapte à votre façon de travailler."
+title = "Faites de Cap le vôtre"
+
+[onboarding.customize.domain]
+description = "Utilisez votre propre domaine pour les liens de partage au lieu de cap.so"
+title = "Domaine personnalisé"
+
+[onboarding.customize.preferences]
+description = "FPS, qualité, compte à rebours, effets de curseur, etc."
+title = "Préférences d'enregistrement"
+
+[onboarding.customize.s3]
+description = "Connectez votre propre bucket compatible S3 pour garder le contrôle total de vos enregistrements"
+title = "Stockage S3 personnalisé"
+
+[onboarding.customize.shortcuts]
+description = "Raccourcis globaux pour enregistrer, faire des captures et changer de mode"
+title = "Raccourcis clavier"
+
+[onboarding.demo]
+background = "ARRIÈRE-PLAN"
+copied = "Copié !"
+copied_to_clipboard = "Copié dans le presse-papiers"
+copy = "Copier"
+editor = "Éditeur Cap"
+export = "Exporter"
+export_complete = "Exportation terminée !"
+exporting = "Exportation..."
+link_ready = "Lien prêt à partager !"
+save = "Enregistrer"
+start_recording = "Lancer l'enregistrement"
+stopped = "Arrêté"
+style = "STYLE"
+
+[onboarding.demo.steps]
+beautify = "Embellir"
+edit = "Monter"
+record = "Enregistrer"
+select_area = "Choisir une zone"
+share_link = "Partager le lien"
+stop = "Arrêter"
+
+[onboarding.error]
+save_progress = "Impossible d'enregistrer votre progression. Veuillez réessayer."
+save_sound = "Impossible d'enregistrer la préférence de son."
+
+[onboarding.faq]
+pricing = "Voir les forfaits"
+pricing_link = "Voir les forfaits ↗"
+subtitle = "Tout ce qu'il faut savoir pour bien démarrer."
+title = "Questions fréquentes"
+
+[onboarding.faq.free]
+answer = "Cap est gratuit pour un usage personnel. Pour les équipes et un usage commercial, consultez nos forfaits."
+question = "Cap est-il gratuit ?"
+
+[onboarding.faq.instant_vs_studio]
+answer = "Le mode Instant met en ligne pendant l'enregistrement : arrêtez et votre lien de partage est prêt immédiatement. Le mode Studio enregistre localement en pleine qualité pour que vous puissiez ajouter arrière-plans, effets et plus encore avant de partager."
+question = "Quelle est la différence entre Instant et Studio ?"
+
+[onboarding.faq.sharing]
+answer = "En mode Instant, vous obtenez automatiquement un lien de partage à l'arrêt de l'enregistrement. En mode Studio, exportez votre vidéo montée puis partagez-la via le cloud de Cap ou enregistrez-la localement."
+question = "Comment fonctionne le partage ?"
+
+[onboarding.faq.shortcuts]
+answer = "Rendez-vous dans Paramètres → Raccourcis à tout moment pour personnaliser tous vos raccourcis clavier."
+question = "Puis-je modifier mes raccourcis plus tard ?"
+
+[onboarding.faq.storage]
+answer = "Tous les enregistrements sont stockés localement sur votre ordinateur. En mode Instant, ils sont aussi mis en ligne sur le cloud de Cap pour faciliter le partage. Vous pouvez gérer le stockage dans les paramètres."
+question = "Où sont stockés mes enregistrements ?"
+
+[onboarding.modes.instant]
+description = "Votre enregistrement est mis en ligne pendant la capture. Arrêtez et obtenez aussitôt un lien de partage, sans attendre."
+feature_1 = "Lien de partage instantané"
+feature_2 = "Mise en ligne en arrière-plan"
+feature_3 = "Transcription et résumé par IA"
+feature_4 = "Lecture dans le navigateur"
+tagline = "Enregistrez et partagez en quelques secondes"
+title = "Mode Instant"
+
+[onboarding.modes.screenshot]
+description = "Prenez des captures d'écran avec un seul raccourci, ajoutez des annotations et de beaux arrière-plans, puis partagez ou copiez instantanément."
+feature_1 = "Capture par raccourci"
+feature_2 = "Outils d'annotation et de dessin"
+feature_3 = "De beaux arrière-plans"
+feature_4 = "Copier, enregistrer ou partager"
+tagline = "Capturez et embellissez en un instant"
+title = "Mode Capture d'écran"
+
+[onboarding.modes.studio]
+description = "Enregistrez localement en pleine qualité, puis utilisez l'éditeur intégré pour ajouter arrière-plans, marges, effets de curseur et plus encore."
+feature_1 = "Enregistrement local en pleine qualité"
+feature_2 = "Éditeur et effets intégrés"
+feature_3 = "Arrière-plans et marges personnalisés"
+feature_4 = "Exportez ou partagez quand c'est prêt"
+tagline = "Outils de montage professionnels"
+title = "Mode Studio"
+
+[onboarding.nav]
+back = "←  Retour"
+continue_to_cap = "Continuer vers Cap"
+keyboard_hint = "Appuyez sur Entrée ↵ ou utilisez les flèches ← →"
+next = "Continuer"
+permissions_needed = "Accordez les autorisations requises pour continuer"
+relaunch = "Relancer Cap"
+skip = "Passer la visite"
+start = "Commencer à utiliser Cap"
+
+[onboarding.overview]
+subtitle = "Que vous ayez besoin de rapidité, de qualité studio ou d'une capture rapide, Cap a un mode pour cela."
+title = "Une app, tous les usages"
+
+[onboarding.toggle]
+subtitle = "Passez d'un mode à l'autre en un clic depuis la fenêtre principale de Cap."
+title = "Changez de mode à tout moment"
+
+[onboarding.welcome]
+click_or_press = "Cliquez ici ou appuyez sur"
+get_started = "Commencer"
+space_key = "Espace"
+tagline = "L'app open source de partage d'écran pour tout le monde."

@@ -297,8 +297,7 @@ async fn load_audio_segments(
                         .as_ref()
                         .map(|audio| project.recording_meta.path(&audio.path)),
                     segment
-                        .system_audio
-                        .as_ref()
+                        .usable_system_audio()
                         .map(|audio| project.recording_meta.path(&audio.path)),
                 )
             })
