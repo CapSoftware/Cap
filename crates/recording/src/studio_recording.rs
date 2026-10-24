@@ -145,7 +145,9 @@ fn persist_segment_input_events(
             moves: response.moves,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|events| std::fs::write(path, events).map_err(anyhow::Error::from))
+        .and_then(|events| {
+            crate::cursor::write_atomically(path, &[events.as_bytes()]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save cursor events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -156,8 +158,11 @@ fn persist_segment_input_events(
         let result = KeyboardEvents {
             presses: response.keyboard_presses,
         }
-        .write_to_file(path)
+        .to_bytes()
         .map_err(anyhow::Error::msg)
+        .and_then(|bytes| {
+            crate::cursor::write_atomically(path, &[&bytes]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save keyboard events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
