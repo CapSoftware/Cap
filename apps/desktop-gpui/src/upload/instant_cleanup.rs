@@ -11,9 +11,12 @@ const RETRY_MAX_SECS: i64 = 6 * 60 * 60;
 const INTERRUPTED_GRACE_SECS: i64 = 30 * 60;
 const SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const MEDIA_SCAN_DEPTH: usize = 3;
+const CRASHED_ADOPTION_AGE_SECS: i64 = 10 * 60;
+const CRASHED_ERROR: &str = "Cap closed before this recording captured anything.";
 
 static JOURNAL_LOCK: Mutex<()> = Mutex::new(());
 static SESSION: OnceLock<String> = OnceLock::new();
+static LAUNCHED_AT: OnceLock<i64> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -143,6 +146,10 @@ fn now() -> i64 {
 
 fn session_id() -> &'static str {
     SESSION.get_or_init(crate::store::new_uuid_v4)
+}
+
+fn launched_at() -> i64 {
+    *LAUNCHED_AT.get_or_init(now)
 }
 
 fn journal_path() -> PathBuf {
@@ -428,7 +435,8 @@ fn meta_claims(meta: &RecordingMeta, video_id: &str) -> bool {
 
 /// True when the folder holds recorded media, or when part of it cannot be
 /// read: media that cannot be checked counts as present. Only a missing folder
-/// counts as empty.
+/// counts as empty. A segment still named `.m4s.tmp` counts too, since a crash
+/// can leave a complete fragment under that name and recovery can rescue it.
 fn has_recorded_media(directory: &Path, depth: usize) -> bool {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -453,7 +461,9 @@ fn has_recorded_media(directory: &Path, depth: usize) -> bool {
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        name.ends_with(".m4s") || (name.ends_with(".mp4") && !name.starts_with("init"))
+        let segment =
+            name.ends_with(".m4s") || name.ends_with(".m4s.tmp") || name.ends_with(".m4s.unsealed");
+        segment || (name.ends_with(".mp4") && !name.starts_with("init"))
     })
 }
 
@@ -522,10 +532,133 @@ fn locally_protected(
     false
 }
 
+/// An Instant recording that crashed after capture began but before it saved
+/// any media leaves a server video nothing can fill: the journal stops
+/// tracking a recording once it starts, and there is nothing to recover. This
+/// journals such a recording as interrupted so the sweep deletes that video,
+/// but only when it is not live anywhere (its upload lock is free), its upload
+/// state was saved before this launch and over ten minutes ago, it is still in
+/// progress, and its folder holds no media. The sweep's own checks then still
+/// apply before anything is deleted.
+fn adopt_crashed_at(path: &Path, recording_dirs: &[PathBuf], launched_at: i64, now: i64) -> usize {
+    let mut found = Vec::new();
+    for directory in recording_dirs {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Some(crashed) = crashed_without_media(&entry.path(), launched_at, now) {
+                found.push(crashed);
+            }
+        }
+    }
+    if found.is_empty() {
+        return 0;
+    }
+    let mut adopted = 0;
+    if let Err(error) = update_journal(path, |entries| {
+        for crashed in found {
+            if entries
+                .iter()
+                .all(|entry| entry.video_id != crashed.video_id)
+            {
+                entries.push(crashed);
+                adopted += 1;
+            }
+        }
+    }) {
+        tracing::warn!(%error, "Instant cleanup could not record crashed recordings");
+        return 0;
+    }
+    adopted
+}
+
+fn crashed_without_media(project: &Path, launched_at: i64, now: i64) -> Option<Entry> {
+    let state = queue::read_state(project).ok().flatten()?;
+    if !matches!(
+        state.phase,
+        queue::UploadPhase::Recording
+            | queue::UploadPhase::Retrying
+            | queue::UploadPhase::Failed
+            | queue::UploadPhase::NeedsAuthentication
+    ) {
+        return None;
+    }
+    let owner_id = state.owner_id()?.to_string();
+    let saved = std::fs::symlink_metadata(project.join(queue::STATE_FILE))
+        .and_then(|metadata| metadata.modified())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    if saved >= launched_at || now.saturating_sub(saved) < CRASHED_ADOPTION_AGE_SECS {
+        return None;
+    }
+    let meta = RecordingMeta::load_for_project(project).ok()?;
+    if !matches!(
+        meta.inner,
+        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. })
+    ) || !meta_claims(&meta, state.video_id())
+    {
+        return None;
+    }
+    let _ownership = cap_recording::upload_resume::UploadLock::acquire(project).ok()?;
+    if has_recorded_media(&project.join("content"), MEDIA_SCAN_DEPTH) {
+        return None;
+    }
+    Some(Entry {
+        video_id: state.video_id().to_string(),
+        server_url: state.server_url().to_string(),
+        owner_id,
+        session: session_id().to_string(),
+        stage: Stage::Abandoned,
+        reason: Some(CleanupReason::Interrupted),
+        cause: None,
+        created_at: now,
+        attempts: 0,
+        next_attempt_at: now,
+        project_dir: Some(project.to_path_buf()),
+    })
+}
+
+/// After the sweep deletes the server video of an interrupted recording,
+/// marks the local copy failed so the library stops showing it in progress.
+/// Only a recording that still claims the video, is still in progress and
+/// still holds no media is changed, and nothing is deleted.
+fn mark_crashed_recording_failed(project: &Path, video_id: &str) {
+    let Ok(_ownership) = cap_recording::upload_resume::UploadLock::acquire(project) else {
+        return;
+    };
+    let Ok(mut meta) = RecordingMeta::load_for_project(project) else {
+        return;
+    };
+    if !matches!(
+        meta.inner,
+        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. })
+    ) || !meta_claims(&meta, video_id)
+        || has_recorded_media(&project.join("content"), MEDIA_SCAN_DEPTH)
+    {
+        return;
+    }
+    meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+        error: CRASHED_ERROR.to_string(),
+    });
+    if let Err(error) = meta.save_for_project() {
+        tracing::warn!(%error, video_id, "Instant cleanup could not mark a crashed recording failed");
+        return;
+    }
+    if let Err(error) = queue::record_cancelled(project) {
+        tracing::warn!(%error, video_id, "Instant cleanup could not close a crashed upload");
+    }
+}
+
 trait SweepBackend {
     fn account_ready(&self, entry: &Entry) -> bool;
     fn protected(&self, entry: &Entry) -> impl Future<Output = bool> + Send;
     fn delete(&self, entry: &Entry) -> impl Future<Output = Result<(), String>> + Send;
+    fn deleted(&self, _entry: &Entry) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -571,6 +704,7 @@ async fn sweep(path: &Path, session: &str, now: i64, backend: &impl SweepBackend
         }
         match backend.delete(&entry).await {
             Ok(()) => {
+                backend.deleted(&entry).await;
                 summary.deleted += 1;
                 remove.push(entry.video_id);
             }
@@ -633,10 +767,39 @@ impl SweepBackend for LiveSweep {
             ))
             .await
     }
+
+    async fn deleted(&self, entry: &Entry) {
+        if entry.effective_reason() != CleanupReason::Interrupted {
+            return;
+        }
+        let Some(project) = entry.project_dir.clone() else {
+            return;
+        };
+        let video_id = entry.video_id.clone();
+        let _ =
+            tokio::task::spawn_blocking(move || mark_crashed_recording_failed(&project, &video_id))
+                .await;
+    }
 }
 
 async fn run() {
     loop {
+        let adopted = tokio::task::spawn_blocking(|| {
+            adopt_crashed_at(
+                &journal_path(),
+                &crate::library::known_recordings_dirs(),
+                launched_at(),
+                now(),
+            )
+        })
+        .await
+        .unwrap_or(0);
+        if adopted > 0 {
+            tracing::info!(
+                adopted,
+                "Instant cleanup found recordings that crashed before capturing"
+            );
+        }
         let summary = sweep(&journal_path(), session_id(), now(), &LiveSweep).await;
         if summary != SweepSummary::default() {
             tracing::info!(?summary, "Instant cleanup sweep finished");
@@ -650,6 +813,7 @@ pub(crate) fn init(cx: &mut gpui::App) {
         return;
     }
     session_id();
+    launched_at();
     gpui_tokio::Tokio::spawn(cx, run()).detach();
 }
 
@@ -1209,6 +1373,229 @@ mod tests {
         }
         assert!(protected);
         assert!(!normal);
+    }
+
+    /// A project left the way a crash during capture leaves it: metadata in
+    /// progress, an upload state saved `saved_secs_ago`, and no media.
+    fn crashed_project(
+        recordings: &Path,
+        name: &str,
+        phase: queue::UploadPhase,
+        saved_secs_ago: u64,
+    ) -> PathBuf {
+        let project = write_project(recordings, name, "video", in_progress());
+        queue::record_capture(
+            &project,
+            &VideoUploadInfo {
+                id: "video".into(),
+                link: "https://cap.test/s/video".into(),
+                config: S3UploadMeta { id: "video".into() },
+            },
+            true,
+            true,
+        )
+        .unwrap();
+        let path = project.join(queue::STATE_FILE);
+        let mut state: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        state["owner_id"] = serde_json::json!("owner");
+        state["server_url"] = serde_json::json!("https://cap.test");
+        state["phase"] = serde_json::to_value(phase).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(saved_secs_ago))
+            .unwrap();
+        project
+    }
+
+    #[test]
+    fn a_recording_that_crashed_before_capturing_is_adopted_with_its_own_identity() {
+        let fixture = Fixture::new();
+        let recordings = fixture.recordings();
+        let project = crashed_project(
+            &recordings,
+            "crashed.cap",
+            queue::UploadPhase::Recording,
+            3600,
+        );
+        let now = now();
+        let dirs = std::slice::from_ref(&recordings);
+        assert_eq!(adopt_crashed_at(&fixture.journal(), dirs, now, now), 1);
+        let entries = fixture.entries();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.video_id, "video");
+        assert_eq!(entry.server_url, "https://cap.test");
+        assert_eq!(entry.owner_id, "owner");
+        assert_eq!(entry.stage, Stage::Abandoned);
+        assert_eq!(entry.reason, Some(CleanupReason::Interrupted));
+        assert_eq!(entry.project_dir.as_deref(), Some(project.as_path()));
+        assert!(entry.due("another-session", now));
+        assert!(!locally_protected(dirs, "video", true, Some(&project)));
+        assert_eq!(adopt_crashed_at(&fixture.journal(), dirs, now, now), 0);
+        assert_eq!(fixture.entries().len(), 1);
+    }
+
+    #[test]
+    fn a_crashed_recording_is_left_alone_unless_it_is_certainly_abandoned() {
+        use queue::UploadPhase;
+        let now = now();
+        type Prepare = fn(&Path) -> Option<cap_recording::upload_resume::UploadLock>;
+        let cases: Vec<(&str, UploadPhase, u64, i64, Prepare)> = vec![
+            ("saved recently", UploadPhase::Recording, 300, now, |_| None),
+            (
+                "saved after this launch",
+                UploadPhase::Recording,
+                3600,
+                now - 7200,
+                |_| None,
+            ),
+            (
+                "live elsewhere",
+                UploadPhase::Recording,
+                3600,
+                now,
+                |project| Some(cap_recording::upload_resume::UploadLock::acquire(project).unwrap()),
+            ),
+            ("has media", UploadPhase::Recording, 3600, now, |project| {
+                std::fs::write(project.join("content/display/segment_001.m4s"), b"media").unwrap();
+                None
+            }),
+            (
+                "has a pending segment",
+                UploadPhase::Recording,
+                3600,
+                now,
+                |project| {
+                    std::fs::write(
+                        project.join("content/display/segment_001.m4s.tmp"),
+                        b"media",
+                    )
+                    .unwrap();
+                    None
+                },
+            ),
+            ("finished", UploadPhase::Recording, 3600, now, |project| {
+                let mut meta = RecordingMeta::load_for_project(project).unwrap();
+                meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+                    fps: 30,
+                    sample_rate: None,
+                });
+                meta.save_for_project().unwrap();
+                None
+            }),
+            (
+                "another video",
+                UploadPhase::Recording,
+                3600,
+                now,
+                |project| {
+                    write_project(
+                        project.parent().unwrap(),
+                        "case.cap",
+                        "other",
+                        in_progress(),
+                    );
+                    None
+                },
+            ),
+            ("no owner", UploadPhase::Recording, 3600, now, |project| {
+                let path = project.join(queue::STATE_FILE);
+                let mut state: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                state["owner_id"] = Value::Null;
+                std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+                    .unwrap();
+                None
+            }),
+            ("uploading", UploadPhase::Pending, 3600, now, |_| None),
+            ("verified", UploadPhase::Verified, 3600, now, |_| None),
+            ("cancelled", UploadPhase::Cancelled, 3600, now, |_| None),
+        ];
+        for (case, phase, saved_secs_ago, launched, prepare) in cases {
+            let fixture = Fixture::new();
+            let recordings = fixture.recordings();
+            let project = crashed_project(&recordings, "case.cap", phase, saved_secs_ago);
+            let _held = prepare(&project);
+            assert_eq!(
+                adopt_crashed_at(
+                    &fixture.journal(),
+                    std::slice::from_ref(&recordings),
+                    launched,
+                    now
+                ),
+                0,
+                "{case}"
+            );
+            assert!(fixture.entries().is_empty(), "{case}");
+        }
+    }
+
+    #[test]
+    fn a_crashed_recording_is_marked_failed_once_its_video_is_deleted() {
+        let fixture = Fixture::new();
+        let recordings = fixture.recordings();
+        let project = crashed_project(
+            &recordings,
+            "crashed.cap",
+            queue::UploadPhase::Recording,
+            3600,
+        );
+        mark_crashed_recording_failed(&project, "video");
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        assert!(matches!(
+            meta.inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Failed { ref error }) if error == CRASHED_ERROR
+        ));
+        assert_eq!(
+            queue::read_state(&project).unwrap().unwrap().phase,
+            queue::UploadPhase::Cancelled
+        );
+
+        for (case, prepare) in [
+            (
+                "has media",
+                (|project: &Path| {
+                    std::fs::write(project.join("content/display/segment_001.m4s"), b"media")
+                        .unwrap()
+                }) as fn(&Path),
+            ),
+            ("has a pending segment", |project: &Path| {
+                std::fs::write(
+                    project.join("content/display/segment_001.m4s.tmp"),
+                    b"media",
+                )
+                .unwrap()
+            }),
+            ("another video", |project: &Path| {
+                let name = project.file_name().unwrap().to_str().unwrap();
+                write_project(project.parent().unwrap(), name, "other", in_progress());
+            }),
+        ] {
+            let name = format!("{}.cap", case.replace(' ', "-"));
+            let project = crashed_project(&recordings, &name, queue::UploadPhase::Recording, 3600);
+            prepare(&project);
+            mark_crashed_recording_failed(&project, "video");
+            assert!(
+                matches!(
+                    RecordingMeta::load_for_project(&project).unwrap().inner,
+                    RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. })
+                ),
+                "{case}"
+            );
+            assert_eq!(
+                queue::read_state(&project).unwrap().unwrap().phase,
+                queue::UploadPhase::Recording,
+                "{case}"
+            );
+        }
     }
 
     #[test]
