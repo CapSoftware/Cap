@@ -3422,6 +3422,10 @@ async fn start_recording_prepared(
                         cap_recording::PipelineHealthEvent::CaptureTargetLost { target } => {
                             Some(format!("Capture target lost: {target}"))
                         }
+                        cap_recording::PipelineHealthEvent::MicrophoneDigitalSilence => Some(
+                            "Microphone is recording silence. Another app, like a call, may be using it."
+                                .to_string(),
+                        ),
                         cap_recording::PipelineHealthEvent::SourceRestarted => None,
                     };
 

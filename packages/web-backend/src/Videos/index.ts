@@ -241,14 +241,36 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				if (videoIds.length === 0)
 					return [] as Array<Exit.Exit<{ count: number }, unknown>>;
 
+				const rows = yield* db.use((database) =>
+					database
+						.select({
+							id: Db.videos.id,
+							orgId: Db.videos.orgId,
+							ownerId: Db.videos.ownerId,
+							public: Db.videos.public,
+							password: Db.videos.password,
+						})
+						.from(Db.videos)
+						.where(Dz.inArray(Db.videos.id, [...new Set(videoIds)])),
+				);
+				const videosById = new Map(rows.map((video) => [video.id, video]));
 				const videoExits = yield* Effect.forEach(
 					videoIds,
-					(videoId) => getByIdForViewing(videoId).pipe(Effect.exit),
+					(videoId) => {
+						const video = videosById.get(videoId);
+						if (!video)
+							return Effect.succeed(
+								Exit.succeed(Option.none<(typeof rows)[number]>()),
+							);
+						return policy
+							.canViewLoaded(video, Option.fromNullable(video.password))
+							.pipe(Effect.as(Option.some(video)), Effect.exit);
+					},
 					{ concurrency: 10 },
 				);
 				const analyticsVideos = videoExits.flatMap((exit) => {
 					if (!Exit.isSuccess(exit) || Option.isNone(exit.value)) return [];
-					const [video] = exit.value.value;
+					const video = exit.value.value;
 					return [{ id: video.id, orgId: video.orgId }];
 				});
 				const countsByPathname = yield* getAnalyticsCounts(analyticsVideos);

@@ -68,7 +68,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - TypeScript / JS / JSON / CSS: **tab indent** and **double-quoted** strings, enforced by Biome (see `biome.json`). Do not configure per-file overrides.
 - Rust: `rustfmt` default style + the denied clippy lints in the Pre-Generation Invariants above.
 - Naming: files kebab‑case (`user-menu.tsx`); React/Solid components PascalCase; hooks `useX`; Rust modules snake_case; crates kebab‑case.
-- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Docker for MySQL/MinIO.
+- Runtime: Node 24, Bun 1.4.4, Rust 1.88+, Docker for MySQL/MinIO.
 
 (See **Pre-Generation Invariants** at the top of this file for the comments policy and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
 

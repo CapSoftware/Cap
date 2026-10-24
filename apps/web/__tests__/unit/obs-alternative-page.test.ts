@@ -65,9 +65,10 @@ describe("ObsAlternativePage component content", () => {
 		expect(componentSource).toContain("migrationGuide");
 	});
 
-	it("mentions open source and MIT license", () => {
+	it("mentions AGPLv3 and specified MIT crates", () => {
 		expect(componentSource.toLowerCase()).toContain("open source");
-		expect(componentSource.toLowerCase()).toContain("mit");
+		expect(componentSource).toContain("AGPLv3");
+		expect(componentSource).toContain("MIT");
 	});
 
 	it("mentions instant sharing capability", () => {
@@ -109,7 +110,8 @@ describe("ObsAlternativePage FAQ schema", () => {
 		},
 		{
 			question: "Is Cap open source like OBS?",
-			answer: "Yes. Cap is fully open source and MIT-licensed on GitHub.",
+			answer:
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. The source is available on GitHub.",
 		},
 		{
 			question: "Can Cap do live streaming like OBS?",

@@ -59,6 +59,10 @@ import {
 } from "@/lib/account-deletion-request";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+} from "@/lib/email-code-rate-limit";
+import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
 } from "@/lib/mobile-request-origin";
@@ -472,10 +476,15 @@ const createMobileApiKey = Effect.fn("Mobile.createMobileApiKey")(function* (
 
 const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
+	headers: Headers,
 ) {
 	const email = normalizeEmail(rawEmail);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
+
+	if (yield* Effect.promise(() => isEmailCodeSendLimited(email, headers))) {
+		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	}
 
 	const code = crypto.randomInt(100000, 1000000).toString();
 	const token = hashEmailCode(code);
@@ -513,10 +522,13 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	return { success: true as const };
 });
 
-const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
-	email: rawEmail,
-	code: rawCode,
-}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"]) {
+const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
+	{
+		email: rawEmail,
+		code: rawCode,
+	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
+	headers: Headers,
+) {
 	const email = normalizeEmail(rawEmail);
 	const code = rawCode.trim();
 
@@ -526,6 +538,10 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
+
+	if (yield* Effect.promise(() => isEmailCodeVerifyLimited(email, headers))) {
+		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	}
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
@@ -539,32 +555,21 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 		if (!verificationToken) return "missing" as const;
 
-		if (verificationToken.expires.valueOf() < Date.now()) {
-			await db
-				.delete(Db.verificationTokens)
-				.where(eq(Db.verificationTokens.identifier, identifier));
-			return "expired" as const;
-		}
-
-		if (verificationToken.token !== token) {
-			await db
-				.delete(Db.verificationTokens)
-				.where(eq(Db.verificationTokens.identifier, identifier));
-			return "invalid" as const;
-		}
-
-		const result = await db
+		const claim = await db
 			.delete(Db.verificationTokens)
 			.where(
 				and(
-					eq(Db.verificationTokens.identifier, identifier),
-					eq(Db.verificationTokens.token, token),
+					eq(Db.verificationTokens.identifier, verificationToken.identifier),
+					eq(Db.verificationTokens.token, verificationToken.token),
 				),
 			);
 
-		return getAffectedRows(result) === 1
-			? ("verified" as const)
-			: ("used" as const);
+		if (getAffectedRows(claim) !== 1) return "used" as const;
+		if (verificationToken.expires.valueOf() < Date.now()) {
+			return "expired" as const;
+		}
+		if (verificationToken.token !== token) return "invalid" as const;
+		return "verified" as const;
 	});
 
 	if (verificationStatus !== "verified") {
@@ -2829,11 +2834,15 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("requestEmailSession", ({ payload }) =>
-						withMappedErrors(requestEmailSession(payload.email)),
+					.handle("requestEmailSession", ({ payload, request }) =>
+						withMappedErrors(
+							requestEmailSession(payload.email, toHeaders(request.headers)),
+						),
 					)
-					.handle("verifyEmailSession", ({ payload }) =>
-						withMappedErrors(verifyEmailSession(payload)),
+					.handle("verifyEmailSession", ({ payload, request }) =>
+						withMappedErrors(
+							verifyEmailSession(payload, toHeaders(request.headers)),
+						),
 					)
 					.handle("revokeSession", ({ headers }) =>
 						withMappedErrors(

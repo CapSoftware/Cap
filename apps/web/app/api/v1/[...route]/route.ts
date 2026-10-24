@@ -126,8 +126,14 @@ import {
 } from "@/lib/permissions/roles";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import {
+	blockedS3EndpointMessage,
+	isDisallowedS3Endpoint,
+	publicOnlyS3Agents,
+} from "@/lib/s3-endpoint-policy";
 import { transcribeVideo } from "@/lib/transcribe";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { isVideoStorageKey } from "@/lib/video-storage-key";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
 	calculateProSeats,
@@ -1335,6 +1341,9 @@ const resolveAgentS3Config = Effect.fn("Agent.resolveS3Config")(function* (
 		} catch {
 			return yield* badRequest(requestId, "S3 endpoint is invalid");
 		}
+		if (yield* Effect.promise(() => isDisallowedS3Endpoint(endpoint))) {
+			return yield* badRequest(requestId, blockedS3EndpointMessage);
+		}
 	}
 	let accessKeyId = payload.accessKeyId.trim();
 	let secretAccessKey = payload.secretAccessKey.trim();
@@ -1411,6 +1420,7 @@ const testAgentS3Config = Effect.fn("Agent.testS3Config")(function* (
 						accessKeyId: config.accessKeyId,
 						secretAccessKey: config.secretAccessKey,
 					},
+					requestHandler: publicOnlyS3Agents(),
 				});
 				await client.send(
 					new HeadBucketCommand({ Bucket: config.bucketName }),
@@ -7038,6 +7048,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"The upload completion state is unavailable",
 							);
 						}
+						if (
+							!isVideoStorageKey(
+								{ id: path.id, ownerId: principal.id },
+								acceptedRawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						if (payload.rawFileKey !== acceptedRawFileKey) {
 							yield* deleteStoredKeyIfPresent(payload.rawFileKey);
 						}
@@ -7094,6 +7115,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (
+							!isVideoStorageKey(
+								{ id: state.id, ownerId: state.ownerId },
+								state.rawFileKey,
+							)
+						) {
+							return yield* badRequest(
+								requestId,
+								"Upload completion is invalid",
+							);
+						}
 						const processing = yield* Effect.tryPromise(() =>
 							startVideoProcessingWorkflow({
 								videoId: state.id,

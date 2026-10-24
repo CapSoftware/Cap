@@ -14,6 +14,7 @@ import {
 import type { Organisation, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 interface ShareCapParams {
 	capId: Video.VideoId;
@@ -69,6 +70,21 @@ export async function shareCap({
 				),
 			);
 
+		const currentSpaceVideos = await db()
+			.select()
+			.from(spaceVideos)
+			.where(eq(spaceVideos.videoId, capId));
+		const existingSpaceIds = new Set(currentSpaceVideos.map((s) => s.spaceId));
+
+		for (const space of spacesData) {
+			if (space.privacy === "Public" || existingSpaceIds.has(space.id))
+				continue;
+			const access = await getSpaceAccess(user.id, space.id);
+			if (!access || (!access.canManage && !access.spaceRole)) {
+				return { success: false, error: "Unauthorized" };
+			}
+		}
+
 		const organizationIds = directOrgIds;
 
 		const currentSharedOrganizations = await db()
@@ -107,11 +123,6 @@ export async function shareCap({
 
 		const spacesIds = spacesData.map((space) => space.id);
 
-		const currentSpaceVideos = await db()
-			.select()
-			.from(spaceVideos)
-			.where(eq(spaceVideos.videoId, capId));
-
 		const spaceIdsToRemove = currentSpaceVideos
 			.filter((s) => !spacesIds.includes(s.spaceId))
 			.map((s) => s.spaceId);
@@ -126,7 +137,6 @@ export async function shareCap({
 				);
 		}
 
-		const existingSpaceIds = new Set(currentSpaceVideos.map((s) => s.spaceId));
 		const newSpaceEntries = spacesIds
 			.filter((id) => !existingSpaceIds.has(id))
 			.map((spaceId) => ({
