@@ -16,8 +16,9 @@ const MAX_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_LONG_RECORDING_METADATA_BYTES = 1024 * 1024 * 1024;
 // A long budget covers many reads; one allocation for a single header box stays bounded.
 const MAX_SINGLE_METADATA_READ_BYTES = 256 * 1024 * 1024;
-// Sample tables grow with a recording's length; reads stream through a fixed cache.
-const METADATA_BYTES_PER_FILE_BYTE = 1 / 64;
+// Reads stream through a fixed cache and also pull in any fragment that fits in one read, so recordings of
+// tiny frames (a mostly static screen) read close to their whole file; allow twice the file size for re-reads.
+const METADATA_BYTES_PER_FILE_BYTE = 2;
 const MAX_RANGE_BYTES = 1024 * 1024;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_TERMINAL_PACKETS = 1024;

@@ -245,7 +245,13 @@ describe("recoverStalledVideoPipeline", () => {
 				bucketId: null,
 				rawFileKey: "user-1/video-loom/raw.mp4",
 				loomVideoId: "loom-video-1",
-				metadata: { loomImportRun: { runId: "old-run", dispatch: "accepted" } },
+				metadata: {
+					loomImportRun: {
+						runId: "old-run",
+						dispatch: "accepted",
+						importPriority: "bulk",
+					},
+				},
 				processingMessage,
 				updatedAt: staleAt,
 			};
@@ -273,6 +279,7 @@ describe("recoverStalledVideoPipeline", () => {
 					videoId: "video-loom",
 					loomVideoId: "loom-video-1",
 					reuseExistingRawUpload: true,
+					importPriority: "bulk",
 				}),
 			);
 			expect(mockStart).not.toHaveBeenCalled();

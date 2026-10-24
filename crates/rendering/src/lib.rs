@@ -2,8 +2,8 @@ use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
     ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
-    FrameStyle, OverlayTrackKind, ProjectConfiguration, RecordingMeta, SceneMode,
-    StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
+    FrameStyle, OverlayTrackKind, ProjectConfiguration, ProjectStyleCache, RecordingMeta,
+    SceneMode, StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
 };
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
@@ -29,7 +29,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::{borrow::Cow, path::PathBuf, time::Instant};
+use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
 pub mod camera3d;
@@ -2571,6 +2571,7 @@ pub struct RenderVideoConstants {
     pub is_software_adapter: bool,
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
+    project_styles: ProjectStyleCache,
 }
 
 /// Instance, adapter and device the way every renderer creates them. A
@@ -2734,6 +2735,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2764,6 +2766,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -2825,6 +2828,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -4239,7 +4243,9 @@ impl ProjectUniforms {
         let camera_only_padding = project.camera_only_padding_at(timeline_time);
         let base_crop = Self::get_crop(options, project);
         let base_padding = project.background.padding;
-        let styled_project = project.style_at(timeline_time);
+        let styled_project = constants
+            .project_styles
+            .resolve(shared_project, timeline_time);
         let project = styled_project.as_ref();
         let styled_crop = Self::get_crop(options, project);
         let has_layout_override =
@@ -5296,10 +5302,7 @@ impl ProjectUniforms {
             frame_chrome,
             notch,
             display_outer_bounds,
-            project: match styled_project {
-                Cow::Borrowed(_) => Arc::clone(shared_project),
-                Cow::Owned(styled) => Arc::new(styled),
-            },
+            project: styled_project,
             zoom,
             scene,
             split: split_layout,
@@ -6418,6 +6421,7 @@ mod style_image_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -6483,10 +6487,12 @@ mod style_image_tests {
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 3.0, XY::new(160, 90));
         let mut layers = RendererLayers::new(&constants.device, &constants.queue);
         let mut renderer = FrameRenderer::new(&constants);
+        let shared_project = Arc::new(project.clone());
+        let mut previous_styled = None;
         for frame_number in [41, 42, 60, 83, 84] {
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &Arc::new(project.clone()),
+                &shared_project,
                 frame_number,
                 60,
                 XY::new(160, 90),
@@ -6498,6 +6504,10 @@ mod style_image_tests {
             assert_eq!(uniforms.output_size, (160, 90));
             let active = (42..84).contains(&frame_number);
             if active {
+                if let Some(previous) = &previous_styled {
+                    assert!(Arc::ptr_eq(previous, &uniforms.project));
+                }
+                previous_styled = Some(Arc::clone(&uniforms.project));
                 assert!(uniforms.display.target_size[0] < uniforms.display.target_size[1]);
                 let camera = uniforms.camera_only.expect("camera-only layout");
                 assert_eq!(camera.target_bounds, [9.0, 9.0, 151.0, 81.0]);
@@ -6667,6 +6677,7 @@ mod export_order_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -7002,6 +7013,7 @@ mod nv12_flush_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
@@ -8116,7 +8128,7 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
-    fn reset_frame_state(&mut self) {
+    pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();
@@ -10645,27 +10657,43 @@ mod project_uniforms_tests {
     }
 
     #[tokio::test]
-    async fn uniforms_share_the_project_unless_a_style_segment_is_active() {
+    async fn uniforms_share_base_and_styled_project_snapshots() {
         let constants = cursor_test_constants().await;
         let mut project = captioned_project(10);
         project.timeline.as_mut().unwrap().style_segments = serde_json::from_value(
             serde_json::json!([{"start": 1.0, "end": 2.0, "overrides": {"background": {"padding": 30.0}}}]),
         )
         .unwrap();
-        let project = Arc::new(project);
+        let mut project = Arc::new(project);
 
         let before = uniforms_at(&constants, &project, 15);
         let styled = uniforms_at(&constants, &project, 45);
+        let next_styled = uniforms_at(&constants, &project, 46);
         let after = uniforms_at(&constants, &project, 75);
 
         assert!(Arc::ptr_eq(&before.project, &project));
         assert!(Arc::ptr_eq(&after.project, &project));
         assert!(!Arc::ptr_eq(&styled.project, &project));
+        assert!(Arc::ptr_eq(&styled.project, &next_styled.project));
         assert_eq!(styled.project.background.padding, 30.0);
         assert_eq!(
             styled.project.captions.as_ref().unwrap().segments.len(),
             project.captions.as_ref().unwrap().segments.len()
         );
+        Arc::make_mut(&mut project)
+            .timeline
+            .as_mut()
+            .unwrap()
+            .style_segments[0]
+            .overrides
+            .background
+            .as_mut()
+            .unwrap()
+            .padding = 15.0;
+        let edited = uniforms_at(&constants, &project, 45);
+        assert_eq!(edited.project.background.padding, 15.0);
+        assert_eq!(styled.project.background.padding, 30.0);
+        assert!(!Arc::ptr_eq(&edited.project, &styled.project));
     }
 
     #[tokio::test]

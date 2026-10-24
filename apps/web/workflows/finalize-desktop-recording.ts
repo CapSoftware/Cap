@@ -87,8 +87,10 @@ const MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
 // A remux is about as large as its source, so a source that fits in one part is
 // uploaded with one PUT instead of sign-part + PUT + complete round trips.
 const SINGLE_PUT_OUTPUT_MAX_SOURCE_BYTES = MULTIPART_OUTPUT_PART_SIZE_BYTES;
-const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 32;
-const SOURCE_COMMIT_BATCH_DURATION_MS = 15_000;
+const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 128;
+// A page can still run for its 180 s timeout after this budget is spent, so a step stays far inside
+// the function's max duration while a long commit needs a third of the step hops it did at 15 s.
+const SOURCE_COMMIT_BATCH_DURATION_MS = 45_000;
 const TRANSCRIPTION_QUEUE_MAX_ATTEMPTS = 12;
 
 function getErrorMessage(error: unknown) {
@@ -435,18 +437,43 @@ async function buildDesktopSegmentsOutput({
 	const env = serverEnv();
 	const webhookBaseUrl = env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL;
 	const webhookSecret = env.MEDIA_SERVER_WEBHOOK_SECRET;
-	const outputVerificationUrl = await bucket
-		.getInternalSignedObjectUrl(outputKey, {
-			expiresIn: PRESIGNED_EXPIRES_SECONDS,
-		})
-		.pipe(runWorkflowPromise);
-	const outputPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			outputKey,
-			{ ContentType: "video/mp4" },
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
+	// Each Google Drive target is a resumable session costing two Drive round trips, so create them together.
+	const [
+		outputVerificationUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
+	] = await Promise.all([
+		bucket
+			.getInternalSignedObjectUrl(outputKey, {
+				expiresIn: PRESIGNED_EXPIRES_SECONDS,
+			})
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				outputKey,
+				{ ContentType: "video/mp4" },
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				`${candidateDirectory}/screenshot.jpg`,
+				{ ContentType: "image/jpeg" },
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				`${candidateDirectory}/preview.gif`,
+				{
+					ContentType: "image/gif",
+					CacheControl: "public, max-age=31536000, immutable",
+				},
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+	]);
 	let outputUpload: DesktopSegmentsOutputUpload = {
 		type: "put",
 		url: outputPresignedUrl,
@@ -485,23 +512,6 @@ async function buildDesktopSegmentsOutput({
 			webhookSecret,
 		};
 	}
-	const thumbnailPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			`${candidateDirectory}/screenshot.jpg`,
-			{ ContentType: "image/jpeg" },
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
-	const previewGifPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			`${candidateDirectory}/preview.gif`,
-			{
-				ContentType: "image/gif",
-				CacheControl: "public, max-age=31536000, immutable",
-			},
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
 	return {
 		outputKey,
 		outputVerificationUrl,
