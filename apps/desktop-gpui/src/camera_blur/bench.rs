@@ -66,8 +66,6 @@ fn with_bytes<R>(buffer: &cv::PixelBuf, body: impl FnOnce(&mut [u8], usize) -> R
     result
 }
 
-/// `PAN_POSITIONS` crops of every photo, scaled to cover `width`x`height`
-/// with a little slack and converted to the `420v` a webcam delivers.
 fn camera_frames(
     photos: &[image::RgbaImage],
     width: usize,
@@ -201,7 +199,6 @@ fn thread_cpu_ns() -> u64 {
     time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64
 }
 
-/// CPU time per live thread, keyed by thread id, with its name.
 fn threads() -> HashMap<u64, (String, u64)> {
     let mut out = HashMap::new();
     unsafe {
@@ -328,10 +325,10 @@ fn run(
         }
         std::thread::sleep(next_tick.saturating_duration_since(Instant::now()));
         next_tick += interval;
-        let cpu_start = thread_cpu_ns();
         let start = Instant::now();
         let job = converter.convert(frame_at(index), mode);
         let converted = start.elapsed();
+        let cpu_start = thread_cpu_ns();
         let output = worker.process(&runtime, job).unwrap();
         let elapsed = start.elapsed();
         let cpu = thread_cpu_ns() - cpu_start;
@@ -494,7 +491,13 @@ pub(super) fn compare(reference: &[Vec<u8>], candidate: &[Vec<u8>]) -> String {
     let mut alpha_psnr = Vec::new();
     let mut color_psnr = Vec::new();
     let mut max_alpha_error = 0u8;
-    for (reference, candidate) in reference.iter().zip(candidate) {
+    assert_eq!(reference.len(), candidate.len(), "frame count mismatch");
+    for (index, (reference, candidate)) in reference.iter().zip(candidate).enumerate() {
+        assert_eq!(
+            reference.len(),
+            candidate.len(),
+            "frame {index} byte length mismatch"
+        );
         let (mut intersection, mut union) = (0u64, 0u64);
         let (mut alpha_error, mut color_error) = (0f64, 0f64);
         for (a, b) in reference.chunks_exact(4).zip(candidate.chunks_exact(4)) {
