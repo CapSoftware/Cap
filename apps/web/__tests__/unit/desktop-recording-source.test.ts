@@ -1302,6 +1302,36 @@ describe("durable desktop recording source commit", () => {
 			),
 		).toBe(false);
 	});
+	it.each(["s3", "googleDrive"] as const)(
+		"reads each %s checkpoint page back once and reuses it for the rest of the commit",
+		async (provider) => {
+			const storage = storageFixture(provider);
+			seedSegments(
+				storage,
+				Array.from({ length: 150 }, (_, index) => index + 1),
+			);
+			await commitDesktopRecordingSource(recording(), generation);
+			const pageReads = new Map<string, number>();
+			for (const [key] of storage.bucket.getObject.mock.calls)
+				if (key.includes("/pages/"))
+					pageReads.set(key, (pageReads.get(key) ?? 0) + 1);
+			expect(pageReads.size).toBeGreaterThan(1);
+			expect(Math.max(...pageReads.values())).toBe(1);
+		},
+	);
+
+	it("still reads committed pages from storage when building source URLs", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const before = storage.bucket.getObject.mock.calls.length;
+		await buildDesktopRecordingSourceUrls(recording(), source);
+		expect(
+			storage.bucket.getObject.mock.calls
+				.slice(before)
+				.some(([key]) => key.includes("/pages/")),
+		).toBe(true);
+	});
 });
 
 describe("large desktop recording snapshots", () => {

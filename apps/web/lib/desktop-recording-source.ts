@@ -206,6 +206,8 @@ type SourceContext = {
 	run: SourceRun;
 	concurrency: number;
 	pageSize: number;
+	// Only a commit in progress may reuse pages it verified; committed sources must prove their pages still exist.
+	reuseVerifiedPages?: boolean;
 };
 type TreeKind = "plan" | "objects" | "parts";
 
@@ -342,17 +344,41 @@ async function readSourceText(context: SourceContext, key: string) {
 	return result.value;
 }
 
+// Checkpoint pages are addressed by their SHA-256, so a page this process already wrote and read back, or
+// read and verified, can be served from memory: storage could only return these same bytes or fail the hash.
+const VERIFIED_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const verifiedPages = new Map<string, string>();
+let verifiedPageBytes = 0;
+
+function rememberVerifiedPage(key: string, sha256: string, content: string) {
+	const id = `${key}\n${sha256}`;
+	if (verifiedPages.has(id) || content.length > VERIFIED_PAGE_CACHE_MAX_BYTES)
+		return;
+	verifiedPages.set(id, content);
+	verifiedPageBytes += content.length;
+	for (const [oldest, value] of verifiedPages) {
+		if (verifiedPageBytes <= VERIFIED_PAGE_CACHE_MAX_BYTES) break;
+		verifiedPages.delete(oldest);
+		verifiedPageBytes -= value.length;
+	}
+}
+
 async function readReference(
 	context: SourceContext,
 	reference: SourceCommitReference,
 ) {
 	assertContextKey(context, reference.key);
+	const cached = context.reuseVerifiedPages
+		? verifiedPages.get(`${reference.key}\n${reference.sha256}`)
+		: undefined;
+	if (cached !== undefined) return parseSourceJson(cached);
 	const content = await readSourceText(context, reference.key);
 	if (hash(content) !== reference.sha256)
 		throw new DesktopRecordingSourceError(
 			"source-changed",
 			"A recording source checkpoint changed after it was saved",
 		);
+	rememberVerifiedPage(reference.key, reference.sha256, content);
 	return parseSourceJson(content);
 }
 
@@ -367,7 +393,9 @@ async function writeSourceText(
 	);
 	if ((await readSourceText(context, key)) !== content)
 		throw new Error("Durable recording source readback did not match");
-	return { key, sha256: hash(content) };
+	const sha256 = hash(content);
+	rememberVerifiedPage(key, sha256, content);
+	return { key, sha256 };
 }
 
 async function writeReference(context: SourceContext, value: unknown) {
@@ -1486,6 +1514,7 @@ export async function advanceDesktopRecordingSourceCommit(
 				run,
 				prefix: `${sourcePrefix(video)}${parsed.generation}/${parsed.snapshotId}`,
 				...sourceLimits(access),
+				reuseVerifiedPages: true,
 			},
 			parsed,
 			verification,
