@@ -66,7 +66,7 @@ impl Sandbox {
         Self { root }
     }
 
-    fn launch(&self, name: &str, env: &[(&str, &str)]) -> Child {
+    fn launch(&self, name: &str, env: &[(&str, &str)]) -> App {
         let binary = std::env::var("CAP_GPUI_REAL_APP_BIN")
             .expect("set CAP_GPUI_REAL_APP_BIN to the built cap-gpui binary");
         let log = std::fs::File::create(self.root.path().join(format!("{name}.log"))).unwrap();
@@ -84,7 +84,7 @@ impl Sandbox {
         for (key, value) in env {
             command.env(key, value);
         }
-        command.spawn().unwrap()
+        App(Some(command.spawn().unwrap()))
     }
 
     fn log(&self, name: &str) -> String {
@@ -172,10 +172,11 @@ fn media_files(project: &Path) -> usize {
                     if depth > 0 { walk(&path, depth - 1) } else { 0 }
                 } else {
                     let sized = entry.metadata().is_ok_and(|metadata| metadata.len() > 0);
+                    let segment = name.ends_with(".m4s")
+                        || name.ends_with(".m4s.tmp")
+                        || name.ends_with(".m4s.unsealed");
                     usize::from(
-                        sized
-                            && (name.ends_with(".m4s")
-                                || (name.ends_with(".mp4") && !name.starts_with("init"))),
+                        sized && (segment || (name.ends_with(".mp4") && !name.starts_with("init"))),
                     )
                 }
             })
@@ -204,7 +205,7 @@ fn finished_segments(project: &Path) -> usize {
 /// hang can be diagnosed from the artifacts.
 async fn wait_for_app(
     sandbox: &Sandbox,
-    app: &Child,
+    app: &App,
     what: &str,
     timeout: Duration,
     mut done: impl FnMut() -> bool,
@@ -228,9 +229,27 @@ async fn wait_for_app(
     }
 }
 
-fn kill(mut app: Child) {
-    let _ = app.kill();
-    let _ = app.wait();
+/// A launched app, killed when dropped, so a failing test never leaves it
+/// running into the next one.
+struct App(Option<Child>);
+
+impl App {
+    fn id(&self) -> u32 {
+        self.0.as_ref().map_or(0, Child::id)
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn kill(app: App) {
+    drop(app);
 }
 
 /// A normal Instant recording uploads, verifies, and leaves nothing for the
@@ -377,22 +396,44 @@ async fn real_app_recovered_recording_uploads() {
 }
 
 /// Stops the recording while its start is still in flight: the server video
-/// it created is deleted and nothing is left behind.
+/// it created is deleted and nothing is left behind. A stop that lands after
+/// capture began exercises nothing, so the case retries until one lands
+/// during the start, and fails if none does.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_cancelled_start_deletes_its_video() {
     let mock = MockCap::start(Vec::new()).await;
     let sandbox = Sandbox::new(&mock.url, 2);
-    let app = sandbox.launch("cancel", &[("CAP_GPUI_AUTO_RECORD", "instant:2")]);
-    tokio::time::sleep(Duration::from_secs(20)).await;
-    kill(app);
-    let created = mock.created();
-    assert_eq!(created.len(), 1, "{created:?}");
-    if sandbox.log("cancel").contains("recording started") {
-        eprintln!("the stop landed after capture began; nothing to check");
+    for attempt in 0..5 {
+        let name = format!("cancel-{attempt}");
+        let before = mock.created().len();
+        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", "instant:2")]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the server video",
+            Duration::from_secs(60),
+            || mock.created().len() > before,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        kill(app);
+        let video = mock.created()[before].clone();
+        if sandbox.log(&name).contains("recording started") {
+            eprintln!("attempt {attempt}: the stop landed after capture began, retrying");
+            continue;
+        }
+        assert!(mock.deleted().contains(&video), "{video} was not deleted");
+        assert!(sandbox.project_for(&video).is_none());
+        assert!(
+            sandbox
+                .journal()
+                .iter()
+                .all(|entry| entry["video_id"] != video.as_str()),
+            "{:?}",
+            sandbox.journal()
+        );
         return;
     }
-    assert_eq!(mock.deleted(), created);
-    assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
-    assert!(sandbox.project_for(&created[0]).is_none());
+    panic!("no stop landed while the start was in flight");
 }

@@ -435,12 +435,10 @@ impl MockCap {
         self.lock().confirmations.clone()
     }
 
-    /// Video ids the mock created, in order.
     pub(super) fn created(&self) -> Vec<String> {
         self.lock().created.clone()
     }
 
-    /// Video ids the mock was asked to delete, in order.
     pub(super) fn deleted(&self) -> Vec<String> {
         self.lock().deleted.clone()
     }
