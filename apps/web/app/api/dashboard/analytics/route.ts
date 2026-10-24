@@ -3,6 +3,8 @@ import type { NextRequest } from "next/server";
 
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import type { AnalyticsRange } from "@/app/(org)/dashboard/analytics/types";
+import { canViewCapAnalytics } from "@/lib/cap-analytics-access";
+import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 
 const RANGE_VALUES: AnalyticsRange[] = ["24h", "7d", "30d", "lifetime"];
 
@@ -31,6 +33,14 @@ export async function GET(request: NextRequest) {
 		: "7d";
 
 	try {
+		if (spaceId && !(await canViewSpaceAnalytics(user.id, orgId, spaceId))) {
+			return Response.json({ error: "Forbidden" }, { status: 403 });
+		}
+
+		if (capId && !(await canViewCapAnalytics(user.id, orgId, capId))) {
+			return Response.json({ error: "Forbidden" }, { status: 403 });
+		}
+
 		const data = await getOrgAnalyticsData(orgId, range, spaceId, capId);
 		return Response.json({ data });
 	} catch (error) {

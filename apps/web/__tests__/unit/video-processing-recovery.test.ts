@@ -347,37 +347,54 @@ describe("recoverFailedVideoProcessing", () => {
 		expect(result.statuses).toEqual({ "retry-scheduled": 1 });
 	});
 
-	it("restarts a Loom import that exhausted its capacity retries", async () => {
-		mockDb
-			.mockReturnValueOnce(makeSelectChain([]))
-			.mockReturnValueOnce(makeSelectChain([]))
-			.mockReturnValueOnce(
-				makeSelectChain([
-					{
-						...candidate,
-						orgId: "organization-1",
-					},
-				]),
-			)
-			.mockReturnValueOnce(makeSelectChain([{ loomVideoId: "loom-video-1" }]))
-			.mockReturnValueOnce(makeSelectChain([]))
-			.mockReturnValueOnce(makeUpdateChain(1));
-		const { recoverFailedVideoProcessing } = await import(
-			"@/lib/video-processing-recovery"
-		);
+	it.each([
+		{ metadata: undefined, importPriority: undefined },
+		{
+			metadata: {
+				loomImportRun: {
+					runId: "bulk-run",
+					dispatch: "accepted" as const,
+					importPriority: "bulk" as const,
+				},
+			},
+			importPriority: "bulk",
+		},
+	])(
+		"restarts a Loom import that exhausted its capacity retries in its original lane: $importPriority",
+		async ({ metadata, importPriority }) => {
+			mockDb
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(
+					makeSelectChain([
+						{
+							...candidate,
+							orgId: "organization-1",
+							...(metadata ? { metadata } : {}),
+						},
+					]),
+				)
+				.mockReturnValueOnce(makeSelectChain([{ loomVideoId: "loom-video-1" }]))
+				.mockReturnValueOnce(makeSelectChain([]))
+				.mockReturnValueOnce(makeUpdateChain(1));
+			const { recoverFailedVideoProcessing } = await import(
+				"@/lib/video-processing-recovery"
+			);
 
-		const result = await recoverFailedVideoProcessing();
+			const result = await recoverFailedVideoProcessing();
 
-		expect(mockStartLoomImportWorkflow).toHaveBeenCalledWith(
-			expect.objectContaining({
-				videoId: "video-1",
-				loomVideoId: "loom-video-1",
-				rawFileKey: "user-1/video-1/raw.mp4",
-				reuseExistingRawUpload: true,
-			}),
-		);
-		expect(result.statuses).toEqual({ started: 1 });
-	});
+			expect(mockStartLoomImportWorkflow).toHaveBeenCalledWith(
+				expect.objectContaining({
+					videoId: "video-1",
+					loomVideoId: "loom-video-1",
+					rawFileKey: "user-1/video-1/raw.mp4",
+					reuseExistingRawUpload: true,
+					importPriority,
+				}),
+			);
+			expect(result.statuses).toEqual({ started: 1 });
+		},
+	);
 
 	it("keeps a failed Loom workflow start eligible for Loom-specific recovery", async () => {
 		const restore = makeUpdateChain(1);

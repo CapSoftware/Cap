@@ -77,6 +77,7 @@ export interface JobProgress {
 	errorCode?: RecordingErrorCode;
 	metadata?: VideoMetadata;
 	outputUrl?: string;
+	deferredSourceKey?: string;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -137,6 +138,7 @@ export interface Job {
 	errorCode?: RecordingErrorCode;
 	metadata?: VideoMetadata;
 	outputUrl?: string;
+	deferredSourceKey?: string;
 	createdAt: number;
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
@@ -405,6 +407,7 @@ export function updateJob(
 			| "manifestSha256"
 			| "recordingVerification"
 			| "outputUrl"
+			| "deferredSourceKey"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -689,6 +692,7 @@ export function getJobProgress(job: Job): JobProgress {
 		errorCode: job.errorCode,
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
+		deferredSourceKey: job.deferredSourceKey,
 	};
 }
 

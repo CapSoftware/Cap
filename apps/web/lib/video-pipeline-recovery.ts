@@ -204,6 +204,7 @@ async function recoverMediaCandidate(
 				bucketId: candidate.bucketId,
 				loomVideoId: candidate.loomVideoId,
 				reuseExistingRawUpload: true,
+				importPriority: receipt?.importPriority,
 			});
 		} else {
 			await start(processVideoWorkflow, [
@@ -394,7 +395,10 @@ export async function recoverStalledVideoPipeline({
 				gte(videos.createdAt, recentBefore),
 				lte(videos.updatedAt, staleBefore),
 				or(
-					isNull(videos.transcriptionStatus),
+					and(
+						isNull(videos.transcriptionStatus),
+						sql`JSON_EXTRACT(${videos.metadata}, '$.transcribeOnView') IS NULL`,
+					),
 					eq(videos.transcriptionStatus, "PROCESSING"),
 				),
 			),

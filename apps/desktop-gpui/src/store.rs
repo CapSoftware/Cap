@@ -999,6 +999,9 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
     pub theme: AppTheme,
+    /// `uiLanguage`: absent, `"system"`, or a catalog code such as `"fr"`. A
+    /// GPUI-only key; the Tauri app keeps it as an unknown field.
+    pub ui_language: Option<String>,
     pub hide_dock_icon: bool,
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
@@ -1329,6 +1332,7 @@ impl GeneralSettings {
     ) -> Self {
         Self {
             theme: enum_at(general, "theme"),
+            ui_language: opt_string_at(general, crate::i18n::SETTING_KEY),
             hide_dock_icon: bool_at(general, "hideDockIcon", false),
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
@@ -2759,6 +2763,33 @@ mod tests {
         assert!(!settings.studio_sound_by_default);
         // The section it created did not disturb the others.
         assert_eq!(store.read()["auth"]["user_id"], "u_1");
+    }
+
+    #[test]
+    fn ui_language_round_trips_without_touching_other_keys() {
+        let store = TempStore::new(
+            "ui-language",
+            Some(
+                r#"{"general_settings":{"theme":"dark","uiLanguage":"pt-BR","futureSetting":{"keep":[1]}}}"#,
+            ),
+        );
+        assert_eq!(
+            GeneralSettings::load().ui_language.as_deref(),
+            Some("pt-BR")
+        );
+        assert!(super::set_store_setting(
+            GENERAL_SETTINGS,
+            crate::i18n::SETTING_KEY,
+            Value::from("fr")
+        ));
+        let after = store.read();
+        assert_eq!(after["general_settings"]["uiLanguage"], "fr");
+        assert_eq!(after["general_settings"]["theme"], "dark");
+        assert_eq!(
+            after["general_settings"]["futureSetting"],
+            serde_json::json!({ "keep": [1] })
+        );
+        assert_eq!(GeneralSettings::load().ui_language.as_deref(), Some("fr"));
     }
 
     /// A store that does not parse is someone's settings in a state we do not

@@ -311,33 +311,68 @@ async function explainTrackMismatch(
 	}
 }
 
-function describeTrackDifference(
-	source: Awaited<ReturnType<typeof readTrack>>,
-	output: Awaited<ReturnType<typeof readTrack>>,
-): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function configurationDifferences(
+	left: Record<string, unknown>,
+	right: Record<string, unknown>,
+	path = "",
+): string[] {
 	const parts: string[] = [];
-	const left = source.summary.configuration as Record<string, unknown>;
-	const right = output.summary.configuration as Record<string, unknown>;
+	const value = (raw: unknown) => {
+		const text = JSON.stringify(raw) ?? "none";
+		return text.length > 40 ? `${text.slice(0, 37)}...` : text;
+	};
 	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
 		if (JSON.stringify(left[key]) === JSON.stringify(right[key])) continue;
-		const value = (raw: unknown) => {
-			const text = JSON.stringify(raw) ?? "none";
-			return text.length > 40 ? "(differs)" : text;
-		};
-		parts.push(`${key} ${value(left[key])} vs ${value(right[key])}`);
+		const [a, b] = [left[key], right[key]];
+		if (!path && (isRecord(a) || isRecord(b)))
+			parts.push(
+				...configurationDifferences(
+					isRecord(a) ? a : {},
+					isRecord(b) ? b : {},
+					`${key}.`,
+				),
+			);
+		else parts.push(`${path}${key} ${value(a)} vs ${value(b)}`);
 	}
-	if (source.summary.count !== output.summary.count)
-		parts.push(`packets ${source.summary.count} vs ${output.summary.count}`);
-	if (source.summary.startTime !== output.summary.startTime)
-		parts.push(
-			`start ${source.summary.startTime} vs ${output.summary.startTime}`,
-		);
+	return parts;
+}
+
+export function describeTrackDifference(
+	source: Pick<
+		Awaited<ReturnType<typeof readTrack>>,
+		"summary" | "log" | "timeBase"
+	>,
+	output: Pick<
+		Awaited<ReturnType<typeof readTrack>>,
+		"summary" | "log" | "timeBase"
+	>,
+): string {
+	// Short, specific details go first so many changed tags cannot push them past the length cap.
+	const parts: string[] = [];
+	if (source.timeBase !== output.timeBase)
+		parts.push(`time base ${source.timeBase} vs ${output.timeBase}`);
 	if (
 		source.summary.packets !== output.summary.packets &&
 		source.log &&
 		output.log
 	)
 		parts.push(firstPacketDifference(source.log, output.log));
+	if (source.summary.count !== output.summary.count)
+		parts.push(`packets ${source.summary.count} vs ${output.summary.count}`);
+	if (source.summary.startTime !== output.summary.startTime)
+		parts.push(
+			`start ${source.summary.startTime} vs ${output.summary.startTime}`,
+		);
+	parts.push(
+		...configurationDifferences(
+			source.summary.configuration as Record<string, unknown>,
+			output.summary.configuration as Record<string, unknown>,
+		),
+	);
 	return parts.join("; ").slice(0, 400) || "track summaries differ";
 }
 
@@ -389,9 +424,17 @@ async function readTrack(
 		!/^SHA256:[a-f0-9]{64}$/.test(stream.extradata_hash)
 	)
 		throw new Error("Recording codec configuration is incomplete");
-	const { index, time_base: base, start_pts: startPts, ...rest } = stream;
+	const { index, time_base: base, start_pts: startPts, tags, ...rest } = stream;
+	// Remuxing a fragmented source into a regular MP4 drops its track creation_time, which is
+	// container metadata rather than anything in the encoded stream.
+	const { creation_time: _creationTime, ...keptTags } =
+		tags && typeof tags === "object" ? (tags as Record<string, unknown>) : {};
 	const start = time(String(startPts), base);
-	const configuration = { ...rest, start };
+	const configuration = {
+		...rest,
+		...(Object.keys(keptTags).length > 0 ? { tags: keptTags } : {}),
+		start,
+	};
 	const [startNumerator, startDenominator] = start.split("/").map(Number);
 	const startTime = startNumerator / startDenominator;
 	if (!Number.isFinite(startTime))
@@ -522,6 +565,7 @@ async function readTrack(
 			tail,
 		},
 		log,
+		timeBase: base,
 	};
 }
 

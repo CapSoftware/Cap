@@ -5,8 +5,8 @@ import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import type { NextRequest } from "next/server";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import * as EffectRuntime from "@/lib/server";
+import { getVideoViewCount } from "@/lib/video-view-count";
 
 const parseRangeParam = (value: string | null) => {
 	if (!value) return undefined;
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
 
 	try {
 		console.log("videoId", videoId);
-		const result = await getVideoAnalytics(videoId, { rangeDays });
+		const result = await getVideoViewCount(videoId, { rangeDays });
 		console.log("result", result);
 		return Response.json({ count: result.count }, { status: 200 });
 	} catch (error) {
