@@ -553,7 +553,7 @@ index f5b2c1a..96f7826 100644
          self.0.as_ref().lock().event_callback = Some(callback);
      }
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index f8939e9..18c8da8 100644
+index f8939e9..e01aa10 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -30,9 +30,14 @@ use windows::{
@@ -595,42 +595,38 @@ index f8939e9..18c8da8 100644
  
          std::thread::Builder::new()
              .name("VSyncProvider".to_owned())
-@@ -339,17 +347,29 @@ impl WindowsPlatform {
+@@ -339,7 +347,8 @@ impl WindowsPlatform {
                      let Some(all_windows) = all_windows.upgrade() else {
                          break;
                      };
 -                    for hwnd in all_windows.read().iter() {
--                        unsafe {
--                            let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
--                        }
--                    }
-+                    redraw_unpaused_windows(&all_windows.read(), &paused_windows.read());
-                 }
-             })
-             .unwrap();
++                    let paused_windows = paused_windows.read();
++                    for hwnd in unpaused_windows(&all_windows.read(), &paused_windows) {
+                         unsafe {
+                             let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
+                         }
+@@ -350,6 +359,20 @@ impl WindowsPlatform {
      }
  }
  
-+/// Asks every window whose frame requests are running for a frame. Device-lost
-+/// recovery still reaches paused windows: it sends its messages to all of them.
-+fn redraw_unpaused_windows(all_windows: &[SafeHwnd], paused_windows: &[SafeHwnd]) {
-+    for hwnd in all_windows {
-+        if paused_windows
++/// The windows the `VSyncProvider` thread redraws every vblank: those whose
++/// frame requests are running. Device-lost recovery still reaches paused
++/// windows: it sends its messages to all of them.
++fn unpaused_windows<'a>(
++    all_windows: &'a [SafeHwnd],
++    paused_windows: &'a [SafeHwnd],
++) -> impl Iterator<Item = &'a SafeHwnd> {
++    all_windows.iter().filter(|hwnd| {
++        !paused_windows
 +            .iter()
 +            .any(|paused| paused.as_raw() == hwnd.as_raw())
-+        {
-+            continue;
-+        }
-+        unsafe {
-+            let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
-+        }
-+    }
++    })
 +}
 +
  fn translate_accelerator(msg: &MSG) -> Option<()> {
      if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
          return None;
-@@ -526,6 +546,9 @@ impl Platform for WindowsPlatform {
+@@ -526,6 +549,9 @@ impl Platform for WindowsPlatform {
          let window = WindowsWindow::new(handle, options, self.generate_creation_info())?;
          let handle = window.get_raw_handle();
          self.raw_window_handles.write().push(handle.into());
@@ -640,7 +636,7 @@ index f8939e9..18c8da8 100644
  
          Ok(Box::new(window))
      }
-@@ -1132,6 +1155,7 @@ pub(crate) struct WindowCreationInfo {
+@@ -1132,6 +1158,7 @@ pub(crate) struct WindowCreationInfo {
      /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
      /// as resizing them has failed, causing us to have lost at least the render target.
      pub(crate) invalidate_devices: Arc<AtomicBool>,
@@ -648,7 +644,7 @@ index f8939e9..18c8da8 100644
  }
  
  struct PlatformWindowCreateContext {
-@@ -1504,3 +1528,141 @@ mod tests {
+@@ -1504,3 +1531,134 @@ mod tests {
          assert_eq!(read_from_clipboard(), Some(item));
      }
  }
@@ -661,11 +657,11 @@ index f8939e9..18c8da8 100644
 +    use parking_lot::RwLock;
 +    use smallvec::{SmallVec, smallvec};
 +    use windows::{
-+        Win32::{Foundation::*, Graphics::Gdi::ValidateRect, UI::WindowsAndMessaging::*},
++        Win32::{Foundation::*, UI::WindowsAndMessaging::*},
 +        core::w,
 +    };
 +
-+    use super::{handle_gpu_device_lost, redraw_unpaused_windows};
++    use super::{handle_gpu_device_lost, unpaused_windows};
 +    use crate::{
 +        DirectXDevices, PausedWindows, SafeHwnd, WM_GPUI_FORCE_UPDATE_WINDOW,
 +        WM_GPUI_GPU_DEVICE_LOST, set_frame_requests_paused,
@@ -681,15 +677,8 @@ index f8939e9..18c8da8 100644
 +        wparam: WPARAM,
 +        lparam: LPARAM,
 +    ) -> LRESULT {
-+        if matches!(
-+            msg,
-+            WM_PAINT | WM_GPUI_GPU_DEVICE_LOST | WM_GPUI_FORCE_UPDATE_WINDOW
-+        ) {
++        if matches!(msg, WM_GPUI_GPU_DEVICE_LOST | WM_GPUI_FORCE_UPDATE_WINDOW) {
 +            MESSAGES.with(|messages| messages.borrow_mut().push((hwnd.0 as usize, msg)));
-+        }
-+        if msg == WM_PAINT {
-+            unsafe { ValidateRect(Some(hwnd), None).ok().log_err() };
-+            return LRESULT(0);
 +        }
 +        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 +    }
@@ -710,12 +699,12 @@ index f8939e9..18c8da8 100644
 +                WINDOW_EX_STYLE(0),
 +                class_name,
 +                None,
-+                WS_POPUP | WS_VISIBLE,
++                WINDOW_STYLE(0),
 +                0,
 +                0,
-+                64,
-+                64,
-+                None,
++                0,
++                0,
++                Some(HWND_MESSAGE),
 +                None,
 +                None,
 +                None,
@@ -724,68 +713,68 @@ index f8939e9..18c8da8 100644
 +        }
 +    }
 +
-+    /// Dispatches everything queued for this thread and returns the recorded
-+    /// messages, including the ones `SendMessageW` delivered directly.
-+    fn drain_messages() -> Vec<(usize, u32)> {
-+        let mut msg = MSG::default();
-+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-+            unsafe { DispatchMessageW(&msg) };
-+        }
-+        let mut messages = MESSAGES.with(|messages| std::mem::take(&mut *messages.borrow_mut()));
-+        messages.sort();
-+        messages
++    fn raw(windows: impl IntoIterator<Item = HWND>) -> Vec<usize> {
++        windows.into_iter().map(|hwnd| hwnd.0 as usize).collect()
 +    }
 +
 +    #[test]
 +    fn a_paused_window_skips_vsync_redraws_but_still_gets_the_device_lost_forced_render() {
 +        let running = test_window();
 +        let paused = test_window();
-+        drain_messages();
 +        let all_windows: Arc<RwLock<SmallVec<[SafeHwnd; 4]>>> =
 +            Arc::new(RwLock::new(smallvec![running.into(), paused.into()]));
 +        let paused_windows = PausedWindows::default();
 +        set_frame_requests_paused(&paused_windows, paused, true);
++        set_frame_requests_paused(&paused_windows, paused, true);
 +
-+        redraw_unpaused_windows(&all_windows.read(), &paused_windows.read());
-+        assert_eq!(drain_messages(), [(running.0 as usize, WM_PAINT)]);
++        let redrawn = |paused_windows: &PausedWindows| {
++            raw(
++                unpaused_windows(&all_windows.read(), &paused_windows.read())
++                    .map(|hwnd| hwnd.as_raw()),
++            )
++        };
++        assert_eq!(redrawn(&paused_windows), raw([running]));
 +
 +        let devices = DirectXDevices::new();
 +        assert!(
 +            devices.is_ok() || std::env::var_os("GPUI_REQUIRE_TEST_DEVICE").is_none(),
 +            "GPUI_REQUIRE_TEST_DEVICE is set but no DirectX device is available"
 +        );
-+        let Ok(mut devices) = devices else {
-+            return;
-+        };
-+        let platform_window = test_window();
-+        drain_messages();
-+        handle_gpu_device_lost(
-+            &mut devices,
-+            platform_window,
-+            0,
-+            &Arc::downgrade(&all_windows),
-+            &std::sync::Weak::new(),
-+        )
-+        .unwrap();
-+        let mut expected = vec![(platform_window.0 as usize, WM_GPUI_GPU_DEVICE_LOST)];
-+        for hwnd in [running, paused] {
-+            expected.push((hwnd.0 as usize, WM_GPUI_GPU_DEVICE_LOST));
-+            expected.push((hwnd.0 as usize, WM_GPUI_FORCE_UPDATE_WINDOW));
++        if let Ok(mut devices) = devices {
++            let platform_window = test_window();
++            handle_gpu_device_lost(
++                &mut devices,
++                platform_window,
++                0,
++                &Arc::downgrade(&all_windows),
++                &std::sync::Weak::new(),
++            )
++            .unwrap();
++            let messages = MESSAGES.with(|messages| std::mem::take(&mut *messages.borrow_mut()));
++            let device_lost = |hwnd: HWND| (hwnd.0 as usize, WM_GPUI_GPU_DEVICE_LOST);
++            let forced_render = |hwnd: HWND| (hwnd.0 as usize, WM_GPUI_FORCE_UPDATE_WINDOW);
++            assert_eq!(
++                messages,
++                [
++                    device_lost(platform_window),
++                    device_lost(running),
++                    device_lost(paused),
++                    forced_render(running),
++                    forced_render(paused),
++                ]
++            );
++            unsafe { DestroyWindow(platform_window).log_err() };
 +        }
-+        expected.sort();
-+        assert_eq!(drain_messages(), expected);
 +
 +        // A frame request resumes the vsync redraws.
 +        set_frame_requests_paused(&paused_windows, paused, false);
-+        redraw_unpaused_windows(&all_windows.read(), &paused_windows.read());
-+        let mut expected = vec![
-+            (running.0 as usize, WM_PAINT),
-+            (paused.0 as usize, WM_PAINT),
-+        ];
-+        expected.sort();
-+        assert_eq!(drain_messages(), expected);
++        assert_eq!(redrawn(&paused_windows), raw([running, paused]));
++        // A window that closed while paused leaves nothing behind.
++        set_frame_requests_paused(&paused_windows, running, true);
++        set_frame_requests_paused(&paused_windows, running, false);
++        assert!(paused_windows.read().is_empty());
 +
-+        for hwnd in [running, paused, platform_window] {
++        for hwnd in [running, paused] {
 +            unsafe { DestroyWindow(hwnd).log_err() };
 +        }
 +    }
