@@ -607,6 +607,34 @@ describe("encoded recording preservation", () => {
 		expect(verified.audio).toEqual(source.audio);
 		expect(verified.video).toEqual(source.video);
 	});
+	test("preserves a recording whose source track carries a creation time", async () => {
+		const input = join(directory, "creation-time-source.mp4");
+		const output = join(directory, "creation-time-remux.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-video_track_timescale",
+			"600",
+			"-movflags",
+			"frag_keyframe+empty_moov+default_base_moof",
+			"-metadata",
+			"creation_time=2026-09-17T10:29:10.000000Z",
+			input,
+		]);
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRemuxedRecording(input, input, output, {
+			requireAudio: true,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.integrity).toBeUndefined();
+	});
 	test("refuses identical corrupt packets rather than treating preservation as decodability", async () => {
 		await expect(
 			verifyRemuxedRecording(corruptTail, corruptTail, corruptTail, {

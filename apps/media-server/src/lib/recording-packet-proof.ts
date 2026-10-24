@@ -424,9 +424,17 @@ async function readTrack(
 		!/^SHA256:[a-f0-9]{64}$/.test(stream.extradata_hash)
 	)
 		throw new Error("Recording codec configuration is incomplete");
-	const { index, time_base: base, start_pts: startPts, ...rest } = stream;
+	const { index, time_base: base, start_pts: startPts, tags, ...rest } = stream;
+	// Remuxing a fragmented source into a regular MP4 drops its track creation_time, which is
+	// container metadata rather than anything in the encoded stream.
+	const { creation_time: _creationTime, ...keptTags } =
+		tags && typeof tags === "object" ? (tags as Record<string, unknown>) : {};
 	const start = time(String(startPts), base);
-	const configuration = { ...rest, start };
+	const configuration = {
+		...rest,
+		...(Object.keys(keptTags).length > 0 ? { tags: keptTags } : {}),
+		start,
+	};
 	const [startNumerator, startDenominator] = start.split("/").map(Number);
 	const startTime = startNumerator / startDenominator;
 	if (!Number.isFinite(startTime))
