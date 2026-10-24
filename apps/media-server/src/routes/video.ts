@@ -97,6 +97,7 @@ import {
 import { getRuntimeReport } from "../lib/runtime-report";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
+import { blockedUrlPayload } from "../lib/url-policy";
 import {
 	getActiveDirectVideoProcessCount,
 	getMaxConcurrentDirectVideoProcesses,
@@ -528,6 +529,9 @@ video.post("/probe", async (c) => {
 	} catch (err) {
 		console.error("[video/probe] Error:", err);
 
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
+
 		if (isBusyError(err)) {
 			return c.json(
 				{
@@ -607,6 +611,9 @@ video.post("/thumbnail", async (c) => {
 		});
 	} catch (err) {
 		console.error("[video/thumbnail] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			return c.json(
@@ -751,6 +758,9 @@ video.post("/convert", async (c) => {
 			...getVideoCapacitySnapshot(),
 		});
 		console.error("[video/convert] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
