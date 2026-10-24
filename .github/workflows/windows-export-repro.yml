@@ -4,6 +4,8 @@ name: Windows export crash repro
 # Windows Error Reporting writing full dumps, then prints each crash's stack.
 
 on:
+  push:
+    branches: [ci/windows-export-blur-captions]
   workflow_dispatch:
     inputs:
       tests:
@@ -46,7 +48,7 @@ jobs:
           RUST_BACKTRACE: "1"
           RUST_LOG: info
         run: |
-          for test in ${{ inputs.tests }}; do
+          for test in ${{ inputs.tests || 'camera_blur_export captions_export camera_blur_and_captions_export' }}; do
             echo "::group::$test"
             cargo test --profile ci-verify -p cap-verify --test export "$test" -- --exact --nocapture 2>&1 | tail -80
             echo "exit=${PIPESTATUS[0]}"
