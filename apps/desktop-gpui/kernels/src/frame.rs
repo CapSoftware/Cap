@@ -68,7 +68,12 @@ pub fn copy_rows(
     if stride < row_bytes || data.len() < rows.checked_mul(stride)? {
         return None;
     }
-    let mut pixels = vec![0; rows.checked_mul(row_bytes)?];
+    let total_bytes = rows.checked_mul(row_bytes)?;
+    if !mirrored && stride == row_bytes {
+        return Some(data[..total_bytes].to_vec());
+    }
+
+    let mut pixels = vec![0; total_bytes];
     for (row, output) in pixels.chunks_exact_mut(row_bytes.max(1)).enumerate() {
         let input = &data[row * stride..row * stride + row_bytes];
         if mirrored {
@@ -92,12 +97,26 @@ pub fn downsample_nearest(
 ) -> Vec<u8> {
     let target_width = target_width as usize;
     let target_height = target_height as usize;
-    let mut pixels = Vec::with_capacity(target_width * target_height * 4);
-    for y in 0..target_height {
-        let row = &data[y * height / target_height * stride..];
-        for x in 0..target_width {
-            let offset = x * width / target_width * 4;
-            pixels.extend_from_slice(&row[offset..offset + 4]);
+    if target_width == 0 || target_height == 0 || width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let target_row_bytes = target_width * 4;
+    let mut pixels = vec![0u8; target_row_bytes * target_height];
+
+    let x_offsets: Vec<usize> = (0..target_width)
+        .map(|x| (x * width / target_width) * 4)
+        .collect();
+
+    for (y, target_row) in pixels.chunks_exact_mut(target_row_bytes).enumerate() {
+        let src_row_offset = (y * height / target_height) * stride;
+        if src_row_offset >= data.len() {
+            break;
+        }
+        let src_row = &data[src_row_offset..];
+        for (&src_offset, dst_pixel) in x_offsets.iter().zip(target_row.chunks_exact_mut(4)) {
+            if src_offset + 4 <= src_row.len() {
+                dst_pixel.copy_from_slice(&src_row[src_offset..src_offset + 4]);
+            }
         }
     }
     pixels
@@ -172,7 +191,7 @@ fn reorder_32bit_row<const R: usize, const G: usize, const B: usize, const A: us
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Nv12Range {
     Video,
     _Full,
@@ -187,9 +206,19 @@ pub fn convert_nv12_planes(
     height: usize,
     range: Nv12Range,
 ) -> Option<Vec<u8>> {
-    let mut rgba_data = vec![0u8; width * height * 4];
+    let row_bytes = width.checked_mul(4)?;
+    let output_len = row_bytes.checked_mul(height)?;
+    if output_len == 0 {
+        return Some(Vec::new());
+    }
+    let mut rgba_data = vec![0u8; output_len];
 
-    for y_idx in 0..height {
+    let (scale, y_sub) = match range {
+        Nv12Range::Video => (1.164383_f32, 16.0_f32),
+        Nv12Range::_Full => (1.0_f32, 0.0_f32),
+    };
+
+    for (y_idx, rgba_row) in rgba_data.chunks_exact_mut(row_bytes).enumerate() {
         let y_row_start = y_idx * y_stride;
         if y_row_start + width > y_plane.len() {
             tracing::warn!(
@@ -214,25 +243,53 @@ pub fn convert_nv12_planes(
         }
         let uv_row = &uv_plane[uv_row_start..uv_row_start + width];
 
-        for (x, y_val) in y_row.iter().enumerate().take(width) {
-            let uv_index = (x / 2) * 2;
-            if uv_index + 1 >= uv_row.len() {
+        let pairs = width / 2;
+        let mut x = 0;
+        let mut dst_idx = 0;
+
+        for _ in 0..pairs {
+            let cb = uv_row[x];
+            let cr = uv_row[x + 1];
+            let cb_f = cb as f32 - 128.0;
+            let cr_f = cr as f32 - 128.0;
+
+            let r_chroma = 1.596027_f32 * cr_f;
+            let g_cb = 0.391762_f32 * cb_f;
+            let g_cr = 0.812968_f32 * cr_f;
+            let b_chroma = 2.017232_f32 * cb_f;
+
+            let y1 = ((f32::from(y_row[x]) - y_sub).max(0.0)) * scale;
+            rgba_row[dst_idx] = clamp_channel(y1 + r_chroma);
+            rgba_row[dst_idx + 1] = clamp_channel(y1 - g_cb - g_cr);
+            rgba_row[dst_idx + 2] = clamp_channel(y1 + b_chroma);
+            rgba_row[dst_idx + 3] = 255;
+
+            let y2 = ((f32::from(y_row[x + 1]) - y_sub).max(0.0)) * scale;
+            rgba_row[dst_idx + 4] = clamp_channel(y2 + r_chroma);
+            rgba_row[dst_idx + 5] = clamp_channel(y2 - g_cb - g_cr);
+            rgba_row[dst_idx + 6] = clamp_channel(y2 + b_chroma);
+            rgba_row[dst_idx + 7] = 255;
+
+            x += 2;
+            dst_idx += 8;
+        }
+
+        if x < width {
+            if x + 1 >= uv_row.len() {
                 tracing::warn!(
-                    uv_index,
+                    uv_index = x,
                     uv_row_len = uv_row.len(),
                     "UV index out of bounds during conversion",
                 );
                 return None;
             }
-
-            let cb = uv_row[uv_index];
-            let cr = uv_row[uv_index + 1];
-            let (r, g, b) = ycbcr_to_rgb(*y_val, cb, cr, range);
-            let out = (y_idx * width + x) * 4;
-            rgba_data[out] = r;
-            rgba_data[out + 1] = g;
-            rgba_data[out + 2] = b;
-            rgba_data[out + 3] = 255;
+            let cb = uv_row[x];
+            let cr = uv_row[x + 1];
+            let (r, g, b) = ycbcr_to_rgb(y_row[x], cb, cr, range);
+            rgba_row[dst_idx] = r;
+            rgba_row[dst_idx + 1] = g;
+            rgba_row[dst_idx + 2] = b;
+            rgba_row[dst_idx + 3] = 255;
         }
     }
 
@@ -391,5 +448,75 @@ mod tests {
         let out = convert_nv12_planes(&y_plane, 4, &uv_plane, 4, 2, 2, Nv12Range::Video).unwrap();
         assert_eq!(&out[0..8], &[0, 0, 0, 255, 254, 254, 254, 255]);
         assert!(convert_nv12_planes(&[16], 4, &uv_plane, 4, 2, 1, Nv12Range::Video).is_none());
+    }
+
+    #[test]
+    fn nv12_precision_and_odd_width_rejection() {
+        let (r, g, b) = ycbcr_to_rgb(36, 80, 58, Nv12Range::Video);
+        assert_eq!(g, 99);
+        let y_plane = vec![36, 36];
+        let uv_plane = vec![80, 58];
+        let out = convert_nv12_planes(&y_plane, 2, &uv_plane, 2, 2, 1, Nv12Range::Video).unwrap();
+        assert_eq!(out, vec![r, 99, b, 255, r, 99, b, 255]);
+
+        let y_plane_odd = vec![36, 36, 36];
+        let uv_plane_short = vec![80, 58, 80];
+        assert!(
+            convert_nv12_planes(&y_plane_odd, 3, &uv_plane_short, 3, 3, 1, Nv12Range::Video)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn nv12_sweeps_y_cb_cr_ranges_against_ycbcr_to_rgb() {
+        for range in [Nv12Range::Video, Nv12Range::_Full] {
+            for &y in &[0u8, 16, 36, 81, 128, 200, 235, 255] {
+                for cb in (0..=255).step_by(15) {
+                    for cr in (0..=255).step_by(15) {
+                        let y_plane = vec![y, y];
+                        let uv_plane = vec![cb as u8, cr as u8];
+                        let out = convert_nv12_planes(&y_plane, 2, &uv_plane, 2, 2, 1, range)
+                            .expect("conversion should succeed");
+                        let (er, eg, eb) = ycbcr_to_rgb(y, cb as u8, cr as u8, range);
+                        assert_eq!(
+                            &out[0..4],
+                            &[er, eg, eb, 255],
+                            "range={range:?} y={y} cb={cb} cr={cr}"
+                        );
+                        assert_eq!(
+                            &out[4..8],
+                            &[er, eg, eb, 255],
+                            "range={range:?} y={y} cb={cb} cr={cr}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copy_rows_returns_a_direct_copy_for_unpadded_unmirrored_rows() {
+        let data: Vec<u8> = (0..32).collect();
+
+        assert_eq!(
+            copy_rows(&data, 8, 8, 4, false).unwrap(),
+            data[..32].to_vec()
+        );
+        assert_eq!(
+            copy_rows(&data, 8, 16, 2, false).unwrap(),
+            [&data[..8], &data[16..24]].concat(),
+            "padded sources still strip the stride padding"
+        );
+
+        let expected_mirrored: Vec<u8> = data[..8]
+            .chunks_exact(4)
+            .rev()
+            .flat_map(|px| px.to_vec())
+            .collect();
+        assert_eq!(
+            copy_rows(&data, 8, 8, 1, true).unwrap(),
+            expected_mirrored,
+            "mirrored rows bypass the direct-copy fast path"
+        );
     }
 }

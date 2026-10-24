@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "screenshot_blur"
 harness = false
+
+[[bench]]
+name = "frame_convert"
+harness = false
