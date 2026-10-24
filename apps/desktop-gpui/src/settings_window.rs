@@ -607,13 +607,13 @@ struct UserProfile {
     image_url: Option<String>,
 }
 
-fn signed_in_user_id() -> Option<Option<String>> {
-    store::auth_snapshot().signed_in().then(|| {
-        store::store_section("auth")
-            .get("user_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
+fn signed_in_profile_session() -> Option<(Option<String>, String, String)> {
+    let token = store::auth_snapshot().token?;
+    let user_id = store::store_section("auth")
+        .get("user_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((user_id, token, crate::auth::server_url()))
 }
 
 fn cached_user_profile(
@@ -769,7 +769,7 @@ impl SettingsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, true);
         let settings = GeneralSettings::load();
-        let user_profile = signed_in_user_id().and_then(|user_id| {
+        let user_profile = signed_in_profile_session().and_then(|(user_id, _, _)| {
             cached_user_profile(user_id.as_deref(), &store::store_section("user_profile"))
         });
 
@@ -2140,9 +2140,10 @@ impl SettingsWindow {
     fn refresh_user_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.instant_quality_notice = None;
-        let Some(user_id) = signed_in_user_id() else {
+        let Some(profile_session) = signed_in_profile_session() else {
             return;
         };
+        let user_id = profile_session.0.clone();
         cx.spawn_in(window, async move |this, cx| {
             let Ok(task) = cx.update(|_, cx| gpui_tokio::Tokio::spawn(cx, fetch_user_profile()))
             else {
@@ -2155,7 +2156,7 @@ impl SettingsWindow {
                 Ok(profile) => profile,
                 Err(crate::auth::AuthApiError::InvalidAuthentication) => {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if signed_in_user_id().as_ref() == Some(&user_id) {
+                        if signed_in_profile_session().as_ref() == Some(&profile_session) {
                             this.clear_local_auth(window, cx);
                         }
                     });
@@ -2173,7 +2174,7 @@ impl SettingsWindow {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
             let Ok(true) = this.update_in(cx, |this, window, cx| {
-                if signed_in_user_id().as_ref() != Some(&user_id) {
+                if signed_in_profile_session().as_ref() != Some(&profile_session) {
                     return false;
                 }
                 if !store::set_store_value(
@@ -2209,7 +2210,7 @@ impl SettingsWindow {
             match result {
                 Ok(image) => {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if signed_in_user_id().as_ref() != Some(&user_id)
+                        if signed_in_profile_session().as_ref() != Some(&profile_session)
                             || this
                                 .user_profile
                                 .as_ref()
@@ -2228,7 +2229,7 @@ impl SettingsWindow {
                 }
                 Err(crate::auth::AuthApiError::InvalidAuthentication) => {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if signed_in_user_id().as_ref() == Some(&user_id) {
+                        if signed_in_profile_session().as_ref() == Some(&profile_session) {
                             this.clear_local_auth(window, cx);
                         }
                     });
@@ -4840,6 +4841,32 @@ fn format_project_name(template: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_request_identity_changes_when_same_user_signs_in_again() {
+        let path =
+            std::env::temp_dir().join(format!("cap-profile-session-{}", store::new_uuid_v4()));
+        store::set_test_tauri_store_path(Some(path.clone()));
+        assert!(store::set_auth(Some(serde_json::json!({
+            "user_id": "user-1",
+            "secret": { "api_key": "old-token" }
+        }))));
+        let old_request = signed_in_profile_session();
+        assert!(store::set_auth(Some(serde_json::json!({
+            "user_id": "user-1",
+            "secret": { "api_key": "new-token" }
+        }))));
+        let new_request = signed_in_profile_session();
+        assert_ne!(old_request, new_request);
+        assert!(store::set_store_setting(
+            GENERAL_SETTINGS,
+            "serverUrl",
+            Value::String("https://other.example.com".into()),
+        ));
+        assert_ne!(new_request, signed_in_profile_session());
+        store::set_test_tauri_store_path(None);
+        std::fs::remove_file(path).unwrap();
+    }
 
     /// The sidebar list and its routes, which `showWindow({ Settings: { page } })`
     /// addresses by slug.
