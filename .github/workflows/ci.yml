@@ -122,6 +122,7 @@ jobs:
       - name: Test web React compatibility
         run: >-
           bun run --cwd apps/web test
+          __tests__/unit/dashboard-analytics-space-access.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
@@ -132,6 +133,7 @@ jobs:
           __tests__/unit/playback-store.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/space-folder-page-access.test.ts
           __tests__/unit/space-page-round-trips.test.ts
           __tests__/unit/speed-controller.test.ts
           __tests__/unit/summary-editor.test.ts
