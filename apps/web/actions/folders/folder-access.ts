@@ -1,6 +1,7 @@
 import type { Organisation, Space, User } from "@cap/web-domain";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import { canManageSpace } from "@/lib/permissions/roles";
 
 export async function canViewFolder(
 	userId: User.UserId,
@@ -22,6 +23,6 @@ export async function canViewFolder(
 	return Boolean(
 		access &&
 			access.organizationId === folder.organizationId &&
-			(access.organizationRole || access.spaceRole),
+			(access.spaceRole || canManageSpace(access)),
 	);
 }

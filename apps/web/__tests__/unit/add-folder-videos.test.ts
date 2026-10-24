@@ -2,13 +2,24 @@ import { Folder, Organisation, Space, Video } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addVideosToFolder } from "@/actions/folders/add-videos";
 
-const mocks = vi.hoisted(() => ({ query: vi.fn(), user: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	query: vi.fn(),
+	user: vi.fn(),
+	organizationAccess: vi.fn(),
+	spaceAccess: vi.fn(),
+}));
 
 vi.mock("@cap/database", async () => {
 	const { drizzle } = await import("drizzle-orm/mysql-proxy");
 	return { db: () => drizzle(mocks.query) };
 });
 vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: mocks.user }));
+vi.mock("@/actions/organization/authorization", () => ({
+	getOrganizationAccess: mocks.organizationAccess,
+}));
+vi.mock("@/actions/organization/space-authorization", () => ({
+	getSpaceAccess: mocks.spaceAccess,
+}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const folderId = Folder.FolderId.make("folder-1");
@@ -18,6 +29,21 @@ const newId = Video.VideoId.make("new-video");
 
 beforeEach(() => {
 	mocks.user.mockResolvedValue({ id: "owner", activeOrganizationId: orgId });
+	mocks.organizationAccess.mockResolvedValue({
+		id: orgId,
+		ownerId: "owner",
+		memberId: "member-1",
+		role: "owner",
+	});
+	mocks.spaceAccess.mockResolvedValue({
+		spaceId: "space-1",
+		organizationId: orgId,
+		organizationOwnerId: "owner",
+		createdById: "owner",
+		organizationRole: "owner",
+		spaceRole: "admin",
+		canManage: true,
+	});
 });
 
 describe.each([
@@ -28,11 +54,15 @@ describe.each([
 	},
 	{ name: "organization", spaceId: orgId, table: "shared_videos" },
 ])("adding videos to a $name folder", ({ spaceId, table }) => {
-	function setup(ownedIds: Video.VideoId[], sharedIds: Video.VideoId[]) {
+	function setup(
+		ownedIds: Video.VideoId[],
+		sharedIds: Video.VideoId[],
+		folderOrganizationId: Organisation.OrganisationId = orgId,
+	) {
 		mocks.query.mockImplementation(async (query: string) => {
 			if (query.startsWith("select")) {
 				if (query.includes("from `folders`")) {
-					return { rows: [[folderId, spaceId]] };
+					return { rows: [[folderId, folderOrganizationId, spaceId]] };
 				}
 				if (query.includes("from `videos`")) {
 					return { rows: ownedIds.map((id) => [id]) };
@@ -118,11 +148,41 @@ describe.each([
 		}
 	});
 
+	it("rejects a caller without access to the collection", async () => {
+		setup([newId], []);
+		mocks.organizationAccess.mockResolvedValue(null);
+		mocks.spaceAccess.mockResolvedValue(null);
+
+		await expect(
+			addVideosToFolder(folderId, [newId], spaceId),
+		).resolves.toMatchObject({ success: false });
+
+		expect(
+			mocks.query.mock.calls.every(([query]) =>
+				String(query).startsWith("select"),
+			),
+		).toBe(true);
+	});
+
+	it("rejects a folder that belongs to another organization", async () => {
+		setup([newId], [], Organisation.OrganisationId.make("other-org"));
+
+		await expect(
+			addVideosToFolder(folderId, [newId], spaceId),
+		).resolves.toMatchObject({ success: false });
+
+		expect(
+			mocks.query.mock.calls.every(([query]) =>
+				String(query).startsWith("select"),
+			),
+		).toBe(true);
+	});
+
 	it("does not write when the sharing lookup fails", async () => {
 		setup([existingId], [existingId]);
 		vi.spyOn(console, "error").mockImplementation(() => {});
 		mocks.query
-			.mockResolvedValueOnce({ rows: [[folderId, spaceId]] })
+			.mockResolvedValueOnce({ rows: [[folderId, orgId, spaceId]] })
 			.mockResolvedValueOnce({ rows: [[existingId]] })
 			.mockRejectedValueOnce(new Error("Database unavailable"));
 

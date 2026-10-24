@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 
+use cap_audio::high_quality_resampler_options;
 use cap_editor::{TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio};
 use cap_project::{
     CaptionSegment, CaptionSettings, CaptionTrackSegment, CaptionWord, CaptionsData,
@@ -980,10 +981,6 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
 
     let target_channels: u16 = if source_channels <= 1 { 1 } else { 2 };
     let target_channel_layout = ChannelLayout::default(i32::from(target_channels));
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("filter_size", "128");
-    options.set("cutoff", "0.97");
-
     let mut resampler = resampling::Context::get_with(
         decoder.format(),
         decoder.channel_layout(),
@@ -991,7 +988,7 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
         avformat::Sample::F32(avformat::sample::Type::Packed),
         target_channel_layout,
         DECODE_SAMPLE_RATE,
-        options,
+        high_quality_resampler_options(),
     )
     .map_err(|e| format!("Resampler / {e}"))?;
 
