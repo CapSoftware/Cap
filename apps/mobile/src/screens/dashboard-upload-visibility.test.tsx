@@ -1920,6 +1920,30 @@ describe("upload and dashboard visibility", () => {
 			},
 		);
 
+		it("keeps polling after a temporary status request failure", async () => {
+			auth.client.getCap = vi
+				.fn()
+				.mockRejectedValueOnce(new Error("Network unavailable"))
+				.mockResolvedValueOnce({ cap: { upload: null } });
+			const screen = await startImport();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1500);
+			});
+			expect(getTextNodes(screen.toJSON()).join(" ")).toContain(
+				"Unable to check processing. Retrying...",
+			);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(3000);
+			});
+
+			expect(auth.client.getCap).toHaveBeenCalledTimes(2);
+			expect(getTextNodes(screen.toJSON()).join(" ")).toContain(
+				"Ready to view",
+			);
+		});
+
 		it.each(cancellations)(
 			"stops requests after %s while waiting",
 			async (reason) => {

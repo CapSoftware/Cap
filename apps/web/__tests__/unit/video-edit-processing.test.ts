@@ -108,8 +108,8 @@ vi.mock("@/lib/public-share-video", () => ({}));
 vi.mock("@/lib/shareable-link-quota", () => ({}));
 vi.mock("@/lib/transcribe", () => ({}));
 vi.mock("@/utils/flags", () => ({}));
-vi.mock("@/app/s/[videoId]/_components/PasswordOverlay", () => ({
-	PasswordOverlay: () => null,
+vi.mock("@/app/s/[videoId]/_components/PasswordGate", () => ({
+	PasswordGate: () => null,
 }));
 vi.mock("@/app/s/[videoId]/_components/PendingRecordingShare", () => ({}));
 vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({}));

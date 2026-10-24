@@ -35,6 +35,7 @@ export class CapRecorder {
 	private _videoId: string | null = null;
 	private _durationMs = 0;
 	private recorder: MediaRecorder | null = null;
+	private recordingStopped = Promise.resolve();
 	private streams: ManagedStreams | null = null;
 	private startup: AbortController | null = null;
 	private chunks: Blob[] = [];
@@ -144,8 +145,12 @@ export class CapRecorder {
 
 			const mimeType = getSupportedMimeType();
 			this.selectedMimeType = mimeType;
-			this.recorder = new MediaRecorder(composite, {
+			const recorder = new MediaRecorder(composite, {
 				mimeType: mimeType || undefined,
+			});
+			this.recorder = recorder;
+			this.recordingStopped = new Promise<void>((resolve) => {
+				recorder.onstop = () => resolve();
 			});
 
 			this.chunks = [];
@@ -207,21 +212,17 @@ export class CapRecorder {
 			throw new Error(`Cannot stop from phase "${this._phase}"`);
 		}
 
+		this._durationMs =
+			this.accumulatedMs +
+			(this._phase === "recording" ? Date.now() - this.lastResumeTime : 0);
 		this.setPhase("stopping");
 		this.stopDurationTimer();
 
 		const recorder = this.recorder;
-		return new Promise((resolve, reject) => {
-			recorder.onstop = async () => {
-				try {
-					const result = await this.uploadRecording();
-					resolve(result);
-				} catch (err) {
-					reject(err);
-				}
-			};
-			recorder.stop();
-		});
+		const stopped = this.recordingStopped;
+		if (recorder.state !== "inactive") recorder.stop();
+		await stopped;
+		return this.uploadRecording();
 	}
 
 	destroy(): void {
@@ -246,8 +247,6 @@ export class CapRecorder {
 
 			this._videoId = videoId;
 
-			this._durationMs =
-				this.accumulatedMs + (Date.now() - this.lastResumeTime);
 			await this.client.uploadBlob(videoId, blob, {
 				durationMs: this._durationMs,
 			});

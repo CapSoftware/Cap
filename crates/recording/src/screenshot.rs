@@ -53,15 +53,15 @@ fn unsupported_error() -> anyhow::Error {
     anyhow!(WINDOWS_CAPTURE_UNSUPPORTED)
 }
 
-#[cfg(not(target_os = "linux"))]
-#[derive(Clone, Copy)]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Clone, Copy, Debug)]
 enum ChannelOrder {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Rgba,
     Bgra,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn rgb_from_rgba(
     data: &[u8],
     width: usize,
@@ -80,31 +80,266 @@ fn rgb_from_rgba(
     }
 
     let width_stride = width.checked_mul(3)?;
-    let rgb_len = height.checked_mul(width_stride)?;
-    let mut rgb = vec![0u8; rgb_len];
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: reorder_rgb_row_neon initializes every element of each destination row.
+        let rgb = unsafe {
+            pack_rows_uninit(
+                data,
+                height,
+                bytes_per_row,
+                row_bytes,
+                width_stride,
+                |src_row, dst_row| reorder_rgb_row_neon(src_row, dst_row, order),
+            )?
+        };
+        RgbImage::from_raw(width as u32, height as u32, rgb)
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("ssse3") {
+                for y in 0..height {
+                    let (src_row, dst_row) =
+                        rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+                    unsafe {
+                        reorder_rgb_row_ssse3(src_row, dst_row, order);
+                    }
+                }
+                return RgbImage::from_raw(width as u32, height as u32, rgb);
+            }
+        }
+
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            reorder_rgb_row_scalar(src_row, dst_row, order);
+        }
+
+        RgbImage::from_raw(width as u32, height as u32, rgb)
+    }
+}
+
+/// # Safety
+///
+/// `write_row` must initialize every element of the destination slice it receives.
+#[cfg(all(target_arch = "aarch64", any(not(target_os = "linux"), test)))]
+unsafe fn pack_rows_uninit(
+    data: &[u8],
+    height: usize,
+    bytes_per_row: usize,
+    row_bytes: usize,
+    dst_stride: usize,
+    mut write_row: impl FnMut(&[u8], &mut [std::mem::MaybeUninit<u8>]),
+) -> Option<Vec<u8>> {
+    let dst_len = height.checked_mul(dst_stride)?;
+    let mut out = Vec::<u8>::with_capacity(dst_len);
+    let spare = out.spare_capacity_mut().get_mut(..dst_len)?;
 
     for y in 0..height {
         let src_start = y.checked_mul(bytes_per_row)?;
-        let src_end = src_start.checked_add(row_bytes)?;
-        let dst_start = y.checked_mul(width_stride)?;
-        let dst_end = dst_start.checked_add(width_stride)?;
+        let src_row = data.get(src_start..src_start.checked_add(row_bytes)?)?;
+        let dst_start = y.checked_mul(dst_stride)?;
+        let dst_row = spare.get_mut(dst_start..dst_start.checked_add(dst_stride)?)?;
+        write_row(src_row, dst_row);
+    }
 
-        let src_row = data.get(src_start..src_end)?;
-        let dst_row = rgb.get_mut(dst_start..dst_end)?;
+    // SAFETY: the rows 0..height tile 0..dst_len exactly, and the caller guarantees write_row
+    // initialized every byte of each row. dst_len <= capacity.
+    unsafe { out.set_len(dst_len) };
+    Some(out)
+}
 
-        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
-            let (r, b) = match order {
-                ChannelOrder::Rgba => (src[0], src[2]),
-                ChannelOrder::Bgra => (src[2], src[0]),
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", test),
+    target_arch = "aarch64"
+))]
+fn reorder_rgb_row_neon(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8>], order: ChannelOrder) {
+    use std::arch::aarch64::*;
+
+    assert_eq!(
+        dst.len() % 3,
+        0,
+        "rgb row length must be a whole number of pixels"
+    );
+    let pixels = dst.len() / 3;
+    let src = &src[..pixels * 4];
+    let swap = matches!(order, ChannelOrder::Bgra);
+    let simd_pixels = pixels & !15;
+
+    for i in (0..simd_pixels).step_by(16) {
+        // SAFETY: i + 16 <= simd_pixels <= pixels, so the 64 byte load at i * 4 is inside src
+        // (pixels * 4 bytes) and the 48 byte store at i * 3 is inside dst (pixels * 3 bytes).
+        // NEON is part of the aarch64 baseline, and both intrinsics accept unaligned pointers.
+        unsafe {
+            let px = vld4q_u8(src.as_ptr().add(i * 4));
+            let rgb = if swap {
+                uint8x16x3_t(px.2, px.1, px.0)
+            } else {
+                uint8x16x3_t(px.0, px.1, px.2)
             };
-
-            dst[0] = r;
-            dst[1] = src[1];
-            dst[2] = b;
+            vst3q_u8(dst.as_mut_ptr().add(i * 3).cast::<u8>(), rgb);
         }
     }
 
-    RgbImage::from_raw(width as u32, height as u32, rgb)
+    for (s, d) in src[simd_pixels * 4..]
+        .chunks_exact(4)
+        .zip(dst[simd_pixels * 3..].chunks_exact_mut(3))
+    {
+        let (r, b) = if swap { (s[2], s[0]) } else { (s[0], s[2]) };
+        d[0].write(r);
+        d[1].write(s[1]);
+        d[2].write(b);
+    }
+}
+
+#[cfg(all(not(target_os = "linux"), target_arch = "aarch64"))]
+fn reorder_rgba_row_neon(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8>], order: ChannelOrder) {
+    use std::arch::aarch64::*;
+
+    assert_eq!(
+        dst.len() % 4,
+        0,
+        "rgba row length must be a whole number of pixels"
+    );
+    let pixels = dst.len() / 4;
+    let src = &src[..pixels * 4];
+    let swap = matches!(order, ChannelOrder::Bgra);
+    let simd_pixels = pixels & !15;
+
+    for i in (0..simd_pixels).step_by(16) {
+        // SAFETY: i + 16 <= simd_pixels <= pixels, so the 64 byte load and the 64 byte store at
+        // i * 4 are inside src and dst (both pixels * 4 bytes). NEON is part of the aarch64
+        // baseline, and both intrinsics accept unaligned pointers.
+        unsafe {
+            let px = vld4q_u8(src.as_ptr().add(i * 4));
+            let rgba = if swap {
+                uint8x16x4_t(px.2, px.1, px.0, px.3)
+            } else {
+                px
+            };
+            vst4q_u8(dst.as_mut_ptr().add(i * 4).cast::<u8>(), rgba);
+        }
+    }
+
+    for (s, d) in src[simd_pixels * 4..]
+        .chunks_exact(4)
+        .zip(dst[simd_pixels * 4..].chunks_exact_mut(4))
+    {
+        let (r, b) = if swap { (s[2], s[0]) } else { (s[0], s[2]) };
+        d[0].write(r);
+        d[1].write(s[1]);
+        d[2].write(b);
+        d[3].write(s[3]);
+    }
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn rgb_row_pair<'a>(
+    data: &'a [u8],
+    rgb: &'a mut [u8],
+    y: usize,
+    bytes_per_row: usize,
+    row_bytes: usize,
+    width_stride: usize,
+) -> Option<(&'a [u8], &'a mut [u8])> {
+    let src_start = y.checked_mul(bytes_per_row)?;
+    let src_end = src_start.checked_add(row_bytes)?;
+    let dst_start = y.checked_mul(width_stride)?;
+    let dst_end = dst_start.checked_add(width_stride)?;
+    let src_row = data.get(src_start..src_end)?;
+    let dst_row = rgb.get_mut(dst_start..dst_end)?;
+    Some((src_row, dst_row))
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn reorder_rgb_row_scalar(src: &[u8], dst: &mut [u8], order: ChannelOrder) {
+    match order {
+        ChannelOrder::Rgba => rgba_to_rgb_scalar(src, dst),
+        ChannelOrder::Bgra => bgra_to_rgb_scalar(src, dst),
+    }
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn rgba_to_rgb_scalar(src: &[u8], dst: &mut [u8]) {
+    for (src, dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+    }
+}
+
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "windows"),
+        not(target_arch = "aarch64")
+    ),
+    test
+))]
+fn bgra_to_rgb_scalar(src: &[u8], dst: &mut [u8]) {
+    for (src, dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", test),
+    target_arch = "x86_64"
+))]
+#[target_feature(enable = "ssse3")]
+unsafe fn reorder_rgb_row_ssse3(src: &[u8], dst: &mut [u8], order: ChannelOrder) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        let mask = match order {
+            ChannelOrder::Rgba => {
+                _mm_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1)
+            }
+            ChannelOrder::Bgra => {
+                _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1)
+            }
+        };
+
+        let pixels = (src.len() / 4).min(dst.len() / 3);
+        let simd_pixels = pixels & !3;
+        for i in (0..simd_pixels).step_by(4) {
+            let v = _mm_loadu_si128(src.as_ptr().add(i * 4) as *const __m128i);
+            let shuffled = _mm_shuffle_epi8(v, mask);
+            let dst_ptr = dst.as_mut_ptr().add(i * 3);
+            let lo = _mm_cvtsi128_si64(shuffled);
+            let hi = _mm_cvtsi128_si32(_mm_srli_si128(shuffled, 8));
+            std::ptr::write_unaligned(dst_ptr.cast::<i64>(), lo);
+            std::ptr::write_unaligned(dst_ptr.add(8).cast::<i32>(), hi);
+        }
+
+        reorder_rgb_row_scalar(&src[simd_pixels * 4..], &mut dst[simd_pixels * 3..], order);
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -126,58 +361,160 @@ fn rgba_from_raw(
     }
 
     let width_stride = width.checked_mul(4)?;
-    let rgba_len = height.checked_mul(width_stride)?;
-    let mut rgba = vec![0u8; rgba_len];
 
-    for y in 0..height {
-        let src_start = y.checked_mul(bytes_per_row)?;
-        let src_end = src_start.checked_add(row_bytes)?;
-        let dst_start = y.checked_mul(width_stride)?;
-        let dst_end = dst_start.checked_add(width_stride)?;
-
-        let src_row = data.get(src_start..src_end)?;
-        let dst_row = rgba.get_mut(dst_start..dst_end)?;
-
-        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
-            let (r, b) = match order {
-                ChannelOrder::Rgba => (src[0], src[2]),
-                ChannelOrder::Bgra => (src[2], src[0]),
-            };
-
-            dst[0] = r;
-            dst[1] = src[1];
-            dst[2] = b;
-            dst[3] = src[3];
-        }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: reorder_rgba_row_neon initializes every element of each destination row.
+        let rgba = unsafe {
+            pack_rows_uninit(
+                data,
+                height,
+                bytes_per_row,
+                row_bytes,
+                width_stride,
+                |src_row, dst_row| reorder_rgba_row_neon(src_row, dst_row, order),
+            )?
+        };
+        RgbaImage::from_raw(width as u32, height as u32, rgba)
     }
 
-    RgbaImage::from_raw(width as u32, height as u32, rgba)
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let rgba_len = height.checked_mul(width_stride)?;
+        let mut rgba = vec![0u8; rgba_len];
+
+        for y in 0..height {
+            let src_start = y.checked_mul(bytes_per_row)?;
+            let src_end = src_start.checked_add(row_bytes)?;
+            let dst_start = y.checked_mul(width_stride)?;
+            let dst_end = dst_start.checked_add(width_stride)?;
+
+            let src_row = data.get(src_start..src_end)?;
+            let dst_row = rgba.get_mut(dst_start..dst_end)?;
+
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+                dst[3] = src[3];
+            }
+        }
+
+        RgbaImage::from_raw(width as u32, height as u32, rgba)
+    }
 }
 
 fn apply_window_rounded_corners(image: RgbImage, target: &ScreenCaptureTarget) -> RgbaImage {
+    round_rgb_corners(image, window_corner_radius_px(target))
+}
+
+fn round_rgb_corners(image: RgbImage, corner_radius: f32) -> RgbaImage {
     let width = image.width();
     let height = image.height();
-
-    let corner_radius = window_corner_radius_px(target);
 
     if corner_radius <= 0.0 {
         return image::buffer::ConvertBuffer::convert(&image);
     }
 
-    let fw = width as f32;
-    let fh = height as f32;
+    let geom = CornerGeom {
+        fw: width as f32,
+        fh: height as f32,
+        radius: corner_radius,
+    };
+    let corner_x = corner_band_px(corner_radius, width) as usize;
+    let corner_y = corner_band_px(corner_radius, height) as usize;
+    let width_us = width as usize;
+    let height_us = height as usize;
+    let src = image.into_raw();
     let mut rgba = RgbaImage::new(width, height);
+    let dst = rgba.as_mut();
+    let src_stride = width_us * 3;
+    let dst_stride = width_us * 4;
+    let right = width_us.saturating_sub(corner_x);
+    let x_covers_row = corner_x >= right;
 
-    for (x, y, rgb_pixel) in image.enumerate_pixels() {
-        let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, corner_radius);
-        rgba.put_pixel(
-            x,
-            y,
-            image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+    for y in 0..height_us {
+        let src_off = y * src_stride;
+        let dst_off = y * dst_stride;
+        let src_row = &src[src_off..src_off + src_stride];
+        let dst_row = &mut dst[dst_off..dst_off + dst_stride];
+        let y_in_band = y < corner_y || y.saturating_add(corner_y) >= height_us;
+
+        if !y_in_band || corner_x == 0 {
+            copy_rgb_opaque(src_row, dst_row);
+            continue;
+        }
+
+        if x_covers_row {
+            fill_corner_span(src_row, dst_row, 0, width_us, y, geom);
+            continue;
+        }
+
+        fill_corner_span(src_row, dst_row, 0, corner_x, y, geom);
+        copy_rgb_opaque(
+            &src_row[corner_x * 3..right * 3],
+            &mut dst_row[corner_x * 4..right * 4],
         );
+        fill_corner_span(src_row, dst_row, right, width_us, y, geom);
     }
 
     rgba
+}
+
+#[derive(Clone, Copy)]
+struct CornerGeom {
+    fw: f32,
+    fh: f32,
+    radius: f32,
+}
+
+fn corner_band_px(radius: f32, extent: u32) -> u32 {
+    if extent == 0 {
+        return 0;
+    }
+
+    let rounded = radius.ceil();
+    if !rounded.is_finite() || rounded >= extent as f32 {
+        extent
+    } else if rounded <= 0.0 {
+        0
+    } else {
+        rounded as u32
+    }
+}
+
+fn copy_rgb_opaque(src: &[u8], dst: &mut [u8]) {
+    for (src_px, dst_px) in src.chunks_exact(3).zip(dst.chunks_exact_mut(4)) {
+        dst_px[0] = src_px[0];
+        dst_px[1] = src_px[1];
+        dst_px[2] = src_px[2];
+        dst_px[3] = 255;
+    }
+}
+
+fn fill_corner_span(
+    src_row: &[u8],
+    dst_row: &mut [u8],
+    x_start: usize,
+    x_end: usize,
+    y: usize,
+    geom: CornerGeom,
+) {
+    let y_center = y as f32 + 0.5;
+    for x in x_start..x_end {
+        let src_i = x * 3;
+        let dst_i = x * 4;
+        let alpha = rounded_corner_alpha(x as f32 + 0.5, y_center, geom.fw, geom.fh, geom.radius);
+        dst_row[dst_i] = src_row[src_i];
+        dst_row[dst_i + 1] = src_row[src_i + 1];
+        dst_row[dst_i + 2] = src_row[src_i + 2];
+        dst_row[dst_i + 3] = alpha;
+    }
 }
 
 fn window_corner_radius_px(target: &ScreenCaptureTarget) -> f32 {
@@ -1671,5 +2008,418 @@ mod wayland_screenshot_tests {
     #[test]
     fn wayland_camera_only_screenshots_are_rejected_before_portal_capture() {
         assert!(wayland_screenshot_display_id(&ScreenCaptureTarget::CameraOnly).is_err());
+    }
+}
+
+#[cfg(test)]
+mod screenshot_pixel_tests {
+    use super::*;
+
+    fn paint(len: usize, seed: u32) -> Vec<u8> {
+        let mut state = seed;
+        let mut out = vec![0u8; len];
+        for byte in &mut out {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            *byte = (state >> 16) as u8;
+        }
+        out
+    }
+
+    fn assert_bytes_eq(got: &[u8], expected: &[u8], label: &str) {
+        assert_eq!(got.len(), expected.len(), "{label} length");
+        let mismatch = got
+            .iter()
+            .zip(expected.iter())
+            .position(|(got_byte, expected_byte)| got_byte != expected_byte);
+        if let Some(index) = mismatch {
+            panic!(
+                "{label} mismatch at {index}: got {:02x} expected {:02x}",
+                got[index], expected[index]
+            );
+        }
+    }
+
+    fn reference_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+
+        for y in 0..height {
+            let src_start = y.checked_mul(bytes_per_row)?;
+            let src_end = src_start.checked_add(row_bytes)?;
+            let dst_start = y.checked_mul(width_stride)?;
+            let dst_end = dst_start.checked_add(width_stride)?;
+            let src_row = data.get(src_start..src_end)?;
+            let dst_row = rgb.get_mut(dst_start..dst_end)?;
+
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+            }
+        }
+
+        Some(rgb)
+    }
+
+    fn scalar_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            reorder_rgb_row_scalar(src_row, dst_row, order);
+        }
+        Some(rgb)
+    }
+
+    fn rgb_cases() -> Vec<(usize, usize, usize)> {
+        let mut cases = Vec::new();
+        let widths = [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 47, 48, 49, 63, 64, 65, 191,
+            1920, 1921, 2879,
+        ];
+        let heights = [0, 1, 2, 3, 5, 7];
+        let pads = [0usize, 1, 7, 32];
+        for width in widths {
+            for height in heights {
+                for pad in pads {
+                    cases.push((width, height, pad));
+                }
+            }
+        }
+        cases.push((1920, 1080, 0));
+        cases.push((1920, 1080, 64));
+        cases.push((1919, 17, 3));
+        cases.push((1, 1080, 0));
+        cases
+    }
+
+    fn assert_rgb_path_matches_original(
+        path: &str,
+        packed: Option<Vec<u8>>,
+        expected: &Option<Vec<u8>>,
+        label: &str,
+    ) {
+        match (packed.as_deref(), expected.as_deref()) {
+            (Some(got), Some(expected)) => {
+                assert_bytes_eq(got, expected, &format!("{path} {label}"));
+            }
+            (None, None) => {}
+            _ => panic!(
+                "{path} {label} presence got {} expected {}",
+                packed.is_some(),
+                expected.is_some()
+            ),
+        }
+    }
+
+    #[test]
+    fn rgb_dispatch_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(19).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = rgb_from_rgba(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("dispatch", got, &expected, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_scalar_fallback_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(23).wrapping_add(pad as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = scalar_rgb(&data, width, height, stride, order);
+                assert_rgb_path_matches_original("scalar", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn ssse3_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            unsafe {
+                reorder_rgb_row_ssse3(src_row, dst_row, order);
+            }
+        }
+        Some(rgb)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn rgb_ssse3_matches_original_including_scalar_tail() {
+        if !std::is_x86_feature_detected!("ssse3") {
+            eprintln!("ssse3 unavailable, skipping shuffled rgb path");
+            return;
+        }
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(29).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = ssse3_rgb(&data, width, height, stride, order);
+                assert_rgb_path_matches_original("ssse3", got, &expected, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_packing_rejects_undersized_input() {
+        assert!(rgb_from_rgba(&[0, 1, 2, 3], 2, 1, 4, ChannelOrder::Rgba).is_none());
+        assert!(rgb_from_rgba(&[0, 1, 2, 3], 1, 2, 4, ChannelOrder::Bgra).is_none());
+        assert!(rgb_from_rgba(&[0, 1, 2, 3, 4, 5, 6], 1, 1, 8, ChannelOrder::Rgba).is_none());
+        let image = rgb_from_rgba(&[10, 20, 30, 40, 1, 2, 3, 4], 1, 1, 8, ChannelOrder::Bgra)
+            .expect("padded row");
+        assert_eq!(image.as_raw(), &[30, 20, 10]);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn rgb_neon_matches_scalar_including_tail() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(31).wrapping_add(pad as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = scalar_rgb(&data, width, height, stride, order);
+                let got = rgb_from_rgba(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("neon", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn reference_rgba(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let mut rgba = vec![0u8; height.checked_mul(row_bytes)?];
+        for y in 0..height {
+            let src_row = data.get(y * bytes_per_row..y * bytes_per_row + row_bytes)?;
+            let dst_row = rgba.get_mut(y * row_bytes..(y + 1) * row_bytes)?;
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+                dst[3] = src[3];
+            }
+        }
+        Some(rgba)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn rgba_dispatch_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(37).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgba(&data, width, height, stride, order);
+                let got = rgba_from_raw(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("rgba", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn rgba_packing_rejects_undersized_input() {
+        assert!(rgba_from_raw(&[0, 1, 2, 3], 2, 1, 4, ChannelOrder::Rgba).is_none());
+        assert!(rgba_from_raw(&[0, 1, 2, 3], 1, 2, 4, ChannelOrder::Bgra).is_none());
+        assert!(rgba_from_raw(&[0, 1, 2, 3, 4, 5, 6], 1, 1, 8, ChannelOrder::Rgba).is_none());
+        let image = rgba_from_raw(&[10, 20, 30, 40, 1, 2, 3, 4], 1, 1, 8, ChannelOrder::Bgra)
+            .expect("padded row");
+        assert_eq!(image.as_raw(), &[30, 20, 10, 40]);
+        let empty = rgba_from_raw(&[], 0, 0, 0, ChannelOrder::Bgra).expect("empty image");
+        assert!(empty.as_raw().is_empty());
+    }
+
+    fn rgb_image(width: u32, height: u32, seed: u32) -> RgbImage {
+        let buf = paint((width as usize) * (height as usize) * 3, seed);
+        RgbImage::from_raw(width, height, buf).expect("rgb image")
+    }
+
+    fn reference_round(image: &RgbImage, radius: f32) -> RgbaImage {
+        if radius <= 0.0 {
+            return image::buffer::ConvertBuffer::convert(image);
+        }
+
+        let width = image.width();
+        let height = image.height();
+        let fw = width as f32;
+        let fh = height as f32;
+        let mut rgba = RgbaImage::new(width, height);
+        for (x, y, rgb_pixel) in image.enumerate_pixels() {
+            let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, radius);
+            rgba.put_pixel(
+                x,
+                y,
+                image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+            );
+        }
+        rgba
+    }
+
+    fn assert_corners(width: u32, height: u32, radius: f32) {
+        let image = rgb_image(width, height, width.wrapping_mul(17).wrapping_add(height));
+        let expected = reference_round(&image, radius);
+        let got = round_rgb_corners(image, radius);
+        assert_bytes_eq(
+            got.as_raw(),
+            expected.as_raw(),
+            &format!("corners {width}x{height} radius {radius}"),
+        );
+    }
+
+    #[test]
+    fn rounded_corners_match_original_for_varied_sizes() {
+        let sizes = [
+            (0, 0),
+            (0, 4),
+            (4, 0),
+            (1, 1),
+            (1, 2),
+            (2, 1),
+            (2, 2),
+            (3, 3),
+            (3, 5),
+            (5, 3),
+            (7, 9),
+            (8, 8),
+            (15, 17),
+            (16, 9),
+            (31, 20),
+            (64, 63),
+            (100, 50),
+            (127, 13),
+            (320, 180),
+        ];
+        let base_radii = [-1.0, 0.0, 0.25, 0.5, 1.0, 1.5, 2.2, 8.0, 10.5, 12.0];
+        for (width, height) in sizes {
+            for radius in base_radii {
+                assert_corners(width, height, radius);
+            }
+            let min_dim = width.min(height) as f32;
+            let max_dim = width.max(height) as f32;
+            assert_corners(width, height, min_dim / 2.0);
+            assert_corners(width, height, min_dim / 2.0 + 0.5);
+            assert_corners(width, height, max_dim + 10.0);
+        }
+        assert_corners(1920, 1080, 0.0);
+        assert_corners(1920, 1080, 12.0);
+        assert_corners(1919, 17, 6.5);
+    }
+
+    #[test]
+    fn rounded_corners_match_original_for_non_finite_radius() {
+        for (width, height) in [(1, 1), (2, 3), (8, 5), (17, 9)] {
+            assert_corners(width, height, f32::INFINITY);
+            assert_corners(width, height, f32::NAN);
+            assert_corners(width, height, f32::MIN_POSITIVE);
+        }
+    }
+
+    #[test]
+    fn non_window_screenshot_keeps_opaque_alpha() {
+        let image = rgb_image(13, 9, 99);
+        let expected: RgbaImage = image::buffer::ConvertBuffer::convert(&image);
+        let got = apply_window_rounded_corners(image, &ScreenCaptureTarget::CameraOnly);
+        assert_bytes_eq(got.as_raw(), expected.as_raw(), "camera only");
     }
 }
