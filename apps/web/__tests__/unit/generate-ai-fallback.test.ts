@@ -43,9 +43,8 @@ vi.mock("server-only", () => ({}));
 import { AiUnavailableError } from "@/lib/ai/run";
 import {
 	callAiApi,
-	chunkTranscriptWithTimestamps,
+	chunkTranscriptForProviderChain,
 	estimateTokens,
-	getTranscriptChunkTokenBudget,
 	parseAiResponse,
 	parseChunkAnalysis,
 	parseFinalSummary,
@@ -191,19 +190,73 @@ describe("map-reduce output parsers", () => {
 });
 
 describe("transcript chunk budget", () => {
-	it("uses a 4k-context-safe budget when openai-compatible is in the chain", () => {
-		getAiProviderChainMock.mockReturnValue([makeSelection("groq")]);
-		const hostedBudget = getTranscriptChunkTokenBudget();
+	// A typical eight-word, 40-character VTT cue.
+	const CUE = "Then we checked the numbers for the week";
+	const cues = (count: number, text = CUE) =>
+		Array.from({ length: count }, (_, i) => ({ start: i * 3, text }));
 
+	describe("hosted chains keep the 24,000-character chunks", () => {
+		beforeEach(() => {
+			getAiProviderChainMock.mockReturnValue([
+				makeSelection("groq"),
+				makeSelection("openai"),
+			]);
+		});
+
+		it("fits 585 cues in one chunk and splits at 586", () => {
+			expect(chunkTranscriptForProviderChain(cues(585))).toHaveLength(1);
+
+			const chunks = chunkTranscriptForProviderChain(cues(586));
+
+			expect(chunks.map((chunk) => chunk.text.length)).toEqual([23984, 40]);
+			expect(chunks.map((chunk) => [chunk.startTime, chunk.endTime])).toEqual([
+				[0, 1752],
+				[1755, 1755],
+			]);
+		});
+
+		it("allows exactly 24,000 joined characters and splits at 24,001", () => {
+			const withLastCue = (length: number) =>
+				chunkTranscriptForProviderChain([
+					...cues(585),
+					{ start: 1755, text: "x".repeat(length) },
+				]).map((chunk) => chunk.text.length);
+
+			expect(withLastCue(15)).toEqual([24000]);
+			expect(withLastCue(16)).toEqual([23984, 16]);
+		});
+
+		it("keeps an oversized first segment whole", () => {
+			const chunks = chunkTranscriptForProviderChain([
+				{ start: 0, text: "a".repeat(30000) },
+				{ start: 5, text: "b".repeat(10) },
+			]);
+
+			expect(chunks.map((chunk) => chunk.text.length)).toEqual([30000, 10]);
+		});
+
+		it("counts non-ASCII text by string length, not estimated tokens", () => {
+			const japanese = chunkTranscriptForProviderChain(
+				cues(1600, "会議の要約です会議の要約です"),
+			);
+			// Each emoji is two UTF-16 units.
+			const emoji = chunkTranscriptForProviderChain([
+				{ start: 0, text: "😀".repeat(6001) },
+				{ start: 5, text: "b".repeat(11999) },
+			]);
+
+			expect(japanese.map((chunk) => chunk.text.length)).toEqual([23999]);
+			expect(emoji.map((chunk) => chunk.text.length)).toEqual([12002, 11999]);
+		});
+	});
+
+	it("uses the token budget when openai-compatible is only a fallback", () => {
 		getAiProviderChainMock.mockReturnValue([
 			makeSelection("groq"),
 			makeSelection("openai-compatible"),
 		]);
-		const localBudget = getTranscriptChunkTokenBudget();
 
-		expect(hostedBudget).toBe(6000);
-		expect(localBudget).toBeLessThan(hostedBudget);
-		expect(localBudget).toBeLessThanOrEqual(2000);
+		expect(chunkTranscriptForProviderChain(cues(585))).toHaveLength(6);
 	});
 
 	it("estimates one token per non-ASCII character", () => {
@@ -212,17 +265,22 @@ describe("transcript chunk budget", () => {
 	});
 
 	it("splits a transcript so no chunk exceeds the token budget", () => {
+		getAiProviderChainMock.mockReturnValue([
+			makeSelection("openai-compatible"),
+		]);
+		const text = "We reviewed the search console numbers for the client today.";
 		const segments = Array.from({ length: 300 }, (_, i) => ({
 			start: i * 4,
-			text: "We reviewed the search console numbers for the client today.",
+			text,
 		}));
 
-		const chunks = chunkTranscriptWithTimestamps(segments, 1800);
+		const chunks = chunkTranscriptForProviderChain(segments);
 
-		expect(chunks.length).toBeGreaterThan(1);
-		for (const chunk of chunks) {
-			expect(estimateTokens(chunk.text)).toBeLessThanOrEqual(1800);
-		}
+		expect(getAiProviderChainMock).toHaveBeenLastCalledWith("generation");
+		// 15 tokens of text plus 6 for the timestamp: 85 segments fit in 1,800.
+		expect(
+			chunks.map((chunk) => (chunk.text.length + 1) / (text.length + 1)),
+		).toEqual([85, 85, 85, 45]);
 		expect(chunks[0]?.startTime).toBe(0);
 		expect(chunks[chunks.length - 1]?.endTime).toBe(299 * 4);
 	});

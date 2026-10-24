@@ -57,7 +57,7 @@ const getAffectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
-const TRANSCRIPT_CHUNK_TOKENS = 6000;
+const MAX_CHARS_PER_CHUNK = 24000;
 // Ollama serves a 4k-token context on machines under 24 GB of VRAM and its
 // /v1 endpoint ignores num_ctx, so a longer prompt is cut from the front
 // (losing the instructions) with no error. Leave room for the ~800-token
@@ -259,10 +259,7 @@ async function generateWithAi(
 ): Promise<AiResult> {
 	"use step";
 
-	const chunks = chunkTranscriptWithTimestamps(
-		transcript.segments,
-		getTranscriptChunkTokenBudget(),
-	);
+	const chunks = chunkTranscriptForProviderChain(transcript.segments);
 
 	const videoDuration = getVideoDuration(transcript.segments);
 	const languageInstruction = getAiLanguageInstruction(language);
@@ -473,11 +470,54 @@ function parseVttWithTimestamps(vttContent: string): VttSegment[] {
 	return segments;
 }
 
-export function getTranscriptChunkTokenBudget(): number {
+// Every provider gets the same chunks, so a local model anywhere in the
+// chain means sizing for its 4k context.
+export function chunkTranscriptForProviderChain(
+	segments: VttSegment[],
+): { text: string; startTime: number; endTime: number }[] {
 	const chain = getAiProviderChain("generation");
-	return chain.some((selection) => selection.provider === "openai-compatible")
-		? OPENAI_COMPATIBLE_TRANSCRIPT_CHUNK_TOKENS
-		: TRANSCRIPT_CHUNK_TOKENS;
+	if (chain.some((selection) => selection.provider === "openai-compatible")) {
+		return chunkTranscriptByTokens(
+			segments,
+			OPENAI_COMPATIBLE_TRANSCRIPT_CHUNK_TOKENS,
+		);
+	}
+	return chunkTranscriptWithTimestamps(segments);
+}
+
+function chunkTranscriptWithTimestamps(
+	segments: VttSegment[],
+): { text: string; startTime: number; endTime: number }[] {
+	const chunks: { text: string; startTime: number; endTime: number }[] = [];
+	let currentChunk: VttSegment[] = [];
+	let currentLength = 0;
+
+	for (const segment of segments) {
+		if (
+			currentLength + segment.text.length > MAX_CHARS_PER_CHUNK &&
+			currentChunk.length > 0
+		) {
+			chunks.push({
+				text: currentChunk.map((s) => s.text).join(" "),
+				startTime: currentChunk[0]?.start ?? 0,
+				endTime: currentChunk[currentChunk.length - 1]?.start ?? 0,
+			});
+			currentChunk = [];
+			currentLength = 0;
+		}
+		currentChunk.push(segment);
+		currentLength += segment.text.length + 1;
+	}
+
+	if (currentChunk.length > 0) {
+		chunks.push({
+			text: currentChunk.map((s) => s.text).join(" "),
+			startTime: currentChunk[0]?.start ?? 0,
+			endTime: currentChunk[currentChunk.length - 1]?.start ?? 0,
+		});
+	}
+
+	return chunks;
 }
 
 // Conservative without a tokenizer: ~4 ASCII characters per token, and one
@@ -492,7 +532,7 @@ export function estimateTokens(text: string): number {
 	return Math.ceil(ascii / 4) + other;
 }
 
-export function chunkTranscriptWithTimestamps(
+function chunkTranscriptByTokens(
 	segments: VttSegment[],
 	maxTokensPerChunk: number,
 ): { text: string; startTime: number; endTime: number }[] {
