@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 
+use cap_audio::high_quality_resampler_options;
 use cap_editor::{TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio};
 use cap_project::{
     CaptionSegment, CaptionSettings, CaptionTrackSegment, CaptionWord, CaptionsData,
@@ -81,6 +82,32 @@ pub fn supports_parakeet() -> bool {
 /// `PARAKEET_DIR_MODELS` (`captions.ts:26`).
 pub fn is_parakeet_model(model: &str) -> bool {
     matches!(model, "best" | "best-max")
+}
+
+/// The 25 languages parakeet-tdt-0.6b-v3 transcribes. It takes no language
+/// hint and its vocabulary has no other scripts, so any other language comes
+/// out as phonetic Latin text.
+const PARAKEET_LANGUAGES: [&str; 25] = [
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+const PARAKEET_UNSUPPORTED_LANGUAGE: &str = "Parakeet cannot transcribe language";
+
+/// The model that transcribes `language`: a Parakeet model hands a language
+/// it cannot write to a downloaded Whisper model, larger first.
+fn transcription_model<'a>(
+    model: &'a str,
+    language: &str,
+    downloaded: impl Fn(&str) -> bool,
+) -> Result<&'a str, String> {
+    if !is_parakeet_model(model) || language == "auto" || PARAKEET_LANGUAGES.contains(&language) {
+        return Ok(model);
+    }
+    ["medium", "small"]
+        .into_iter()
+        .find(|whisper| downloaded(whisper))
+        .ok_or_else(|| format!("{PARAKEET_UNSUPPORTED_LANGUAGE} {language}"))
 }
 
 /// Tauri's `appLocalDataDir()` for the `so.cap.desktop` identifier: on macOS
@@ -158,6 +185,12 @@ struct Hub {
 }
 
 impl Hub {
+    fn downloading(&self, model: &str) -> bool {
+        self.download.as_ref().is_some_and(|download| {
+            download.model == model && download.state == DownloadState::Downloading
+        })
+    }
+
     fn work_in_flight(&self) -> bool {
         self.download
             .as_ref()
@@ -948,10 +981,6 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
 
     let target_channels: u16 = if source_channels <= 1 { 1 } else { 2 };
     let target_channel_layout = ChannelLayout::default(i32::from(target_channels));
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("filter_size", "128");
-    options.set("cutoff", "0.97");
-
     let mut resampler = resampling::Context::get_with(
         decoder.format(),
         decoder.channel_layout(),
@@ -959,7 +988,7 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
         avformat::Sample::F32(avformat::sample::Type::Packed),
         target_channel_layout,
         DECODE_SAMPLE_RATE,
-        options,
+        high_quality_resampler_options(),
     )
     .map_err(|e| format!("Resampler / {e}"))?;
 
@@ -1738,6 +1767,15 @@ pub fn transcribe_blocking(
     model: &str,
     language: &str,
 ) -> Result<Vec<CaptionSegment>, String> {
+    let requested = model;
+    // A download writes straight to the model's final path, so a model still
+    // downloading looks present but cannot load yet.
+    let model = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
+    if model != requested {
+        tracing::info!("{requested} cannot transcribe {language}; using the {model} Whisper model");
+    }
     let model_file = model_path(model);
     if !project_path.exists() {
         return Err(format!(
@@ -2250,6 +2288,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("Failed to load Whisper model") {
         return "Failed to load the caption model. Try downloading it again".to_string();
     }
+    if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
+        return "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language".to_string();
+    }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
         return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
             .to_string();
@@ -2263,6 +2304,38 @@ mod verify_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parakeet_keeps_the_languages_it_can_write() {
+        for language in ["auto", "en", "de", "ru", "uk", "pl"] {
+            assert_eq!(transcription_model("best", language, |_| true), Ok("best"));
+            assert_eq!(
+                transcription_model("best-max", language, |_| true),
+                Ok("best-max")
+            );
+        }
+    }
+
+    #[test]
+    fn other_languages_move_to_a_downloaded_whisper_model() {
+        for language in ["zh", "ja", "ko", "ar", "hi", "tr", "he", "fa"] {
+            assert_eq!(
+                transcription_model("best", language, |_| true),
+                Ok("medium")
+            );
+            assert_eq!(
+                transcription_model("best-max", language, |model| model == "small"),
+                Ok("small")
+            );
+            assert_eq!(
+                transcription_model("best", language, |model| model != "medium"),
+                Ok("small")
+            );
+            let error = transcription_model("best", language, |_| false).unwrap_err();
+            assert!(caption_generation_error_message(&error).contains("Small or Medium"));
+        }
+        assert_eq!(transcription_model("small", "zh", |_| false), Ok("small"));
+    }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
@@ -2577,6 +2650,22 @@ mod tests {
         assert_eq!(model_path("best-max"), base.join("parakeet-best-max"));
         assert_eq!(model_path("small"), base.join("small.bin"));
         assert_eq!(model_path("medium"), base.join("medium.bin"));
+    }
+
+    #[test]
+    fn only_the_model_being_downloaded_counts_as_downloading() {
+        let mut state = Hub::default();
+        assert!(!state.downloading("medium"));
+        state.download = Some(ModelDownload {
+            model: "medium".to_string(),
+            state: DownloadState::Downloading,
+            progress: 40.0,
+            message: "Downloading".to_string(),
+        });
+        assert!(state.downloading("medium"));
+        assert!(!state.downloading("small"));
+        state.download.as_mut().unwrap().state = DownloadState::Completed;
+        assert!(!state.downloading("medium"));
     }
 
     #[test]

@@ -212,6 +212,9 @@ export class CapRecorder {
 			throw new Error(`Cannot stop from phase "${this._phase}"`);
 		}
 
+		this._durationMs =
+			this.accumulatedMs +
+			(this._phase === "recording" ? Date.now() - this.lastResumeTime : 0);
 		this.setPhase("stopping");
 		this.stopDurationTimer();
 
@@ -244,8 +247,6 @@ export class CapRecorder {
 
 			this._videoId = videoId;
 
-			this._durationMs =
-				this.accumulatedMs + (Date.now() - this.lastResumeTime);
 			await this.client.uploadBlob(videoId, blob, {
 				durationMs: this._durationMs,
 			});

@@ -62,11 +62,14 @@ import {
 	withMediaTransfers,
 } from "../lib/media-transfer";
 import type {
+	PendingStorageUpload,
 	ResilientInputFlags,
+	StorageUploadReceipt,
 	StorageUploadTarget,
 } from "../lib/media-video";
 import {
 	abortStorageUploadTarget,
+	beginStorageUpload,
 	downloadVideoToTemp,
 	generatePreviewGif,
 	generateThumbnail,
@@ -1197,15 +1200,30 @@ async function generateAndUploadPreviewGif(
 ): Promise<void> {
 	if (!previewGifPresignedUrl) return;
 
-	let previewGifFile: TempFileHandle | null = null;
-
+	const render = generatePreviewGif(inputPath, duration, {}, abortSignal);
 	try {
-		previewGifFile = await generatePreviewGif(
-			inputPath,
-			duration,
-			{},
+		await uploadRenderedPreviewGif(
+			render,
+			previewGifPresignedUrl,
 			abortSignal,
+			logPrefix,
 		);
+	} finally {
+		await render.then(
+			(gif) => gif.cleanup(),
+			() => {},
+		);
+	}
+}
+
+async function uploadRenderedPreviewGif(
+	render: Promise<TempFileHandle>,
+	previewGifPresignedUrl: string,
+	abortSignal: AbortSignal | undefined,
+	logPrefix: string,
+): Promise<void> {
+	try {
+		const previewGifFile = await render;
 		await uploadFileToS3(
 			previewGifFile.path,
 			previewGifPresignedUrl,
@@ -1219,8 +1237,6 @@ async function generateAndUploadPreviewGif(
 				: new Error("Preview GIF generation aborted");
 		}
 		console.warn(`[${logPrefix}] Preview GIF generation failed:`, previewErr);
-	} finally {
-		await previewGifFile?.cleanup();
 	}
 }
 
@@ -1516,7 +1532,9 @@ async function processVideoAsync(
 			progress: 0,
 			message: "Downloading video...",
 		});
-		await sendWebhook(job);
+		// Progress webhooks only update the upload row, so don't wait on cap.so between stages. sendWebhook keeps one
+		// delivery in flight per job and always sends the latest state, so the awaited terminal webhook still lands last.
+		void sendWebhook(job);
 
 		const input = await withJobHeartbeat(jobId, () =>
 			downloadVideoToTemp(
@@ -1548,7 +1566,7 @@ async function processVideoAsync(
 		const sourcePresignedUrl = options.sourcePresignedUrl;
 		if (sourcePresignedUrl || options.sourceUpload) {
 			updateJob(jobId, { message: "Saving original video..." });
-			await sendWebhook(job);
+			void sendWebhook(job);
 			await withJobHeartbeat(jobId, () =>
 				options.sourceUpload
 					? uploadFileToStorage(
@@ -1580,7 +1598,7 @@ async function processVideoAsync(
 			progress: 5,
 			message: "Analyzing video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
 		const { metadata, repairedFile } = await withJobHeartbeat(jobId, () =>
 			options.existingOutput
@@ -1608,7 +1626,7 @@ async function processVideoAsync(
 				? "Processing repaired video..."
 				: "Processing video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
 		const processed = options.existingOutput
 			? { outputFile: input, lastResortRepairFile: null }
@@ -1637,73 +1655,94 @@ async function processVideoAsync(
 			progress: 80,
 			message: "Uploading processed video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
-		const uploadReceipt = await withJobHeartbeat(jobId, async () =>
-			options.existingOutput
-				? { objectIdentity: options.existingOutput.objectIdentity }
-				: options.outputUpload
-					? uploadFileToStorage(
-							outputPath,
-							options.outputUpload,
-							"video/mp4",
-							signal,
-						)
-					: uploadFileToS3(outputPath, outputPresignedUrl, "video/mp4", signal),
-		);
-		outputUploaded = true;
+		// Previews only read the finished output, so render them while it uploads; they are still
+		// uploaded after the output, so a failed upload never leaves previews behind.
+		let uploadReceipt: StorageUploadReceipt;
+		const previewAbort = new AbortController();
+		const previewSignal = AbortSignal.any([signal, previewAbort.signal]);
+		const thumbnailRender = thumbnailPresignedUrl
+			? generateThumbnail(outputPath, metadata.duration, {}, previewSignal)
+			: undefined;
+		const previewGifRender = previewGifPresignedUrl
+			? generatePreviewGif(outputPath, metadata.duration, {}, previewSignal)
+			: undefined;
+		thumbnailRender?.catch(() => {});
+		previewGifRender?.catch(() => {});
+		try {
+			uploadReceipt = await withJobHeartbeat(jobId, async () =>
+				options.existingOutput
+					? { objectIdentity: options.existingOutput.objectIdentity }
+					: options.outputUpload
+						? uploadFileToStorage(
+								outputPath,
+								options.outputUpload,
+								"video/mp4",
+								signal,
+							)
+						: uploadFileToS3(
+								outputPath,
+								outputPresignedUrl,
+								"video/mp4",
+								signal,
+							),
+			);
+			outputUploaded = true;
 
-		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
-			updateJob(jobId, {
-				phase: "generating_thumbnail",
-				progress: 90,
-				message: "Generating preview assets...",
-			});
-			await sendWebhook(job);
-		}
-
-		await withJobHeartbeat(jobId, async () => {
-			if (thumbnailPresignedUrl) {
-				// Only the fully verified reuse path can finish without a decoded preview.
-				const thumbnailData = await generateThumbnail(
-					outputPath,
-					metadata.duration,
-					{},
-					signal,
-				).catch((error) => {
-					signal.throwIfAborted();
-					if (!options.existingOutput) throw error;
-					console.warn(
-						"Verified Loom output preview could not be generated",
-						error,
-					);
-					return undefined;
+			if (thumbnailPresignedUrl || previewGifPresignedUrl) {
+				updateJob(jobId, {
+					phase: "generating_thumbnail",
+					progress: 90,
+					message: "Generating preview assets...",
 				});
-				try {
-					if (thumbnailData)
-						await uploadToS3(
-							thumbnailData,
-							thumbnailPresignedUrl,
-							"image/jpeg",
-							signal,
-						);
-				} catch (error) {
-					signal.throwIfAborted();
-					console.warn(
-						`[video/process] Thumbnail upload failed for ${jobId}:`,
-						error,
-					);
-				}
+				void sendWebhook(job);
 			}
 
-			await generateAndUploadPreviewGif(
-				outputPath,
-				metadata.duration,
-				previewGifPresignedUrl,
-				signal,
-				"video/process",
-			);
-		});
+			await withJobHeartbeat(jobId, async () => {
+				if (thumbnailRender && thumbnailPresignedUrl) {
+					// Only the fully verified reuse path can finish without a decoded preview.
+					const thumbnailData = await thumbnailRender.catch((error) => {
+						signal.throwIfAborted();
+						if (!options.existingOutput) throw error;
+						console.warn(
+							"Verified Loom output preview could not be generated",
+							error,
+						);
+						return undefined;
+					});
+					try {
+						if (thumbnailData)
+							await uploadToS3(
+								thumbnailData,
+								thumbnailPresignedUrl,
+								"image/jpeg",
+								signal,
+							);
+					} catch (error) {
+						signal.throwIfAborted();
+						console.warn(
+							`[video/process] Thumbnail upload failed for ${jobId}:`,
+							error,
+						);
+					}
+				}
+
+				if (previewGifRender && previewGifPresignedUrl)
+					await uploadRenderedPreviewGif(
+						previewGifRender,
+						previewGifPresignedUrl,
+						signal,
+						"video/process",
+					);
+			});
+		} finally {
+			previewAbort.abort();
+			await Promise.allSettled([
+				thumbnailRender,
+				previewGifRender?.then((gif) => gif.cleanup()),
+			]);
+		}
 		signal.throwIfAborted();
 
 		updateJob(jobId, {
@@ -2810,40 +2849,68 @@ async function downloadUrlToFile(
 	throw lastError ?? new Error("Download failed");
 }
 
-async function downloadSegmentsBatchTracked(
-	urls: string[],
-	dir: string,
+// Storage that struggles with this many small concurrent reads can lower it through the env.
+const SEGMENT_DOWNLOAD_CONCURRENCY = 64;
+
+export function segmentDownloadConcurrencyFromEnv(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number.parseInt(
+		env.MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY ?? "",
+		10,
+	);
+	return Number.isFinite(value) && value > 0
+		? Math.min(value, SEGMENT_DOWNLOAD_CONCURRENCY)
+		: SEGMENT_DOWNLOAD_CONCURRENCY;
+}
+
+interface SegmentTrackDownload {
+	urls: string[];
+	dir: string;
+}
+
+// Recordings are thousands of small segments, so latency per request dominates; video and audio
+// share one pool so neither track waits for the other to finish.
+export async function downloadSegmentTracks(
+	tracks: SegmentTrackDownload[],
 	jobId: string,
 	progressBase: number,
 	progressRange: number,
 	abortSignal?: AbortSignal,
 	sources?: Map<string, MuxSourceObject>,
-): Promise<string[]> {
+): Promise<string[][]> {
 	const { join } = await import("node:path");
 	let completed = 0;
 	let fatalError: Error | undefined;
-	const total = urls.length;
-	const indexWidth = Math.max(3, String(total).length);
-	const outputPaths = new Array<string>(total);
-	const pending = [...urls.entries()];
+	const outputPaths = tracks.map(
+		(track) => new Array<string>(track.urls.length),
+	);
+	const pending = tracks.flatMap((track, trackIndex) => {
+		const indexWidth = Math.max(3, String(track.urls.length).length);
+		return track.urls.map((url, i) => ({
+			trackIndex,
+			i,
+			url,
+			outputPath: join(
+				track.dir,
+				`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
+			),
+		}));
+	});
+	const total = pending.length;
 	let pendingIndex = 0;
 	const batchAbortController = new AbortController();
 	const batchSignal = abortSignal
 		? AbortSignal.any([abortSignal, batchAbortController.signal])
 		: batchAbortController.signal;
-	const CONCURRENCY = 10;
 
 	async function worker() {
 		while (pendingIndex < pending.length && !fatalError) {
 			const entry = pending[pendingIndex++];
 			if (!entry) break;
-			const [i, url] = entry;
+			const { trackIndex, i, url, outputPath } = entry;
 			try {
-				const outputPath = join(
-					dir,
-					`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
-				);
-				outputPaths[i] = outputPath;
+				outputPaths[trackIndex][i] = outputPath;
 				await downloadUrlToFile(
 					url,
 					outputPath,
@@ -2856,7 +2923,7 @@ async function downloadSegmentsBatchTracked(
 					pendingIndex = pending.length;
 					batchAbortController.abort();
 					console.error(
-						`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
+						`[mux-segments] Failed to download segment ${i + 1}/${tracks[trackIndex].urls.length}:`,
 						err instanceof Error ? err.message : err,
 					);
 				}
@@ -2874,7 +2941,10 @@ async function downloadSegmentsBatchTracked(
 	}
 
 	await Promise.all(
-		Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
+		Array.from(
+			{ length: Math.min(segmentDownloadConcurrencyFromEnv(), total) },
+			() => worker(),
+		),
 	);
 	if (fatalError) throw fatalError;
 	return outputPaths;
@@ -2929,6 +2999,10 @@ async function muxSegmentsAsync(
 	const abortController = new AbortController();
 	updateJob(jobId, { abortController });
 	let outputUploadStarted = false;
+	let pendingOutputUpload: PendingStorageUpload | undefined;
+	let pendingOutputHash:
+		| { promise: Promise<string>; abort: AbortController }
+		| undefined;
 	let processingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let errorCode: RecordingErrorCode = "processing-unavailable";
 	const sources = context.sourceObjects
@@ -2963,49 +3037,62 @@ async function muxSegmentsAsync(
 		await mkdir(videoDir, { recursive: true });
 		await mkdir(audioDir, { recursive: true });
 
-		await downloadUrlToFile(
-			videoInitUrl,
-			join(videoDir, "init.mp4"),
-			abortController.signal,
-			sources?.get(videoInitUrl),
-		);
-		updateJob(jobId, { phase: "downloading", progress: 5 });
-		sendCurrentJobWebhook(jobId);
-
-		const videoSegmentFiles = await downloadSegmentsBatchTracked(
-			videoSegmentUrls,
-			videoDir,
-			jobId,
-			5,
-			45,
-			abortController.signal,
-			sources,
-		);
-
 		const audioInput =
 			audioInitUrl !== null &&
 			audioSegmentUrls !== null &&
 			audioSegmentUrls.length > 0
 				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
 				: null;
-		let audioSegmentFiles: string[] = [];
-		if (audioInput) {
-			await downloadUrlToFile(
-				audioInput.initUrl,
-				join(audioDir, "init.mp4"),
-				abortController.signal,
-				sources?.get(audioInput.initUrl),
-			);
-			audioSegmentFiles = await downloadSegmentsBatchTracked(
-				audioInput.segmentUrls,
-				audioDir,
+		// Both init segments download together; a failure cancels the other and waits for it, so nothing
+		// keeps writing into the work directory after the job has failed.
+		const initAbort = new AbortController();
+		const initSignal = AbortSignal.any([
+			abortController.signal,
+			initAbort.signal,
+		]);
+		const initDownloads = [
+			downloadUrlToFile(
+				videoInitUrl,
+				join(videoDir, "init.mp4"),
+				initSignal,
+				sources?.get(videoInitUrl),
+			),
+			...(audioInput
+				? [
+						downloadUrlToFile(
+							audioInput.initUrl,
+							join(audioDir, "init.mp4"),
+							initSignal,
+							sources?.get(audioInput.initUrl),
+						),
+					]
+				: []),
+		];
+		let initFailure: { error: unknown } | undefined;
+		for (const download of initDownloads)
+			download.catch((error: unknown) => {
+				initFailure ??= { error };
+				initAbort.abort();
+			});
+		await Promise.allSettled(initDownloads);
+		if (initFailure) throw initFailure.error;
+		updateJob(jobId, { phase: "downloading", progress: 5 });
+		sendCurrentJobWebhook(jobId);
+
+		const [videoSegmentFiles, audioSegmentFiles = []] =
+			await downloadSegmentTracks(
+				[
+					{ urls: videoSegmentUrls, dir: videoDir },
+					...(audioInput
+						? [{ urls: audioInput.segmentUrls, dir: audioDir }]
+						: []),
+				],
 				jobId,
-				50,
-				10,
+				5,
+				55,
 				abortController.signal,
 				sources,
 			);
-		}
 
 		updateJob(jobId, {
 			phase: "processing",
@@ -3081,6 +3168,21 @@ async function muxSegmentsAsync(
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
+		// Hashing and multipart parts only read the finished file, so they run during the decode check; the
+		// upload is only completed (the object only exists) after everything below has passed.
+		pendingOutputUpload = beginStorageUpload(
+			resultPath,
+			outputUpload,
+			"video/mp4",
+			abortController.signal,
+		);
+		const hashAbort = new AbortController();
+		const outputHash = hashRecordingFile(
+			resultPath,
+			AbortSignal.any([abortController.signal, hashAbort.signal]),
+		);
+		outputHash.catch(() => {});
+		pendingOutputHash = { promise: outputHash, abort: hashAbort };
 		updateJob(jobId, {
 			progress: 70,
 			message: "Checking the processed recording...",
@@ -3126,9 +3228,7 @@ async function muxSegmentsAsync(
 			message: "Verifying the recording file...",
 		});
 		sendCurrentJobWebhook(jobId);
-		const outputSha256 = await withJobHeartbeat(jobId, () =>
-			hashRecordingFile(resultPath, abortController.signal),
-		);
+		const outputSha256 = await withJobHeartbeat(jobId, () => outputHash);
 		const afterHash = await lstat(resultPath, { bigint: true });
 		if (
 			!afterHash.isFile() ||
@@ -3191,13 +3291,11 @@ async function muxSegmentsAsync(
 
 		outputUploadStarted = true;
 		errorCode = "processing-unavailable";
+		const startedOutputUpload = pendingOutputUpload;
+		if (!startedOutputUpload)
+			throw new Error("Recording output upload was not started");
 		const uploadReceipt = await withJobHeartbeat(jobId, () =>
-			uploadFileToStorage(
-				resultPath,
-				outputUpload,
-				"video/mp4",
-				abortController.signal,
-			),
+			startedOutputUpload.finish(),
 		);
 		if (outputVerificationUrl) {
 			errorCode = "output-invalid";
@@ -3283,38 +3381,36 @@ async function muxSegmentsAsync(
 		await withJobHeartbeat(jobId, async () => {
 			const assets = await previewAssets;
 			abortController.signal.throwIfAborted();
-			if (thumbnailPresignedUrl && assets?.thumbnail) {
-				try {
-					await uploadToS3(
-						assets.thumbnail,
-						thumbnailPresignedUrl,
-						"image/jpeg",
-						abortController.signal,
-					);
-				} catch (thumbErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						`[mux-segments] Thumbnail generation failed for ${videoId}:`,
-						thumbErr,
-					);
-				}
-			}
-			if (previewGifPresignedUrl && assets?.previewGif) {
-				try {
-					await uploadFileToS3(
-						assets.previewGif.path,
-						previewGifPresignedUrl,
-						"image/gif",
-						abortController.signal,
-					);
-				} catch (previewErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						"[mux-segments] Preview GIF generation failed:",
-						previewErr,
-					);
-				}
-			}
+			await Promise.all([
+				thumbnailPresignedUrl && assets?.thumbnail
+					? uploadToS3(
+							assets.thumbnail,
+							thumbnailPresignedUrl,
+							"image/jpeg",
+							abortController.signal,
+						).catch((thumbErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+								thumbErr,
+							);
+						})
+					: undefined,
+				previewGifPresignedUrl && assets?.previewGif
+					? uploadFileToS3(
+							assets.previewGif.path,
+							previewGifPresignedUrl,
+							"image/gif",
+							abortController.signal,
+						).catch((previewErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								"[mux-segments] Preview GIF generation failed:",
+								previewErr,
+							);
+						})
+					: undefined,
+			]);
 		});
 
 		abortController.signal.throwIfAborted();
@@ -3365,7 +3461,12 @@ async function muxSegmentsAsync(
 			error: logReason(error, MUX_FAILURE_LOG_LENGTH),
 			resources: getSystemResources(),
 		});
+		// Stop a hash still reading the output before the work directory is removed.
+		pendingOutputHash?.abort.abort();
+		await pendingOutputHash?.promise.catch(() => {});
 		if (!outputUploadStarted) {
+			// Parts still in flight could land after the abort, so let them settle first.
+			await pendingOutputUpload?.cancel();
 			await abortStorageUploadTarget(outputUpload).catch((abortError) => {
 				console.warn(
 					`[mux-segments] Failed to abort output upload for ${videoId}:`,

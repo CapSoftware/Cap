@@ -140,8 +140,7 @@ impl H264PacketEncoder {
             let converted = self.converted_frame_pool.as_mut().expect(
                 "converted_frame_pool present whenever converter is Some (invariant preserved by from_opened)",
             );
-            converter
-                .run(&frame, converted)
+            super::packed_yuv::convert_or_scale(&frame, converted, converter)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -173,8 +172,7 @@ impl H264PacketEncoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
-            converter
-                .run(frame, converted)
+            super::packed_yuv::convert_or_scale(frame, converted, converter)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video

@@ -537,6 +537,8 @@ describe("process video args", () => {
 			"4",
 			"-fflags",
 			"+genpts",
+			"-reinit_filter",
+			"0",
 			"-i",
 			"in.webm",
 			...nvencVideoArgs,

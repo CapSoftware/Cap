@@ -6,7 +6,7 @@ pub mod microphone;
 /// full or the feed has stopped. Test-only sources hand over the same way so
 /// a feed that cannot keep up is visible as a rejection, not as a late
 /// source.
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admission {
     Accepted,
@@ -14,7 +14,7 @@ pub enum Admission {
     Closed,
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 impl Admission {
     fn of<M, E>(result: Result<(), kameo::error::SendError<M, E>>) -> Self {
         match result {
@@ -27,5 +27,5 @@ impl Admission {
 
 /// Test-only slow consumer: the feed actor handles nothing else for the
 /// given time, as a feed blocked on a downstream consumer would.
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub struct Stall(pub std::time::Duration);

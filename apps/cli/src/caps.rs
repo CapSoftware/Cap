@@ -1862,6 +1862,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operation_wait_bounds_slow_responses() {
+        for send_headers in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut stream).await;
+                assert!(request.starts_with("GET /api/v1/operations/op_test HTTP/1.1\r\n"));
+                let body = r#"{"state":"succeeded"}"#;
+                if send_headers {
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                                body.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                if send_headers {
+                    stream.write_all(body.as_bytes()).await.unwrap();
+                } else {
+                    mock_response(&mut stream, "200 OK", body).await;
+                }
+            });
+            let client =
+                AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_millis(1_400),
+                crate::jobs::wait_operation(&client, "op_test", 1),
+            )
+            .await;
+            server.abort();
+            assert!(server.await.unwrap_err().is_cancelled());
+            let error = result
+                .expect("operation wait exceeded its deadline")
+                .unwrap_err();
+            assert_eq!(error.code, "NOT_READY");
+            assert_eq!(error.message, "Timed out waiting for the Cap operation");
+            assert!(error.retryable);
+            assert_eq!(error.retry_after_ms, Some(2_000));
+            assert_eq!(error.request_id, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn operation_wait_bounds_poll_sleeps_and_keeps_the_last_request_id() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for request_id in ["request_1", "request_2"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_request(&mut stream).await;
+                mock_response(
+                    &mut stream,
+                    "200 OK",
+                    &json!({"state":"running", "requestId":request_id}).to_string(),
+                )
+                .await;
+            }
+        });
+        let client = AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(1_400),
+            crate::jobs::wait_operation(&client, "op_test", 1),
+        )
+        .await;
+        server.abort();
+        if let Err(error) = server.await {
+            assert!(error.is_cancelled(), "{error}");
+        }
+        let error = result
+            .expect("operation wait exceeded its deadline")
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_READY");
+        assert_eq!(error.request_id.as_deref(), Some("request_2"));
+    }
+
+    #[tokio::test]
+    async fn operation_wait_keeps_the_request_id_when_the_next_poll_stalls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            mock_response(
+                &mut stream,
+                "200 OK",
+                r#"{"state":"queued","requestId":"request_1"}"#,
+            )
+            .await;
+            drop(stream);
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            mock_response(&mut stream, "200 OK", r#"{"state":"succeeded"}"#).await;
+        });
+        let client = AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(1_400),
+            crate::jobs::wait_operation(&client, "op_test", 1),
+        )
+        .await;
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        let error = result
+            .expect("operation wait exceeded its deadline")
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_READY");
+        assert_eq!(error.request_id.as_deref(), Some("request_1"));
+    }
+
+    #[tokio::test]
+    async fn operation_wait_returns_terminal_results_without_polling() {
+        for state in ["succeeded", "failed"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = json!({"state":state, "error":{"message":"Operation failed"}});
+            let response = body.to_string();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_request(&mut stream).await;
+                mock_response(&mut stream, "200 OK", &response).await;
+            });
+            let client =
+                AgentClient::new(format!("http://{address}"), "token".to_string()).unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_millis(400),
+                crate::jobs::wait_operation(&client, "op_test", 1),
+            )
+            .await
+            .expect("terminal operation should return immediately");
+            server.abort();
+            if let Err(error) = server.await {
+                assert!(error.is_cancelled(), "{error}");
+            }
+            match state {
+                "succeeded" => assert_eq!(result.unwrap(), body),
+                _ => {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, "OPERATION_FAILED");
+                    assert_eq!(error.message, "Operation failed");
+                    assert!(!error.retryable);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn mutation_retries_reuse_the_same_idempotency_key() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

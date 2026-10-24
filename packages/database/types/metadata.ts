@@ -23,6 +23,16 @@ export interface VideoMetadata {
 		source?: { key: string; uploadId: string };
 		output: { key: string; uploadId: string };
 	};
+	loomDeferredProcessing?: {
+		rawFileKey: string;
+		status: "pending" | "started" | "complete";
+		startedAt?: string;
+	};
+	transcribeOnView?: boolean;
+	loomPreviewGif?: {
+		status: "pending" | "started" | "complete";
+		startedAt?: string;
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;
