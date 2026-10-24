@@ -51,9 +51,13 @@ export default function StatsChart({
 		() => new Set<Metric>(["views", "comments", "reactions"]),
 	);
 
+	const withVisibleMetric = (set: Set<Metric>) =>
+		available.some((m) => set.has(m)) ? set : new Set<Metric>(["views"]);
+	const effective = withVisibleMetric(selected);
+
 	const toggle = (metric: Metric) => {
 		setSelected((prev) => {
-			const next = new Set(prev);
+			const next = new Set(withVisibleMetric(prev));
 			if (next.has(metric)) {
 				const visibleCount = available.filter((m) => next.has(m)).length;
 				if (visibleCount > 1) next.delete(metric);
@@ -64,7 +68,7 @@ export default function StatsChart({
 		});
 	};
 
-	const metrics = available.filter((m) => selected.has(m));
+	const metrics = available.filter((m) => effective.has(m));
 	const display = useMemo(
 		() => rollUpLongRanges(data, granularity),
 		[data, granularity],
@@ -110,7 +114,7 @@ export default function StatsChart({
 						metric={metric}
 						value={counts[metric]}
 						hint={hints[metric]}
-						isSelected={selected.has(metric)}
+						isSelected={effective.has(metric)}
 						isLoading={isLoading}
 						onClick={() => toggle(metric)}
 					/>
