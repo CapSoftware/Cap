@@ -19,14 +19,15 @@
 //! Metrics are transcribed from the TSX with the Tailwind class quoted next to
 //! them, the same convention `main_window.rs` uses.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    Animation, AnimationExt as _, App, AppContext as _, Context, Entity, FontWeight, Global, Hsla,
-    ImageFormat, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    App, AppContext as _, Context, Entity, FontWeight, Global, Hsla, ImageFormat,
+    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, Pixels, Point, Render, SharedString, StatefulInteractiveElement as _,
     Styled, Window, div, img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
     rgb, svg,
@@ -78,6 +79,13 @@ fn overlay_display_is_active(
     window_hovered: bool,
 ) -> bool {
     cursor_display.map_or(only_overlay || window_hovered, |cursor| cursor == display)
+}
+
+/// Whether a new mic level should repaint an overlay: only when it drew the
+/// meter and the fill moves by a device pixel. The cluster's width bounds the
+/// meter's.
+fn overlay_meter_moved(drawn: Option<f32>, next: f32, scale: f32) -> bool {
+    drawn.is_some_and(|drawn| crate::ui::moves_a_device_pixel(drawn, next, CLUSTER_WIDTH * scale))
 }
 
 fn overlay_viewport_size(viewport: (f32, f32), previous: (f32, f32)) -> (f32, f32) {
@@ -140,6 +148,16 @@ const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
 ];
 
 const SELECTION_HINT_CYCLE: Duration = Duration::from_millis(2800);
+
+/// The hint redraws on a 30 fps timer rather than every display refresh: it
+/// is a small illustration, but each frame repaints a full-screen overlay.
+const SELECTION_HINT_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+
+/// Where the hint is in its cycle, the way gpui's repeating `Animation`
+/// computes it: linear time since it first drew, wrapped to `0..1`.
+fn selection_hint_progress(elapsed: Duration) -> f32 {
+    (elapsed.as_secs_f32() / SELECTION_HINT_CYCLE.as_secs_f32()) % 1.
+}
 
 fn material_ease(progress: f32) -> f32 {
     let progress = progress.clamp(0., 1.);
@@ -368,28 +386,32 @@ impl TargetSelect {
                     })
                     .await;
 
-                let Ok((icon_wanted, active, changed)) = this.update(cx, |this: &mut Self, cx| {
-                    let (display, window) = probe;
-                    let microphone_fill =
-                        crate::ui::MicrophoneLevel::fill(crate::feeds::Feeds::global(cx).read(cx));
-                    let changed = this.cursor_display != display
-                        || this.hovered_window != window
-                        || this.microphone_fill != microphone_fill;
-                    this.microphone_fill = microphone_fill;
-                    this.cursor_display = display;
-                    this.hovered_window = window;
-                    if changed {
-                        cx.notify();
-                    }
+                let Ok((icon_wanted, active, changed, microphone_changed)) =
+                    this.update(cx, |this: &mut Self, cx| {
+                        let (display, window) = probe;
+                        let microphone_fill = crate::ui::MicrophoneLevel::capture_fill(cx);
+                        // The mic level stays out of `changed`: only the overlays
+                        // drawing the meter repaint for it, below.
+                        let changed =
+                            this.cursor_display != display || this.hovered_window != window;
+                        let microphone_changed = this.microphone_fill != microphone_fill;
+                        this.microphone_fill = microphone_fill;
+                        this.cursor_display = display;
+                        this.hovered_window = window;
+                        if changed {
+                            cx.notify();
+                        }
 
-                    (
-                        this.active_window()
-                            .map(|window| window.id.clone())
-                            .filter(|id| !this.icons.contains_key(&id.to_string())),
-                        this.active_window().cloned(),
-                        changed,
-                    )
-                }) else {
+                        (
+                            this.active_window()
+                                .map(|window| window.id.clone())
+                                .filter(|id| !this.icons.contains_key(&id.to_string())),
+                            this.active_window().cloned(),
+                            changed,
+                            microphone_changed,
+                        )
+                    })
+                else {
                     return;
                 };
                 let fetched_icon = icon_wanted.is_some();
@@ -409,6 +431,8 @@ impl TargetSelect {
                 // that changed nothing they draw has nothing to repaint.
                 if changed || fetched_icon {
                     cx.update(app_windows::refresh_target_overlays);
+                } else if microphone_changed {
+                    cx.update(app_windows::refresh_microphone_overlays);
                 }
                 cx.background_executor().timer(POLL_INTERVAL).await;
             }
@@ -613,6 +637,11 @@ pub struct OverlayWindow {
     /// Cached off the store so the start pill does not re-read the settings
     /// file every frame; refreshed whenever the shared sign-in reports.
     signed_in: bool,
+    /// The mic fill the last render drew, `None` when it drew no meter.
+    drawn_microphone_fill: Cell<Option<f32>>,
+    /// When the area hint first drew since it was last hidden.
+    selection_hint_started: Option<Instant>,
+    selection_hint_redraw: Option<gpui::Task<()>>,
     _main_subscription: Option<gpui::Subscription>,
 }
 
@@ -741,6 +770,9 @@ impl OverlayWindow {
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
             device_menu: None,
             signed_in: crate::store::auth_snapshot().signed_in(),
+            drawn_microphone_fill: Cell::new(None),
+            selection_hint_started: None,
+            selection_hint_redraw: None,
             _main_subscription: main_subscription,
         }
     }
@@ -917,6 +949,14 @@ impl OverlayWindow {
         });
     }
 
+    pub fn microphone_level_moved(&self, window: &Window, cx: &App) -> bool {
+        overlay_meter_moved(
+            self.drawn_microphone_fill.get(),
+            self.select.read(cx).microphone_fill,
+            window.scale_factor(),
+        )
+    }
+
     /// True when the cursor is on this overlay's display -- `data-over` in the
     /// display variant, `isActiveDisplay` in the area variant.
     fn is_active_display(&self, window: &Window, cx: &App) -> bool {
@@ -946,6 +986,7 @@ impl Render for OverlayWindow {
             self.sync_area_camera(cx);
         }
         let mode = self.select.read(cx).mode;
+        self.drawn_microphone_fill.set(None);
 
         let root = div()
             .id("overlay-root")
@@ -1212,14 +1253,13 @@ impl OverlayWindow {
             .overflow_hidden()
             .when(disabled, |row| row.opacity(0.7))
             .when(!camera && enabled && !disabled, |row| {
+                let fill = self.select.read(cx).microphone_fill;
+                self.drawn_microphone_fill.set(Some(fill));
                 row.child(
-                    crate::ui::MicrophoneLevel::snapshot(
-                        self.select.read(cx).microphone_fill,
-                        theme.blue_9.into(),
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0(),
+                    crate::ui::MicrophoneLevel::snapshot(fill, theme.blue_9.into())
+                        .absolute()
+                        .top_0()
+                        .left_0(),
                 )
             })
             .child(
@@ -1611,10 +1651,13 @@ impl OverlayWindow {
     /// region with eight handles, a size readout on top and the start cluster
     /// placed against the crop.
     fn render_area_variant(
-        &self,
-        window: &Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        // Taken so the hint restarts whenever a render leaves it out, as a
+        // gpui animation's element state would.
+        let hint_started = self.selection_hint_started.take();
         let interacting = self.drag.is_some();
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = self.recording_area || interacting || self.is_active_display(window, cx);
@@ -1704,7 +1747,7 @@ impl OverlayWindow {
             return root;
         }
         if crop.is_none() && !interacting {
-            root = root.child(self.render_selection_hint());
+            root = root.child(self.render_selection_hint(hint_started, window, cx));
         }
         root = root.child(self.render_area_toolbar(crop, valid));
         if crop.is_some() {
@@ -1838,13 +1881,36 @@ impl OverlayWindow {
             .collect()
     }
 
-    fn render_selection_hint(&self) -> impl IntoElement {
+    fn render_selection_hint(
+        &mut self,
+        started: Option<Instant>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let cursor_path = if cfg!(target_os = "windows") {
             "onboarding/cursor-windows.svg"
         } else {
             "onboarding/cursor-macos.svg"
         };
-        let animation = || Animation::new(SELECTION_HINT_CYCLE).repeat();
+        let started = started.unwrap_or_else(Instant::now);
+        self.selection_hint_started = Some(started);
+        // Reduced motion holds the first frame, as gpui's animations do.
+        let progress = if cx.reduce_motion() {
+            0.
+        } else {
+            if self.selection_hint_redraw.is_none() {
+                self.selection_hint_redraw = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(SELECTION_HINT_FRAME).await;
+                    this.update_in(cx, |this, window, cx| {
+                        this.selection_hint_redraw = None;
+                        repaint(window, cx);
+                    })
+                    .ok();
+                }));
+            }
+            selection_hint_progress(started.elapsed())
+        };
+        let drag = selection_drag_progress(progress);
         let selection = div()
             .absolute()
             .left(px(41.))
@@ -1856,55 +1922,37 @@ impl OverlayWindow {
                 linear_color_stop(gpui::hsla(0.55, 1., 0.72, 0.4), 0.),
                 linear_color_stop(gpui::hsla(0.62, 1., 0.59, 0.2), 1.),
             ))
-            .with_animation("area-selection-hint-box", animation(), |this, progress| {
-                let progress = selection_drag_progress(progress);
-                this.w(px(10. + 58. * progress)).h(px(8. + 44. * progress))
-            });
+            .w(px(10. + 58. * drag))
+            .h(px(8. + 44. * drag));
         let cursor = img(cursor_path)
             .absolute()
-            .left(px(41.))
-            .top(px(26.))
+            .left(px(41. + 68. * drag))
+            .top(px(26. + 52. * drag))
             .w(px(18.))
-            .h(px(26.))
-            .with_animation(
-                "area-selection-hint-cursor",
-                animation(),
-                |this, progress| {
-                    let progress = selection_drag_progress(progress);
-                    this.left(px(41. + 68. * progress))
-                        .top(px(26. + 52. * progress))
-                },
-            );
+            .h(px(26.));
+        let (scale, opacity) = if (0.1..0.12).contains(&progress) {
+            (
+                (progress - 0.1) / 0.02 * 0.2,
+                (progress - 0.1) / 0.02 * 0.95,
+            )
+        } else if (0.12..0.18).contains(&progress) {
+            (
+                0.2 + (progress - 0.12) / 0.06 * 0.65,
+                0.95 * (1. - (progress - 0.12) / 0.06),
+            )
+        } else {
+            (0., 0.)
+        };
+        let size = 20. * scale;
         let click = div()
             .absolute()
             .rounded_full()
             .border_2()
             .border_color(gpui::hsla(0., 0., 1., 0.85))
-            .with_animation(
-                "area-selection-hint-click",
-                animation(),
-                |this, progress| {
-                    let (scale, opacity) = if (0.1..0.12).contains(&progress) {
-                        (
-                            (progress - 0.1) / 0.02 * 0.2,
-                            (progress - 0.1) / 0.02 * 0.95,
-                        )
-                    } else if (0.12..0.18).contains(&progress) {
-                        (
-                            0.2 + (progress - 0.12) / 0.06 * 0.65,
-                            0.95 * (1. - (progress - 0.12) / 0.06),
-                        )
-                    } else {
-                        (0., 0.)
-                    };
-                    let drag = selection_drag_progress(progress);
-                    let size = 20. * scale;
-                    this.left(px(41. + 68. * drag + 9. - size / 2.))
-                        .top(px(26. + 52. * drag + 14.3 - size / 2.))
-                        .size(px(size))
-                        .opacity(opacity)
-                },
-            );
+            .left(px(41. + 68. * drag + 9. - size / 2.))
+            .top(px(26. + 52. * drag + 14.3 - size / 2.))
+            .size(px(size))
+            .opacity(opacity);
 
         div()
             .absolute()
@@ -2782,6 +2830,42 @@ mod tests {
         let (unsnapped, guides) = snap_area_point((490., 390.), display);
         assert_eq!(unsnapped, (490., 390.));
         assert!(guides.is_empty());
+    }
+
+    #[test]
+    fn only_an_overlay_drawing_the_meter_repaints_for_the_level() {
+        assert!(!overlay_meter_moved(None, 0.8, 2.));
+        assert!(overlay_meter_moved(Some(0.), 0.8, 2.));
+        assert!(overlay_meter_moved(
+            Some(0.5),
+            0.5 + 1. / (CLUSTER_WIDTH * 2.),
+            2.
+        ));
+        assert!(!overlay_meter_moved(
+            Some(0.5),
+            0.5 + 0.4 / (CLUSTER_WIDTH * 2.),
+            2.
+        ));
+        assert!(!overlay_meter_moved(Some(0.), 0., 1.));
+    }
+
+    #[test]
+    fn selection_hint_progress_repeats_like_a_gpui_animation() {
+        let at = |ms| selection_hint_progress(Duration::from_millis(ms));
+        assert_eq!(at(0), 0.);
+        assert!((at(1400) - 0.5).abs() < 1e-4);
+        assert!((at(2800 + 700) - 0.25).abs() < 1e-4);
+        assert!((at(5 * 2800 + 1400) - 0.5).abs() < 1e-3);
+        assert!(at(2799) < 1.);
+    }
+
+    #[test]
+    fn selection_hint_paces_to_thirty_frames_a_second() {
+        let frames = SELECTION_HINT_CYCLE.as_secs_f32() / SELECTION_HINT_FRAME.as_secs_f32();
+        assert!((83.9..84.1).contains(&frames), "{frames}");
+        // The click ring (`0.1..0.18` of the cycle) still gets several frames.
+        let ring = 0.08 * SELECTION_HINT_CYCLE.as_secs_f32() / SELECTION_HINT_FRAME.as_secs_f32();
+        assert!(ring >= 6., "{ring}");
     }
 
     #[test]

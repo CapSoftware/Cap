@@ -1517,6 +1517,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                             start_time: Some(0.0),
                             device_id: None,
                             gap_summary: None,
+                            digital_silence_ms: None,
                         })
                     } else {
                         None
@@ -1702,6 +1703,7 @@ async fn append_mp4_to_editor_project(
             start_time: Some(0.0),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         })
     } else {
         None

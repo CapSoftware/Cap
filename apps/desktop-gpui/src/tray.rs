@@ -287,17 +287,20 @@ pub fn cover_crop_geometry(orig_w: u32, orig_h: u32, size: u32) -> (u32, u32, u3
 
 /// `load_thumbnail_data`, ending in a PNG rather than raw RGBA -- muda hands
 /// its icon to AppKit as a PNG too (`PlatformIcon::to_nsimage`), so this is the
-/// same conversion one step earlier. A JPEG source starts from the Recents card
+/// same conversion one step earlier. An opaque source (a recording's JPEG, a
+/// display or area screenshot's RGB PNG) starts from the Recents card
 /// thumbnail cache instead of the native-resolution original. That cache is
-/// itself JPEG and drops alpha, so anything else (a transparent screenshot PNG)
-/// still decodes directly.
+/// itself JPEG and drops alpha, so a source that can carry alpha (a window
+/// screenshot's rounded-corner RGBA PNG) still decodes directly.
 fn load_thumbnail_png(path: &Path) -> Option<Vec<u8>> {
-    use image::{GenericImageView, ImageEncoder, ImageFormat, RgbaImage, imageops::FilterType};
+    use image::{GenericImageView, ImageEncoder, RgbaImage, imageops::FilterType};
 
-    let img = if ImageFormat::from_path(path).ok() == Some(ImageFormat::Jpeg) {
-        image::DynamicImage::ImageRgba8(library::thumbnail_rgba(path)?)
-    } else {
-        image::load_from_memory(&std::fs::read(path).ok()?).ok()?
+    let cached = (!source_may_have_alpha(path))
+        .then(|| library::thumbnail_rgba(path))
+        .flatten();
+    let img = match cached {
+        Some(rgba) => image::DynamicImage::ImageRgba8(rgba),
+        None => image::load_from_memory(&std::fs::read(path).ok()?).ok()?,
     };
     let (orig_w, orig_h) = img.dimensions();
     if orig_w == 0 || orig_h == 0 {
@@ -323,6 +326,24 @@ fn load_thumbnail_png(path: &Path) -> Option<Vec<u8>> {
         .write_image(result.as_raw(), size, size, image::ExtendedColorType::Rgba8)
         .ok()?;
     Some(png)
+}
+
+/// Reads only the signature and, for a PNG, the header chunks: the color type
+/// says whether the pixels can carry alpha without decoding any of them.
+fn source_may_have_alpha(path: &Path) -> bool {
+    use image::{ImageDecoder, ImageFormat, ImageReader};
+
+    let Ok(reader) = ImageReader::open(path).and_then(ImageReader::with_guessed_format) else {
+        return true;
+    };
+    match reader.format() {
+        Some(ImageFormat::Jpeg) => false,
+        Some(ImageFormat::Png) => reader
+            .into_decoder()
+            .ok()
+            .is_none_or(|decoder| decoder.color_type().has_alpha()),
+        _ => true,
+    }
 }
 
 /// `load_all_previous_items` + the background thumbnail pass, in one call.
@@ -904,6 +925,7 @@ mod mac {
         actions: Vec<TrayItem>,
         mode: Mode,
         previous: Vec<PreviousItem>,
+        previous_generation: u64,
         recording: bool,
     }
 
@@ -967,41 +989,52 @@ mod mac {
     }
 
     fn create_status_item() -> Option<Tray> {
-        let mtm = MainThreadMarker::new()?;
-        let status_item =
-            NSStatusBar::systemStatusBar().statusItemWithLength(NS_VARIABLE_STATUS_ITEM_LENGTH);
-        let target: Retained<TrayTarget> = unsafe { msg_send![TrayTarget::alloc(mtm), init] };
+        unsafe {
+            let status_bar: *mut AnyObject = msg_send![class!(NSStatusBar), systemStatusBar];
+            if status_bar.is_null() {
+                return None;
+            }
+            let raw: *mut AnyObject =
+                msg_send![status_bar, statusItemWithLength: NS_VARIABLE_STATUS_ITEM_LENGTH];
+            // `statusItemWithLength:` hands back an autoreleased object owned
+            // by the status bar; retain it for as long as we hold it, and never
+            // release it -- removing a status item is what makes it disappear
+            // from the menu bar, and this one lives for the process.
+            let status_item = Id::retain(raw)?;
+            let target: Id<TrayTarget> = msg_send_id![TrayTarget::alloc(), init];
 
-        let mode = Mode::from_store();
-        let tray = Tray {
-            status_item,
-            target,
-            menu: None,
-            actions: Vec::new(),
-            mode,
-            previous: Vec::new(),
-            recording: false,
-        };
-        set_button_image(&tray, mode_icon(mode));
-        let button = tray.status_item.button(mtm);
-        let frame = button.as_ref().map_or_else(
-            || {
+            let mode = Mode::from_store();
+            let tray = Tray {
+                status_item,
+                target,
+                menu: None,
+                actions: Vec::new(),
+                mode,
+                previous: Vec::new(),
+                previous_generation: 0,
+                recording: false,
+            };
+            set_button_image(&tray, mode_icon(mode));
+            let button: *mut AnyObject = msg_send![&*tray.status_item, button];
+            let visible: bool = msg_send![&*tray.status_item, isVisible];
+            let frame: objc2_foundation::NSRect = if button.is_null() {
                 objc2_foundation::NSRect::new(
-                    objc2_foundation::NSPoint::new(0.0, 0.0),
-                    objc2_foundation::NSSize::new(0.0, 0.0),
+                    objc2_foundation::NSPoint::new(0., 0.),
+                    objc2_foundation::NSSize::new(0., 0.),
                 )
-            },
-            |button| button.frame(),
-        );
-        tracing::info!(
-            has_button = button.is_some(),
-            visible = tray.status_item.isVisible(),
-            width = frame.size.width,
-            height = frame.size.height,
-            ?mode,
-            "status item created"
-        );
-        Some(tray)
+            } else {
+                msg_send![button, frame]
+            };
+            tracing::info!(
+                has_button = !button.is_null(),
+                visible,
+                width = frame.size.width,
+                height = frame.size.height,
+                ?mode,
+                "status item created"
+            );
+            Some(tray)
+        }
     }
 
     /// `set_icon_for_ns_status_item_button`: an 18pt-tall template image on the
@@ -1301,13 +1334,17 @@ mod mac {
         if !cx.has_global::<Tray>() {
             return;
         }
+        let tray = cx.global_mut::<Tray>();
+        tray.previous_generation = tray.previous_generation.wrapping_add(1);
+        let generation = tray.previous_generation;
         cx.spawn(async move |cx| {
             let previous = cx
                 .background_executor()
                 .spawn(async { scan_previous(true) })
                 .await;
             cx.update(|cx| {
-                if !cx.has_global::<Tray>() {
+                if !cx.has_global::<Tray>() || cx.global::<Tray>().previous_generation != generation
+                {
                     return;
                 }
                 cx.global_mut::<Tray>().previous = previous;
@@ -1520,6 +1557,8 @@ mod tests {
             let icon = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
                 .unwrap()
                 .into_rgba8();
+            assert_eq!(icon.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+            assert!(icon.get_pixel(0, 0)[3] < 8, "{scan} scan lost the corner");
             assert!(
                 icon.get_pixel(2, 16)[3] < 8,
                 "{scan} scan lost the transparent half"
@@ -1529,6 +1568,50 @@ mod tests {
                 "{scan} scan lost the opaque half"
             );
         }
+        let cache = library::thumbnail_cache_file(&png).unwrap();
+        assert!(
+            !cache.exists(),
+            "a transparent PNG never goes through the alpha-dropping cache"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn previous_thumbnails_reuse_the_cache_for_an_opaque_png() {
+        let root = temp_root("opaque-png");
+        std::fs::create_dir_all(&root).unwrap();
+        let png = root.join("screenshot.png");
+        image::RgbImage::from_pixel(1280, 720, image::Rgb([20, 120, 220]))
+            .save_with_format(&png, image::ImageFormat::Png)
+            .unwrap();
+        let cache = library::thumbnail_cache_file(&png).unwrap();
+        std::fs::remove_file(&cache).ok();
+
+        let cold = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(cold.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+        assert_eq!(cold.get_pixel(0, 0)[3], 255);
+        assert!(cache.exists(), "the first scan fills the shared cache");
+
+        let marker = image::Rgb([200, 30, 90]);
+        image::RgbImage::from_pixel(398, 224, marker)
+            .save_with_format(&cache, image::ImageFormat::Jpeg)
+            .unwrap();
+        let warm = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(warm.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+        assert!(
+            warm.pixels().all(|pixel| pixel.0[..3]
+                .iter()
+                .zip(marker.0)
+                .all(|(a, b)| a.abs_diff(b) <= 3)
+                && pixel.0[3] == 255),
+            "the warm icon is built from the cached thumbnail, not the original"
+        );
+
+        std::fs::remove_file(&cache).ok();
         std::fs::remove_dir_all(&root).ok();
     }
 
