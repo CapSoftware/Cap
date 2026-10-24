@@ -122,7 +122,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			if (result.failedEmails.length > 0) {
 				toast.warning(
 					sendEmailNotifications
-						? `Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`
+						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
 						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
 				);
 			} else if (result.skippedEmails.length === 0) {
