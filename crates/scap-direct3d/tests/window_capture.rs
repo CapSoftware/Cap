@@ -16,17 +16,22 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{COLORREF, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::{
-            Direct3D11::D3D11_BOX,
+            Direct3D::D3D_DRIVER_TYPE_WARP,
+            Direct3D11::{
+                D3D11_BOX, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION, D3D11CreateDevice,
+                ID3D11Device,
+            },
             Gdi::{CreateSolidBrush, InvalidateRect},
         },
         UI::{
             HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness},
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-                HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SWP_NOACTIVATE,
-                SWP_SHOWWINDOW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW,
+                HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SPI_GETWORKAREA,
+                SWP_NOACTIVATE, SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos,
+                SystemParametersInfoW, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW,
                 WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
             },
         },
@@ -34,14 +39,55 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-const TARGET_X: i32 = 200;
-const TARGET_Y: i32 = 200;
-const TARGET_W: i32 = 800;
-const TARGET_H: i32 = 600;
-const OVERLAY_W: i32 = 300;
-const OVERLAY_H: i32 = 200;
-const RESIZED_W: i32 = 1100;
-const RESIZED_H: i32 = 700;
+/// Where the fixture puts the target window: a fixed fraction of the primary
+/// display's work area, so the windows, the crop taken around them and every
+/// resize stay on screen from a 1024x768 runner up to a 4K desktop.
+#[derive(Clone, Copy, Debug)]
+struct Layout {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl Layout {
+    /// Physical pixels once the process is per-monitor DPI aware, which the
+    /// fixture and every test arrange before calling this.
+    fn of_primary_work_area() -> Self {
+        let mut area = RECT::default();
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some(&mut area as *mut RECT as *mut _),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        }
+        .expect("primary display work area");
+        let (width, height) = (area.right - area.left, area.bottom - area.top);
+        Self {
+            x: area.left + width / 8,
+            y: area.top + height / 8,
+            width: width / 2,
+            height: height / 2,
+        }
+    }
+
+    /// Inside the target's client area, clear of its title bar.
+    fn overlay(&self) -> (i32, i32, i32, i32) {
+        (
+            self.x + self.width / 4,
+            self.y + self.height / 4,
+            self.width / 3,
+            self.height / 3,
+        )
+    }
+
+    /// Still inside the work area: x + 3w/2 and y + 5h/4 end at 7/8 and 6/8.
+    fn grown(&self) -> (i32, i32) {
+        (self.width * 3 / 2, self.height * 5 / 4)
+    }
+}
 
 struct FixtureProcess(Child);
 
@@ -90,6 +136,8 @@ fn window_capture_fixture_process() {
     }
 
     match_cli_dpi_awareness();
+    let layout = Layout::of_primary_work_area();
+    let (overlay_x, overlay_y, overlay_w, overlay_h) = layout.overlay();
 
     // COLORREF is 0x00BBGGRR.
     register_class(w!("Cap2151Target"), 0x00FF_0000);
@@ -101,10 +149,10 @@ fn window_capture_fixture_process() {
             w!("Cap2151Target"),
             w!("Cap2151 target"),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            TARGET_X,
-            TARGET_Y,
-            TARGET_W,
-            TARGET_H,
+            layout.x,
+            layout.y,
+            layout.width,
+            layout.height,
             None,
             None,
             None,
@@ -118,10 +166,10 @@ fn window_capture_fixture_process() {
             w!("Cap2151Overlay"),
             w!("Cap2151 overlay"),
             WS_POPUP | WS_VISIBLE,
-            TARGET_X + 200,
-            TARGET_Y + 150,
-            OVERLAY_W,
-            OVERLAY_H,
+            overlay_x,
+            overlay_y,
+            overlay_w,
+            overlay_h,
             None,
             None,
             None,
@@ -133,10 +181,10 @@ fn window_capture_fixture_process() {
         SetWindowPos(
             overlay,
             Some(HWND_TOPMOST),
-            TARGET_X + 200,
-            TARGET_Y + 150,
-            OVERLAY_W,
-            OVERLAY_H,
+            overlay_x,
+            overlay_y,
+            overlay_w,
+            overlay_h,
             SWP_SHOWWINDOW | SWP_NOACTIVATE,
         )
     }
@@ -159,13 +207,14 @@ fn window_capture_fixture_process() {
     while started.elapsed() < Duration::from_secs(60) {
         match command_rx.try_recv() {
             Ok(line) if line.trim() == "resize" => unsafe {
+                let (width, height) = layout.grown();
                 SetWindowPos(
                     target,
                     None,
-                    TARGET_X,
-                    TARGET_Y,
-                    RESIZED_W,
-                    RESIZED_H,
+                    layout.x,
+                    layout.y,
+                    width,
+                    height,
                     SWP_SHOWWINDOW | SWP_NOACTIVATE,
                 )
                 .expect("resize target");
@@ -178,7 +227,7 @@ fn window_capture_fixture_process() {
                 let (x, y) = if moves {
                     (dims.next().unwrap(), dims.next().unwrap())
                 } else {
-                    (TARGET_X, TARGET_Y)
+                    (layout.x, layout.y)
                 };
                 let (width, height) = (dims.next().unwrap(), dims.next().unwrap());
                 unsafe {
@@ -236,9 +285,57 @@ fn capture_samples(
     )
 }
 
+/// The WARP software rasterizer, which Cap falls back to without a usable GPU.
+/// It removes its device over copies a hardware driver lets pass, so it is
+/// what catches an out-of-bounds copy on a machine that has a GPU.
+fn warp_device() -> ID3D11Device {
+    let mut device = None;
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_WARP,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_FLAG::default(),
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            None,
+        )
+    }
+    .expect("create WARP device");
+    device.expect("WARP device")
+}
+
+/// `CAP_SCAP_TEST_WARP=1` runs every capture here on WARP; otherwise the
+/// capturer picks its device the way the recorder does.
+fn device_from_env() -> Option<ID3D11Device> {
+    std::env::var_os("CAP_SCAP_TEST_WARP").map(|_| warp_device())
+}
+
 fn capture_samples_with(
     item: windows::Graphics::Capture::GraphicsCaptureItem,
     settings: Settings,
+    duration: Duration,
+    during: impl FnOnce(),
+) -> Vec<Sample> {
+    capture_samples_on(
+        item,
+        settings,
+        device_from_env(),
+        Duration::ZERO,
+        duration,
+        during,
+    )
+}
+
+/// `frame_delay` holds each frame in the callback, standing in for a consumer
+/// slower than the capture, so frames queue up in the pool behind it.
+fn capture_samples_on(
+    item: windows::Graphics::Capture::GraphicsCaptureItem,
+    settings: Settings,
+    device: Option<ID3D11Device>,
+    frame_delay: Duration,
     duration: Duration,
     during: impl FnOnce(),
 ) -> Vec<Sample> {
@@ -254,6 +351,9 @@ fn capture_samples_with(
             ..settings
         },
         move |frame| {
+            if !frame_delay.is_zero() {
+                std::thread::sleep(frame_delay);
+            }
             let buffer = frame.as_buffer()?;
             let (width, height, stride) = (
                 buffer.width() as usize,
@@ -282,7 +382,7 @@ fn capture_samples_with(
             Ok(())
         },
         || Ok(()),
-        None,
+        device,
     )
     .expect("create capturer");
 
@@ -290,6 +390,10 @@ fn capture_samples_with(
     during();
     std::thread::sleep(duration);
     capturer.stop().expect("stop capture");
+    // A removed device stops the frames without failing anything else, and
+    // on WARP it is how an invalid copy shows up.
+    unsafe { capturer.d3d_device().GetDeviceRemovedReason() }
+        .expect("the capture device must not be removed during the capture");
     let samples = samples.lock().unwrap();
     samples.clone()
 }
@@ -297,6 +401,7 @@ fn capture_samples_with(
 struct Fixture {
     process: FixtureProcess,
     target: WindowId,
+    layout: Layout,
 }
 
 impl Fixture {
@@ -328,11 +433,21 @@ impl Fixture {
             .expect("parse fixture window id");
         // Give the windows a moment to paint before capturing them.
         std::thread::sleep(Duration::from_millis(800));
-        Self { process, target }
+        Self {
+            process,
+            target,
+            layout: Layout::of_primary_work_area(),
+        }
     }
 
     fn window(&self) -> Window {
         Window::from_id(&self.target).expect("fixture window must be discoverable")
+    }
+
+    /// Resizes the target in place to its starting size plus `pixels`.
+    fn grow_by(&mut self, pixels: i32) {
+        let (width, height) = (self.layout.width + pixels, self.layout.height + pixels);
+        self.send(&format!("size {width} {height}"));
     }
 
     fn send(&mut self, command: &str) {
@@ -485,9 +600,9 @@ fn window_frames_are_trimmed_to_even_dimensions_on_the_gpu() {
         Duration::from_secs(2),
         || {
             std::thread::sleep(Duration::from_millis(700));
-            fixture.send(&format!("size {} {}", TARGET_W + 1, TARGET_H + 1));
+            fixture.grow_by(1);
             std::thread::sleep(Duration::from_millis(700));
-            fixture.send(&format!("size {} {}", TARGET_W + 2, TARGET_H + 2));
+            fixture.grow_by(2);
         },
     );
 
@@ -511,5 +626,101 @@ fn window_frames_are_trimmed_to_even_dimensions_on_the_gpu() {
     assert!(
         last.blue > 0,
         "trimmed frames must still carry the window's contents: {last:?}"
+    );
+}
+
+/// A consumer slower than the capture leaves frames queued in the pool when it
+/// is recreated for a new size. Those frames report the new ContentSize on a
+/// surface still at the old size, so trimming them to their ContentSize reads
+/// past the surface's edge. WARP removes the device over that copy and
+/// Windows.Graphics.Capture then fails fast on its next use of it, taking the
+/// whole process down with 0xc0000409. Runs on WARP whatever the machine has.
+/// Which frames are queued is up to the capture's timing, so before the fix
+/// this crashed on most runs rather than every one.
+#[test]
+fn frames_queued_before_the_pool_is_recreated_are_not_copied() {
+    match_cli_dpi_awareness();
+
+    let mut fixture = Fixture::start();
+    let item = fixture
+        .window()
+        .raw_handle()
+        .try_as_capture_item()
+        .expect("window capture item");
+
+    let samples = capture_samples_on(
+        item,
+        Settings {
+            even_dimensions: true,
+            follow_item_size: true,
+            ..Default::default()
+        },
+        Some(warp_device()),
+        Duration::from_millis(150),
+        Duration::from_secs(2),
+        || {
+            std::thread::sleep(Duration::from_millis(700));
+            fixture.grow_by(1);
+            std::thread::sleep(Duration::from_millis(700));
+            fixture.grow_by(2);
+        },
+    );
+
+    let sizes: Vec<_> = samples.iter().map(|s| (s.width, s.height)).collect();
+    assert!(
+        sizes.iter().all(|(w, h)| w % 2 == 0 && h % 2 == 0),
+        "every frame must have even dimensions: {sizes:?}"
+    );
+    let mut distinct = sizes.clone();
+    distinct.dedup();
+    assert!(
+        distinct.len() >= 2,
+        "the capture must follow the resizes, saw {distinct:?}"
+    );
+}
+
+/// Without `follow_item_size` the pool keeps its creation size while the item
+/// grows past it, so the trim has to stay inside the surface rather than
+/// follow ContentSize off its edge. Runs on WARP, where that copy removes the
+/// device and the capture stops delivering frames.
+#[test]
+fn even_dimension_trim_stays_inside_the_surface() {
+    match_cli_dpi_awareness();
+
+    let mut fixture = Fixture::start();
+    let item = fixture
+        .window()
+        .raw_handle()
+        .try_as_capture_item()
+        .expect("window capture item");
+    let start = item.Size().expect("item size");
+    let even = |v: i32| (v.max(0) as u32) & !1;
+
+    let samples = capture_samples_on(
+        item,
+        Settings {
+            even_dimensions: true,
+            ..Default::default()
+        },
+        Some(warp_device()),
+        Duration::ZERO,
+        Duration::from_secs(2),
+        || {
+            // WARP can be slow to deliver its first frame while the other
+            // tests capture alongside it.
+            std::thread::sleep(Duration::from_millis(1000));
+            fixture.grow_by(1);
+            std::thread::sleep(Duration::from_millis(700));
+            fixture.grow_by(2);
+        },
+    );
+
+    let sizes: Vec<_> = samples.iter().map(|s| (s.width, s.height)).collect();
+    assert!(!sizes.is_empty(), "the capture must deliver frames");
+    assert!(
+        sizes
+            .iter()
+            .all(|&(w, h)| (w, h) == (even(start.Width), even(start.Height))),
+        "every frame must be the pool's own size floored to even: {sizes:?}"
     );
 }

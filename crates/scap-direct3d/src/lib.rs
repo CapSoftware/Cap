@@ -635,6 +635,17 @@ impl Capturer {
                                 .unwrap_or_else(|poisoned| poisoned.into_inner());
                             if (size.Width, size.Height) != *pool_size {
                                 drop(frame);
+                                // Windows.Graphics.Capture fails fast, on a
+                                // thread nothing here can catch, once its device
+                                // is removed. Do not hand it the removed device
+                                // again; report the removal instead.
+                                if let Err(error) = unsafe { d3d_device.GetDeviceRemovedReason() } {
+                                    tracing::error!(
+                                        %error,
+                                        "scap-direct3d: capture device removed, not recreating the frame pool"
+                                    );
+                                    return Err(error);
+                                }
                                 // IDirect3DDevice is not Send, so it is rebuilt
                                 // here from the capture device rather than held
                                 // across the event handler.
@@ -657,13 +668,39 @@ impl Capturer {
                         let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
                         let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
 
+                        // ContentSize is the item's size when the frame was
+                        // captured, not the size of the surface it was written
+                        // to: it runs ahead of the surface whenever the item
+                        // grows before the pool is recreated, including frames
+                        // the old pool had already queued when `Recreate` ran.
+                        // Copies are bounded by the surface itself, because a
+                        // source box past its edge is undefined behaviour that
+                        // a hardware driver ignores but WARP answers by removing
+                        // the device, and Windows.Graphics.Capture then fails
+                        // fast on its next use of it.
+                        let mut surface_desc = D3D11_TEXTURE2D_DESC::default();
+                        unsafe { texture.GetDesc(&mut surface_desc) };
+                        let content_width = size.Width.max(0) as u32;
+                        let content_height = size.Height.max(0) as u32;
+
+                        // A frame queued before the pool was recreated: its
+                        // surface is the old size, and the next frame is not.
+                        if follow_item_size
+                            && (surface_desc.Width, surface_desc.Height)
+                                != (content_width, content_height)
+                        {
+                            return Ok(());
+                        }
+
                         let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
                             // A shrunk item leaves the crop box hanging off the
                             // edge of the source texture, which copies nothing
                             // and would vend a stale surface as if it were live.
-                            if follow_item_size
-                                && (crop.right > size.Width.max(0) as u32
-                                    || crop.bottom > size.Height.max(0) as u32)
+                            if crop.right > surface_desc.Width
+                                || crop.bottom > surface_desc.Height
+                                || (follow_item_size
+                                    && (crop.right > content_width
+                                        || crop.bottom > content_height))
                             {
                                 return Ok(());
                             }
@@ -691,9 +728,14 @@ impl Capturer {
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),
                             }
-                        } else if even_dimensions && (size.Width % 2 != 0 || size.Height % 2 != 0) {
-                            let width = (size.Width.max(0) as u32) & !1;
-                            let height = (size.Height.max(0) as u32) & !1;
+                        } else if even_dimensions
+                            && (
+                                content_width.min(surface_desc.Width) & !1,
+                                content_height.min(surface_desc.Height) & !1,
+                            ) != (content_width, content_height)
+                        {
+                            let width = content_width.min(surface_desc.Width) & !1;
+                            let height = content_height.min(surface_desc.Height) & !1;
                             if width == 0 || height == 0 {
                                 return Ok(());
                             }
