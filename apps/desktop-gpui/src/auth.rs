@@ -338,7 +338,9 @@ fn api_client_builder() -> reqwest::ClientBuilder {
         .timeout(Duration::from_secs(45))
 }
 
-/// A new client, for a caller that keeps one for a single upload.
+/// Multipart uploads hold their own client and drop it when the upload ends,
+/// so a later upload never starts on a pooled connection from an earlier
+/// network (#2522).
 pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
     api_client_builder()
         .build()
@@ -347,6 +349,12 @@ pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
 
 static SHARED_API_CLIENT: Mutex<Option<(std::time::SystemTime, reqwest::Client)>> =
     Mutex::new(None);
+
+/// Held by every test that resets the shared client or counts its
+/// connections, so a reset on one thread cannot land in another's count.
+#[cfg(test)]
+pub(crate) static SHARED_API_CLIENT_TEST_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
 
 /// Drops the shared client, as quitting the app does, for tests that model a
 /// relaunch.

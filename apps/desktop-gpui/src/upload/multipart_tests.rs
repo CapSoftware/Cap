@@ -816,11 +816,11 @@ async fn authed_presign(part: u32) -> Duration {
 async fn sequential_api_requests_reuse_one_connection_until_it_idles_out() {
     let server = mock_network::start(fast_local_profile());
     let _signed_in = SignedIn::new(server.addr);
+    let _shared_client = auth::SHARED_API_CLIENT_TEST_LOCK.lock().await;
     for part in 1..=20 {
         authed_presign(part).await;
     }
-    // One more if the shared client is replaced mid-loop, by its age or by a
-    // relaunch test on another thread.
+    // One more if the shared client reaches its maximum age mid-loop.
     let reused = server.connections.load(Ordering::Acquire);
     assert!(reused <= 2, "{reused} connections for 20 requests");
 

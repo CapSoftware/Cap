@@ -126,6 +126,7 @@ fn assert_verified(
 #[test]
 fn saved_instant_upload_resumes_after_quit_mid_transfer() {
     let case = "queue_resume_after_quit_mid_transfer";
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
     let scratch = Scratch::new(case);
     virtual_time(async {
         let mock = MockCap::start(vec![rule(
@@ -179,6 +180,7 @@ fn saved_instant_upload_resumes_after_quit_mid_transfer() {
 #[test]
 fn saved_instant_upload_quit_during_verification_confirms_without_reupload() {
     let case = "queue_resume_after_quit_during_verification";
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
     let scratch = Scratch::new(case);
     virtual_time(async {
         let mock = MockCap::start(vec![rule(Route::Api("recording-complete"), Fault::Hang)]).await;
