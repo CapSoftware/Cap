@@ -175,3 +175,64 @@ describe("recording status synchronization", () => {
 		});
 	});
 });
+
+describe("standalone side panel across windows", () => {
+	type ClickListener = Parameters<
+		typeof chrome.action.onClicked.addListener
+	>[0];
+
+	const newTab = (windowId: number) =>
+		({
+			id: windowId * 10,
+			windowId,
+			url: "chrome://newtab/",
+		}) as chrome.tabs.Tab;
+
+	const panelCloses = () =>
+		vi
+			.mocked(chrome.runtime.sendMessage)
+			.mock.calls.map(
+				([message]) =>
+					message as { target?: string; type?: string; windowId?: number },
+			)
+			.filter(
+				(message) =>
+					message.target === "standalone-panel" && message.type === "close",
+			)
+			.map((message) => message.windowId);
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	it("moves the recorder to the clicked window and toggles only in its own window", async () => {
+		const open = vi.fn(() => Promise.resolve());
+		Object.assign(chrome, { sidePanel: { open } });
+		const click = vi.mocked(chrome.action.onClicked.addListener).mock
+			.calls[0][0] as ClickListener;
+
+		click(newTab(1));
+		expect(open).toHaveBeenLastCalledWith({ windowId: 1 });
+		await vi.waitFor(() => expect(pollReplies).toHaveLength(1));
+		pollReplies[0](undefined as unknown as OffscreenResponse);
+		answerContexts(false);
+		await settle();
+
+		click(newTab(2));
+		expect(open).toHaveBeenLastCalledWith({ windowId: 2 });
+		await vi.waitFor(() => expect(panelCloses()).toEqual([1]));
+
+		await onMessage(
+			{
+				target: "service-worker",
+				type: "standalone-panel-closed",
+				windowId: 1,
+			},
+			{},
+			vi.fn(),
+		);
+		await settle();
+
+		click(newTab(2));
+		expect(open).toHaveBeenCalledTimes(2);
+		expect(panelCloses()).toEqual([1, 2]);
+	});
+});
