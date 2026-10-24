@@ -12,6 +12,8 @@ import {
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getOrganizationAccess } from "@/actions/organization/authorization";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 export async function addVideosToFolder(
 	folderId: Folder.FolderId,
@@ -30,12 +32,36 @@ export async function addVideosToFolder(
 		}
 
 		const [folder] = await db()
-			.select({ id: folders.id, spaceId: folders.spaceId })
+			.select({
+				id: folders.id,
+				organizationId: folders.organizationId,
+				spaceId: folders.spaceId,
+			})
 			.from(folders)
-			.where(eq(folders.id, folderId));
+			.where(and(eq(folders.id, folderId), eq(folders.spaceId, spaceId)));
 
 		if (!folder) {
 			throw new Error("Folder not found");
+		}
+
+		if (spaceId === user.activeOrganizationId) {
+			const access = await getOrganizationAccess(
+				user.id,
+				user.activeOrganizationId,
+			);
+			if (!access || folder.organizationId !== user.activeOrganizationId) {
+				throw new Error("Folder not found");
+			}
+		} else {
+			const access = await getSpaceAccess(user.id, spaceId);
+			if (
+				!access ||
+				access.organizationId !== folder.organizationId ||
+				!access.organizationRole ||
+				(!access.canManage && !access.spaceRole)
+			) {
+				throw new Error("Folder not found");
+			}
 		}
 
 		const userVideos = await db()
@@ -50,13 +76,29 @@ export async function addVideosToFolder(
 		}
 
 		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
+		const sharesWithOrganization = isAllSpacesEntry && !!folder.spaceId;
+		const sharingTable = sharesWithOrganization ? sharedVideos : spaceVideos;
+		const existingShares = await db()
+			.select({ videoId: sharingTable.videoId })
+			.from(sharingTable)
+			.where(
+				and(
+					sharesWithOrganization
+						? eq(sharedVideos.organizationId, user.activeOrganizationId)
+						: eq(spaceVideos.spaceId, spaceId),
+					inArray(sharingTable.videoId, validVideoIds),
+				),
+			);
+		const existingVideoIds = new Set(
+			existingShares.map((share) => share.videoId),
+		);
+		const newVideoIds = validVideoIds.filter((id) => !existingVideoIds.has(id));
 
-		//if we're adding videos to a folder from Caps page, then insert the videos into the folder
-		if (isAllSpacesEntry && folder.spaceId) {
+		if (newVideoIds.length > 0 && sharesWithOrganization) {
 			await db()
 				.insert(sharedVideos)
 				.values(
-					validVideoIds.map((videoId) => {
+					newVideoIds.map((videoId) => {
 						const id = nanoId();
 						return {
 							id,
@@ -67,11 +109,11 @@ export async function addVideosToFolder(
 						};
 					}),
 				);
-		} else {
+		} else if (newVideoIds.length > 0) {
 			await db()
 				.insert(spaceVideos)
 				.values(
-					validVideoIds.map((videoId) => {
+					newVideoIds.map((videoId) => {
 						const id = nanoId();
 						return {
 							id,

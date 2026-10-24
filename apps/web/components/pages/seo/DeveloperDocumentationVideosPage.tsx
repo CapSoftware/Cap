@@ -130,7 +130,7 @@ export const developerDocumentationVideosContent: SeoPageContent = {
 			],
 			[
 				"Open source",
-				{ text: "Yes — MIT", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
@@ -160,7 +160,7 @@ export const developerDocumentationVideosContent: SeoPageContent = {
 		{
 			title: "Cap vs Loom for Developer Documentation",
 			description:
-				"Loom is a capable async video tool but limits recording quality and length on its free plan, and has no self-hosting option for teams with data residency requirements. Cap records at 4K with no recording-length limits in Studio Mode and supports <a href='/self-hosted-screen-recording'>self-hosted S3 storage</a>. Cap is also fully open source under the MIT license — developers can audit the code, contribute features, and trust the tool they're using to document their own products.",
+				"Loom is a capable async video tool but limits recording quality and length on its free plan, and has no self-hosting option for teams with data residency requirements. Cap records at 4K with no recording-length limits in Studio Mode and supports <a href='/self-hosted-screen-recording'>self-hosted S3 storage</a>. Cap is also open source, with most code under AGPLv3 and specified Rust crates under MIT — developers can audit the code, contribute features, and trust the tool they're using to document their own products.",
 		},
 		{
 			title: "Cap vs Written Documentation",
@@ -265,7 +265,7 @@ export const developerDocumentationVideosContent: SeoPageContent = {
 		{
 			question: "What is the best screen recorder for developer documentation?",
 			answer:
-				"Cap is the best screen recorder for developer documentation because it combines 4K recording quality, instant shareable links, AI-generated transcripts, and self-hosted storage in a single free, open-source tool. Unlike general-purpose video tools, Cap is optimized for the async sharing workflows developers actually use — paste a link in a README, embed in a docs site, or share in a PR comment. It's free, MIT-licensed, and available for Mac and Windows.",
+				"Cap is the best screen recorder for developer documentation because it combines 4K recording quality, instant shareable links, AI-generated transcripts, and self-hosted storage in a single free, open-source tool. Unlike general-purpose video tools, Cap is optimized for the async sharing workflows developers actually use — paste a link in a README, embed in a docs site, or share in a PR comment. It's free and open source, with most code under AGPLv3, and available for Mac and Windows.",
 		},
 		{
 			question: "Does Cap work for recording API demos and SDK walkthroughs?",

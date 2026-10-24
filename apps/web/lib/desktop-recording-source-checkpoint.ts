@@ -1,8 +1,13 @@
 import { z } from "zod";
 
 export const SOURCE_COMMIT_PAGE_SIZE = 16;
+// Cap's own AWS bucket answers fast enough to finish 8x larger pages well inside a step's deadline.
+export const SOURCE_COMMIT_AWS_PAGE_SIZE = 128;
 export const SOURCE_COMMIT_PART_BATCH_SIZE = 4;
 export const SOURCE_COMMIT_PART_PAGE_SIZE = 64;
+// Readers accept larger tree pages than writers produce, so a deployment can be rolled back while commits written by a newer one are in flight.
+export const SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES = 256;
+export const SOURCE_COMMIT_TREE_PAGE_SIZE = 128;
 export const SOURCE_COMMIT_MAX_OBJECTS = 100_002;
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);

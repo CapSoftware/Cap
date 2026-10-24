@@ -55,6 +55,10 @@ pub struct AudioMeta {
     pub device_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap_summary: Option<AudioGapSummary>,
+    /// Milliseconds the unmuted microphone delivered sustained bit-exact silence,
+    /// e.g. while a VoIP call held the input on macOS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digital_silence_ms: Option<u32>,
 }
 
 /// Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
@@ -1142,6 +1146,7 @@ mod test {
                 start_time,
                 device_id: None,
                 gap_summary: None,
+                digital_silence_ms: None,
             }
         }
 

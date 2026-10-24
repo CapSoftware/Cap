@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { FfmpegExitError, ffmpegErrorLines } from "../../lib/ffmpeg-errors";
 import type { VideoMetadata } from "../../lib/job-manager";
 import { decodeThreadsFromEnv } from "../../lib/media-common";
 import {
@@ -286,6 +287,76 @@ describe("nvenc fallback", () => {
 		expect(nvencFallbackReason(new Error("killed"), true)).toBeNull();
 	});
 
+	test("leads with the encoder error printed before the progress tail", () => {
+		const progress = [
+			"frame=0",
+			"fps=0.00",
+			"stream_0_0_q=0.0",
+			"bitrate=N/A",
+			"total_size=0",
+			"out_time_us=N/A",
+			"out_time_ms=N/A",
+			"out_time=N/A",
+			"dup_frames=0",
+			"drop_frames=0",
+			"speed=N/A",
+			"progress=end",
+		];
+		const stderr = [
+			"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'https://bucket.s3.us-east-1.amazonaws.com/user-123/video-456/raw.mp4?X-Amz-Credential=AKIAEXAMPLE%2F20261023&X-Amz-Signature=deadbeef':",
+			"[h264_nvenc @ 0x5581c2a0] InitializeEncoder failed: invalid param (8): Invalid Level.",
+			"[vost#0:0/h264_nvenc @ 0x5581c3b0] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.",
+			"Error opening output file /tmp/cap-media-server/instance-1/user-123-out.mp4.",
+			...progress,
+			"Conversion failed!",
+		];
+		const reason = nvencFallbackReason(
+			new FfmpegExitError(
+				`FFmpeg exited with code 1. Last stderr: ${stderr.slice(-10).join(" | ")}`,
+				ffmpegErrorLines(stderr.join("\n")),
+			),
+			false,
+		);
+		expect(reason).toStartWith(
+			"[h264_nvenc @ 0x5581c2a0] InitializeEncoder failed: invalid param (8): Invalid Level.",
+		);
+		expect(reason).toContain("Error while opening encoder");
+		expect(reason).toContain("Error opening output file <path>");
+		expect(reason).toContain("Conversion failed!");
+		expect(reason).not.toContain("amazonaws");
+		expect(reason).not.toContain("X-Amz");
+		expect(reason).not.toContain("user-123");
+		expect(reason?.length).toBeLessThanOrEqual(500);
+		expect(
+			ffmpegErrorLines(
+				"Reconfiguring filter graph because video parameters changed to yuv420p(tv), 1280x720\r\nprogress=continue\nerror_rate=0\n",
+			),
+		).toEqual([
+			"Reconfiguring filter graph because video parameters changed to yuv420p(tv), 1280x720",
+		]);
+		expect(
+			ffmpegErrorLines(
+				[
+					"[https @ 0x1] HTTP error 403 Forbidden",
+					`[in#0 @ 0x2] Error opening input: Server returned 403 Forbidden (access denied)`,
+				].join("\n"),
+			),
+		).toHaveLength(2);
+		expect(
+			nvencFallbackReason(
+				new FfmpegExitError(
+					"FFmpeg exited with code 1. Last stderr: Conversion failed!",
+					[
+						"Error opening input file https://bucket.example/raw.mp4?X-Amz-Signature=secret",
+					],
+				),
+				false,
+			),
+		).toBe(
+			"Error opening input file <url> || FFmpeg exited with code 1. Last stderr: Conversion failed!",
+		);
+	});
+
 	test("reports the last attempt through the encoder status", () => {
 		const before = getVideoEncoderStatus(enabled).nvenc;
 		recordNvencAttempt("process", "No NVENC capable devices found");
@@ -466,6 +537,8 @@ describe("process video args", () => {
 			"4",
 			"-fflags",
 			"+genpts",
+			"-reinit_filter",
+			"0",
 			"-i",
 			"in.webm",
 			...nvencVideoArgs,
@@ -684,6 +757,12 @@ describe("nvenc jobs on hosts without an NVENC device", () => {
 			expect(result.height).toBe(120);
 			expect(result.audioCodec).toBe("aac");
 			expectRecordedAttempt("process", attempts);
+			const lastAttempt = getVideoEncoderStatus(enabled).nvenc?.lastAttempt;
+			if (lastAttempt?.fellBack) {
+				const [cause] = lastAttempt.reason?.split(" || ") ?? [];
+				expect(cause).not.toStartWith("FFmpeg exited");
+				expect(cause).not.toMatch(/out_time=|total_size=|progress=/);
+			}
 		} finally {
 			await output.cleanup();
 		}

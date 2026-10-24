@@ -80,4 +80,40 @@ describe("playback store", () => {
 		video.dispatchEvent(new Event("timeupdate"));
 		expect(subscriber).toHaveBeenCalledTimes(1);
 	});
+
+	it("notifies subscribers when late fallbackDuration changes the store duration", () => {
+		const store = createPlaybackStore(0);
+		let observedDuration = store.getDuration();
+		store.subscribe(() => {
+			observedDuration = store.getDuration();
+		});
+
+		expect(observedDuration).toBe(0);
+
+		store.setFallbackDuration(60);
+
+		expect(observedDuration).toBe(60);
+		expect(store.getDuration()).toBe(60);
+	});
+
+	it("does not notify subscribers when fallbackDuration does not change total duration", () => {
+		const video = Object.assign(new EventTarget(), {
+			currentTime: 0,
+			duration: 120,
+			paused: true,
+			ended: false,
+		});
+		const store = createPlaybackStore(60);
+		store.attach(video as unknown as HTMLVideoElement);
+
+		const subscriber = vi.fn(() => store.getDuration());
+		store.subscribe(subscriber);
+		subscriber.mockClear();
+
+		store.setFallbackDuration(90);
+
+		expect(subscriber).not.toHaveBeenCalled();
+		expect(store.getDuration()).toBe(120);
+		store.detach();
+	});
 });
