@@ -66,45 +66,22 @@ export async function startDeferredLoomProcessing(
 		);
 	if (getAffectedRows(claim) !== 1) return "already-started" as const;
 
-	try {
-		await db()
-			.insert(videoUploads)
-			.values({
-				videoId,
-				mode: "singlepart",
-				phase: "uploading",
-				rawFileKey,
-				processingMessage: "Optimizing imported video...",
-			})
-			.onDuplicateKeyUpdate({ set: { rawFileKey, phase: "uploading" } });
-		return await startVideoProcessingWorkflow({
+	await db()
+		.insert(videoUploads)
+		.values({
 			videoId,
-			userId: ownerId,
+			mode: "singlepart",
+			phase: "uploading",
 			rawFileKey,
-			bucketId,
 			processingMessage: "Optimizing imported video...",
-			startFailureMessage: "Imported video could not be optimized",
-		});
-	} catch (error) {
-		await db()
-			.delete(videoUploads)
-			.where(
-				and(
-					eq(videoUploads.videoId, videoId),
-					eq(videoUploads.rawFileKey, rawFileKey),
-				),
-			);
-		await db()
-			.update(videos)
-			.set({
-				metadata: sql`JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.status', 'pending')`,
-			})
-			.where(
-				and(
-					eq(videos.id, videoId),
-					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.startedAt')) = ${startedAt}`,
-				),
-			);
-		throw error;
-	}
+		})
+		.onDuplicateKeyUpdate({ set: { rawFileKey, phase: "uploading" } });
+	return startVideoProcessingWorkflow({
+		videoId,
+		userId: ownerId,
+		rawFileKey,
+		bucketId,
+		processingMessage: "Optimizing imported video...",
+		startFailureMessage: "Imported video could not be optimized",
+	});
 }

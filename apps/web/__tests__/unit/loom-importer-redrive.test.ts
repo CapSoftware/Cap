@@ -281,8 +281,8 @@ describe("deferred Loom processing", () => {
 		).toBeNull();
 	});
 
-	it("releases its claim when the conversion cannot start", async () => {
-		mocks.startProcessing.mockRejectedValue(new Error("queue down"));
+	it("keeps its claim when the conversion start is uncertain", async () => {
+		mocks.startProcessing.mockRejectedValue(new Error("queue timed out"));
 		await expect(
 			startDeferredLoomProcessing(
 				{
@@ -293,9 +293,9 @@ describe("deferred Loom processing", () => {
 				},
 				now,
 			),
-		).rejects.toThrow("queue down");
-		expect(mocks.deletes).toBe(1);
-		expect(mocks.updates).toHaveLength(2);
+		).rejects.toThrow("queue timed out");
+		expect(mocks.deletes).toBe(0);
+		expect(mocks.updates).toHaveLength(1);
 	});
 
 	it("starts processing the original once", async () => {
