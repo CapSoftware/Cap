@@ -1337,6 +1337,10 @@ async fn build_instant_recording_actor(
             #[cfg(not(target_os = "macos"))]
             let max_capture_size = None;
 
+            #[cfg(target_os = "macos")]
+            let capture_window =
+                macos_capture_window(&inputs.capture_target, inputs.camera_feed.is_some());
+
             let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
                 display,
                 crop_bounds,
@@ -1358,6 +1362,8 @@ async fn build_instant_recording_actor(
                     .ok_or_else(|| anyhow::anyhow!("Missing shareable content"))?,
                 #[cfg(target_os = "macos")]
                 inputs.excluded_windows,
+                #[cfg(target_os = "macos")]
+                capture_window,
             )
             .await
             .context("screen capture init")?;
@@ -1567,9 +1573,33 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     }
 }
 
+// macOS Instant mode has no camera compositing: the camera preview only reaches the
+// video because the display capture records it, so a window-only capture would drop it.
+#[cfg(target_os = "macos")]
+fn macos_capture_window(
+    target: &ScreenCaptureTarget,
+    camera_attached: bool,
+) -> Option<scap_targets::WindowId> {
+    target.window().filter(|_| !camera_attached)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_target_captures_window_unless_camera_attached() {
+        let id: scap_targets::WindowId = "247".parse().unwrap();
+        let window = ScreenCaptureTarget::Window { id: id.clone() };
+
+        assert_eq!(macos_capture_window(&window, false), Some(id));
+        assert_eq!(macos_capture_window(&window, true), None);
+        assert_eq!(
+            macos_capture_window(&ScreenCaptureTarget::CameraOnly, false),
+            None
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
