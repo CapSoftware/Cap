@@ -462,7 +462,8 @@ impl InstantUpload {
         result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
     }
 
-    pub async fn cancel(&mut self) -> Result<(), String> {
+    /// `query` adds parameters to the server delete.
+    pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
         self.abort_segments().await;
         if let Some(ownership) = &self.ownership {
             queue::record_cancelled(ownership.project_path())?;
@@ -470,7 +471,7 @@ impl InstantUpload {
         with_upload_context(
             self.request_context.clone(),
             self.reads.clone(),
-            delete_instant_video(&self.video.id),
+            delete_instant_video_with_query(&self.video.id, query),
         )
         .await
     }
@@ -490,10 +491,6 @@ impl InstantUpload {
         }
         self.reads.join().await;
     }
-}
-
-pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
-    delete_instant_video_with_query(video_id, None).await
 }
 
 pub(crate) async fn delete_instant_video_with_query(

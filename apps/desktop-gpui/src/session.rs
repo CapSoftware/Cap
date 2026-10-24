@@ -963,7 +963,7 @@ impl RecordingSession {
             #[cfg(target_os = "linux")]
             let discarded = active.cancel_preserving().await;
             #[cfg(not(target_os = "linux"))]
-            let discarded = active.cancel_and_delete().await;
+            let discarded = active.discard_cancelled_start().await;
             match discarded {
                 Ok(()) => {
                     if let Some(video_id) = &video_id {

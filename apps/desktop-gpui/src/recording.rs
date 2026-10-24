@@ -1123,6 +1123,21 @@ impl ActiveRecording {
     /// delete and restart flows. Deleting a directory this app just created is
     /// app behavior, same as the Tauri delete button.
     pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
+        self.cancel_and_delete_with_query(None).await
+    }
+
+    /// `cancel_and_delete` for a start that was superseded before it began,
+    /// telling the server why its Instant video is deleted.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) async fn discard_cancelled_start(self) -> anyhow::Result<()> {
+        let query = crate::upload::instant_cleanup::delete_query(
+            crate::upload::instant_cleanup::CleanupReason::StartCancelled,
+            None,
+        );
+        self.cancel_and_delete_with_query(query).await
+    }
+
+    async fn cancel_and_delete_with_query(self, query: Option<String>) -> anyhow::Result<()> {
         if let Some(gate) = &self.start_gate {
             gate.arm();
         }
@@ -1175,7 +1190,7 @@ impl ActiveRecording {
             None => None,
         };
         let remote_result = if let Some(upload) = upload.as_mut() {
-            upload.cancel().await
+            upload.cancel(query.as_deref()).await
         } else {
             Ok(())
         };
