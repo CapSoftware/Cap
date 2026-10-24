@@ -586,6 +586,45 @@ fn create_uav(
 // Samples whose copy to a staging texture can be in flight while an earlier one is read back.
 const READBACK_DEPTH: usize = 2;
 
+// Readbacks go downstream as `Arc<Vec<u8>>`. A clone of each is kept so a later readback can
+// refill one once every consumer has dropped it, instead of allocating and zeroing a new frame.
+// Only a few free ones are kept, so memory still falls when a seek empties the frame cache.
+const MAX_READBACK_BUFFERS: usize = 128;
+const MAX_FREE_READBACK_BUFFERS: usize = 4;
+
+#[derive(Default)]
+struct ReadbackBuffers(Vec<Arc<Vec<u8>>>);
+
+impl ReadbackBuffers {
+    // An empty buffer with room for `len` bytes. Free buffers of another size are dropped, so
+    // a size change never reuses the old size.
+    fn take(&mut self, len: usize) -> Vec<u8> {
+        let mut free = 0;
+        self.0.retain(|data| {
+            if Arc::strong_count(data) > 1 {
+                return true;
+            }
+            free += 1;
+            data.len() == len && free <= MAX_FREE_READBACK_BUFFERS
+        });
+        self.0
+            .iter()
+            .position(|data| Arc::strong_count(data) == 1 && data.len() == len)
+            .and_then(|index| Arc::try_unwrap(self.0.swap_remove(index)).ok())
+            .map(|mut data| {
+                data.clear();
+                data
+            })
+            .unwrap_or_else(|| Vec::with_capacity(len))
+    }
+
+    fn keep(&mut self, data: &Arc<Vec<u8>>) {
+        if self.0.len() < MAX_READBACK_BUFFERS {
+            self.0.push(Arc::clone(data));
+        }
+    }
+}
+
 pub struct MediaFoundationDecoder {
     source_reader: IMFSourceReader,
     d3d11_device: ID3D11Device,
@@ -599,6 +638,7 @@ pub struct MediaFoundationDecoder {
     readback_queue: VecDeque<(i64, ID3D11Texture2D)>,
     // How the stream stopped, reported once the queued readbacks are drained.
     readback_end: Option<Result<(), String>>,
+    readback_buffers: ReadbackBuffers,
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
@@ -691,6 +731,7 @@ impl MediaFoundationDecoder {
             readback_free,
             readback_queue: VecDeque::new(),
             readback_end: None,
+            readback_buffers: ReadbackBuffers::default(),
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
@@ -759,7 +800,7 @@ impl MediaFoundationDecoder {
         Ok(Some(NV12Sample { pts, data: data? }))
     }
 
-    unsafe fn map_staging(&self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
+    unsafe fn map_staging(&mut self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d11_context
@@ -775,14 +816,17 @@ impl MediaFoundationDecoder {
         let uv_size = (y_stride * uv_height) as usize;
         let total_size = y_size + uv_size;
 
-        let mut data = vec![0u8; total_size];
+        let mut data = self.readback_buffers.take(total_size);
         unsafe {
             std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), total_size);
+            data.set_len(total_size);
             self.d3d11_context.Unmap(staging, 0);
         }
+        let data = Arc::new(data);
+        self.readback_buffers.keep(&data);
 
         Ok(NV12Data {
-            data: Arc::new(data),
+            data,
             y_stride,
             uv_stride: y_stride,
         })
@@ -1246,6 +1290,83 @@ mod tests {
         decoder.read_nv12().unwrap();
         decoder.seek(0).unwrap();
         assert!(first(&mut decoder) == expected[0]);
+    }
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn released_readbacks_are_refilled_with_the_same_samples() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let mut held = Vec::new();
+        while let Ok(Some(sample)) = decoder.read_nv12() {
+            held.push((sample.pts, sample.data.data));
+        }
+        drop(decoder);
+
+        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let mut released = Vec::new();
+        let mut addresses = Vec::new();
+        while let Ok(Some(sample)) = decoder.read_nv12() {
+            addresses.push(sample.data.data.as_ptr());
+            released.push((sample.pts, sample.data.data.to_vec()));
+        }
+        assert!(held.len() > 2);
+        assert_eq!(released.len(), held.len());
+        for ((pts, data), (held_pts, held_data)) in released.iter().zip(&held) {
+            assert_eq!(pts, held_pts);
+            assert!(*data == **held_data);
+        }
+        addresses.sort();
+        addresses.dedup();
+        assert!(addresses.len() < held.len());
+    }
+
+    #[test]
+    fn readback_buffers_are_reused_only_after_every_consumer_drops_them() {
+        let mut buffers = ReadbackBuffers::default();
+        let frame = Arc::new(vec![7u8; 64]);
+        let address = frame.as_ptr();
+        buffers.keep(&frame);
+
+        let fresh = buffers.take(64);
+        assert!(fresh.is_empty() && fresh.capacity() >= 64);
+        assert_ne!(fresh.as_ptr(), address);
+
+        drop(frame);
+        let reused = buffers.take(64);
+        assert!(reused.is_empty() && reused.capacity() >= 64);
+        assert_eq!(reused.as_ptr(), address);
+        assert!(buffers.0.is_empty());
+    }
+
+    #[test]
+    fn readback_buffers_of_another_size_are_dropped() {
+        let mut buffers = ReadbackBuffers::default();
+        let held = Arc::new(vec![0u8; 64]);
+        buffers.keep(&held);
+        buffers.keep(&Arc::new(vec![0u8; 64]));
+
+        let resized = buffers.take(128);
+        assert!(resized.capacity() >= 128);
+        assert_eq!(buffers.0.len(), 1);
+        assert!(Arc::ptr_eq(&buffers.0[0], &held));
+    }
+
+    #[test]
+    fn readback_buffers_are_bounded() {
+        let mut buffers = ReadbackBuffers::default();
+        let frames: Vec<_> = (0..MAX_READBACK_BUFFERS + 2)
+            .map(|_| Arc::new(vec![0u8; 4]))
+            .collect();
+        for frame in &frames {
+            buffers.keep(frame);
+        }
+        assert_eq!(buffers.0.len(), MAX_READBACK_BUFFERS);
+
+        drop(frames);
+        buffers.take(4);
+        assert_eq!(buffers.0.len(), MAX_FREE_READBACK_BUFFERS - 1);
     }
 
     fn normalized(path: &str) -> String {
