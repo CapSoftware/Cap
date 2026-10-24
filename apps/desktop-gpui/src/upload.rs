@@ -229,9 +229,8 @@ impl SegmentUploadManifest {
     }
 }
 
-/// Written once a recording stops so the share page can show its full length
-/// while it plays the start and the last segments are still uploading. Only
-/// that preview reads it; the complete manifest stays the source of truth.
+// Only the share page's early playback reads this; the complete manifest stays
+// the source of truth for everything else.
 const RECORDED_LENGTH_SUBPATH: &str = "segments/recording.json";
 const RECORDED_LENGTH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -266,8 +265,6 @@ async fn publish_recorded_length(video_id: String, bytes: Vec<u8>, cancel: Arc<A
     }
 }
 
-/// Runs `side` while `main` runs, without ever waiting on it: when `main`
-/// finishes first, `side` is dropped where it is.
 async fn alongside<T>(main: impl Future<Output = T>, side: impl Future<Output = ()>) -> T {
     let main = std::pin::pin!(main);
     let side = std::pin::pin!(side);
