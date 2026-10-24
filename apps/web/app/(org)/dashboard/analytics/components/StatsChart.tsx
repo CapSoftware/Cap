@@ -165,17 +165,26 @@ const rollUpLongRanges = (
 	for (let end = data.length; end > 0; end -= 7) {
 		const chunk = data.slice(Math.max(0, end - 7), end);
 		const first = chunk[0];
-		if (!first) continue;
+		const last = chunk[chunk.length - 1];
+		if (!first || !last) continue;
 		weeks.unshift(
 			chunk.reduce(
 				(acc, point) => ({
 					bucket: acc.bucket,
+					bucketEnd: acc.bucketEnd,
 					views: acc.views + point.views,
 					comments: acc.comments + point.comments,
 					reactions: acc.reactions + point.reactions,
 					caps: acc.caps + point.caps,
 				}),
-				{ bucket: first.bucket, views: 0, comments: 0, reactions: 0, caps: 0 },
+				{
+					bucket: first.bucket,
+					bucketEnd: last.bucket,
+					views: 0,
+					comments: 0,
+					reactions: 0,
+					caps: 0,
+				},
 			),
 		);
 	}

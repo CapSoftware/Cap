@@ -38,7 +38,11 @@ export const formatBucketTick = (
 	});
 };
 
-export const formatBucketTitle = (bucket: string, granularity: Granularity) => {
+export const formatBucketTitle = (
+	bucket: string,
+	granularity: Granularity,
+	bucketEnd?: string,
+) => {
 	const date = new Date(bucket);
 	if (Number.isNaN(date.getTime())) return bucket;
 	if (granularity === "hour") {
@@ -55,7 +59,9 @@ export const formatBucketTitle = (bucket: string, granularity: Granularity) => {
 		return `${day}, ${start} to ${end}`;
 	}
 	if (granularity === "week") {
-		const end = new Date(date.getTime() + 6 * 24 * 60 * 60 * 1000);
+		const end = bucketEnd
+			? new Date(bucketEnd)
+			: new Date(date.getTime() + 6 * 24 * 60 * 60 * 1000);
 		const short = (d: Date) =>
 			d.toLocaleDateString([], {
 				day: "numeric",

@@ -23,6 +23,7 @@ export type Metric = "views" | "comments" | "reactions" | "caps";
 
 export type ChartPoint = {
 	bucket: string;
+	bucketEnd?: string;
 	caps: number;
 	views: number;
 	comments: number;
@@ -334,7 +335,7 @@ export default function TrafficChart({
 			aria-valuenow={hoverIndex ?? Math.max(0, n - 1)}
 			aria-valuetext={
 				hovered
-					? `${formatBucketTitle(hovered.bucket, granularity)}: ${metrics
+					? `${formatBucketTitle(hovered.bucket, granularity, hovered.bucketEnd)}: ${metrics
 							.map((m) => `${hovered[m]} ${METRIC_META[m].label.toLowerCase()}`)
 							.join(", ")}`
 					: "Use the left and right arrow keys to move between points"
@@ -605,7 +606,11 @@ export default function TrafficChart({
 						style={{ left: tooltipLeft, width: tooltipWidth }}
 					>
 						<p className="text-[13px] font-medium leading-tight">
-							{formatBucketTitle(hovered.bucket, granularity)}
+							{formatBucketTitle(
+								hovered.bucket,
+								granularity,
+								hovered.bucketEnd,
+							)}
 						</p>
 						<div className="my-2.5 h-px bg-gray-1/15" />
 						<div className="space-y-1.5">
