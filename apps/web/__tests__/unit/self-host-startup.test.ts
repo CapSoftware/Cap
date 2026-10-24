@@ -57,6 +57,31 @@ describe("self-host startup secrets", () => {
 		);
 	});
 
+	it("can decrypt existing data after upgrading with the old encryption key", async () => {
+		vi.resetModules();
+		const { encrypt } = await import("@cap/database/crypto");
+		const storedCredentials = await encrypt("existing-storage-credentials");
+		vi.stubEnv("CAP_ALLOW_INSECURE_SECRETS", "true");
+
+		await register();
+
+		const { decrypt } = await import("@cap/database/crypto");
+		expect(await decrypt(storedCredentials)).toBe(
+			"existing-storage-credentials",
+		);
+	});
+
+	it.each(["NEXTAUTH_SECRET", "MEDIA_SERVER_WEBHOOK_SECRET"])(
+		"does not bypass a missing %s with the upgrade override",
+		async (name) => {
+			vi.stubEnv("CAP_ALLOW_INSECURE_SECRETS", "true");
+			vi.stubEnv(name, "");
+			await expect(register()).rejects.toThrow("exit");
+			expect(process.exit).toHaveBeenCalledWith(1);
+			expect(vi.getTimerCount()).toBe(0);
+		},
+	);
+
 	it.each(["", "invalid"])(
 		"does not bypass missing or invalid encryption keys (%j)",
 		async (key) => {
