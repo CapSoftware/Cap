@@ -16,11 +16,11 @@ describe("database encryption", () => {
 	it("derives a stored value's key once and decrypts it again from the cached key", async () => {
 		const stored = await encrypt("drive-config");
 		const derive = vi.spyOn(crypto.subtle, "deriveKey");
-		await expect(decrypt(stored)).resolves.toBe("drive-config");
-		await expect(decrypt(stored)).resolves.toBe("drive-config");
 		await expect(
 			Promise.all([decrypt(stored), decrypt(stored)]),
 		).resolves.toEqual(["drive-config", "drive-config"]);
+		await expect(decrypt(stored)).resolves.toBe("drive-config");
+		await expect(decrypt(stored)).resolves.toBe("drive-config");
 		expect(derive).toHaveBeenCalledTimes(1);
 	});
 
