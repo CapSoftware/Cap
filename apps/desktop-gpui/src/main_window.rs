@@ -4949,7 +4949,7 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
                 "Are you sure you want to delete this recording?",
@@ -4969,10 +4969,8 @@ impl MainWindow {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| {
-                this.refresh_library(LibraryKind::Recordings, window, cx);
-            })
-            .ok();
+            cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))
+                .ok();
         })
         .detach();
     }
