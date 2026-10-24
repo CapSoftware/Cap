@@ -395,6 +395,7 @@ pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
 /// The display track of the newest studio recording that has one, however
 /// many screenshots or Instant recordings are newer. Metas are loaded newest
 /// first and only until it is found.
+#[cfg(target_os = "macos")]
 pub(crate) fn newest_studio_display_path() -> Option<PathBuf> {
     recording_items_in(&known_recordings_dirs())
         .filter(|item| item.mode == RecordingMode::Studio)
