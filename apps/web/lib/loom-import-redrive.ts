@@ -62,8 +62,8 @@ export async function redriveLoomImport(
 	const runState = await getLoomImportRunState(row.metadata?.loomImportRun);
 	const abandoned =
 		row.phase === "processing" &&
-		runState === "inactive" &&
-		age > ABANDONED_PROCESSING_AGE_MS;
+		((runState === "inactive" && age > ABANDONED_PROCESSING_AGE_MS) ||
+			(runState === "unconfirmed" && age >= FINISHED_WORKER_AGE_MS));
 	if (row.phase !== "error" && !stalled && !abandoned)
 		return { videoId, status: "skipped", reason: `phase ${row.phase}` };
 	if (runState === "pending" || runState === "active")

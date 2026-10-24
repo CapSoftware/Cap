@@ -297,6 +297,45 @@ describe("Loom workflow startup receipts", () => {
 		},
 	);
 
+	it("cancels a run that never left pending and treats it as inactive", async () => {
+		const run = {
+			status: Promise.resolve("pending"),
+			createdAt: Promise.resolve(new Date(Date.now() - 2 * 60 * 60 * 1000)),
+			cancel: vi.fn(async () => {
+				run.status = Promise.resolve("cancelled");
+			}),
+		};
+		mocks.getRun.mockReturnValue(run);
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("inactive");
+		expect(run.cancel).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves a recently queued run pending", async () => {
+		const cancel = vi.fn();
+		mocks.getRun.mockReturnValue({
+			status: Promise.resolve("pending"),
+			createdAt: Promise.resolve(new Date(Date.now() - 10 * 60 * 1000)),
+			cancel,
+		});
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("pending");
+		expect(cancel).not.toHaveBeenCalled();
+	});
+
+	it("keeps an old pending run pending when it cannot be cancelled", async () => {
+		mocks.getRun.mockReturnValue({
+			status: Promise.resolve("pending"),
+			createdAt: Promise.resolve(new Date(Date.now() - 2 * 60 * 60 * 1000)),
+			cancel: vi.fn().mockRejectedValue(new Error("Unavailable")),
+		});
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("pending");
+	});
+
 	it("holds startup while the run cannot be queried", async () => {
 		mocks.getRun.mockReturnValue({
 			status: Promise.reject(new Error("Not found yet")),
