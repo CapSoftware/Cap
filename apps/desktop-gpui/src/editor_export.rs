@@ -2603,7 +2603,7 @@ impl EditorWindow {
                     )
                 },
             )
-            .when(ui.phase.is_busy(), |this| {
+            .when(ui.phase.is_busy() && ui.phase != ExportPhase::Copying, |this| {
                 this.child(
                     ui::Button::plain(
                         &theme,
@@ -2701,19 +2701,21 @@ impl EditorWindow {
                                 }
                             }),
                         )
-                        .child(
-                            ui::Button::plain(
-                                &theme,
-                                "export-copy-file",
-                                ui::ButtonVariant::Gray,
-                                ui::ButtonSize::Md,
+                        .when(ui.phase == ExportPhase::Done, |this| {
+                            this.child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "export-copy-file",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Md,
+                                )
+                                .icon("icons/copy.svg")
+                                .label("Copy File")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.duplicate_output(window, cx);
+                                })),
                             )
-                            .icon("icons/copy.svg")
-                            .label("Copy File")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.duplicate_output(window, cx);
-                            })),
-                        )
+                        })
                     },
                 )
                 .when(
