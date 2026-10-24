@@ -1196,7 +1196,7 @@ impl SettingsWindow {
     /// thread, which is where `NSAlert` has to run, so the task is both the
     /// right thread and the right borrow state.
     fn delete_recording(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 "Are you sure you want to delete this recording?",
@@ -1220,7 +1220,7 @@ impl SettingsWindow {
             }
             tracing::info!(path = %path.display(), "deleted a recording");
 
-            this.update_in(cx, |this, window, cx| this.refresh_recordings(window, cx))
+            cx.update(|_, cx| cx.defer(crate::app_windows::refresh_library_after_delete))
                 .ok();
         })
         .detach();

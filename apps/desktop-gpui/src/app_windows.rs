@@ -549,7 +549,6 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
-                crate::tray::refresh_previous(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -6883,6 +6882,7 @@ pub fn refresh_library_after_delete(cx: &mut App) {
             .update(cx, |view, window, cx| view.refresh_recordings(window, cx))
             .ok();
     }
+    crate::tray::refresh_previous(cx);
 }
 
 fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
