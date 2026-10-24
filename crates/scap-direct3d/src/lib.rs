@@ -590,9 +590,11 @@ impl Capturer {
             })
             .transpose()?;
 
-        // Allocated on the first odd-sized frame and again whenever that size
-        // changes, so an even-sized capture never pays for the copy.
-        let even_trim = Mutex::new(None::<(ID3D11Texture2D, u32, u32)>);
+        // Allocated on the first frame whose size differs from its surface
+        // (odd-sized, or smaller than the pool's surface) and again whenever
+        // that size changes, so a capture that matches its surface never pays
+        // for the copy.
+        let trim = Mutex::new(None::<(ID3D11Texture2D, u32, u32)>);
 
         let frame_arrived_token = frame_pool
             .FrameArrived(
@@ -728,79 +730,88 @@ impl Capturer {
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),
                             }
-                        } else if even_dimensions
-                            && (
-                                content_width.min(surface_desc.Width) & !1,
-                                content_height.min(surface_desc.Height) & !1,
-                            ) != (content_width, content_height)
-                        {
-                            let width = content_width.min(surface_desc.Width) & !1;
-                            let height = content_height.min(surface_desc.Height) & !1;
+                        } else {
+                            // The frame is the content bounded by its surface,
+                            // floored to even when asked. A surface larger than
+                            // the content (a window item whose pool surface
+                            // includes the invisible resize borders) is copied
+                            // down to it: handing the whole surface over under
+                            // the content's size makes `as_buffer`'s
+                            // `CopyResource` a copy between different sizes,
+                            // which D3D11 drops, so the readback is all zeros.
+                            let mut width = content_width.min(surface_desc.Width);
+                            let mut height = content_height.min(surface_desc.Height);
+                            if even_dimensions {
+                                width &= !1;
+                                height &= !1;
+                            }
                             if width == 0 || height == 0 {
                                 return Ok(());
                             }
 
-                            let trimmed_texture = {
-                                let mut even_trim = even_trim
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                match even_trim.as_ref() {
-                                    Some((texture, w, h)) if (*w, *h) == (width, height) => {
-                                        texture.clone()
-                                    }
-                                    _ => {
-                                        let texture = create_copy_texture(
-                                            &d3d_device,
-                                            width,
-                                            height,
-                                            pixel_format,
-                                        )?;
-                                        *even_trim = Some((texture.clone(), width, height));
-                                        texture
-                                    }
+                            if (width, height) == (surface_desc.Width, surface_desc.Height) {
+                                Frame {
+                                    width,
+                                    height,
+                                    pixel_format: settings.pixel_format,
+                                    inner: frame,
+                                    texture,
+                                    d3d_context: d3d_context.clone(),
+                                    d3d_device: d3d_device.clone(),
+                                    staging_pool: staging_pool.clone(),
                                 }
-                            };
+                            } else {
+                                let trimmed_texture = {
+                                    let mut trim = trim
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    match trim.as_ref() {
+                                        Some((texture, w, h)) if (*w, *h) == (width, height) => {
+                                            texture.clone()
+                                        }
+                                        _ => {
+                                            let texture = create_copy_texture(
+                                                &d3d_device,
+                                                width,
+                                                height,
+                                                pixel_format,
+                                            )?;
+                                            *trim = Some((texture.clone(), width, height));
+                                            texture
+                                        }
+                                    }
+                                };
 
-                            unsafe {
-                                d3d_context.CopySubresourceRegion(
-                                    &trimmed_texture,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    &texture,
-                                    0,
-                                    Some(&D3D11_BOX {
-                                        left: 0,
-                                        top: 0,
-                                        front: 0,
-                                        right: width,
-                                        bottom: height,
-                                        back: 1,
-                                    }),
-                                );
-                            }
+                                unsafe {
+                                    d3d_context.CopySubresourceRegion(
+                                        &trimmed_texture,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        &texture,
+                                        0,
+                                        Some(&D3D11_BOX {
+                                            left: 0,
+                                            top: 0,
+                                            front: 0,
+                                            right: width,
+                                            bottom: height,
+                                            back: 1,
+                                        }),
+                                    );
+                                }
 
-                            Frame {
-                                width,
-                                height,
-                                pixel_format: settings.pixel_format,
-                                inner: frame,
-                                texture: trimmed_texture,
-                                d3d_context: d3d_context.clone(),
-                                d3d_device: d3d_device.clone(),
-                                staging_pool: staging_pool.clone(),
-                            }
-                        } else {
-                            Frame {
-                                width: size.Width as u32,
-                                height: size.Height as u32,
-                                pixel_format: settings.pixel_format,
-                                inner: frame,
-                                texture,
-                                d3d_context: d3d_context.clone(),
-                                d3d_device: d3d_device.clone(),
-                                staging_pool: staging_pool.clone(),
+                                Frame {
+                                    width,
+                                    height,
+                                    pixel_format: settings.pixel_format,
+                                    inner: frame,
+                                    texture: trimmed_texture,
+                                    d3d_context: d3d_context.clone(),
+                                    d3d_device: d3d_device.clone(),
+                                    staging_pool: staging_pool.clone(),
+                                }
                             }
                         };
 

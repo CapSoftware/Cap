@@ -264,6 +264,10 @@ fn window_capture_fixture_process() {
 struct Sample {
     width: u32,
     height: u32,
+    /// The frame's ContentSize, which on some systems (Server 2022) is
+    /// smaller than `item.Size()` because the latter counts the window's
+    /// invisible resize borders.
+    content: (u32, u32),
     red: usize,
     blue: usize,
 }
@@ -354,6 +358,8 @@ fn capture_samples_on(
             if !frame_delay.is_zero() {
                 std::thread::sleep(frame_delay);
             }
+            let content = frame.inner().ContentSize()?;
+            let content = (content.Width.max(0) as u32, content.Height.max(0) as u32);
             let buffer = frame.as_buffer()?;
             let (width, height, stride) = (
                 buffer.width() as usize,
@@ -376,6 +382,7 @@ fn capture_samples_on(
             sink.lock().unwrap().push(Sample {
                 width: width as u32,
                 height: height as u32,
+                content,
                 red,
                 blue,
             });
@@ -587,9 +594,6 @@ fn window_frames_are_trimmed_to_even_dimensions_on_the_gpu() {
         .raw_handle()
         .try_as_capture_item()
         .expect("window capture item");
-    let start = item.Size().expect("item size");
-    let even = |v: i32| (v.max(0) as u32) & !1;
-
     let samples = capture_samples_with(
         item,
         Settings {
@@ -607,10 +611,11 @@ fn window_frames_are_trimmed_to_even_dimensions_on_the_gpu() {
     );
 
     let sizes: Vec<_> = samples.iter().map(|s| (s.width, s.height)).collect();
+    let first = samples.first().expect("frames");
     assert_eq!(
-        sizes.first().copied(),
-        Some((even(start.Width), even(start.Height))),
-        "the first frame must be the item's size floored to even: {sizes:?}"
+        (first.width, first.height),
+        (first.content.0 & !1, first.content.1 & !1),
+        "the first frame must be its ContentSize floored to even: {samples:?}"
     );
     assert!(
         sizes.iter().all(|(w, h)| w % 2 == 0 && h % 2 == 0),
@@ -693,8 +698,10 @@ fn even_dimension_trim_stays_inside_the_surface() {
         .raw_handle()
         .try_as_capture_item()
         .expect("window capture item");
+    // Without `follow_item_size` the pool keeps the surface size it was created
+    // with, which is the item's size at the start.
     let start = item.Size().expect("item size");
-    let even = |v: i32| (v.max(0) as u32) & !1;
+    let pool = (start.Width.max(0) as u32, start.Height.max(0) as u32);
 
     let samples = capture_samples_on(
         item,
@@ -718,9 +725,50 @@ fn even_dimension_trim_stays_inside_the_surface() {
     let sizes: Vec<_> = samples.iter().map(|s| (s.width, s.height)).collect();
     assert!(!sizes.is_empty(), "the capture must deliver frames");
     assert!(
-        sizes
+        samples
             .iter()
-            .all(|&(w, h)| (w, h) == (even(start.Width), even(start.Height))),
-        "every frame must be the pool's own size floored to even: {sizes:?}"
+            .all(|s| (s.width, s.height)
+                == (s.content.0.min(pool.0) & !1, s.content.1.min(pool.1) & !1)),
+        "every frame must be its ContentSize, bounded by the pool's surface, floored to even: {samples:?}"
+    );
+}
+
+/// With no crop, trim or pool recreation, a frame whose ContentSize is smaller
+/// than its surface must still read back. Handing the whole surface over under
+/// the smaller size made `as_buffer`'s `CopyResource` a copy between different
+/// sizes, which D3D11 drops, so the frame read back blank. Shrinking the window
+/// under a fixed pool reaches this anywhere; on Server 2022 every window item
+/// does, because its surface includes the invisible resize borders.
+#[test]
+fn frames_smaller_than_their_surface_still_read_back() {
+    match_cli_dpi_awareness();
+
+    let mut fixture = Fixture::start();
+    let item = fixture
+        .window()
+        .raw_handle()
+        .try_as_capture_item()
+        .expect("window capture item");
+    let start = item.Size().expect("item size");
+    let pool = (start.Width.max(0) as u32, start.Height.max(0) as u32);
+
+    let samples = capture_samples(item, None, Duration::from_secs(1), || {
+        std::thread::sleep(Duration::from_millis(700));
+        fixture.grow_by(-41);
+    });
+
+    let shrunk: Vec<_> = samples
+        .iter()
+        .filter(|s| s.content.0 < pool.0 && s.content.1 < pool.1)
+        .collect();
+    assert!(
+        !shrunk.is_empty(),
+        "the capture must deliver frames after the shrink: {samples:?}"
+    );
+    assert!(
+        shrunk
+            .iter()
+            .all(|s| (s.width, s.height) == s.content && s.blue > 0),
+        "a frame smaller than its surface must be its ContentSize and carry the window: {shrunk:?}"
     );
 }
