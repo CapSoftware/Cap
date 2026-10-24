@@ -90,10 +90,13 @@ interface LoomDownloadResult {
 	error?: string;
 }
 
+export type LoomImportErrorCode = "loom_temporarily_unavailable";
+
 export interface LoomImportResult {
 	success: boolean;
 	videoId?: Video.VideoId;
 	error?: string;
+	errorCode?: LoomImportErrorCode;
 }
 
 export interface LoomCsvImportRow {
@@ -110,6 +113,7 @@ export interface LoomCsvImportRowResult {
 	success: boolean;
 	videoId?: Video.VideoId;
 	error?: string;
+	errorCode?: LoomImportErrorCode;
 }
 
 export interface LoomCsvImportResult {
@@ -494,7 +498,11 @@ async function importLoomVideoForOwner({
 		downloadUrl = await getLoomDownloadUrl(loomVideoId);
 	} catch (error) {
 		if (error instanceof LoomDownloadTemporaryError) {
-			return { success: false, error: error.message };
+			return {
+				success: false,
+				error: error.message,
+				errorCode: "loom_temporarily_unavailable",
+			};
 		}
 		throw error;
 	}
@@ -1109,6 +1117,7 @@ async function processLoomCsvRows({
 				success: result.success,
 				videoId: result.videoId,
 				error: result.error ?? spaceError,
+				...(result.errorCode ? { errorCode: result.errorCode } : {}),
 			});
 		} catch {
 			results.push({
