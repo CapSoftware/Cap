@@ -100,6 +100,7 @@ struct PreviewSource<'a> {
     render_constants: &'a RenderVideoConstants,
     segments: Vec<PreviewSegment<'a>>,
     total_duration: f64,
+    layers_cache: Option<&'a std::sync::Mutex<Option<RendererLayers>>>,
 }
 
 struct PreviewSegment<'a> {
@@ -130,6 +131,7 @@ async fn render_preview_with_base(
             })
             .collect(),
         total_duration,
+        layers_cache: None,
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -184,6 +186,7 @@ pub async fn render_preview_with_editor(
             })
             .collect(),
         total_duration,
+        layers_cache: Some(&editor.preview_layers),
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -219,6 +222,7 @@ async fn render_preview_frame(
         render_constants,
         segments,
         total_duration,
+        layers_cache,
     } = source;
     let project_config = &Arc::new(project_config.clone());
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
@@ -286,11 +290,22 @@ async fn render_preview_frame(
     );
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
-    let mut layers = RendererLayers::new_with_options(
-        &render_constants.device,
-        &render_constants.queue,
-        render_constants.is_software_adapter,
-    );
+    let mut layers = layers_cache
+        .and_then(|cache| {
+            let mut guard = cache.lock().ok()?;
+            guard.take()
+        })
+        .map(|mut cached| {
+            cached.reset_frame_state();
+            cached
+        })
+        .unwrap_or_else(|| {
+            RendererLayers::new_with_options(
+                &render_constants.device,
+                &render_constants.queue,
+                render_constants.is_software_adapter,
+            )
+        });
 
     let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
         let outgoing_media = segments
@@ -391,6 +406,12 @@ async fn render_preview_frame(
         let encoder_efficiency = 0.5;
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
+
+    if let Some(cache) = layers_cache
+        && let Ok(mut guard) = cache.lock()
+    {
+        *guard = Some(layers);
+    }
 
     Ok(ExportPreviewResult {
         jpeg_base64: STANDARD.encode(&jpeg_buffer),
