@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 	affectedRows: 1,
 	updates: [] as Array<Record<string, unknown>>,
 	inserts: [] as Array<Record<string, unknown>>,
+	deletes: 0,
 	runState: vi.fn(),
 	start: vi.fn(),
 	restore: vi.fn(),
@@ -29,6 +30,11 @@ vi.mock("@cap/database", () => {
 						return [{ affectedRows: mocks.affectedRows }];
 					},
 				}),
+			}),
+			delete: () => ({
+				where: async () => {
+					mocks.deletes++;
+				},
 			}),
 			insert: () => ({
 				values: (values: Record<string, unknown>) => ({
@@ -56,11 +62,26 @@ vi.mock("@/lib/loom-import-start", () => ({
 	startLoomImportWorkflow: mocks.start,
 	restoreLoomImportStartError: mocks.restore,
 	LoomImportStartError: class LoomImportStartError extends Error {
-		constructor(readonly canRetry: boolean) {
-			super("Loom import could not start. Please try again.");
+		constructor(
+			readonly canRetry: boolean,
+			cause: unknown,
+		) {
+			super("Loom import could not start. Please try again.", { cause });
 		}
 	},
 }));
+vi.mock("@/lib/server", async () => {
+	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { Layer } = await import("effect");
+	return {
+		apiToHandler: (api: Layer.Layer<never>) => {
+			const { handler } = HttpApiBuilder.toWebHandler(
+				Layer.mergeAll(api, HttpServer.layerContext),
+			);
+			return (request: Request) => handler(request);
+		},
+	};
+});
 vi.mock("@/lib/video-processing", () => ({
 	startVideoProcessingWorkflow: mocks.startProcessing,
 }));
@@ -92,6 +113,7 @@ beforeEach(() => {
 	mocks.affectedRows = 1;
 	mocks.updates = [];
 	mocks.inserts = [];
+	mocks.deletes = 0;
 	mocks.runState.mockReset().mockResolvedValue("inactive");
 	mocks.start.mockReset().mockResolvedValue(undefined);
 	mocks.restore.mockReset().mockResolvedValue(undefined);
@@ -180,7 +202,9 @@ describe("redriveLoomImport", () => {
 	});
 
 	it("puts the import back into its error state when the start is rejected", async () => {
-		mocks.start.mockRejectedValue(new LoomImportStartError(true));
+		mocks.start.mockRejectedValue(
+			new LoomImportStartError(true, new Error("queue rejected")),
+		);
 		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
 			status: "failed",
 		});
@@ -210,6 +234,55 @@ describe("deferred Loom processing", () => {
 				"video",
 			),
 		).toBe(expected);
+	});
+
+	it("retries a start that never finished after half an hour", () => {
+		const deferred = {
+			rawFileKey: "owner/video/raw-upload.webm",
+			status: "started" as const,
+			startedAt: now.toISOString(),
+		};
+		expect(
+			getPendingLoomProcessing(
+				{ loomDeferredProcessing: deferred },
+				"owner",
+				"video",
+				now.getTime() + 29 * 60 * 1000,
+			),
+		).toBeNull();
+		expect(
+			getPendingLoomProcessing(
+				{ loomDeferredProcessing: deferred },
+				"owner",
+				"video",
+				now.getTime() + 31 * 60 * 1000,
+			),
+		).toBe("owner/video/raw-upload.webm");
+		expect(
+			getPendingLoomProcessing(
+				{ loomDeferredProcessing: { ...deferred, status: "complete" } },
+				"owner",
+				"video",
+				now.getTime() + 31 * 60 * 1000,
+			),
+		).toBeNull();
+	});
+
+	it("releases its claim when the conversion cannot start", async () => {
+		mocks.startProcessing.mockRejectedValue(new Error("queue down"));
+		await expect(
+			startDeferredLoomProcessing(
+				{
+					videoId: "video" as never,
+					ownerId: "owner",
+					bucketId: null,
+					rawFileKey: "owner/video/raw-upload.webm",
+				},
+				now,
+			),
+		).rejects.toThrow("queue down");
+		expect(mocks.deletes).toBe(1);
+		expect(mocks.updates).toHaveLength(2);
 	});
 
 	it("starts processing the original once", async () => {
@@ -246,7 +319,10 @@ describe("POST /api/internal/loom-imports/redrive", () => {
 		POST(
 			new NextRequest("https://cap.so/api/internal/loom-imports/redrive", {
 				method: "POST",
-				headers: secret ? { "x-media-server-secret": secret } : {},
+				headers: {
+					"Content-Type": "application/json",
+					...(secret ? { "x-media-server-secret": secret } : {}),
+				},
 				body: JSON.stringify(body),
 			}),
 		);
