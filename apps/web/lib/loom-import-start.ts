@@ -57,13 +57,29 @@ export class LoomImportStartError extends Error {
 export const LOOM_IMPORT_CONFIRMATION_MESSAGE =
 	"We're confirming whether your Loom import started. Please contact support before retrying.";
 
+const STUCK_PENDING_RUN_MS = 60 * 60 * 1000;
+
+async function cancelStuckPendingRun(run: ReturnType<typeof getRun>) {
+	try {
+		const createdAt = await run.createdAt;
+		if (Date.now() - createdAt.getTime() < STUCK_PENDING_RUN_MS) return false;
+		await run.cancel();
+		return (await run.status) === "cancelled";
+	} catch {
+		return false;
+	}
+}
+
 export async function getLoomImportRunState(
 	receipt?: LoomImportRun,
 ): Promise<"inactive" | "pending" | "active" | "unconfirmed"> {
 	if (!receipt || receipt.dispatch === "rejected") return "inactive";
+	const run = getRun(receipt.runId);
 	let status: string;
 	try {
-		status = await getRun(receipt.runId).status;
+		status = await run.status;
+		if (status === "pending" && (await cancelStuckPendingRun(run)))
+			status = "cancelled";
 	} catch (error) {
 		return WorkflowRunNotFoundError.is(error) &&
 			receipt.dispatch === "uncertain" &&

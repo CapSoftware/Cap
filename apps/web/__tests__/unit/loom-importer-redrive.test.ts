@@ -225,6 +225,18 @@ describe("redriveLoomImport", () => {
 		});
 	});
 
+	it("leaves an unconfirmed import processing because its worker may still be running", async () => {
+		mocks.runState.mockResolvedValue("unconfirmed");
+		mocks.rows = [
+			failedImport({ phase: "processing", uploadUpdatedAt: hoursAgo(3) }),
+		];
+		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
+			status: "skipped",
+			reason: "phase processing",
+		});
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
 	it("does not start a workflow when another restart claimed the row", async () => {
 		mocks.affectedRows = 0;
 		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
