@@ -1672,6 +1672,7 @@ pub fn place_segment_at_time<T: TrackSegmentOps>(
 
 pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
     TextSegment {
+        keyframes: Default::default(),
         start,
         end,
         track,

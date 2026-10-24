@@ -1217,6 +1217,139 @@ pub enum TextLayout {
     SplitRight,
 }
 
+/// Animation of a text or image overlay. Times are seconds from the
+/// segment start; values hold flat before the first and after the last key.
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayKeyframes {
+    #[serde(default)]
+    pub position: Vec<MaskVectorKeyframe>,
+    #[serde(default)]
+    pub size: Vec<MaskVectorKeyframe>,
+    #[serde(default)]
+    pub opacity: Vec<MaskScalarKeyframe>,
+}
+
+/// Keys closer together than this (seconds) are the same keyframe.
+pub const OVERLAY_KEYFRAME_MATCH_SECS: f64 = 1.0 / 120.0;
+
+impl OverlayKeyframes {
+    pub fn is_empty(&self) -> bool {
+        self.position.is_empty() && self.size.is_empty() && self.opacity.is_empty()
+    }
+
+    /// Distinct key times across every property, ascending.
+    pub fn times(&self) -> Vec<f64> {
+        let mut times: Vec<f64> = self
+            .position
+            .iter()
+            .chain(&self.size)
+            .map(|k| k.time)
+            .chain(self.opacity.iter().map(|k| k.time))
+            .filter(|t| t.is_finite())
+            .collect();
+        times.sort_by(f64::total_cmp);
+        times.dedup_by(|b, a| (*b - *a).abs() <= OVERLAY_KEYFRAME_MATCH_SECS);
+        times
+    }
+
+    pub fn set_position(&mut self, time: f64, value: XY<f64>) {
+        upsert_vector_key(&mut self.position, time, value);
+    }
+
+    pub fn set_size(&mut self, time: f64, value: XY<f64>) {
+        upsert_vector_key(&mut self.size, time, value);
+    }
+
+    pub fn set_opacity(&mut self, time: f64, value: f64) {
+        let keys = &mut self.opacity;
+        match keys
+            .iter_mut()
+            .find(|k| (k.time - time).abs() <= OVERLAY_KEYFRAME_MATCH_SECS)
+        {
+            Some(key) => key.value = value,
+            None => {
+                keys.push(MaskScalarKeyframe { time, value });
+                keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+            }
+        }
+    }
+
+    /// Removes every property's key at `time`.
+    pub fn remove_at(&mut self, time: f64) {
+        let keep = |t: f64| (t - time).abs() > OVERLAY_KEYFRAME_MATCH_SECS;
+        self.position.retain(|k| keep(k.time));
+        self.size.retain(|k| keep(k.time));
+        self.opacity.retain(|k| keep(k.time));
+    }
+
+    /// Center, size and opacity at `relative_time`, falling back to the base
+    /// values for any property without keys.
+    pub fn sample(
+        &self,
+        center: XY<f64>,
+        size: XY<f64>,
+        opacity: f64,
+        relative_time: f64,
+    ) -> (XY<f64>, XY<f64>, f64) {
+        (
+            sample_vector_keys(&self.position, relative_time).unwrap_or(center),
+            sample_vector_keys(&self.size, relative_time).unwrap_or(size),
+            sample_scalar_keys(&self.opacity, relative_time).unwrap_or(opacity),
+        )
+    }
+}
+
+fn keyframe_span<T>(keys: &[T], time: f64, key_time: impl Fn(&T) -> f64) -> Option<(&T, &T, f64)> {
+    let mut sorted: Vec<&T> = keys.iter().filter(|k| key_time(k).is_finite()).collect();
+    sorted.sort_by(|a, b| key_time(a).total_cmp(&key_time(b)));
+    let first = *sorted.first()?;
+    if time <= key_time(first) {
+        return Some((first, first, 0.0));
+    }
+    for pair in sorted.windows(2) {
+        let (prev, next) = (pair[0], pair[1]);
+        if time <= key_time(next) {
+            let span = (key_time(next) - key_time(prev)).max(1e-6);
+            // Ease in and out between keys so motion starts and stops softly
+            let t = ((time - key_time(prev)) / span).clamp(0.0, 1.0);
+            return Some((prev, next, t * t * (3.0 - 2.0 * t)));
+        }
+    }
+    let last = *sorted.last()?;
+    Some((last, last, 0.0))
+}
+
+fn upsert_vector_key(keys: &mut Vec<MaskVectorKeyframe>, time: f64, value: XY<f64>) {
+    match keys
+        .iter_mut()
+        .find(|k| (k.time - time).abs() <= OVERLAY_KEYFRAME_MATCH_SECS)
+    {
+        Some(key) => {
+            key.x = value.x;
+            key.y = value.y;
+        }
+        None => {
+            keys.push(MaskVectorKeyframe {
+                time,
+                x: value.x,
+                y: value.y,
+            });
+            keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+        }
+    }
+}
+
+fn sample_vector_keys(keys: &[MaskVectorKeyframe], time: f64) -> Option<XY<f64>> {
+    let (a, b, t) = keyframe_span(keys, time, |k| k.time)?;
+    Some(XY::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
+}
+
+fn sample_scalar_keys(keys: &[MaskScalarKeyframe], time: f64) -> Option<f64> {
+    let (a, b, t) = keyframe_span(keys, time, |k| k.time)?;
+    Some(a.value + (b.value - a.value) * t)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSegment {
@@ -1289,9 +1422,54 @@ pub struct TextSegment {
     /// segment edges when `layout` is not `Overlay`.
     #[serde(default = "TextSegment::default_layout_transition")]
     pub layout_transition: f64,
+    #[serde(default)]
+    pub keyframes: OverlayKeyframes,
 }
 
 impl TextSegment {
+    /// Seconds into the segment for `time`, clamped to its length: the
+    /// timebase of [`OverlayKeyframes`].
+    pub fn key_time(&self, time: f64) -> f64 {
+        (time - self.start).clamp(0., (self.end - self.start).max(0.))
+    }
+
+    /// Opacity at output `time`, keyframes applied.
+    pub fn opacity_at(&self, time: f64) -> f64 {
+        self.keyframes
+            .sample(
+                self.center,
+                self.size,
+                f64::from(self.opacity),
+                time - self.start,
+            )
+            .2
+    }
+
+    /// Sets the opacity at `time`: the key there when opacity is animated,
+    /// otherwise the segment's own value.
+    pub fn set_opacity_at(&mut self, time: f64, value: f64) {
+        if self.keyframes.opacity.is_empty() {
+            self.opacity = value as f32;
+        } else {
+            let at = self.key_time(time);
+            self.keyframes.set_opacity(at, value);
+        }
+    }
+
+    /// Records the current position and opacity as a keyframe at `time`.
+    /// Text size is not keyed: its box follows the font size.
+    pub fn add_keyframe_at(&mut self, time: f64) {
+        let (center, _, opacity) = self.keyframes.sample(
+            self.center,
+            self.size,
+            f64::from(self.opacity),
+            time - self.start,
+        );
+        let at = self.key_time(time);
+        self.keyframes.set_position(at, center);
+        self.keyframes.set_opacity(at, opacity);
+    }
+
     fn default_enabled() -> bool {
         true
     }
@@ -1755,6 +1933,8 @@ pub struct ImageSegment {
     pub flip_x: bool,
     pub flip_y: bool,
     pub lock_aspect: bool,
+    #[serde(default)]
+    pub keyframes: OverlayKeyframes,
 }
 
 impl Default for ImageSegment {
@@ -1774,6 +1954,7 @@ impl Default for ImageSegment {
             flip_x: false,
             flip_y: false,
             lock_aspect: true,
+            keyframes: OverlayKeyframes::default(),
         }
     }
 }
@@ -1781,6 +1962,49 @@ impl Default for ImageSegment {
 impl ImageSegment {
     pub fn is_active_at(&self, time: f64) -> bool {
         self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+
+    /// Seconds into the segment for `time`, clamped to its length: the
+    /// timebase of [`OverlayKeyframes`].
+    pub fn key_time(&self, time: f64) -> f64 {
+        (time - self.start).clamp(0., (self.end - self.start).max(0.))
+    }
+
+    /// Opacity at output `time`, keyframes applied.
+    pub fn opacity_at(&self, time: f64) -> f64 {
+        self.keyframes
+            .sample(
+                self.center,
+                self.size,
+                f64::from(self.opacity),
+                time - self.start,
+            )
+            .2
+    }
+
+    /// Sets the opacity at `time`: the key there when opacity is animated,
+    /// otherwise the segment's own value.
+    pub fn set_opacity_at(&mut self, time: f64, value: f64) {
+        if self.keyframes.opacity.is_empty() {
+            self.opacity = value as f32;
+        } else {
+            let at = self.key_time(time);
+            self.keyframes.set_opacity(at, value);
+        }
+    }
+
+    /// Records the current position, size and opacity as a keyframe at `time`.
+    pub fn add_keyframe_at(&mut self, time: f64) {
+        let (center, size, opacity) = self.keyframes.sample(
+            self.center,
+            self.size,
+            f64::from(self.opacity),
+            time - self.start,
+        );
+        let at = self.key_time(time);
+        self.keyframes.set_position(at, center);
+        self.keyframes.set_size(at, size);
+        self.keyframes.set_opacity(at, opacity);
     }
 }
 
@@ -3152,6 +3376,74 @@ mod notch_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_keyframes_ease_between_keys_and_hold_outside() {
+        let keys = OverlayKeyframes {
+            position: vec![
+                MaskVectorKeyframe {
+                    time: 1.0,
+                    x: 0.2,
+                    y: 0.5,
+                },
+                MaskVectorKeyframe {
+                    time: 3.0,
+                    x: 0.8,
+                    y: 0.5,
+                },
+            ],
+            size: vec![],
+            opacity: vec![
+                MaskScalarKeyframe {
+                    time: 0.0,
+                    value: 0.0,
+                },
+                MaskScalarKeyframe {
+                    time: 2.0,
+                    value: 1.0,
+                },
+            ],
+        };
+        let base = XY::new(0.5, 0.5);
+        let sample = |t| keys.sample(base, XY::new(0.3, 0.1), 0.7, t);
+        assert_eq!(sample(0.0).0.x, 0.2);
+        assert!((sample(2.0).0.x - 0.5).abs() < 1e-9);
+        assert_eq!(sample(9.0).0.x, 0.8);
+        assert_eq!(sample(2.0).1, XY::new(0.3, 0.1));
+        assert_eq!(sample(1.0).2, 0.5);
+        assert!(OverlayKeyframes::default().is_empty());
+    }
+
+    #[test]
+    fn image_opacity_edits_the_key_under_the_playhead_once_animated() {
+        let mut image = ImageSegment {
+            start: 10.0,
+            end: 20.0,
+            ..Default::default()
+        };
+        image.set_opacity_at(12.0, 0.5);
+        assert_eq!(image.opacity, 0.5);
+        image.add_keyframe_at(10.0);
+        image.set_opacity_at(14.0, 0.0);
+        assert_eq!(image.opacity, 0.5, "the base stays once keyed");
+        assert_eq!(image.keyframes.times(), vec![0.0, 4.0]);
+        assert!((image.opacity_at(12.0) - 0.25).abs() < 1e-9);
+        assert_eq!(image.opacity_at(30.0), 0.0);
+    }
+
+    #[test]
+    fn overlay_keyframe_edits_upsert_and_remove_by_time() {
+        let mut keys = OverlayKeyframes::default();
+        keys.set_position(2.0, XY::new(0.1, 0.1));
+        keys.set_position(0.0, XY::new(0.0, 0.0));
+        keys.set_position(2.001, XY::new(0.3, 0.3));
+        keys.set_opacity(1.0, 0.5);
+        assert_eq!(keys.position.len(), 2);
+        assert_eq!(keys.position[1].x, 0.3);
+        assert_eq!(keys.times(), vec![0.0, 1.0, 2.0]);
+        keys.remove_at(2.0);
+        assert_eq!(keys.times(), vec![0.0, 1.0]);
+    }
     use serde_json::Value;
 
     #[test]
@@ -3298,7 +3590,8 @@ mod tests {
                 "path": "", "name": "Image", "center": { "x": 0.5, "y": 0.5 },
                 "size": { "x": 0.3, "y": 0.3 }, "opacity": 1.0,
                 "rotation": 0.0, "rounding": 0.0, "flipX": false,
-                "flipY": false, "lockAspect": true
+                "flipY": false, "lockAspect": true,
+                "keyframes": { "position": [], "size": [], "opacity": [] }
             })
         );
         assert_eq!(
@@ -3737,6 +4030,7 @@ mod tests {
 
     fn fullscreen_text(start: f64, end: f64) -> TextSegment {
         TextSegment {
+            keyframes: Default::default(),
             start,
             end,
             track: 0,
@@ -4583,6 +4877,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: vec![TextSegment {
+                    keyframes: Default::default(),
                     start: 0.0,
                     end: 1.0,
                     track: 0,
@@ -4692,6 +4987,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: vec![TextSegment {
+                    keyframes: Default::default(),
                     start: 0.0,
                     end: 1.0,
                     track: 0,
