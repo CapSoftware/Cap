@@ -7,6 +7,7 @@ import type { Space } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import { canManageSpace } from "@/lib/permissions/roles";
 
 export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -32,7 +33,7 @@ export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 			}
 		} else {
 			const access = await getSpaceAccess(user.id, spaceId);
-			if (!access || (!access.organizationRole && !access.spaceRole)) {
+			if (!access || (!access.spaceRole && !canManageSpace(access))) {
 				throw new Error("Space not found");
 			}
 		}

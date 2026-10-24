@@ -42,9 +42,11 @@ class Stream {
 
 let onMessage: MessageListener;
 let capturedStream: Stream;
+let speakerStreams: Stream[];
 
 beforeEach(async () => {
 	vi.resetModules();
+	speakerStreams = [];
 	vi.useFakeTimers();
 	const stored: Record<string, unknown> = {};
 	const storage = {
@@ -91,8 +93,12 @@ beforeEach(async () => {
 				return { stream: new Stream([new Track("audio")]) };
 			}
 
-			createMediaStreamSource() {
-				return { connect: vi.fn() };
+			createMediaStreamSource(stream: Stream) {
+				return {
+					connect: (destination: object) => {
+						if (destination === this.destination) speakerStreams.push(stream);
+					},
+				};
 			}
 		},
 	);
@@ -133,6 +139,7 @@ const send = (message: Record<string, unknown>) =>
 describe("recording microphone mute", () => {
 	it.each([
 		{ mode: "tab", microphone: true, systemAudio: true },
+		{ mode: "tab", microphone: true, systemAudio: false },
 		{ mode: "fullscreen", microphone: true, systemAudio: true },
 		{ mode: "camera", microphone: true, systemAudio: false },
 		{ mode: "tab", microphone: false, systemAudio: true },
@@ -141,7 +148,7 @@ describe("recording microphone mute", () => {
 		microphone: boolean;
 		systemAudio: boolean;
 	}>)(
-		"mutes only microphone capture in $mode with microphone=$microphone",
+		"mutes only microphone capture in $mode with microphone=$microphone, systemAudio=$systemAudio",
 		async ({ mode, microphone, systemAudio }) => {
 			const mic = new Track("audio");
 			const system = new Track("audio");
@@ -178,6 +185,10 @@ describe("recording microphone mute", () => {
 					},
 				}),
 			).toMatchObject({ ok: true, status: { phase: "recording" } });
+
+			expect(speakerStreams).toEqual(
+				mode === "tab" && systemAudio ? [main] : [],
+			);
 
 			expect(
 				await send({ type: "toggle-microphone-mute", muted: true }),

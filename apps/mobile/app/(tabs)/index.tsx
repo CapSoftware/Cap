@@ -377,7 +377,7 @@ export default function CapsScreen() {
 				if (requestId !== loadRequestId.current) return;
 				setLoadError(getCapsErrorMessage(error));
 			} finally {
-				if (showLoading && requestId === loadRequestId.current) {
+				if (requestId === loadRequestId.current) {
 					setLoading(false);
 				}
 			}

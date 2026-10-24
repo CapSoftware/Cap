@@ -15,6 +15,7 @@ import { Readable } from "node:stream";
 import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import { muxMediaTracksToMp4 } from "../../lib/media-video";
 import {
+	describeTrackDifference,
 	proveRecordingPackets,
 	readRecordingAudioTail,
 } from "../../lib/recording-packet-proof";
@@ -606,6 +607,34 @@ describe("encoded recording preservation", () => {
 		expect(verified.audio).toEqual(source.audio);
 		expect(verified.video).toEqual(source.video);
 	});
+	test("preserves a recording whose source track carries a creation time", async () => {
+		const input = join(directory, "creation-time-source.mp4");
+		const output = join(directory, "creation-time-remux.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-video_track_timescale",
+			"600",
+			"-movflags",
+			"frag_keyframe+empty_moov+default_base_moof",
+			"-metadata",
+			"creation_time=2026-09-17T10:29:10.000000Z",
+			input,
+		]);
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRemuxedRecording(input, input, output, {
+			requireAudio: true,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.integrity).toBeUndefined();
+	});
 	test("refuses identical corrupt packets rather than treating preservation as decodability", async () => {
 		await expect(
 			verifyRemuxedRecording(corruptTail, corruptTail, corruptTail, {
@@ -719,6 +748,109 @@ describe("encoded recording preservation", () => {
 		await expect(
 			verifyRemuxedRecording(silent, silent, output, { requireAudio: true }),
 		).rejects.toThrow();
+	});
+	test("names what differs when the packet proof fails", async () => {
+		const shifted = join(directory, "proof-explained-shift.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-itsoffset",
+			"0.5",
+			"-i",
+			silent,
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a:0",
+			"-c",
+			"copy",
+			shifted,
+		]);
+		await expect(
+			proveRecordingPackets(silent, silent, shifted, AbortSignal.timeout(5000)),
+		).rejects.toThrow(
+			/audio does not preserve the source \(.*first difference at packet 0: pts -?[\d.]+ vs [\d.]+, dts/,
+		);
+
+		const retagged = join(directory, "proof-explained-tags.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-metadata:s:v:0",
+			"handler_name=Retagged",
+			retagged,
+		]);
+		await expect(
+			proveRecordingPackets(
+				silent,
+				silent,
+				retagged,
+				AbortSignal.timeout(5000),
+			),
+		).rejects.toThrow(
+			/video does not preserve the source \(tags\.handler_name "[^"]*" vs "Retagged"/,
+		);
+
+		const changed = join(directory, "proof-explained-data.mp4");
+		const bytes = await readFile(silent);
+		const mdat = bytes.indexOf(Buffer.from("mdat"));
+		if (mdat < 0) throw new Error("Fixture has no media data");
+		bytes[mdat + 64] ^= 0xff;
+		await writeFile(changed, bytes);
+		await expect(
+			proveRecordingPackets(silent, silent, changed, AbortSignal.timeout(5000)),
+		).rejects.toThrow(
+			/does not preserve the source \(first difference at packet \d+: data differs\)/,
+		);
+	});
+	test("shows both time bases when packet timing differs", () => {
+		const summary = (packets: string) => ({
+			configuration: { codec_type: "video" as const, start: "0/1" },
+			count: 2,
+			packets,
+			startTime: 0,
+			tail: undefined,
+		});
+		expect(
+			describeTrackDifference(
+				{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+				{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+			),
+		).toBe("time base 1/15000 vs 1/90000");
+	});
+	test("keeps the time bases when many tags differ", () => {
+		const summary = (value: string) => ({
+			configuration: {
+				codec_type: "video" as const,
+				start: "0/1",
+				tags: Object.fromEntries(
+					Array.from({ length: 20 }, (_, index) => [
+						`tag_${index}`,
+						`${value}-${"x".repeat(30)}`,
+					]),
+				),
+			},
+			count: 2,
+			packets: value,
+			startTime: 0,
+			tail: undefined,
+		});
+		const explanation = describeTrackDifference(
+			{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+			{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+		);
+		expect(explanation.length).toBeLessThanOrEqual(400);
+		expect(explanation).toStartWith("time base 1/15000 vs 1/90000; tags.tag_0");
 	});
 	test("does not start cancelled packet verification", async () => {
 		const controller = new AbortController();
@@ -1123,7 +1255,7 @@ describe("source-preserving recording mux", () => {
 		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
 		expect(timing.terminalPacketCount).toBe(3);
 		await expect(inspectRecordingSources(input, null)).rejects.toThrow(
-			"Recording container timing does not match decoded video",
+			"Recording container timing does not match decoded video (final tied packets 3 vs decoded 2)",
 		);
 	});
 
@@ -1323,7 +1455,7 @@ describe("source-preserving recording mux", () => {
 		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
 		expect(timing.videoPacketCount).toBe(31);
 		await expect(inspectRecordingSources(input, null)).rejects.toThrow(
-			"Recording container timing does not match decoded video",
+			"Recording container timing does not match decoded video (packets 31 vs decoded frames 30)",
 		);
 	});
 
@@ -1967,14 +2099,17 @@ function expectExited(pid: number) {
 
 describe("recording timing metadata budget", () => {
 	const mb = 1024 * 1024;
-	test("keeps the 64 MB budget for normal recordings", () => {
+	test("keeps at least 64 MB for small recordings", () => {
 		expect(timingMetadataBudget(0)).toBe(64 * mb);
-		expect(timingMetadataBudget(300 * mb)).toBe(64 * mb);
-		expect(timingMetadataBudget(4096 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(2 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(32 * mb)).toBe(64 * mb);
 	});
 
-	test("scales with very long recordings up to 1 GB", () => {
-		expect(timingMetadataBudget(20 * 1024 * mb)).toBe(320 * mb);
+	test("allows twice the file size, up to 1 GB", () => {
+		// Production failures: 64 MB read for a 156 MB and a 324 MB recording of tiny frames.
+		expect(timingMetadataBudget(156 * mb)).toBe(312 * mb);
+		expect(timingMetadataBudget(324 * mb)).toBe(648 * mb);
+		expect(timingMetadataBudget(4096 * mb)).toBe(1024 * mb);
 		expect(timingMetadataBudget(200 * 1024 * mb)).toBe(1024 * mb);
 	});
 
