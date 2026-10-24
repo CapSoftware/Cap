@@ -3666,6 +3666,7 @@ async fn create_segment_pipeline(
                         cursor: incremental_output,
                         keyboard: keyboard_incremental_output,
                     },
+                    keyboard_capture,
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {

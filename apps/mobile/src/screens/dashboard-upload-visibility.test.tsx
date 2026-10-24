@@ -1920,6 +1920,30 @@ describe("upload and dashboard visibility", () => {
 			},
 		);
 
+		it("keeps polling after a temporary status request failure", async () => {
+			auth.client.getCap = vi
+				.fn()
+				.mockRejectedValueOnce(new Error("Network unavailable"))
+				.mockResolvedValueOnce({ cap: { upload: null } });
+			const screen = await startImport();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1500);
+			});
+			expect(getTextNodes(screen.toJSON()).join(" ")).toContain(
+				"Unable to check processing. Retrying...",
+			);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(3000);
+			});
+
+			expect(auth.client.getCap).toHaveBeenCalledTimes(2);
+			expect(getTextNodes(screen.toJSON()).join(" ")).toContain(
+				"Ready to view",
+			);
+		});
+
 		it.each(cancellations)(
 			"stops requests after %s while waiting",
 			async (reason) => {
@@ -2338,6 +2362,95 @@ describe("upload and dashboard visibility", () => {
 
 		expect(auth.client.listCaps).toHaveBeenCalledTimes(2);
 	});
+
+	it.each(["success", "failure"] as const)(
+		"releases pagination when an overlapping background reload ends in %s",
+		async (outcome) => {
+			vi.useFakeTimers();
+			const auth = createAuth();
+			const processing = {
+				phase: "processing",
+				processingError: null,
+				processingMessage: "Processing",
+				processingProgress: 50,
+				total: 100,
+				uploaded: 100,
+			};
+			const firstPage = (upload: typeof processing | null) => ({
+				caps: Array.from({ length: 30 }, (_, index) => ({
+					id: `cap_${index + 1}`,
+					title: `Cap ${index + 1}`,
+					upload: index === 0 ? upload : null,
+				})),
+				folders: [],
+				hasMore: true,
+				limit: 30,
+				page: 1,
+				pagination: { hasNextPage: true, page: 1, totalPages: 2 },
+				rootFolders: [],
+				total: 31,
+			});
+			const pendingRefresh = createDeferred<ReturnType<typeof firstPage>>();
+			const listCaps = vi
+				.fn<AuthStub["client"]["listCaps"]>()
+				.mockResolvedValueOnce(firstPage(processing))
+				.mockReturnValueOnce(pendingRefresh.promise);
+			if (outcome === "success")
+				listCaps.mockResolvedValueOnce(firstPage(null));
+			if (outcome === "failure")
+				listCaps.mockRejectedValueOnce(new Error("Refresh unavailable"));
+			listCaps.mockResolvedValue({
+				...firstPage(null),
+				caps: [{ id: "cap_31", title: "Cap 31", upload: null }],
+				hasMore: false,
+				page: 2,
+			});
+			auth.client.listCaps = listCaps;
+			auth.client.getCapStatuses = vi
+				.fn()
+				.mockResolvedValueOnce({ caps: [{ id: "cap_1", upload: processing }] })
+				.mockResolvedValue({ caps: [{ id: "cap_1", upload: null }] });
+			authState.value = auth;
+			const renderer = await renderComponent(React.createElement(CapsScreen));
+			try {
+				expect(auth.client.listCaps).toHaveBeenCalledTimes(1);
+				expect(auth.client.getCapStatuses).toHaveBeenCalledTimes(1);
+				const { FlashList } = await import("@shopify/flash-list");
+				let refresh: Promise<void> | undefined;
+				await act(async () => {
+					refresh = renderer.root
+						.findByType(FlashList)
+						.props.refreshControl.props.onRefresh();
+					await Promise.resolve();
+				});
+				expect(auth.client.listCaps).toHaveBeenCalledTimes(2);
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(3000);
+				});
+				expect(auth.client.listCaps).toHaveBeenCalledTimes(3);
+				await act(async () => {
+					pendingRefresh.resolve(firstPage(processing));
+					await refresh;
+				});
+				await act(async () => {
+					renderer.root.findByType(FlashList).props.onEndReached();
+					await Promise.resolve();
+				});
+				const cards = renderer.root.findAll(
+					(node) => String(node.type) === "CapCard",
+				);
+				expect(auth.client.listCaps).toHaveBeenLastCalledWith(
+					expect.objectContaining({ page: 2, limit: 30 }),
+				);
+				expect(cards.map((card) => card.props.cap.id)).toEqual(
+					Array.from({ length: 31 }, (_, index) => `cap_${index + 1}`),
+				);
+			} finally {
+				await act(async () => renderer.unmount());
+				vi.useRealTimers();
+			}
+		},
+	);
 
 	it("loads the next dashboard page without replacing visible Caps", async () => {
 		const auth = createAuth();

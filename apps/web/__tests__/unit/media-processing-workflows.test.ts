@@ -2,6 +2,8 @@ import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	createHook: vi.fn(),
+	hookDispose: vi.fn(),
 	rows: [] as unknown[][],
 	where: vi.fn(),
 	write: vi.fn(),
@@ -66,6 +68,7 @@ vi.mock("@/lib/ai-generation-entitlement", () => ({
 	isAiGenerationEnabledForUser: () => false,
 }));
 vi.mock("workflow", () => ({
+	createHook: mocks.createHook,
 	sleep: mocks.sleep,
 	FatalError: class FatalError extends Error {},
 	getWorkflowMetadata: () => ({ workflowRunId: "run-import" }),
@@ -110,6 +113,12 @@ function s3Error(name: string, httpStatusCode: number) {
 
 describe("media processing workflows", () => {
 	beforeEach(() => {
+		mocks.hookDispose.mockReset();
+		mocks.createHook.mockReset().mockImplementation(() => ({
+			then: (resolve: (value: unknown) => void) =>
+				resolve({ phase: "complete" }),
+			dispose: mocks.hookDispose,
+		}));
 		mocks.rows = [];
 		mocks.env = {};
 		mocks.loomSourceUrl = "https://cdn.loom.com/original.mp4";
@@ -239,6 +248,7 @@ describe("media processing workflows", () => {
 				"https://storage.example.com/owner/video/raw-upload.mp4?upload=1",
 			priority: "bulk",
 		});
+		expect(JSON.parse(calls[1]?.[1].body)).not.toHaveProperty("importPriority");
 		expect(mocks.remove).not.toHaveBeenCalled();
 	});
 
@@ -257,7 +267,8 @@ describe("media processing workflows", () => {
 
 		it("sends HLS downloads to the importer and defers transcription", async () => {
 			mocks.loomSourceUrl = "https://luna.loom.com/id/x/playlist.m3u8";
-			mocks.rows = [[video], [pending], [], [metadata]];
+			mocks.rows = [[video], [], [metadata]];
+			mocks.sleep.mockImplementation(() => new Promise(() => undefined));
 			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
 				success: true,
 			});
@@ -277,12 +288,30 @@ describe("media processing workflows", () => {
 			expect(body).toMatchObject({
 				videoUrl: "https://luna.loom.com/id/x/playlist.m3u8",
 				webhookUrl:
-					"https://cap.example.com/api/webhooks/media-server/progress?retryable=true&transcription=on-view&preview=on-view",
+					"https://cap.example.com/api/webhooks/media-server/progress?retryable=true&signal=loom-import%3Avideo%3Arun-import%3A0&transcription=on-view&preview=on-view",
 			});
+			expect(mocks.createHook).toHaveBeenCalledWith({
+				token: "loom-import:video:run-import:0",
+			});
+			expect(mocks.hookDispose).toHaveBeenCalledTimes(1);
 			expect(body.previewGifPresignedUrl).toBeUndefined();
 			expect(body.thumbnailPresignedUrl).toBeDefined();
 			expect(body.sourcePresignedUrl).toBeUndefined();
 			expect(body.sourceUpload).toBeUndefined();
+			expect(body.importPriority).toBe("customer");
+		});
+
+		it("keeps operator redrives in the importer's bulk lane", async () => {
+			mocks.loomSourceUrl = "https://luna.loom.com/id/x/playlist.m3u8";
+			mocks.rows = [[video], [], [metadata]];
+			mocks.sleep.mockImplementation(() => new Promise(() => undefined));
+			await expect(
+				importLoomVideoWorkflow({ ...payload, importPriority: "bulk" }),
+			).resolves.toMatchObject({ success: true });
+			expect(dispatchedBody()).toMatchObject({
+				priority: "bulk",
+				importPriority: "bulk",
+			});
 		});
 
 		it.each([
