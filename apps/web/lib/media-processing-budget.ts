@@ -13,6 +13,9 @@ export class MediaProcessingBudgetError extends Error {
 const key = (parts: string[]) =>
 	createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 
+export const recordingBudgetKey = (videoId: string, generation: string) =>
+	key(["recording", videoId, generation]);
+
 // A recording's transfer budget covers every automatic attempt, so the attempt limit (not the
 // budget) decides when processing stops. Media workers read sources in-region, so retries cost time, not egress.
 export const RECORDING_PROCESSING_ATTEMPTS = 5;
@@ -48,7 +51,7 @@ export async function reserveMediaProcessingBudget(input: {
 		input.generation,
 		input.attemptId,
 	]);
-	const recordingKey = key(["recording", input.videoId, input.generation]);
+	const recordingKey = recordingBudgetKey(input.videoId, input.generation);
 	const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60_000);
 	return db().transaction(async (tx) => {
 		const limits = [
