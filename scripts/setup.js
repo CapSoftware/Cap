@@ -432,6 +432,9 @@ async function setupMacOSOnnxRuntime() {
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
 	const markerPath = path.join(outputDir, "asset.txt");
+	// Microsoft's dylib keeps ~12 MB of local symbols nothing in Cap reads; the
+	// marker changes with the preparation so a cached unstripped copy is redone.
+	const preparedMarker = `${asset.name}:stripped`;
 	const marker = await fs
 		.readFile(markerPath, "utf-8")
 		.then((value) => value.trim())
@@ -444,7 +447,7 @@ async function setupMacOSOnnxRuntime() {
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 
-	if (!(await fileExists(outputPath)) || marker !== asset.name) {
+	if (!(await fileExists(outputPath)) || marker !== preparedMarker) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
 		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
 		await fs.mkdir(outputDir, { recursive: true });
@@ -452,8 +455,11 @@ async function setupMacOSOnnxRuntime() {
 			path.join(extractDir, "lib", "libonnxruntime.dylib"),
 			outputPath,
 		);
+		// Local symbols only: the exported C API (OrtGetApiBase) that ort loads
+		// through is unchanged.
+		await execFile("strip", ["-x", outputPath]);
 		await signMacOSDylib(outputPath);
-		await fs.writeFile(markerPath, asset.name);
+		await fs.writeFile(markerPath, preparedMarker);
 		console.log("Prepared ONNX Runtime dylib");
 	} else {
 		console.log("Using cached ONNX Runtime dylib");
