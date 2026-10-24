@@ -5370,6 +5370,8 @@ fn load_editor_project_candidate(
         cx.spawn({
             let stats = stats.clone();
             let pump_instance = Arc::downgrade(&instance);
+            let pump_playhead = Arc::downgrade(&playhead);
+            let pump_playhead_rx = playhead_rx.clone();
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
                     let (frame, number) = match output {
@@ -5407,6 +5409,14 @@ fn load_editor_project_candidate(
                         .update(cx, |view, window, cx| {
                             if !view.holds_instance(&pump_instance) {
                                 return;
+                            }
+                            // A playing sample the drain has not applied yet
+                            // is drawn with this frame rather than after it.
+                            if view.playing
+                                && pump_playhead_rx.try_recv().is_ok()
+                                && let Some(signal) = pump_playhead.upgrade()
+                            {
+                                view.playhead_changed(signal.position(), window, cx);
                             }
                             view.frame_arrived(
                                 editor_window::EditorFrame {
