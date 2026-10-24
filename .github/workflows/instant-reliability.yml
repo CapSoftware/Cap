@@ -25,7 +25,6 @@ on:
       - "crates/recording/src/recovery.rs"
       - "crates/enc-ffmpeg/src/mux/segmented_stream.rs"
       - "crates/enc-ffmpeg/src/mux/dash_audio.rs"
-      - ".github/workflows/instant-reliability.yml"
   schedule:
     - cron: "40 4 * * *"
   workflow_dispatch:
