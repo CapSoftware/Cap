@@ -4204,8 +4204,8 @@ impl MainWindow {
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {
-                            let mut items = library::list_screenshots();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_screenshots_limited(library::LIBRARY_PANEL_LIMIT);
                             (None, Some(items))
                         }
                     }
@@ -4785,13 +4785,14 @@ impl MainWindow {
                 self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
                     let png = png.clone();
                     move |_, _, cx| {
-                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png, cx) {
-                            tracing::warn!("copying screenshot failed: {error}");
-                            cx.spawn(async move |_| {
+                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                        cx.spawn(async move |_| {
+                            if let Err(error) = copied.await {
+                                tracing::warn!("copying screenshot failed: {error}");
                                 crate::platform::alert_dialog("Could not copy screenshot", &error);
-                            })
-                            .detach();
-                        }
+                            }
+                        })
+                        .detach();
                     }
                 }),
             )

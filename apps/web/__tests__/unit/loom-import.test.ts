@@ -1207,6 +1207,59 @@ describe("importFromLoom", () => {
 		expect(startMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("marks CSV rows that hit a temporary Loom failure as retryable", async () => {
+		whereMock.mockImplementation((conditions: unknown) => {
+			if (JSON.stringify(conditions).includes("sourceId")) {
+				return Promise.resolve([]);
+			}
+
+			return withLimit([{ userId: "member-123", email: "member@example.com" }]);
+		});
+
+		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+
+			if (url.includes("/transcoded-url")) {
+				return {
+					ok: false,
+					status: 429,
+					headers: new Headers({ "retry-after": "30" }),
+					body: null,
+				} as Response;
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+
+		const { importFromLoomCsv } = await import("@/actions/loom");
+
+		const result = await importFromLoomCsv({
+			orgId: "org-1" as never,
+			rows: [
+				{
+					rowNumber: 2,
+					loomUrl: "https://www.loom.com/share/loom-ratelimited1",
+					userEmail: "member@example.com",
+				},
+			],
+		});
+
+		expect(result.results).toStrictEqual([
+			{
+				rowNumber: 2,
+				userEmail: "member@example.com",
+				spaceName: undefined,
+				success: false,
+				videoId: undefined,
+				error:
+					"Loom is temporarily unavailable. Please retry the import later.",
+				errorCode: "loom_temporarily_unavailable",
+			},
+		]);
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
 	it("limits CSV imports to 500 rows", async () => {
 		const fetchMock = vi.mocked(fetch);
 		const { importFromLoomCsv } = await import("@/actions/loom");
