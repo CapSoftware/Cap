@@ -96,6 +96,7 @@ pub struct ActiveRecording {
     start_gate: Option<cap_recording::RecordingStartGate>,
     instant_upload: Option<SharedInstantUpload>,
     instant_share_link: Option<String>,
+    instant_video_id: Option<String>,
     #[cfg(target_os = "linux")]
     instant_completion: Option<crate::upload::CompletionControl>,
     #[cfg(target_os = "linux")]
@@ -818,6 +819,10 @@ impl ActiveRecording {
 
     pub fn instant_share_url(&self) -> Option<&str> {
         self.instant_share_link.as_deref()
+    }
+
+    pub(crate) fn instant_video_id(&self) -> Option<&str> {
+        self.instant_video_id.as_deref()
     }
 
     /// Stop and finalize. Returns the project directory.
@@ -2117,15 +2122,15 @@ async fn start_internal(
         .map(str::to_string);
 
     let pre_created_video = if config.mode == RecordingMode::Instant {
-        Some(
-            crate::upload::prepare_instant_upload(
-                matches!(config.target, ScreenCaptureTarget::CameraOnly),
-                project_name,
-                organization_id,
-            )
-            .await
-            .map_err(anyhow::Error::msg)?,
+        let video = crate::upload::prepare_instant_upload(
+            matches!(config.target, ScreenCaptureTarget::CameraOnly),
+            project_name,
+            organization_id,
         )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        crate::upload::instant_cleanup::begin(&video.id, &project_dir);
+        Some(video)
     } else {
         None
     };
@@ -2152,12 +2157,20 @@ async fn start_internal(
             );
         }
     }
-    if result.is_err()
+    if let Err(start_error) = &result
         && let Some(video) = pre_created_video
-        && let Err(error) = crate::upload::delete_instant_video(&video.id).await
     {
-        tracing::error!(video_id = %video.id, "Failed to clean up instant recording: {error}");
-        return Err(anyhow!("Failed to clean up instant recording: {error}"));
+        use crate::upload::instant_cleanup::{self, CleanupReason};
+        let cause = instant_cleanup::classify_start_failure(&format!("{start_error:#}"));
+        let query = instant_cleanup::delete_query(CleanupReason::StartFailed, Some(cause));
+        match crate::upload::delete_instant_video_with_query(&video.id, query.as_deref()).await {
+            Ok(()) => instant_cleanup::resolved(&video.id),
+            Err(error) => {
+                instant_cleanup::abandon(&video.id, CleanupReason::StartFailed, Some(cause));
+                tracing::error!(video_id = %video.id, "Failed to clean up instant recording: {error}");
+                return Err(anyhow!("Failed to clean up instant recording: {error}"));
+            }
+        }
     }
     result
 }
@@ -2451,6 +2464,9 @@ async fn start_attempt_with_upload(
     let instant_share_link = instant_upload
         .as_ref()
         .map(|upload| upload.video().link.clone());
+    let instant_video_id = instant_upload
+        .as_ref()
+        .map(|upload| upload.video().id.clone());
     let instant_upload =
         instant_upload.map(|upload| Arc::new(tokio::sync::Mutex::new(Some(upload))));
     Ok(ActiveRecording {
@@ -2459,6 +2475,7 @@ async fn start_attempt_with_upload(
         start_gate: config.start_gate.clone(),
         instant_upload,
         instant_share_link,
+        instant_video_id,
         #[cfg(target_os = "linux")]
         instant_completion,
         #[cfg(target_os = "linux")]

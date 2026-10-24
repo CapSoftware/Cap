@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+pub(crate) mod instant_cleanup;
 #[cfg(test)]
 mod multipart_tests;
 pub(crate) mod queue;
@@ -492,10 +493,21 @@ impl InstantUpload {
 }
 
 pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
-    let path = format!(
+    delete_instant_video_with_query(video_id, None).await
+}
+
+pub(crate) async fn delete_instant_video_with_query(
+    video_id: &str,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let mut path = format!(
         "/api/desktop/video/delete?videoId={}",
         urlencoding(video_id)
     );
+    if let Some(query) = query {
+        path.push('&');
+        path.push_str(query);
+    }
     let response = auth::authed_request(reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|error| format!("Failed to delete instant recording: {error}"))?;

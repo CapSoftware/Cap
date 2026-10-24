@@ -55,6 +55,10 @@ pub(crate) struct UploadState {
 }
 
 impl UploadState {
+    pub(crate) fn video_id(&self) -> &str {
+        &self.video_id
+    }
+
     pub(super) fn request_context(&self) -> Result<auth::UploadRequestContext, String> {
         auth::UploadRequestContext::for_upload(&self.server_url, self.owner_id.as_deref())
             .map_err(|error| error.to_string())
