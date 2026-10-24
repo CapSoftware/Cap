@@ -1,4 +1,4 @@
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -28,8 +28,16 @@ vi.mock("@cap/database/schema", () => ({
 	videos: { id: "v.id", metadata: "v.metadata" },
 }));
 vi.mock("@cap/env", () => ({ serverEnv: () => mocks.env }));
+vi.mock("@/lib/server", async () => {
+	const { Effect } = await import("effect");
+	return {
+		runPromise: (effect: Parameters<typeof Effect.runPromise>[0]) =>
+			Effect.runPromise(effect),
+	};
+});
 
 import {
+	ensureLoomPreviewGif,
 	isLoomPreviewDue,
 	LOOM_PREVIEW_RETRY_MS,
 	startLoomPreviewGif,
@@ -116,6 +124,12 @@ describe("startLoomPreviewGif", () => {
 		expect(mocks.fetch).not.toHaveBeenCalled();
 	});
 
+	it("lets the next view retry when the importer is busy", async () => {
+		mocks.fetch.mockResolvedValue(new Response("busy", { status: 503 }));
+		await expect(run()).resolves.toBe("busy");
+		expect(mocks.updates).toHaveLength(2);
+	});
+
 	it("waits before retrying a failed preview", async () => {
 		mocks.fetch.mockResolvedValue(new Response("busy", { status: 502 }));
 		await expect(run()).resolves.toBe("failed");
@@ -130,5 +144,72 @@ describe("startLoomPreviewGif", () => {
 		await expect(run()).resolves.toBe("unavailable");
 		expect(mocks.updates).toEqual([]);
 		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+});
+
+describe("ensureLoomPreviewGif", () => {
+	const bucket = (exists: () => boolean) =>
+		({
+			getInternalSignedObjectUrl: (key: string) =>
+				Effect.succeed(`https://storage.example.com/${key}`),
+			getInternalPresignedPutUrl: (key: string) =>
+				Effect.succeed(`https://storage.example.com/${key}?put`),
+			headObject: () =>
+				exists() ? Effect.succeed({}) : Effect.fail(new Error("missing")),
+		}) as never;
+
+	it("returns straight away for videos without a pending Loom preview", async () => {
+		await expect(
+			Effect.runPromise(
+				ensureLoomPreviewGif(
+					{ ...video, metadata: Option.none() } as never,
+					bucket(() => true),
+					"key",
+				),
+			),
+		).resolves.toBe(false);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("renders the first pending preview before answering", async () => {
+		await expect(
+			Effect.runPromise(
+				ensureLoomPreviewGif(
+					{
+						...video,
+						metadata: Option.some({ loomPreviewGif: { status: "pending" } }),
+					} as never,
+					bucket(() => false),
+					"key",
+				),
+			),
+		).resolves.toBe(true);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("waits for a preview another view is rendering", async () => {
+		vi.useFakeTimers();
+		let ready = false;
+		const pending = Effect.runPromise(
+			ensureLoomPreviewGif(
+				{
+					...video,
+					metadata: Option.some({
+						loomPreviewGif: {
+							status: "started",
+							startedAt: new Date().toISOString(),
+						},
+					}),
+				} as never,
+				bucket(() => ready),
+				"key",
+			),
+		);
+		await vi.advanceTimersByTimeAsync(4_000);
+		ready = true;
+		await vi.advanceTimersByTimeAsync(2_000);
+		await expect(pending).resolves.toBe(true);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		vi.useRealTimers();
 	});
 });
