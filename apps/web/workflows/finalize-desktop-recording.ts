@@ -87,8 +87,10 @@ const MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
 // A remux is about as large as its source, so a source that fits in one part is
 // uploaded with one PUT instead of sign-part + PUT + complete round trips.
 const SINGLE_PUT_OUTPUT_MAX_SOURCE_BYTES = MULTIPART_OUTPUT_PART_SIZE_BYTES;
-const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 32;
-const SOURCE_COMMIT_BATCH_DURATION_MS = 15_000;
+const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 128;
+// A page can still run for its 180 s timeout after this budget is spent, so a step stays far inside
+// the function's max duration while a long commit needs a third of the step hops it did at 15 s.
+const SOURCE_COMMIT_BATCH_DURATION_MS = 45_000;
 const TRANSCRIPTION_QUEUE_MAX_ATTEMPTS = 12;
 
 function getErrorMessage(error: unknown) {
