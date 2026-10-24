@@ -62,12 +62,14 @@ import {
 	withMediaTransfers,
 } from "../lib/media-transfer";
 import type {
+	PendingStorageUpload,
 	ResilientInputFlags,
 	StorageUploadReceipt,
 	StorageUploadTarget,
 } from "../lib/media-video";
 import {
 	abortStorageUploadTarget,
+	beginStorageUpload,
 	downloadVideoToTemp,
 	generatePreviewGif,
 	generateThumbnail,
@@ -2992,6 +2994,10 @@ async function muxSegmentsAsync(
 	const abortController = new AbortController();
 	updateJob(jobId, { abortController });
 	let outputUploadStarted = false;
+	let pendingOutputUpload: PendingStorageUpload | undefined;
+	let pendingOutputHash:
+		| { promise: Promise<string>; abort: AbortController }
+		| undefined;
 	let processingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let errorCode: RecordingErrorCode = "processing-unavailable";
 	const sources = context.sourceObjects
@@ -3157,6 +3163,21 @@ async function muxSegmentsAsync(
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
+		// Hashing and multipart parts only read the finished file, so they run during the decode check; the
+		// upload is only completed (the object only exists) after everything below has passed.
+		pendingOutputUpload = beginStorageUpload(
+			resultPath,
+			outputUpload,
+			"video/mp4",
+			abortController.signal,
+		);
+		const hashAbort = new AbortController();
+		const outputHash = hashRecordingFile(
+			resultPath,
+			AbortSignal.any([abortController.signal, hashAbort.signal]),
+		);
+		outputHash.catch(() => {});
+		pendingOutputHash = { promise: outputHash, abort: hashAbort };
 		updateJob(jobId, {
 			progress: 70,
 			message: "Checking the processed recording...",
@@ -3202,9 +3223,7 @@ async function muxSegmentsAsync(
 			message: "Verifying the recording file...",
 		});
 		sendCurrentJobWebhook(jobId);
-		const outputSha256 = await withJobHeartbeat(jobId, () =>
-			hashRecordingFile(resultPath, abortController.signal),
-		);
+		const outputSha256 = await withJobHeartbeat(jobId, () => outputHash);
 		const afterHash = await lstat(resultPath, { bigint: true });
 		if (
 			!afterHash.isFile() ||
@@ -3267,13 +3286,11 @@ async function muxSegmentsAsync(
 
 		outputUploadStarted = true;
 		errorCode = "processing-unavailable";
+		const startedOutputUpload = pendingOutputUpload;
+		if (!startedOutputUpload)
+			throw new Error("Recording output upload was not started");
 		const uploadReceipt = await withJobHeartbeat(jobId, () =>
-			uploadFileToStorage(
-				resultPath,
-				outputUpload,
-				"video/mp4",
-				abortController.signal,
-			),
+			startedOutputUpload.finish(),
 		);
 		if (outputVerificationUrl) {
 			errorCode = "output-invalid";
@@ -3441,7 +3458,12 @@ async function muxSegmentsAsync(
 			error: logReason(error, MUX_FAILURE_LOG_LENGTH),
 			resources: getSystemResources(),
 		});
+		// Stop a hash still reading the output before the work directory is removed.
+		pendingOutputHash?.abort.abort();
+		await pendingOutputHash?.promise.catch(() => {});
 		if (!outputUploadStarted) {
+			// Parts still in flight could land after the abort, so let them settle first.
+			await pendingOutputUpload?.cancel();
 			await abortStorageUploadTarget(outputUpload).catch((abortError) => {
 				console.warn(
 					`[mux-segments] Failed to abort output upload for ${videoId}:`,
