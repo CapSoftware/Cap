@@ -261,6 +261,38 @@ fn begin_at(
     }
 }
 
+fn forget_at(path: &Path, video_id: &str) -> bool {
+    let _guard = JOURNAL_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut journal = read_journal(path);
+    if !journal
+        .entries
+        .iter()
+        .any(|entry| entry.video_id == video_id)
+    {
+        return true;
+    }
+    journal.entries.retain(|entry| entry.video_id != video_id);
+    match write_journal(path, &journal) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, video_id, "Instant cleanup could not clear a verified video");
+            false
+        }
+    }
+}
+
+fn still_journaled(path: &Path, video_id: &str) -> bool {
+    let _guard = JOURNAL_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    read_journal(path)
+        .entries
+        .iter()
+        .any(|entry| entry.video_id == video_id)
+}
+
 fn remove_at(path: &Path, video_id: &str) {
     if let Err(error) = update_journal(path, |entries| {
         entries.retain(|entry| entry.video_id != video_id);
@@ -337,6 +369,17 @@ pub(crate) fn resolved(video_id: &str) {
     remove_at(&journal_path(), video_id);
 }
 
+/// Called once the server has verified an upload. If `started` could not clear
+/// the entry, a later sweep would otherwise find a start whose folder was
+/// removed and delete the uploaded video. False when the entry is still there,
+/// so the caller keeps the local copy.
+pub(crate) fn forget_verified(video_id: &str) -> bool {
+    if cfg!(target_os = "linux") {
+        return true;
+    }
+    forget_at(&journal_path(), video_id)
+}
+
 pub(crate) fn abandon(video_id: &str, reason: CleanupReason, cause: Option<StartFailureCause>) {
     if cfg!(target_os = "linux") {
         return;
@@ -411,9 +454,10 @@ fn project_needs_video(project: &Path, meta: Option<&RecordingMeta>, interrupted
 /// True when a local recording that must not lose its server copy points at
 /// this video: anything past `InProgress`, an unreadable project that claims
 /// the id, or (for interrupted starts) a project that already holds media.
-/// An interrupted start is kept unless its own folder can be read: the folder
-/// is created before the server video, so a missing one was moved, deleted or
-/// sits on a drive that is not mounted, and its media may still exist.
+/// An interrupted start whose own folder sits on storage that cannot be read
+/// right now (an unmounted drive) is kept too: its media may still be there.
+/// A missing folder on readable storage is not protected, because capture
+/// creates the folder only once it starts.
 fn locally_protected(
     recording_dirs: &[PathBuf],
     video_id: &str,
@@ -421,12 +465,21 @@ fn locally_protected(
     start_project: Option<&Path>,
 ) -> bool {
     if interrupted && let Some(project) = start_project {
-        if !matches!(project.try_exists(), Ok(true)) {
+        if !project
+            .parent()
+            .is_some_and(|parent| std::fs::read_dir(parent).is_ok())
+        {
             return true;
         }
-        let meta = RecordingMeta::load_for_project(project).ok();
-        if project_needs_video(project, meta.as_ref(), interrupted) {
-            return true;
+        match project.try_exists() {
+            Ok(true) => {
+                let meta = RecordingMeta::load_for_project(project).ok();
+                if project_needs_video(project, meta.as_ref(), interrupted) {
+                    return true;
+                }
+            }
+            Ok(false) => {}
+            Err(_) => return true,
         }
     }
     for directory in recording_dirs {
@@ -498,6 +551,9 @@ async fn sweep(path: &Path, session: &str, now: i64, backend: &impl SweepBackend
             tracing::warn!(video_id = %entry.video_id, "Instant cleanup kept a video a local recording uses");
             summary.kept += 1;
             remove.push(entry.video_id);
+            continue;
+        }
+        if !still_journaled(path, &entry.video_id) {
             continue;
         }
         match backend.delete(&entry).await {
@@ -954,6 +1010,58 @@ mod tests {
         assert!(fixture.entries().is_empty());
     }
 
+    #[tokio::test]
+    async fn a_video_verified_during_a_sweep_is_never_deleted() {
+        let fixture = Fixture::new();
+        fixture.seed(vec![entry("uploaded", "earlier", Stage::Starting, 100)]);
+        struct VerifiedDuringCheck<'a> {
+            journal: &'a Path,
+            deletes: AtomicUsize,
+        }
+        impl SweepBackend for VerifiedDuringCheck<'_> {
+            fn account_ready(&self, _entry: &Entry) -> bool {
+                true
+            }
+            async fn protected(&self, entry: &Entry) -> bool {
+                assert!(forget_at(self.journal, &entry.video_id));
+                false
+            }
+            async fn delete(&self, _entry: &Entry) -> Result<(), String> {
+                self.deletes.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let journal = fixture.journal();
+        let backend = VerifiedDuringCheck {
+            journal: &journal,
+            deletes: AtomicUsize::new(0),
+        };
+        sweep(
+            &journal,
+            "current",
+            100 + INTERRUPTED_GRACE_SECS + 1,
+            &backend,
+        )
+        .await;
+        assert_eq!(backend.deletes.load(Ordering::SeqCst), 0);
+        assert!(fixture.entries().is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_verified_video_clears_only_that_entry() {
+        let fixture = Fixture::new();
+        let journal = fixture.journal();
+        assert!(forget_at(&journal, "absent"));
+        assert!(!journal.exists());
+        fixture.seed(vec![
+            entry("uploaded", "earlier", Stage::Starting, 100),
+            entry("other", "earlier", Stage::Starting, 100),
+        ]);
+        assert!(forget_at(&journal, "uploaded"));
+        let remaining: Vec<_> = fixture.entries().into_iter().map(|e| e.video_id).collect();
+        assert_eq!(remaining, vec!["other".to_string()]);
+    }
+
     fn write_project(
         root: &Path,
         name: &str,
@@ -1120,7 +1228,7 @@ mod tests {
             Some(&project),
         ));
         let deleted = recordings.join("deleted.cap");
-        assert!(locally_protected(
+        assert!(!locally_protected(
             std::slice::from_ref(&recordings),
             "video",
             true,
