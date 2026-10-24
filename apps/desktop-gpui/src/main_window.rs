@@ -4321,15 +4321,19 @@ impl MainWindow {
             let (_decodes, results) = library::spawn_decode_pool(
                 cx.background_executor(),
                 thumbnails,
-                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+                |(index, path, version)| {
+                    library::decode_thumbnail(&path).map(|image| (index, path, version, image))
+                },
             );
             while let Ok(first) = results.recv_async().await {
                 let mut batch = vec![first];
                 batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        for (index, path, image) in batch {
-                            this.set_library_thumbnail(kind, index, path, image, window, cx);
+                        for (index, path, version, image) in batch {
+                            this.set_library_thumbnail(
+                                kind, index, path, version, image, window, cx,
+                            );
                         }
                     })
                     .is_err()
@@ -4347,19 +4351,29 @@ impl MainWindow {
         screenshots: Option<Vec<ScreenshotItem>>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(usize, std::path::PathBuf)> {
+    ) -> Vec<(usize, std::path::PathBuf, Option<u128>)> {
         let mut cached_recordings: std::collections::HashMap<_, _> =
-            match (kind, self.library.take()) {
-                (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => rows
+            std::collections::HashMap::new();
+        let mut cached_screenshots: std::collections::HashMap<_, _> =
+            std::collections::HashMap::new();
+        match (kind, self.library.take()) {
+            (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => {
+                cached_recordings = rows
                     .into_iter()
                     .map(|row| (row.item.path.clone(), row))
-                    .collect(),
-                (_, previous) => {
-                    self.library = previous;
-                    self.drop_library_images(window);
-                    std::collections::HashMap::new()
-                }
-            };
+                    .collect();
+            }
+            (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
+                cached_screenshots = rows
+                    .into_iter()
+                    .map(|row| (row.item.path.clone(), row))
+                    .collect();
+            }
+            (_, previous) => {
+                self.library = previous;
+                self.drop_library_images(window);
+            }
+        }
         let mut pending = Vec::new();
         self.library = Some(match kind {
             LibraryKind::Recordings => LibraryItems::Recordings(
@@ -4376,7 +4390,7 @@ impl MainWindow {
                                 || row.thumbnail.is_none()
                         });
                         if changed && let Some(path) = item.thumbnail.clone() {
-                            pending.push((index, path));
+                            pending.push((index, path, item.thumbnail_version));
                         }
                         LibraryRow {
                             item,
@@ -4392,19 +4406,35 @@ impl MainWindow {
                     .into_iter()
                     .enumerate()
                     .map(|(index, item)| {
-                        if let Some(path) = item.thumbnail.clone() {
-                            pending.push((index, path));
+                        let previous = cached_screenshots.remove(&item.path);
+                        let has_thumbnail =
+                            previous.as_ref().is_some_and(|row| row.thumbnail.is_some());
+                        let previous_stale =
+                            previous.as_ref().is_some_and(|row| row.thumbnail_stale);
+                        let changed = !library::screenshot_thumbnail_is_current(
+                            &item,
+                            previous.as_ref().map(|row| &row.item),
+                            has_thumbnail,
+                            previous_stale,
+                        );
+                        if changed && let Some(path) = item.thumbnail.clone() {
+                            pending.push((index, path, item.thumbnail_version));
                         }
                         LibraryRow {
                             item,
-                            thumbnail: None,
-                            thumbnail_stale: false,
+                            thumbnail: previous.and_then(|row| row.thumbnail),
+                            thumbnail_stale: changed,
                         }
                     })
                     .collect(),
             ),
         });
         for (_, row) in cached_recordings {
+            if let Some(image) = row.thumbnail {
+                let _ = window.drop_image(image);
+            }
+        }
+        for (_, row) in cached_screenshots {
             if let Some(image) = row.thumbnail {
                 let _ = window.drop_image(image);
             }
@@ -4419,6 +4449,7 @@ impl MainWindow {
         kind: LibraryKind,
         index: usize,
         path: std::path::PathBuf,
+        version: Option<u128>,
         image: std::sync::Arc<gpui::RenderImage>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -4433,8 +4464,14 @@ impl MainWindow {
                 }),
             (Some(LibraryItems::Screenshots(rows)), LibraryKind::Screenshots) => rows
                 .get_mut(index)
-                .filter(|row| row.item.thumbnail.as_deref() == Some(path.as_path()))
-                .and_then(|row| row.thumbnail.replace(image)),
+                .filter(|row| {
+                    row.item.thumbnail.as_deref() == Some(path.as_path())
+                        && row.item.thumbnail_version == version
+                })
+                .and_then(|row| {
+                    row.thumbnail_stale = false;
+                    row.thumbnail.replace(image)
+                }),
             _ => None,
         };
         if let Some(old) = replaced {
