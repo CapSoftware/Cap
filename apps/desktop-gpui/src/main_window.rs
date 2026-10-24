@@ -177,7 +177,6 @@ impl Mode {
         }
     }
 
-    /// `{name} mode`, the hover card heading, as one message per mode.
     fn hover_title(self) -> &'static str {
         match self {
             Self::Instant => tr::main::mode::hover::instant(),
@@ -186,7 +185,6 @@ impl Mode {
         }
     }
 
-    /// `{name} Mode`, under the mode pill, as one message per mode.
     fn header_title(self) -> &'static str {
         match self {
             Self::Instant => tr::main::mode::header::instant(),

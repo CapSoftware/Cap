@@ -1,6 +1,5 @@
 use super::*;
 
-/// Keys the main window, controls, camera and onboarding conversion added.
 pub(super) const NEW_COMMON: &[&str] = &[
     "common.back",
     "common.choose_allow_prompt",
