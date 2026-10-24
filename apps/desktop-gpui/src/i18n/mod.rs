@@ -7,7 +7,6 @@ use gpui::App;
 
 include!(concat!(env!("OUT_DIR"), "/i18n.rs"));
 
-/// `general_settings.uiLanguage`.
 pub const SETTING_KEY: &str = "uiLanguage";
 /// Wins over the setting and the system language, for example
 /// `CAP_GPUI_LOCALE=ja` (or `pseudo` in a debug build).
