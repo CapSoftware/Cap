@@ -2988,8 +2988,12 @@ describe("upload and dashboard visibility", () => {
 				sheet().props.onRename(sheet().props.cap);
 				const buttons = vi.mocked(Alert.prompt).mock.calls.at(-1)?.[2];
 				if (!Array.isArray(buttons)) throw new Error("Rename prompt missing");
-				expect(vi.mocked(Alert.prompt).mock.calls.at(-1)?.[3]).toBe("plain-text");
-				const save = buttons[1]?.onPress as ((value: string) => void) | undefined;
+				expect(vi.mocked(Alert.prompt).mock.calls.at(-1)?.[3]).toBe(
+					"plain-text",
+				);
+				const save = buttons[1]?.onPress as
+					| ((value: string) => void)
+					| undefined;
 				save?.("Roadmap review");
 			};
 			const removePassword = () => {
