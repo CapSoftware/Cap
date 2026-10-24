@@ -598,6 +598,11 @@ impl TextInputState {
         self.focus.clone()
     }
 
+    /// `focus_handle().is_focused(window)` without cloning the handle.
+    pub fn is_focused(&self, window: &Window) -> bool {
+        self.focus.is_focused(window)
+    }
+
     fn invalidate_layout(&self) {
         *self.layout.borrow_mut() = None;
     }

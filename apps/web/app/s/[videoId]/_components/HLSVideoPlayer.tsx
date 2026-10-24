@@ -190,10 +190,14 @@ export function HLSVideoPlayer({
 	const hasTriedRouterRefreshRef = useRef(false);
 	const isBackgroundPreview = previewMode === "background";
 	// Native HLS players end a growing playlist when playback catches up with
-	// its last segment, so early playback is limited to hls.js and everything
-	// else keeps waiting for the complete recording.
+	// its last segment, and on ManagedMediaSource alone (iPhone) the final
+	// segment was seen to go missing when it ended, so early playback needs
+	// hls.js on MediaSource. Everything else waits for the complete recording.
 	const isEarlyPlayback =
-		earlyPlayback && typeof window !== "undefined" && Hls.isSupported();
+		earlyPlayback &&
+		typeof window !== "undefined" &&
+		typeof window.MediaSource !== "undefined" &&
+		Hls.isSupported();
 	const sourceSrc =
 		earlyPlayback && !isEarlyPlayback
 			? videoSrc.replace("earlyPlayback=1", "requireComplete=1")
