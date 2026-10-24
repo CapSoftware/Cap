@@ -15,13 +15,13 @@
 			"ios": {
 				"simulator": true
 			},
-			"bun": "1.4.0"
+			"bun": "1.4.4"
 		},
 		"preview": {
 			"channel": "preview",
 			"distribution": "internal",
 			"environment": "preview",
-			"bun": "1.4.0"
+			"bun": "1.4.4"
 		},
 		"production": {
 			"autoIncrement": true,
@@ -29,7 +29,7 @@
 			"credentialsSource": "remote",
 			"distribution": "store",
 			"environment": "production",
-			"bun": "1.4.0"
+			"bun": "1.4.4"
 		}
 	},
 	"submit": {

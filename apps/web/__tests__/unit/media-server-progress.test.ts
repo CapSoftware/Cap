@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Effect } from "effect";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -808,5 +810,154 @@ describe("media-server recording progress webhook", () => {
 				}),
 			},
 		]);
+	});
+});
+
+describe("Loom importer completions", () => {
+	const complete = (extra: Record<string, unknown> = {}) => ({
+		jobId: "importer-1",
+		videoId,
+		phase: "complete",
+		progress: 100,
+		metadata,
+		...extra,
+	});
+	const metadataWrites = (mutations: Mutation[]) =>
+		mutations
+			.filter(
+				({ table, values }) =>
+					table === mocks.tables.videos && values?.metadata !== undefined,
+			)
+			.map(({ values }) =>
+				new MySqlDialect().sqlToQuery(values?.metadata as SQL),
+			);
+
+	beforeEach(() => {
+		mocks.transcribe.mockReset().mockResolvedValue({ success: true });
+		mocks.queue.mockReset();
+		vi.spyOn(console, "log").mockImplementation(() => undefined);
+	});
+
+	function loomVideo() {
+		const database = databaseFixture(null);
+		database.video.source = { type: "webMP4" };
+		return database;
+	}
+
+	it("leaves transcription for the first view of importer completions", async () => {
+		const database = loomVideo();
+		const response = await request(
+			complete(),
+			"media-secret",
+			"?retryable=true&transcription=on-view",
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"'$.transcribeOnView', JSON_EXTRACT('true', '$')",
+		);
+		expect(write?.sql).not.toContain("loomDeferredProcessing");
+		expect(database.mutations).toContainEqual({
+			operation: "delete",
+			table: mocks.tables.uploads,
+		});
+	});
+
+	it("records an imported original that still needs processing", async () => {
+		const database = loomVideo();
+		const key = `${ownerId}/${videoId}/raw-upload.webm`;
+		await request(
+			complete({ deferredSourceKey: key }),
+			"media-secret",
+			"?retryable=true&transcription=on-view",
+		);
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"JSON_OBJECT('rawFileKey', ?, 'status', 'pending')",
+		);
+		expect(write?.params).toContain(key);
+	});
+
+	it.each([
+		`other-user/${videoId}/raw-upload.webm`,
+		`${ownerId}/other-video/raw-upload.webm`,
+		`${ownerId}/${videoId}/result.mp4`,
+	])("ignores the deferred original %s", async (key) => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: key }),
+			"media-secret",
+			"?retryable=true&transcription=on-view",
+		);
+		for (const write of metadataWrites(database.mutations))
+			expect(write.sql).not.toContain("loomDeferredProcessing");
+	});
+
+	it("keeps an existing deferred claim when a completion is repeated", async () => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: `${ownerId}/${videoId}/raw-upload.webm` }),
+			"media-secret",
+			"?retryable=true&transcription=on-view",
+		);
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"IF(JSON_EXTRACT(?, '$.loomDeferredProcessing') IS NULL",
+		);
+	});
+
+	it("marks a deferred original complete once it has been processed", async () => {
+		const database = loomVideo();
+		const key = `${ownerId}/${videoId}/raw-upload.webm`;
+		database.video.metadata = {
+			loomDeferredProcessing: { rawFileKey: key, status: "started" },
+		};
+		database.setRawFileKey(key);
+		await request(complete(), "media-secret", "?retryable=true");
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"'$.loomDeferredProcessing.status', 'complete'",
+		);
+		expect(mocks.transcribe).toHaveBeenCalledWith(videoId);
+	});
+
+	it("leaves the preview GIF for the first view of importer completions", async () => {
+		const database = loomVideo();
+		await request(
+			complete(),
+			"media-secret",
+			"?retryable=true&transcription=on-view&preview=on-view",
+		);
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"'$.loomPreviewGif', COALESCE(JSON_EXTRACT(?, '$.loomPreviewGif'), JSON_OBJECT('status', 'pending'))",
+		);
+	});
+
+	it("does not wait for a preview view when the original still needs processing", async () => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: `${ownerId}/${videoId}/raw-upload.webm` }),
+			"media-secret",
+			"?retryable=true&transcription=on-view&preview=on-view",
+		);
+		for (const write of metadataWrites(database.mutations))
+			expect(write.sql).not.toContain("loomPreviewGif");
+	});
+
+	it("keeps queueing transcription for media server completions", async () => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: `${ownerId}/${videoId}/raw-upload.webm` }),
+			"media-secret",
+			"?retryable=true",
+		);
+		expect(mocks.transcribe).toHaveBeenCalledWith(videoId);
+		expect(
+			metadataWrites(database.mutations).some(({ sql }) =>
+				sql.includes("transcribeOnView"),
+			),
+		).toBe(false);
 	});
 });

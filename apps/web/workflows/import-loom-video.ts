@@ -3,7 +3,7 @@ import { agentApiOperations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import {
 	FatalError,
@@ -65,6 +65,17 @@ function isStreamingUrl(url: string): boolean {
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
+function isMp4Url(url: string): boolean {
+	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".mp4");
+}
+
+type LoomWorker = "importer" | "media";
+
+function getLoomWorkerUrl(worker: LoomWorker): string | undefined {
+	const env = serverEnv();
+	return worker === "importer" ? env.LOOM_IMPORTER_URL : env.MEDIA_SERVER_URL;
+}
+
 async function fetchFreshLoomDownloadUrl(
 	loomVideoId: string,
 	existingUrl?: string,
@@ -112,7 +123,16 @@ async function requireLoomMediaServerSupport() {
 	const env = serverEnv();
 	if (!env.MEDIA_SERVER_URL)
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
-	const response = await fetch(`${env.MEDIA_SERVER_URL}/video/status`, {
+	await requireLoomWorkerCapabilities(env.MEDIA_SERVER_URL);
+	if (env.LOOM_IMPORTER_URL)
+		await requireLoomWorkerCapabilities(env.LOOM_IMPORTER_URL);
+}
+
+requireLoomMediaServerSupport.maxRetries = 60;
+
+async function requireLoomWorkerCapabilities(workerUrl: string) {
+	const env = serverEnv();
+	const response = await fetch(`${workerUrl}/video/status`, {
 		headers: env.MEDIA_SERVER_WEBHOOK_SECRET
 			? { "x-media-server-secret": env.MEDIA_SERVER_WEBHOOK_SECRET }
 			: undefined,
@@ -138,8 +158,6 @@ async function requireLoomMediaServerSupport() {
 		);
 	}
 }
-
-requireLoomMediaServerSupport.maxRetries = 60;
 
 async function claimAgentImport(operationId: string | undefined) {
 	"use step";
@@ -225,7 +243,7 @@ export async function importLoomVideoWorkflow(
 
 		let metadata: ProcessedVideoMetadata;
 		for (let processingAttempt = 0; ; processingAttempt++) {
-			let mediaJobId: string;
+			let mediaJob: { jobId: string; worker: LoomWorker };
 			let capacityRetryCount = 0;
 			let previousSourceUrl =
 				processingAttempt === 0 ? payload.loomDownloadUrl : undefined;
@@ -238,7 +256,7 @@ export async function importLoomVideoWorkflow(
 							)
 						: undefined;
 					previousSourceUrl = loomSourceUrl;
-					mediaJobId = await processVideoOnMediaServer(
+					mediaJob = await processVideoOnMediaServer(
 						payload,
 						loomSourceUrl,
 						`${workflowRunId}:${processingAttempt}`,
@@ -262,7 +280,13 @@ export async function importLoomVideoWorkflow(
 				) {
 					throw error;
 				}
-				if (!(await confirmLoomMediaJobFailure(mediaJobId, payload.videoId))) {
+				if (
+					!(await confirmLoomMediaJobFailure(
+						mediaJob.jobId,
+						payload.videoId,
+						mediaJob.worker,
+					))
+				) {
 					throw new FatalError(
 						"The previous Loom worker must be reconciled before retrying",
 					);
@@ -307,10 +331,14 @@ function getInputExtension(url: string): string | undefined {
 	return undefined;
 }
 
-async function confirmLoomMediaJobFailure(jobId: string, videoId: string) {
+async function confirmLoomMediaJobFailure(
+	jobId: string,
+	videoId: string,
+	worker: LoomWorker,
+) {
 	"use step";
 
-	return isLoomMediaJobFailed(jobId, videoId);
+	return isLoomMediaJobFailed(jobId, videoId, getLoomWorkerUrl(worker));
 }
 
 async function hasExistingLoomUpload(
@@ -371,11 +399,15 @@ async function startMediaServerProcessJob(
 		sourcePresignedUrl?: string;
 		sourceUpload?: LoomMultipartUploadTarget;
 		outputUpload?: LoomMultipartUploadTarget;
+		originalUpload?: {
+			key: string;
+			upload: LoomMultipartUploadTarget | { type: "put"; url: string };
+		};
 		existingOutput?: { url: string; objectIdentity: string; fileSize: number };
 		maxImportBytes: number;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
-		previewGifPresignedUrl: string;
+		previewGifPresignedUrl?: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension?: string;
@@ -385,6 +417,7 @@ async function startMediaServerProcessJob(
 		state: "accepted" | "rejected" | "uncertain",
 		jobId?: string,
 	) => Promise<void>,
+	importOnly = false,
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
 		const headers: Record<string, string> = {
@@ -395,7 +428,9 @@ async function startMediaServerProcessJob(
 		}
 
 		const endpoint =
-			body.sourcePresignedUrl || body.sourceUpload ? "import" : "process";
+			importOnly || body.sourcePresignedUrl || body.sourceUpload
+				? "import"
+				: "process";
 		await recordDispatch("uncertain");
 		const response = await fetch(`${mediaServerUrl}/video/${endpoint}`, {
 			method: "POST",
@@ -461,21 +496,28 @@ async function processVideoOnMediaServer(
 	loomSourceUrl: string | undefined,
 	attemptId: string,
 	runId: string,
-): Promise<string> {
+): Promise<{ jobId: string; worker: LoomWorker }> {
 	"use step";
 
 	const { videoId, userId, rawFileKey } = payload;
 
-	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+	const worker: LoomWorker =
+		loomSourceUrl && serverEnv().LOOM_IMPORTER_URL ? "importer" : "media";
+	const mediaServerUrl = getLoomWorkerUrl(worker);
 	if (!mediaServerUrl) {
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
 	}
+	const originalKey =
+		worker === "importer" && loomSourceUrl && !isMp4Url(loomSourceUrl)
+			? `${userId}/${videoId}/raw-upload.webm`
+			: undefined;
 
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
 
 	const {
 		rawVideoUrl,
+		originalUpload,
 		sourcePresignedUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
@@ -516,7 +558,7 @@ async function processVideoOnMediaServer(
 					expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 				});
 		const sourcePresignedUrl =
-			loomSourceUrl && !isStreamingUrl(loomSourceUrl)
+			worker === "media" && loomSourceUrl && !isStreamingUrl(loomSourceUrl)
 				? yield* bucket.getInternalPresignedPutUrl(
 						rawFileKey,
 						{ ContentType: "video/mp4" },
@@ -546,22 +588,46 @@ async function processVideoOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		);
+		if (originalKey)
+			yield* bucket
+				.deleteObject(originalKey)
+				.pipe(Effect.catchAll(() => Effect.void));
+		const originalPutUrl =
+			originalKey && bucket.provider !== "s3"
+				? yield* bucket.getInternalPresignedPutUrl(originalKey, {
+						ContentType: "video/webm",
+					})
+				: undefined;
 		const multipart = yield* Effect.promise(() =>
 			prepareLoomMultipartUploads({
 				video,
 				bucket,
 				attemptId,
 				sourceKey:
-					loomSourceUrl && !isStreamingUrl(loomSourceUrl)
-						? rawFileKey
-						: undefined,
+					worker === "importer"
+						? originalKey
+						: loomSourceUrl && !isStreamingUrl(loomSourceUrl)
+							? rawFileKey
+							: undefined,
 				webhookBaseUrl,
 				webhookSecret: serverEnv().MEDIA_SERVER_WEBHOOK_SECRET || undefined,
 			}),
 		);
 
+		const originalUpload = originalKey
+			? multipart.sourceUpload
+				? { key: originalKey, upload: multipart.sourceUpload }
+				: originalPutUrl
+					? {
+							key: originalKey,
+							upload: { type: "put" as const, url: originalPutUrl },
+						}
+					: undefined
+			: undefined;
+
 		return {
 			rawVideoUrl: multipart.existingOutput?.url ?? rawVideoUrl,
+			originalUpload,
 			sourcePresignedUrl:
 				multipart.sourceUpload || multipart.existingOutput
 					? undefined
@@ -588,7 +654,7 @@ async function processVideoOnMediaServer(
 		};
 	}).pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true${worker === "importer" ? "&transcription=on-view&preview=on-view" : ""}`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	try {
@@ -608,20 +674,22 @@ async function processVideoOnMediaServer(
 	}
 
 	try {
-		return await startMediaServerProcessJob(
+		const jobId = await startMediaServerProcessJob(
 			mediaServerUrl,
 			{
 				videoId,
 				userId,
 				videoUrl: rawVideoUrl,
 				sourcePresignedUrl,
-				sourceUpload,
+				sourceUpload: worker === "importer" ? undefined : sourceUpload,
+				originalUpload,
 				outputUpload,
 				existingOutput,
 				maxImportBytes: LOOM_IMPORT_MAX_BYTES,
 				outputPresignedUrl,
 				thumbnailPresignedUrl,
-				previewGifPresignedUrl,
+				previewGifPresignedUrl:
+					worker === "importer" ? undefined : previewGifPresignedUrl,
 				webhookUrl,
 				webhookSecret: webhookSecret || undefined,
 				inputExtension: getInputExtension(rawVideoUrl),
@@ -636,7 +704,9 @@ async function processVideoOnMediaServer(
 					state,
 					jobId,
 				}),
+			worker === "importer",
 		);
+		return { jobId, worker };
 	} catch (error) {
 		if (error instanceof LoomMediaRequestRejectedError) await abortUploads();
 		throw error;
@@ -665,7 +735,12 @@ async function saveMetadataAndComplete(
 
 	await db()
 		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+		.where(
+			and(
+				eq(videoUploads.videoId, videoId as Video.VideoId),
+				sql`NOT EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${videoId} AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.status')) = 'started')`,
+			),
+		);
 }
 
 async function setProcessingError(

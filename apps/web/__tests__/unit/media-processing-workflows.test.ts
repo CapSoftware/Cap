@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(),
 	mediaJobFailed: vi.fn(),
 	sleep: vi.fn(),
+	env: {} as Record<string, string>,
+	loomSourceUrl: "https://cdn.loom.com/original.mp4",
 }));
 
 vi.mock("@cap/database", () => ({
@@ -40,6 +42,7 @@ vi.mock("@cap/env", () => ({
 		MEDIA_SERVER_URL: "https://worker.example.com",
 		WEB_URL: "https://cap.example.com",
 		MEDIA_SERVER_WEBHOOK_SECRET: "test-secret",
+		...mocks.env,
 	}),
 }));
 vi.mock("@cap/web-domain", () => ({
@@ -108,6 +111,8 @@ function s3Error(name: string, httpStatusCode: number) {
 describe("media processing workflows", () => {
 	beforeEach(() => {
 		mocks.rows = [];
+		mocks.env = {};
+		mocks.loomSourceUrl = "https://cdn.loom.com/original.mp4";
 		mocks.where
 			.mockReset()
 			.mockImplementation(async () => mocks.rows.shift() ?? []);
@@ -148,9 +153,12 @@ describe("media processing workflows", () => {
 		);
 		mocks.fetch.mockReset().mockImplementation(async (url: string) => {
 			if (url.startsWith("https://www.loom.com/")) {
-				return Response.json({ url: "https://cdn.loom.com/original.mp4" });
+				return Response.json({ url: mocks.loomSourceUrl });
 			}
-			if (url.startsWith("https://worker.example.com/")) {
+			if (
+				url.startsWith("https://worker.example.com/") ||
+				url.startsWith("https://media.example.com/loom-importer/")
+			) {
 				return Response.json({ jobId: "job-1", status: "queued" });
 			}
 			throw new Error("Video bytes must not pass through Vercel");
@@ -232,6 +240,116 @@ describe("media processing workflows", () => {
 			priority: "bulk",
 		});
 		expect(mocks.remove).not.toHaveBeenCalled();
+	});
+
+	describe("with the dedicated Loom importer", () => {
+		const importerUrl = "https://media.example.com/loom-importer";
+		const dispatchedBody = () => {
+			const call = mocks.fetch.mock.calls.find(([url]) =>
+				String(url).startsWith(importerUrl),
+			);
+			return call ? JSON.parse(call[1].body) : undefined;
+		};
+
+		beforeEach(() => {
+			mocks.env = { LOOM_IMPORTER_URL: importerUrl };
+		});
+
+		it("sends HLS downloads to the importer and defers transcription", async () => {
+			mocks.loomSourceUrl = "https://luna.loom.com/id/x/playlist.m3u8";
+			mocks.rows = [[video], [pending], [], [metadata]];
+			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			expect(mocks.statusFetch.mock.calls.map(([url]) => url)).toEqual([
+				"https://worker.example.com/video/status",
+				`${importerUrl}/video/status`,
+			]);
+			expect(
+				mocks.fetch.mock.calls.some(([url]) =>
+					String(url).startsWith("https://worker.example.com/"),
+				),
+			).toBe(false);
+			const body = dispatchedBody();
+			expect(mocks.fetch.mock.calls.at(-1)?.[0]).toBe(
+				`${importerUrl}/video/import`,
+			);
+			expect(body).toMatchObject({
+				videoUrl: "https://luna.loom.com/id/x/playlist.m3u8",
+				webhookUrl:
+					"https://cap.example.com/api/webhooks/media-server/progress?retryable=true&transcription=on-view&preview=on-view",
+			});
+			expect(body.previewGifPresignedUrl).toBeUndefined();
+			expect(body.thumbnailPresignedUrl).toBeDefined();
+			expect(body.sourcePresignedUrl).toBeUndefined();
+			expect(body.sourceUpload).toBeUndefined();
+		});
+
+		it.each([
+			"https://luna.loom.com/id/x/playlist.mpd",
+			"https://luna.loom.com/id/x/playlist.m3u8",
+			"https://luna.loom.com/id/x/raw.webm",
+		])("gives %s a WebM original destination", async (url) => {
+			mocks.loomSourceUrl = url;
+			mocks.rows = [[video], [pending], [], [metadata]];
+			await importLoomVideoWorkflow(payload);
+			expect(dispatchedBody()?.originalUpload).toEqual({
+				key: "owner/video/raw-upload.webm",
+				upload: {
+					type: "put",
+					url: "https://storage.example.com/owner/video/raw-upload.webm?upload=1",
+				},
+			});
+			expect(mocks.put).toHaveBeenCalledWith("owner/video/raw-upload.webm", {
+				ContentType: "video/webm",
+			});
+			expect(mocks.remove).toHaveBeenCalledWith("owner/video/raw-upload.webm");
+		});
+
+		it("does not keep a second copy of progressive MP4 downloads", async () => {
+			mocks.rows = [[video], [pending], [], [metadata]];
+			await importLoomVideoWorkflow(payload);
+			const body = dispatchedBody();
+			expect(body.videoUrl).toBe("https://cdn.loom.com/original.mp4");
+			expect(body.sourcePresignedUrl).toBeUndefined();
+			expect(body.originalUpload).toBeUndefined();
+			expect(mocks.put).not.toHaveBeenCalledWith(
+				payload.rawFileKey,
+				expect.anything(),
+				expect.anything(),
+			);
+		});
+
+		it("keeps processing a preserved original on the media server", async () => {
+			mocks.rows = [[video], [video], [], [metadata]];
+			await importLoomVideoWorkflow({
+				...payload,
+				reuseExistingRawUpload: true,
+			});
+			expect(mocks.fetch).toHaveBeenCalledOnce();
+			expect(mocks.fetch.mock.calls[0]?.[0]).toBe(
+				"https://worker.example.com/video/process",
+			);
+			const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1].body);
+			expect(body.webhookUrl).not.toContain("transcription=on-view");
+			expect(body.webhookUrl).not.toContain("preview=on-view");
+			expect(body.previewGifPresignedUrl).toBeDefined();
+		});
+
+		it("waits for the importer when it cannot confirm Loom support", async () => {
+			mocks.statusFetch.mockImplementation(async (url: string) =>
+				url.startsWith(importerUrl)
+					? new Response("unavailable", { status: 503 })
+					: Response.json({
+							loomMultipartUploads: true,
+							loomImportMaxBytes: 10 * 1024 ** 3,
+						}),
+			);
+			await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+				"Could not verify Loom import worker capabilities",
+			);
+			expect(dispatchedBody()).toBeUndefined();
+		});
 	});
 
 	it("reuses a preserved Loom upload when retrying", async () => {
@@ -396,7 +514,11 @@ describe("media processing workflows", () => {
 		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
 			"must be reconciled before retrying",
 		);
-		expect(mocks.mediaJobFailed).toHaveBeenCalledWith("job-1", "video");
+		expect(mocks.mediaJobFailed).toHaveBeenCalledWith(
+			"job-1",
+			"video",
+			"https://worker.example.com",
+		);
 		expect(
 			mocks.fetch.mock.calls.filter(([url]) =>
 				url.startsWith("https://worker.example.com/"),

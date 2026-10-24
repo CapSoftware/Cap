@@ -46,12 +46,32 @@ export async function recordLoomMediaDispatch({
 		throw new Error("Loom media dispatch ownership changed");
 }
 
-export async function isLoomMediaJobFailed(jobId: string, videoId: string) {
+export async function isLoomMediaJobFailed(
+	jobId: string,
+	videoId: string,
+	workerUrl?: string,
+) {
 	const env = serverEnv();
-	if (!env.MEDIA_SERVER_URL || !env.MEDIA_SERVER_WEBHOOK_SECRET) return false;
+	const workerUrls = workerUrl
+		? [workerUrl]
+		: [env.MEDIA_SERVER_URL, env.LOOM_IMPORTER_URL].filter(
+				(url): url is string => Boolean(url),
+			);
+	for (const url of workerUrls)
+		if (await isJobFailedOnWorker(url, jobId, videoId)) return true;
+	return false;
+}
+
+async function isJobFailedOnWorker(
+	workerUrl: string,
+	jobId: string,
+	videoId: string,
+) {
+	const env = serverEnv();
+	if (!env.MEDIA_SERVER_WEBHOOK_SECRET) return false;
 	try {
 		const response = await fetch(
-			`${env.MEDIA_SERVER_URL}/video/process/${encodeURIComponent(jobId)}/status`,
+			`${workerUrl}/video/process/${encodeURIComponent(jobId)}/status`,
 			{
 				headers: { "x-media-server-secret": env.MEDIA_SERVER_WEBHOOK_SECRET },
 				signal: AbortSignal.timeout(15_000),
