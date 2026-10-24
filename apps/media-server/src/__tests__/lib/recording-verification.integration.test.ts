@@ -21,6 +21,7 @@ import {
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
+	timingMetadataBudget,
 } from "../../lib/recording-timing";
 import {
 	inspectRecordingSources,
@@ -1964,6 +1965,25 @@ function expectExited(pid: number) {
 	expect(() => process.kill(pid, 0)).toThrow();
 }
 
+describe("recording timing metadata budget", () => {
+	const mb = 1024 * 1024;
+	test("keeps the 64 MB budget for normal recordings", () => {
+		expect(timingMetadataBudget(0)).toBe(64 * mb);
+		expect(timingMetadataBudget(300 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(4096 * mb)).toBe(64 * mb);
+	});
+
+	test("scales with very long recordings up to 1 GB", () => {
+		expect(timingMetadataBudget(20 * 1024 * mb)).toBe(320 * mb);
+		expect(timingMetadataBudget(200 * 1024 * mb)).toBe(1024 * mb);
+	});
+
+	test("ignores an invalid size", () => {
+		expect(timingMetadataBudget(Number.NaN)).toBe(64 * mb);
+		expect(timingMetadataBudget(-1)).toBe(64 * mb);
+	});
+});
+
 describe("recording timing metadata lifetime", () => {
 	test.each(["cancel", "timeout"])(
 		"joins a stalled raw terminal-duration read after %s",
@@ -2445,7 +2465,12 @@ function objectResponse(
 }
 
 describe("chunked packet-proven verification", () => {
-	async function segmentedRecording(name: string, gop: number) {
+	async function segmentedRecording(
+		name: string,
+		gop: number,
+		frames = 120,
+		segmentSeconds = 0.5,
+	) {
 		const fragments = await mkdtemp(join(directory, `${name}-`));
 		await run([
 			"ffmpeg",
@@ -2456,7 +2481,7 @@ describe("chunked packet-proven verification", () => {
 			"-i",
 			"testsrc2=size=320x180:rate=30",
 			"-frames:v",
-			"120",
+			String(frames),
 			"-c:v",
 			"libx264",
 			"-preset",
@@ -2472,7 +2497,7 @@ describe("chunked packet-proven verification", () => {
 			"-f",
 			"dash",
 			"-seg_duration",
-			"0.5",
+			String(segmentSeconds),
 			"-use_template",
 			"1",
 			"-use_timeline",
@@ -2618,6 +2643,165 @@ describe("chunked packet-proven verification", () => {
 		expect(fallbacks).toHaveLength(1);
 		expect(chunked).toEqual(single);
 		expect(chunked.video.frameCount).toBe(120);
+	});
+
+	async function resizedRecording(name: string) {
+		const halves: string[] = [];
+		for (const size of ["320x180", "352x180"]) {
+			const half = join(directory, `${name}-${size}.h264`);
+			await run([
+				"ffmpeg",
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				`testsrc2=size=${size}:rate=30`,
+				"-frames:v",
+				"90",
+				"-c:v",
+				"libx264",
+				"-preset",
+				"ultrafast",
+				"-g",
+				"15",
+				"-keyint_min",
+				"15",
+				"-sc_threshold",
+				"0",
+				"-pix_fmt",
+				"yuv420p",
+				"-bsf:v",
+				"h264_mp4toannexb",
+				"-f",
+				"h264",
+				half,
+			]);
+			halves.push(half);
+		}
+		const stream = join(directory, `${name}.h264`);
+		await writeFile(
+			stream,
+			Buffer.concat(await Promise.all(halves.map((path) => readFile(path)))),
+		);
+		const fragments = await mkdtemp(join(directory, `${name}-`));
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-framerate",
+			"30",
+			"-f",
+			"h264",
+			"-i",
+			stream,
+			"-c",
+			"copy",
+			"-f",
+			"dash",
+			"-seg_duration",
+			"0.5",
+			"-use_template",
+			"1",
+			"-use_timeline",
+			"1",
+			"-init_seg_name",
+			"init.mp4",
+			"-media_seg_name",
+			"fragment-$Number%05d$.m4s",
+			join(fragments, "manifest.mpd"),
+		]);
+		const init = join(fragments, "init.mp4");
+		const segments = (await readdir(fragments))
+			.filter((file) => /^fragment-\d+\.m4s$/.test(file))
+			.sort()
+			.map((file) => join(fragments, file));
+		expect(segments.length).toBeGreaterThanOrEqual(6);
+		const combined = join(directory, `${name}-combined.mp4`);
+		await writeFile(
+			combined,
+			Buffer.concat(
+				await Promise.all([init, ...segments].map((path) => readFile(path))),
+			),
+		);
+		const output = join(directory, `${name}-output.mp4`);
+		await muxMediaTracksToMp4(combined, silent, output);
+		return { init, segments, combined, output };
+	}
+
+	test("falls back when a later chunk starts at a different resolution", async () => {
+		const recording = await resizedRecording("chunk-resize");
+		const { single, chunked, fallbacks } = await both(recording);
+		expect(fallbacks).toHaveLength(1);
+		expect(String(fallbacks[0][0])).toContain(
+			"dimensions 0: 320x180 -> 352x180",
+		);
+		expect(chunked).toEqual(single);
+		expect(chunked.video.frameCount).toBe(180);
+	});
+
+	test("stops the other chunk decoders once headers differ", async () => {
+		const recording = await resizedRecording("chunk-resize-early");
+		const ffmpeg = Bun.which("ffmpeg");
+		if (!ffmpeg) throw new Error("ffmpeg is required");
+		// Every chunk after the first keeps running for 30 s after its output is complete,
+		// so verification only finishes quickly if those decoders are stopped early.
+		const bin = await mkdtemp(join(directory, "slow-ffmpeg-"));
+		await writeFile(
+			join(bin, "ffmpeg"),
+			[
+				"#!/bin/sh",
+				'case "$*" in',
+				`*verify-chunk-0.mp4*) exec "${ffmpeg}" "$@" ;;`,
+				`*verify-chunk-*) "${ffmpeg}" "$@"; status=$?; exec 1>&- 2>&-; sleep 30; exit $status ;;`,
+				`*) exec "${ffmpeg}" "$@" ;;`,
+				"esac",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const path = process.env.PATH;
+		process.env.PATH = `${bin}:${path}`;
+		process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "3";
+		const warn = spyOn(console, "warn");
+		try {
+			const started = performance.now();
+			const result = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+			);
+			expect(performance.now() - started).toBeLessThan(15_000);
+			expect(result.video.frameCount).toBe(180);
+			expect(
+				warn.mock.calls.some((call) =>
+					String(call[0]).includes("chunk stream parameters differ"),
+				),
+			).toBe(true);
+		} finally {
+			warn.mockRestore();
+			process.env.PATH = path;
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	}, 60_000);
+
+	test("copies many fragments into one run without piling up stream listeners", async () => {
+		const recording = await segmentedRecording("chunk-many", 6, 240, 0.2);
+		expect(recording.segments.length).toBeGreaterThanOrEqual(30);
+		const warnings: string[] = [];
+		const onWarning = (warning: Error) => warnings.push(warning.name);
+		const events = process as unknown as NodeJS.EventEmitter;
+		events.on("warning", onWarning);
+		try {
+			const { single, chunked, fallbacks } = await both(recording);
+			expect(fallbacks).toHaveLength(0);
+			expect(chunked).toEqual(single);
+		} finally {
+			events.off("warning", onWarning);
+		}
+		expect(warnings).not.toContain("MaxListenersExceededWarning");
 	});
 
 	test("still rejects a corrupt recording through the full decode", async () => {

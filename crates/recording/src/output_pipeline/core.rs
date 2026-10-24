@@ -426,6 +426,7 @@ pub enum PipelineHealthEvent {
         source: String,
         starvation_ms: u64,
     },
+    MicrophoneDigitalSilence,
     RecoveryFragmentCorrupt {
         path: String,
         reason: String,
@@ -495,6 +496,9 @@ pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
         }
         PipelineHealthEvent::CaptureTargetLost { .. } => {
             health_event(13, "capture_target_lost", &[])
+        }
+        PipelineHealthEvent::MicrophoneDigitalSilence => {
+            health_event(14, "microphone_digital_silence", &[])
         }
     }
     let _ = tx.try_send(event);
@@ -2282,6 +2286,7 @@ pub struct SetupCtx {
     master_clock: Arc<MasterClock>,
     stop_token: CancellationToken,
     stop_signal: PipelineStopSignal,
+    digital_silence_ms: Arc<AtomicU64>,
 }
 
 impl SetupCtx {
@@ -2297,7 +2302,12 @@ impl SetupCtx {
             master_clock,
             stop_token,
             stop_signal,
+            digital_silence_ms: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn digital_silence_ms(&self) -> Arc<AtomicU64> {
+        self.digital_silence_ms.clone()
     }
 
     pub fn tasks(&mut self) -> &mut TaskPool {
@@ -3014,6 +3024,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         );
 
         let audio_gap_summary = Arc::new(OnceLock::new());
+        let digital_silence_ms = setup_ctx.digital_silence_ms();
 
         finish_build(
             setup_ctx,
@@ -3056,6 +3067,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             video_timestamp_span,
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
+            digital_silence_ms,
         })
     }
 }
@@ -3113,6 +3125,7 @@ impl OutputPipelineBuilder<NoVideo> {
 
         let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
         let audio_gap_summary = Arc::new(OnceLock::new());
+        let digital_silence_ms = setup_ctx.digital_silence_ms();
 
         finish_build(
             setup_ctx,
@@ -3148,6 +3161,7 @@ impl OutputPipelineBuilder<NoVideo> {
             video_timestamp_span: Arc::new(VideoTimestampSpan::default()),
             health_rx: Some(build_ctx.health_rx),
             audio_gap_summary,
+            digital_silence_ms,
         })
     }
 }
@@ -4940,6 +4954,7 @@ pub struct OutputPipeline {
     video_timestamp_span: Arc<VideoTimestampSpan>,
     health_rx: Option<HealthReceiver>,
     audio_gap_summary: Arc<OnceLock<AudioGapSummary>>,
+    digital_silence_ms: Arc<AtomicU64>,
 }
 
 pub struct FinishedOutputPipeline {
@@ -4951,6 +4966,7 @@ pub struct FinishedOutputPipeline {
     /// media span for VFR content.
     pub video_timestamp_span: Option<(Duration, Duration)>,
     pub audio_gap_summary: Option<AudioGapSummary>,
+    pub digital_silence_ms: Option<u32>,
 }
 
 pub(crate) struct OutputPipelineStopOutcome {
@@ -5084,6 +5100,10 @@ impl OutputPipeline {
                 video_frame_count: self.video_frame_count.load(Ordering::Acquire),
                 video_timestamp_span: self.video_timestamp_span.get(),
                 audio_gap_summary: self.audio_gap_summary.get().copied(),
+                digital_silence_ms: match self.digital_silence_ms.load(Ordering::Relaxed) {
+                    0 => None,
+                    ms => Some(u32::try_from(ms).unwrap_or(u32::MAX)),
+                },
             },
             media_error,
         })

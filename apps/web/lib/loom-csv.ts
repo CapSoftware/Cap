@@ -50,6 +50,35 @@ export function parseLoomCsvRecords(text: string) {
 	return records;
 }
 
+export const LOOM_CSV_RESULTS_HEADERS = [
+	"row",
+	"loom_video_url",
+	"user_email",
+	"space_name",
+	"status",
+	"error",
+];
+
+const GUARDED_FORMULA_PREFIX = /^'*[=+\-@\t\r]/;
+const FORMULA_GUARD = /^'(?='*[=+\-@\t\r])/;
+
+export function formatLoomCsvCell(value: string) {
+	const literal = GUARDED_FORMULA_PREFIX.test(value) ? `'${value}` : value;
+	if (/[",\n\r]/.test(literal)) {
+		return `"${literal.replace(/"/g, '""')}"`;
+	}
+	return literal;
+}
+
+export function isLoomCsvResultsFile(headers: string[]) {
+	const normalized = new Set(headers.map((header) => header.toLowerCase()));
+	return LOOM_CSV_RESULTS_HEADERS.every((header) => normalized.has(header));
+}
+
+export function readLoomCsvCell(value: string) {
+	return value.replace(FORMULA_GUARD, "");
+}
+
 export function parseConciergeLoomCsv(text: string): LoomCsvImportRow[] {
 	const records = parseLoomCsvRecords(text);
 	const headers = records[0]?.map((value) => value.toLowerCase()) ?? [];

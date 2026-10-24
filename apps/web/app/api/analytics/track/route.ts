@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { videos, videoUploads } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
@@ -254,7 +255,11 @@ export async function POST(request: NextRequest) {
 					),
 				);
 			}
-		}).pipe(provideOptionalAuth),
+		}).pipe((trackView) =>
+			isCrossSiteCookieWrite(request)
+				? trackView
+				: provideOptionalAuth(trackView),
+		),
 	);
 
 	return Response.json({ success: true });
