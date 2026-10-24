@@ -125,6 +125,7 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
+import { releaseProSeatSubscription } from "@/lib/pro-seat-subscription";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	blockedS3EndpointMessage,
@@ -5301,6 +5302,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.select({
 										userId: Db.organizationMembers.userId,
 										role: Db.organizationMembers.role,
+										hasProSeat: Db.organizationMembers.hasProSeat,
 										email: Db.users.email,
 									})
 									.from(Db.organizationMembers)
@@ -5374,6 +5376,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										),
 									);
 								if (affectedRows(result) === 0) return { state: "not_found" };
+								if (member.hasProSeat) {
+									await releaseProSeatSubscription(tx, member.userId);
+								}
 								const now = new Date();
 								return {
 									state: "success",
