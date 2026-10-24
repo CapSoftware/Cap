@@ -6,7 +6,6 @@ import { formatClock } from "./early-playback";
 
 const FRAME_WIDTH = 48;
 
-/** Counts up to `value` (whole seconds) instead of jumping between polls. */
 function useCountUp(value: number): number {
 	const [shown, setShown] = useState(Math.floor(value));
 	const currentRef = useRef(value);
@@ -34,12 +33,8 @@ function useCountUp(value: number): number {
 	return shown;
 }
 
-/**
- * Shown over an early-playback recording when a seek or playback reaches a
- * part that hasn't uploaded yet. The paused frame is drawn once into a tiny
- * canvas and scaled up, so the blur costs nothing per frame; the grain and
- * sheen only move layers.
- */
+// The paused frame is drawn once into a tiny canvas and scaled up, so the
+// blur costs nothing per frame; the grain and sheen only move layers.
 export function EarlyUploadOverlay({
 	videoRef,
 	target,
@@ -52,7 +47,6 @@ export function EarlyUploadOverlay({
 	target: number | null;
 	ready: number;
 	recorded: number | null;
-	/** Everything has uploaded and the player is fetching the last part. */
 	uploadComplete: boolean;
 	stalled: boolean;
 }) {

@@ -108,10 +108,6 @@ interface Props {
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
 	allowSegmentProbeDuringUpload?: boolean;
-	/**
-	 * Plays a stopped recording from its first segment while the playlist is
-	 * still growing, instead of waiting for the last segments to upload.
-	 */
 	earlyPlayback?: boolean;
 	onSourceComplete?: () => void;
 	enhancedAudioUrl?: string | null;

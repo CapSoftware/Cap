@@ -2,12 +2,8 @@
 
 import { type RefObject, useEffect, useRef, useState } from "react";
 
-/**
- * Early playback plays a stopped recording from its start while its last
- * segments are still uploading. The playlist only holds what has uploaded, so
- * a seek past it is held here until that part arrives instead of letting the
- * browser clamp it to the end of the uploaded part.
- */
+// The playlist only holds what has uploaded, so a seek past it is held until
+// that part arrives instead of letting the browser clamp it to the end.
 
 const STATUS_POLL_MS = 2_000;
 const STALLED_AFTER_MS = 30_000;
@@ -19,17 +15,11 @@ export type EarlyPlaybackStatus = {
 };
 
 export type EarlyPlaybackState = {
-	/** Seconds that play from the start without a gap. */
 	ready: number;
-	/** The full length, once the desktop app or the complete upload says. */
 	recorded: number | null;
-	/** Every segment has uploaded. */
 	uploadComplete: boolean;
-	/** A seek target waiting for its part to upload. */
 	held: number | null;
-	/** Playback has caught up with the end of the uploaded part. */
 	atEdge: boolean;
-	/** Nothing new has uploaded for a while. */
 	stalled: boolean;
 };
 
@@ -51,7 +41,6 @@ export function parseEarlyPlaybackStatus(response: {
 	};
 }
 
-/** How far the player can seek right now. */
 export function getMediaEnd(
 	video: Pick<HTMLMediaElement, "duration" | "seekable">,
 ): number {
@@ -63,11 +52,8 @@ export function getMediaEnd(
 	return Math.max(duration, seekable, 0);
 }
 
-/**
- * Seeks the browser can carry out as asked. Before the duration is known
- * (hls.js placing its start position) and once the player holds the whole
- * recording, every seek goes through untouched.
- */
+// hls.js places its start position before the duration is known, so seeks
+// pass untouched until then.
 export function canSeekNow(
 	target: number,
 	mediaEnd: number,
@@ -76,11 +62,6 @@ export function canSeekNow(
 	return playerComplete || mediaEnd <= 0 || target <= mediaEnd - 0.05;
 }
 
-/**
- * A held seek resolves once its part has uploaded with a second to play (or
- * the upload is complete) and the player's playlist reaches it. Once the
- * player holds the whole recording, a target past its end lands on the end.
- */
 export function canResolveHold(
 	target: number,
 	{
@@ -140,7 +121,6 @@ export function useEarlyPlayback({
 }: {
 	enabled: boolean;
 	statusUrl: string | null;
-	/** The player's playlist has ended, so it holds the whole recording. */
 	playerComplete: boolean;
 	videoRef: RefObject<HTMLVideoElement | null>;
 }): EarlyPlaybackState {
@@ -292,7 +272,6 @@ export function useEarlyPlayback({
 			});
 		}
 
-		// Pressing play while a seek is held keeps watching from here.
 		const onPlay = () => {
 			if (heldRef.current !== null) releaseHold();
 			updateEdge();

@@ -478,9 +478,6 @@ export const ShareVideo = forwardRef<
 		let enableCrossOrigin = false;
 
 		if (isSegmentsSource) {
-			// A stopped recording either waits for its complete manifest or,
-			// with early playback, starts from its first segment while the
-			// last ones finish uploading.
 			const stoppedMode = userConfirmedStopped
 				? earlySegmentPlayback
 					? "&earlyPlayback=1"

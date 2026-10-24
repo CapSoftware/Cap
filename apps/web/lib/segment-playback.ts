@@ -15,12 +15,10 @@ export function getSegmentPlaybackState(
 
 type SegmentEntry = { index: number; duration: number };
 
-/**
- * The run of segments numbered 1, 2, 3... with no gap. Uploads finish out of
- * order, so a progress manifest can list segment 12 while 11 is still in
- * flight. A playlist that skipped 11 would play the wrong media at that time,
- * then have to insert 11 mid-list later, which HLS players cannot follow.
- */
+// Uploads finish out of order, so a progress manifest can list segment 12
+// while 11 is still in flight. A playlist that skipped 11 would play the wrong
+// media at that time, then have to insert 11 mid-list, which HLS players
+// cannot follow.
 export function contiguousSegmentPrefix(
 	entries: Video.SegmentManifestType["video_segments"],
 ): SegmentEntry[] {
@@ -35,12 +33,8 @@ export function contiguousSegmentPrefix(
 	return prefix;
 }
 
-/**
- * What can play from the start of a recording whose last segments are still
- * uploading, or null to keep waiting for the complete manifest. Audio only
- * proves it exists once it starts uploading, so a manifest without any audio
- * yet waits: it may belong to a recording whose audio is still on its way.
- */
+// Audio only proves it exists once it starts uploading, so a manifest without
+// any audio yet waits: its recording may still have audio on the way.
 export function getEarlySegmentTracks(
 	manifest: Video.SegmentManifestType,
 ): { video: SegmentEntry[]; audio: SegmentEntry[] } | null {
@@ -60,11 +54,6 @@ export function totalSegmentDuration(
 
 const MAX_RECORDED_LENGTH_SECONDS = 24 * 60 * 60;
 
-/**
- * The full length the desktop app records when a recording stops, before its
- * last segments finish uploading (`segments/recording.json`). Anything
- * malformed, implausible or shorter than what has already uploaded is ignored.
- */
 export function readRecordedLength(
 	content: string,
 	readyDuration: number,

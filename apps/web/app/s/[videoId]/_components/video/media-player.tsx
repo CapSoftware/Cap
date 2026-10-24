@@ -1577,17 +1577,8 @@ interface MediaPlayerSeekProps
 	withoutChapter?: boolean;
 	withoutTooltip?: boolean;
 	fallbackDuration?: number | null;
-	/**
-	 * The full length while only part of the media has loaded, so the bar
-	 * spans the whole recording.
-	 */
 	expectedDuration?: number | null;
-	/** Where the not-yet-available part of the bar starts. */
 	pendingFrom?: number | null;
-	/**
-	 * A seek the player is holding. The thumb stays on it while it is held and
-	 * returns to the playhead once the hold is dropped.
-	 */
 	heldSeekTime?: number | null;
 	tooltipThumbnailSrc?: string | ((time: number) => string | undefined | null);
 	tooltipTimeVariant?: "current" | "progress";
@@ -2575,7 +2566,6 @@ interface MediaPlayerTimeProps extends React.ComponentProps<"div"> {
 	variant?: "progress" | "remaining" | "duration";
 	asChild?: boolean;
 	fallbackDuration?: number | null;
-	/** The full length while only part of the media has loaded. */
 	expectedDuration?: number | null;
 }
 

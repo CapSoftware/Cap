@@ -250,9 +250,6 @@ const getPlaylistResponse = (
 				onNone: () => false,
 				onSome: (value) => value === "1" || value === "true",
 			});
-			// Early playback starts a stopped recording from its first segment
-			// while the last ones are still uploading: the playlist grows in
-			// place until the complete manifest ends it.
 			const earlyPlayback =
 				!requireComplete &&
 				Option.match(urlParams.earlyPlayback, {
@@ -276,8 +273,6 @@ const getPlaylistResponse = (
 					"X-Cap-Recording-Complete": playbackState === "ready" ? "1" : "0",
 				};
 				if (earlyPlayback && status === 204) {
-					// What plays from the start right now, and the full length the
-					// player can show while the rest uploads.
 					const complete = playbackState === "ready";
 					const fullLength = totalSegmentDuration(
 						manifest.video_segments.map(Video.normalizeSegmentEntry),
@@ -401,8 +396,8 @@ const getPlaylistResponse = (
 
 			let playlist = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${Math.max(targetDuration, 1)}\n#EXT-X-MEDIA-SEQUENCE:0\n`;
 			if (earlyPlayback) {
-				// EVENT keeps the type stable as the playlist grows and ends, and
-				// tells players they may seek anywhere from the first segment.
+				// A playlist type must not change, and EVENT lets players seek
+				// anywhere from the first segment while it grows.
 				playlist += "#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-START:TIME-OFFSET=0\n";
 			} else if (manifest.is_complete) {
 				playlist += "#EXT-X-PLAYLIST-TYPE:VOD\n";
