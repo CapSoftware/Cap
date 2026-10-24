@@ -643,6 +643,7 @@ impl DecodedFrame {
 }
 
 pub enum VideoDecoderMessage {
+    PreferSequentialAccess,
     GetFrame(f32, u32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
@@ -999,11 +1000,19 @@ impl AsyncVideoDecoderHandle {
         self
     }
 
-    /// For consumers that read front to back, such as export. The native
-    /// reader then keeps only a few decoded frames behind the newest request
+    /// For consumers that read front to back, such as export. The
+    /// reader then releases old cached frames behind the newest request
     /// instead of a playback-sized cache, and returns to the playback cache
     /// if a request ever moves backwards.
     pub fn prefer_sequential_access(&self) {
+        if matches!(
+            self.status.decoder_type,
+            DecoderType::FFmpegHardware | DecoderType::FFmpegSoftware
+        ) {
+            let _ = self
+                .sender
+                .send(VideoDecoderMessage::PreferSequentialAccess);
+        }
         #[cfg(target_os = "macos")]
         if let Some(sequential_access) = &self.sequential_access {
             sequential_access.store(true, Ordering::Relaxed);
@@ -2582,6 +2591,66 @@ mod managed_worker_tests {
         };
         assert_eq!(pixels.len(), expected_bytes);
         pixels
+    }
+
+    #[tokio::test]
+    async fn sequential_export_matches_source_through_vfr_holds_and_backward_requests() {
+        let directory = tempfile::tempdir().unwrap();
+        encode_gapped_segments(directory.path());
+        // Decode once in source order, without the asynchronous request/cache
+        // layer under test. Every encoded frame has distinct xorshift noise.
+        let mut source =
+            cap_video_decode::FFmpegDecoder::new(directory.path().to_path_buf(), None).unwrap();
+        let time_base = source.decoder().time_base();
+        let oracle: std::collections::BTreeMap<_, _> = source
+            .frames()
+            .map(|frame| {
+                let frame = frame.unwrap();
+                assert_eq!(frame.format(), ::ffmpeg::format::Pixel::YUV420P);
+                let mut pixels = Vec::new();
+                for plane in 0..3 {
+                    let width = if plane == 0 {
+                        frame.width()
+                    } else {
+                        frame.width() / 2
+                    } as usize;
+                    let height = if plane == 0 {
+                        frame.height()
+                    } else {
+                        frame.height() / 2
+                    } as usize;
+                    for row in frame.data(plane).chunks(frame.stride(plane)).take(height) {
+                        pixels.extend_from_slice(&row[..width]);
+                    }
+                }
+                (pts_to_frame(frame.pts().unwrap(), time_base, 30), pixels)
+            })
+            .collect();
+        assert_eq!(oracle.len(), 210);
+        let (ordinary, ordinary_join) =
+            ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
+        let (sequential, sequential_join) =
+            ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
+        sequential.prefer_sequential_access();
+        let times = (0..570)
+            .map(|frame| frame as f32 / 60.0)
+            .chain([0.0, 3.75, 2.7, 7.75, 1.25, 8.5, 10.5]);
+        for time in times {
+            let request = request_frame(time + 0.25, 30);
+            let expected = oracle.range(..=request).next_back().unwrap().1;
+            let baseline = ordinary.get_frame_initial(time).await.unwrap();
+            let actual = sequential.get_frame_initial(time).await.unwrap();
+            assert_eq!(frame_pixels(&baseline), *expected, "baseline time {time}");
+            assert_eq!(frame_pixels(&actual), *expected, "sequential time {time}");
+        }
+        drop(ordinary);
+        drop(sequential);
+        tokio::task::spawn_blocking(move || {
+            ordinary_join.join().unwrap();
+            sequential_join.join().unwrap();
+        })
+        .await
+        .unwrap();
     }
 
     async fn compare_gapped_workers(hardware: bool) {
