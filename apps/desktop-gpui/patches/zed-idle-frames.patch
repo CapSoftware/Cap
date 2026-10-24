@@ -340,7 +340,7 @@ index 393e517..de95b7d 100644
  mod tests {
      use crate::{
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index 701ae28..83b3d13 100644
+index 701ae28..0a18864 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -84,6 +84,7 @@ pub(crate) struct WindowRef {
@@ -351,7 +351,7 @@ index 701ae28..83b3d13 100644
  }
  
  impl WindowRef {
-@@ -257,6 +258,23 @@ impl X11ClientStatePtr {
+@@ -257,6 +258,27 @@ impl X11ClientStatePtr {
          state.cursor_styles.remove(&x_window);
      }
  
@@ -363,9 +363,13 @@ index 701ae28..83b3d13 100644
 +        let Some(window_ref) = state.windows.get_mut(&x_window) else {
 +            return;
 +        };
-+        // A window still owed a forced render after GPU recovery keeps its
-+        // refresh timer until that render has run.
-+        if paused && window_ref.window.state.borrow().force_render_after_recovery {
++        // A window still owed a forced render after GPU recovery, or a
++        // presentation of an area exposed after the frame that asked for the
++        // pause, keeps its refresh timer until that frame has run.
++        if paused
++            && (window_ref.expose_event_received
++                || window_ref.window.state.borrow().force_render_after_recovery)
++        {
 +            return;
 +        }
 +        window_ref.frame_requests_paused = paused;
@@ -375,7 +379,7 @@ index 701ae28..83b3d13 100644
      pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
          let Some(client) = self.get_client() else {
              return;
-@@ -659,8 +677,12 @@ impl X11Client {
+@@ -659,8 +681,12 @@ impl X11Client {
  
              for window in windows_to_refresh.into_iter() {
                  let mut state = self.0.borrow_mut();
@@ -390,7 +394,7 @@ index 701ae28..83b3d13 100644
                  }
              }
  
-@@ -1652,6 +1674,7 @@ impl LinuxClient for X11Client {
+@@ -1652,6 +1678,7 @@ impl LinuxClient for X11Client {
              expose_event_received: false,
              last_visibility: Visibility::UNOBSCURED,
              is_mapped: false,
@@ -398,7 +402,7 @@ index 701ae28..83b3d13 100644
          };
  
          state.windows.insert(x_window, window_ref);
-@@ -1921,7 +1944,8 @@ impl X11ClientState {
+@@ -1921,7 +1948,8 @@ impl X11ClientState {
          };
          let is_visible = window_ref.is_mapped
              && !matches!(window_ref.last_visibility, Visibility::FULLY_OBSCURED);
@@ -552,8 +556,167 @@ index f5b2c1a..96f7826 100644
      fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
          self.0.as_ref().lock().event_callback = Some(callback);
      }
+diff --git a/crates/gpui_windows/src/direct_manipulation.rs b/crates/gpui_windows/src/direct_manipulation.rs
+index 9adcbed..308f320 100644
+--- a/crates/gpui_windows/src/direct_manipulation.rs
++++ b/crates/gpui_windows/src/direct_manipulation.rs
+@@ -26,6 +26,10 @@ pub(crate) struct DirectManipulationHandler {
+     window: HWND,
+     scale_factor: Rc<Cell<f32>>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++    /// Set from the moment a touchpad contact is handed over until the
++    /// viewport is ready again after the gesture and its inertia. `update`
++    /// has to keep running until then.
++    manipulating: Rc<Cell<bool>>,
+ }
+ 
+ impl DirectManipulationHandler {
+@@ -65,12 +69,14 @@ impl DirectManipulationHandler {
+ 
+             let scale_factor = Rc::new(Cell::new(scale_factor));
+             let pending_events = Rc::new(RefCell::new(Vec::new()));
++            let manipulating = Rc::new(Cell::new(false));
+ 
+             let event_handler: IDirectManipulationViewportEventHandler =
+                 DirectManipulationEventHandler::new(
+                     window,
+                     Rc::clone(&scale_factor),
+                     Rc::clone(&pending_events),
++                    Rc::clone(&manipulating),
+                 )
+                 .into();
+ 
+@@ -86,6 +92,7 @@ impl DirectManipulationHandler {
+                 window,
+                 scale_factor,
+                 pending_events,
++                manipulating,
+             })
+         }
+     }
+@@ -100,11 +107,17 @@ impl DirectManipulationHandler {
+             let mut pointer_type = POINTER_INPUT_TYPE::default();
+             if GetPointerType(pointer_id, &mut pointer_type).is_ok() && pointer_type == PT_TOUCHPAD
+             {
+-                self.viewport.SetContact(pointer_id).log_err();
++                if self.viewport.SetContact(pointer_id).log_err().is_some() {
++                    self.manipulating.set(true);
++                }
+             }
+         }
+     }
+ 
++    pub fn is_manipulating(&self) -> bool {
++        self.manipulating.get()
++    }
++
+     pub fn update(&self) {
+         unsafe {
+             self.update_manager.Update(None).log_err();
+@@ -143,6 +156,7 @@ struct DirectManipulationEventHandler {
+     last_y_offset: Cell<f32>,
+     scroll_phase: Cell<TouchPhase>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++    manipulating: Rc<Cell<bool>>,
+ }
+ 
+ impl DirectManipulationEventHandler {
+@@ -150,6 +164,7 @@ impl DirectManipulationEventHandler {
+         window: HWND,
+         scale_factor: Rc<Cell<f32>>,
+         pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++        manipulating: Rc<Cell<bool>>,
+     ) -> Self {
+         Self {
+             window,
+@@ -160,6 +175,7 @@ impl DirectManipulationEventHandler {
+             last_y_offset: Cell::new(0.0),
+             scroll_phase: Cell::new(TouchPhase::Started),
+             pending_events,
++            manipulating,
+         }
+     }
+ 
+@@ -214,6 +230,12 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
+             return Ok(());
+         }
+ 
++        if current == DIRECTMANIPULATION_RUNNING || current == DIRECTMANIPULATION_INERTIA {
++            self.manipulating.set(true);
++        } else if current == DIRECTMANIPULATION_READY {
++            self.manipulating.set(false);
++        }
++
+         // A new gesture interrupted inertia, so end the old sequence.
+         if current == DIRECTMANIPULATION_RUNNING && previous == DIRECTMANIPULATION_INERTIA {
+             self.end_gesture();
+@@ -357,3 +379,38 @@ fn float_equals(f1: f32, f2: f32) -> bool {
+     const EPSILON_SCALE: f32 = 0.00001;
+     (f1 - f2).abs() < EPSILON_SCALE * f1.abs().max(f2.abs()).max(EPSILON_SCALE)
+ }
++
++#[cfg(test)]
++mod tests {
++    use std::{cell::Cell, rc::Rc};
++
++    use windows::Win32::{Foundation::HWND, Graphics::DirectManipulation::*};
++
++    use super::DirectManipulationEventHandler;
++
++    #[test]
++    fn a_manipulation_lasts_through_its_inertia_until_the_viewport_is_ready() {
++        let manipulating = Rc::new(Cell::new(true));
++        let handler: IDirectManipulationViewportEventHandler = DirectManipulationEventHandler::new(
++            HWND::default(),
++            Rc::new(Cell::new(1.0)),
++            Rc::default(),
++            Rc::clone(&manipulating),
++        )
++        .into();
++        let status_changed = |current, previous| unsafe {
++            handler
++                .OnViewportStatusChanged(None::<&IDirectManipulationViewport>, current, previous)
++                .unwrap()
++        };
++
++        status_changed(DIRECTMANIPULATION_RUNNING, DIRECTMANIPULATION_ENABLED);
++        assert!(manipulating.get());
++        status_changed(DIRECTMANIPULATION_INERTIA, DIRECTMANIPULATION_RUNNING);
++        assert!(manipulating.get());
++        status_changed(DIRECTMANIPULATION_READY, DIRECTMANIPULATION_INERTIA);
++        assert!(!manipulating.get());
++        status_changed(DIRECTMANIPULATION_RUNNING, DIRECTMANIPULATION_READY);
++        assert!(manipulating.get());
++    }
++}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 44f5505..b957e4b 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -111,7 +111,7 @@ impl WindowsWindowInner {
+             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
+             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+-            DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(wparam),
++            DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(handle, wparam),
+             WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
+             _ => None,
+         };
+@@ -1240,8 +1240,11 @@ impl WindowsWindowInner {
+         Some(0)
+     }
+ 
+-    fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
++    fn handle_dm_pointer_hit_test(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
+         self.state.direct_manipulation.on_pointer_hit_test(wparam);
++        // `draw_window` pumps Direct Manipulation, so a touchpad gesture on an
++        // idle window needs the vsync redraws back.
++        set_frame_requests_paused(&self.paused_windows, handle, false);
+         None
+     }
+ 
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index f8939e9..e01aa10 100644
+index f8939e9..b933fdd 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -30,9 +30,14 @@ use windows::{
@@ -644,7 +807,7 @@ index f8939e9..e01aa10 100644
  }
  
  struct PlatformWindowCreateContext {
-@@ -1504,3 +1531,134 @@ mod tests {
+@@ -1504,3 +1531,132 @@ mod tests {
          assert_eq!(read_from_clipboard(), Some(item));
      }
  }
@@ -766,10 +929,8 @@ index f8939e9..e01aa10 100644
 +            unsafe { DestroyWindow(platform_window).log_err() };
 +        }
 +
-+        // A frame request resumes the vsync redraws.
 +        set_frame_requests_paused(&paused_windows, paused, false);
 +        assert_eq!(redrawn(&paused_windows), raw([running, paused]));
-+        // A window that closed while paused leaves nothing behind.
 +        set_frame_requests_paused(&paused_windows, running, true);
 +        set_frame_requests_paused(&paused_windows, running, false);
 +        assert!(paused_windows.read().is_empty());
@@ -780,14 +941,14 @@ index f8939e9..e01aa10 100644
 +    }
 +}
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 8fdd318..9776a28 100644
+index 8fdd318..58a9292 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -102,6 +102,7 @@ pub(crate) struct WindowsWindowInner {
      pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
      pub(crate) platform_window_handle: HWND,
      pub(crate) parent_hwnd: Option<HWND>,
-+    paused_windows: PausedWindows,
++    pub(crate) paused_windows: PausedWindows,
  }
  
  impl WindowsWindowState {
@@ -845,19 +1006,25 @@ index 8fdd318..9776a28 100644
                  unsafe {
                      RevokeDragDrop(handle).log_err();
                      DestroyWindow(handle).log_err();
-@@ -1031,6 +1051,18 @@ impl PlatformWindow for WindowsWindow {
+@@ -1031,6 +1051,24 @@ impl PlatformWindow for WindowsWindow {
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
 +    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(FrameRequests)>> {
-+        let paused_windows = self.paused_windows.clone();
-+        let hwnd = self.hwnd;
++        let this = Rc::downgrade(&self.0);
 +        Some(Box::new(move |request| {
++            let Some(this) = this.upgrade() else {
++                return;
++            };
 +            // Once resumes the vsync redraws too: the frame pacer stops them
 +            // again after the frame, and until a frame arrives the window keeps
 +            // getting redrawn every vblank, as it did before it was paused.
 +            // Device-lost forced renders are sent to every window regardless.
-+            set_frame_requests_paused(&paused_windows, hwnd, request == FrameRequests::Stop);
++            // A touchpad gesture keeps them running until it ends, because
++            // `draw_window` is what pumps Direct Manipulation.
++            let paused =
++                request == FrameRequests::Stop && !this.state.direct_manipulation.is_manipulating();
++            set_frame_requests_paused(&this.paused_windows, this.hwnd, paused);
 +        }))
 +    }
 +
