@@ -275,6 +275,7 @@ export const SpeedController = () => {
 					};
 
 					recorder.onstop = () => {
+						video.onerror = null;
 						const chunks = recordedChunksRef.current;
 						const blob = new Blob(chunks, {
 							type: selectedMimeType.split(";")[0],
@@ -355,6 +356,7 @@ export const SpeedController = () => {
 					const discardRecording = (err: unknown) => {
 						clearTimeout(safetyTimeout);
 						cancelAnimationFrame(animationFrameId);
+						video.onerror = null;
 						video.onended = null;
 						recorder.ondataavailable = null;
 						recorder.onstop = null;
