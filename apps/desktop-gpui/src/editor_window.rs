@@ -78,6 +78,7 @@ use crate::{
 
 mod frame;
 mod loading;
+mod safe_zones;
 mod scenes;
 
 // ---------------------------------------------------------------------------
@@ -1366,6 +1367,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    safe_zone: Option<safe_zones::SafeZonePlatform>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2060,6 +2062,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            safe_zone: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -10097,6 +10100,7 @@ impl EditorWindow {
                     })),
             )
             .child(self.render_frame_button(narrow, cx))
+            .children(self.render_safe_zone_button(narrow, cx))
     }
 
     /// The preview-resolution control: a segmented `Full | Half | Quarter`.
@@ -10196,6 +10200,11 @@ impl EditorWindow {
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
+            .children(if self.project_ready() {
+                self.render_safe_zone_overlay()
+            } else {
+                None
+            })
             .children(if self.project_ready() {
                 self.render_canvas_overlay(cx)
             } else {
