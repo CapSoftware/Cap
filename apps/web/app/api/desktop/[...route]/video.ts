@@ -21,9 +21,11 @@ import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { after } from "next/server";
 import { z } from "zod";
+import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
+import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
@@ -442,6 +444,17 @@ app.delete(
 			await invalidateGoogleDriveStorageQuotaCache(
 				result.video.storageIntegrationId,
 			);
+
+			const cleanup = readInstantCleanupReport(
+				c.req.query("reason"),
+				c.req.query("cause"),
+				hasDesktopFeature(c.req, "gpui"),
+			);
+			if (cleanup)
+				trackServerEvent(user.id, "desktop_instant_cleanup", {
+					...cleanup,
+					sourceType: result.video.source?.type ?? null,
+				});
 
 			return c.json(true);
 		} catch (error) {
