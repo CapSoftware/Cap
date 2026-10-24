@@ -617,10 +617,12 @@ impl EditorWindow {
             return;
         }
         self.edit_project("clip-delete", window, cx, move |project| {
-            project
-                .timeline
-                .as_mut()
-                .is_some_and(|timeline| edits::delete_clip_segments(timeline, &[index]))
+            let locked = project.locked_tracks.clone();
+            project.timeline.as_mut().is_some_and(|timeline| {
+                edits::with_locked_tracks(timeline, &locked, |timeline| {
+                    edits::delete_clip_segments(timeline, &[index])
+                })
+            })
         });
         self.set_selection(None, cx);
     }
@@ -690,10 +692,12 @@ impl EditorWindow {
         }
 
         self.edit_project("clip-reorder", window, cx, move |project| {
-            project
-                .timeline
-                .as_mut()
-                .is_some_and(|timeline| move_clip(timeline, from, insertion))
+            let locked = project.locked_tracks.clone();
+            project.timeline.as_mut().is_some_and(|timeline| {
+                crate::editor_edits::with_locked_tracks(timeline, &locked, |timeline| {
+                    move_clip(timeline, from, insertion)
+                })
+            })
         });
         self.set_selection(None, cx);
     }
@@ -3972,6 +3976,46 @@ mod tests {
         assert_eq!(kept[0].segment_index, 2);
         assert_eq!(dropped.len(), 1);
         assert_eq!(dropped[0].segment_index, 3);
+    }
+
+    /// A locked track keeps its segments where they were even when a reorder
+    /// drops a transition and ripples everything else.
+    #[test]
+    fn reordering_clips_leaves_locked_tracks_in_place() {
+        let mut config = timeline(vec![
+            segment(0, 0.0, 10.0),
+            segment(1, 0.0, 10.0),
+            segment(2, 0.0, 10.0),
+        ]);
+        config.transitions = vec![transition(1, 1.0)];
+        let zoom = cap_project::ZoomSegment {
+            start: 15.0,
+            end: 18.0,
+            amount: 1.5,
+            mode: cap_project::ZoomMode::Auto,
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        };
+        config.zoom_segments = vec![zoom.clone()];
+        config.style_segments.push(cap_project::StyleSegment {
+            start: 15.,
+            end: 18.,
+            ..Default::default()
+        });
+
+        let locked = [cap_project::LockableTimelineTrack::Zoom];
+        assert!(crate::editor_edits::with_locked_tracks(
+            &mut config,
+            &locked,
+            |timeline| move_clip(timeline, 0, 3)
+        ));
+        assert_eq!(config.zoom_segments[0].start, 15.0, "locked zoom stays");
+        assert!(
+            config.style_segments[0].start > 15.0,
+            "unlocked style ripples"
+        );
     }
 
     /// The dropped transition's overlap is given back: every later segment on
