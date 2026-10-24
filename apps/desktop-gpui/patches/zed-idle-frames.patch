@@ -553,7 +553,7 @@ index f5b2c1a..96f7826 100644
          self.0.as_ref().lock().event_callback = Some(callback);
      }
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index f8939e9..94141d1 100644
+index f8939e9..18c8da8 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -30,9 +30,14 @@ use windows::{
@@ -648,15 +648,28 @@ index f8939e9..94141d1 100644
  }
  
  struct PlatformWindowCreateContext {
-@@ -1504,3 +1528,128 @@ mod tests {
+@@ -1504,3 +1528,141 @@ mod tests {
          assert_eq!(read_from_clipboard(), Some(item));
      }
  }
 +
 +#[cfg(test)]
 +mod frame_request_tests {
-+    use super::*;
-+    use smallvec::smallvec;
++    use std::{cell::RefCell, sync::Arc};
++
++    use gpui_util::ResultExt;
++    use parking_lot::RwLock;
++    use smallvec::{SmallVec, smallvec};
++    use windows::{
++        Win32::{Foundation::*, Graphics::Gdi::ValidateRect, UI::WindowsAndMessaging::*},
++        core::w,
++    };
++
++    use super::{handle_gpu_device_lost, redraw_unpaused_windows};
++    use crate::{
++        DirectXDevices, PausedWindows, SafeHwnd, WM_GPUI_FORCE_UPDATE_WINDOW,
++        WM_GPUI_GPU_DEVICE_LOST, set_frame_requests_paused,
++    };
 +
 +    thread_local! {
 +        static MESSAGES: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
