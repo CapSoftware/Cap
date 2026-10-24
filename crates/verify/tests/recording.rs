@@ -1807,6 +1807,68 @@ fn observer_silence_excuses_only_a_covered_window() {
     assert!(!check(Vec::new()).dropped_for_every_client(4));
 }
 
+#[test]
+fn post_hold_pictures_are_excused_only_when_the_reference_missed_them() {
+    // 20 fps pictures, held from 0.5 s to 1.5 s: picture 10 stays on screen
+    // and picture 31 is the first change after the hold.
+    let truth: Truth = (1..=10u32)
+        .chain(31..=50)
+        .map(|i| (i, f64::from(i - 1) * 0.05))
+        .collect();
+    let required = vec![(
+        31u32,
+        "first picture after the 1 s hold at 0.5 s".to_string(),
+    )];
+    let check = |observed: Vec<f64>| VideoCheck {
+        name: "screen",
+        kind: StreamKind::Screen,
+        truth: &truth,
+        not_sent: &[],
+        may_skip: Box::new(|_| false),
+        allow_duplicates: true,
+        required: required.clone(),
+        window: (0.0, 2.5),
+        observed,
+    };
+    let recorded_except = |lost: &'static [u32]| move |i: u32| !lost.contains(&i);
+    // The reference stream receives each picture 20 ms after it is presented
+    // and nothing during the hold, as on a quiet screen.
+    let prompt: Vec<f64> = truth.values().map(|t| t + 0.02).collect();
+    // The capture service resumes 70 ms after the hold: its first frame
+    // already shows picture 32, so picture 31 reached no client.
+    let late: Vec<f64> = prompt
+        .iter()
+        .map(|&t| if (1.51..1.53).contains(&t) { 1.57 } else { t })
+        .collect();
+
+    let resumed_late = check(late);
+    assert!(resumed_late.dropped_for_every_client(31));
+    let (missing, dropped) = resumed_late.missing_required(recorded_except(&[31]), 1, 50);
+    assert!(missing.is_empty(), "excused: {missing:?}");
+    assert_eq!(dropped, vec![31]);
+    // The first picture after the hold that reached the reference must be
+    // recorded in its place.
+    let (missing, _) = resumed_late.missing_required(recorded_except(&[31, 32]), 1, 50);
+    assert_eq!(missing.iter().map(|m| m.0).collect::<Vec<_>>(), vec![32]);
+
+    // The reference received picture 31: the recorder lost it.
+    let resumed_in_time = check(prompt);
+    assert!(!resumed_in_time.dropped_for_every_client(31));
+    let (missing, dropped) = resumed_in_time.missing_required(recorded_except(&[31]), 1, 50);
+    assert_eq!(missing.iter().map(|m| m.0).collect::<Vec<_>>(), vec![31]);
+    assert!(dropped.is_empty());
+    assert!(
+        resumed_in_time
+            .missing_required(recorded_except(&[]), 1, 50)
+            .0
+            .is_empty()
+    );
+
+    // Without a reference stream (Windows) nothing is excused.
+    let (missing, _) = check(Vec::new()).missing_required(recorded_except(&[31]), 1, 50);
+    assert_eq!(missing.iter().map(|m| m.0).collect::<Vec<_>>(), vec![31]);
+}
+
 fn test_trace(name: &'static str, handoffs: Vec<Handoff>) -> SourceTrace {
     let constraint = sched::Constraint {
         period_ms: 33.333,
@@ -2654,6 +2716,10 @@ enum Injection {
     TruncateEnd,
     /// The first second of the screen track is lost (a late start).
     LateStart,
+    /// The first picture after a scripted hold is lost although the
+    /// stimulus's own capture stream received it: a recorder drop, which
+    /// must fail even where the capture service resumes late after a hold.
+    DropAfterHold,
 }
 
 thread_local! {
@@ -2662,13 +2728,14 @@ thread_local! {
     static INJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-const INJECTIONS: [Injection; 6] = [
+const INJECTIONS: [Injection; 7] = [
     Injection::DropRun,
     Injection::Freeze,
     Injection::Stale,
     Injection::Late,
     Injection::TruncateEnd,
     Injection::LateStart,
+    Injection::DropAfterHold,
 ];
 const INJECTED_LATENESS: f64 = 0.15;
 
@@ -2681,6 +2748,7 @@ impl Injection {
             Injection::Late => "screen 150 ms late",
             Injection::TruncateEnd => "lose the last second",
             Injection::LateStart => "start one second late",
+            Injection::DropAfterHold => "lose a picture after a hold that reached the reference",
         }
     }
 
@@ -2691,6 +2759,7 @@ impl Injection {
             Injection::Stale => ("timestamps", "screen:"),
             Injection::Late => ("sync-screen-mic", "screen vs"),
             Injection::TruncateEnd | Injection::LateStart => ("coverage", "screen:"),
+            Injection::DropAfterHold => ("missing-after-hold", "screen:"),
         }
     }
 
@@ -2718,10 +2787,57 @@ impl Injection {
         })
     }
 
-    fn apply(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
+    fn apply(self, frames: &mut Vec<(f64, Readout)>, check: &mut VideoCheck) {
         let before = frames.clone();
-        self.mutate(frames, check);
-        INJECTED.set(*frames != before);
+        let observed = check.observed.len();
+        if self == Injection::DropAfterHold {
+            Self::drop_after_hold(frames, check);
+        } else {
+            self.mutate(frames, check);
+        }
+        INJECTED.set(*frames != before || check.observed.len() != observed);
+    }
+
+    /// Takes the first required picture after a hold that lies inside the
+    /// recording (one the recorder captured if there is one), removes it
+    /// from the recording and gives the stimulus's own capture stream a
+    /// frame while it was on screen.
+    fn drop_after_hold(frames: &mut Vec<(f64, Readout)>, check: &mut VideoCheck) {
+        let index_of = |r: &Readout| match r {
+            Readout::Marker { marker, .. } if marker.kind == StreamKind::Screen => {
+                Some(marker.index)
+            }
+            _ => None,
+        };
+        let recorded: std::collections::BTreeSet<u32> =
+            frames.iter().filter_map(|(_, r)| index_of(r)).collect();
+        let (Some(&lo), Some(&hi)) = (recorded.first(), recorded.last()) else {
+            return;
+        };
+        let inside: Vec<u32> = check
+            .required
+            .iter()
+            .map(|(index, _)| *index)
+            .filter(|index| *index > lo && *index < hi)
+            .collect();
+        let Some(index) = inside
+            .iter()
+            .copied()
+            .find(|index| recorded.contains(index))
+            .or_else(|| inside.first().copied())
+        else {
+            return;
+        };
+        let (Some(&shown), Some((_, &replaced))) = (
+            check.truth.get(&index),
+            check.truth.range(index + 1..).next(),
+        ) else {
+            return;
+        };
+        frames.retain(|(_, r)| index_of(r) != Some(index));
+        let at = (shown + replaced) / 2.0;
+        let position = check.observed.partition_point(|t| *t < at);
+        check.observed.insert(position, at);
     }
 
     fn mutate(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
@@ -2730,6 +2846,7 @@ impl Injection {
             _ => None,
         };
         match self {
+            Injection::DropAfterHold => {}
             Injection::Late => {
                 for (pts, _) in frames.iter_mut() {
                     *pts += INJECTED_LATENESS;
@@ -2813,6 +2930,9 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             ));
             continue;
         }
+        if injection == Injection::DropAfterHold && rec.holds.is_empty() {
+            continue;
+        }
         if injection == Injection::Late && case.unobserved.contains_key(class) {
             caught.push(format!("{}: unobserved (track absent)", injection.label()));
             continue;
@@ -2838,8 +2958,13 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             case.problem(
                 "oracle",
                 format!(
-                    "self-check: no frames to inject '{}' into: no 3 consecutive pictures the capture rate must sample",
-                    injection.label()
+                    "self-check: no frames to inject '{}' into: {}",
+                    injection.label(),
+                    if injection == Injection::DropAfterHold {
+                        "no picture after a hold inside the recording"
+                    } else {
+                        "no 3 consecutive pictures the capture rate must sample"
+                    }
                 ),
             );
         } else if probe.classes.contains(class) && !new.is_empty() {
@@ -2900,10 +3025,24 @@ struct VideoCheck<'a> {
 const OBSERVER_COVER_SECS: f64 = 0.5;
 
 impl VideoCheck<'_> {
+    /// Whether the stimulus's own capture stream received a frame while
+    /// `index` was on screen.
+    fn observed_while_shown(&self, index: u32) -> bool {
+        let (Some(&shown), Some((_, &replaced))) =
+            (self.truth.get(&index), self.truth.range(index + 1..).next())
+        else {
+            return false;
+        };
+        self.observed.iter().any(|&t| t >= shown && t <= replaced)
+    }
+
     /// A picture the capture service never delivered to any client: the
     /// stimulus's own capture stream received no frame while it was on
     /// screen, although that stream delivered frames on both sides of it
-    /// (so it covered exactly that window).
+    /// (so it covered exactly that window). The stream receives frames only
+    /// when the screen changes, so its frames before the picture are looked
+    /// for from the previous picture on: after a scripted hold that is when
+    /// the screen went static, and during the hold the stream is silent.
     fn dropped_for_every_client(&self, index: u32) -> bool {
         let Some(&shown) = self.truth.get(&index) else {
             return false;
@@ -2911,16 +3050,67 @@ impl VideoCheck<'_> {
         let Some((_, &replaced)) = self.truth.range(index + 1..).next() else {
             return false;
         };
+        let since = self
+            .truth
+            .range(..index)
+            .next_back()
+            .map_or(shown, |(_, &previous)| previous.min(shown));
         let before = self
             .observed
             .iter()
-            .any(|&t| t < shown && t >= shown - OBSERVER_COVER_SECS);
+            .any(|&t| t < shown && t >= since - OBSERVER_COVER_SECS);
         let after = self
             .observed
             .iter()
             .any(|&t| t > replaced && t <= replaced + OBSERVER_COVER_SECS);
-        let during = self.observed.iter().any(|&t| t >= shown && t <= replaced);
-        before && after && !during
+        before && after && !self.observed_while_shown(index)
+    }
+
+    /// Required pictures missing from the recording (indices strictly
+    /// between `lo` and `hi`, the first and last recorded), with their
+    /// description, and the required pictures excused because the capture
+    /// service dropped them for every client. An excused picture is
+    /// replaced by the first later one, within `OBSERVER_COVER_SECS`, that
+    /// the stimulus's own capture stream received while it was on screen
+    /// and that the capture rate must sample: the first change after the
+    /// hold that reached any client must be in the recording.
+    fn missing_required(
+        &self,
+        recorded: impl Fn(u32) -> bool,
+        lo: u32,
+        hi: u32,
+    ) -> (Vec<(u32, String)>, Vec<u32>) {
+        let mut missing = Vec::new();
+        let mut dropped = Vec::new();
+        for (index, what) in &self.required {
+            let index = *index;
+            let Some(&shown) = self.truth.get(&index) else {
+                continue;
+            };
+            if index <= lo || index >= hi || recorded(index) {
+                continue;
+            }
+            if !self.dropped_for_every_client(index) {
+                missing.push((index, what.clone()));
+                continue;
+            }
+            dropped.push(index);
+            let stand_in = self
+                .truth
+                .range(index + 1..hi)
+                .take_while(|(_, t)| **t <= shown + OBSERVER_COVER_SECS)
+                .map(|(i, _)| *i)
+                .find(|&i| self.observed_while_shown(i) && !(self.may_skip)(i));
+            if let Some(stand_in) = stand_in.filter(|&i| !recorded(i)) {
+                missing.push((
+                    stand_in,
+                    format!(
+                        "{what} to reach the stimulus's own capture stream (index {index} reached no client)"
+                    ),
+                ));
+            }
+        }
+        (missing, dropped)
     }
 }
 
@@ -2931,7 +3121,7 @@ impl VideoCheck<'_> {
 /// recorded picture is the first one presented, 9 to 69 ms after the start.
 const START_COVERAGE_SECS: f64 = 0.3;
 
-fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Result<Offsets> {
+fn check_video(case: &mut Case, track: &Track, mut check: VideoCheck) -> anyhow::Result<Offsets> {
     let mut frames: Vec<(f64, Readout)> = Vec::new();
     media::decode_video(&track.path, |picture| {
         let readout = video_code::read_stream(&picture.view(), check.kind);
@@ -2940,7 +3130,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
     if check.kind == StreamKind::Screen
         && let Some(injection) = INJECTION.get()
     {
-        injection.apply(&mut frames, &check);
+        injection.apply(&mut frames, &mut check);
     }
     let name = check.name;
     if frames.is_empty() {
@@ -3111,10 +3301,17 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
     }
     // Pictures the capture service dropped for every client (approved
     // policy): counted and reported, never a threshold change.
-    let (for_every_client, rest): (Vec<u32>, Vec<u32>) = skipped
+    // The first picture after a hold that reached no client counts here too
+    // (see `missing_required`).
+    let (mut for_every_client, rest): (Vec<u32>, Vec<u32>) = skipped
         .into_iter()
         .partition(|&index| check.dropped_for_every_client(index));
     skipped = rest;
+    let (missing_required, dropped_required) =
+        check.missing_required(|index| first_seen.contains_key(&index), lo, hi);
+    for_every_client.extend(dropped_required);
+    for_every_client.sort_unstable();
+    for_every_client.dedup();
     if !for_every_client.is_empty() {
         case.note(format!(
             "capture-service drops: {name}: {} missing pictures also never reached the stimulus's own capture stream, which covered their window: {:?}",
@@ -3152,19 +3349,13 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             (best.max(run), run, Some(i))
         })
         .0;
-    for (index, what) in &check.required {
-        if check.truth.contains_key(index)
-            && *index > lo
-            && *index < hi
-            && !first_seen.contains_key(index)
-        {
-            case.count("missing-after-hold", &format!("{name}-pictures"), 1.0);
-            case.problem(
-                "missing-after-hold",
-                format!("{name}: {what} (index {index}) is missing from the recording"),
-            );
-            implicate(case, check.truth.get(index).copied());
-        }
+    for (index, what) in &missing_required {
+        case.count("missing-after-hold", &format!("{name}-pictures"), 1.0);
+        case.problem(
+            "missing-after-hold",
+            format!("{name}: {what} (index {index}) is missing from the recording"),
+        );
+        implicate(case, check.truth.get(index).copied());
     }
     if skipped.len() > budget || longest_run >= 3 {
         case.count("missing", &format!("{name}-frames"), skipped.len() as f64);
