@@ -346,114 +346,131 @@ impl MacOSFragmentedM4SMuxer {
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
-                    if matches!(
-                        disk_monitor.poll(&base_path, &health_tx),
-                        super::core::DiskSpacePollResult::Exhausted { .. }
-                            | super::core::DiskSpacePollResult::Stopped
-                    ) {
-                        disk_exhausted = true;
-                    }
-                    if disk_exhausted {
-                        continue;
-                    }
-
-                    if let Some(frame_pool) = frame_pool.as_mut() {
-                        let convert_start = std::time::Instant::now();
-                        let frame = frame_pool.get_frame();
-                        let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
-                        let convert_elapsed_ms = convert_start.elapsed().as_millis();
-
-                        if convert_elapsed_ms > slow_threshold_ms {
-                            slow_convert_count += 1;
-                            if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                                debug!(
-                                    elapsed_ms = convert_elapsed_ms,
-                                    count = slow_convert_count,
-                                    "fill_frame_from_sample_buf exceeded {}ms threshold",
-                                    slow_threshold_ms
-                                );
-                            }
+                    let mut fatal_error: Option<String> = None;
+                    cidre::objc::ar_pool(|| {
+                        let sample_buf = sample_buf;
+                        if matches!(
+                            disk_monitor.poll(&base_path, &health_tx),
+                            super::core::DiskSpacePollResult::Exhausted { .. }
+                                | super::core::DiskSpacePollResult::Stopped
+                        ) {
+                            disk_exhausted = true;
+                        }
+                        if disk_exhausted {
+                            return;
                         }
 
-                        match fill_result {
-                            Ok(()) => {
-                                let encode_start = std::time::Instant::now();
-                                let owned_frame = frame_pool.take_frame();
+                        if let Some(frame_pool) = frame_pool.as_mut() {
+                            let convert_start = std::time::Instant::now();
+                            let frame = frame_pool.get_frame();
+                            let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                            let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                                match encoder_clone.lock() {
-                                    Ok(mut encoder) => {
-                                        if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                            warn!("Failed to encode frame: {e}");
+                            if convert_elapsed_ms > slow_threshold_ms {
+                                slow_convert_count += 1;
+                                if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100)
+                                {
+                                    debug!(
+                                        elapsed_ms = convert_elapsed_ms,
+                                        count = slow_convert_count,
+                                        "fill_frame_from_sample_buf exceeded {}ms threshold",
+                                        slow_threshold_ms
+                                    );
+                                }
+                            }
+
+                            match fill_result {
+                                Ok(()) => {
+                                    let encode_start = std::time::Instant::now();
+
+                                    match encoder_clone.lock() {
+                                        Ok(mut encoder) => {
+                                            if let Err(e) =
+                                                encoder.queue_frame_reusable(frame, timestamp)
+                                            {
+                                                warn!("Failed to encode frame: {e}");
+                                            }
+                                        }
+                                        Err(_) => {
+                                            error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                            fatal_error = Some(
+                                                "Encoder mutex poisoned - all subsequent frames would be lost"
+                                                    .to_string(),
+                                            );
+                                            return;
                                         }
                                     }
-                                    Err(_) => {
-                                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                        return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+
+                                    let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                                    if encode_elapsed_ms > slow_threshold_ms {
+                                        slow_encode_count += 1;
+                                        if slow_encode_count <= 5
+                                            || slow_encode_count.is_multiple_of(100)
+                                        {
+                                            debug!(
+                                                elapsed_ms = encode_elapsed_ms,
+                                                count = slow_encode_count,
+                                                "encoder.queue_frame_reusable exceeded {slow_threshold_ms}ms threshold",
+                                            );
+                                        }
                                     }
                                 }
-
-                                let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                                if encode_elapsed_ms > slow_threshold_ms {
-                                    slow_encode_count += 1;
-                                    if slow_encode_count <= 5
-                                        || slow_encode_count.is_multiple_of(100)
-                                    {
-                                        debug!(
-                                            elapsed_ms = encode_elapsed_ms,
-                                            count = slow_encode_count,
-                                            "encoder.queue_frame exceeded {}ms threshold",
-                                            slow_threshold_ms
-                                        );
-                                    }
+                                Err(e) => {
+                                    warn!("Failed to convert frame: {e:?}");
                                 }
                             }
-                            Err(e) => {
-                                warn!("Failed to convert frame: {e:?}");
-                            }
-                        }
-                    } else {
-                        let encode_start = std::time::Instant::now();
+                        } else {
+                            let encode_start = std::time::Instant::now();
 
-                        let queued = match sample_buf.image_buf() {
-                            Some(image_buf) => {
-                                let ptr = (std::ptr::from_ref(image_buf)
-                                    as *const std::ffi::c_void)
-                                    .cast_mut();
-                                match encoder_clone.lock() {
-                                    Ok(mut encoder) => {
-                                        unsafe { encoder.queue_hw_pixel_buffer(ptr, timestamp) }
-                                            .map_err(|e| anyhow!("{e}"))
-                                    }
-                                    Err(_) => {
-                                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                        return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                            let queued = match sample_buf.image_buf() {
+                                Some(image_buf) => {
+                                    let ptr = (std::ptr::from_ref(image_buf)
+                                        as *const std::ffi::c_void)
+                                        .cast_mut();
+                                    match encoder_clone.lock() {
+                                        Ok(mut encoder) => {
+                                            unsafe { encoder.queue_hw_pixel_buffer(ptr, timestamp) }
+                                                .map_err(|e| anyhow!("{e}"))
+                                        }
+                                        Err(_) => {
+                                            error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                            fatal_error = Some(
+                                                "Encoder mutex poisoned - all subsequent frames would be lost"
+                                                    .to_string(),
+                                            );
+                                            return;
+                                        }
                                     }
                                 }
-                            }
-                            None => Err(anyhow!("sample buffer has no image buffer")),
-                        };
+                                None => Err(anyhow!("sample buffer has no image buffer")),
+                            };
 
-                        if let Err(e) = queued {
-                            warn!("Failed to encode frame: {e}");
+                            if let Err(e) = queued {
+                                warn!("Failed to encode frame: {e}");
+                            }
+
+                            let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                            if encode_elapsed_ms > slow_threshold_ms {
+                                slow_encode_count += 1;
+                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
+                                    debug!(
+                                        elapsed_ms = encode_elapsed_ms,
+                                        count = slow_encode_count,
+                                        "encoder.queue_hw_pixel_buffer exceeded {}ms threshold",
+                                        slow_threshold_ms
+                                    );
+                                }
+                            }
                         }
 
-                        let encode_elapsed_ms = encode_start.elapsed().as_millis();
+                        total_frames += 1;
+                    });
 
-                        if encode_elapsed_ms > slow_threshold_ms {
-                            slow_encode_count += 1;
-                            if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                                debug!(
-                                    elapsed_ms = encode_elapsed_ms,
-                                    count = slow_encode_count,
-                                    "encoder.queue_hw_pixel_buffer exceeded {}ms threshold",
-                                    slow_threshold_ms
-                                );
-                            }
-                        }
+                    if let Some(message) = fatal_error {
+                        return Err(anyhow!(message));
                     }
-
-                    total_frames += 1;
                 }
 
                 if total_frames > 0 {
@@ -735,71 +752,85 @@ impl MacOSFragmentedM4SCameraMuxer {
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
-                    if matches!(
-                        disk_monitor.poll(&base_path, &health_tx),
-                        super::core::DiskSpacePollResult::Exhausted { .. }
-                            | super::core::DiskSpacePollResult::Stopped
-                    ) {
-                        disk_exhausted = true;
-                    }
-                    if disk_exhausted {
-                        continue;
-                    }
-
-                    let convert_start = std::time::Instant::now();
-                    let frame = frame_pool.get_frame();
-                    let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
-                    let convert_elapsed_ms = convert_start.elapsed().as_millis();
-
-                    if convert_elapsed_ms > slow_threshold_ms {
-                        slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = convert_elapsed_ms,
-                                count = slow_convert_count,
-                                "Camera fill_frame_from_sample_buf exceeded {}ms threshold",
-                                slow_threshold_ms
-                            );
+                    let mut fatal_error: Option<String> = None;
+                    cidre::objc::ar_pool(|| {
+                        let sample_buf = sample_buf;
+                        if matches!(
+                            disk_monitor.poll(&base_path, &health_tx),
+                            super::core::DiskSpacePollResult::Exhausted { .. }
+                                | super::core::DiskSpacePollResult::Stopped
+                        ) {
+                            disk_exhausted = true;
                         }
-                    }
+                        if disk_exhausted {
+                            return;
+                        }
 
-                    match fill_result {
-                        Ok(()) => {
-                            let encode_start = std::time::Instant::now();
-                            let owned_frame = frame_pool.take_frame();
+                        let convert_start = std::time::Instant::now();
+                        let frame = frame_pool.get_frame();
+                        let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                        let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                            match encoder_clone.lock() {
-                                Ok(mut encoder) => {
-                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                        warn!("Failed to encode camera frame: {e}");
+                        if convert_elapsed_ms > slow_threshold_ms {
+                            slow_convert_count += 1;
+                            if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = convert_elapsed_ms,
+                                    count = slow_convert_count,
+                                    "Camera fill_frame_from_sample_buf exceeded {}ms threshold",
+                                    slow_threshold_ms
+                                );
+                            }
+                        }
+
+                        match fill_result {
+                            Ok(()) => {
+                                let encode_start = std::time::Instant::now();
+
+                                match encoder_clone.lock() {
+                                    Ok(mut encoder) => {
+                                        if let Err(e) =
+                                            encoder.queue_frame_reusable(frame, timestamp)
+                                        {
+                                            warn!("Failed to encode camera frame: {e}");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                        fatal_error = Some(
+                                            "Camera encoder mutex poisoned - all subsequent frames would be lost"
+                                                .to_string(),
+                                        );
+                                        return;
                                     }
                                 }
-                                Err(_) => {
-                                    error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                    return Err(anyhow!("Camera encoder mutex poisoned - all subsequent frames would be lost"));
+
+                                let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                                if encode_elapsed_ms > slow_threshold_ms {
+                                    slow_encode_count += 1;
+                                    if slow_encode_count <= 5
+                                        || slow_encode_count.is_multiple_of(100)
+                                    {
+                                        debug!(
+                                            elapsed_ms = encode_elapsed_ms,
+                                            count = slow_encode_count,
+                                            "Camera encoder.queue_frame_reusable exceeded {slow_threshold_ms}ms threshold",
+                                        );
+                                    }
                                 }
                             }
-
-                            let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                            if encode_elapsed_ms > slow_threshold_ms {
-                                slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                                    debug!(
-                                        elapsed_ms = encode_elapsed_ms,
-                                        count = slow_encode_count,
-                                        "Camera encoder.queue_frame exceeded {}ms threshold",
-                                        slow_threshold_ms
-                                    );
-                                }
+                            Err(e) => {
+                                warn!("Failed to convert camera frame: {e:?}");
                             }
                         }
-                        Err(e) => {
-                            warn!("Failed to convert camera frame: {e:?}");
-                        }
+
+                        total_frames += 1;
+                    });
+
+                    if let Some(message) = fatal_error {
+                        return Err(anyhow!(message));
                     }
-
-                    total_frames += 1;
                 }
 
                 if total_frames > 0 {
