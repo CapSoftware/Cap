@@ -2276,8 +2276,7 @@ impl EditorWindow {
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
     fn rebuild_timeline(&mut self) {
-        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
-        self.text_menu = None;
+        self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
@@ -2293,6 +2292,13 @@ impl EditorWindow {
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
+    }
+
+    /// The transient popovers a project change closes, shared by the full
+    /// rebuild and the frame-only path so the two cannot drift.
+    fn dismiss_transient_menus(&mut self) {
+        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
+        self.text_menu = None;
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -2419,12 +2425,36 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_changed_inner(true, window, cx);
+    }
+
+    /// [`Self::project_changed`] for edits that only write `background.frame`.
+    ///
+    /// [`crate::editor_timeline::TimelineModel::build`] never reads the frame
+    /// or the background (the style track draws a segment's name and enabled
+    /// flag only), so a frame edit can skip the rebuild. The frame text fields
+    /// call this once per keystroke; any edit that touches a field the timeline
+    /// model reads must go through [`Self::project_changed`] instead.
+    fn project_changed_without_timeline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_changed_inner(false, window, cx);
+    }
+
+    fn project_changed_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.project_ready() {
             return;
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
-        self.rebuild_timeline();
+        if rebuild_timeline {
+            self.rebuild_timeline();
+        } else {
+            self.dismiss_transient_menus();
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();
@@ -12285,6 +12315,130 @@ mod tests {
                 samples[samples.len() / 2]
             );
         }
+    }
+
+    /// The style-edit scope swaps the overridden configuration into
+    /// `self.project`; controls built inside it must borrow that project
+    /// instead of cloning it once per slider. Pin both halves: the override is
+    /// visible while the scope is active, and the base project comes back
+    /// (with a clone) once it ends.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn style_controls_borrow_the_scoped_project(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, _window, _cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            padding: 77.5,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            editor.project = config;
+            editor.sidebar.style_target = Some((0, crate::editor_sidebar::StyleGroup::Background));
+            let base_padding = editor.project.background.padding;
+
+            editor.with_style_controls(|editor| {
+                assert_eq!(editor.project.background.padding, 77.5);
+                let scoped = editor.style_control_project();
+                assert!(matches!(&scoped, std::borrow::Cow::Borrowed(_)));
+                assert_eq!(scoped.background.padding, 77.5);
+            });
+
+            assert_eq!(editor.project.background.padding, base_padding);
+            // Outside the scope the method still owns the override for the
+            // control builders; only the base project itself is restored.
+            let restored = editor.style_control_project();
+            assert!(matches!(&restored, std::borrow::Cow::Owned(_)));
+            assert_eq!(restored.background.padding, 77.5);
+        });
+    }
+
+    /// Manual A/B benchmark for the style-edit scope. Run with:
+    /// `cargo test -p cap-desktop-gpui --bin cap-gpui -- --ignored benchmark_style_control_repaint --nocapture`
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    #[ignore = "manual style-control repaint benchmark"]
+    fn benchmark_style_control_repaint(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, _window, _cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: vec![cap_project::TimelineSegment::default(); 2_000],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            padding: 77.5,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            editor.project = config;
+            editor.sidebar.style_target = Some((0, crate::editor_sidebar::StyleGroup::Background));
+            editor.sidebar.tab = crate::editor_sidebar::SidebarTab::Background;
+        });
+
+        let mut samples = Vec::new();
+        for _ in 0..32 {
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(800.), px(600.)),
+                |_, cx| {
+                    editor.update(cx, |editor, cx| {
+                        let started = std::time::Instant::now();
+                        for _ in 0..10 {
+                            drop(std::hint::black_box(editor.with_style_controls(|editor| {
+                                editor.render_sidebar(cx).into_any_element()
+                            })));
+                        }
+                        samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+                    });
+                    div()
+                },
+            );
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "style_controls timeline_segments=2000 samples=31 repaints_per_sample=10 median_us={:.3}",
+            samples[samples.len() / 2]
+        );
     }
 
     #[test]
