@@ -3,6 +3,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
+import { LOOM_REASSIGN_CLAIM_TTL_MS } from "@/lib/loom-original-key";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export const DEFERRED_PROCESSING_RECLAIM_MS = 30 * 60 * 1000;
@@ -61,6 +62,7 @@ export async function startDeferredLoomProcessing(
 			and(
 				eq(videos.id, videoId),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) = ${rawFileKey}`,
+				sql`(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.at')) < ${new Date(now.getTime() - LOOM_REASSIGN_CLAIM_TTL_MS).toISOString()})`,
 				sql`(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.status')) = 'pending' OR (JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.status')) = 'started' AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.startedAt')) < ${reclaimBefore}))`,
 			),
 		);
