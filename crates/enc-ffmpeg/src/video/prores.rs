@@ -3,10 +3,11 @@ use std::{thread, time::Duration};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use ffmpeg::{
     Dictionary,
-    codec::{context, encoder},
+    codec::{Capabilities, context, encoder},
     color, format, frame,
     threading::{Config, Type},
 };
+use tracing::{info, warn};
 
 use crate::base::EncoderBase;
 
@@ -17,6 +18,14 @@ const MAX_FRAME_THREADS: usize = 8;
 // gets 4 threads instead of swapping, and 16 GB or more gets all 8.
 const FRAME_THREAD_BYTES_PER_PIXEL: u64 = 16;
 const FRAME_THREAD_MEMORY_SHARE: u64 = 16;
+
+#[cfg(target_os = "macos")]
+const ENCODERS: &[(&str, format::Pixel)] = &[
+    ("prores_videotoolbox", format::Pixel::BGRA),
+    ("prores_ks", format::Pixel::YUVA444P10LE),
+];
+#[cfg(not(target_os = "macos"))]
+const ENCODERS: &[(&str, format::Pixel)] = &[("prores_ks", format::Pixel::YUVA444P10LE)];
 
 fn frame_thread_count(
     cores: usize,
@@ -77,12 +86,29 @@ impl ProResEncoderBuilder {
         self,
         output: &mut format::context::Output,
     ) -> Result<ProResEncoder, ProResEncoderError> {
-        let codec = encoder::find_by_name("prores_ks").ok_or(ProResEncoderError::CodecNotFound)?;
+        let (fallback, preferred) = ENCODERS.split_last().expect("at least one ProRes encoder");
+        for (name, encoder_format) in preferred {
+            match self.build_with(name, *encoder_format, output) {
+                Ok(encoder) => return Ok(encoder),
+                Err(error) => {
+                    warn!(encoder = name, %error, "ProRes encoder unavailable, falling back")
+                }
+            }
+        }
+        self.build_with(fallback.0, fallback.1, output)
+    }
+
+    fn build_with(
+        &self,
+        name: &str,
+        output_format: format::Pixel,
+        output: &mut format::context::Output,
+    ) -> Result<ProResEncoder, ProResEncoderError> {
+        let codec = encoder::find_by_name(name).ok_or(ProResEncoderError::CodecNotFound)?;
         let input_config = self.input_config;
         let (output_width, output_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
-        let output_format = format::Pixel::YUVA444P10LE;
 
         let converter = if input_config.pixel_format != output_format
             || input_config.width != output_width
@@ -119,11 +145,13 @@ impl ProResEncoderBuilder {
         // sent frame until a worker encodes it, so it is only safe when frames
         // come from `converted_frames`, which never rewrites a frame the encoder
         // still holds.
-        let mut threading = Config::kind(if converter.is_some() {
-            Type::Frame
-        } else {
-            Type::None
-        });
+        let mut threading = Config::kind(
+            if converter.is_some() && codec.capabilities().contains(Capabilities::FRAME_THREADS) {
+                Type::Frame
+            } else {
+                Type::None
+            },
+        );
         threading.count = thread_count;
         encoder_ctx.set_threading(threading);
 
@@ -134,9 +162,16 @@ impl ProResEncoderBuilder {
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
         encoder.set_colorspace(color::Space::BT709);
-        // Limited range: what the converter above produces (and the ProRes
-        // convention).
-        encoder.set_color_range(color::Range::MPEG);
+        // ProRes is limited range, which is what the converter produces for
+        // prores_ks. prores_videotoolbox takes RGB input, which libavutil maps
+        // to a VideoToolbox pixel format only as full range (opening fails
+        // with EINVAL otherwise); VideoToolbox then produces limited-range
+        // YCbCr itself.
+        encoder.set_color_range(if super::colour::is_rgb(output_format) {
+            color::Range::JPEG
+        } else {
+            color::Range::MPEG
+        });
         unsafe {
             (*encoder.as_mut_ptr()).color_primaries =
                 ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
@@ -146,9 +181,12 @@ impl ProResEncoderBuilder {
 
         let mut options = Dictionary::new();
         options.set("profile", "4444");
-        options.set("alpha_bits", "16");
+        if name == "prores_ks" {
+            options.set("alpha_bits", "16");
+        }
 
         let encoder = encoder.open_with(options)?;
+        info!(encoder = name, "ProRes encoder opened");
 
         let mut output_stream = output.add_stream(codec)?;
         let stream_index = output_stream.index();
