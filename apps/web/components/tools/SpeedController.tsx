@@ -130,8 +130,11 @@ export const SpeedController = () => {
 			console.log(`Input file: ${file.name}, size: ${file.size} bytes`);
 
 			const fileUrl = URL.createObjectURL(file);
-			await adjustVideoSpeed(fileUrl);
-			URL.revokeObjectURL(fileUrl);
+			try {
+				await adjustVideoSpeed(fileUrl);
+			} finally {
+				URL.revokeObjectURL(fileUrl);
+			}
 		} catch (err: any) {
 			console.error("Detailed processing error:", err);
 
@@ -349,6 +352,23 @@ export const SpeedController = () => {
 						}
 					};
 
+					const discardRecording = (err: unknown) => {
+						clearTimeout(safetyTimeout);
+						cancelAnimationFrame(animationFrameId);
+						video.onended = null;
+						recorder.ondataavailable = null;
+						recorder.onstop = null;
+						if (recorder.state === "recording") recorder.stop();
+						for (const track of stream.getTracks()) track.stop();
+						video.pause();
+						videoRef.current = null;
+						mediaRecorderRef.current = null;
+						recordedChunksRef.current = [];
+						reject(err);
+					};
+					video.onerror = () =>
+						discardRecording(new Error("Error loading video"));
+
 					video
 						.play()
 						.then(() => {
@@ -356,7 +376,7 @@ export const SpeedController = () => {
 						})
 						.catch((err) => {
 							console.error("Error playing video:", err);
-							reject(err);
+							discardRecording(err);
 						});
 
 					const safetyTimeout = setTimeout(

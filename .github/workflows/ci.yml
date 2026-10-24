@@ -130,6 +130,7 @@ jobs:
           __tests__/unit/playback-store.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/speed-controller-playback-failure.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
           __tests__/unit/transcript-numbers.test.ts
