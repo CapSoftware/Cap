@@ -1,0 +1,115 @@
+name: Linux desktop reliability
+
+# The built GPUI app on real Linux desktops: Ubuntu 26.04 with GNOME 50 and
+# Arch with Hyprland, each with its real portals and tray host, in systemd
+# containers (scripts/linux-desktop-harness). Each case starts a Display
+# recording the way a person does (overlay Start, approve the shortcut or use
+# the tray, approve the screen share), stops it, and checks it finished.
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop-gpui/**"
+      - "crates/recording/**"
+      - "crates/utils/**"
+      - "crates/scap-targets/**"
+      - "scripts/linux-desktop-harness/**"
+      - "scripts/prepare-gpui-dependency.sh"
+      - ".github/workflows/linux-desktop-reliability.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The package only supplies the desktop file and runtime dependencies; the
+  # binary under test is this commit's build.
+  CAP_DEB_URL: https://cdn.crabnebula.app/asset/01M5CHFS77QM2HSZ69KT784SAV
+  CAP_DEB_SHA256: bb03dddc5268f64d3e6eb4c11534462e5b7a8a5c1c7bb5bca5f5bdaa99d11c56
+
+jobs:
+  desktops:
+    name: Record on GNOME and Hyprland
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build cap-gpui
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+
+      - name: Fetch the Cap package for desktop integration
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
+          echo "$CAP_DEB_SHA256  $RUNNER_TEMP/cap.deb" | sha256sum --check
+
+      - name: Virtual display devices
+        id: kms
+        run: |
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || true
+          if sudo modprobe vkms && sudo modprobe vgem; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "::warning::vkms is unavailable on this runner kernel; the Hyprland case is skipped"
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: GNOME 50 (shortcut approval, screen share dialog)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+
+      - name: Hyprland (portal refuses host apps, tray Stop control)
+        if: steps.kms.outputs.available == 'true'
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/hyprland" LAUNCH=dock
+
+      - name: Check results
+        run: |
+          dirs=("$RUNNER_TEMP/out/gnome")
+          [[ "${{ steps.kms.outputs.available }}" == true ]] && dirs+=("$RUNNER_TEMP/out/hyprland")
+          bash scripts/linux-desktop-harness/check-results.sh "${dirs[@]}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
