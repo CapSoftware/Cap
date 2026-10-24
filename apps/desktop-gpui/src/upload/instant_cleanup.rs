@@ -435,7 +435,8 @@ fn meta_claims(meta: &RecordingMeta, video_id: &str) -> bool {
 
 /// True when the folder holds recorded media, or when part of it cannot be
 /// read: media that cannot be checked counts as present. Only a missing folder
-/// counts as empty.
+/// counts as empty. A segment still named `.m4s.tmp` counts too, since a crash
+/// can leave a complete fragment under that name and recovery can rescue it.
 fn has_recorded_media(directory: &Path, depth: usize) -> bool {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -460,7 +461,9 @@ fn has_recorded_media(directory: &Path, depth: usize) -> bool {
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        name.ends_with(".m4s") || (name.ends_with(".mp4") && !name.starts_with("init"))
+        let segment =
+            name.ends_with(".m4s") || name.ends_with(".m4s.tmp") || name.ends_with(".m4s.unsealed");
+        segment || (name.ends_with(".mp4") && !name.starts_with("init"))
     })
 }
 
@@ -1460,6 +1463,20 @@ mod tests {
                 std::fs::write(project.join("content/display/segment_001.m4s"), b"media").unwrap();
                 None
             }),
+            (
+                "has a pending segment",
+                UploadPhase::Recording,
+                3600,
+                now,
+                |project| {
+                    std::fs::write(
+                        project.join("content/display/segment_001.m4s.tmp"),
+                        b"media",
+                    )
+                    .unwrap();
+                    None
+                },
+            ),
             ("finished", UploadPhase::Recording, 3600, now, |project| {
                 let mut meta = RecordingMeta::load_for_project(project).unwrap();
                 meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
@@ -1550,6 +1567,13 @@ mod tests {
                         .unwrap()
                 }) as fn(&Path),
             ),
+            ("has a pending segment", |project: &Path| {
+                std::fs::write(
+                    project.join("content/display/segment_001.m4s.tmp"),
+                    b"media",
+                )
+                .unwrap()
+            }),
             ("another video", |project: &Path| {
                 let name = project.file_name().unwrap().to_str().unwrap();
                 write_project(project.parent().unwrap(), name, "other", in_progress());
