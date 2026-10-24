@@ -397,13 +397,18 @@ describe("reassignLoomImport", () => {
 		]);
 	});
 
-	it("keeps the original files when the owner changed during the move", async () => {
+	it("keeps the original files and removes its copies when the claim was lost", async () => {
 		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
 		mocks.affectedRows = 0;
 		await expect(reassignLoomImport(input)).resolves.toMatchObject({
 			status: "failed",
 		});
-		expect(mocks.removed).toEqual([]);
+		expect(mocks.removed).toEqual([
+			[
+				`${ids.to}/${ids.video}/result.mp4`,
+				`${ids.to}/${ids.video}/screenshot/screen-capture.jpg`,
+			],
+		]);
 	});
 });
 

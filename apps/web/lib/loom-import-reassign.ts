@@ -279,8 +279,12 @@ async function moveClaimedVideo({
 		await tx.delete(spaceVideos).where(eq(spaceVideos.videoId, id));
 		return true;
 	});
-	if (!updated)
-		return { videoId, status: "failed", reason: "owner changed during move" };
+	if (!updated) {
+		await runPromise(
+			source.bucket.deleteObjects(written.map((key) => ({ Key: key }))),
+		).catch(() => undefined);
+		return { videoId, status: "failed", reason: "move claim was lost" };
+	}
 
 	try {
 		await runPromise(
