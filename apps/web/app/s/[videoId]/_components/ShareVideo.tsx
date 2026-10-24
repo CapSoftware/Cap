@@ -98,6 +98,7 @@ export const ShareVideo = forwardRef<
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
 		recordingStopped?: boolean;
+		earlySegmentPlayback?: boolean;
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
 		callToAction?: ShareCallToAction | null;
@@ -121,6 +122,7 @@ export const ShareVideo = forwardRef<
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
 			recordingStopped = false,
+			earlySegmentPlayback = false,
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
 			callToAction = null,
@@ -476,8 +478,12 @@ export const ShareVideo = forwardRef<
 		let enableCrossOrigin = false;
 
 		if (isSegmentsSource) {
-			const requireComplete = userConfirmedStopped ? "&requireComplete=1" : "";
-			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master${requireComplete}`;
+			const stoppedMode = userConfirmedStopped
+				? earlySegmentPlayback
+					? "&earlyPlayback=1"
+					: "&requireComplete=1"
+				: "";
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=segments-master${stoppedMode}`;
 		} else if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 			enableCrossOrigin = true;
@@ -605,6 +611,9 @@ export const ShareVideo = forwardRef<
 							onSourceComplete={handleSourceComplete}
 							allowSegmentProbeDuringUpload={
 								isSegmentsSource && userConfirmedStopped
+							}
+							earlyPlayback={
+								isSegmentsSource && userConfirmedStopped && earlySegmentPlayback
 							}
 							captionLanguage={captionContext.selectedLanguage}
 							onCaptionLanguageChange={handleCaptionLanguageChange}
