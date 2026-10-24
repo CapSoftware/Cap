@@ -444,7 +444,7 @@ jobs:
             cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             cargo +1.95.0 test -p gpui_macos --lib -- metal_atlas metal_renderer
           else
-            cargo +1.95.0 test -p gpui_windows --lib -- directx_atlas frame_request_tests
+            cargo +1.95.0 test -p gpui_windows --lib -- directx_atlas frame_request_tests direct_manipulation
           fi
 
   tauri-plugins:
