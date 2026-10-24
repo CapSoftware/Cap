@@ -70,8 +70,8 @@ vi.mock("next/navigation", () => ({
 		throw new Error("NOT_FOUND");
 	},
 }));
-vi.mock("@/actions/videos/get-analytics", () => ({
-	getVideoAnalytics: async () => ({ count: 12 }),
+vi.mock("@/lib/video-view-count", () => ({
+	getVideoViewCount: async () => ({ count: 12 }),
 }));
 vi.mock("@/app/(org)/dashboard/dashboard-data", () => ({
 	getDashboardSpacesData: async () => [],
