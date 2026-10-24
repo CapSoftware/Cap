@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Host side: one fresh desktop container, one Cap package, one scenario.
-# Usage: run-desktop.sh <gnome|hyprland|niri|sway> <package.deb|.AppImage> <out-dir> [ENV=VALUE...]
+# Usage: run-desktop.sh <gnome|hyprland|niri|sway> <package.deb|.AppImage|any file with DEV_BIN> <out-dir> [ENV=VALUE...]
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 desktop=$1
@@ -52,7 +52,7 @@ case "$package" in
     docker exec "$name" install -m 755 "/pkgs/$(basename "$package")" /opt/Cap.AppImage
     envs+=(-e CAP_BIN=/opt/Cap.AppImage -e APPIMAGE_EXTRACT_AND_RUN=1)
     ;;
-  *) echo "unknown package type" >&2; exit 2 ;;
+  *) [[ -n "${DEV_BIN:-}" ]] || { echo "unknown package type" >&2; exit 2; } ;;
 esac
 if [[ -n "${DEV_BIN:-}" ]]; then
   envs+=(-e CAP_BIN=/dev-bin/cap-gpui -e LD_LIBRARY_PATH=/dev-libs)
