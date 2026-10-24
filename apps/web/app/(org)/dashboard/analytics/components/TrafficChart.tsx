@@ -166,7 +166,9 @@ export default function TrafficChart({
 
 	const lineMetrics = metrics.filter((m) => METRIC_META[m].kind === "line");
 	const barMetrics = metrics.filter((m) => METRIC_META[m].kind === "bar");
-	const barsOnRightAxis = lineMetrics.length > 0 && barMetrics.length > 0;
+	const hasBarData = data.some((point) => barMetrics.some((m) => point[m] > 0));
+	const barsOnRightAxis =
+		lineMetrics.length > 0 && barMetrics.length > 0 && hasBarData;
 	const marginRight = barsOnRightAxis ? 44 : 16;
 
 	const n = data.length;
