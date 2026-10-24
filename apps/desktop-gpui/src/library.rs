@@ -359,7 +359,7 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
     recording_items_in(dirs).collect()
 }
 
-fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> + use<> {
+fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
     let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -392,9 +392,13 @@ pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
         .collect()
 }
 
-/// Every recording, newest first, loading each meta only when it is reached.
-pub fn recordings_newest_first() -> impl Iterator<Item = RecordingItem> {
+/// The display track of the newest studio recording that has one, however
+/// many screenshots or Instant recordings are newer. Metas are loaded newest
+/// first and only until it is found.
+pub(crate) fn newest_studio_display_path() -> Option<PathBuf> {
     recording_items_in(&known_recordings_dirs())
+        .filter(|item| item.mode == RecordingMode::Studio)
+        .find_map(|item| crate::recording::studio_display_path(&item.path))
 }
 
 pub fn find_incomplete_recordings_in(

@@ -4972,11 +4972,10 @@ async fn warm_video_decoder() -> Option<f64> {
     let started = std::time::Instant::now();
     let tokio_handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        let path = crate::library::recordings_newest_first()
-            .filter(|item| {
-                item.mode == crate::library::RecordingMode::Studio && item.status.is_complete()
-            })
-            .find_map(|item| crate::recording::studio_display_path(&item.path))?;
+        let path = crate::library::newest_studio_display_path()?;
+        if gpu_work_requested() {
+            return None;
+        }
         cap_rendering::prewarm_video_decoder(&path, tokio_handle)
             .inspect_err(|error| tracing::warn!(%error, "launch decoder warmup failed"))
             .ok()
