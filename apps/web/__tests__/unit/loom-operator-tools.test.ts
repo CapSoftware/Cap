@@ -247,6 +247,7 @@ describe("operator CSV import", () => {
 			orgId: ids.org,
 			actorId: "owneraaaaaaaaaa",
 			allowFolders: true,
+			importPriority: "bulk",
 		});
 	});
 
