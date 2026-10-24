@@ -473,33 +473,15 @@ fn open_previous_item(path: PathBuf, cx: &mut App) {
         }
         RecordingMetaInner::Instant(_) => {
             if let Some(sharing) = &meta.sharing {
-                #[cfg(target_os = "windows")]
                 cx.open_url(&sharing.link);
-                #[cfg(not(target_os = "windows"))]
-                open_with_finder(&sharing.link);
             } else {
                 let mp4 = path.join("content/output.mp4");
                 if mp4.exists() {
-                    #[cfg(target_os = "windows")]
-                    cx.open_with_system(&mp4);
-                    #[cfg(not(target_os = "windows"))]
-                    open_with_finder(&mp4.to_string_lossy());
+                    library::open_with_system(&mp4, cx);
                 }
             }
         }
     }
-}
-
-/// `tauri_plugin_opener`'s `open_url` / `open_path`, which on macOS are both
-/// `open <thing>` -- the same spawn `library::open_recording_folder` uses.
-#[cfg(not(target_os = "windows"))]
-fn open_with_finder(target: &str) {
-    #[cfg(target_os = "macos")]
-    if let Err(error) = std::process::Command::new("open").arg(target).spawn() {
-        tracing::warn!(target, "opening from the tray failed: {error}");
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = target;
 }
 
 /// The status item was clicked while a recording is running: stop it, exactly

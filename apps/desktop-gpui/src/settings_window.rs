@@ -2563,7 +2563,7 @@ impl SettingsWindow {
                 "Open folder",
                 false,
                 cx,
-                move |_this, _window, _cx| library::reveal_in_folder(&bundle),
+                move |_this, _window, cx| library::reveal_path(&bundle, cx),
             ))
             .child(self.row_button(
                 ("screenshot-delete", index),
@@ -3052,7 +3052,7 @@ impl SettingsWindow {
             "Open recording bundle",
             false,
             cx,
-            move |_this, _window, _cx| library::open_recording_folder(&folder_path, mode),
+            move |_this, _window, cx| library::open_recording_folder(&folder_path, mode, cx),
         ));
         actions.child(self.row_button(
             ("recording-delete", index),
