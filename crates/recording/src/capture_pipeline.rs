@@ -251,6 +251,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 .parent()
                 .map(|p| p.join("display"))
                 .unwrap_or_else(|| output_path.with_file_name("display"));
+            let d3d_device = screen_capture.d3d_device.clone();
+            let pixel_format = screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi();
 
             let bpp = if ultra {
                 H264EncoderBuilder::ULTRA_BPP
@@ -301,7 +303,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         bpp,
                         output_size,
                         shared_pause_state,
-                        disk_space_callback: None,
                         segment_tx: None,
                         ..Default::default()
                     })
@@ -318,7 +319,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         bpp,
                         output_size,
                         shared_pause_state,
-                        disk_space_callback: None,
+                        d3d_device: Some(d3d_device),
+                        pixel_format: Some(pixel_format),
+                        encoder_preferences: encoder_preferences.clone(),
                         segment_tx: None,
                     })
                     .await
@@ -356,6 +359,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
+        let d3d_device = screen_capture.d3d_device.clone();
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -367,7 +371,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
                 shared_pause_state: None,
-                disk_space_callback: None,
+                d3d_device: Some(d3d_device),
+                pixel_format: Some(screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi()),
+                encoder_preferences: EncoderPreferences::new(),
                 segment_tx,
             })
             .await
@@ -627,60 +633,6 @@ fn resolve_area_display_notch(
     })
 }
 
-#[cfg(test)]
-mod display_notch_tests {
-    use super::*;
-    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
-
-    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
-        x: 0.4,
-        width: 0.2,
-        height: 0.1,
-    };
-
-    fn display_size() -> LogicalSize {
-        LogicalSize::new(1_000.0, 800.0)
-    }
-
-    #[test]
-    fn area_containing_the_full_notch_rebases_it() {
-        let bounds = LogicalBounds::new(
-            LogicalPosition::new(300.0, 0.0),
-            LogicalSize::new(400.0, 200.0),
-        );
-
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), bounds),
-            Some(cap_project::DisplayNotch {
-                x: 0.25,
-                width: 0.5,
-                height: 0.4,
-            })
-        );
-    }
-
-    #[test]
-    fn partially_intersected_notches_are_omitted() {
-        let horizontal = LogicalBounds::new(
-            LogicalPosition::new(500.0, 0.0),
-            LogicalSize::new(200.0, 200.0),
-        );
-        let vertical = LogicalBounds::new(
-            LogicalPosition::new(300.0, 40.0),
-            LogicalSize::new(400.0, 200.0),
-        );
-
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), horizontal),
-            None
-        );
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), vertical),
-            None
-        );
-    }
-}
-
 #[cfg(windows)]
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
@@ -691,9 +643,11 @@ pub fn create_d3d_device()
 
     let mut device = None;
     let flags = {
-        use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+        };
 
-        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
         if cfg!(feature = "d3ddebug") {
             use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_DEBUG;
 
@@ -720,8 +674,12 @@ pub fn create_d3d_device()
 
         if error.code() == DXGI_ERROR_UNSUPPORTED {
             use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+            use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
-            result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device);
+            // WARP rejects VIDEO_SUPPORT; it cannot hardware-encode anyway.
+            let warp_flags =
+                D3D11_CREATE_DEVICE_FLAG(flags.0 & !D3D11_CREATE_DEVICE_VIDEO_SUPPORT.0);
+            result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, warp_flags, &mut device);
         }
     }
     result?;
@@ -777,4 +735,58 @@ pub fn create_d3d_device()
     }
 
     Ok(device.unwrap())
+}
+
+#[cfg(test)]
+mod display_notch_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
+        x: 0.4,
+        width: 0.2,
+        height: 0.1,
+    };
+
+    fn display_size() -> LogicalSize {
+        LogicalSize::new(1_000.0, 800.0)
+    }
+
+    #[test]
+    fn area_containing_the_full_notch_rebases_it() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(300.0, 0.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), bounds),
+            Some(cap_project::DisplayNotch {
+                x: 0.25,
+                width: 0.5,
+                height: 0.4,
+            })
+        );
+    }
+
+    #[test]
+    fn partially_intersected_notches_are_omitted() {
+        let horizontal = LogicalBounds::new(
+            LogicalPosition::new(500.0, 0.0),
+            LogicalSize::new(200.0, 200.0),
+        );
+        let vertical = LogicalBounds::new(
+            LogicalPosition::new(300.0, 40.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), horizontal),
+            None
+        );
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), vertical),
+            None
+        );
+    }
 }
