@@ -1529,7 +1529,8 @@ fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
     });
     config
         .timeline
-        .get_or_insert_with(Default::default)
+        .as_mut()
+        .expect("verification projects have a timeline")
         .caption_segments = segments;
 }
 
