@@ -27,7 +27,7 @@ fn main() {
 
     let _handle = selected_camera
         .start_capturing(selected_format.0, |frame| {
-            drop(frame);
+            let _ = frame.native().bytes.len();
         })
         .unwrap();
 
