@@ -2079,6 +2079,7 @@ async fn upload_file_parts(
     let mut parts = Vec::new();
     let mut failed = Vec::new();
     let mut offset = 0u64;
+    let mut uploaded_bytes = 0u64;
     let mut part_number = 1u32;
 
     while offset < file_size {
@@ -2096,7 +2097,11 @@ async fn upload_file_parts(
             bytes: chunk.into(),
         };
         match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => parts.push(part),
+            Ok(part) => {
+                uploaded_bytes += size as u64;
+                progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
+                parts.push(part);
+            }
             Err(error) => {
                 check_export_cancelled(cancel)?;
                 tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
@@ -2105,7 +2110,6 @@ async fn upload_file_parts(
         }
         offset += size as u64;
         part_number += 1;
-        progress((offset as f64 / file_size as f64).min(0.99));
     }
 
     for (chunk, first_error) in failed {
@@ -2113,7 +2117,11 @@ async fn upload_file_parts(
             return Err(AuthApiError::Other("Export cancelled".into()));
         }
         match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => parts.push(part),
+            Ok(part) => {
+                uploaded_bytes += chunk.bytes.len() as u64;
+                progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
+                parts.push(part);
+            }
             Err(_) => {
                 check_export_cancelled(cancel)?;
                 return Err(first_error);
