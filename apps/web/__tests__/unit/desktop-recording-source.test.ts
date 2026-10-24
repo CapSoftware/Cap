@@ -1409,6 +1409,67 @@ describe("durable desktop recording source commit", () => {
 			),
 		).toBe(false);
 	});
+	it.each([
+		["plan", "/plans/", "/plan.json"],
+		["finalize", "/commits/", "/inventory.json"],
+	])(
+		"writes the %s manifest copy alongside its sibling file",
+		async (_phase, directory, sibling) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(storage);
+			const put = storage.bucket.putObject.getMockImplementation();
+			if (!put) throw new Error("Missing fixture operation");
+			let manifestPending = false;
+			let overlapped = false;
+			let siblingStarted: () => void = () => {};
+			const siblingWrite = new Promise<void>((resolve) => {
+				siblingStarted = resolve;
+			});
+			storage.bucket.putObject.mockImplementation((key, body) => {
+				if (key.includes(directory) && key.endsWith(sibling)) {
+					if (manifestPending) overlapped = true;
+					siblingStarted();
+				}
+				if (key.includes(directory) && key.endsWith("/manifest.json")) {
+					manifestPending = true;
+					return Effect.promise(() =>
+						Promise.race([
+							siblingWrite,
+							new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+						]),
+					).pipe(
+						Effect.zipRight(put(key, body)),
+						Effect.ensuring(
+							Effect.sync(() => {
+								manifestPending = false;
+							}),
+						),
+					);
+				}
+				return put(key, body);
+			});
+			await commitDesktopRecordingSource(recording(), generation);
+			expect(overlapped).toBe(true);
+		},
+	);
+
+	it.each(["/plans/", "/commits/"])(
+		"does not commit when the manifest copy under %s fails",
+		async (directory) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(storage);
+			const put = storage.bucket.putObject.getMockImplementation();
+			if (!put) throw new Error("Missing fixture operation");
+			storage.bucket.putObject.mockImplementation((key, body) =>
+				key.includes(directory) && key.endsWith("/manifest.json")
+					? Effect.fail(new Error("Manifest copy unavailable"))
+					: put(key, body),
+			);
+			await expect(
+				commitDesktopRecordingSource(recording(), generation),
+			).rejects.toThrow();
+		},
+	);
 });
 
 describe("large desktop recording snapshots", () => {
