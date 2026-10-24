@@ -411,8 +411,9 @@ fn project_needs_video(project: &Path, meta: Option<&RecordingMeta>, interrupted
 /// True when a local recording that must not lose its server copy points at
 /// this video: anything past `InProgress`, an unreadable project that claims
 /// the id, or (for interrupted starts) a project that already holds media.
-/// An interrupted start whose own folder sits on storage that cannot be read
-/// right now (an unmounted drive) is kept too: its media may still be there.
+/// An interrupted start is kept unless its own folder can be read: the folder
+/// is created before the server video, so a missing one was moved, deleted or
+/// sits on a drive that is not mounted, and its media may still exist.
 fn locally_protected(
     recording_dirs: &[PathBuf],
     video_id: &str,
@@ -420,17 +421,12 @@ fn locally_protected(
     start_project: Option<&Path>,
 ) -> bool {
     if interrupted && let Some(project) = start_project {
-        if !project
-            .parent()
-            .is_some_and(|parent| std::fs::read_dir(parent).is_ok())
-        {
+        if !matches!(project.try_exists(), Ok(true)) {
             return true;
         }
-        if project.exists() {
-            let meta = RecordingMeta::load_for_project(project).ok();
-            if project_needs_video(project, meta.as_ref(), interrupted) {
-                return true;
-            }
+        let meta = RecordingMeta::load_for_project(project).ok();
+        if project_needs_video(project, meta.as_ref(), interrupted) {
+            return true;
         }
     }
     for directory in recording_dirs {
@@ -1124,7 +1120,7 @@ mod tests {
             Some(&project),
         ));
         let deleted = recordings.join("deleted.cap");
-        assert!(!locally_protected(
+        assert!(locally_protected(
             std::slice::from_ref(&recordings),
             "video",
             true,
