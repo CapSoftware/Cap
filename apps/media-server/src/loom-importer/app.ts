@@ -22,6 +22,7 @@ import {
 	importRequestSchema,
 	runLoomImport,
 } from "./job";
+import { previewRequestSchema, renderPreviewGif } from "./preview";
 
 function positiveInt(value: string | undefined, fallback: number): number {
 	const parsed = Number.parseInt(value ?? "", 10);
@@ -53,6 +54,7 @@ export function loadImporterSettings(
 		settings,
 		maxActiveJobs: positiveInt(env.LOOM_IMPORTER_MAX_JOBS, 16),
 		maxQueuedJobs: positiveInt(env.LOOM_IMPORTER_MAX_QUEUED, 400),
+		maxPreviewJobs: positiveInt(env.LOOM_IMPORTER_PREVIEW_JOBS, 4),
 	};
 }
 
@@ -78,6 +80,7 @@ export function createLoomImporter(
 	const queue: QueuedImport[] = [];
 	const running = new Map<string, AbortController>();
 	let draining = false;
+	const previewSemaphore = new Semaphore(config.maxPreviewJobs);
 
 	const startJob = ({ jobId, request }: QueuedImport) =>
 		createJob(
@@ -186,6 +189,31 @@ export function createLoomImporter(
 			status: "queued",
 			message: "Loom import queued",
 		});
+	});
+
+	app.post("/video/preview-gif", async (c) => {
+		if (!validateMediaServerSecret(c))
+			return c.json({ error: "Unauthorized" }, 401);
+		if (draining)
+			return c.json(
+				{ error: "Importer is draining", code: "SERVER_BUSY" },
+				503,
+			);
+		const parsed = previewRequestSchema.safeParse(
+			await c.req.json().catch(() => null),
+		);
+		if (!parsed.success)
+			return c.json({ error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+		try {
+			await previewSemaphore.run(() => renderPreviewGif(parsed.data));
+			return c.json({ ok: true });
+		} catch (error) {
+			console.warn("[loom-importer] Preview GIF failed", error);
+			return c.json(
+				{ error: "Preview GIF failed", code: "PREVIEW_FAILED" },
+				502,
+			);
+		}
 	});
 
 	app.get("/video/process/:jobId/status", (c) => {
