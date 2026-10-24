@@ -835,6 +835,93 @@ mod tests {
     }
 
     #[test]
+    fn reusable_queue_and_encode_preserve_plane_backing_and_detach_when_retained() {
+        ffmpeg::init().unwrap();
+        if ffmpeg::codec::encoder::find_by_name("libx264").is_none() {
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reusable.mp4");
+        let mut output = ffmpeg::format::output_as(&path, "mp4").unwrap();
+        let info = cap_media_info::VideoInfo::from_raw_ffmpeg(Pixel::BGRA, 64, 48, 30);
+        let mut queue_enc = super::super::h264::H264Encoder::builder(info)
+            .with_preset(super::super::h264::H264Preset::Ultrafast)
+            .with_crf(18)
+            .with_encoder_priority_override(&["libx264"])
+            .build(&mut output)
+            .unwrap();
+
+        let mut frame = frame::Video::new(Pixel::BGRA, 64, 48);
+        frame.data_mut(0).fill(0x24);
+        let src_ptr = frame.data(0).as_ptr();
+        let mut sink = crate::PacketQueue::new(ffmpeg::Rational(1, 90_000));
+        for idx in 0..4u64 {
+            queue_enc
+                .queue_frame_to_reusable(
+                    &mut frame,
+                    std::time::Duration::from_millis(idx * 33),
+                    &mut sink,
+                )
+                .unwrap();
+            assert_eq!(frame.data(0).as_ptr(), src_ptr);
+        }
+        queue_enc.flush_to(&mut sink).unwrap();
+        assert!(!sink.take().is_empty());
+
+        let mut pkt_enc = super::super::h264::H264Encoder::builder(info)
+            .with_preset(super::super::h264::H264Preset::Ultrafast)
+            .with_crf(18)
+            .with_encoder_priority_override(&["libx264"])
+            .build_standalone()
+            .unwrap();
+        let mut converted: Option<frame::Video> = None;
+        let mut packets = Vec::new();
+        pkt_enc
+            .encode_frame_reusable(
+                &mut frame,
+                &mut converted,
+                std::time::Duration::ZERO,
+                |pkt| {
+                    packets.push(pkt.data);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let mut retained = frame::Video::empty();
+        let old_y_byte = {
+            let conv = converted.as_ref().unwrap();
+            assert_eq!(
+                unsafe { ffmpeg::ffi::av_frame_ref(retained.as_mut_ptr(), conv.as_ptr()) },
+                0
+            );
+            retained.data(0)[0]
+        };
+
+        frame.data_mut(0).fill(0xee);
+        pkt_enc
+            .encode_frame_reusable(
+                &mut frame,
+                &mut converted,
+                std::time::Duration::from_millis(33),
+                |pkt| {
+                    packets.push(pkt.data);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(retained.data(0)[0], old_y_byte);
+        pkt_enc
+            .flush(|pkt| {
+                packets.push(pkt.data);
+                Ok(())
+            })
+            .unwrap();
+        assert!(!packets.is_empty());
+    }
+
+    #[test]
     #[ignore = "release timing bench, run with --ignored --nocapture"]
     fn bench_packed_yuv_conversion() {
         ffmpeg::init().unwrap();

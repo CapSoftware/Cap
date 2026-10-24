@@ -84,6 +84,14 @@ fn get_mp4_audio_finish_timeout(instant_mode: bool) -> Duration {
 
 type SharedFatalError = Arc<Mutex<Option<String>>>;
 
+#[derive(Clone)]
+enum EncoderLoopStep {
+    Continue,
+    Break,
+    FinishOk,
+    Fatal(String),
+}
+
 fn set_fatal_error(fatal_error: &SharedFatalError, message: String) {
     if let Ok(mut slot) = fatal_error.lock() {
         if slot.is_none() {
@@ -423,116 +431,138 @@ impl Muxer for AVFoundationMp4Muxer {
                 let mut disk_monitor = DiskSpaceMonitor::new();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
-                    if let Some(ref depth) = channel_depth {
-                        ChannelPressureTracker::on_recv(depth);
-                    }
-                    if fatal_error_message(&video_fatal_error).is_some() {
-                        break;
-                    }
+                    let step = cidre::objc::ar_pool(|| {
+                        let msg = msg;
+                        if let Some(ref depth) = channel_depth {
+                            ChannelPressureTracker::on_recv(depth);
+                        }
+                        if fatal_error_message(&video_fatal_error).is_some() {
+                            return EncoderLoopStep::Break;
+                        }
 
-                    // All modes, not just instant: if the disk fills, the
-                    // AVAssetWriter dies asynchronously mid-write and the
-                    // non-fragmented output loses its moov (unrecoverable).
-                    // Stopping while the writer is alive lets finish() write
-                    // the moov and preserves the recording up to this point.
-                    // DiskSpaceMonitor carries the platform-wide thresholds
-                    // (warn 200MB / stop 50MB) and emits DiskSpaceLow /
-                    // DiskSpaceExhausted so the user sees the real cause.
-                    if let DiskSpacePollResult::Exhausted { bytes_remaining } =
-                        disk_monitor.poll(&disk_check_path, &video_health_tx)
-                    {
-                        let message = format!(
-                            "Disk space exhausted ({}MB left), stopping recording to preserve output",
-                            bytes_remaining / (1024 * 1024)
-                        );
-                        set_fatal_error(&video_fatal_error, message.clone());
-                        return Err(anyhow!(message));
-                    }
+                        // All modes, not just instant: if the disk fills, the
+                        // AVAssetWriter dies asynchronously mid-write and the
+                        // non-fragmented output loses its moov (unrecoverable).
+                        // Stopping while the writer is alive lets finish() write
+                        // the moov and preserves the recording up to this point.
+                        // DiskSpaceMonitor carries the platform-wide thresholds
+                        // (warn 200MB / stop 50MB) and emits DiskSpaceLow /
+                        // DiskSpaceExhausted so the user sees the real cause.
+                        if let DiskSpacePollResult::Exhausted { bytes_remaining } =
+                            disk_monitor.poll(&disk_check_path, &video_health_tx)
+                        {
+                            let message = format!(
+                                "Disk space exhausted ({}MB left), stopping recording to preserve output",
+                                bytes_remaining / (1024 * 1024)
+                            );
+                            set_fatal_error(&video_fatal_error, message.clone());
+                            return EncoderLoopStep::Fatal(message);
+                        }
 
-                    match msg {
-                        VideoFrameMessage::Frame(sample_buf, timestamp) => {
-                            let mut retry_count = 0;
-                            const MAX_RETRIES: u32 = 100;
+                        match msg {
+                            VideoFrameMessage::Frame(sample_buf, timestamp) => {
+                                let mut retry_count = 0;
+                                const MAX_RETRIES: u32 = 100;
 
-                            loop {
-                                let queue_result = {
-                                    let mut encoder = match encoder_clone.lock() {
-                                        Ok(e) => e,
-                                        Err(_) => {
+                                loop {
+                                    let mut attempt_out = None;
+                                    cidre::objc::ar_pool(|| {
+                                        attempt_out = Some(match encoder_clone.lock() {
+                                            Ok(mut encoder) => encoder
+                                                .queue_video_frame(sample_buf.clone(), timestamp)
+                                                .map_err(Some),
+                                            Err(_) => Err(None),
+                                        });
+                                    });
+
+                                    let queue_result = match attempt_out.expect("ar_pool executed")
+                                    {
+                                        Ok(()) => Ok(()),
+                                        Err(Some(e)) => Err(e),
+                                        Err(None) => {
                                             let message = "MP4 encoder mutex poisoned".to_string();
                                             set_fatal_error(&video_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
+                                            return EncoderLoopStep::Fatal(message);
                                         }
                                     };
-                                    encoder.queue_video_frame(sample_buf.clone(), timestamp)
-                                };
 
-                                match queue_result {
-                                    Ok(()) => break,
-                                    Err(QueueFrameError::NotReadyForMore) => {
-                                        retry_count += 1;
-                                        if retry_count >= MAX_RETRIES {
-                                            encoder_busy_count += 1;
-                                            if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
-                                                debug!(
-                                                    encoder_busy_count,
-                                                    "MP4 encoder busy, frame queued after max retries"
-                                                );
+                                    match queue_result {
+                                        Ok(()) => break,
+                                        Err(QueueFrameError::NotReadyForMore) => {
+                                            retry_count += 1;
+                                            if retry_count >= MAX_RETRIES {
+                                                encoder_busy_count += 1;
+                                                if encoder_busy_count <= 5
+                                                    || encoder_busy_count.is_multiple_of(100)
+                                                {
+                                                    debug!(
+                                                        encoder_busy_count,
+                                                        "MP4 encoder busy, frame queued after max retries"
+                                                    );
+                                                }
+                                                break;
                                             }
+                                            std::thread::sleep(Duration::from_micros(500));
+                                        }
+                                        Err(QueueFrameError::WriterFailed(err)) => {
+                                            let total = video_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
+                                            let message = format!(
+                                                "Failed to encode video frame: WriterFailed/{err:?} \
+                                                 (frame #{total}, ts={timestamp:?})"
+                                            );
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return EncoderLoopStep::Fatal(message);
+                                        }
+                                        Err(QueueFrameError::Failed) => {
+                                            let total = video_count_thread
+                                                .load(std::sync::atomic::Ordering::Relaxed);
+                                            let message = format!(
+                                                "Failed to encode video frame: Failed \
+                                                 (frame #{total}, ts={timestamp:?})"
+                                            );
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return EncoderLoopStep::Fatal(message);
+                                        }
+                                        Err(QueueFrameError::Finished) => {
+                                            return EncoderLoopStep::FinishOk;
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to encode video frame: {e}");
                                             break;
                                         }
-                                        std::thread::sleep(Duration::from_micros(500));
-                                    }
-                                    Err(QueueFrameError::WriterFailed(err)) => {
-                                        let total = video_count_thread
-                                            .load(std::sync::atomic::Ordering::Relaxed);
-                                        let message = format!(
-                                            "Failed to encode video frame: WriterFailed/{err:?} \
-                                             (frame #{total}, ts={timestamp:?})"
-                                        );
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
-                                    }
-                                    Err(QueueFrameError::Failed) => {
-                                        let total = video_count_thread
-                                            .load(std::sync::atomic::Ordering::Relaxed);
-                                        let message = format!(
-                                            "Failed to encode video frame: Failed \
-                                             (frame #{total}, ts={timestamp:?})"
-                                        );
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
-                                    }
-                                    Err(QueueFrameError::Finished) => return Ok(()),
-                                    Err(e) => {
-                                        warn!("Failed to encode video frame: {e}");
-                                        break;
                                     }
                                 }
-                            }
 
-                            video_count_thread.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        VideoFrameMessage::Pause => {
-                            match encoder_clone.lock() {
+                                video_count_thread
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            VideoFrameMessage::Pause => match encoder_clone.lock() {
                                 Ok(mut encoder) => encoder.pause(),
                                 Err(_) => {
                                     let message = "MP4 encoder mutex poisoned".to_string();
                                     set_fatal_error(&video_fatal_error, message.clone());
-                                    return Err(anyhow!(message));
+                                    return EncoderLoopStep::Fatal(message);
                                 }
-                            }
-                        }
-                        VideoFrameMessage::Resume => {
-                            match encoder_clone.lock() {
+                            },
+                            VideoFrameMessage::Resume => match encoder_clone.lock() {
                                 Ok(mut encoder) => encoder.resume(),
                                 Err(_) => {
                                     let message = "MP4 encoder mutex poisoned".to_string();
                                     set_fatal_error(&video_fatal_error, message.clone());
-                                    return Err(anyhow!(message));
+                                    return EncoderLoopStep::Fatal(message);
                                 }
-                            }
+                            },
                         }
+
+                        EncoderLoopStep::Continue
+                    });
+
+                    match step {
+                        EncoderLoopStep::Continue => {}
+                        EncoderLoopStep::Break => break,
+                        EncoderLoopStep::FinishOk => return Ok(()),
+                        EncoderLoopStep::Fatal(message) => return Err(anyhow!(message)),
                     }
                 }
 
@@ -573,76 +603,106 @@ impl Muxer for AVFoundationMp4Muxer {
                     let mut encoder_busy_count = 0u64;
 
                     while let Ok(Some(msg)) = audio_rx.recv() {
-                        if let Some(ref depth) = audio_channel_depth_thread {
-                            ChannelPressureTracker::on_recv(depth);
-                        }
-                        if fatal_error_message(&audio_fatal_error).is_some() {
-                            break;
-                        }
+                        let step = cidre::objc::ar_pool(|| {
+                            let msg = msg;
+                            if let Some(ref depth) = audio_channel_depth_thread {
+                                ChannelPressureTracker::on_recv(depth);
+                            }
+                            if fatal_error_message(&audio_fatal_error).is_some() {
+                                return EncoderLoopStep::Break;
+                            }
 
-                        match msg {
-                            AudioFrameMessage::Frame(frame, timestamp) => {
-                                let mut retry_count = 0;
-                                const MAX_RETRIES: u32 = 50;
+                            match msg {
+                                AudioFrameMessage::Frame(frame, timestamp) => {
+                                    let mut retry_count = 0;
+                                    const MAX_RETRIES: u32 = 50;
 
-                                loop {
-                                    let queue_result = {
-                                        let mut encoder = match encoder_clone.lock() {
-                                            Ok(e) => e,
-                                            Err(_) => {
-                                                let message =
-                                                    "MP4 audio encoder mutex poisoned".to_string();
+                                    loop {
+                                        let mut attempt_out = None;
+                                        cidre::objc::ar_pool(|| {
+                                            attempt_out = Some(match encoder_clone.lock() {
+                                                Ok(mut encoder) => encoder
+                                                    .queue_audio_frame(&frame, timestamp)
+                                                    .map_err(Some),
+                                                Err(_) => Err(None),
+                                            });
+                                        });
+
+                                        let queue_result =
+                                            match attempt_out.expect("ar_pool executed") {
+                                                Ok(()) => Ok(()),
+                                                Err(Some(e)) => Err(e),
+                                                Err(None) => {
+                                                    let message =
+                                                        "MP4 audio encoder mutex poisoned"
+                                                            .to_string();
+                                                    set_fatal_error(
+                                                        &audio_fatal_error,
+                                                        message.clone(),
+                                                    );
+                                                    return EncoderLoopStep::Fatal(message);
+                                                }
+                                            };
+
+                                        match queue_result {
+                                            Ok(()) => break,
+                                            Err(QueueFrameError::NotReadyForMore) => {
+                                                retry_count += 1;
+                                                if retry_count >= MAX_RETRIES {
+                                                    encoder_busy_count += 1;
+                                                    break;
+                                                }
+                                                std::thread::sleep(Duration::from_micros(500));
+                                            }
+                                            Err(QueueFrameError::WriterFailed(err)) => {
+                                                let total = audio_count_thread
+                                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                                let message = format!(
+                                                    "Failed to encode audio frame: WriterFailed/{err:?} \
+                                                     (frame #{total}, ts={timestamp:?})"
+                                                );
                                                 set_fatal_error(
                                                     &audio_fatal_error,
                                                     message.clone(),
                                                 );
-                                                return Err(anyhow!(message));
+                                                return EncoderLoopStep::Fatal(message);
                                             }
-                                        };
-                                        encoder.queue_audio_frame(&frame, timestamp)
-                                    };
-
-                                    match queue_result {
-                                        Ok(()) => break,
-                                        Err(QueueFrameError::NotReadyForMore) => {
-                                            retry_count += 1;
-                                            if retry_count >= MAX_RETRIES {
-                                                encoder_busy_count += 1;
+                                            Err(QueueFrameError::Failed) => {
+                                                let total = audio_count_thread
+                                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                                let message = format!(
+                                                    "Failed to encode audio frame: Failed \
+                                                     (frame #{total}, ts={timestamp:?})"
+                                                );
+                                                set_fatal_error(
+                                                    &audio_fatal_error,
+                                                    message.clone(),
+                                                );
+                                                return EncoderLoopStep::Fatal(message);
+                                            }
+                                            Err(QueueFrameError::Finished) => {
+                                                return EncoderLoopStep::FinishOk;
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to encode audio frame: {e}");
                                                 break;
                                             }
-                                            std::thread::sleep(Duration::from_micros(500));
-                                        }
-                                        Err(QueueFrameError::WriterFailed(err)) => {
-                                            let total = audio_count_thread
-                                                .load(std::sync::atomic::Ordering::Relaxed);
-                                            let message = format!(
-                                                "Failed to encode audio frame: WriterFailed/{err:?} \
-                                                 (frame #{total}, ts={timestamp:?})"
-                                            );
-                                            set_fatal_error(&audio_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
-                                        }
-                                        Err(QueueFrameError::Failed) => {
-                                            let total = audio_count_thread
-                                                .load(std::sync::atomic::Ordering::Relaxed);
-                                            let message = format!(
-                                                "Failed to encode audio frame: Failed \
-                                                 (frame #{total}, ts={timestamp:?})"
-                                            );
-                                            set_fatal_error(&audio_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
-                                        }
-                                        Err(QueueFrameError::Finished) => return Ok(()),
-                                        Err(e) => {
-                                            warn!("Failed to encode audio frame: {e}");
-                                            break;
                                         }
                                     }
-                                }
 
-                                audio_count_thread
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    audio_count_thread
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
                             }
+
+                            EncoderLoopStep::Continue
+                        });
+
+                        match step {
+                            EncoderLoopStep::Continue => {}
+                            EncoderLoopStep::Break => break,
+                            EncoderLoopStep::FinishOk => return Ok(()),
+                            EncoderLoopStep::Fatal(message) => return Err(anyhow!(message)),
                         }
                     }
 
@@ -1046,103 +1106,125 @@ impl Muxer for AVFoundationCameraMuxer {
                 let mut disk_monitor = DiskSpaceMonitor::new();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
-                    if fatal_error_message(&video_fatal_error).is_some() {
-                        break;
-                    }
+                    let step = cidre::objc::ar_pool(|| {
+                        let msg = msg;
+                        if fatal_error_message(&video_fatal_error).is_some() {
+                            return EncoderLoopStep::Break;
+                        }
 
-                    // Same rationale as the screen writer above: stop while
-                    // the AVAssetWriter is still alive so the camera file
-                    // keeps its moov instead of dying on a failed async write
-                    // (finish() runs because the thread exits cleanly with an
-                    // error rather than timing out).
-                    if let DiskSpacePollResult::Exhausted { bytes_remaining } =
-                        disk_monitor.poll(&disk_check_path, &video_health_tx)
-                    {
-                        let message = format!(
-                            "Disk space exhausted ({}MB left), stopping camera recording to preserve output",
-                            bytes_remaining / (1024 * 1024)
-                        );
-                        set_fatal_error(&video_fatal_error, message.clone());
-                        return Err(anyhow!(message));
-                    }
+                        // Same rationale as the screen writer above: stop while
+                        // the AVAssetWriter is still alive so the camera file
+                        // keeps its moov instead of dying on a failed async write
+                        // (finish() runs because the thread exits cleanly with an
+                        // error rather than timing out).
+                        if let DiskSpacePollResult::Exhausted { bytes_remaining } =
+                            disk_monitor.poll(&disk_check_path, &video_health_tx)
+                        {
+                            let message = format!(
+                                "Disk space exhausted ({}MB left), stopping camera recording to preserve output",
+                                bytes_remaining / (1024 * 1024)
+                            );
+                            set_fatal_error(&video_fatal_error, message.clone());
+                            return EncoderLoopStep::Fatal(message);
+                        }
 
-                    match msg {
-                        CameraFrameMessage::Frame(sample_buf, timestamp) => {
-                            let mut retry_count = 0;
-                            const MAX_RETRIES: u32 = 100;
+                        match msg {
+                            CameraFrameMessage::Frame(sample_buf, timestamp) => {
+                                let mut retry_count = 0;
+                                const MAX_RETRIES: u32 = 100;
 
-                            loop {
-                                let queue_result = {
-                                    let mut encoder = match encoder_clone.lock() {
-                                        Ok(e) => e,
-                                        Err(_) => {
+                                loop {
+                                    let mut attempt_out = None;
+                                    cidre::objc::ar_pool(|| {
+                                        attempt_out = Some(match encoder_clone.lock() {
+                                            Ok(mut encoder) => encoder
+                                                .queue_video_frame(sample_buf.clone(), timestamp)
+                                                .map_err(Some),
+                                            Err(_) => Err(None),
+                                        });
+                                    });
+
+                                    let queue_result = match attempt_out.expect("ar_pool executed")
+                                    {
+                                        Ok(()) => Ok(()),
+                                        Err(Some(e)) => Err(e),
+                                        Err(None) => {
                                             let message =
                                                 "Camera MP4 encoder mutex poisoned".to_string();
                                             set_fatal_error(&video_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
+                                            return EncoderLoopStep::Fatal(message);
                                         }
                                     };
-                                    encoder.queue_video_frame(sample_buf.clone(), timestamp)
-                                };
 
-                                match queue_result {
-                                    Ok(()) => break,
-                                    Err(QueueFrameError::NotReadyForMore) => {
-                                        retry_count += 1;
-                                        if retry_count >= MAX_RETRIES {
-                                            encoder_busy_count += 1;
-                                            if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
-                                                debug!(
-                                                    encoder_busy_count,
-                                                    "Camera MP4 encoder busy, frame queued after max retries"
-                                                );
+                                    match queue_result {
+                                        Ok(()) => break,
+                                        Err(QueueFrameError::NotReadyForMore) => {
+                                            retry_count += 1;
+                                            if retry_count >= MAX_RETRIES {
+                                                encoder_busy_count += 1;
+                                                if encoder_busy_count <= 5
+                                                    || encoder_busy_count.is_multiple_of(100)
+                                                {
+                                                    debug!(
+                                                        encoder_busy_count,
+                                                        "Camera MP4 encoder busy, frame queued after max retries"
+                                                    );
+                                                }
+                                                break;
                                             }
+                                            std::thread::sleep(Duration::from_micros(500));
+                                        }
+                                        Err(QueueFrameError::WriterFailed(err)) => {
+                                            let message = format!(
+                                                "Failed to encode camera frame: WriterFailed/{err:?}"
+                                            );
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return EncoderLoopStep::Fatal(message);
+                                        }
+                                        Err(QueueFrameError::Failed) => {
+                                            let message =
+                                                "Failed to encode camera frame: Failed".to_string();
+                                            set_fatal_error(&video_fatal_error, message.clone());
+                                            return EncoderLoopStep::Fatal(message);
+                                        }
+                                        Err(QueueFrameError::Finished) => {
+                                            return EncoderLoopStep::FinishOk;
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to encode camera frame: {e}");
                                             break;
                                         }
-                                        std::thread::sleep(Duration::from_micros(500));
-                                    }
-                                    Err(QueueFrameError::WriterFailed(err)) => {
-                                        let message = format!(
-                                            "Failed to encode camera frame: WriterFailed/{err:?}"
-                                        );
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
-                                    }
-                                    Err(QueueFrameError::Failed) => {
-                                        let message = "Failed to encode camera frame: Failed".to_string();
-                                        set_fatal_error(&video_fatal_error, message.clone());
-                                        return Err(anyhow!(message));
-                                    }
-                                    Err(QueueFrameError::Finished) => return Ok(()),
-                                    Err(e) => {
-                                        warn!("Failed to encode camera frame: {e}");
-                                        break;
                                     }
                                 }
-                            }
 
-                            total_frames += 1;
-                        }
-                        CameraFrameMessage::Pause => {
-                            match encoder_clone.lock() {
+                                total_frames += 1;
+                            }
+                            CameraFrameMessage::Pause => match encoder_clone.lock() {
                                 Ok(mut encoder) => encoder.pause(),
                                 Err(_) => {
                                     let message = "Camera MP4 encoder mutex poisoned".to_string();
                                     set_fatal_error(&video_fatal_error, message.clone());
-                                    return Err(anyhow!(message));
+                                    return EncoderLoopStep::Fatal(message);
                                 }
-                            }
-                        }
-                        CameraFrameMessage::Resume => {
-                            match encoder_clone.lock() {
+                            },
+                            CameraFrameMessage::Resume => match encoder_clone.lock() {
                                 Ok(mut encoder) => encoder.resume(),
                                 Err(_) => {
                                     let message = "Camera MP4 encoder mutex poisoned".to_string();
                                     set_fatal_error(&video_fatal_error, message.clone());
-                                    return Err(anyhow!(message));
+                                    return EncoderLoopStep::Fatal(message);
                                 }
-                            }
+                            },
                         }
+
+                        EncoderLoopStep::Continue
+                    });
+
+                    match step {
+                        EncoderLoopStep::Continue => {}
+                        EncoderLoopStep::Break => break,
+                        EncoderLoopStep::FinishOk => return Ok(()),
+                        EncoderLoopStep::Fatal(message) => return Err(anyhow!(message)),
                     }
                 }
 
@@ -1190,67 +1272,101 @@ impl Muxer for AVFoundationCameraMuxer {
                     let mut encoder_busy_count = 0u64;
 
                     while let Ok(Some(msg)) = audio_rx.recv() {
-                        if let Some(ref depth) = audio_channel_depth_thread {
-                            ChannelPressureTracker::on_recv(depth);
-                        }
-                        if fatal_error_message(&audio_fatal_error).is_some() {
-                            break;
-                        }
+                        let step = cidre::objc::ar_pool(|| {
+                            let msg = msg;
+                            if let Some(ref depth) = audio_channel_depth_thread {
+                                ChannelPressureTracker::on_recv(depth);
+                            }
+                            if fatal_error_message(&audio_fatal_error).is_some() {
+                                return EncoderLoopStep::Break;
+                            }
 
-                        match msg {
-                            AudioFrameMessage::Frame(frame, timestamp) => {
-                                let mut retry_count = 0;
-                                const MAX_RETRIES: u32 = 50;
+                            match msg {
+                                AudioFrameMessage::Frame(frame, timestamp) => {
+                                    let mut retry_count = 0;
+                                    const MAX_RETRIES: u32 = 50;
 
-                                loop {
-                                    let queue_result = {
-                                        let mut encoder = match encoder_clone.lock() {
-                                            Ok(e) => e,
-                                            Err(_) => {
-                                                let message = "Camera MP4 audio encoder mutex poisoned".to_string();
-                                                set_fatal_error(&audio_fatal_error, message.clone());
-                                                return Err(anyhow!(message));
+                                    loop {
+                                        let mut attempt_out = None;
+                                        cidre::objc::ar_pool(|| {
+                                            attempt_out = Some(match encoder_clone.lock() {
+                                                Ok(mut encoder) => encoder
+                                                    .queue_audio_frame(&frame, timestamp)
+                                                    .map_err(Some),
+                                                Err(_) => Err(None),
+                                            });
+                                        });
+
+                                        let queue_result =
+                                            match attempt_out.expect("ar_pool executed") {
+                                                Ok(()) => Ok(()),
+                                                Err(Some(e)) => Err(e),
+                                                Err(None) => {
+                                                    let message =
+                                                        "Camera MP4 audio encoder mutex poisoned"
+                                                            .to_string();
+                                                    set_fatal_error(
+                                                        &audio_fatal_error,
+                                                        message.clone(),
+                                                    );
+                                                    return EncoderLoopStep::Fatal(message);
+                                                }
+                                            };
+
+                                        match queue_result {
+                                            Ok(()) => break,
+                                            Err(QueueFrameError::NotReadyForMore) => {
+                                                retry_count += 1;
+                                                if retry_count >= MAX_RETRIES {
+                                                    encoder_busy_count += 1;
+                                                    break;
+                                                }
+                                                std::thread::sleep(Duration::from_micros(500));
                                             }
-                                        };
-                                        encoder.queue_audio_frame(&frame, timestamp)
-                                    };
-
-                                    match queue_result {
-                                        Ok(()) => break,
-                                        Err(QueueFrameError::NotReadyForMore) => {
-                                            retry_count += 1;
-                                            if retry_count >= MAX_RETRIES {
-                                                encoder_busy_count += 1;
+                                            Err(QueueFrameError::WriterFailed(err)) => {
+                                                let message = format!(
+                                                    "Failed to encode camera audio frame: WriterFailed/{err:?} \
+                                                     (frame #{total_frames}, ts={timestamp:?})"
+                                                );
+                                                set_fatal_error(
+                                                    &audio_fatal_error,
+                                                    message.clone(),
+                                                );
+                                                return EncoderLoopStep::Fatal(message);
+                                            }
+                                            Err(QueueFrameError::Failed) => {
+                                                let message = format!(
+                                                    "Failed to encode camera audio frame: Failed \
+                                                     (frame #{total_frames}, ts={timestamp:?})"
+                                                );
+                                                set_fatal_error(
+                                                    &audio_fatal_error,
+                                                    message.clone(),
+                                                );
+                                                return EncoderLoopStep::Fatal(message);
+                                            }
+                                            Err(QueueFrameError::Finished) => {
+                                                return EncoderLoopStep::FinishOk;
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to encode camera audio frame: {e}");
                                                 break;
                                             }
-                                            std::thread::sleep(Duration::from_micros(500));
-                                        }
-                                        Err(QueueFrameError::WriterFailed(err)) => {
-                                            let message = format!(
-                                                "Failed to encode camera audio frame: WriterFailed/{err:?} \
-                                                 (frame #{total_frames}, ts={timestamp:?})"
-                                            );
-                                            set_fatal_error(&audio_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
-                                        }
-                                        Err(QueueFrameError::Failed) => {
-                                            let message = format!(
-                                                "Failed to encode camera audio frame: Failed \
-                                                 (frame #{total_frames}, ts={timestamp:?})"
-                                            );
-                                            set_fatal_error(&audio_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
-                                        }
-                                        Err(QueueFrameError::Finished) => return Ok(()),
-                                        Err(e) => {
-                                            warn!("Failed to encode camera audio frame: {e}");
-                                            break;
                                         }
                                     }
-                                }
 
-                                total_frames += 1;
+                                    total_frames += 1;
+                                }
                             }
+
+                            EncoderLoopStep::Continue
+                        });
+
+                        match step {
+                            EncoderLoopStep::Continue => {}
+                            EncoderLoopStep::Break => break,
+                            EncoderLoopStep::FinishOk => return Ok(()),
+                            EncoderLoopStep::Fatal(message) => return Err(anyhow!(message)),
                         }
                     }
 

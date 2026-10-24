@@ -952,6 +952,10 @@ impl H264Encoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
+            if unsafe { ffmpeg::ffi::av_frame_make_writable(converted.as_mut_ptr()) } < 0 {
+                *converted =
+                    frame::Video::new(self.output_format, self.output_width, self.output_height);
+            }
             super::convert_or_scale(frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
@@ -973,6 +977,15 @@ impl H264Encoder {
         timestamp: Duration,
         output: &mut format::context::Output,
     ) -> Result<(), QueueFrameError> {
+        self.queue_preconverted_frame_reusable(&mut frame, timestamp, output)
+    }
+
+    pub fn queue_preconverted_frame_reusable(
+        &mut self,
+        frame: &mut frame::Video,
+        timestamp: Duration,
+        output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
         trace!(
             "Encoding pre-converted frame: format={:?}, size={}x{}, expected={:?} {}x{}",
             frame.format(),
@@ -983,11 +996,40 @@ impl H264Encoder {
             self.output_height
         );
 
-        self.base
-            .update_pts(&mut frame, timestamp, &mut self.encoder);
+        self.base.update_pts(frame, timestamp, &mut self.encoder);
 
         self.base
-            .send_frame(&frame, output, &mut self.encoder)
+            .send_frame(frame, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode)?;
+
+        Ok(())
+    }
+
+    pub fn queue_frame_to_reusable<S: PacketSink + ?Sized>(
+        &mut self,
+        frame: &mut frame::Video,
+        timestamp: Duration,
+        output: &mut S,
+    ) -> Result<(), QueueFrameError> {
+        self.base.update_pts(frame, timestamp, &mut self.encoder);
+
+        let frame_to_send = if let Some(converter) = &mut self.converter {
+            let pts = frame.pts();
+            let converted = self.converted_frame_pool.as_mut().unwrap();
+            if unsafe { ffmpeg::ffi::av_frame_make_writable(converted.as_mut_ptr()) } < 0 {
+                *converted =
+                    frame::Video::new(self.output_format, self.output_width, self.output_height);
+            }
+            super::convert_or_scale(frame, converted, converter)
+                .map_err(QueueFrameError::Converter)?;
+            converted.set_pts(pts);
+            converted as &frame::Video
+        } else {
+            frame as &frame::Video
+        };
+
+        self.base
+            .send_frame(frame_to_send, output, &mut self.encoder)
             .map_err(QueueFrameError::Encode)?;
 
         Ok(())
