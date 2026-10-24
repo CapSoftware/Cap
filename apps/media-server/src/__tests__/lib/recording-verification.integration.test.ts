@@ -800,6 +800,30 @@ describe("encoded recording preservation", () => {
 			),
 		).toBe("time base 1/15000 vs 1/90000");
 	});
+	test("keeps the time bases when many tags differ", () => {
+		const summary = (value: string) => ({
+			configuration: {
+				codec_type: "video" as const,
+				start: "0/1",
+				tags: Object.fromEntries(
+					Array.from({ length: 20 }, (_, index) => [
+						`tag_${index}`,
+						`${value}-${"x".repeat(30)}`,
+					]),
+				),
+			},
+			count: 2,
+			packets: value,
+			startTime: 0,
+			tail: undefined,
+		});
+		const explanation = describeTrackDifference(
+			{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+			{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+		);
+		expect(explanation.length).toBeLessThanOrEqual(400);
+		expect(explanation).toStartWith("time base 1/15000 vs 1/90000; tags.tag_0");
+	});
 	test("does not start cancelled packet verification", async () => {
 		const controller = new AbortController();
 		controller.abort();

@@ -352,24 +352,28 @@ export function describeTrackDifference(
 		"summary" | "log" | "timeBase"
 	>,
 ): string {
-	const parts = configurationDifferences(
-		source.summary.configuration as Record<string, unknown>,
-		output.summary.configuration as Record<string, unknown>,
-	);
-	if (source.summary.count !== output.summary.count)
-		parts.push(`packets ${source.summary.count} vs ${output.summary.count}`);
-	if (source.summary.startTime !== output.summary.startTime)
-		parts.push(
-			`start ${source.summary.startTime} vs ${output.summary.startTime}`,
-		);
+	// Short, specific details go first so many changed tags cannot push them past the length cap.
+	const parts: string[] = [];
+	if (source.timeBase !== output.timeBase)
+		parts.push(`time base ${source.timeBase} vs ${output.timeBase}`);
 	if (
 		source.summary.packets !== output.summary.packets &&
 		source.log &&
 		output.log
 	)
 		parts.push(firstPacketDifference(source.log, output.log));
-	if (source.timeBase !== output.timeBase)
-		parts.push(`time base ${source.timeBase} vs ${output.timeBase}`);
+	if (source.summary.count !== output.summary.count)
+		parts.push(`packets ${source.summary.count} vs ${output.summary.count}`);
+	if (source.summary.startTime !== output.summary.startTime)
+		parts.push(
+			`start ${source.summary.startTime} vs ${output.summary.startTime}`,
+		);
+	parts.push(
+		...configurationDifferences(
+			source.summary.configuration as Record<string, unknown>,
+			output.summary.configuration as Record<string, unknown>,
+		),
+	);
 	return parts.join("; ").slice(0, 400) || "track summaries differ";
 }
 
