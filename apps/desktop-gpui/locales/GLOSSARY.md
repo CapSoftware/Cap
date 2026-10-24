@@ -35,6 +35,15 @@ from English, and `cargo test -p cap-i18n-build` fails while any key is missing.
 Menu bar items follow the wording macOS itself uses in each language, so they
 sit naturally next to the items AppKit adds.
 
+Keep the English punctuation style of each string: `...` stays three dots and
+`…` stays one character, because both appear in the source. Duration units
+follow each language (`~45 s`, `~2 Min.`, `約2分`). Mode names in sentences use
+the language's word for "mode" around the product name (mode Instant,
+Instant-Modus, Instantモード).
+
+Error messages that end in `{error}` show a technical message from the
+recording engine, which stays in English.
+
 ## Terms
 
 | English | zh-CN | ja | fr | es | de | hi |
@@ -61,13 +70,25 @@ sit naturally next to the items AppKit adds.
 | self-host | 自托管 | セルフホスト | auto-hébergement | alojamiento propio | selbst hosten | सेल्फ़-होस्ट |
 | System default | 跟随系统 | システムのデフォルト | langue du système | predeterminado del sistema | Systemstandard | सिस्टम डिफ़ॉल्ट |
 | Recommended | 推荐 | 推奨 | recommandé | recomendado | empfohlen | सुझाया गया |
+| Instant Mode | Instant 模式 | Instantモード | mode Instant | modo Instant | Instant-Modus | Instant मोड |
+| Screenshot Mode | 截图模式 | スクリーンショットモード | mode Capture d'écran | modo Captura de pantalla | Bildschirmfoto-Modus | स्क्रीनशॉट मोड |
+| System Settings (macOS app) | 系统设置 | システム設定 | Réglages Système | Ajustes del Sistema | Systemeinstellungen | सिस्टम सेटिंग्स |
+| Allow (macOS prompt button) | 允许 | 許可 | Autoriser | Permitir | Erlauben | अनुमति दें |
+| shareable link | 分享链接 | 共有リンク | lien de partage | enlace para compartir | Link zum Teilen | शेयर करने लायक लिंक |
+| clip | 片段 | クリップ | clip | clip | Clip | क्लिप |
+| segment (of a recording) | 分段 | セグメント | segment | segmento | Segment | सेगमेंट |
+| recover / discard | 恢复 / 丢弃 | 復元 / 破棄 | récupérer / supprimer | recuperar / descartar | wiederherstellen / verwerfen | रिकवर करें / हटाएँ |
+| Personal / Commercial plan | 个人版 / 商业版 | 個人 / 商用 | Personnel / Commercial | Personal / Comercial | Privat / Kommerziell | पर्सनल / कमर्शियल |
 
 ## Fitting the UI
 
-Keys with `max_px` in `en.toml` sit in fixed-width spots (the settings sidebar,
-select buttons). `translations_fit_their_width_budgets` measures every catalog's
-text for those keys with the bundled Geist and fails above 92% of the budget.
-Prefer a shorter natural phrase over an abbreviation when that happens.
+Keys with `max_px` in `en.toml` sit in fixed-width spots: the settings sidebar,
+select buttons, the main window's capture tiles, device rows and status pills,
+and the recording controls' stop label. `translations_fit_their_width_budgets`
+measures every catalog's text for those keys with the bundled Geist and fails
+above 92% of the budget, or above the English width where English is already
+wider (the controls' `Resuming…`). Prefer a shorter natural phrase over an
+abbreviation when that happens.
 
 ## Adding a language
 
