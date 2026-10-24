@@ -764,6 +764,14 @@ settings_enum! {
 }
 
 settings_enum! {
+    OpenFileBehaviour {
+        OpenFile = "openFile", "Open the file";
+        ShowInFolder = "showInFolder", "Show in folder";
+    }
+    default = OpenFile
+}
+
+settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
         Compatibility = "compatibility", "Compatibility";
@@ -999,6 +1007,7 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
     pub theme: AppTheme,
+    pub open_file_behaviour: OpenFileBehaviour,
     pub hide_dock_icon: bool,
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
@@ -1329,6 +1338,7 @@ impl GeneralSettings {
     ) -> Self {
         Self {
             theme: enum_at(general, "theme"),
+            open_file_behaviour: enum_at(general, "openFileBehaviour"),
             hide_dock_icon: bool_at(general, "hideDockIcon", false),
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
@@ -3158,5 +3168,43 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    #[test]
+    fn open_file_behaviour_defaults_for_old_settings() {
+        let general = serde_json::from_str(r#"{"theme":"dark","maxFps":30}"#).unwrap();
+        let settings = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
+        assert_eq!(settings.open_file_behaviour, OpenFileBehaviour::OpenFile);
+        assert_eq!(settings.theme, AppTheme::Dark);
+        assert_eq!(
+            GeneralSettings::default().open_file_behaviour,
+            OpenFileBehaviour::OpenFile
+        );
+    }
+
+    #[test]
+    fn open_file_behaviour_persists_across_store_reloads() {
+        let store = TempStore::new(
+            "open-file-behaviour",
+            Some(r#"{"general_settings":{"theme":"dark"}}"#),
+        );
+        assert_eq!(
+            GeneralSettings::load().open_file_behaviour,
+            OpenFileBehaviour::OpenFile
+        );
+        for (behaviour, json) in [
+            (OpenFileBehaviour::ShowInFolder, "showInFolder"),
+            (OpenFileBehaviour::OpenFile, "openFile"),
+        ] {
+            assert_eq!(behaviour.as_json(), json);
+            assert!(set_store_setting(
+                GENERAL_SETTINGS,
+                "openFileBehaviour",
+                Value::String(behaviour.as_json().into())
+            ));
+            assert_eq!(store.read()[GENERAL_SETTINGS]["openFileBehaviour"], json);
+            assert_eq!(GeneralSettings::load().open_file_behaviour, behaviour);
+            assert_eq!(GeneralSettings::load().theme, AppTheme::Dark);
+        }
     }
 }

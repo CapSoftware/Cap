@@ -3235,6 +3235,20 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
+                        "Open File behavior",
+                        Some("Choose what Open File does for completed exports."),
+                        self.segmented(
+                            "open-file-behaviour",
+                            self.settings.open_file_behaviour,
+                            cx,
+                            |this, value, cx| {
+                                this.settings.open_file_behaviour = value;
+                                this.write_enum("openFileBehaviour", value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
                         "System notifications",
                         Some(
                             "Show notifications for clipboard copies, saved files, and more. \
