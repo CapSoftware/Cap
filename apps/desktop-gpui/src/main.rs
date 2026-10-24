@@ -378,7 +378,7 @@ fn main() {
                         ..Default::default()
                     }),
                     #[cfg(target_os = "linux")]
-                    app_id: Some("Cap".into()),
+                    app_id: Some(crate::app_windows::APP_ID.into()),
                     #[cfg(target_os = "linux")]
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
