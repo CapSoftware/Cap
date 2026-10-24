@@ -57,6 +57,8 @@ use gpui::{
 };
 use serde_json::Value;
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     camera_loading,
     feeds::Feeds,
@@ -735,22 +737,51 @@ fn awaiting_camera_access(cx: &gpui::App) -> bool {
 fn camera_issue(error: &str) -> (&'static str, &'static str) {
     if error.contains("access is unavailable") {
         return (
-            "Camera access needed",
-            "Click to allow Cap to use your camera in System Settings.",
+            tr::camera::issue::access_title(),
+            tr::camera::issue::access_message(),
         );
     }
     let message = if error.contains("DeviceNotFound") {
-        "This camera is no longer available. Check that it is connected and allowed by system permissions."
+        tr::camera::issue::not_found()
     } else if error.contains("CameraTimeout") {
-        "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app."
+        tr::camera::issue::timeout()
     } else if error.contains("StartCapturing") {
-        "The system could not start this camera. It may be unavailable or in use by another app."
+        tr::camera::issue::start_failed()
     } else if error.contains("InvalidFormat") {
-        "This camera did not report a usable capture format."
+        tr::camera::issue::invalid_format()
     } else {
-        "The selected camera could not be started. Choose another camera or reconnect this one."
+        tr::camera::issue::generic()
     };
-    ("Camera unavailable", message)
+    (tr::camera::issue::unavailable_title(), message)
+}
+
+/// Which preview effect failed. Kept instead of its text so the overlay reads
+/// the current language when it renders.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectIssue {
+    Mirror,
+    Blur,
+    Both,
+}
+
+impl EffectIssue {
+    fn text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Mirror => (
+                tr::camera::effects::mirror_title(),
+                tr::camera::effects::mirror_message(),
+            ),
+            Self::Blur => (
+                tr::camera::effects::blur_title(),
+                tr::camera::effects::blur_message(),
+            ),
+            Self::Both => (
+                tr::camera::effects::both_title(),
+                tr::camera::effects::both_message(),
+            ),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -762,15 +793,12 @@ struct PreviewEffectFailures {
 
 #[cfg(target_os = "macos")]
 impl PreviewEffectFailures {
-    fn issue(self) -> Option<(&'static str, &'static str)> {
+    fn issue(self) -> Option<EffectIssue> {
         match (self.mirror, self.blur) {
             (false, false) => None,
-            (true, false) => Some(("Mirror unavailable", "Your camera preview is not mirrored.")),
-            (false, true) => Some(("Background blur unavailable", "Your camera is unblurred.")),
-            (true, true) => Some((
-                "Camera effects unavailable",
-                "Your camera is unblurred and not mirrored.",
-            )),
+            (true, false) => Some(EffectIssue::Mirror),
+            (false, true) => Some(EffectIssue::Blur),
+            (true, true) => Some(EffectIssue::Both),
         }
     }
 
@@ -798,6 +826,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("not mirrored")
         );
@@ -808,6 +837,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("unblurred")
         );
@@ -818,6 +848,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("unblurred and not mirrored")
         );
@@ -1012,6 +1043,7 @@ struct CameraPreviewView {
     reveal_started: Option<Instant>,
     loading_started: Option<Instant>,
     loading_fade_started: Option<Instant>,
+    loading_redraw: camera_loading::LoadingRedraw,
     retained_invalidated: bool,
     selection_revision: u64,
     frame_revision: Option<u64>,
@@ -1024,7 +1056,7 @@ struct CameraPreviewView {
     /// ~20Hz whenever a microphone is selected, and each of those would
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
-    effect_issue: Option<(&'static str, &'static str)>,
+    effect_issue: Option<EffectIssue>,
     awaiting_access: bool,
     _feeds_subscription: Subscription,
     _access_subscription: Subscription,
@@ -1118,6 +1150,7 @@ impl CameraPreviewView {
             reveal_started: None,
             loading_started: None,
             loading_fade_started: None,
+            loading_redraw: camera_loading::LoadingRedraw::default(),
             retained_invalidated: false,
             selection_revision: 0,
             frame_revision: None,
@@ -1338,7 +1371,12 @@ impl Render for CameraPreviewView {
 
         if let Some((started, opacity, animate)) = loading {
             container = container.child(camera_loading::camera_loading(
-                started, radius, opacity, animate, !has_issue,
+                started,
+                radius,
+                opacity,
+                animate,
+                !has_issue,
+                self.loading_redraw.clone(),
             ));
         }
 
@@ -1354,11 +1392,13 @@ impl Render for CameraPreviewView {
             .camera_error
             .as_deref()
             .map(camera_issue)
-            .or(self.effect_issue)
-            .or(awaiting_access.then_some((
-                "Waiting for camera access",
-                "Choose Allow in the macOS prompt.",
-            )))
+            .or(self.effect_issue.map(EffectIssue::text))
+            .or(awaiting_access.then(|| {
+                (
+                    tr::camera::waiting_title(),
+                    tr::common::choose_allow_prompt(),
+                )
+            }))
         {
             let metrics = overlay_metrics(self.size);
             container = container.child(
@@ -2757,6 +2797,7 @@ impl Render for CameraWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and

@@ -44,9 +44,15 @@ const env = vi.hoisted(() => ({
 	GOOGLE_CLIENT_ID: "google-client",
 	GOOGLE_CLIENT_SECRET: "google-secret",
 	NEXTAUTH_SECRET: "next-auth-secret",
+	OIDC_ISSUER: undefined as string | undefined,
+	OIDC_CLIENT_ID: undefined as string | undefined,
+	OIDC_CLIENT_SECRET: undefined as string | undefined,
 	RESEND_API_KEY: undefined,
 	WORKOS_API_KEY: "workos-secret",
 	WORKOS_CLIENT_ID: "workos-client",
+	TRUSTED_PROXY_AUTH_HEADER: undefined as string | undefined,
+	TRUSTED_PROXY_AUTH_EMAIL: undefined as string | undefined,
+	TRUSTED_PROXY_AUTH_SECRET: undefined as string | undefined,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -105,14 +111,29 @@ function callbacksFor(options: NextAuthOptions) {
 	return { signIn, jwt };
 }
 
+// next-auth keeps a Credentials provider's custom id in `options` until it
+// merges providers at runtime, so read it from there when present.
+function providerIds(options: NextAuthOptions) {
+	return options.providers.map(
+		(provider) =>
+			(provider.options as { id?: string } | undefined)?.id ?? provider.id,
+	);
+}
+
 describe("authOptions", () => {
 	beforeEach(() => {
 		env.APPLE_CLIENT_ID = "so.cap.auth";
 		env.APPLE_CLIENT_SECRET = "apple-secret";
 		env.WORKOS_CLIENT_ID = "workos-client";
 		env.WORKOS_API_KEY = "workos-secret";
+		env.OIDC_ISSUER = undefined;
+		env.OIDC_CLIENT_ID = undefined;
+		env.OIDC_CLIENT_SECRET = undefined;
 		env.CAP_ALLOWED_SIGNUP_DOMAINS = undefined;
 		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
+		env.TRUSTED_PROXY_AUTH_HEADER = undefined;
+		env.TRUSTED_PROXY_AUTH_EMAIL = undefined;
+		env.TRUSTED_PROXY_AUTH_SECRET = undefined;
 		mocks.validate.mockReset().mockResolvedValue(IDENTITY);
 		mocks.provision.mockReset().mockResolvedValue(undefined);
 		mocks.adapter.mockClear();
@@ -166,6 +187,229 @@ describe("authOptions", () => {
 			).not.toContain("workos");
 		},
 	);
+
+	it("enables trusted-proxy sign-in when header, email and secret are configured", () => {
+		env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+		env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+		env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+
+		expect(providerIds(authOptions())).toContain("trusted-proxy");
+	});
+
+	it("does not expose trusted-proxy sign-in by default", () => {
+		expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+	});
+
+	it.each([
+		"TRUSTED_PROXY_AUTH_HEADER",
+		"TRUSTED_PROXY_AUTH_EMAIL",
+		"TRUSTED_PROXY_AUTH_SECRET",
+	] as const)(
+		"does not expose a partially configured trusted-proxy provider when %s is missing",
+		(key) => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+			env[key] = undefined;
+
+			expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+		},
+	);
+
+	it.each([undefined, "", "   "])(
+		"does not register trusted-proxy with only header/email and an unusable secret (%s)",
+		(secret) => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = secret;
+
+			expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+		},
+	);
+
+	it.each([undefined, "proxy-secret"])(
+		"preserves independent OIDC sign-in and its verified-email gate with proxy secret %s",
+		async (secret) => {
+			env.OIDC_ISSUER = "https://idp.example";
+			env.OIDC_CLIENT_ID = "oidc-client";
+			env.OIDC_CLIENT_SECRET = "oidc-secret";
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = secret;
+			const options = authOptions();
+			expect(providerIds(options)).toContain("oidc");
+			expect(providerIds(options).includes("trusted-proxy")).toBe(!!secret);
+			const { signIn } = callbacksFor(options);
+			const account: Account = {
+				provider: "oidc",
+				providerAccountId: "oidc-user",
+				type: "oauth",
+			};
+			for (const email_verified of [undefined, false, true]) {
+				const profile = { email: PROFILE.email, email_verified };
+				await expect(
+					signIn({
+						user: AUTHENTICATED_USER,
+						account,
+						profile,
+					}),
+				).resolves.toBe(
+					email_verified === true ? true : "/login?error=OidcEmailUnverified",
+				);
+			}
+		},
+	);
+
+	describe("trusted-proxy authorize", () => {
+		type Authorize = (
+			credentials: Record<string, string> | undefined,
+			req: { headers?: Record<string, string> },
+		) => Promise<unknown>;
+
+		function trustedProxyAuthorize() {
+			const options = authOptions();
+			const provider = options.providers[
+				providerIds(options).indexOf("trusted-proxy")
+			] as { options?: { authorize?: Authorize } } | undefined;
+			const authorize = provider?.options?.authorize;
+			if (!authorize) throw new Error("trusted-proxy provider is missing");
+			return authorize;
+		}
+
+		beforeEach(() => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "X-OpenHost-Is-Owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = "Alex@Company.example";
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+		});
+
+		const validHeaders = {
+			"x-openhost-is-owner": "true",
+			"x-trusted-proxy-secret": "proxy-secret",
+		};
+
+		it("signs in the configured user when the proxy sets both headers", async () => {
+			await expect(
+				trustedProxyAuthorize()({}, { headers: validHeaders }),
+			).resolves.toMatchObject({
+				id: AUTHENTICATED_USER.id,
+				email: AUTHENTICATED_USER.email,
+			});
+		});
+
+		it.each([
+			["header is absent", { "x-trusted-proxy-secret": "proxy-secret" }],
+			[
+				"header is not exactly 'true'",
+				{ ...validHeaders, "x-openhost-is-owner": "1" },
+			],
+		])("fails closed when the %s", async (_label, headers) => {
+			await expect(
+				trustedProxyAuthorize()({}, { headers }),
+			).resolves.toBeNull();
+			expect(mocks.select).not.toHaveBeenCalled();
+		});
+
+		it("fails closed when the configured user does not exist", async () => {
+			env.TRUSTED_PROXY_AUTH_EMAIL = "nobody@company.example";
+
+			await expect(
+				trustedProxyAuthorize()({}, { headers: validHeaders }),
+			).resolves.toBeNull();
+			expect(mocks.select).toHaveBeenCalledOnce();
+		});
+
+		it.each([undefined, "", "   "])(
+			"fails closed if the configured secret becomes unusable after registration (%s)",
+			async (secret) => {
+				const authorize = trustedProxyAuthorize();
+				env.TRUSTED_PROXY_AUTH_SECRET = secret;
+				await expect(
+					authorize({}, { headers: validHeaders }),
+				).resolves.toBeNull();
+				expect(mocks.select).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([undefined, "", "wrong", "x".repeat(1024), ["proxy-secret"]])(
+			"rejects missing, empty, incorrect or malformed request secrets (%s)",
+			async (secret) => {
+				await expect(
+					trustedProxyAuthorize()(
+						{},
+						{
+							headers: {
+								...validHeaders,
+								"x-trusted-proxy-secret": secret,
+							} as Record<string, string>,
+						},
+					),
+				).resolves.toBeNull();
+				expect(mocks.select).not.toHaveBeenCalled();
+			},
+		);
+
+		it("rejects requests without headers", async () => {
+			await expect(trustedProxyAuthorize()({}, {})).resolves.toBeNull();
+			expect(mocks.select).not.toHaveBeenCalled();
+		});
+
+		it("always requires the shared secret", async () => {
+			const authorize = trustedProxyAuthorize();
+
+			await expect(
+				authorize({}, { headers: { "x-openhost-is-owner": "true" } }),
+			).resolves.toBeNull();
+			await expect(
+				authorize(
+					{},
+					{
+						headers: {
+							"x-openhost-is-owner": "true",
+							"x-trusted-proxy-secret": "wrong",
+						},
+					},
+				),
+			).resolves.toBeNull();
+			await expect(
+				authorize(
+					{},
+					{
+						headers: {
+							"x-openhost-is-owner": "true",
+							"x-trusted-proxy-secret": "proxy-secret",
+						},
+					},
+				),
+			).resolves.toMatchObject({ id: AUTHENTICATED_USER.id });
+		});
+	});
+
+	// authOptions() is rebuilt on every session lookup, so a per-instance
+	// warning would log on every authenticated request.
+	it("warns about trusted-proxy sign-in once per process", async () => {
+		vi.resetModules();
+		const { authOptions: freshAuthOptions } = await import(
+			"@cap/database/auth/auth-options"
+		);
+		env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+		env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		try {
+			void freshAuthOptions().providers;
+			expect(warn).not.toHaveBeenCalled();
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+			for (let i = 0; i < 3; i++) void freshAuthOptions().providers;
+
+			expect(
+				warn.mock.calls.filter(([message]) =>
+					String(message).includes("trusted-proxy sign-in is ENABLED"),
+				),
+			).toHaveLength(1);
+		} finally {
+			warn.mockRestore();
+		}
+	});
 
 	// Without an explicit maxAge next-auth falls back to 24 hours, which is far
 	// too long for a 6-digit code and contradicts what the OTP email tells users.

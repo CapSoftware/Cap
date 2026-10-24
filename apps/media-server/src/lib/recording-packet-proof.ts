@@ -203,10 +203,184 @@ export async function readRecordingAudioTail(
 	}
 }
 
+function seconds(rational: string): number {
+	const [numerator, denominator] = rational.split("/").map(Number);
+	return numerator / denominator;
+}
+
+// A compact per-packet record, kept only so a failed proof can say which packet differs.
+class PacketLog {
+	private capacity = 1024;
+	length = 0;
+	private pts = new Float64Array(this.capacity);
+	private dts = new Float64Array(this.capacity);
+	private sizes = new Uint32Array(this.capacity);
+	private hashes = new Uint32Array(this.capacity);
+	private keyframes = new Uint8Array(this.capacity);
+
+	push(
+		pts: string,
+		dts: string,
+		flags: string | undefined,
+		size: string,
+		dataHash: string,
+	) {
+		if (this.length === this.capacity) {
+			this.capacity *= 2;
+			const grow = <T extends Float64Array | Uint32Array | Uint8Array>(
+				array: T,
+			) => {
+				const next = new (array.constructor as new (length: number) => T)(
+					this.capacity,
+				);
+				next.set(array);
+				return next;
+			};
+			this.pts = grow(this.pts);
+			this.dts = grow(this.dts);
+			this.sizes = grow(this.sizes);
+			this.hashes = grow(this.hashes);
+			this.keyframes = grow(this.keyframes);
+		}
+		this.pts[this.length] = seconds(pts);
+		this.dts[this.length] = seconds(dts);
+		this.sizes[this.length] = Number(size);
+		this.hashes[this.length] = Number.parseInt(dataHash.slice(7, 15), 16);
+		this.keyframes[this.length] =
+			(flags?.includes("K") ? 1 : 0) | (flags?.includes("D") ? 2 : 0);
+		this.length++;
+	}
+
+	at(index: number) {
+		return {
+			pts: this.pts[index],
+			dts: this.dts[index],
+			size: this.sizes[index],
+			data: this.hashes[index],
+			flags: this.keyframes[index],
+		};
+	}
+}
+
+function firstPacketDifference(source: PacketLog, output: PacketLog) {
+	const shared = Math.min(source.length, output.length);
+	for (let index = 0; index < shared; index++) {
+		const left = source.at(index);
+		const right = output.at(index);
+		const fields = (Object.keys(left) as (keyof typeof left)[]).filter(
+			(key) => left[key] !== right[key],
+		);
+		if (fields.length === 0) continue;
+		const show = (key: keyof typeof left, value: number) =>
+			key === "pts" || key === "dts" ? value.toFixed(6) : String(value);
+		return `first difference at packet ${index}: ${fields
+			.map((key) =>
+				key === "data"
+					? "data differs"
+					: `${key} ${show(key, left[key])} vs ${show(key, right[key])}`,
+			)
+			.join(", ")}`;
+	}
+	if (source.length !== output.length)
+		return `packet ${shared} exists only in the ${source.length > output.length ? "source" : "output"}`;
+	return "packet proof differs, but the compact packet log did not capture the difference";
+}
+
+const MISMATCH_EXPLANATION_TIMEOUT_MS = 20_000;
+
+// Packet logs are only collected in this second read, after a mismatch, so passing recordings pay nothing.
+async function explainTrackMismatch(
+	sourcePath: string,
+	outputPath: string,
+	kind: "video" | "audio",
+	signal: AbortSignal,
+): Promise<string> {
+	// Bounded so explaining a mismatch cannot run the verification into its deadline and hide the mismatch.
+	const explainSignal = AbortSignal.any([
+		signal,
+		AbortSignal.timeout(MISMATCH_EXPLANATION_TIMEOUT_MS),
+	]);
+	try {
+		const [source, output] = await Promise.all([
+			readTrack(sourcePath, kind, explainSignal, true),
+			readTrack(outputPath, kind, explainSignal, true),
+		]);
+		return describeTrackDifference(source, output);
+	} catch {
+		return "details unavailable";
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function configurationDifferences(
+	left: Record<string, unknown>,
+	right: Record<string, unknown>,
+	path = "",
+): string[] {
+	const parts: string[] = [];
+	const value = (raw: unknown) => {
+		const text = JSON.stringify(raw) ?? "none";
+		return text.length > 40 ? `${text.slice(0, 37)}...` : text;
+	};
+	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+		if (JSON.stringify(left[key]) === JSON.stringify(right[key])) continue;
+		const [a, b] = [left[key], right[key]];
+		if (!path && (isRecord(a) || isRecord(b)))
+			parts.push(
+				...configurationDifferences(
+					isRecord(a) ? a : {},
+					isRecord(b) ? b : {},
+					`${key}.`,
+				),
+			);
+		else parts.push(`${path}${key} ${value(a)} vs ${value(b)}`);
+	}
+	return parts;
+}
+
+export function describeTrackDifference(
+	source: Pick<
+		Awaited<ReturnType<typeof readTrack>>,
+		"summary" | "log" | "timeBase"
+	>,
+	output: Pick<
+		Awaited<ReturnType<typeof readTrack>>,
+		"summary" | "log" | "timeBase"
+	>,
+): string {
+	// Short, specific details go first so many changed tags cannot push them past the length cap.
+	const parts: string[] = [];
+	if (source.timeBase !== output.timeBase)
+		parts.push(`time base ${source.timeBase} vs ${output.timeBase}`);
+	if (
+		source.summary.packets !== output.summary.packets &&
+		source.log &&
+		output.log
+	)
+		parts.push(firstPacketDifference(source.log, output.log));
+	if (source.summary.count !== output.summary.count)
+		parts.push(`packets ${source.summary.count} vs ${output.summary.count}`);
+	if (source.summary.startTime !== output.summary.startTime)
+		parts.push(
+			`start ${source.summary.startTime} vs ${output.summary.startTime}`,
+		);
+	parts.push(
+		...configurationDifferences(
+			source.summary.configuration as Record<string, unknown>,
+			output.summary.configuration as Record<string, unknown>,
+		),
+	);
+	return parts.join("; ").slice(0, 400) || "track summaries differ";
+}
+
 async function readTrack(
 	path: string,
 	kind: "video" | "audio",
 	signal: AbortSignal,
+	keepLog = false,
 ) {
 	if (!isAbsolute(path) || !(await lstat(path)).isFile())
 		throw new Error("Recording packet proof requires local regular files");
@@ -250,9 +424,17 @@ async function readTrack(
 		!/^SHA256:[a-f0-9]{64}$/.test(stream.extradata_hash)
 	)
 		throw new Error("Recording codec configuration is incomplete");
-	const { index, time_base: base, start_pts: startPts, ...rest } = stream;
+	const { index, time_base: base, start_pts: startPts, tags, ...rest } = stream;
+	// Remuxing a fragmented source into a regular MP4 drops its track creation_time, which is
+	// container metadata rather than anything in the encoded stream.
+	const { creation_time: _creationTime, ...keptTags } =
+		tags && typeof tags === "object" ? (tags as Record<string, unknown>) : {};
 	const start = time(String(startPts), base);
-	const configuration = { ...rest, start };
+	const configuration = {
+		...rest,
+		...(Object.keys(keptTags).length > 0 ? { tags: keptTags } : {}),
+		start,
+	};
 	const [startNumerator, startDenominator] = start.split("/").map(Number);
 	const startTime = startNumerator / startDenominator;
 	if (!Number.isFinite(startTime))
@@ -260,6 +442,7 @@ async function readTrack(
 	const tail =
 		kind === "audio" ? await readRecordingAudioTail(path, signal) : undefined;
 	const hash = createHash("sha256");
+	const log = keepLog ? new PacketLog() : undefined;
 	let count = 0;
 	let pendingPacket: Record<string, string> | undefined;
 	const commitPacket = (fields: Record<string, string>, nextDts?: string) => {
@@ -314,6 +497,13 @@ async function readTrack(
 			throw new Error(
 				"Recording audio tail does not match its packet inventory",
 			);
+		log?.push(
+			time(pts, base),
+			time(dts, base),
+			packetFlags,
+			content.size ?? "0",
+			content.data_hash ?? "",
+		);
 		// Interior timing is bound by PTS/DTS; stored terminal durations are compared separately.
 		hash.update(
 			JSON.stringify({
@@ -366,7 +556,17 @@ async function readTrack(
 	);
 	if (pendingPacket) commitPacket(pendingPacket);
 	if (!count) throw new Error("Recording stream contains no packets");
-	return { configuration, count, packets: hash.digest("hex"), startTime, tail };
+	return {
+		summary: {
+			configuration,
+			count,
+			packets: hash.digest("hex"),
+			startTime,
+			tail,
+		},
+		log,
+		timeBase: base,
+	};
 }
 
 export async function proveRecordingPackets(
@@ -381,41 +581,62 @@ export async function proveRecordingPackets(
 	const before = await Promise.all(
 		paths.map((path) => lstat(path, { bigint: true })),
 	);
-	const sourceTiming = await readRecordingVideoTiming(videoPath, {
-		abortSignal: signal,
-		timeoutMs: 45 * 60_000,
-	});
-	if (sourceTiming.terminalPacketCount !== 1)
-		throw new Error("Tied terminal samples require decoded source evidence");
-	const sourceVideo = await readTrack(videoPath, "video", signal);
-	const outputVideo = await readTrack(outputPath, "video", signal);
-	if (JSON.stringify(sourceVideo) !== JSON.stringify(outputVideo))
-		throw new RecordingPacketMismatchError(
-			"Recording encoded video does not preserve the source",
-		);
-	if (audioPath) {
-		const { tail: sourceTail, ...sourceAudio } = await readTrack(
-			audioPath,
-			"audio",
-			signal,
-		);
-		const { tail: outputTail, ...outputAudio } = await readTrack(
-			outputPath,
-			"audio",
-			signal,
-		);
-		if (JSON.stringify(sourceAudio) !== JSON.stringify(outputAudio))
+	// Every read below is independent and the files are pinned by `before`, so
+	// run them together and still check their results in the original order.
+	const reads = new AbortController();
+	const readSignal = AbortSignal.any([signal, reads.signal]);
+	const settled = <T>(promise: Promise<T>) => {
+		promise.catch(() => {});
+		return promise;
+	};
+	const timingOptions = { abortSignal: readSignal, timeoutMs: 45 * 60_000 };
+	const sourceTimingRead = settled(
+		readRecordingVideoTiming(videoPath, timingOptions),
+	);
+	const sourceVideoRead = settled(readTrack(videoPath, "video", readSignal));
+	const outputVideoRead = settled(readTrack(outputPath, "video", readSignal));
+	const sourceAudioRead = audioPath
+		? settled(readTrack(audioPath, "audio", readSignal))
+		: null;
+	const outputAudioRead = audioPath
+		? settled(readTrack(outputPath, "audio", readSignal))
+		: null;
+	const outputTimingRead = settled(
+		readRecordingVideoTiming(outputPath, timingOptions),
+	);
+	let sourceTiming: Awaited<typeof sourceTimingRead>;
+	let outputTiming: Awaited<typeof outputTimingRead>;
+	let sourceVideo: Awaited<typeof sourceVideoRead>["summary"];
+	let outputVideo: Awaited<typeof outputVideoRead>["summary"];
+	try {
+		sourceTiming = await sourceTimingRead;
+		if (sourceTiming.terminalPacketCount !== 1)
+			throw new Error("Tied terminal samples require decoded source evidence");
+		sourceVideo = (await sourceVideoRead).summary;
+		outputVideo = (await outputVideoRead).summary;
+		if (JSON.stringify(sourceVideo) !== JSON.stringify(outputVideo))
 			throw new RecordingPacketMismatchError(
-				"Recording encoded audio does not preserve the source",
+				`Recording encoded video does not preserve the source (${await explainTrackMismatch(videoPath, outputPath, "video", signal)})`,
 			);
-		// MP4 edit-list rounding can change the reported AAC tail without changing decoded samples.
-		if (sourceTail?.duration !== outputTail?.duration)
-			throw new Error("Recording audio tail requires decoded source evidence");
+		if (audioPath && sourceAudioRead && outputAudioRead) {
+			const { tail: sourceTail, ...sourceAudio } = (await sourceAudioRead)
+				.summary;
+			const { tail: outputTail, ...outputAudio } = (await outputAudioRead)
+				.summary;
+			if (JSON.stringify(sourceAudio) !== JSON.stringify(outputAudio))
+				throw new RecordingPacketMismatchError(
+					`Recording encoded audio does not preserve the source (${await explainTrackMismatch(audioPath, outputPath, "audio", signal)})`,
+				);
+			// MP4 edit-list rounding can change the reported AAC tail without changing decoded samples.
+			if (sourceTail?.duration !== outputTail?.duration)
+				throw new Error(
+					"Recording audio tail requires decoded source evidence",
+				);
+		}
+		outputTiming = await outputTimingRead;
+	} finally {
+		reads.abort();
 	}
-	const outputTiming = await readRecordingVideoTiming(outputPath, {
-		abortSignal: signal,
-		timeoutMs: 45 * 60_000,
-	});
 	const normalizeTiming = (timing: typeof sourceTiming) => ({
 		packets: timing.packetTimelineSha256,
 		terminalPackets: timing.terminalPacketCount,

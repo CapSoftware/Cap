@@ -113,40 +113,11 @@ link = ""
 
 
 [[xfail]]
-case = "export/instant-gated-*mic*/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (33.3 ms at 30 fps; 12.6 to 17.2 ms measured with the gate opening between frames)"
-link = ""
-
-[[xfail]]
-case = "export/instant-gated-system-*/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (12.2 to 15.1 ms measured)"
-link = ""
-
-[[xfail]]
 case = "export/instant-gated-system-only/output/mp4/native"
 class = "audio-system"
 flaky = true
 bound = { count = 1, missing = 2, lost = 2 }
 reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early). Bound: at most 2 markers lost, none unexpected"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late after the start gate (14.2 to 15.3 ms measured)"
-link = ""
-
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34], mic-offset-ms = [5, 34], system-minus-mic-ms = [-1, 1] }
-reason = "NEW: the mixer places system audio on the microphone's timeline (system minus mic 0 ms), so it shares the gated mic offset of the sync-mic entry above (13.3 to 15.4 ms measured)"
 link = ""
 
 [[xfail]]
@@ -318,46 +289,15 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38845236912"
 
 # First picture after a static screen. During a scripted hold ScreenCaptureKit
 # delivers only Idle status buffers; its first Complete frame after the hold
-# arrives 70 to 82 ms after the new picture was presented (steady state 23 to
-# 31 ms after each present), and it already shows the next picture. Frame-level
-# logs (run 38745219281, macos-15: every SCK screen buffer with its
-# SCStreamFrameInfoStatus, every Cap send, every mux call) show 0 Complete
-# frames between the post-hold picture and the next one, and 1797 Complete
-# frames = 1797 Cap sends = 1797 mux calls: the picture never reaches Cap's
-# capture callback and Cap drops nothing. The stimulus presents through the
-# standard Core Animation path, so a user's first change after a static screen
-# is affected the same way: it is recorded ~50 to 80 ms late and anything
-# shown for less than that is lost. Whether a given post-hold picture is lost
-# depends on whether the 70 to 82 ms resume outlasts that picture, so the
-# entries are bounded by the number of holds. Blacksmith VMs resume in time
-# (these cases pass there), so the entries apply to hosted runners and
-# developer Macs only (hosts).
-
-[[xfail]]
-case = "recording/studio-screen/mp4-holds"
-class = "missing-after-hold"
-platforms = ["macos"]
-hosts = ["github-hosted", "local"]
-bound = { count = 3, screen-pictures = 3 }
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 20 fps picture after each of the 3 holds is never delivered by ScreenCaptureKit (first Complete frame 80 to 82 ms after it was presented); runners 18 of 18 holds in 6 runs. Bound: one picture per hold"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-
-[[xfail]]
-case = "recording/instant/long-holds"
-class = "missing-after-hold"
-platforms = ["macos"]
-flaky = true
-hosts = ["github-hosted", "local"]
-bound = { count = 2, screen-pictures = 2 }
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after a hold is never delivered when the resume takes longer than its 67 ms (first Complete frame 70 to 74 ms after it was presented); runners: hold at 6 s 6 of 6 runs, hold at 18 s 4 of 6. Flaky: when ScreenCaptureKit happens to resume within the picture's 67 ms both pictures are caught (fix-video-timestamps track). Bound: one picture per hold (2 holds)"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-
-[[xfail]]
-case = "recording/studio-camera/long"
-class = "missing-after-hold"
-platforms = ["macos"]
-flaky = true
-hosts = ["github-hosted", "local"]
-bound = { count = 1, screen-pictures = 1 }
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
+# can arrive 70 to 82 ms after the new picture was presented (steady state 23
+# to 31 ms after each present), when it already shows the next picture.
+# Frame-level logs (run 38745219281, macos-15) showed the picture never
+# reaches Cap's capture callback and Cap drops nothing. GitHub-hosted runners
+# and developer Macs resume that late, and Blacksmith VMs have since about
+# 2026-10-23 22:00 UTC (runs 40054572525 and 40056780767). No xfail covers
+# it: the suite excuses a post-hold picture only when the stimulus's own
+# ScreenCaptureKit stream also received no frame while it was on screen,
+# and then requires the first later picture that stream did receive
+# ("capture-service drops" in the case notes; see `missing_required` in
+# tests/recording.rs). A post-hold picture the stimulus's stream received
+# but the recording lacks still fails as missing-after-hold.

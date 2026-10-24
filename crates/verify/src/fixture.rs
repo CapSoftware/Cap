@@ -412,6 +412,7 @@ pub fn write_fixture(spec: &FixtureSpec, dir: &Path) -> anyhow::Result<()> {
                         start_time: Some(a.start_time),
                         device_id: None,
                         gap_summary: None,
+                        digital_silence_ms: None,
                     })
                 }
                 None => None,

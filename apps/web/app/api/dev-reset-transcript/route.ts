@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
 	if (request.headers.get("origin") !== request.nextUrl.origin) {
 		return Response.json({ error: "same origin required" }, { status: 403 });
 	}
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	if (!user) {
 		return Response.json({ error: "unauthorized" }, { status: 401 });
 	}

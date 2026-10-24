@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = [".", "kernels"]
+members = [".", "kernels", "i18n-build"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -103,6 +103,9 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 jpeg-decoder = "0.3"
 smallvec = "1"
+# The OS language list the UI language follows when set to System default.
+# Already in this lockfile through cosmic-text.
+sys-locale = "0.3"
 # Grapheme boundaries for `ui::TextInput`: Backspace deletes a user-perceived
 # character, not a `char`, so a flag emoji or a combining accent goes in one
 # press. gpui's own input example uses the same crate and it is already in this
@@ -165,10 +168,12 @@ dirs = "6"
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cap-i18n-build = { path = "i18n-build" }
 cc = "1.4"
 tauri-winres = "0.3.5"
 
 [dev-dependencies]
+gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = ["test-support"] }
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in

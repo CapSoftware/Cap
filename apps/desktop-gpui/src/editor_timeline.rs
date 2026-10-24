@@ -316,7 +316,8 @@ impl Transform {
 
     /// `updateZoom(newZoom, origin)` (`ED/context.ts:1389-1403, 1456-1472`):
     /// clamp the zoom into `[MAX_ZOOM_IN, zoomOutLimit]`, then move the
-    /// position so `origin` stays at the same fraction across the viewport.
+    /// position so `origin` stays at the same fraction across the viewport,
+    /// or at its nearest edge when it is outside the viewport.
     ///
     /// The clamp is `Math.max(Math.min(newZoom, zoomOutLimit()), MAX_ZOOM_IN)`
     /// in that order, so on a project shorter than 3 s the *floor* wins and the
@@ -327,7 +328,7 @@ impl Transform {
             .max(MAX_ZOOM_IN);
 
         let visible_origin = origin - self.position;
-        let origin_percentage = (visible_origin / self.zoom).min(1.);
+        let origin_percentage = (visible_origin / self.zoom).clamp(0., 1.);
         let new_visible_origin = zoom * origin_percentage;
         let new_position = origin - new_visible_origin;
 
@@ -583,6 +584,7 @@ pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> 
         target_samples,
         ref holds,
         source_start: segment_start,
+        timescale,
         origin,
         size,
         scale,
@@ -591,12 +593,12 @@ pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> 
     if peaks.is_empty() || scale <= 0. {
         return None;
     }
-    let duration = (range.1 - range.0).max(WAVEFORM_SAMPLE_STEP);
+    let duration = range.1 - range.0;
     if !duration.is_finite() || duration <= 0. {
         return None;
     }
 
-    let native_samples = (duration / WAVEFORM_SAMPLE_STEP).ceil() as usize + 1;
+    let native_samples = (duration * timescale / WAVEFORM_SAMPLE_STEP).ceil() as usize + 1;
     let num_samples = target_samples
         .clamp(50, MAX_WAVEFORM_SAMPLES)
         .min(native_samples);
@@ -619,7 +621,7 @@ pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> 
                 break;
             }
         }
-        Some(segment_start + output_time - held)
+        Some(segment_start + (output_time - held) * timescale)
     };
 
     let width = f32::from(size.width) as f64;
@@ -646,7 +648,7 @@ pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> 
     let mut builder = gpui::PathBuilder::fill();
     builder.move_to(map(0., 1.));
 
-    let control_step = (WAVEFORM_CONTROL_STEP / duration).min(0.25);
+    let control_step = (WAVEFORM_CONTROL_STEP / timescale / duration).min(0.25);
 
     for i in 0..=num_samples {
         let time = range.0 + i as f64 * time_step;
@@ -692,6 +694,7 @@ pub struct WaveformGeometry {
     pub target_samples: usize,
     pub holds: Vec<(f64, f64)>,
     pub source_start: f64,
+    pub timescale: f64,
     pub origin: gpui::Point<Pixels>,
     pub size: gpui::Size<Pixels>,
     pub scale: f64,
@@ -705,6 +708,7 @@ impl PartialEq for WaveformGeometry {
             && self.target_samples == other.target_samples
             && self.holds == other.holds
             && self.source_start == other.source_start
+            && self.timescale == other.timescale
             && self.origin == other.origin
             && self.size == other.size
             && self.scale == other.scale
@@ -1230,14 +1234,7 @@ pub enum SegmentDetail {
 
 impl SegmentDetail {
     fn shows_waveform(&self) -> bool {
-        matches!(
-            self,
-            Self::Clip {
-                timescale,
-                muted: false,
-                ..
-            } if *timescale == 1.0
-        )
+        matches!(self, Self::Clip { muted: false, .. })
     }
 }
 
@@ -3281,6 +3278,7 @@ fn render_waveform(
 
     let SegmentDetail::Clip {
         source_start: segment_start,
+        timescale,
         volume,
         ..
     } = segment.detail
@@ -3323,6 +3321,7 @@ fn render_waveform(
                     target_samples: layout.samples,
                     holds: holds.clone(),
                     source_start: segment_start,
+                    timescale,
                     origin: layout.origin,
                     size: layout.size,
                     scale,
@@ -3926,6 +3925,19 @@ mod tests {
     }
 
     #[test]
+    fn an_origin_before_the_viewport_pins_to_its_left_edge() {
+        let mut transform = Transform {
+            zoom: 10.,
+            position: 20.,
+        };
+
+        transform.update_zoom(20., 5., 100.);
+
+        assert_eq!(transform.zoom, 20.);
+        assert_eq!(transform.position, 5.);
+    }
+
+    #[test]
     fn position_clamps_to_zero_and_to_the_content_end_plus_four() {
         let total = 60.0;
         let mut transform = Transform {
@@ -4441,7 +4453,7 @@ mod tests {
     }
 
     #[test]
-    fn clip_mute_indicators_follow_speed_audio_modes() {
+    fn clip_waveforms_and_mute_indicators_follow_speed_audio_modes() {
         let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
             "timeline": {
                 "segments": [
@@ -4460,7 +4472,7 @@ mod tests {
                 clip.detail,
                 SegmentDetail::Clip { muted, .. } if muted == expected_muted
             ));
-            assert!(!clip.detail.shows_waveform());
+            assert_eq!(clip.detail.shows_waveform(), !expected_muted);
         }
     }
 
@@ -4675,6 +4687,7 @@ mod tests {
             target_samples: 400,
             holds: Vec::new(),
             source_start: 20.,
+            timescale: 1.,
             origin: gpui::point(px(0.), px(26.)),
             size: gpui::size(px(200.), px(18.)),
             scale,
@@ -4772,6 +4785,7 @@ mod tests {
             target_samples: 400,
             holds: Vec::new(),
             source_start: 5.,
+            timescale: 1.,
             origin: gpui::point(px(10.), px(26.)),
             size: gpui::size(px(300.), px(18.)),
             scale: 0.8,
@@ -4780,6 +4794,78 @@ mod tests {
                 size: gpui::size(px(300.), px(44.)),
             },
         }
+    }
+
+    #[test]
+    fn waveform_path_retimes_trimmed_source_around_holds() {
+        let mut peaks = vec![-60.; 200];
+        peaks[140..160].fill(-6.);
+        let peaks = Arc::new(peaks);
+        for timescale in [0.25, 0.5, 2.0, 8.0] {
+            for holds in [vec![], vec![(1. / timescale, 1. / timescale + 1.)]] {
+                let held = if holds.is_empty() { 0. } else { 1. };
+                let duration = 8. / timescale + held;
+                for range in [(0., duration), (duration / 4., duration * 0.9)] {
+                    let path = waveform_path(&WaveformGeometry {
+                        peaks: peaks.clone(),
+                        range,
+                        target_samples: 1200,
+                        holds: holds.clone(),
+                        source_start: 10.,
+                        timescale,
+                        origin: gpui::point(px(0.), px(26.)),
+                        size: gpui::size(px(600.), px(18.)),
+                        scale: 1.,
+                        clip_bounds: gpui::Bounds {
+                            origin: gpui::point(px(0.), px(0.)),
+                            size: gpui::size(px(600.), px(44.)),
+                        },
+                    })
+                    .unwrap();
+                    let (first, last) = path
+                        .vertices
+                        .iter()
+                        .filter(|vertex| f32::from(vertex.xy_position.y) < 35.)
+                        .map(|vertex| {
+                            range.0
+                                + f64::from(f32::from(vertex.xy_position.x)) / 600.
+                                    * (range.1 - range.0)
+                        })
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(first, last), time| {
+                            (first.min(time), last.max(time))
+                        });
+                    let expected_start = 4. / timescale + held;
+                    let expected_end = 6. / timescale + held;
+                    assert!(
+                        (first - expected_start).abs() < 0.2 / timescale,
+                        "{timescale}x, {holds:?}, {range:?}: first {first}, expected {expected_start}"
+                    );
+                    assert!(
+                        (last - expected_end).abs() < 0.2 / timescale,
+                        "{timescale}x, {holds:?}, {range:?}: last {last}, expected {expected_end}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn short_retimed_waveform_does_not_read_past_the_trim_end() {
+        let mut peaks = vec![-60.; 200];
+        peaks[103..105].fill(0.);
+        let geometry = WaveformGeometry {
+            range: (0., 0.025),
+            source_start: 10.,
+            timescale: 8.,
+            ..waveform_geometry(Arc::new(peaks))
+        };
+        let path = waveform_path(&geometry).unwrap();
+        let silent = waveform_path(&WaveformGeometry {
+            peaks: Arc::new(vec![-60.; 200]),
+            ..geometry
+        })
+        .unwrap();
+        assert_eq!(waveform_vertices(&path), waveform_vertices(&silent));
     }
 
     #[test]
@@ -4880,6 +4966,60 @@ mod tests {
     }
 
     #[test]
+    fn retimed_waveforms_stay_in_place_across_scrolled_windows() {
+        // A 2x clip from source 10 s with a 1 s hold at output 2..3 s: the
+        // loud source 30..32 s lands at segment-local output 11..12 s.
+        let mut peaks = vec![-60.; 600];
+        peaks[300..320].fill(-6.);
+        let peaks = Arc::new(peaks);
+        let zoom = 6.;
+        let segment = (12., 21.);
+        let full_width = 21. * 60.;
+        let canvas = (px(44.), px(full_width as f32), px(44.), px(18.));
+        let offset = gpui::point(px(100.), px(50.));
+        for visible_start in [6.5, 8., 9.5] {
+            let layout = waveform_layout(
+                (segment.0 + visible_start, zoom),
+                segment,
+                full_width,
+                canvas,
+            )
+            .unwrap();
+            assert!(layout.range.0 > 0. && layout.range.0 < visible_start);
+            let path = waveform_path(&WaveformGeometry {
+                peaks: peaks.clone(),
+                range: layout.range,
+                target_samples: layout.samples,
+                holds: vec![(2., 3.)],
+                source_start: 10.,
+                timescale: 2.,
+                origin: layout.origin,
+                size: layout.size,
+                scale: 1.,
+                clip_bounds: layout.clip_bounds,
+            })
+            .unwrap();
+            let path = translated_path(path, offset);
+            let (first, last) = path
+                .vertices
+                .iter()
+                .filter(|vertex| f32::from(vertex.xy_position.y) < 59.)
+                .map(|vertex| f64::from(f32::from(vertex.xy_position.x) - 100.) / 60.)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(first, last), time| {
+                    (first.min(time), last.max(time))
+                });
+            assert!(
+                (first - 11.).abs() < 0.1,
+                "{visible_start}: {layout:?} first {first}"
+            );
+            assert!(
+                (last - 12.).abs() < 0.1,
+                "{visible_start}: {layout:?} last {last}"
+            );
+        }
+    }
+
+    #[test]
     fn an_off_screen_segment_has_no_waveform_layout() {
         let canvas = (px(44.), px(600.), px(44.), px(18.));
         assert!(waveform_layout((0., 20.), (30., 10.), 600., canvas).is_none());
@@ -4932,6 +5072,13 @@ mod tests {
                 "hold added",
                 WaveformGeometry {
                     holds: vec![(4., 6.)],
+                    ..base.clone()
+                },
+            ),
+            (
+                "speed",
+                WaveformGeometry {
+                    timescale: 2.,
                     ..base.clone()
                 },
             ),
@@ -5094,6 +5241,7 @@ mod tests {
                         target_samples: 200,
                         holds: Vec::new(),
                         source_start: 0.,
+                        timescale: 1.,
                         origin: gpui::point(px(50. + x as f32), px(56.)),
                         size: gpui::size(px(span as f32), px(18.)),
                         scale: gain,
