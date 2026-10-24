@@ -287,14 +287,23 @@ async fn real_app_instant_recording_uploads_and_verifies() {
 }
 
 /// Kills the app at points from the server video's creation through the
-/// first seconds of capture, then relaunches long after. No video whose
-/// recording holds media is ever deleted, and every crashed recording that
-/// holds none and has its folder is deleted.
+/// first seconds of capture, then relaunches long after. Each recording's state
+/// is noted right after its kill, before anything else runs: a recording that
+/// held media keeps its folder, its media and its server video, and every
+/// crashed recording that held none in a folder still in progress has its
+/// server video deleted.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn real_app_crashes_never_delete_a_recording_with_media() {
+    struct Crashed {
+        video: String,
+        project: Option<PathBuf>,
+        media: usize,
+        in_progress: bool,
+    }
     let mock = MockCap::start(Vec::new()).await;
     let sandbox = Sandbox::new(&mock.url, 2);
+    let mut crashed = Vec::new();
     for (attempt, offset_ms) in [0u64, 150, 400, 800, 1500, 2500, 4000, 7000]
         .into_iter()
         .enumerate()
@@ -314,6 +323,17 @@ async fn real_app_crashes_never_delete_a_recording_with_media() {
         .await;
         tokio::time::sleep(Duration::from_millis(offset_ms)).await;
         kill(app);
+        let video = mock.created()[created].clone();
+        let project = sandbox.project_for(&video);
+        crashed.push(Crashed {
+            media: project.as_deref().map(media_files).unwrap_or(0),
+            in_progress: project
+                .as_deref()
+                .and_then(meta)
+                .is_some_and(|meta| meta.get("recording").is_some()),
+            video,
+            project,
+        });
     }
     sandbox.age();
     let app = sandbox.launch("sweep", &[]);
@@ -321,19 +341,22 @@ async fn real_app_crashes_never_delete_a_recording_with_media() {
     kill(app);
 
     let deleted = mock.deleted();
-    for video in mock.created() {
-        let project = sandbox.project_for(&video);
-        let media = project.as_deref().map(media_files).unwrap_or(0);
-        if media > 0 {
+    for recording in &crashed {
+        let video = &recording.video;
+        if recording.media > 0 {
             assert!(
-                !deleted.contains(&video),
-                "{video} was deleted although its recording holds media"
+                !deleted.contains(video),
+                "{video} was deleted although its recording held media"
             );
-        } else if let Some(project) = project
-            && meta(&project).is_some_and(|meta| meta.get("recording").is_some())
-        {
+            let project = recording.project.as_deref().unwrap();
+            assert!(project.is_dir(), "{video}'s recording was removed");
             assert!(
-                deleted.contains(&video),
+                media_files(project) >= recording.media,
+                "{video}'s recording lost media"
+            );
+        } else if recording.project.is_some() && recording.in_progress {
+            assert!(
+                deleted.contains(video),
                 "{video} crashed before capturing anything but was kept"
             );
         }
