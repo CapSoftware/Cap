@@ -2849,6 +2849,9 @@ async function downloadUrlToFile(
 	throw lastError ?? new Error("Download failed");
 }
 
+// Storage that struggles with this many small concurrent reads can lower it through the env.
+const SEGMENT_DOWNLOAD_CONCURRENCY = 64;
+
 export function segmentDownloadConcurrencyFromEnv(
 	env: Record<string, string | undefined> = process.env,
 ): number {
@@ -2856,7 +2859,9 @@ export function segmentDownloadConcurrencyFromEnv(
 		env.MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY ?? "",
 		10,
 	);
-	return Number.isFinite(value) && value > 0 ? Math.min(value, 64) : 10;
+	return Number.isFinite(value) && value > 0
+		? Math.min(value, SEGMENT_DOWNLOAD_CONCURRENCY)
+		: SEGMENT_DOWNLOAD_CONCURRENCY;
 }
 
 interface SegmentTrackDownload {
@@ -3376,38 +3381,36 @@ async function muxSegmentsAsync(
 		await withJobHeartbeat(jobId, async () => {
 			const assets = await previewAssets;
 			abortController.signal.throwIfAborted();
-			if (thumbnailPresignedUrl && assets?.thumbnail) {
-				try {
-					await uploadToS3(
-						assets.thumbnail,
-						thumbnailPresignedUrl,
-						"image/jpeg",
-						abortController.signal,
-					);
-				} catch (thumbErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						`[mux-segments] Thumbnail generation failed for ${videoId}:`,
-						thumbErr,
-					);
-				}
-			}
-			if (previewGifPresignedUrl && assets?.previewGif) {
-				try {
-					await uploadFileToS3(
-						assets.previewGif.path,
-						previewGifPresignedUrl,
-						"image/gif",
-						abortController.signal,
-					);
-				} catch (previewErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						"[mux-segments] Preview GIF generation failed:",
-						previewErr,
-					);
-				}
-			}
+			await Promise.all([
+				thumbnailPresignedUrl && assets?.thumbnail
+					? uploadToS3(
+							assets.thumbnail,
+							thumbnailPresignedUrl,
+							"image/jpeg",
+							abortController.signal,
+						).catch((thumbErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+								thumbErr,
+							);
+						})
+					: undefined,
+				previewGifPresignedUrl && assets?.previewGif
+					? uploadFileToS3(
+							assets.previewGif.path,
+							previewGifPresignedUrl,
+							"image/gif",
+							abortController.signal,
+						).catch((previewErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								"[mux-segments] Preview GIF generation failed:",
+								previewErr,
+							);
+						})
+					: undefined,
+			]);
 		});
 
 		abortController.signal.throwIfAborted();

@@ -23,6 +23,7 @@ use gpui::{App, Global};
 
 use crate::{
     app_windows,
+    i18n::tr,
     library::{self, MediaKind},
     main_window::{Mode, TargetType},
     menus,
@@ -262,13 +263,13 @@ pub fn scan_previous(load_thumbnails: bool) -> Vec<PreviousItem> {
 fn previous_submenu(previous: &[PreviousItem]) -> Entry {
     if previous.is_empty() {
         return Entry::Submenu {
-            title: "Previous".into(),
+            title: tr::tray::previous().into(),
             enabled: false,
-            items: vec![Entry::disabled("No recent items")],
+            items: vec![Entry::disabled(tr::tray::no_recent_items())],
         };
     }
     Entry::Submenu {
-        title: "Previous".into(),
+        title: tr::tray::previous().into(),
         enabled: true,
         items: previous
             .iter()
@@ -304,32 +305,50 @@ fn mode_submenu(mode: Mode) -> Entry {
         )
     };
     Entry::Submenu {
-        title: "Select Mode".into(),
+        title: tr::tray::select_mode().into(),
         enabled: true,
         items: vec![
-            label(Mode::Studio, "Studio"),
-            label(Mode::Instant, "Instant"),
-            label(Mode::Screenshot, "Screenshot"),
+            label(Mode::Studio, tr::tray::mode::studio()),
+            label(Mode::Instant, tr::tray::mode::instant()),
+            label(Mode::Screenshot, tr::tray::mode::screenshot()),
         ],
     }
 }
 
 /// `build_tray_menu`, minus the onboarding-minimal branch.
 pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<Entry> {
-    let mut entries = vec![Entry::item("Open Main Window", TrayItem::OpenCap)];
+    let mut entries = vec![Entry::item(tr::tray::open_main_window(), TrayItem::OpenCap)];
 
     if mode == Mode::Screenshot {
-        entries.push(Entry::item("Screenshot Display", TrayItem::RecordDisplay));
-        entries.push(Entry::item("Screenshot Window", TrayItem::RecordWindow));
-        entries.push(Entry::item("Screenshot Area", TrayItem::RecordArea));
+        entries.push(Entry::item(
+            tr::tray::screenshot_display(),
+            TrayItem::RecordDisplay,
+        ));
+        entries.push(Entry::item(
+            tr::tray::screenshot_window(),
+            TrayItem::RecordWindow,
+        ));
+        entries.push(Entry::item(
+            tr::tray::screenshot_area(),
+            TrayItem::RecordArea,
+        ));
     } else {
-        entries.push(Entry::item("Record Display", TrayItem::RecordDisplay));
-        entries.push(Entry::item("Record Window", TrayItem::RecordWindow));
-        entries.push(Entry::item("Record Area", TrayItem::RecordArea));
-        entries.push(Entry::item("Take a Screenshot", TrayItem::TakeScreenshot));
+        entries.push(Entry::item(
+            tr::tray::record_display(),
+            TrayItem::RecordDisplay,
+        ));
+        entries.push(Entry::item(
+            tr::tray::record_window(),
+            TrayItem::RecordWindow,
+        ));
+        entries.push(Entry::item(tr::tray::record_area(), TrayItem::RecordArea));
+        entries.push(Entry::item(
+            tr::tray::take_screenshot(),
+            TrayItem::TakeScreenshot,
+        ));
     }
 
-    entries.push(Entry::item("Import Media...", TrayItem::ImportMedia));
+    entries.push(Entry::item(tr::tray::import_media(), TrayItem::ImportMedia));
 
     entries.push(Entry::Separator);
     entries.push(mode_submenu(mode));
@@ -337,31 +356,34 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     entries.push(Entry::Separator);
 
     entries.push(Entry::item(
-        "View all recordings",
+        tr::tray::view_all_recordings(),
         TrayItem::ViewAllRecordings,
     ));
     entries.push(Entry::item(
-        "View all screenshots",
+        tr::tray::view_all_screenshots(),
         TrayItem::ViewAllScreenshots,
     ));
-    entries.push(Entry::item("Settings", TrayItem::OpenSettings));
+    entries.push(Entry::item(tr::tray::settings(), TrayItem::OpenSettings));
 
     entries.push(Entry::Separator);
     // `logging::upload_log_file` needs the auth token and the HTTP client,
     // neither of which this app has.
-    entries.push(Entry::disabled("Upload Logs"));
-    entries.push(Entry::disabled(format!("Cap v{version}")));
-    entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+    entries.push(Entry::disabled(tr::tray::upload_logs()));
+    entries.push(Entry::disabled(tr::tray::version(version)));
+    entries.push(Entry::item(tr::tray::quit(), TrayItem::Quit));
 
     entries
 }
 
 pub fn build_onboarding_menu(version: &str) -> Vec<Entry> {
     vec![
-        Entry::item("Request Permissions", TrayItem::RequestPermissions),
+        Entry::item(
+            tr::tray::request_permissions(),
+            TrayItem::RequestPermissions,
+        ),
         Entry::Separator,
-        Entry::disabled(format!("Cap v{version}")),
-        Entry::item("Quit Cap", TrayItem::Quit),
+        Entry::disabled(tr::tray::version(version)),
+        Entry::item(tr::tray::quit(), TrayItem::Quit),
     ]
 }
 

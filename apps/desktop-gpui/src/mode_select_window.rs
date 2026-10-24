@@ -13,6 +13,7 @@ use gpui::{
     div, prelude::FluentBuilder, px, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{main_window::Mode, theme::Theme, ui::keyboard_nav};
 
 /// `.inner_size(580.0, 340.0)` / `.min_inner_size(580.0, 340.0)` /
@@ -261,6 +262,7 @@ impl Render for ModeSelectWindow {
             .items_center()
             .bg(Hsla::from(theme.gray_1))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)

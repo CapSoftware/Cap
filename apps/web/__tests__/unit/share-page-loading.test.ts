@@ -70,8 +70,8 @@ vi.mock("next/navigation", () => ({
 		throw new Error("NOT_FOUND");
 	},
 }));
-vi.mock("@/actions/videos/get-analytics", () => ({
-	getVideoAnalytics: async () => ({ count: 12 }),
+vi.mock("@/lib/video-view-count", () => ({
+	getVideoViewCount: async () => ({ count: 12 }),
 }));
 vi.mock("@/app/(org)/dashboard/dashboard-data", () => ({
 	getDashboardSpacesData: async () => [],
@@ -94,8 +94,8 @@ vi.mock("@/lib/video-download-permissions", () => ({
 	canUserDownloadVideo: async () => false,
 }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => false }));
-vi.mock("@/app/s/[videoId]/_components/PasswordOverlay", () => ({
-	PasswordOverlay: () => null,
+vi.mock("@/app/s/[videoId]/_components/PasswordGate", () => ({
+	PasswordGate: () => null,
 }));
 vi.mock("@/app/s/[videoId]/_components/PendingRecordingShare", () => ({
 	PendingRecordingShare: () => null,
@@ -105,6 +105,7 @@ vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({
 }));
 vi.mock("@/app/s/[videoId]/Share", () => ({ Share: () => null }));
 
+import { PasswordGate } from "@/app/s/[videoId]/_components/PasswordGate";
 import ShareVideoPage from "@/app/s/[videoId]/page";
 
 const createVideo = () => ({
@@ -154,8 +155,8 @@ const renderPage = () =>
 	});
 
 async function renderAuthorizedContent() {
-	const page = (await renderPage()) as ReactElement<{ children: unknown[] }>;
-	const content = page.props.children[1];
+	const page = (await renderPage()) as ReactElement<{ children: unknown }>;
+	const content = page.props.children;
 	if (!isValidElement(content) || typeof content.type !== "function") {
 		throw new Error("Expected authorized share content");
 	}
@@ -260,7 +261,7 @@ describe("share page loading", () => {
 	);
 
 	it.each([null, "owner/video/source/original.mp4"])(
-		"keeps password-protected videos behind the password overlay with upload %s",
+		"keeps password-protected videos behind the password gate with upload %s",
 		async (activeUploadRawFileKey) => {
 			arrangeRows([
 				{
@@ -272,11 +273,9 @@ describe("share page loading", () => {
 			mocks.policy.mockReturnValue(
 				Effect.fail({ _tag: "VerifyVideoPasswordError" }),
 			);
-			const page = (await renderPage()) as ReactElement<{
-				children: [ReactElement<{ isOpen: boolean }>, boolean];
-			}>;
-			expect(page.props.children[0].props.isOpen).toBe(true);
-			expect(page.props.children[1]).toBe(false);
+			const page = (await renderPage()) as ReactElement<{ videoId: string }>;
+			expect(page.type).toBe(PasswordGate);
+			expect(page.props.videoId).toBe(createVideo().id);
 			expect(mocks.playbackUrl).not.toHaveBeenCalled();
 		},
 	);

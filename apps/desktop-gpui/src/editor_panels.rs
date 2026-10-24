@@ -2732,31 +2732,41 @@ impl EditorWindow {
     /// while it has focus. Runs from `render`, like `sync_hex_inputs`, because
     /// the focus test needs a `&Window`.
     pub(crate) fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for (key, input) in self.fields.clone() {
-            if input.read(cx).focus_handle().is_focused(window) {
+        // Every field ever created is checked on every render, so the value is
+        // written into one reused buffer and only copied out when it moved.
+        let mut value = String::new();
+        for (key, input) in &self.fields {
+            let state = input.read(cx);
+            if state.is_focused(window) {
                 continue;
             }
-            let Some(value) = self.field_value(key) else {
+            value.clear();
+            if self.write_field_value(*key, &mut value).is_none() {
                 continue;
-            };
-            if input.read(cx).text() != value {
-                input.update(cx, |input, cx| input.set_text(value, cx));
+            }
+            if state.text() != value {
+                let text = value.clone();
+                input.update(cx, |input, cx| input.set_text(text, cx));
             }
         }
     }
 
-    /// What a field should read when it is not being typed into.
-    fn field_value(&self, key: FieldKey) -> Option<String> {
+    /// What a field should read when it is not being typed into, appended to
+    /// `out`. `None` leaves the field alone.
+    fn write_field_value(&self, key: FieldKey, out: &mut String) -> Option<()> {
+        use std::fmt::Write as _;
+
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
         if let FieldKey::Crop(field) = key {
             let state = self.crop.as_ref()?;
-            return Some(ui::format_number(field.read(state.real())));
+            out.push_str(&ui::format_number(field.read(state.real())));
+            return Some(());
         }
         let timeline = self.project.timeline.as_ref()?;
-        Some(match key {
-            FieldKey::StyleName(index) => timeline.style_segments.get(index)?.name.clone(),
-            FieldKey::ImageName(index) => timeline.image_segments.get(index)?.name.clone(),
+        match key {
+            FieldKey::StyleName(index) => out.push_str(&timeline.style_segments.get(index)?.name),
+            FieldKey::ImageName(index) => out.push_str(&timeline.image_segments.get(index)?.name),
             FieldKey::StyleCrop(index, axis) => {
                 let background = timeline
                     .style_segments
@@ -2769,37 +2779,40 @@ impl EditorWindow {
                     position: XY::new(0, 0),
                     size: XY::new(width, height),
                 });
-                match axis {
+                let value = match axis {
                     0 => crop.position.x,
                     1 => crop.position.y,
                     2 => crop.size.x,
                     _ => crop.size.y,
-                }
-                .to_string()
+                };
+                let _ = write!(out, "{value}");
             }
-            FieldKey::TextContent(index) => timeline.text_segments.get(index)?.content.clone(),
-            FieldKey::CaptionText(index) => timeline.caption_segments.get(index)?.text.clone(),
-            FieldKey::AudioName(index) => timeline
-                .audio_segments
-                .get(index)?
-                .name
-                .clone()
-                .unwrap_or_default(),
+            FieldKey::TextContent(index) => {
+                out.push_str(&timeline.text_segments.get(index)?.content)
+            }
+            FieldKey::CaptionText(index) => {
+                out.push_str(&timeline.caption_segments.get(index)?.text)
+            }
+            FieldKey::AudioName(index) => {
+                if let Some(name) = &timeline.audio_segments.get(index)?.name {
+                    out.push_str(name);
+                }
+            }
             FieldKey::KeyboardText(index) => {
-                timeline.keyboard_segments.get(index)?.display_text.clone()
+                out.push_str(&timeline.keyboard_segments.get(index)?.display_text)
             }
             // `value={props.segment.start.toFixed(2)}` on all four.
             FieldKey::CaptionStart(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.start);
             }
             FieldKey::CaptionEnd(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.end);
             }
             FieldKey::KeyboardStart(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.start);
             }
             FieldKey::KeyboardEnd(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -2810,10 +2823,11 @@ impl EditorWindow {
                     .iter()
                     .find(|item| item.index as usize == clip)
                     .map_or(0., |item| kind.read(&item.offsets));
-                ui::format_number(f64::from((offset * 1000.).round()))
+                out.push_str(&ui::format_number(f64::from((offset * 1000.).round())));
             }
             _ => return None,
-        })
+        }
+        Some(())
     }
 
     /// A live keystroke in a segment field.

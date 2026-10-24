@@ -175,6 +175,132 @@ fn saved_instant_upload_resumes_after_quit_mid_transfer() {
     });
 }
 
+/// Leaves a saved project the way a crash mid-recording does: both manifests
+/// unfinished with a partial next segment on disk, the metadata still in
+/// progress, and the upload state still `Recording`.
+fn crash_mid_recording(project: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut partials = Vec::new();
+    for track in ["display", "audio"] {
+        let directory = project.join("content").join(track);
+        let path = directory.join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let next = manifest["segments"].as_array().unwrap().len() + 1;
+        manifest["is_complete"] = serde_json::json!(false);
+        manifest["segments"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "path": format!("segment_{next:03}.m4s"),
+                "index": next,
+                "duration": 0.0,
+                "is_complete": false,
+                "file_size": null,
+            }));
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let partial = directory.join(format!("segment_{next:03}.m4s.tmp"));
+        let bytes = format!("partial {track}").into_bytes();
+        std::fs::write(&partial, &bytes).unwrap();
+        partials.push((partial, bytes));
+    }
+    let mut meta = RecordingMeta::load_for_project(project).unwrap();
+    meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true });
+    meta.sharing = None;
+    meta.save_for_project().unwrap();
+    let mut state = read_state(project).unwrap().unwrap();
+    state.phase = UploadPhase::Recording;
+    write_state(project, &state).unwrap();
+    partials
+}
+
+/// What Recover leaves for the queue, without the local remux this mock
+/// project cannot decode: sealed tracks and saved metadata.
+fn recover(project: &Path) {
+    crate::recording::seal_recovered_instant_tracks(project);
+    let mut meta = RecordingMeta::load_for_project(project).unwrap();
+    meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+        fps: 30,
+        sample_rate: Some(48_000),
+    });
+    meta.save_for_project().unwrap();
+}
+
+/// The app crashes mid-recording and the user recovers the recording on the
+/// next launch. The queue then uploads every segment the crash saved under
+/// the same video id and verifies it. The unfinished tail is kept on disk, and
+/// so is the whole recording, even with delete-after-upload on, because the
+/// upload leaves that tail out.
+#[test]
+fn recovered_instant_recording_uploads_what_the_crash_saved() {
+    let case = "queue_recovered_instant_upload";
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new(case);
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let store = scratch.0.join("store");
+        let mut settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+        settings["general_settings"]["deleteInstantRecordingsAfterUpload"] =
+            serde_json::json!(true);
+        std::fs::write(&store, serde_json::to_vec(&settings).unwrap()).unwrap();
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let partials = crash_mid_recording(&project);
+        recover(&project);
+
+        assert!(
+            read_state(&project).unwrap().unwrap().preserve_local,
+            "a recording whose sealed tracks leave media out must stay local"
+        );
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        launch(&manager, &project).await;
+        settle(&manager).await;
+        assert_verified(&mock, &project, &video, &audio);
+        assert_eq!(mock.confirmations().len(), 1);
+        assert_eq!(mock.deletes(), 0);
+        for (partial, bytes) in partials {
+            let aside = partial.with_file_name(format!(
+                "{}.unsealed",
+                partial.file_name().unwrap().to_string_lossy()
+            ));
+            assert_eq!(std::fs::read(aside).unwrap(), bytes);
+        }
+    });
+}
+
+/// Without sealing, the same recovered recording can never upload: the
+/// resume refuses its unfinished manifests and the cloud copy stays empty.
+#[test]
+fn unsealed_recovered_instant_recording_never_uploads() {
+    let case = "queue_unsealed_recovered_instant_upload";
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new(case);
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        crash_mid_recording(&project);
+        let mut meta = RecordingMeta::load_for_project(&project).unwrap();
+        meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+            fps: 30,
+            sample_rate: Some(48_000),
+        });
+        meta.save_for_project().unwrap();
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let ownership = UploadLock::acquire(&project).unwrap();
+        let state = read_state(&project).unwrap().unwrap();
+        let error = manager
+            .resume(project.clone(), state, ownership)
+            .await
+            .unwrap_err();
+        assert!(error.contains("not complete"), "{error}");
+        assert!(mock.confirmations().is_empty());
+        assert_eq!(mock.stats().media_bytes, 0);
+    });
+}
+
 /// The app quits while the queue waits for cloud verification. The relaunch
 /// confirms the already uploaded recording without sending it again.
 #[test]
