@@ -1291,7 +1291,10 @@ mod tests {
 
     #[test]
     fn portal_trigger_descriptions_read_the_same_on_every_desktop() {
-        assert_eq!(readable_trigger("Press <Shift><Control>F9"), "Shift+Ctrl+F9");
+        assert_eq!(
+            readable_trigger("Press <Shift><Control>F9"),
+            "Shift+Ctrl+F9"
+        );
         assert_eq!(readable_trigger("<Primary><Alt>r"), "Ctrl+Alt+r");
         assert_eq!(readable_trigger("Ctrl+Shift+F9"), "Ctrl+Shift+F9");
         assert_eq!(readable_trigger("  press F9 "), "F9");
