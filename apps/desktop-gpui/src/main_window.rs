@@ -4969,7 +4969,7 @@ impl MainWindow {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
                 return;
             }
-            cx.update(|_, cx| app_windows::refresh_library_after_delete(cx))
+            cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))
                 .ok();
         })
         .detach();

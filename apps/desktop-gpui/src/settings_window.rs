@@ -1214,7 +1214,7 @@ impl SettingsWindow {
             }
             tracing::info!(path = %path.display(), "deleted a recording");
 
-            cx.update(|_, cx| crate::app_windows::refresh_library_after_delete(cx))
+            cx.update(|_, cx| cx.defer(crate::app_windows::refresh_library_after_delete))
                 .ok();
         })
         .detach();
