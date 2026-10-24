@@ -221,10 +221,10 @@ export async function reassignLoomImport({
 			),
 		);
 	} catch (error) {
-		console.error(
-			`[loom-import-reassign] Old files remain under ${source.prefix}`,
+		console.error("[loom-import-reassign] Old files remain", {
+			prefix: source.prefix,
 			error,
-		);
+		});
 		return { videoId, status: "moved", copiedObjects, cleanup: "failed" };
 	}
 	return { videoId, status: "moved", copiedObjects, cleanup: "done" };
