@@ -283,7 +283,25 @@ function firstPacketDifference(source: PacketLog, output: PacketLog) {
 	}
 	if (source.length !== output.length)
 		return `packet ${shared} exists only in the ${source.length > output.length ? "source" : "output"}`;
-	return "packets match on timing, size, flags and data; packet side data differs";
+	return "packet proof differs, but the compact packet log did not capture the difference";
+}
+
+// Packet logs are only collected in this second read, after a mismatch, so passing recordings pay nothing.
+async function explainTrackMismatch(
+	sourcePath: string,
+	outputPath: string,
+	kind: "video" | "audio",
+	signal: AbortSignal,
+): Promise<string> {
+	try {
+		const [source, output] = await Promise.all([
+			readTrack(sourcePath, kind, signal, true),
+			readTrack(outputPath, kind, signal, true),
+		]);
+		return describeTrackDifference(source, output);
+	} catch {
+		return "details unavailable";
+	}
 }
 
 function describeTrackDifference(
@@ -307,7 +325,11 @@ function describeTrackDifference(
 		parts.push(
 			`start ${source.summary.startTime} vs ${output.summary.startTime}`,
 		);
-	if (source.summary.packets !== output.summary.packets)
+	if (
+		source.summary.packets !== output.summary.packets &&
+		source.log &&
+		output.log
+	)
 		parts.push(firstPacketDifference(source.log, output.log));
 	return parts.join("; ").slice(0, 400) || "track summaries differ";
 }
@@ -316,6 +338,7 @@ async function readTrack(
 	path: string,
 	kind: "video" | "audio",
 	signal: AbortSignal,
+	keepLog = false,
 ) {
 	if (!isAbsolute(path) || !(await lstat(path)).isFile())
 		throw new Error("Recording packet proof requires local regular files");
@@ -369,7 +392,7 @@ async function readTrack(
 	const tail =
 		kind === "audio" ? await readRecordingAudioTail(path, signal) : undefined;
 	const hash = createHash("sha256");
-	const log = new PacketLog();
+	const log = keepLog ? new PacketLog() : undefined;
 	let count = 0;
 	let pendingPacket: Record<string, string> | undefined;
 	const commitPacket = (fields: Record<string, string>, nextDts?: string) => {
@@ -424,7 +447,7 @@ async function readTrack(
 			throw new Error(
 				"Recording audio tail does not match its packet inventory",
 			);
-		log.push(
+		log?.push(
 			time(pts, base),
 			time(dts, base),
 			packetFlags,
@@ -538,22 +561,20 @@ export async function proveRecordingPackets(
 		sourceTiming = await sourceTimingRead;
 		if (sourceTiming.terminalPacketCount !== 1)
 			throw new Error("Tied terminal samples require decoded source evidence");
-		const sourceVideoTrack = await sourceVideoRead;
-		const outputVideoTrack = await outputVideoRead;
-		sourceVideo = sourceVideoTrack.summary;
-		outputVideo = outputVideoTrack.summary;
+		sourceVideo = (await sourceVideoRead).summary;
+		outputVideo = (await outputVideoRead).summary;
 		if (JSON.stringify(sourceVideo) !== JSON.stringify(outputVideo))
 			throw new RecordingPacketMismatchError(
-				`Recording encoded video does not preserve the source (${describeTrackDifference(sourceVideoTrack, outputVideoTrack)})`,
+				`Recording encoded video does not preserve the source (${await explainTrackMismatch(videoPath, outputPath, "video", signal)})`,
 			);
-		if (sourceAudioRead && outputAudioRead) {
-			const sourceAudioTrack = await sourceAudioRead;
-			const outputAudioTrack = await outputAudioRead;
-			const { tail: sourceTail, ...sourceAudio } = sourceAudioTrack.summary;
-			const { tail: outputTail, ...outputAudio } = outputAudioTrack.summary;
+		if (audioPath && sourceAudioRead && outputAudioRead) {
+			const { tail: sourceTail, ...sourceAudio } = (await sourceAudioRead)
+				.summary;
+			const { tail: outputTail, ...outputAudio } = (await outputAudioRead)
+				.summary;
 			if (JSON.stringify(sourceAudio) !== JSON.stringify(outputAudio))
 				throw new RecordingPacketMismatchError(
-					`Recording encoded audio does not preserve the source (${describeTrackDifference(sourceAudioTrack, outputAudioTrack)})`,
+					`Recording encoded audio does not preserve the source (${await explainTrackMismatch(audioPath, outputPath, "audio", signal)})`,
 				);
 			// MP4 edit-list rounding can change the reported AAC tail without changing decoded samples.
 			if (sourceTail?.duration !== outputTail?.duration)
