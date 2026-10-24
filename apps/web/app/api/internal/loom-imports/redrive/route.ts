@@ -24,7 +24,7 @@ class Api extends HttpApi.make("LoomImportRedriveApi").add(
 			.setPayload(
 				Schema.Struct({
 					videoIds: Schema.Array(
-						Schema.String.pipe(Schema.pattern(/^[a-z0-9]{15}$/)),
+						Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9_-]{15}$/)),
 					).pipe(Schema.minItems(1), Schema.maxItems(MAX_VIDEOS_PER_REQUEST)),
 				}),
 			)
