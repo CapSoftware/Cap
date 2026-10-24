@@ -6,10 +6,14 @@
 //! `.dark`). The overridden ones are marked below -- they are *not* stock Radix,
 //! so regenerating this from a Radix crate would silently change the palette.
 
+use std::sync::LazyLock;
+
 use gpui::{
-    App, BoxShadow, Context, Global, Hsla, Rgba, Window, WindowAppearance, point, px, rgb, rgba,
+    App, BoxShadow, Context, FontFallbacks, Global, Hsla, Rgba, Styled, Window, WindowAppearance,
+    point, px, rgb, rgba,
 };
 
+use crate::i18n::Locale;
 use crate::platform::{self, ForcedAppearance, MaterialKind};
 use crate::store::AppTheme;
 
@@ -21,6 +25,42 @@ pub const UI_FONT: &str = if cfg!(any(target_os = "macos", target_os = "windows"
 } else {
     "Geist"
 };
+
+/// Faces to try before the system cascade, per catalog. The system fallback
+/// follows the OS language, so without these Japanese on a Chinese system (or
+/// the reverse) gets the other language's Han glyph forms. English and the
+/// Latin catalogs keep the system cascade untouched. macOS, Windows and Linux
+/// names in that order; a face that is not installed is skipped.
+pub fn locale_font_fallbacks(locale: Locale) -> Option<FontFallbacks> {
+    fn faces(names: &[&str]) -> FontFallbacks {
+        FontFallbacks::from_fonts(names.iter().map(|name| (*name).to_string()).collect())
+    }
+    static JA: LazyLock<FontFallbacks> =
+        LazyLock::new(|| faces(&["Hiragino Sans", "Yu Gothic UI", "Noto Sans CJK JP"]));
+    static ZH_CN: LazyLock<FontFallbacks> =
+        LazyLock::new(|| faces(&["PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC"]));
+    static HI: LazyLock<FontFallbacks> =
+        LazyLock::new(|| faces(&["Kohinoor Devanagari", "Nirmala UI", "Noto Sans Devanagari"]));
+    match locale {
+        Locale::Ja => Some(JA.clone()),
+        Locale::ZhCn => Some(ZH_CN.clone()),
+        Locale::Hi => Some(HI.clone()),
+        _ => None,
+    }
+}
+
+/// `.locale_font()` next to each window root's `.font_family(UI_FONT)`:
+/// every text run in the window inherits the current catalog's fallbacks.
+pub trait LocaleFont: Styled + Sized {
+    fn locale_font(mut self) -> Self {
+        if let Some(fallbacks) = locale_font_fallbacks(crate::i18n::current()) {
+            self.text_style().font_fallbacks = Some(fallbacks);
+        }
+        self
+    }
+}
+
+impl<T: Styled> LocaleFont for T {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
@@ -43,8 +83,8 @@ struct ThemePreference(AppTheme);
 
 impl Global for ThemePreference {}
 
-pub fn init(cx: &mut App) {
-    cx.set_global(ThemePreference(crate::store::GeneralSettings::load().theme));
+pub fn init(preference: AppTheme, cx: &mut App) {
+    cx.set_global(ThemePreference(preference));
 }
 
 pub fn current_preference(cx: &App) -> AppTheme {

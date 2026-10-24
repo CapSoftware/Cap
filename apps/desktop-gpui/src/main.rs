@@ -329,7 +329,9 @@ fn main() {
         // binding consumes the keystroke before any `on_key_down` listener on
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
-        crate::theme::init(cx);
+        let general_settings = crate::store::GeneralSettings::load();
+        crate::i18n::init(general_settings.ui_language.as_deref());
+        crate::theme::init(general_settings.theme, cx);
         platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);

@@ -37,6 +37,7 @@ use scap_targets::{
     bounds::{LogicalBounds, LogicalPosition, LogicalSize},
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     app_windows,
     editor_canvas::{
@@ -1076,6 +1077,7 @@ impl Render for OverlayWindow {
             .size_full()
             .relative()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
