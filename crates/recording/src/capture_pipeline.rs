@@ -251,6 +251,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 .parent()
                 .map(|p| p.join("display"))
                 .unwrap_or_else(|| output_path.with_file_name("display"));
+            let d3d_device = screen_capture.d3d_device.clone();
+            let pixel_format = screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi();
 
             let bpp = if ultra {
                 H264EncoderBuilder::ULTRA_BPP
@@ -301,7 +303,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         bpp,
                         output_size,
                         shared_pause_state,
-                        disk_space_callback: None,
                         segment_tx: None,
                         ..Default::default()
                     })
@@ -318,7 +319,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         bpp,
                         output_size,
                         shared_pause_state,
-                        disk_space_callback: None,
+                        d3d_device: Some(d3d_device),
+                        pixel_format: Some(pixel_format),
+                        encoder_preferences: encoder_preferences.clone(),
                         segment_tx: None,
                     })
                     .await
@@ -356,6 +359,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
+        let d3d_device = screen_capture.d3d_device.clone();
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -367,7 +371,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
                 shared_pause_state: None,
-                disk_space_callback: None,
+                d3d_device: Some(d3d_device),
+                pixel_format: Some(screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi()),
+                encoder_preferences: EncoderPreferences::new(),
                 segment_tx,
             })
             .await
