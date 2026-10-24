@@ -70,7 +70,7 @@
 	"packageManager": "bun@1.4.4",
 	"name": "cap",
 	"engines": {
-		"node": ">=20",
+		"node": ">=24",
 		"bun": "1.4.4"
 	},
 	"overrides": {
