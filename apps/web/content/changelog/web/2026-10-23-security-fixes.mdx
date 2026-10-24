@@ -1,0 +1,16 @@
+---
+title: Security Fixes
+publishedAt: "2026-10-23"
+---
+
+Another round of hardening across sharing, sign-in, and billing.
+
+## Fixes
+
+- **Ownership checks** - Folder, space, and organization video actions now verify that you own what you are changing, and adding a Cap to a private space checks you have access to it.
+- **Sign-in codes** - Email login codes are rate limited, and a code is invalidated after a failed guess.
+- **Cross-site requests** - Cookie-authenticated writes now require same-site requests.
+- **Storage endpoints** - Custom S3 endpoints can no longer point at private hosts.
+- **Duplicated Caps** - Duplicating a Cap can no longer forge its creation date or drop its password.
+- **Checkout** - Billing endpoints validate prices and quantities before creating a checkout.
+- **Notifications** - Marking notifications as read is scoped to their recipient.
