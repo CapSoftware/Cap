@@ -479,6 +479,7 @@ fn window_frames_are_trimmed_to_even_dimensions_on_the_gpu() {
         item,
         Settings {
             even_dimensions: true,
+            follow_item_size: true,
             ..Default::default()
         },
         Duration::from_secs(2),
