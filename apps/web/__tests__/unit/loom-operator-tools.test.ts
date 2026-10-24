@@ -1,5 +1,5 @@
 import type { HttpApi } from "@effect/platform";
-import { Effect, type Layer as EffectLayer } from "effect";
+import { Effect, type Layer as EffectLayer, Option } from "effect";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
 	copies: [] as Array<[string, string]>,
 	removed: [] as string[][],
 	headSize: undefined as number | undefined,
+	destinationObjects: [] as Array<{ Key: string; Size: number }>,
+	puts: [] as Array<[string, string]>,
+	stored: new Map<string, string>(),
+	deleteFails: false,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -63,18 +67,26 @@ vi.mock("@cap/database/schema", () => ({
 	},
 	videoUploads: { videoId: "u.video", phase: "u.phase" },
 }));
-vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ MEDIA_SERVER_WEBHOOK_SECRET: "media-secret" }),
-}));
 vi.mock("@cap/web-backend", () => ({
 	Storage: {
 		getAccessForVideo: () =>
 			Effect.succeed([
 				{
 					bucketName: "capso",
-					listObjects: () =>
-						Effect.succeed({ Contents: mocks.objects, IsTruncated: false }),
-					copyObject: (source: string, destination: string) => {
+					listObjects: ({ prefix }: { prefix: string }) =>
+						Effect.succeed({
+							Contents: prefix.startsWith(ids.from)
+								? mocks.objects
+								: mocks.destinationObjects,
+							IsTruncated: false,
+						}),
+					getObject: (key: string) =>
+						Effect.succeed(Option.fromNullable(mocks.stored.get(key))),
+					putObject: (key: string, body: string) => {
+						mocks.puts.push([key, body]);
+						return Effect.void;
+					},
+					copyObjectForRecording: (source: string, destination: string) => {
 						mocks.copies.push([source, destination]);
 						return Effect.succeed({});
 					},
@@ -87,12 +99,19 @@ vi.mock("@cap/web-backend", () => ({
 								)?.Size,
 						}),
 					deleteObjects: (keys: Array<{ Key: string }>) => {
+						if (mocks.deleteFails) return Effect.fail(new Error("denied"));
 						mocks.removed.push(keys.map(({ Key }) => Key));
 						return Effect.succeed({});
 					},
 				},
 			]),
 	},
+}));
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({
+		MEDIA_SERVER_WEBHOOK_SECRET: "media-secret",
+		NEXTAUTH_SECRET: "test-secret",
+	}),
 }));
 vi.mock("@/lib/loom-csv-import", () => ({
 	processLoomCsvRows: mocks.process,
@@ -119,6 +138,11 @@ vi.mock("@/lib/server", async () => {
 
 import { POST as importCsv } from "@/app/api/internal/loom-imports/csv/route";
 import { POST as reassign } from "@/app/api/internal/loom-imports/reassign/route";
+import { getEditTranscriptObjectKey } from "@/lib/edit-transcript";
+import {
+	decryptEditTranscriptObject,
+	encryptEditTranscriptObject,
+} from "@/lib/edit-transcript-storage";
 import { reassignLoomImport } from "@/lib/loom-import-reassign";
 
 const call = (
@@ -174,6 +198,10 @@ beforeEach(() => {
 	mocks.copies = [];
 	mocks.removed = [];
 	mocks.headSize = undefined;
+	mocks.destinationObjects = [];
+	mocks.puts = [];
+	mocks.stored = new Map();
+	mocks.deleteFails = false;
 });
 
 describe("operator CSV import", () => {
@@ -239,6 +267,7 @@ describe("reassignLoomImport", () => {
 			videoId: ids.video,
 			status: "moved",
 			copiedObjects: 2,
+			cleanup: "done",
 		});
 		expect(mocks.copies).toEqual([
 			[
@@ -250,7 +279,9 @@ describe("reassignLoomImport", () => {
 				`${ids.to}/${ids.video}/screenshot/screen-capture.jpg`,
 			],
 		]);
-		expect(mocks.updates).toEqual([{ ownerId: ids.to, public: false }]);
+		expect(mocks.updates).toEqual([
+			{ ownerId: ids.to, public: false, folderId: null },
+		]);
 		expect(mocks.deletes).toBe(2);
 		expect(mocks.removed).toEqual([mocks.objects.map(({ Key }) => Key)]);
 	});
@@ -262,6 +293,10 @@ describe("reassignLoomImport", () => {
 		[[importedVideo({ ownerId: "someoneaaaaaaaa" })], "different owner"],
 		[[importedVideo({ bucketId: "bucket" })], "custom storage"],
 		[[importedVideo({ uploadPhase: "processing" })], "import not finished"],
+		[
+			[importedVideo({ source: { type: "webMP4", outputKey: "edited.mp4" } })],
+			"edited video",
+		],
 		[[importedVideo(), []], "new owner not a member"],
 	])("leaves unsafe moves alone: %#", async (selects, reason) => {
 		mocks.selects = (selects as unknown[]).map((row) =>
@@ -273,6 +308,49 @@ describe("reassignLoomImport", () => {
 		});
 		expect(mocks.copies).toEqual([]);
 		expect(mocks.updates).toEqual([]);
+	});
+
+	it("re-encrypts the word transcript for the new owner", async () => {
+		const key = getEditTranscriptObjectKey(ids.from, ids.video);
+		mocks.objects.push({ Key: key, Size: 50 });
+		mocks.stored.set(
+			key,
+			encryptEditTranscriptObject("hello world", ids.from, ids.video),
+		);
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await expect(reassignLoomImport(input)).resolves.toMatchObject({
+			status: "moved",
+			copiedObjects: 3,
+		});
+		const [destinationKey, body] = mocks.puts[0] ?? [];
+		expect(destinationKey).toBe(getEditTranscriptObjectKey(ids.to, ids.video));
+		expect(decryptEditTranscriptObject(body ?? "", ids.to, ids.video)).toBe(
+			"hello world",
+		);
+		expect(mocks.copies.map(([source]) => source)).not.toContain(
+			`capso/${key}`,
+		);
+	});
+
+	it("does not copy over files the new owner already has", async () => {
+		mocks.destinationObjects = [
+			{ Key: `${ids.to}/${ids.video}/result.mp4`, Size: 100 },
+		];
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await expect(reassignLoomImport(input)).resolves.toMatchObject({
+			status: "skipped",
+		});
+		expect(mocks.copies).toEqual([]);
+		expect(mocks.updates).toEqual([]);
+	});
+
+	it("reports old files it could not remove", async () => {
+		mocks.deleteFails = true;
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await expect(reassignLoomImport(input)).resolves.toMatchObject({
+			status: "moved",
+			cleanup: "failed",
+		});
 	});
 
 	it("keeps the original when a copy does not match", async () => {
@@ -314,7 +392,14 @@ describe("POST /api/internal/loom-imports/reassign", () => {
 		});
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
-			results: [{ videoId: ids.video, status: "moved", copiedObjects: 2 }],
+			results: [
+				{
+					videoId: ids.video,
+					status: "moved",
+					copiedObjects: 2,
+					cleanup: "done",
+				},
+			],
 		});
 	});
 });

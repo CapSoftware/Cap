@@ -13,10 +13,20 @@ import { Storage } from "@cap/web-backend";
 import { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Option } from "effect";
+import { getEditTranscriptObjectKey } from "@/lib/edit-transcript";
+import {
+	decryptEditTranscriptObject,
+	encryptEditTranscriptObject,
+} from "@/lib/edit-transcript-storage";
 import { runPromise } from "@/lib/server";
 
 export type LoomReassignOutcome =
-	| { videoId: string; status: "moved"; copiedObjects: number }
+	| {
+			videoId: string;
+			status: "moved";
+			copiedObjects: number;
+			cleanup: "done" | "failed";
+	  }
 	| { videoId: string; status: "skipped" | "failed"; reason: string };
 
 function getAffectedRows(result: unknown) {
@@ -83,6 +93,7 @@ export async function reassignLoomImport({
 		.select({
 			ownerId: videos.ownerId,
 			orgId: videos.orgId,
+			source: videos.source,
 			bucketId: videos.bucket,
 			storageIntegrationId: videos.storageIntegrationId,
 			uploadPhase: videoUploads.phase,
@@ -109,6 +120,8 @@ export async function reassignLoomImport({
 		return { videoId, status: "skipped", reason: "custom storage" };
 	if (video.uploadPhase)
 		return { videoId, status: "skipped", reason: "import not finished" };
+	if (video.source && "outputKey" in video.source && video.source.outputKey)
+		return { videoId, status: "skipped", reason: "edited video" };
 
 	const [member] = await db()
 		.select({ userId: organizationMembers.userId })
@@ -129,24 +142,51 @@ export async function reassignLoomImport({
 	const source = await listObjects(videoId, fromUserId, organizationId);
 	if (source.objects.length === 0)
 		return { videoId, status: "failed", reason: "no media found" };
-	const destinationPrefix = `${toUserId}/${videoId}/`;
+	const destination = await listObjects(videoId, toUserId, organizationId);
+	if (destination.objects.length > 0)
+		return {
+			videoId,
+			status: "skipped",
+			reason: "new owner already has files for this video",
+		};
+
+	const transcriptKey = getEditTranscriptObjectKey(fromUserId, videoId);
 	let copiedObjects = 0;
 	for (let index = 0; index < source.objects.length; index += 4) {
 		await Promise.all(
 			source.objects.slice(index, index + 4).map(async (object) => {
 				const destinationKey = object.key.replace(
 					source.prefix,
-					destinationPrefix,
+					destination.prefix,
 				);
-				await runPromise(
-					source.bucket.copyObject(
-						`${source.bucket.bucketName}/${object.key}`,
-						destinationKey,
-					),
-				);
-				const head = await runPromise(source.bucket.headObject(destinationKey));
-				if (head.ContentLength !== object.size)
-					throw new Error(`Copied object size mismatch for ${object.key}`);
+				if (object.key === transcriptKey) {
+					const stored = Option.getOrNull(
+						await runPromise(source.bucket.getObject(object.key)),
+					);
+					const transcript =
+						stored && decryptEditTranscriptObject(stored, fromUserId, videoId);
+					if (!transcript)
+						throw new Error(`Could not read the transcript for ${videoId}`);
+					await runPromise(
+						source.bucket.putObject(
+							destinationKey,
+							encryptEditTranscriptObject(transcript, toUserId, videoId),
+							{ contentType: "application/octet-stream" },
+						),
+					);
+				} else {
+					await runPromise(
+						source.bucket.copyObjectForRecording(
+							`${source.bucket.bucketName}/${object.key}`,
+							destinationKey,
+						),
+					);
+					const head = await runPromise(
+						source.bucket.headObject(destinationKey),
+					);
+					if (head.ContentLength !== object.size)
+						throw new Error(`Copied object size mismatch for ${object.key}`);
+				}
 				copiedObjects++;
 			}),
 		);
@@ -155,7 +195,11 @@ export async function reassignLoomImport({
 	const updated = await db().transaction(async (tx) => {
 		const result = await tx
 			.update(videos)
-			.set({ ownerId: User.UserId.make(toUserId), public: false })
+			.set({
+				ownerId: User.UserId.make(toUserId),
+				public: false,
+				folderId: null,
+			})
 			.where(
 				and(
 					eq(videos.id, id),
@@ -170,10 +214,18 @@ export async function reassignLoomImport({
 	if (!updated)
 		return { videoId, status: "failed", reason: "owner changed during move" };
 
-	await runPromise(
-		source.bucket.deleteObjects(
-			source.objects.map((object) => ({ Key: object.key })),
-		),
-	).catch(() => undefined);
-	return { videoId, status: "moved", copiedObjects };
+	try {
+		await runPromise(
+			source.bucket.deleteObjects(
+				source.objects.map((object) => ({ Key: object.key })),
+			),
+		);
+	} catch (error) {
+		console.error(
+			`[loom-import-reassign] Old files remain under ${source.prefix}`,
+			error,
+		);
+		return { videoId, status: "moved", copiedObjects, cleanup: "failed" };
+	}
+	return { videoId, status: "moved", copiedObjects, cleanup: "done" };
 }

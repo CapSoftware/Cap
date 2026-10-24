@@ -39,6 +39,7 @@ class Api extends HttpApi.make("LoomImportReassignApi").add(
 							videoId: Schema.String,
 							status: Schema.Literal("moved", "skipped", "failed"),
 							copiedObjects: Schema.optional(Schema.Number),
+							cleanup: Schema.optional(Schema.Literal("done", "failed")),
 							reason: Schema.optional(Schema.String),
 						}),
 					),
