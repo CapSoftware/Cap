@@ -3317,6 +3317,20 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
+                    self.setting_row(
+                        tr::settings::general::app::open_file::label(),
+                        Some(tr::settings::general::app::open_file::description()),
+                        self.segmented(
+                            "open-file-behaviour",
+                            self.settings.open_file_behaviour,
+                            cx,
+                            |this, value, cx| {
+                                this.settings.open_file_behaviour = value;
+                                this.write_enum("openFileBehaviour", value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
                 ])
                 .into_any_element(),
             ],

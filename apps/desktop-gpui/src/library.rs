@@ -626,6 +626,13 @@ pub fn open_path(path: &Path) {
     }
 }
 
+pub fn open_output(path: &Path) {
+    match crate::store::GeneralSettings::load().open_file_behaviour {
+        crate::store::OpenFileBehaviour::OpenFile => open_path(path),
+        crate::store::OpenFileBehaviour::ShowInFolder => reveal_in_folder(path),
+    }
+}
+
 pub fn reveal_in_folder(path: &Path) {
     let result = {
         #[cfg(target_os = "macos")]

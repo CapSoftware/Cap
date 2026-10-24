@@ -2643,7 +2643,7 @@ impl EditorWindow {
                             .label("Open File")
                             .on_click(move |_, _, _| {
                                 if let Some(path) = &path {
-                                    library::open_path(path);
+                                    library::open_output(path);
                                 }
                             }),
                         )
