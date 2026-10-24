@@ -11,7 +11,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
-import { Organisation, User, Video } from "@cap/web-domain";
+import { Folder, Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { getEditTranscriptObjectKey } from "@/lib/edit-transcript";
@@ -20,6 +20,11 @@ import {
 	encryptEditTranscriptObject,
 } from "@/lib/edit-transcript-storage";
 import { runPromise } from "@/lib/server";
+
+export type LoomReassignOptions = {
+	keepSharing?: boolean;
+	folderId?: string | null;
+};
 
 export type LoomReassignOutcome =
 	| {
@@ -85,11 +90,13 @@ export async function reassignLoomImport({
 	videoId,
 	fromUserId,
 	toUserId,
+	options = {},
 }: {
 	organizationId: string;
 	videoId: string;
 	fromUserId: string;
 	toUserId: string;
+	options?: LoomReassignOptions;
 }): Promise<LoomReassignOutcome> {
 	const id = Video.VideoId.make(videoId);
 	const [video] = await db()
@@ -166,6 +173,7 @@ export async function reassignLoomImport({
 			fromUserId,
 			toUserId,
 			token,
+			options,
 		});
 	} finally {
 		await db()
@@ -189,6 +197,7 @@ async function moveClaimedVideo({
 	fromUserId,
 	toUserId,
 	token,
+	options,
 }: {
 	id: Video.VideoId;
 	videoId: string;
@@ -196,6 +205,7 @@ async function moveClaimedVideo({
 	fromUserId: string;
 	toUserId: string;
 	token: string;
+	options: LoomReassignOptions;
 }): Promise<LoomReassignOutcome> {
 	const source = await listObjects(videoId, fromUserId, organizationId);
 	if (source.objects.length === 0)
@@ -264,8 +274,10 @@ async function moveClaimedVideo({
 			.update(videos)
 			.set({
 				ownerId: User.UserId.make(toUserId),
-				public: false,
-				folderId: null,
+				folderId: options.folderId
+					? Folder.FolderId.make(options.folderId)
+					: null,
+				...(options.keepSharing ? {} : { public: false }),
 			})
 			.where(
 				and(
@@ -275,8 +287,10 @@ async function moveClaimedVideo({
 				),
 			);
 		if (getAffectedRows(result) !== 1) return false;
-		await tx.delete(sharedVideos).where(eq(sharedVideos.videoId, id));
-		await tx.delete(spaceVideos).where(eq(spaceVideos.videoId, id));
+		if (!options.keepSharing) {
+			await tx.delete(sharedVideos).where(eq(sharedVideos.videoId, id));
+			await tx.delete(spaceVideos).where(eq(spaceVideos.videoId, id));
+		}
 		return true;
 	});
 	if (!updated) {
