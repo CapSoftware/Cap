@@ -104,13 +104,27 @@ impl Drop for WindowsTimerResolution {
     }
 }
 
+/// Above normal, so a wake preempts decode and render threads instead of
+/// queueing behind them: at normal priority on a loaded machine the wake
+/// landed up to 10 ms late, with or without the spin.
+#[cfg(target_os = "windows")]
+fn raise_playback_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    }
+}
+
 #[cfg(target_os = "windows")]
 struct WindowsWaitableTimer(windows::Win32::Foundation::HANDLE);
 
 #[cfg(target_os = "windows")]
 impl WindowsWaitableTimer {
     /// How long before the deadline the timer wait ends and spinning starts.
-    const SPIN: Duration = Duration::from_micros(250);
+    /// The timer fires up to about 0.5 ms late.
+    const SPIN: Duration = Duration::from_micros(500);
 
     /// `None` before Windows 10 1803, which rejects the high-resolution flag.
     fn high_resolution() -> Option<Self> {
@@ -169,7 +183,7 @@ fn precision_sleep_sync(deadline: Instant) {
                 WindowsWaitableTimer::high_resolution();
         }
         // A high-resolution timer wakes within a fraction of a millisecond,
-        // so only the last 250 us are spun. Without one, `thread::sleep` can
+        // so only the last 500 us are spun. Without one, `thread::sleep` can
         // wake a full 1 ms timer period late and the last 2 ms are spun.
         let timed = WAITABLE_TIMER.with(|timer| {
             timer.as_ref().is_some_and(|timer| {
@@ -1375,6 +1389,8 @@ impl Playback {
 
             #[cfg(target_os = "windows")]
             let _timer_guard = WindowsTimerResolution::set_high_precision();
+            #[cfg(target_os = "windows")]
+            raise_playback_thread_priority();
 
             // Attach this playback's audio to the session's persistent output
             // stream. Blocks until the live callback is consuming the source,
@@ -2216,6 +2232,7 @@ mod tests {
         }
 
         let _timer_guard = WindowsTimerResolution::set_high_precision();
+        raise_playback_thread_priority();
         for fps in [30u32, 60] {
             let frame = Duration::from_secs(1) / fps;
             let frames = fps * 10;
