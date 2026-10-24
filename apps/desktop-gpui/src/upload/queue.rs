@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 static STATE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-const STATE_FILE: &str = "instant-upload.json";
+pub(super) const STATE_FILE: &str = "instant-upload.json";
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
@@ -57,6 +57,14 @@ pub(crate) struct UploadState {
 impl UploadState {
     pub(crate) fn video_id(&self) -> &str {
         &self.video_id
+    }
+
+    pub(crate) fn server_url(&self) -> &str {
+        &self.server_url
+    }
+
+    pub(crate) fn owner_id(&self) -> Option<&str> {
+        self.owner_id.as_deref()
     }
 
     pub(super) fn request_context(&self) -> Result<auth::UploadRequestContext, String> {
