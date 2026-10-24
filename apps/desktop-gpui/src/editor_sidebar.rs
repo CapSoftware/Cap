@@ -1936,8 +1936,9 @@ const WALLPAPER_TILE_MAX: u32 = 128;
 
 /// One wallpaper tile, through the persistent cache. The bundled assets are
 /// immutable in practice, so after the first-ever run every theme switch is
-/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the mtime
-/// in the key still invalidates if an app update ever replaces them.
+/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the
+/// version (mtime plus length) in the key still invalidates if an app update
+/// ever replaces them.
 pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
     let path = wallpaper_path(id)?;
     // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
