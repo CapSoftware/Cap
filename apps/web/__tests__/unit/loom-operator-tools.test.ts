@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
 	puts: [] as Array<[string, string]>,
 	stored: new Map<string, string>(),
 	deleteFails: false,
+	claims: [] as Array<Record<string, unknown>>,
+	claimRows: 1,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -47,6 +49,14 @@ vi.mock("@cap/database", () => {
 	return {
 		db: () => ({
 			select: () => selection,
+			update: () => ({
+				set: (values: Record<string, unknown>) => ({
+					where: async () => {
+						mocks.claims.push(values);
+						return [{ affectedRows: mocks.claimRows }];
+					},
+				}),
+			}),
 			transaction: async (run: (handle: typeof tx) => Promise<unknown>) =>
 				run(tx),
 		}),
@@ -202,6 +212,8 @@ beforeEach(() => {
 	mocks.puts = [];
 	mocks.stored = new Map();
 	mocks.deleteFails = false;
+	mocks.claims = [];
+	mocks.claimRows = 1;
 });
 
 describe("operator CSV import", () => {
@@ -308,6 +320,24 @@ describe("reassignLoomImport", () => {
 		});
 		expect(mocks.copies).toEqual([]);
 		expect(mocks.updates).toEqual([]);
+	});
+
+	it("does not touch a video another move has claimed", async () => {
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		mocks.claimRows = 0;
+		await expect(reassignLoomImport(input)).resolves.toMatchObject({
+			status: "skipped",
+			reason: "another move is running",
+		});
+		expect(mocks.copies).toEqual([]);
+		expect(mocks.removed).toEqual([]);
+	});
+
+	it("releases its claim after a failed move", async () => {
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		mocks.headSize = 1;
+		await expect(reassignLoomImport(input)).rejects.toThrow();
+		expect(mocks.claims).toHaveLength(2);
 	});
 
 	it("re-encrypts the word transcript for the new owner", async () => {

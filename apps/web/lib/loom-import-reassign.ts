@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import {
 	importedVideos,
@@ -11,7 +12,7 @@ import {
 } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { Organisation, User, Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Option } from "effect";
 import { getEditTranscriptObjectKey } from "@/lib/edit-transcript";
 import {
@@ -28,6 +29,8 @@ export type LoomReassignOutcome =
 			cleanup: "done" | "failed";
 	  }
 	| { videoId: string; status: "skipped" | "failed"; reason: string };
+
+const CLAIM_TTL_MS = 60 * 60 * 1000;
 
 function getAffectedRows(result: unknown) {
 	const header = Array.isArray(result) ? result[0] : result;
@@ -139,6 +142,61 @@ export async function reassignLoomImport({
 	if (!member)
 		return { videoId, status: "skipped", reason: "new owner not a member" };
 
+	const token = randomUUID();
+	const claimedAt = new Date();
+	const claim = await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.loomReassignClaim', JSON_OBJECT('token', ${token}, 'at', ${claimedAt.toISOString()}))`,
+		})
+		.where(
+			and(
+				eq(videos.id, id),
+				eq(videos.ownerId, User.UserId.make(fromUserId)),
+				sql`(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.at')) < ${new Date(claimedAt.getTime() - CLAIM_TTL_MS).toISOString()})`,
+			),
+		);
+	if (getAffectedRows(claim) !== 1)
+		return { videoId, status: "skipped", reason: "another move is running" };
+	try {
+		return await moveClaimedVideo({
+			id,
+			videoId,
+			organizationId,
+			fromUserId,
+			toUserId,
+			token,
+		});
+	} finally {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_REMOVE(${videos.metadata}, '$.loomReassignClaim')`,
+			})
+			.where(
+				and(
+					eq(videos.id, id),
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.token')) = ${token}`,
+				),
+			);
+	}
+}
+
+async function moveClaimedVideo({
+	id,
+	videoId,
+	organizationId,
+	fromUserId,
+	toUserId,
+	token,
+}: {
+	id: Video.VideoId;
+	videoId: string;
+	organizationId: string;
+	fromUserId: string;
+	toUserId: string;
+	token: string;
+}): Promise<LoomReassignOutcome> {
 	const source = await listObjects(videoId, fromUserId, organizationId);
 	if (source.objects.length === 0)
 		return { videoId, status: "failed", reason: "no media found" };
@@ -213,6 +271,7 @@ export async function reassignLoomImport({
 				and(
 					eq(videos.id, id),
 					eq(videos.ownerId, User.UserId.make(fromUserId)),
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.token')) = ${token}`,
 				),
 			);
 		if (getAffectedRows(result) !== 1) return false;
