@@ -39,6 +39,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardSpacesData,
@@ -47,6 +48,10 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
+import {
+	getPendingLoomProcessing,
+	startDeferredLoomProcessing,
+} from "@/lib/loom-deferred-processing";
 import { createNotification } from "@/lib/Notification";
 import {
 	canManageOrganizationSettings,
@@ -873,6 +878,25 @@ async function AuthorizedContent({
 	}
 
 	const metadata = (video.metadata as VideoMetadata) || {};
+	const deferredLoomRawFileKey = hasActiveUpload
+		? null
+		: getPendingLoomProcessing(metadata, video.owner.id, videoId);
+	if (deferredLoomRawFileKey) {
+		const rawFileKey = deferredLoomRawFileKey;
+		after(() =>
+			startDeferredLoomProcessing({
+				videoId,
+				ownerId: video.owner.id,
+				bucketId: video.bucket,
+				rawFileKey,
+			}).catch((error) => {
+				console.error(
+					`[ShareVideoPage] Error starting deferred processing for ${videoId}:`,
+					error,
+				);
+			}),
+		);
+	}
 	const aiGenerationStatus = metadata.aiGenerationStatus || null;
 
 	const initialAiData = {

@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { handleAudioLevelPublication } from "@/lib/audio-level-publication";
 import { SourceCommitPendingError } from "@/lib/desktop-recording-jobs";
@@ -56,6 +56,7 @@ interface ProgressWebhookPayload {
 		bitrate: number;
 		fileSize: number;
 	};
+	deferredSourceKey?: string;
 }
 
 const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
@@ -232,6 +233,41 @@ export async function POST(request: NextRequest) {
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 
+			const transcribeOnView =
+				request.nextUrl.searchParams.get("transcription") === "on-view";
+			const deferredSourceKey =
+				currentVideo &&
+				typeof payload.deferredSourceKey === "string" &&
+				payload.deferredSourceKey.startsWith(
+					`${currentVideo.ownerId}/${currentVideo.id}/`,
+				) &&
+				payload.deferredSourceKey.endsWith(".webm")
+					? payload.deferredSourceKey
+					: undefined;
+			const metadataUpdates = [
+				...(transcribeOnView
+					? [sql`'$.transcribeOnView', JSON_EXTRACT('true', '$')`]
+					: []),
+				...(currentVideo?.metadata?.loomDeferredProcessing &&
+				currentUpload?.rawFileKey ===
+					currentVideo.metadata.loomDeferredProcessing.rawFileKey
+					? [sql`'$.loomDeferredProcessing.status', 'complete'`]
+					: []),
+				...(deferredSourceKey
+					? [
+							sql`'$.loomDeferredProcessing', IF(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing') IS NULL, JSON_OBJECT('rawFileKey', ${deferredSourceKey}, 'status', 'pending'), JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing'))`,
+						]
+					: []),
+			];
+			if (currentVideo && metadataUpdates.length > 0) {
+				await db()
+					.update(videos)
+					.set({
+						metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(metadataUpdates, sql`, `)})`,
+					})
+					.where(eq(videos.id, currentVideo.id));
+			}
+
 			if (receipt) {
 				await db()
 					.update(videos)
@@ -260,13 +296,24 @@ export async function POST(request: NextRequest) {
 			} else {
 				await db()
 					.delete(videoUploads)
-					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+					.where(
+						and(
+							eq(videoUploads.videoId, payload.videoId as Video.VideoId),
+							deferredSourceKey
+								? or(
+										isNull(videoUploads.rawFileKey),
+										ne(videoUploads.rawFileKey, deferredSourceKey),
+									)
+								: undefined,
+						),
+					);
 			}
 			await invalidateGoogleDriveStorageQuotaCache(
 				currentVideo?.storageIntegrationId,
 			);
 
 			if (
+				!transcribeOnView &&
 				shouldQueueTranscriptionAfterMediaComplete(
 					currentVideo?.source.type,
 					Boolean(isEditUpload),
