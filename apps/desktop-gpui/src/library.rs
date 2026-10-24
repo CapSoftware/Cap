@@ -626,7 +626,6 @@ pub fn open_path(path: &Path) {
     }
 }
 
-/// Open File on a finished export, as chosen in General settings.
 pub fn open_output(path: &Path) {
     match crate::store::GeneralSettings::load().open_file_behaviour {
         crate::store::OpenFileBehaviour::OpenFile => open_path(path),
