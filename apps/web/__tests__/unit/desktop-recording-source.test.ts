@@ -1270,6 +1270,33 @@ describe("durable desktop recording source commit", () => {
 			).rejects.toThrow();
 		},
 	);
+	it("checks each S3 original once per phase and does not read receipts back", async () => {
+		const storage = storageFixture();
+		seedSegments(storage);
+		await commitDesktopRecordingSource(recording(), generation);
+		const segmentKey = `${prefix}/segments/video/segment_001.m4s`;
+		expect(
+			storage.bucket.headObject.mock.calls.filter(
+				([key]) => key === segmentKey,
+			),
+		).toHaveLength(3);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
+	});
+
+	it("still reads Drive receipts back after writing them", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		await commitDesktopRecordingSource(recording(), generation);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(true);
+	});
 });
 
 describe("large desktop recording snapshots", () => {
