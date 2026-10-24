@@ -1,4 +1,5 @@
 import { Agent, createServer, get } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
 import type { AddressInfo } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,8 +12,10 @@ vi.mock("@cap/env", () => env);
 
 import {
 	isBlockedS3Endpoint,
+	isDisallowedS3Endpoint,
 	isPrivateAddress,
 	publicOnlyLookup,
+	publicOnlyS3Agents,
 	shouldBlockPrivateS3Endpoints,
 } from "@/lib/s3-endpoint-policy";
 
@@ -154,5 +157,56 @@ describe("shouldBlockPrivateS3Endpoints", () => {
 		env.NODE_ENV = "production";
 		env.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
 		expect(shouldBlockPrivateS3Endpoints()).toBe(false);
+	});
+});
+
+describe("isDisallowedS3Endpoint", () => {
+	beforeEach(() => {
+		env.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		env.NODE_ENV = "production";
+	});
+
+	it("blocks private endpoints on Cap Cloud production", async () => {
+		await expect(isDisallowedS3Endpoint("http://127.0.0.1:9000")).resolves.toBe(
+			true,
+		);
+		await expect(isDisallowedS3Endpoint("https://8.8.8.8")).resolves.toBe(
+			false,
+		);
+	});
+
+	it("leaves an empty endpoint to the AWS default", async () => {
+		await expect(isDisallowedS3Endpoint("")).resolves.toBe(false);
+	});
+
+	it("allows private endpoints outside Cap Cloud production", async () => {
+		env.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
+		await expect(isDisallowedS3Endpoint("http://localhost:9000")).resolves.toBe(
+			false,
+		);
+
+		env.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		env.NODE_ENV = "development";
+		await expect(isDisallowedS3Endpoint("http://10.0.0.5:9000")).resolves.toBe(
+			false,
+		);
+	});
+});
+
+describe("publicOnlyS3Agents", () => {
+	beforeEach(() => {
+		env.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		env.NODE_ENV = "production";
+	});
+
+	it("returns public-only agents on Cap Cloud production", () => {
+		const agents = publicOnlyS3Agents();
+		expect(agents?.httpAgent).toBeInstanceOf(Agent);
+		expect(agents?.httpsAgent).toBeInstanceOf(HttpsAgent);
+	});
+
+	it("keeps the SDK default handler elsewhere", () => {
+		env.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
+		expect(publicOnlyS3Agents()).toBeUndefined();
 	});
 });

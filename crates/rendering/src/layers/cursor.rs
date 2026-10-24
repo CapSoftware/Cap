@@ -455,6 +455,7 @@ impl CursorLayer {
         let time_s = segment_frames.recording_time;
 
         let Some(interpolated_cursor) = &uniforms.interpolated_cursor else {
+            self.bind_group = None;
             return;
         };
 
@@ -565,6 +566,7 @@ impl CursorLayer {
             }
             let Some(tex) = self.cursors.get(&interpolated_cursor.cursor_id) else {
                 error!("Cursor {:?} not found!", interpolated_cursor.cursor_id);
+                self.bind_group = None;
                 return;
             };
             tex

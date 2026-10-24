@@ -294,17 +294,7 @@ impl WindowImpl {
     }
 
     pub fn display(&self) -> Option<DisplayImpl> {
-        let bounds = self.physical_bounds()?;
-        let center = PhysicalPosition::new(
-            bounds.position().x() + bounds.size().width() / 2.0,
-            bounds.position().y() + bounds.size().height() / 2.0,
-        );
-
-        DisplayImpl::list().into_iter().find(|display| {
-            display
-                .physical_bounds()
-                .is_some_and(|display_bounds| display_bounds.contains_point(center))
-        })
+        display_for_bounds(self.physical_bounds()?, &DisplayImpl::list())
     }
 
     pub fn name(&self) -> Option<String> {
@@ -320,6 +310,24 @@ impl WindowImpl {
     pub fn level(&self) -> Option<i32> {
         Some(0)
     }
+}
+
+fn display_for_bounds(bounds: PhysicalBounds, displays: &[DisplayImpl]) -> Option<DisplayImpl> {
+    displays
+        .iter()
+        .filter_map(|display| {
+            let display_bounds = display.physical_bounds()?;
+            let left = bounds.position().x().max(display_bounds.position().x());
+            let top = bounds.position().y().max(display_bounds.position().y());
+            let right = (bounds.position().x() + bounds.size().width())
+                .min(display_bounds.position().x() + display_bounds.size().width());
+            let bottom = (bounds.position().y() + bounds.size().height())
+                .min(display_bounds.position().y() + display_bounds.size().height());
+            let area = (right - left).max(0.0) * (bottom - top).max(0.0);
+            (area > 0.0).then_some((*display, area))
+        })
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(display, _)| display)
 }
 
 fn filter_window_candidates(windows: Vec<Window>) -> Vec<WindowImpl> {
@@ -490,4 +498,73 @@ fn get_cursor_position() -> Option<PhysicalPosition> {
         reply.root_x.into(),
         reply.root_y.into(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn display(id: u32, x: i32, y: i32, width: u32, height: u32) -> DisplayImpl {
+        DisplayImpl {
+            id,
+            x,
+            y,
+            width,
+            height,
+            refresh_rate: 60.0,
+            logical_bounds: None,
+            wayland_uuid: None,
+        }
+    }
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> PhysicalBounds {
+        PhysicalBounds::new(
+            PhysicalPosition::new(x, y),
+            PhysicalSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn window_center_in_monitor_gap_still_resolves_to_visible_display() {
+        let displays = [display(0, 0, 0, 1000, 800), display(1, 1200, 0, 1000, 800)];
+        let window = bounds(900.0, 100.0, 350.0, 200.0);
+        assert_eq!(display_for_bounds(window, &displays).unwrap().id, 0);
+    }
+
+    #[test]
+    fn window_uses_largest_overlap_on_offset_monitors() {
+        let displays = [
+            display(0, -1920, 0, 1920, 1080),
+            display(1, 0, -900, 1440, 900),
+        ];
+        let window = bounds(-150.0, -100.0, 400.0, 300.0);
+        assert_eq!(display_for_bounds(window, &displays).unwrap().id, 0);
+        assert_eq!(
+            display_for_bounds(window, &[displays[1], displays[0]])
+                .unwrap()
+                .id,
+            0
+        );
+        assert_eq!(
+            display_for_bounds(bounds(-150.0, -200.0, 400.0, 300.0), &displays)
+                .unwrap()
+                .id,
+            1
+        );
+    }
+
+    #[test]
+    fn nonoverlapping_and_edge_touching_windows_have_no_display() {
+        let displays = [display(0, 0, 0, 1920, 1080)];
+        for window in [
+            bounds(-320.0, 100.0, 320.0, 240.0),
+            bounds(1920.0, 100.0, 320.0, 240.0),
+            bounds(100.0, -240.0, 320.0, 240.0),
+            bounds(100.0, 1080.0, 320.0, 240.0),
+            bounds(-400.0, -400.0, 320.0, 240.0),
+        ] {
+            assert!(display_for_bounds(window, &displays).is_none());
+        }
+        assert!(display_for_bounds(bounds(0.0, 0.0, 320.0, 240.0), &[]).is_none());
+    }
 }

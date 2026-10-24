@@ -41,6 +41,9 @@ const FRAME_PROTECTED_PATHS = [
 	"/invite",
 	"/cli/authorize",
 	"/mcp/authorize",
+	"/admin",
+	"/signup",
+	"/verify-otp",
 ];
 
 const isFrameProtectedPath = (path: string) =>
