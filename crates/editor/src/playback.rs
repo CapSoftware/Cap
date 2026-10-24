@@ -188,7 +188,7 @@ fn precision_sleep_sync(deadline: Instant) {
         let timed = WAITABLE_TIMER.with(|timer| {
             timer.as_ref().is_some_and(|timer| {
                 remaining <= WindowsWaitableTimer::SPIN
-                    || timer.sleep(remaining - WindowsWaitableTimer::SPIN)
+                    || timer.sleep(remaining.saturating_sub(WindowsWaitableTimer::SPIN))
             })
         });
         if !timed {
@@ -2244,7 +2244,8 @@ mod tests {
                 precision_sleep_sync(deadline);
                 late_us.push(Instant::now().duration_since(deadline).as_secs_f64() * 1e6);
             }
-            let cpu = (thread_cpu() - cpu_start).as_secs_f64() / start.elapsed().as_secs_f64();
+            let cpu = thread_cpu().saturating_sub(cpu_start).as_secs_f64()
+                / start.elapsed().as_secs_f64();
             late_us.sort_by(f64::total_cmp);
             let at = |q: f64| late_us[((late_us.len() - 1) as f64 * q).round() as usize];
             println!(
