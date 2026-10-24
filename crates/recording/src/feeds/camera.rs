@@ -1159,6 +1159,7 @@ async fn setup_camera(
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);
 
+    let mut native_buffers: Vec<(NativeCameraFrame, usize)> = Vec::new();
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
             let callback_num =
@@ -1178,33 +1179,56 @@ async fn setup_camera(
                 use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
                 let data_len = bytes.len();
-                if let Ok(buffer) = unsafe { MFCreateMemoryBuffer(data_len as u32) } {
-                    let buffer_ready = {
-                        if let Ok(mut lock) = buffer.lock_for_write() {
-                            lock.copy_from_slice(&bytes);
+                let reusable = native_buffers
+                    .iter()
+                    .find(|(frame, capacity)| {
+                        *capacity >= data_len
+                            && Arc::strong_count(&frame.buffer) == 1
+                            && !frame.buffer.is_poisoned()
+                    })
+                    .map(|(frame, _)| frame.buffer.clone());
+                let buffer = match reusable {
+                    Some(buffer) => Ok(buffer),
+                    None => unsafe { MFCreateMemoryBuffer(data_len as u32) }
+                        .map(std::sync::Mutex::new)
+                        .map(Arc::from),
+                };
+                if let Ok(buffer) = buffer {
+                    let buffer_ready = buffer.lock().is_ok_and(|guard| {
+                        let copied = if let Ok(mut lock) = guard.lock_for_write() {
+                            lock[..data_len].copy_from_slice(&bytes);
                             true
                         } else {
                             false
-                        }
-                    };
+                        };
+                        copied && unsafe { guard.SetCurrentLength(data_len as u32) }.is_ok()
+                    });
 
                     if buffer_ready {
-                        let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
-
-                        #[allow(clippy::arc_with_non_send_sync)]
-                        let buffer = std::sync::Arc::new(std::sync::Mutex::new(buffer));
-                        hand_native_frame_to_feed(
-                            &native_recipient,
-                            &native_ingress,
-                            NativeCameraFrame {
-                                buffer,
-                                pixel_format: frame.native().pixel_format,
-                                width: frame.native().width as u32,
-                                height: frame.native().height as u32,
-                                is_bottom_up: frame.native().is_bottom_up,
-                                timestamp,
-                            },
-                        );
+                        let native_frame = NativeCameraFrame {
+                            buffer,
+                            pixel_format: frame.native().pixel_format,
+                            width: frame.native().width as u32,
+                            height: frame.native().height as u32,
+                            is_bottom_up: frame.native().is_bottom_up,
+                            timestamp,
+                        };
+                        if !native_buffers
+                            .iter()
+                            .any(|(frame, _)| Arc::ptr_eq(&frame.buffer, &native_frame.buffer))
+                        {
+                            if let Some(slot) = native_buffers
+                                .iter_mut()
+                                .find(|(frame, _)| Arc::strong_count(&frame.buffer) == 1)
+                            {
+                                *slot = (native_frame.clone(), data_len);
+                            } else if native_buffers.len() < 3 {
+                                native_buffers.push((native_frame.clone(), data_len));
+                            }
+                        }
+                        hand_native_frame_to_feed(&native_recipient, &native_ingress, native_frame);
+                    } else {
+                        native_buffers.retain(|(frame, _)| !Arc::ptr_eq(&frame.buffer, &buffer));
                     }
                 }
             }
