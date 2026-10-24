@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
     let wall = started.elapsed();
     let cpu = process_cpu()
         .zip(started_cpu)
-        .map(|(now, started)| (now - started).as_secs_f64());
+        .map(|(now, started)| now.saturating_sub(started).as_secs_f64());
     let response = futures::executor::block_on(actor.rx.clone())
         .map_err(|_| anyhow::anyhow!("The cursor recorder exited without a response"))?;
 

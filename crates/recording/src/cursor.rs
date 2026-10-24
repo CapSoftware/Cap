@@ -535,8 +535,6 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
     (display.to_string(), code.to_string())
 }
 
-/// Appends a down event for each key held now but not before, then an up event
-/// for each key released since, in that order.
 fn push_key_changes(
     previous: &[device_query::Keycode],
     current: &[device_query::Keycode],
