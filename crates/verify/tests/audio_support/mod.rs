@@ -179,6 +179,7 @@ impl OfflinePlayer {
                 duration_secs: self.duration,
                 start_playhead_secs: start,
                 playhead_rx: rx,
+                playback_rate: 1.0,
             })
             .expect("offline audio output accepted the play request");
         self.playhead = Some(tx);

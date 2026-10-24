@@ -117,6 +117,7 @@ fn audible_spec_with_duration(duration_secs: usize) -> PlaySpec {
         duration_secs: duration_secs as f64,
         start_playhead_secs: 0.0,
         playhead_rx,
+        playback_rate: 1.0,
     }
 }
 
