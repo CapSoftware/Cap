@@ -1720,11 +1720,23 @@ mod incremental_writer_tests {
         }
     }
 
+    /// Joins the writer, failing instead of hanging if it never finishes.
+    fn finish_writer(writer: CursorFileWriter, delta: Option<IncrementalDelta>) -> Vec<PathBuf> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(writer.finish(delta));
+        });
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("the cursor writer did not finish")
+    }
+
     /// The files hold exactly the first `events` events, in the compact form
     /// of a single `CursorEvents` serialization and the usual keyboard binary.
     fn assert_files_hold(outputs: &IncrementalCaptureOutputs, events: usize) {
         let expected = delta(0..events);
         let cursor = outputs.cursor.as_ref().unwrap();
+        // Reading a FIFO left in place would block instead of failing.
+        assert!(std::fs::metadata(cursor).unwrap().is_file());
         assert_eq!(
             std::fs::read(cursor).unwrap(),
             serde_json::to_vec(&CursorEvents {
@@ -1843,7 +1855,7 @@ mod incremental_writer_tests {
         let threaded = outputs(dir.path(), "threaded");
         let writer = CursorFileWriter::spawn(threaded.clone()).unwrap();
         writer.flush(delta(0..10));
-        writer.finish(Some(delta(10..500)));
+        finish_writer(writer, Some(delta(10..500)));
 
         for (a, b) in [
             (&inline.cursor, &threaded.cursor),
@@ -1904,7 +1916,19 @@ mod incremental_writer_tests {
             })
         };
 
-        let unsaved = writer.finish(Some(delta(40..50)));
+        // The writer may have folded every queued delta into its stalled write,
+        // which renames the FIFO itself into place once a reader arrives. Wait
+        // for that rename before the last flush, so the last write always
+        // replaces it with a regular file.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !(outputs.cursor.as_ref().unwrap().exists() && !fifo.exists()) {
+            assert!(
+                Instant::now() < deadline,
+                "the stalled write never completed"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let unsaved = finish_writer(writer, Some(delta(40..50)));
         done.store(true, Ordering::Release);
         drainer.join().unwrap();
 
@@ -1952,10 +1976,10 @@ mod incremental_writer_tests {
             // while a large file is being replaced.
             let deadline = Instant::now() + Duration::from_secs(60);
             while !std::fs::metadata(cursor).is_ok_and(|meta| meta.len() >= 2_000_000) {
-                assert!(
-                    Instant::now() < deadline,
-                    "the child never wrote the cursor file"
-                );
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    panic!("the child never wrote the cursor file");
+                }
                 std::thread::sleep(Duration::from_millis(2));
             }
             std::thread::sleep(Duration::from_millis(round * 7 % 40));
@@ -1994,7 +2018,7 @@ mod incremental_writer_tests {
             saved.clone(),
             image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
         ));
-        assert_eq!(writer.finish(None), vec![missing]);
+        assert_eq!(finish_writer(writer, None), vec![missing]);
         assert!(saved.exists());
     }
 
@@ -2020,7 +2044,7 @@ mod incremental_writer_tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(path.exists());
-        assert!(writer.finish(None).is_empty());
+        assert!(finish_writer(writer, None).is_empty());
     }
 }
 
