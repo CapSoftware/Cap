@@ -186,6 +186,7 @@ impl GifExportSettings {
             self.resolution_base,
             &base.recordings,
             base.sample_windows.clone(),
+            true,
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

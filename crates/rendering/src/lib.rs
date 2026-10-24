@@ -907,6 +907,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
     frame_windows: Option<FrameWindows>,
+    owned_frames: bool,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
     validate_timeline(project, render_segments.len())?;
@@ -980,6 +981,9 @@ pub async fn render_video_to_channel(
 
     let mut frame_renderer = FrameRenderer::new(constants);
     frame_renderer.use_export_deadlines();
+    if owned_frames {
+        frame_renderer.deliver_owned_frames();
+    }
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -6745,6 +6749,7 @@ mod export_order_tests {
                 XY::new(SIZE, SIZE),
                 &recordings,
                 None,
+                false,
             );
             let collect = async {
                 let mut order = Vec::new();
@@ -7227,6 +7232,7 @@ pub struct FrameRenderer<'a> {
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
     export_deadlines: bool,
+    owned_frames: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -7245,6 +7251,7 @@ impl<'a> FrameRenderer<'a> {
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
             export_deadlines: false,
+            owned_frames: false,
         }
     }
 
@@ -7253,6 +7260,13 @@ impl<'a> FrameRenderer<'a> {
     /// failed readback costs the export a frame.
     pub(crate) fn use_export_deadlines(&mut self) {
         self.export_deadlines = true;
+    }
+
+    /// Frames are delivered with no other owner: the readback does not keep
+    /// a clone for recycling, so the consumer can take the buffer by value
+    /// instead of copying it out of a shared `Arc`.
+    pub(crate) fn deliver_owned_frames(&mut self) {
+        self.owned_frames = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -7303,6 +7317,7 @@ impl<'a> FrameRenderer<'a> {
         let session = self.session.get_or_insert_with(|| {
             RenderSession::new(&self.constants.device, width, height)
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
         });
         session.update_texture_size(&self.constants.device, width, height);
     }
@@ -7351,6 +7366,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -7429,6 +7445,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7601,6 +7618,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7739,6 +7757,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7825,6 +7844,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -8018,6 +8038,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
