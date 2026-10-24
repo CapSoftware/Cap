@@ -2881,7 +2881,7 @@ mod tests {
             },
         )
         .unwrap();
-        for index in 0..110u64 {
+        for index in 0..300u64 {
             let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 64, 64);
             for plane in 0..frame.planes() {
                 frame.data_mut(plane).fill((index % 200) as u8);
@@ -2903,6 +2903,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(manifest["is_complete"], Value::Bool(false));
+        let finished = manifest["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|segment| segment["is_complete"] == Value::Bool(true))
+            .count();
+        assert!(finished >= 1, "the crash saved no finished segment");
         assert!(
             cap_recording::upload_resume::collect_segment_events(&project, false).is_err(),
             "a crashed recording must not be resumable before Recover"
@@ -2938,7 +2945,7 @@ mod tests {
             .iter()
             .filter(|event| !event.is_init && event.media_type == SegmentMediaType::Video)
             .count();
-        assert!(segments >= 2, "kept {segments} segments");
+        assert_eq!(segments, finished);
     }
 
     #[cfg(target_os = "linux")]
