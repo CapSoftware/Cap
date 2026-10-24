@@ -1,0 +1,232 @@
+[common]
+add = "Ajouter"
+cancel = "Annuler"
+ok = "OK"
+reset = "Réinitialiser"
+reset_to_default = "Rétablir par défaut"
+save = "Enregistrer"
+
+[menu.app]
+about = "À propos de Cap"
+hide = "Masquer Cap"
+hide_others = "Masquer les autres"
+quit = "Quitter Cap"
+services = "Services"
+settings = "Paramètres…"
+
+[menu.file]
+close_window = "Fermer la fenêtre"
+title = "Fichier"
+
+[menu.edit]
+copy = "Copier"
+cut = "Couper"
+paste = "Coller"
+redo = "Rétablir"
+select_all = "Tout sélectionner"
+title = "Édition"
+undo = "Annuler"
+
+[menu.view]
+enter_full_screen = "Passer en mode plein écran"
+title = "Présentation"
+
+[menu.window]
+close_window = "Fermer la fenêtre"
+minimize = "Placer dans le Dock"
+title = "Fenêtre"
+zoom = "Réduire/agrandir"
+
+[menu.help]
+title = "Aide"
+
+[tray]
+import_media = "Importer des médias..."
+no_recent_items = "Aucun élément récent"
+open_main_window = "Ouvrir la fenêtre principale"
+previous = "Récents"
+quit = "Quitter Cap"
+record_area = "Enregistrer une zone"
+record_display = "Enregistrer l'écran"
+record_window = "Enregistrer une fenêtre"
+request_permissions = "Demander les autorisations"
+screenshot_area = "Capturer une zone"
+screenshot_display = "Capturer l'écran"
+screenshot_window = "Capturer une fenêtre"
+select_mode = "Choisir le mode"
+settings = "Paramètres"
+take_screenshot = "Prendre une capture d'écran"
+tooltip_recording = "Cap - Arrêter l'enregistrement"
+upload_logs = "Envoyer les journaux"
+version = "Cap v{version}"
+view_all_recordings = "Voir tous les enregistrements"
+view_all_screenshots = "Voir toutes les captures d'écran"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "Capture d'écran"
+studio = "Studio"
+
+[settings.nav]
+automations = "Automatisations"
+changelog = "Nouveautés"
+cli = "CLI"
+experimental = "Expérimental"
+feedback = "Commentaires"
+general = "Général"
+integrations = "Intégrations"
+license = "Forfait et licence"
+quality = "Qualité d'enregistrement"
+recordings = "Enregistrements"
+screenshots = "Captures d'écran"
+shortcuts = "Raccourcis"
+transcription = "Transcription"
+
+[settings.general.language]
+description = "Choisissez la langue d'affichage de Cap."
+label = "Langue de l'app"
+system_default = "Langue du système ({language})"
+title = "Langue"
+
+[settings.general.appearance]
+description = "Adaptez Cap au thème de votre système ou choisissez une apparence fixe."
+title = "Apparence"
+
+[settings.general.app]
+description = "Choisissez comment Cap apparaît sur votre système."
+title = "App"
+
+[settings.general.app.dock_icon]
+description = "Garder Cap dans le Dock même lorsqu'aucune fenêtre n'est ouverte."
+label = "Toujours afficher l'icône dans le Dock"
+
+[settings.general.app.notifications]
+description = "Afficher des notifications pour les copies dans le presse-papiers, les fichiers enregistrés, etc. Vous devrez peut-être autoriser Cap dans les réglages de notifications de votre système."
+label = "Notifications système"
+
+[settings.general.app.open_file]
+description = "Choisissez si « Ouvrir le fichier » ouvre un export ou l'affiche dans son dossier."
+label = "Bouton « Ouvrir le fichier »"
+
+[settings.general.recording]
+description = "Comportement pendant l'enregistrement et après l'arrêt."
+title = "Enregistrement"
+
+[settings.general.recording.countdown]
+description = "Délai avant le début de l'enregistrement."
+label = "Compte à rebours"
+off = "Désactivé"
+seconds_10 = "10 secondes"
+seconds_3 = "3 secondes"
+seconds_5 = "5 secondes"
+
+[settings.general.recording.confirm_without_mic]
+description = "Demander une confirmation si aucun micro n'est sélectionné ou si le micro sélectionné est indisponible."
+label = "Confirmer avant d'enregistrer sans micro"
+
+[settings.general.recording.studio_sound]
+description = "Nettoie automatiquement l'audio du micro. Vous pouvez toujours le désactiver pour un enregistrement dans l'éditeur."
+label = "Studio Sound sur les nouveaux enregistrements"
+
+[settings.general.recording.main_window_start]
+description = "Ce que devient la fenêtre principale lorsqu'un enregistrement commence."
+label = "Fenêtre principale au début de l'enregistrement"
+
+[settings.general.recording.post_deletion]
+description = "Indique si la fenêtre d'enregistrement doit se rouvrir."
+label = "Après la suppression d'un enregistrement"
+
+[settings.general.recording.delete_after_upload]
+description = "Cap supprime le fichier local une fois la mise en ligne réussie."
+label = "Supprimer les enregistrements Instant après la mise en ligne"
+
+[settings.general.recording.crash_recovery]
+description = "Enregistrer par fragments récupérables après un plantage ou une coupure de courant. Fichiers légèrement plus volumineux pendant la capture."
+label = "Enregistrement récupérable après un plantage"
+
+[settings.general.recording.custom_cursor]
+description = "Capturer l'état du curseur séparément pour pouvoir ajuster sa taille et son lissage dans l'éditeur."
+label = "Capture séparée du curseur (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Ajouter automatiquement des segments de zoom autour des clics de souris dans les enregistrements Studio."
+label = "Zoom automatique sur les clics"
+
+[settings.general.recording.default_zoom]
+description = "Niveau de zoom des segments de zoom créés manuellement ou automatiquement."
+label = "Niveau de zoom par défaut"
+
+[settings.general.recording.capture_keyboard]
+description = "Enregistrer les frappes au clavier pour pouvoir ajouter des incrustations de touches dans l'éditeur."
+label = "Capturer les frappes au clavier"
+
+[settings.general.recording.notch_overlay]
+description = "Restaure automatiquement l'encoche pour les nouveaux enregistrements d'écran et de zone lorsque la région sélectionnée contient toute l'encoche. Les écrans externes, les zones partielles et les enregistrements de fenêtre ne sont pas modifiés. Chaque enregistrement peut remplacer ce réglage dans l'éditeur."
+label = "Afficher l'encoche du MacBook dans les enregistrements d'écran"
+
+[settings.general.recording.max_fps]
+description = "Fréquence d'images maximale de la capture d'écran."
+description_high = "Fréquence d'images maximale de la capture d'écran. Des valeurs plus élevées peuvent provoquer des pertes d'images ou une hausse de l'utilisation du processeur sur certains systèmes."
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (recommandé)"
+label = "Fréquence d'images maximale"
+
+[settings.general.storage]
+choose_folder = "Choisir un dossier"
+default_location = "Par défaut (Application Support)"
+description = "Le dossier où Cap sauvegarde vos enregistrements."
+title = "Stockage"
+
+[settings.general.project_name]
+available_placeholders = "Variables disponibles"
+description = "Modèle utilisé pour les nouveaux enregistrements et les fichiers exportés."
+title = "Nom de projet par défaut"
+
+[settings.general.project_name.placeholders]
+date_time = "Date et heure"
+date_values = "la date de l'enregistrement"
+mode_values = "\"studio\", \"instant\" ou \"screenshot\""
+random = "Aléatoire"
+random_values = "10 caractères hexadécimaux compatibles avec les noms de fichier ; utilisez {{random:N}} pour 1–32."
+recording_mode = "Mode d'enregistrement"
+recording_mode_values = "\"Studio\", \"Instant\" ou \"Screenshot\""
+target = "Cible"
+target_kind_values = "\"Display\", \"Window\" ou \"Area\""
+target_name_values = "Nom de l'écran ou titre de la fenêtre."
+time_values = "l'heure de l'enregistrement"
+
+[settings.general.excluded_windows]
+description = "Masquer des fenêtres dans les enregistrements."
+empty = "Aucune fenêtre n'est exclue pour le moment."
+missing_body = "Les fenêtres de caméra, de paramètres ou d'enregistrement peuvent apparaître comme des rectangles noirs dans les enregistrements d'écran. Manquantes : {names}."
+missing_title = "Des fenêtres Cap recommandées ne sont pas exclues"
+restore = "Restaurer"
+title = "Fenêtres exclues"
+
+[settings.general.updates]
+description = "Choisissez les versions de Cap que vous recevez."
+nightly_description = "Les versions les plus récentes, mises à jour automatiquement en arrière-plan lorsque vous n'enregistrez pas et n'exportez pas. Peuvent être instables."
+nightly_switch_back = "Revenir au canal Stable vous ramènera à la dernière version stable, qui peut être plus ancienne que votre version actuelle."
+stable_description = "Versions numérotées (recommandé)"
+title = "Mises à jour"
+
+[settings.general.updates.channel]
+description = "Le canal de publication à partir duquel Cap se met à jour."
+label = "Canal de mise à jour"
+
+[settings.general.self_host]
+confirm_change = "Voulez-vous vraiment remplacer l'URL du serveur par « {origin} » ? Vous devrez vous reconnecter."
+description = "Ne modifiez ce réglage que si vous hébergez votre propre instance de Cap Web."
+server_url = "URL du serveur Cap"
+title = "Auto-hébergement"
+update = "Mettre à jour"
+
+[settings.general.privacy]
+title = "Confidentialité"
+
+[settings.general.privacy.telemetry]
+description = "Cap utilise une télémétrie anonyme pour améliorer sa fiabilité et corriger des bugs. Nous ne collectons jamais le contenu des enregistrements, les titres de fenêtres, les chemins de fichiers ni aucune information personnelle."
+label = "Partager la télémétrie anonyme"

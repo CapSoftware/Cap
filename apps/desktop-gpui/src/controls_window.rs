@@ -15,6 +15,7 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _, px, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     feeds::Feeds,
     recording::RecordingMode,
@@ -516,6 +517,7 @@ impl Render for ControlsWindow {
             .justify_end()
             .p(px(12.))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .when_some(issue, |this, issue| {

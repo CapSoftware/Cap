@@ -1,0 +1,232 @@
+[common]
+add = "Añadir"
+cancel = "Cancelar"
+ok = "Aceptar"
+reset = "Restablecer"
+reset_to_default = "Restablecer valores predeterminados"
+save = "Guardar"
+
+[menu.app]
+about = "Acerca de Cap"
+hide = "Ocultar Cap"
+hide_others = "Ocultar otros"
+quit = "Salir de Cap"
+services = "Servicios"
+settings = "Ajustes…"
+
+[menu.file]
+close_window = "Cerrar ventana"
+title = "Archivo"
+
+[menu.edit]
+copy = "Copiar"
+cut = "Cortar"
+paste = "Pegar"
+redo = "Rehacer"
+select_all = "Seleccionar todo"
+title = "Edición"
+undo = "Deshacer"
+
+[menu.view]
+enter_full_screen = "Entrar en pantalla completa"
+title = "Visualización"
+
+[menu.window]
+close_window = "Cerrar ventana"
+minimize = "Minimizar"
+title = "Ventana"
+zoom = "Zoom"
+
+[menu.help]
+title = "Ayuda"
+
+[tray]
+import_media = "Importar contenido..."
+no_recent_items = "No hay elementos recientes"
+open_main_window = "Abrir ventana principal"
+previous = "Recientes"
+quit = "Salir de Cap"
+record_area = "Grabar área"
+record_display = "Grabar pantalla"
+record_window = "Grabar ventana"
+request_permissions = "Solicitar permisos"
+screenshot_area = "Capturar área"
+screenshot_display = "Capturar pantalla"
+screenshot_window = "Capturar ventana"
+select_mode = "Seleccionar modo"
+settings = "Ajustes"
+take_screenshot = "Hacer una captura de pantalla"
+tooltip_recording = "Cap - Detener grabación"
+upload_logs = "Subir registros"
+version = "Cap v{version}"
+view_all_recordings = "Ver todas las grabaciones"
+view_all_screenshots = "Ver todas las capturas de pantalla"
+
+[tray.mode]
+instant = "Instant"
+screenshot = "Captura de pantalla"
+studio = "Studio"
+
+[settings.nav]
+automations = "Automatizaciones"
+changelog = "Novedades"
+cli = "CLI"
+experimental = "Experimental"
+feedback = "Comentarios"
+general = "General"
+integrations = "Integraciones"
+license = "Plan y licencia"
+quality = "Calidad de grabación"
+recordings = "Grabaciones"
+screenshots = "Capturas de pantalla"
+shortcuts = "Atajos"
+transcription = "Transcripción"
+
+[settings.general.language]
+description = "Elige el idioma en el que se muestra Cap."
+label = "Idioma de la app"
+system_default = "Predeterminado del sistema ({language})"
+title = "Idioma"
+
+[settings.general.appearance]
+description = "Adapta Cap al tema de tu sistema o elige un aspecto fijo."
+title = "Apariencia"
+
+[settings.general.app]
+description = "Elige cómo aparece Cap en tu sistema."
+title = "App"
+
+[settings.general.app.dock_icon]
+description = "Mantén Cap en el Dock aunque no haya ventanas abiertas."
+label = "Mostrar siempre el icono en el Dock"
+
+[settings.general.app.notifications]
+description = "Muestra notificaciones al copiar al portapapeles, guardar archivos y más. Puede que tengas que permitir Cap en los ajustes de notificaciones del sistema."
+label = "Notificaciones del sistema"
+
+[settings.general.app.open_file]
+description = "Elige si «Abrir archivo» abre una exportación o la muestra en su carpeta."
+label = "Botón «Abrir archivo»"
+
+[settings.general.recording]
+description = "Comportamiento durante la grabación y al detenerla."
+title = "Grabación"
+
+[settings.general.recording.countdown]
+description = "Espera antes de que empiece la grabación."
+label = "Cuenta atrás"
+off = "Desactivada"
+seconds_10 = "10 segundos"
+seconds_3 = "3 segundos"
+seconds_5 = "5 segundos"
+
+[settings.general.recording.confirm_without_mic]
+description = "Pide confirmación si no hay ningún micrófono seleccionado o si el micrófono seleccionado no está disponible."
+label = "Confirmar antes de grabar sin micrófono"
+
+[settings.general.recording.studio_sound]
+description = "Limpia el audio del micrófono automáticamente. Puedes desactivarlo en el editor para cualquier grabación."
+label = "Studio Sound en las grabaciones nuevas"
+
+[settings.general.recording.main_window_start]
+description = "Qué ocurre con la ventana principal cuando empieza una grabación."
+label = "Ventana principal al empezar a grabar"
+
+[settings.general.recording.post_deletion]
+description = "Si la ventana de grabación debe volver a abrirse."
+label = "Después de eliminar una grabación"
+
+[settings.general.recording.delete_after_upload]
+description = "Cap elimina el archivo local cuando se ha subido correctamente."
+label = "Eliminar las grabaciones Instant después de subirlas"
+
+[settings.general.recording.crash_recovery]
+description = "Graba en fragmentos que se pueden recuperar tras un fallo o un corte de luz. Los archivos son algo más grandes durante la captura."
+label = "Grabación recuperable tras un fallo"
+
+[settings.general.recording.custom_cursor]
+description = "Captura el cursor por separado para poder ajustar su tamaño y suavizado en el editor."
+label = "Captura del cursor por separado (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Añade automáticamente segmentos de zoom alrededor de los clics del ratón en las grabaciones Studio."
+label = "Zoom automático en los clics"
+
+[settings.general.recording.default_zoom]
+description = "Nivel de zoom de los segmentos de zoom nuevos y generados automáticamente."
+label = "Nivel de zoom predeterminado"
+
+[settings.general.recording.capture_keyboard]
+description = "Registra las pulsaciones de teclas para poder añadir superposiciones de teclado en el editor."
+label = "Capturar pulsaciones de teclas"
+
+[settings.general.recording.notch_overlay]
+description = "Restaura automáticamente la muesca en las nuevas grabaciones de pantalla y de área cuando la región seleccionada incluye la muesca completa. Las pantallas externas, las áreas parciales y las grabaciones de ventana no se modifican. Cada grabación puede cambiarlo en el editor."
+label = "Dibujar la muesca del MacBook en las grabaciones de pantalla"
+
+[settings.general.recording.max_fps]
+description = "Velocidad de fotogramas máxima de la captura de pantalla."
+description_high = "Velocidad de fotogramas máxima de la captura de pantalla. Los valores altos pueden provocar pérdida de fotogramas o un mayor uso de CPU en algunos sistemas."
+fps_120 = "120 FPS"
+fps_24 = "24 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (recomendado)"
+label = "Velocidad de fotogramas máxima"
+
+[settings.general.storage]
+choose_folder = "Elegir carpeta"
+default_location = "Predeterminada (Application Support)"
+description = "Dónde guarda Cap tus grabaciones."
+title = "Almacenamiento"
+
+[settings.general.project_name]
+available_placeholders = "Marcadores disponibles"
+description = "Plantilla para las grabaciones nuevas y los archivos exportados."
+title = "Nombre de proyecto predeterminado"
+
+[settings.general.project_name.placeholders]
+date_time = "Fecha y hora"
+date_values = "la fecha de la grabación"
+mode_values = "\"studio\", \"instant\" o \"screenshot\""
+random = "Aleatorio"
+random_values = "10 caracteres hexadecimales válidos en nombres de archivo; usa {{random:N}} para 1–32."
+recording_mode = "Modo de grabación"
+recording_mode_values = "\"Studio\", \"Instant\" o \"Screenshot\""
+target = "Objetivo"
+target_kind_values = "\"Display\", \"Window\" o \"Area\""
+target_name_values = "Nombre del monitor o título de la ventana."
+time_values = "la hora de la grabación"
+
+[settings.general.excluded_windows]
+description = "Oculta ventanas en las grabaciones."
+empty = "No hay ninguna ventana excluida."
+missing_body = "Las ventanas de cámara, ajustes o grabación pueden aparecer como recuadros negros en las grabaciones de pantalla. Faltan: {names}."
+missing_title = "Hay ventanas de Cap recomendadas sin excluir"
+restore = "Restaurar"
+title = "Ventanas excluidas"
+
+[settings.general.updates]
+description = "Elige qué versiones de Cap recibes."
+nightly_description = "Las versiones más recientes, que se actualizan automáticamente en segundo plano cuando no estás grabando ni exportando. Pueden ser inestables."
+nightly_switch_back = "Si vuelves a Stable, volverás a la última versión estable, que puede ser anterior a tu versión actual."
+stable_description = "Versiones numeradas (recomendado)"
+title = "Actualizaciones"
+
+[settings.general.updates.channel]
+description = "El canal de versiones desde el que se actualiza Cap."
+label = "Canal de actualización"
+
+[settings.general.self_host]
+confirm_change = "¿Seguro que quieres cambiar la URL del servidor a «{origin}»? Tendrás que volver a iniciar sesión."
+description = "Cámbiala solo si tienes tu propia instancia de Cap Web."
+server_url = "URL del servidor de Cap"
+title = "Alojamiento propio"
+update = "Actualizar"
+
+[settings.general.privacy]
+title = "Privacidad"
+
+[settings.general.privacy.telemetry]
+description = "Cap usa telemetría anónima para mejorar la fiabilidad y corregir errores. Nunca recopilamos el contenido de las grabaciones, los títulos de las ventanas, las rutas de los archivos ni información personal."
+label = "Compartir telemetría anónima"
