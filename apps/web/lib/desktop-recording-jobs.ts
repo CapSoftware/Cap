@@ -29,7 +29,10 @@ import {
 	type RecordingVerification,
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
-import { recordingBudgetKey } from "@/lib/media-processing-budget";
+import {
+	RECORDING_PROCESSING_ATTEMPTS,
+	recordingBudgetKey,
+} from "@/lib/media-processing-budget";
 
 export const DESKTOP_RECORDING_LEASE_MS = 5 * 60 * 1_000;
 export const DESKTOP_RECORDING_SOURCE_RETRY_MS = 60 * 60 * 1_000;
@@ -38,7 +41,7 @@ export const DESKTOP_RECORDING_DELETING = "video-deleting";
 export const DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED =
 	"source-reupload-required";
 export const DESKTOP_RECORDING_RETRY_EXHAUSTED = "processing-retry-exhausted";
-const MAX_AUTOMATIC_ATTEMPTS = 5;
+const MAX_AUTOMATIC_ATTEMPTS = RECORDING_PROCESSING_ATTEMPTS;
 const RETRY_EXHAUSTED_MESSAGE =
 	"Processing paused after repeated failures. Your uploaded recording is retained. Please contact support.";
 
