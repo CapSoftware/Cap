@@ -593,7 +593,9 @@ export default function CapsScreen() {
 					public: isPublic,
 				});
 				setSettingsCap((current) =>
-					current?.id === updated.id ? updated : current,
+					current?.id === updated.id
+						? { ...current, public: updated.public }
+						: current,
 				);
 				await Promise.all([auth.refresh(), load()]);
 			} catch (error) {
@@ -640,7 +642,9 @@ export default function CapsScreen() {
 				client: auth.client,
 				onUpdated: async (updated) => {
 					setSettingsCap((current) =>
-						current?.id === updated.id ? updated : current,
+						current?.id === updated.id
+							? { ...current, protected: updated.protected }
+							: current,
 					);
 					await Promise.all([auth.refresh(), load()]);
 				},
@@ -657,7 +661,9 @@ export default function CapsScreen() {
 				client: auth.client,
 				onUpdated: async (updated) => {
 					setSettingsCap((current) =>
-						current?.id === updated.id ? updated : current,
+						current?.id === updated.id
+							? { ...current, title: updated.title }
+							: current,
 					);
 					await Promise.all([auth.refresh(), load()]);
 				},

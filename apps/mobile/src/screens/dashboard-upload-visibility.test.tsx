@@ -1,4 +1,6 @@
+import { Video } from "@cap/web-domain";
 import React, { type ReactElement, type ReactNode } from "react";
+import { ActionSheetIOS, Alert } from "react-native";
 import TestRenderer, {
 	act,
 	type ReactTestRenderer,
@@ -6,6 +8,7 @@ import TestRenderer, {
 } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MobileCapSummary } from "@/api/mobile";
+import { CapSettingsSheet } from "@/caps/CapSettingsSheet";
 import CapsScreen from "../../app/(tabs)";
 import UploadScreen from "../../app/(tabs)/upload";
 
@@ -71,6 +74,8 @@ type AuthStub = {
 			rootFolders: unknown[];
 			total?: number;
 		}>;
+		updateCapTitle: ReturnType<typeof vi.fn>;
+		updateCapPassword: ReturnType<typeof vi.fn>;
 		updateCapSharing: (
 			id: string,
 			input: { public: boolean },
@@ -127,6 +132,8 @@ const createAuth = (): AuthStub => ({
 				rootFolders: [],
 				total: 0,
 			}),
+		updateCapTitle: vi.fn(),
+		updateCapPassword: vi.fn(),
 		updateCapSharing: vi.fn((id: string, input: { public: boolean }) =>
 			Promise.resolve({
 				id,
@@ -2934,4 +2941,99 @@ describe("upload and dashboard visibility", () => {
 			await Promise.resolve();
 		});
 	});
+
+	it.each(["title", "password", "public"] as const)(
+		"keeps other settings when the earlier %s response arrives in the library sheet",
+		async (first) => {
+			const cap: MobileCapSummary = {
+				id: Video.VideoId.make("video_settings"),
+				title: "Launch review",
+				shareUrl: "https://cap.so/s/video_settings",
+				createdAt: "2026-05-18T10:00:00.000Z",
+				updatedAt: "2026-05-18T10:30:00.000Z",
+				ownerName: "Richie",
+				durationSeconds: 125,
+				thumbnailUrl: null,
+				folderId: null,
+				public: true,
+				protected: true,
+				viewCount: 7,
+				commentCount: 2,
+				reactionCount: 3,
+				upload: null,
+			};
+			const auth = createAuth();
+			const earlier = createDeferred<MobileCapSummary>();
+			let serverCap = cap;
+			auth.client.listCaps = vi.fn(async () => ({
+				caps: [serverCap],
+				folders: [],
+				pagination: { hasNextPage: false, page: 1, totalPages: 1 },
+				rootFolders: [],
+			}));
+			auth.client.updateCapTitle = vi.fn(() =>
+				first === "title" ? earlier.promise : Promise.resolve(serverCap),
+			);
+			auth.client.updateCapPassword = vi.fn(() =>
+				first === "password" ? earlier.promise : Promise.resolve(serverCap),
+			);
+			auth.client.updateCapSharing = vi.fn(() => earlier.promise);
+			authState.value = auth;
+			const renderer = await renderComponent(React.createElement(CapsScreen));
+			const card = renderer.root.findAllByProps({ cap })[0];
+			if (!card) throw new Error("Cap card missing");
+			await act(async () => card.props.onMenuPress(cap));
+			const sheet = () => renderer.root.findByType(CapSettingsSheet);
+			const rename = () => {
+				sheet().props.onRename(sheet().props.cap);
+				const buttons = vi.mocked(Alert.prompt).mock.calls.at(-1)?.[2];
+				if (!Array.isArray(buttons)) throw new Error("Rename prompt missing");
+				expect(vi.mocked(Alert.prompt).mock.calls.at(-1)?.[3]).toBe("plain-text");
+				const save = buttons[1]?.onPress as ((value: string) => void) | undefined;
+				save?.("Roadmap review");
+			};
+			const removePassword = () => {
+				sheet().props.onPassword(sheet().props.cap);
+				const callback = vi
+					.mocked(ActionSheetIOS.showActionSheetWithOptions)
+					.mock.calls.at(-1)?.[1];
+				if (!callback) throw new Error("Password actions missing");
+				callback(1);
+			};
+
+			await act(async () => {
+				if (first === "title") rename();
+				if (first === "password") removePassword();
+				if (first === "public") sheet().props.onVisibilityChange(cap, false);
+			});
+			serverCap = {
+				...cap,
+				title: "Roadmap review",
+				protected: first === "public",
+				public: first !== "public",
+			};
+			await act(async () => {
+				if (first === "title") removePassword();
+				else rename();
+			});
+			await act(async () => {
+				earlier.resolve(
+					first === "title"
+						? { ...cap, title: "Roadmap review" }
+						: first === "password"
+							? { ...cap, protected: false }
+							: { ...cap, public: false },
+				);
+				await earlier.promise;
+			});
+
+			expect(sheet().props.cap.title).toBe("Roadmap review");
+			expect(sheet().props.cap.protected).toBe(first === "public");
+			expect(sheet().props.cap.public).toBe(first !== "public");
+			expect(getTextNodes(renderer.toJSON())).toContain(
+				first === "public" ? "Protected" : "Off",
+			);
+			await act(async () => renderer.unmount());
+		},
+	);
 });
