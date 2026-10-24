@@ -1541,10 +1541,6 @@ fn captions(config: &mut ProjectConfiguration) {
         .caption_segments = segments;
 }
 
-fn path_index(dir: &tempfile::TempDir) -> usize {
-    std::fs::read_dir(dir.path()).map_or(0, |entries| entries.count())
-}
-
 /// The project shape of a 0.6.1 Windows export that ended the process right
 /// after it started: two segments with a camera, background blur on the camera
 /// (CPU segmentation where DirectML is unavailable) and captions on. The
