@@ -104,6 +104,7 @@ export async function reassignLoomImport({
 			ownerId: videos.ownerId,
 			orgId: videos.orgId,
 			source: videos.source,
+			metadata: videos.metadata,
 			bucketId: videos.bucket,
 			storageIntegrationId: videos.storageIntegrationId,
 			uploadPhase: videoUploads.phase,
@@ -132,6 +133,8 @@ export async function reassignLoomImport({
 		return { videoId, status: "skipped", reason: "import not finished" };
 	if (video.source && "outputKey" in video.source && video.source.outputKey)
 		return { videoId, status: "skipped", reason: "edited video" };
+	if (video.metadata?.loomDeferredProcessing?.status === "started")
+		return { videoId, status: "skipped", reason: "conversion running" };
 
 	const [member] = await db()
 		.select({ userId: organizationMembers.userId })
@@ -273,6 +276,7 @@ async function moveClaimedVideo({
 		const result = await tx
 			.update(videos)
 			.set({
+				metadata: sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) LIKE ${`${fromUserId}/${videoId}/%`}, JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', CONCAT(${`${toUserId}/${videoId}/`}, SUBSTRING(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')), ${`${fromUserId}/${videoId}/`.length + 1}))), ${videos.metadata})`,
 				ownerId: User.UserId.make(toUserId),
 				folderId: options.folderId
 					? Folder.FolderId.make(options.folderId)

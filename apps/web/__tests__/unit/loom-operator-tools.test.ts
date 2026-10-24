@@ -1,4 +1,6 @@
 import type { HttpApi } from "@effect/platform";
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Effect, type Layer as EffectLayer, Option } from "effect";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -293,7 +295,11 @@ describe("reassignLoomImport", () => {
 			],
 		]);
 		expect(mocks.updates).toEqual([
-			{ ownerId: ids.to, public: false, folderId: null },
+			expect.objectContaining({
+				ownerId: ids.to,
+				public: false,
+				folderId: null,
+			}),
 		]);
 		expect(mocks.deletes).toBe(2);
 		expect(mocks.removed).toEqual([mocks.objects.map(({ Key }) => Key)]);
@@ -309,6 +315,19 @@ describe("reassignLoomImport", () => {
 		[
 			[importedVideo({ source: { type: "webMP4", outputKey: "edited.mp4" } })],
 			"edited video",
+		],
+		[
+			[
+				importedVideo({
+					metadata: {
+						loomDeferredProcessing: {
+							status: "started",
+							rawFileKey: `${ids.from}/${ids.video}/raw-upload.webm`,
+						},
+					},
+				}),
+			],
+			"conversion running",
 		],
 		[[importedVideo(), []], "new owner not a member"],
 	])("leaves unsafe moves alone: %#", async (selects, reason) => {
@@ -341,6 +360,21 @@ describe("reassignLoomImport", () => {
 		expect(mocks.claims).toHaveLength(2);
 	});
 
+	it("points a pending conversion at the new owner's copy", async () => {
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await reassignLoomImport(input);
+		const query = new MySqlDialect().sqlToQuery(
+			mocks.updates[0]?.metadata as SQL,
+		);
+		expect(query.sql).toContain("'$.loomDeferredProcessing.rawFileKey'");
+		expect(query.params).toEqual(
+			expect.arrayContaining([
+				`${ids.from}/${ids.video}/%`,
+				`${ids.to}/${ids.video}/`,
+			]),
+		);
+	});
+
 	it("keeps sharing and visibility when asked", async () => {
 		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
 		await expect(
@@ -350,8 +384,9 @@ describe("reassignLoomImport", () => {
 			}),
 		).resolves.toMatchObject({ status: "moved" });
 		expect(mocks.updates).toEqual([
-			{ ownerId: ids.to, folderId: "folderaaaaaaaaa" },
+			expect.objectContaining({ ownerId: ids.to, folderId: "folderaaaaaaaaa" }),
 		]);
+		expect(mocks.updates[0]).not.toHaveProperty("public");
 		expect(mocks.deletes).toBe(0);
 	});
 

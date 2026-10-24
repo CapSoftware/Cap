@@ -301,6 +301,46 @@ describe("backfillLoomImport", () => {
 		expect(mocks.reassign).not.toHaveBeenCalled();
 	});
 
+	it("repairs a pending conversion left on the previous owner's path", async () => {
+		mocks.selects = [
+			[
+				video({
+					ownerId: "zephyaaaaaaaaaa",
+					metadata: {
+						loomDeferredProcessing: {
+							status: "pending",
+							rawFileKey: "lukeaaaaaaaaaaa/videoaaaaaaaaaa/raw-upload.webm",
+						},
+					},
+				}),
+			],
+			[lukeFolder("folderaaaaaaaaa")],
+		];
+		await expect(
+			backfillLoomImport(org, { videoId: "videoaaaaaaaaaa" }),
+		).resolves.toMatchObject({ status: "updated", changes: ["original"] });
+		expect(mocks.updates).toHaveLength(1);
+	});
+
+	it("leaves a conversion already on the owner's path alone", async () => {
+		mocks.selects = [
+			[
+				video({
+					metadata: {
+						loomDeferredProcessing: {
+							status: "pending",
+							rawFileKey: "lukeaaaaaaaaaaa/videoaaaaaaaaaa/raw-upload.webm",
+						},
+					},
+				}),
+			],
+			[lukeFolder("folderaaaaaaaaa")],
+		];
+		await expect(
+			backfillLoomImport(org, { videoId: "videoaaaaaaaaaa" }),
+		).resolves.toMatchObject({ status: "unchanged" });
+	});
+
 	it("reports moves it could not make or finish cleaning up", async () => {
 		mocks.selects = [[video()], [lukeFolder("folderaaaaaaaaa")]];
 		mocks.reassign.mockResolvedValue({
