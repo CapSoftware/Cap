@@ -13,6 +13,9 @@ export class MediaProcessingBudgetError extends Error {
 const key = (parts: string[]) =>
 	createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 
+export const recordingBudgetKey = (videoId: string, generation: string) =>
+	key(["recording", videoId, generation]);
+
 export function getMediaProcessingReservation(sourceBytes: number) {
 	if (
 		!Number.isSafeInteger(sourceBytes) ||
@@ -43,7 +46,7 @@ export async function reserveMediaProcessingBudget(input: {
 		input.generation,
 		input.attemptId,
 	]);
-	const recordingKey = key(["recording", input.videoId, input.generation]);
+	const recordingKey = recordingBudgetKey(input.videoId, input.generation);
 	const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60_000);
 	return db().transaction(async (tx) => {
 		const limits = [
