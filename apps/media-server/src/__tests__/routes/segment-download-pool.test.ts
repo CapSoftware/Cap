@@ -79,7 +79,6 @@ describe("segment download pool", () => {
 			55,
 		);
 		expect(peak).toBe(8);
-		// Audio starts while video segments are still downloading instead of after the whole video track.
 		expect(startedAt.get("audio-0")).toBeLessThan(
 			finishedAt.get("video-29") ?? 0,
 		);
