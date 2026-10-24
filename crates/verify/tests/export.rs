@@ -1493,3 +1493,72 @@ fn recorded_epoch_audio_head() {
     }
     common::assert_passed(failures);
 }
+
+/// The project shape of a 0.6.1 Windows export that ended the process right
+/// after it started: two segments with a camera, background blur on the camera
+/// (CPU segmentation where DirectML is unavailable) and captions on.
+fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
+    config.camera.background_blur.mode = cap_project::BackgroundBlurMode::Light;
+    let segments: Vec<cap_project::CaptionTrackSegment> = (0..12)
+        .map(|i| {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("caption-{i}"),
+                "start": f64::from(i) * 0.6,
+                "end": f64::from(i) * 0.6 + 0.5,
+                "text": format!("Caption number {i} on the timeline"),
+            }))
+            .unwrap()
+        })
+        .collect();
+    config.captions = Some(cap_project::CaptionsData {
+        segments: segments
+            .iter()
+            .map(|segment| cap_project::CaptionSegment {
+                id: segment.id.clone(),
+                start: segment.start as f32,
+                end: segment.end as f32,
+                text: segment.text.clone(),
+                words: Vec::new(),
+            })
+            .collect(),
+        settings: cap_project::CaptionSettings {
+            enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    config
+        .timeline
+        .get_or_insert_with(Default::default)
+        .caption_segments = segments;
+}
+
+/// Exports must finish, not end the process, with camera blur and captions.
+#[test]
+fn camera_blur_and_captions_export() {
+    let project = common::project(&catalog::multi_segment(report::tier()));
+    let mut config = project.config();
+    camera_blur_and_captions(&mut config);
+    let rt = common::runtime();
+    let dir = common::scratch_dir("export/multi-segment/camera-blur-captions");
+    for decoder in Decoder::all() {
+        let run = ExportRun {
+            custom_bpp: None,
+            fps: 30,
+            resolution: (1920, 1080),
+            format: Format::Mp4,
+            decoder,
+        };
+        let path = dir.path().join(format!("{}.mp4", decoder.label()));
+        let output = rt
+            .block_on(common::export(&project, config.clone(), &run, &path))
+            .unwrap_or_else(|error| panic!("{} export failed: {error}", decoder.label()));
+        let frames = common::read_output(&output, None);
+        assert!(
+            frames.len() > 30,
+            "{} export wrote {} frames",
+            decoder.label(),
+            frames.len()
+        );
+    }
+}
