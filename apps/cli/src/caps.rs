@@ -1932,7 +1932,10 @@ mod tests {
             crate::jobs::wait_operation(&client, "op_test", 1),
         )
         .await;
-        server.await.unwrap();
+        server.abort();
+        if let Err(error) = server.await {
+            assert!(error.is_cancelled(), "{error}");
+        }
         let error = result
             .expect("operation wait exceeded its deadline")
             .unwrap_err();
@@ -1994,7 +1997,10 @@ mod tests {
             )
             .await
             .expect("terminal operation should return immediately");
-            server.await.unwrap();
+            server.abort();
+            if let Err(error) = server.await {
+                assert!(error.is_cancelled(), "{error}");
+            }
             match state {
                 "succeeded" => assert_eq!(result.unwrap(), body),
                 _ => {
