@@ -281,12 +281,14 @@ describe("media processing workflows", () => {
 			});
 			expect(body.sourcePresignedUrl).toBeUndefined();
 			expect(body.sourceUpload).toBeUndefined();
-			expect(body.originalUpload).toBeUndefined();
-			expect(mocks.remove).not.toHaveBeenCalled();
 		});
 
-		it("gives DASH downloads a WebM original destination", async () => {
-			mocks.loomSourceUrl = "https://luna.loom.com/id/x/playlist.mpd";
+		it.each([
+			"https://luna.loom.com/id/x/playlist.mpd",
+			"https://luna.loom.com/id/x/playlist.m3u8",
+			"https://luna.loom.com/id/x/raw.webm",
+		])("gives %s a WebM original destination", async (url) => {
+			mocks.loomSourceUrl = url;
 			mocks.rows = [[video], [pending], [], [metadata]];
 			await importLoomVideoWorkflow(payload);
 			expect(dispatchedBody()?.originalUpload).toEqual({

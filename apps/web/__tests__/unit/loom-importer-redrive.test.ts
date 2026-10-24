@@ -364,6 +364,12 @@ describe("POST /api/internal/loom-imports/redrive", () => {
 		expect((await call(body)).status).toBe(400);
 	});
 
+	it("accepts older video ids with uppercase letters and separators", async () => {
+		const response = await call({ videoIds: ["-GwQTqb-_IXEwTf"] });
+		expect(response.status).toBe(200);
+		expect(mocks.start).toHaveBeenCalledOnce();
+	});
+
 	it("restarts each distinct video once", async () => {
 		const response = await call({
 			videoIds: ["abcdefghjkmnpqr", "abcdefghjkmnpqr", "bbcdefghjkmnpqr"],

@@ -65,8 +65,8 @@ function isStreamingUrl(url: string): boolean {
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
-function isDashUrl(url: string): boolean {
-	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".mpd");
+function isMp4Url(url: string): boolean {
+	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".mp4");
 }
 
 type LoomWorker = "importer" | "media";
@@ -508,7 +508,7 @@ async function processVideoOnMediaServer(
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
 	}
 	const originalKey =
-		worker === "importer" && loomSourceUrl && isDashUrl(loomSourceUrl)
+		worker === "importer" && loomSourceUrl && !isMp4Url(loomSourceUrl)
 			? `${userId}/${videoId}/raw-upload.webm`
 			: undefined;
 
