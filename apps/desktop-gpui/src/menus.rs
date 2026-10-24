@@ -27,6 +27,7 @@ use gpui::{
 use crate::{
     app_windows::{self, AppWindows},
     hotkeys,
+    i18n::tr,
     main_window::MainWindow,
     platform,
     session::{Phase, RecordingSession},
@@ -36,7 +37,7 @@ use crate::{
 };
 
 /// `productName` in `tauri.conf.json`, which is what macOS renames the first
-/// submenu to and what the About/Hide/Quit labels interpolate.
+/// submenu to.
 pub const APP_NAME: &str = "Cap";
 
 /// `env!("CARGO_PKG_VERSION")`, exactly as `build_tray_menu` spells it -- this
@@ -159,25 +160,28 @@ pub fn build_menus() -> Vec<Menu> {
             name: APP_NAME.into(),
             disabled: false,
             items: vec![
-                MenuItem::action(format!("About {APP_NAME}"), About),
+                MenuItem::action(tr::menu::app::about(), About),
                 MenuItem::separator(),
-                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action(tr::menu::app::settings(), OpenSettings),
                 MenuItem::separator(),
-                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::os_submenu(tr::menu::app::services(), SystemMenuType::Services),
                 MenuItem::separator(),
-                MenuItem::action(format!("Hide {APP_NAME}"), HideSelf),
-                MenuItem::action("Hide Others", HideOthers),
+                MenuItem::action(tr::menu::app::hide(), HideSelf),
+                MenuItem::action(tr::menu::app::hide_others(), HideOthers),
                 MenuItem::separator(),
-                MenuItem::action(format!("Quit {APP_NAME}"), Quit),
+                MenuItem::action(tr::menu::app::quit(), Quit),
             ],
         },
         Menu {
-            name: "File".into(),
+            name: tr::menu::file::title().into(),
             disabled: false,
-            items: vec![MenuItem::action("Close Window", CloseWindow)],
+            items: vec![MenuItem::action(
+                tr::menu::file::close_window(),
+                CloseWindow,
+            )],
         },
         Menu {
-            name: "Edit".into(),
+            name: tr::menu::edit::title().into(),
             disabled: false,
             // The text field's own actions, tagged with the AppKit selector
             // that belongs to each. gpui routes `cut:`/`copy:`/`paste:`/
@@ -185,17 +189,21 @@ pub fn build_menus() -> Vec<Menu> {
             // `cx.dispatch_action`, so all six land in whatever element holds
             // focus -- there is no separate "menu implementation" of copy.
             items: vec![
-                MenuItem::os_action("Undo", text_input::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", text_input::Redo, OsAction::Redo),
+                MenuItem::os_action(tr::menu::edit::undo(), text_input::Undo, OsAction::Undo),
+                MenuItem::os_action(tr::menu::edit::redo(), text_input::Redo, OsAction::Redo),
                 MenuItem::separator(),
-                MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),
-                MenuItem::os_action("Paste", text_input::Paste, OsAction::Paste),
-                MenuItem::os_action("Select All", text_input::SelectAll, OsAction::SelectAll),
+                MenuItem::os_action(tr::menu::edit::cut(), text_input::Cut, OsAction::Cut),
+                MenuItem::os_action(tr::menu::edit::copy(), text_input::Copy, OsAction::Copy),
+                MenuItem::os_action(tr::menu::edit::paste(), text_input::Paste, OsAction::Paste),
+                MenuItem::os_action(
+                    tr::menu::edit::select_all(),
+                    text_input::SelectAll,
+                    OsAction::SelectAll,
+                ),
             ],
         },
         Menu {
-            name: "View".into(),
+            name: tr::menu::view::title().into(),
             disabled: false,
             // muda's own string for this item is "Toggle Full Screen"; AppKit
             // relabels any item wired to `toggleFullScreen:` to "Enter Full
@@ -203,20 +211,26 @@ pub fn build_menus() -> Vec<Menu> {
             // a gpui action rather than that selector, so the title is written
             // out -- and, unlike the shipping one, does not flip to "Exit Full
             // Screen" while fullscreen (noted deviation).
-            items: vec![MenuItem::action("Enter Full Screen", ToggleFullscreen)],
+            items: vec![MenuItem::action(
+                tr::menu::view::enter_full_screen(),
+                ToggleFullscreen,
+            )],
         },
         Menu {
+            // gpui_macos hands this menu to `setWindowsMenu:` only when its
+            // title is exactly "Window" (platform.rs:274), so it stays English
+            // until the menu is registered by hand.
             name: "Window".into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Minimize", Minimize),
-                MenuItem::action("Zoom", Zoom),
+                MenuItem::action(tr::menu::window::minimize(), Minimize),
+                MenuItem::action(tr::menu::window::zoom(), Zoom),
                 MenuItem::separator(),
-                MenuItem::action("Close Window", CloseWindow),
+                MenuItem::action(tr::menu::window::close_window(), CloseWindow),
             ],
         },
         Menu {
-            name: "Help".into(),
+            name: tr::menu::help::title().into(),
             disabled: false,
             items: vec![],
         },

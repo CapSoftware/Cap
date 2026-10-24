@@ -30,6 +30,7 @@ use serde_json::Value;
 
 use crate::{
     devices::WindowOption,
+    i18n::tr,
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     main_window::Mode,
     sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
@@ -121,19 +122,19 @@ impl Page {
     /// and the route disagree in the shipping app.
     fn label(self) -> &'static str {
         match self {
-            Self::General => "General",
-            Self::Quality => "Recording quality",
-            Self::Shortcuts => "Shortcuts",
-            Self::Cli => "CLI",
-            Self::Recordings => "Recordings",
-            Self::Screenshots => "Screenshots",
-            Self::Automations => "Automations",
-            Self::Transcription => "Transcription",
-            Self::Integrations => "Integrations",
-            Self::License => "Plan & license",
-            Self::Experimental => "Experimental",
-            Self::Feedback => "Feedback",
-            Self::Changelog => "Changelog",
+            Self::General => tr::settings::nav::general(),
+            Self::Quality => tr::settings::nav::quality(),
+            Self::Shortcuts => tr::settings::nav::shortcuts(),
+            Self::Cli => tr::settings::nav::cli(),
+            Self::Recordings => tr::settings::nav::recordings(),
+            Self::Screenshots => tr::settings::nav::screenshots(),
+            Self::Automations => tr::settings::nav::automations(),
+            Self::Transcription => tr::settings::nav::transcription(),
+            Self::Integrations => tr::settings::nav::integrations(),
+            Self::License => tr::settings::nav::license(),
+            Self::Experimental => tr::settings::nav::experimental(),
+            Self::Feedback => tr::settings::nav::feedback(),
+            Self::Changelog => tr::settings::nav::changelog(),
         }
     }
 
@@ -224,20 +225,20 @@ struct OpenMenu {
 }
 
 /// `MAX_FPS_OPTIONS` in general.tsx.
-const MAX_FPS_OPTIONS: &[(u32, &str)] = &[
-    (24, "24 FPS"),
-    (25, "25 FPS"),
-    (30, "30 FPS"),
-    (60, "60 FPS (Recommended)"),
-    (120, "120 FPS"),
+const MAX_FPS_OPTIONS: &[(u32, fn() -> &'static str)] = &[
+    (24, tr::settings::general::recording::max_fps::fps_24),
+    (25, tr::settings::general::recording::max_fps::fps_25),
+    (30, tr::settings::general::recording::max_fps::fps_30),
+    (60, tr::settings::general::recording::max_fps::fps_60),
+    (120, tr::settings::general::recording::max_fps::fps_120),
 ];
 
 /// The Countdown select's options.
-const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
-    (0, "Off"),
-    (3, "3 seconds"),
-    (5, "5 seconds"),
-    (10, "10 seconds"),
+const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
+    (0, tr::settings::general::recording::countdown::off),
+    (3, tr::settings::general::recording::countdown::seconds_3),
+    (5, tr::settings::general::recording::countdown::seconds_5),
+    (10, tr::settings::general::recording::countdown::seconds_10),
 ];
 
 const STUDIO_QUALITY_TIERS: &[(StudioQuality, &str, &str)] = &[
@@ -282,12 +283,14 @@ enum InstantQualityNotice {
 }
 
 /// `UPDATE_CHANNEL_OPTIONS`.
-const UPDATE_CHANNEL_DESCRIPTIONS: &[(UpdateChannel, &str)] = &[
-    (UpdateChannel::Stable, "Versioned releases (recommended)"),
+const UPDATE_CHANNEL_DESCRIPTIONS: &[(UpdateChannel, fn() -> &'static str)] = &[
+    (
+        UpdateChannel::Stable,
+        tr::settings::general::updates::stable_description,
+    ),
     (
         UpdateChannel::Nightly,
-        "The newest builds, updated automatically in the background when you're \
-         not recording or exporting. May be unstable.",
+        tr::settings::general::updates::nightly_description,
     ),
 ];
 
@@ -1538,12 +1541,12 @@ impl SettingsWindow {
                 let current = self.settings.recording_countdown.unwrap_or(0);
                 COUNTDOWN_OPTIONS
                     .iter()
-                    .map(|(value, label)| ui::MenuItem::new(*label, *value == current))
+                    .map(|(value, label)| ui::MenuItem::new(label(), *value == current))
                     .collect()
             }
             MenuKind::MaxFps => MAX_FPS_OPTIONS
                 .iter()
-                .map(|(value, label)| ui::MenuItem::new(*label, *value == self.settings.max_fps))
+                .map(|(value, label)| ui::MenuItem::new(label(), *value == self.settings.max_fps))
                 .collect(),
             MenuKind::MainWindowStart => {
                 enum_items(self.settings.main_window_recording_start_behaviour)
@@ -3198,8 +3201,8 @@ impl SettingsWindow {
             }));
 
         self.section(
-            "Appearance",
-            Some("Match Cap to your system theme or pick a fixed look."),
+            tr::settings::general::appearance::title(),
+            Some(tr::settings::general::appearance::description()),
             None,
             vec![self.card(true).child(tiles).into_any_element()],
         )
@@ -3208,18 +3211,18 @@ impl SettingsWindow {
     /// The macOS-only App section: `hideDockIcon`, `enableNotifications`.
     fn render_app_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         self.section(
-            "App",
-            Some("Choose how Cap shows up on your system."),
+            tr::settings::general::app::title(),
+            Some(tr::settings::general::app::description()),
             None,
             vec![
                 self.rows(vec![
                     self.setting_row(
-                        "Always show dock icon",
-                        Some("Keep Cap in the dock even when no windows are open."),
+                        tr::settings::general::app::dock_icon::label(),
+                        Some(tr::settings::general::app::dock_icon::description()),
                         // The row is the *inverse* of the stored key.
                         self.toggle(
                             "hide-dock-icon",
-                            "Always show dock icon",
+                            tr::settings::general::app::dock_icon::label(),
                             !self.settings.hide_dock_icon,
                             cx,
                             |this, cx| {
@@ -3236,14 +3239,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "System notifications",
-                        Some(
-                            "Show notifications for clipboard copies, saved files, and more. \
-                             You may need to allow Cap in your system's notification settings.",
-                        ),
+                        tr::settings::general::app::notifications::label(),
+                        Some(tr::settings::general::app::notifications::description()),
                         self.toggle(
                             "enable-notifications",
-                            "System notifications",
+                            tr::settings::general::app::notifications::label(),
                             self.settings.enable_notifications,
                             cx,
                             |this, cx| {
@@ -3557,36 +3557,33 @@ impl SettingsWindow {
         let countdown_label = COUNTDOWN_OPTIONS
             .iter()
             .find(|(value, _)| *value == settings.recording_countdown.unwrap_or(0))
-            .map(|(_, label)| (*label).to_string())
+            .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.recording_countdown.unwrap_or(0).to_string());
         let fps_label = MAX_FPS_OPTIONS
             .iter()
             .find(|(value, _)| *value == settings.max_fps)
-            .map(|(_, label)| (*label).to_string())
+            .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.default_zoom_amount.unwrap_or(1.5);
 
         self.section(
-            "Recording",
-            Some("Behaviour while you record and after you stop."),
+            tr::settings::general::recording::title(),
+            Some(tr::settings::general::recording::description()),
             None,
             vec![
                 self.rows(vec![
                     self.setting_row(
-                        "Countdown",
-                        Some("Wait before the recording starts."),
+                        tr::settings::general::recording::countdown::label(),
+                        Some(tr::settings::general::recording::countdown::description()),
                         self.select("countdown", countdown_label, MenuKind::Countdown, cx)
                             .into_any_element(),
                     ),
                     self.setting_row(
-                        "Confirm before recording without a microphone",
-                        Some(
-                            "Require confirmation when no microphone is selected or the \
-                             selected microphone is unavailable.",
-                        ),
+                        tr::settings::general::recording::confirm_without_mic::label(),
+                        Some(tr::settings::general::recording::confirm_without_mic::description()),
                         self.toggle(
                             "confirm-without-mic",
-                            "Confirm before recording without a microphone",
+                            tr::settings::general::recording::confirm_without_mic::label(),
                             settings.confirm_without_microphone,
                             cx,
                             |this, cx| {
@@ -3606,14 +3603,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Studio Sound on new recordings",
-                        Some(
-                            "Clean up microphone audio automatically. You can still turn it \
-                             off for any recording in the editor.",
-                        ),
+                        tr::settings::general::recording::studio_sound::label(),
+                        Some(tr::settings::general::recording::studio_sound::description()),
                         self.toggle(
                             "studio-sound-default",
-                            "Studio Sound on new recordings",
+                            tr::settings::general::recording::studio_sound::label(),
                             settings.studio_sound_by_default,
                             cx,
                             |this, cx| {
@@ -3627,8 +3621,8 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Main window when recording starts",
-                        Some("What happens to the main window once a recording begins."),
+                        tr::settings::general::recording::main_window_start::label(),
+                        Some(tr::settings::general::recording::main_window_start::description()),
                         self.select(
                             "main-window-start",
                             settings.main_window_recording_start_behaviour.label(),
@@ -3643,8 +3637,8 @@ impl SettingsWindow {
                     // `showOverlay` means "reshow the main window"
                     // (`app_windows.rs`) and is labelled "Show Cap".
                     self.setting_row(
-                        "After deleting a recording",
-                        Some("Whether the recording window should reopen."),
+                        tr::settings::general::recording::post_deletion::label(),
+                        Some(tr::settings::general::recording::post_deletion::description()),
                         self.select(
                             "post-deletion",
                             settings.post_deletion_behaviour.label(),
@@ -3654,11 +3648,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Delete Instant recordings after upload",
-                        Some("Cap removes the local file once it has uploaded successfully."),
+                        tr::settings::general::recording::delete_after_upload::label(),
+                        Some(tr::settings::general::recording::delete_after_upload::description()),
                         self.toggle(
                             "delete-after-upload",
-                            "Delete Instant recordings after upload",
+                            tr::settings::general::recording::delete_after_upload::label(),
                             settings.delete_instant_recordings_after_upload,
                             cx,
                             |this, cx| {
@@ -3671,14 +3665,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Crash-recoverable recording",
-                        Some(
-                            "Record in fragments that can be recovered after a crash or power \
-                             loss. Slightly larger files during capture.",
-                        ),
+                        tr::settings::general::recording::crash_recovery::label(),
+                        Some(tr::settings::general::recording::crash_recovery::description()),
                         self.toggle(
                             "crash-recovery",
-                            "Crash-recoverable recording",
+                            tr::settings::general::recording::crash_recovery::label(),
                             settings.crash_recovery_recording,
                             cx,
                             |this, cx| {
@@ -3691,14 +3682,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Custom cursor capture (Studio)",
-                        Some(
-                            "Capture cursor state separately so you can adjust size and \
-                             smoothing in the editor.",
-                        ),
+                        tr::settings::general::recording::custom_cursor::label(),
+                        Some(tr::settings::general::recording::custom_cursor::description()),
                         self.toggle(
                             "custom-cursor",
-                            "Custom cursor capture (Studio)",
+                            tr::settings::general::recording::custom_cursor::label(),
                             settings.custom_cursor_capture,
                             cx,
                             |this, cx| {
@@ -3711,14 +3699,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Auto zoom on clicks",
-                        Some(
-                            "Automatically add zoom segments around mouse clicks in Studio \
-                             recordings.",
-                        ),
+                        tr::settings::general::recording::auto_zoom::label(),
+                        Some(tr::settings::general::recording::auto_zoom::description()),
                         self.toggle(
                             "auto-zoom",
-                            "Auto zoom on clicks",
+                            tr::settings::general::recording::auto_zoom::label(),
                             settings.auto_zoom_on_clicks,
                             cx,
                             |this, cx| {
@@ -3731,8 +3716,8 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Default zoom amount",
-                        Some("Zoom level for newly created and auto-generated zoom segments."),
+                        tr::settings::general::recording::default_zoom::label(),
+                        Some(tr::settings::general::recording::default_zoom::description()),
                         div()
                             // `flex gap-2 items-center w-52`
                             .flex()
@@ -3752,11 +3737,11 @@ impl SettingsWindow {
                             .into_any_element(),
                     ),
                     self.setting_row(
-                        "Capture keyboard presses",
-                        Some("Record key presses so you can add keyboard overlays in the editor."),
+                        tr::settings::general::recording::capture_keyboard::label(),
+                        Some(tr::settings::general::recording::capture_keyboard::description()),
                         self.toggle(
                             "capture-keyboard",
-                            "Capture keyboard presses",
+                            tr::settings::general::recording::capture_keyboard::label(),
                             settings.capture_keyboard_events,
                             cx,
                             |this, cx| {
@@ -3769,16 +3754,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Draw the MacBook notch on screen recordings",
-                        Some(
-                            "Automatically restores the notch for new screen and area \
-                             recordings when the selected region contains the complete notch. \
-                             External displays, partial areas, and window recordings are left \
-                             alone. Each recording can override it in the editor.",
-                        ),
+                        tr::settings::general::recording::notch_overlay::label(),
+                        Some(tr::settings::general::recording::notch_overlay::description()),
                         self.toggle(
                             "notch-overlay",
-                            "Draw the MacBook notch on screen recordings",
+                            tr::settings::general::recording::notch_overlay::label(),
                             settings.macbook_notch_overlay,
                             cx,
                             |this, cx| {
@@ -3791,12 +3771,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Max capture framerate",
+                        tr::settings::general::recording::max_fps::label(),
                         Some(if settings.max_fps > 60 {
-                            "Maximum framerate for screen capture. Higher values may cause \
-                             drops or increased CPU usage on some systems."
+                            tr::settings::general::recording::max_fps::description_high()
                         } else {
-                            "Maximum framerate for screen capture."
+                            tr::settings::general::recording::max_fps::description()
                         }),
                         self.select("max-fps", fps_label, MenuKind::MaxFps, cx)
                             .into_any_element(),
@@ -3813,14 +3792,15 @@ impl SettingsWindow {
         let path = self.settings.recordings_path.clone();
         let is_custom = path.is_some();
         // `Default (Application Support)`
-        let display = path.unwrap_or_else(|| "Default (Application Support)".to_string());
+        let display =
+            path.unwrap_or_else(|| tr::settings::general::storage::default_location().to_string());
 
         let mut actions = div().flex().flex_row().justify_end().gap(px(8.));
         if is_custom {
             actions = actions.child(self.button(
                 "recordings-reset",
                 (ui::ButtonVariant::Gray, None),
-                "Reset to Default",
+                tr::common::reset_to_default(),
                 false,
                 cx,
                 |this, _window, cx| {
@@ -3832,7 +3812,7 @@ impl SettingsWindow {
         actions = actions.child(self.button(
             "recordings-pick",
             (ui::ButtonVariant::Dark, None),
-            "Choose Folder",
+            tr::settings::general::storage::choose_folder(),
             false,
             cx,
             |_, window, cx| {
@@ -3863,8 +3843,8 @@ impl SettingsWindow {
         ));
 
         self.section(
-            "Storage",
-            Some("Where Cap saves your recordings."),
+            tr::settings::general::storage::title(),
+            Some(tr::settings::general::storage::description()),
             None,
             vec![
                 self.card(true)
@@ -3925,7 +3905,7 @@ impl SettingsWindow {
             .child(self.button(
                 "project-name-reset",
                 (ui::ButtonVariant::Gray, None),
-                "Reset",
+                tr::common::reset(),
                 reset_disabled,
                 cx,
                 |this, _window, cx| {
@@ -3941,7 +3921,7 @@ impl SettingsWindow {
             .child(self.button(
                 "project-name-save",
                 (ui::ButtonVariant::Dark, None),
-                "Save",
+                tr::common::save(),
                 save_disabled,
                 cx,
                 |this, _window, cx| {
@@ -3954,23 +3934,39 @@ impl SettingsWindow {
 
         let placeholder_rows: Vec<(&str, &str, &str)> = vec![
             (
-                "Recording mode",
+                tr::settings::general::project_name::placeholders::recording_mode(),
                 "{recording_mode}",
-                "\"Studio\", \"Instant\", or \"Screenshot\"",
+                tr::settings::general::project_name::placeholders::recording_mode_values(),
             ),
-            ("", "{mode}", "\"studio\", \"instant\", or \"screenshot\""),
             (
-                "Target",
+                "",
+                "{mode}",
+                tr::settings::general::project_name::placeholders::mode_values(),
+            ),
+            (
+                tr::settings::general::project_name::placeholders::target(),
                 "{target_kind}",
-                "\"Display\", \"Window\", or \"Area\"",
+                tr::settings::general::project_name::placeholders::target_kind_values(),
             ),
-            ("", "{target_name}", "Monitor name or window title."),
-            ("Date & time", "{date}", "the recording's date"),
-            ("", "{time}", "the recording's time"),
             (
-                "Random",
+                "",
+                "{target_name}",
+                tr::settings::general::project_name::placeholders::target_name_values(),
+            ),
+            (
+                tr::settings::general::project_name::placeholders::date_time(),
+                "{date}",
+                tr::settings::general::project_name::placeholders::date_values(),
+            ),
+            (
+                "",
+                "{time}",
+                tr::settings::general::project_name::placeholders::time_values(),
+            ),
+            (
+                tr::settings::general::project_name::placeholders::random(),
                 "{random}",
-                "10 filename-safe hexadecimal characters; use {random:N} for 1–32.",
+                tr::settings::general::project_name::placeholders::random_values(),
             ),
         ];
 
@@ -4019,7 +4015,7 @@ impl SettingsWindow {
                             .size(px(14.))
                             .text_color(theme.settings_muted()),
                     )
-                    .child("Available placeholders")
+                    .child(tr::settings::general::project_name::available_placeholders())
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_placeholders(cx);
                     })),
@@ -4084,8 +4080,8 @@ impl SettingsWindow {
             );
 
         self.section(
-            "Default project name",
-            Some("Template used for new recordings and exported files."),
+            tr::settings::general::project_name::title(),
+            Some(tr::settings::general::project_name::description()),
             Some(right),
             vec![self.card(true).child(body).into_any_element()],
         )
@@ -4104,7 +4100,7 @@ impl SettingsWindow {
             .child(self.button(
                 "exclusions-reset",
                 (ui::ButtonVariant::Gray, None),
-                "Reset",
+                tr::common::reset(),
                 false,
                 cx,
                 |this, _window, cx| {
@@ -4115,7 +4111,7 @@ impl SettingsWindow {
                 self.button(
                     "exclusions-add",
                     (ui::ButtonVariant::Dark, Some("icons/plus.svg")),
-                    "Add",
+                    tr::common::add(),
                     self.windows.is_empty(),
                     cx,
                     |_, _, _| {},
@@ -4134,7 +4130,7 @@ impl SettingsWindow {
             div()
                 .text_size(px(12.))
                 .text_color(theme.settings_muted())
-                .child("No windows are currently excluded.")
+                .child(tr::settings::general::excluded_windows::empty())
                 .into_any_element()
         } else {
             div()
@@ -4210,6 +4206,8 @@ impl SettingsWindow {
                 .map(|entry| entry.primary_label().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let missing_title = tr::settings::general::excluded_windows::missing_title();
+            let missing_body = tr::settings::general::excluded_windows::missing_body(names);
             card = card.child(
                 // `mb-3 rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5`
                 div()
@@ -4244,17 +4242,19 @@ impl SettingsWindow {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("Recommended Cap windows are not excluded"),
+                                    .child(missing_title),
                             )
-                            .child(div().text_size(px(10.)).line_height(px(14.)).child(format!(
-                                "Camera, settings, or recording windows can appear as black \
-                                 boxes in screen recordings. Missing: {names}."
-                            ))),
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .line_height(px(14.))
+                                    .child(missing_body),
+                            ),
                     )
                     .child(self.button(
                         "exclusions-restore",
                         (ui::ButtonVariant::Gray, None),
-                        "Restore",
+                        tr::settings::general::excluded_windows::restore(),
                         false,
                         cx,
                         |this, _window, cx| {
@@ -4265,8 +4265,8 @@ impl SettingsWindow {
         }
 
         self.section(
-            "Excluded windows",
-            Some("Hide windows from recordings."),
+            tr::settings::general::excluded_windows::title(),
+            Some(tr::settings::general::excluded_windows::description()),
             Some(right),
             vec![card.child(chips).into_any_element()],
         )
@@ -4279,7 +4279,7 @@ impl SettingsWindow {
         let description = UPDATE_CHANNEL_DESCRIPTIONS
             .iter()
             .find(|(channel, _)| *channel == current)
-            .map(|(_, description)| *description)
+            .map(|(_, description)| description())
             .unwrap_or_default();
 
         let body = div()
@@ -4301,13 +4301,17 @@ impl SettingsWindow {
                             .flex_col()
                             .gap(px(2.))
                             .min_w_0()
-                            .child(div().text_size(px(13.)).child("Update channel"))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .child(tr::settings::general::updates::channel::label()),
+                            )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
                                     .text_color(theme.settings_muted())
-                                    .child("Which release channel Cap updates from."),
+                                    .child(tr::settings::general::updates::channel::description()),
                             ),
                     )
                     .child(self.segmented::<UpdateChannel>(
@@ -4336,17 +4340,14 @@ impl SettingsWindow {
                                 .text_size(px(11.))
                                 .line_height(px(15.))
                                 .text_color(theme.settings_muted())
-                                .child(
-                                    "Switching back to Stable will return you to the latest \
-                                     stable version, which may be older than your current build.",
-                                ),
+                                .child(tr::settings::general::updates::nightly_switch_back()),
                         )
                     }),
             );
 
         self.section(
-            "Updates",
-            Some("Choose which Cap builds you receive."),
+            tr::settings::general::updates::title(),
+            Some(tr::settings::general::updates::description()),
             None,
             vec![self.card(false).child(body).into_any_element()],
         )
@@ -4366,7 +4367,11 @@ impl SettingsWindow {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(div().text_size(px(13.)).child("Cap Server URL"))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .child(tr::settings::general::self_host::server_url()),
+                    )
                     .child(self.text_field(Field::ServerUrl, cx)),
             )
             .child(
@@ -4378,7 +4383,7 @@ impl SettingsWindow {
                     .child(self.button(
                         "server-url-reset",
                         (ui::ButtonVariant::Gray, None),
-                        "Reset to Default",
+                        tr::common::reset_to_default(),
                         stored == DEFAULT_SERVER_URL && draft == DEFAULT_SERVER_URL,
                         cx,
                         |this, window, cx| {
@@ -4396,7 +4401,7 @@ impl SettingsWindow {
                     .child(self.button(
                         "server-url-update",
                         (ui::ButtonVariant::Dark, None),
-                        "Update",
+                        tr::settings::general::self_host::update(),
                         stored == draft,
                         cx,
                         |this, window, cx| {
@@ -4407,8 +4412,8 @@ impl SettingsWindow {
             );
 
         self.section(
-            "Self-host",
-            Some("Only change this if you are running your own instance of Cap Web."),
+            tr::settings::general::self_host::title(),
+            Some(tr::settings::general::self_host::description()),
             None,
             vec![self.card(true).child(body).into_any_element()],
         )
@@ -4422,12 +4427,12 @@ impl SettingsWindow {
         };
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            &format!(
-                "Are you sure you want to change the server URL to '{origin}'? You will need \
-                 to sign in again."
-            ),
+            &tr::settings::general::self_host::confirm_change(&origin),
             None,
-            &["Ok", "Cancel"],
+            &[
+                gpui::PromptButton::ok(tr::common::ok()),
+                gpui::PromptButton::cancel(tr::common::cancel()),
+            ],
             cx,
         );
         cx.spawn(async move |this, cx| {
@@ -4449,21 +4454,17 @@ impl SettingsWindow {
     /// `TelemetryCard` -- `enableTelemetry`.
     fn render_privacy(&self, cx: &mut Context<Self>) -> impl IntoElement {
         self.section(
-            "Privacy",
+            tr::settings::general::privacy::title(),
             None,
             None,
             vec![
                 self.rows(vec![
                     self.setting_row(
-                        "Share anonymous telemetry",
-                        Some(
-                            "Cap uses anonymous telemetry to improve reliability and fix bugs. We \
-                         never collect recording contents, window titles, file paths, or \
-                         personal information.",
-                        ),
+                        tr::settings::general::privacy::telemetry::label(),
+                        Some(tr::settings::general::privacy::telemetry::description()),
                         self.toggle(
                             "telemetry",
-                            "Share anonymous telemetry",
+                            tr::settings::general::privacy::telemetry::label(),
                             self.settings.enable_telemetry,
                             cx,
                             |this, cx| {
