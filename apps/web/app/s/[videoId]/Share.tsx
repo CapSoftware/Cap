@@ -195,6 +195,7 @@ interface ShareProps {
 	viewerId?: string | null;
 	isEditProcessing: boolean;
 	recordingStopped?: boolean;
+	earlySegmentPlayback?: boolean;
 	defaultPlaybackSpeed?: number;
 	initialAiData?: {
 		title?: string | null;
@@ -327,6 +328,7 @@ export const Share = ({
 	viewerId,
 	isEditProcessing,
 	recordingStopped = false,
+	earlySegmentPlayback = false,
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
@@ -993,6 +995,7 @@ export const Share = ({
 														showPlaybackStatusBadge={viewerId === data.owner.id}
 														isEditProcessing={isEditProcessing}
 														recordingStopped={recordingStopped}
+														earlySegmentPlayback={earlySegmentPlayback}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
 														callToAction={data.callToAction}
