@@ -182,12 +182,35 @@ async fn failed_part_is_retried_after_the_rest_and_upload_completes() {
         fail_once: Mutex::new(HashSet::from([3, 6])),
         ..FakeParts::default()
     };
-    let (result, progress) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+    let progress = Mutex::new(Vec::new());
+    let result = upload_file_parts(
+        &transport,
+        &export.0,
+        40,
+        4,
+        &|value| {
+            progress
+                .lock()
+                .unwrap()
+                .push((transport.started_parts().len(), value));
+        },
+        &AtomicBool::new(false),
+        None,
+    )
+    .await;
     assert_parts(&result.unwrap(), &[4; 10]);
     let started = transport.started_parts();
     assert_eq!(started.len(), 12);
     assert_eq!(&started[10..], [3, 6]);
-    assert_eq!(progress.last().copied(), Some(0.99));
+    assert_eq!(
+        progress
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .map(|(started, _)| started)
+            .collect::<Vec<_>>(),
+        [1, 2, 4, 5, 7, 8, 9, 10, 11, 12]
+    );
     let retried = transport.started.lock().unwrap();
     assert_eq!(retried[10].2, retried[2].2);
 }
@@ -199,12 +222,13 @@ async fn part_failing_its_retry_returns_the_first_error() {
         fail_always: HashSet::from([2]),
         ..FakeParts::default()
     };
-    let (result, _) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+    let (result, progress) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
     assert_eq!(
         result.unwrap_err().to_string(),
         "uploader/part/2/status/500"
     );
     assert_eq!(transport.started_parts(), [1, 2, 3, 4, 5, 2]);
+    assert_eq!(progress, [0.2, 0.4, 0.6, 0.8]);
 }
 
 #[tokio::test]
