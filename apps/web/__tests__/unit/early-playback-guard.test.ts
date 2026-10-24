@@ -3,6 +3,7 @@
 import { act, createElement, createRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seekLength } from "@/app/s/[videoId]/_components/early-length";
 import {
 	canResolveHold,
 	canSeekNow,
@@ -43,7 +44,11 @@ describe("Early playback rules", () => {
 	});
 
 	it("resolves a held seek once its part has uploaded and the player has it", () => {
-		const base = { uploadComplete: false, playerComplete: false };
+		const base = {
+			uploadComplete: false,
+			playerComplete: false,
+			recorded: 120,
+		};
 		expect(canResolveHold(90, { ...base, ready: 90.5, mediaEnd: 92 })).toBe(
 			false,
 		);
@@ -75,6 +80,23 @@ describe("Early playback rules", () => {
 				mediaEnd: 120,
 			}),
 		).toBe(true);
+		expect(
+			canResolveHold(90, {
+				...base,
+				playerComplete: true,
+				ready: 120,
+				mediaEnd: 44,
+			}),
+		).toBe(false);
+		expect(
+			canResolveHold(500, {
+				...base,
+				recorded: null,
+				playerComplete: true,
+				ready: 120,
+				mediaEnd: 120,
+			}),
+		).toBe(false);
 	});
 
 	it("only reports the upload edge while waiting there during playback", () => {
@@ -274,6 +296,29 @@ describe("Early playback seek guard", () => {
 		await render(true);
 		expect(state.held).toBe(null);
 		expect(video.currentTime).toBeCloseTo(119.95, 5);
+	});
+
+	it("keeps a hold when the playlist ends before the element's duration does", async () => {
+		await render();
+		await act(async () => {
+			video.currentTime = 90;
+		});
+		await render(true);
+		expect(state.held).toBe(90);
+		expect(video.currentTime).toBe(0);
+		duration = 120;
+		await act(async () => {
+			video.dispatchEvent(new Event("durationchange"));
+		});
+		expect(state.held).toBe(null);
+		expect(video.currentTime).toBe(90);
+	});
+
+	it("registers the full length for clamped seek paths until complete", async () => {
+		await render();
+		expect(seekLength(video, 44)).toBe(120);
+		await render(true);
+		expect(seekLength(video, 44)).toBe(44);
 	});
 
 	it("stops polling once the upload is complete", async () => {

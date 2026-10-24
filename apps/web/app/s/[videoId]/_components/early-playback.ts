@@ -1,6 +1,7 @@
 "use client";
 
 import { type RefObject, useEffect, useRef, useState } from "react";
+import { setFullLength } from "./early-length";
 
 // The playlist only holds what has uploaded, so a seek past it is held until
 // that part arrives instead of letting the browser clamp it to the end.
@@ -66,17 +67,27 @@ export function canResolveHold(
 	target: number,
 	{
 		ready,
+		recorded,
 		mediaEnd,
 		uploadComplete,
 		playerComplete,
 	}: {
 		ready: number;
+		recorded: number | null;
 		mediaEnd: number;
 		uploadComplete: boolean;
 		playerComplete: boolean;
 	},
 ): boolean {
-	if (playerComplete) return mediaEnd > 0;
+	// The playlist can end before the element reports its final duration, so
+	// a target past the old end waits for that duration instead of landing on
+	// the old end.
+	if (playerComplete)
+		return (
+			mediaEnd > 0 &&
+			(mediaEnd >= target - 0.05 ||
+				(recorded !== null && mediaEnd >= recorded - 0.25))
+		);
 	if (uploadComplete) return mediaEnd >= Math.min(target + 0.25, ready - 0.05);
 	return ready >= target + 1 && mediaEnd >= target + 0.25;
 }
@@ -133,6 +144,7 @@ export function useEarlyPlayback({
 	const uploadComplete = statusComplete || playerComplete;
 
 	const readyRef = useRef(0);
+	const recordedRef = useRef<number | null>(null);
 	const uploadCompleteRef = useRef(uploadComplete);
 	const playerCompleteRef = useRef(playerComplete);
 	const heldRef = useRef<number | null>(null);
@@ -162,7 +174,10 @@ export function useEarlyPlayback({
 						lastGrowthRef.current = Date.now();
 						setReady(status.ready);
 					}
-					if (status.recorded !== null) setRecorded(status.recorded);
+					if (status.recorded !== null) {
+						recordedRef.current = status.recorded;
+						setRecorded(status.recorded);
+					}
 					if (status.uploadComplete) {
 						uploadCompleteRef.current = true;
 						setStatusComplete(true);
@@ -215,6 +230,7 @@ export function useEarlyPlayback({
 			if (
 				!canResolveHold(target, {
 					ready: readyRef.current,
+					recorded: recordedRef.current,
 					mediaEnd,
 					uploadComplete: uploadCompleteRef.current,
 					playerComplete: playerCompleteRef.current,
@@ -295,6 +311,13 @@ export function useEarlyPlayback({
 			resolveHoldRef.current = () => {};
 		};
 	}, [enabled, playerComplete, videoRef]);
+
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!enabled || !video || playerComplete || recorded === null) return;
+		setFullLength(video, recorded);
+		return () => setFullLength(video, null);
+	}, [enabled, playerComplete, recorded, videoRef]);
 
 	return { ready, recorded, uploadComplete, held, atEdge, stalled };
 }

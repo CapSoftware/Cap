@@ -59,6 +59,7 @@ import {
 	normalizePlaybackSpeed,
 	PLAYBACK_SPEEDS,
 } from "@/lib/playback-speed";
+import { seekLength } from "../early-length";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
 import {
@@ -562,7 +563,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 						dispatch({
 							type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 							detail: Math.min(
-								mediaElement.duration,
+								seekLength(mediaElement, mediaElement.duration),
 								mediaElement.currentTime + SEEK_STEP_SHORT,
 							),
 						});
@@ -700,7 +701,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 						detail: Math.min(
-							mediaElement.duration,
+							seekLength(mediaElement, mediaElement.duration),
 							mediaElement.currentTime + SEEK_STEP_LONG,
 						),
 					});
@@ -719,7 +720,8 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				case "9": {
 					event.preventDefault();
 					const percent = Number.parseInt(event.key, 10) / 10;
-					const seekTime = mediaElement.duration * percent;
+					const seekTime =
+						seekLength(mediaElement, mediaElement.duration) * percent;
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 						detail: seekTime,
@@ -740,7 +742,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					event.preventDefault();
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
-						detail: mediaElement.duration,
+						detail: seekLength(mediaElement, mediaElement.duration),
 					});
 					break;
 				}
@@ -1530,15 +1532,25 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
 
 			if (event.defaultPrevented) return;
 
+			const media = document.getElementById(context.mediaId);
 			dispatch({
 				type: MediaActionTypes.MEDIA_SEEK_REQUEST,
 				detail: Math.min(
-					seekableEnd ?? Number.POSITIVE_INFINITY,
+					media instanceof HTMLMediaElement
+						? seekLength(media, seekableEnd ?? Number.POSITIVE_INFINITY)
+						: (seekableEnd ?? Number.POSITIVE_INFINITY),
 					mediaCurrentTime + seconds,
 				),
 			});
 		},
-		[dispatch, props.onClick, mediaCurrentTime, seekableEnd, seconds],
+		[
+			dispatch,
+			props.onClick,
+			mediaCurrentTime,
+			seekableEnd,
+			seconds,
+			context.mediaId,
+		],
 	);
 
 	return (
