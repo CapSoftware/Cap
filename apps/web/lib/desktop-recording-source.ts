@@ -266,7 +266,7 @@ const committedInventorySchema = z.union([
 const SOURCE_COMMIT_STEP_TIMEOUT_MS = 180_000;
 const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
 const SOURCE_COMMIT_CONCURRENCY = 8;
-const SOURCE_COMMIT_AWS_CONCURRENCY = 128;
+const SOURCE_COMMIT_AWS_CONCURRENCY = 256;
 
 function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
 	return bucket.provider === "s3" && Option.isNone(customBucket)

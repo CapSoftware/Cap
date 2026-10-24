@@ -1399,7 +1399,7 @@ describe("large desktop recording snapshots", () => {
 	});
 
 	it.each([
-		["s3", 128],
+		["s3", 256],
 		["googleDrive", 16],
 	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
@@ -1407,7 +1407,7 @@ describe("large desktop recording snapshots", () => {
 			const storage = storageFixture(provider);
 			seedSegments(
 				storage,
-				Array.from({ length: 129 }, (_, index) => index + 1),
+				Array.from({ length: 299 }, (_, index) => index + 1),
 				false,
 			);
 			const video = recording();
@@ -1432,8 +1432,8 @@ describe("large desktop recording snapshots", () => {
 			expect(replay.checkpoint.snapshotId).toBe(checkpoint.snapshotId);
 			const source = await finishSnapshot(video, replay.checkpoint);
 			const urls = await buildDesktopRecordingSourceUrls(video, source);
-			expect(urls.sourceObjects).toHaveLength(130);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(130);
+			expect(urls.sourceObjects).toHaveLength(300);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(300);
 			expect(JSON.stringify(replay.checkpoint).length).toBeLessThan(5_000);
 		},
 	);
@@ -1662,11 +1662,15 @@ describe("large desktop recording snapshots", () => {
 describe("source commit page size", () => {
 	const segmentCount = 130;
 
-	function pagedFixture(provider = "s3", customBucket = false) {
+	function pagedFixture(
+		provider = "s3",
+		customBucket = false,
+		segments = segmentCount,
+	) {
 		const storage = storageFixture(provider, customBucket);
 		seedSegments(
 			storage,
-			Array.from({ length: segmentCount }, (_, index) => index + 1),
+			Array.from({ length: segments }, (_, index) => index + 1),
 		);
 		return storage;
 	}
@@ -1771,11 +1775,11 @@ describe("source commit page size", () => {
 		};
 	}
 
-	it("uses 128-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
+	it("uses 256-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
 		const actual = await vi.importActual<
 			typeof import("@/lib/desktop-recording-source-checkpoint")
 		>("@/lib/desktop-recording-source-checkpoint");
-		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(128);
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(256);
 		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
 		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
 			actual.SOURCE_COMMIT_TREE_PAGE_SIZE,
@@ -1785,10 +1789,11 @@ describe("source commit page size", () => {
 		);
 	});
 
-	it("resumes a commit saved with larger tree pages using today's 128-entry writer, as after a rollback", async () => {
+	it("resumes a commit saved with 256-entry pages using the previous 128-entry writer, as after a rollback", async () => {
+		mocks.treePageSize = 128;
 		const reference = await referenceOutput(128);
+		mocks.treePageSize = undefined;
 		const storage = pagedFixture();
-		mocks.treePageSize = 256;
 		const partial = await advanceWithPageSize(
 			256,
 			snapshotCheckpoint(),
@@ -1796,8 +1801,9 @@ describe("source commit page size", () => {
 		);
 		expect(partial.source).toBeUndefined();
 		expect(partial.checkpoint.phase).toBe("verify");
-		mocks.treePageSize = undefined;
+		mocks.treePageSize = 128;
 		const resumed = await advanceWithPageSize(128, partial.checkpoint);
+		mocks.treePageSize = undefined;
 		if (!resumed.source) throw new Error("Resumed commit did not complete");
 		expect(await snapshotOutput(storage, resumed.source)).toEqual(
 			reference.output,
@@ -1909,13 +1915,13 @@ describe("source commit page size", () => {
 	}
 
 	it.each([
-		["Cap's AWS bucket", "s3", false, 128],
+		["Cap's AWS bucket", "s3", false, 256],
 		["a custom S3-compatible bucket", "s3", true, 8],
 		["Google Drive", "googleDrive", false, 8],
 	] as const)(
 		"bounds parallel storage requests for %s",
 		async (_, provider, customBucket, expected) => {
-			const storage = pagedFixture(provider, customBucket);
+			const storage = pagedFixture(provider, customBucket, 300);
 			const active = { head: 0, copy: 0 };
 			const peak = { head: 0, copy: 0 };
 			const track = <A, E>(
@@ -1960,7 +1966,7 @@ describe("source commit page size", () => {
 			// bound is on objects in flight; requests peak at two per object.
 			expect(peak.head).toBeLessThanOrEqual(expected * 2);
 			expect(readInventory(storage, source.inventoryKey).objects).toHaveLength(
-				segmentCount + 3,
+				300 + 3,
 			);
 		},
 	);
