@@ -341,6 +341,20 @@ describe("reassignLoomImport", () => {
 		expect(mocks.claims).toHaveLength(2);
 	});
 
+	it("keeps sharing and visibility when asked", async () => {
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await expect(
+			reassignLoomImport({
+				...input,
+				options: { keepSharing: true, folderId: "folderaaaaaaaaa" },
+			}),
+		).resolves.toMatchObject({ status: "moved" });
+		expect(mocks.updates).toEqual([
+			{ ownerId: ids.to, folderId: "folderaaaaaaaaa" },
+		]);
+		expect(mocks.deletes).toBe(0);
+	});
+
 	it("re-encrypts the word transcript for the new owner", async () => {
 		const key = getEditTranscriptObjectKey(ids.from, ids.video);
 		mocks.objects.push({ Key: key, Size: 50 });
