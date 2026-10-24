@@ -235,6 +235,8 @@ export async function POST(request: NextRequest) {
 
 			const transcribeOnView =
 				request.nextUrl.searchParams.get("transcription") === "on-view";
+			const previewOnView =
+				request.nextUrl.searchParams.get("preview") === "on-view";
 			const deferredSourceKey =
 				currentVideo &&
 				typeof payload.deferredSourceKey === "string" &&
@@ -247,6 +249,11 @@ export async function POST(request: NextRequest) {
 			const metadataUpdates = [
 				...(transcribeOnView
 					? [sql`'$.transcribeOnView', JSON_EXTRACT('true', '$')`]
+					: []),
+				...(previewOnView && !payload.deferredSourceKey
+					? [
+							sql`'$.loomPreviewGif', COALESCE(JSON_EXTRACT(${videos.metadata}, '$.loomPreviewGif'), JSON_OBJECT('status', 'pending'))`,
+						]
 					: []),
 				...(currentVideo?.metadata?.loomDeferredProcessing &&
 				currentUpload?.rawFileKey ===
