@@ -348,8 +348,8 @@ pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
 static SHARED_API_CLIENT: Mutex<Option<(std::time::SystemTime, reqwest::Client)>> =
     Mutex::new(None);
 
-/// Starts the next `authed_request` on a new client, so a test's connection
-/// count cannot see another test's client reach its maximum age.
+/// Drops the shared client, as quitting the app does, for tests that model a
+/// relaunch.
 #[cfg(test)]
 pub(crate) fn reset_shared_api_client() {
     *SHARED_API_CLIENT

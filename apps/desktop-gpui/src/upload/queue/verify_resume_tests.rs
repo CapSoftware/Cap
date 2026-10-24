@@ -147,6 +147,7 @@ fn saved_instant_upload_resumes_after_quit_mid_transfer() {
 
         mock.drain().await;
         mock.new_session();
+        crate::auth::reset_shared_api_client();
         let relaunched = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
         launch(&relaunched, &project).await;
         settle(&relaunched).await;
@@ -196,6 +197,7 @@ fn saved_instant_upload_quit_during_verification_confirms_without_reupload() {
 
         mock.drain().await;
         mock.new_session();
+        crate::auth::reset_shared_api_client();
         let relaunched = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
         launch(&relaunched, &project).await;
         settle(&relaunched).await;
