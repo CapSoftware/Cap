@@ -148,6 +148,8 @@ const HISTORY_LIMIT: usize = 100;
 #[derive(Debug, Clone)]
 pub struct ProjectHistory {
     entries: Vec<ProjectConfiguration>,
+    /// A short description of what each entry changed, for the history menu.
+    labels: Vec<String>,
     /// `history().count` -- steps walked back from the newest entry.
     count: usize,
     /// `pauseCount` (`:1917`). A drag brackets itself with `pause`/`resume` so
@@ -165,6 +167,7 @@ impl ProjectHistory {
     pub fn new(initial: ProjectConfiguration) -> Self {
         Self {
             entries: vec![initial],
+            labels: vec!["Opened project".to_string()],
             count: 0,
             paused: 0,
             dirty: false,
@@ -180,11 +183,18 @@ impl ProjectHistory {
         }
         let new_length = self.entries.len() - self.count;
         self.entries.truncate(new_length);
+        self.labels.truncate(new_length);
+        let label = self.entries.last().map_or_else(
+            || "Edit".to_string(),
+            |previous| describe_change(previous, config),
+        );
         if self.entries.len() >= HISTORY_LIMIT {
             let excess = self.entries.len() - HISTORY_LIMIT + 1;
             self.entries.drain(0..excess);
+            self.labels.drain(0..excess);
         }
         self.entries.push(config.clone());
+        self.labels.push(label);
         self.count = 0;
     }
 
@@ -237,10 +247,106 @@ impl ProjectHistory {
         self.entries.get(self.entries.len() - self.count - 1)
     }
 
+    /// Each entry's label, oldest first.
+    pub fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    /// Index (into [`Self::labels`]) of the entry the project is at now.
+    pub fn cursor(&self) -> usize {
+        self.entries.len() - self.count - 1
+    }
+
+    /// Walk straight to entry `index` and hand back the state there.
+    pub fn jump_to(&mut self, index: usize) -> Option<&ProjectConfiguration> {
+        if index >= self.entries.len() || index == self.cursor() {
+            return None;
+        }
+        self.count = self.entries.len() - 1 - index;
+        self.entries.get(index)
+    }
+
     #[cfg(test)]
     fn depth(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// A short human label for what changed between two project snapshots, e.g.
+/// "Added zoom" or "Changed background".
+pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfiguration) -> String {
+    let (Ok(serde_json::Value::Object(before)), Ok(serde_json::Value::Object(after))) =
+        (serde_json::to_value(before), serde_json::to_value(after))
+    else {
+        return "Edit".to_string();
+    };
+    let empty = serde_json::Map::new();
+    let timeline = |map: &serde_json::Map<String, serde_json::Value>| match map.get("timeline") {
+        Some(serde_json::Value::Object(timeline)) => timeline.clone(),
+        _ => empty.clone(),
+    };
+    let (before_timeline, after_timeline) = (timeline(&before), timeline(&after));
+    let mut keys: Vec<&String> = before_timeline
+        .keys()
+        .chain(after_timeline.keys())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    for key in keys {
+        let (a, b) = (before_timeline.get(key), after_timeline.get(key));
+        if a == b {
+            continue;
+        }
+        let name = match key.as_str() {
+            "segments" => "clip",
+            "zoomSegments" => "zoom",
+            "textSegments" => "text",
+            "imageSegments" => "image",
+            "audioSegments" => "audio clip",
+            "maskSegments" => "mask",
+            "sceneSegments" => "scene",
+            "styleSegments" => "style",
+            "keyboardSegments" => "keyboard segment",
+            "captionSegments" => "caption",
+            "camera3dSegments" => "3D segment",
+            "transitions" => "transition",
+            other => other,
+        };
+        let count = |value: Option<&serde_json::Value>| {
+            value.and_then(|v| v.as_array()).map_or(0, Vec::len)
+        };
+        let (before_count, after_count) = (count(a), count(b));
+        return match after_count.cmp(&before_count) {
+            std::cmp::Ordering::Greater if key == "segments" => "Split clip".to_string(),
+            std::cmp::Ordering::Greater => format!("Added {name}"),
+            std::cmp::Ordering::Less => format!("Deleted {name}"),
+            std::cmp::Ordering::Equal => format!("Edited {name}"),
+        };
+    }
+    let mut keys: Vec<&String> = before.keys().chain(after.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    for key in keys {
+        if key == "timeline" || before.get(key) == after.get(key) {
+            continue;
+        }
+        let name = match key.as_str() {
+            "aspectRatio" => "aspect ratio".to_string(),
+            "inOut" => "in/out range".to_string(),
+            other => other
+                .chars()
+                .flat_map(|c| {
+                    if c.is_uppercase() {
+                        vec![' ', c.to_ascii_lowercase()]
+                    } else {
+                        vec![c]
+                    }
+                })
+                .collect(),
+        };
+        return format!("Changed {name}");
+    }
+    "Edit".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -2947,6 +3053,28 @@ mod tests {
             .timeline
             .as_ref()
             .map_or(0, |timeline| timeline.zoom_segments.len())
+    }
+
+    #[test]
+    fn history_labels_steps_and_jumps_between_them() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        history.record(&with_zoom_count(1));
+        history.record(&with_zoom_count(2));
+        history.record(&with_zoom_count(1));
+        assert_eq!(
+            history.labels(),
+            ["Opened project", "Added zoom", "Added zoom", "Deleted zoom"]
+        );
+        assert_eq!(history.cursor(), 3);
+        assert_eq!(zoom_len(history.jump_to(0).unwrap()), 0);
+        assert_eq!(history.cursor(), 0);
+        assert!(history.can_redo());
+        assert_eq!(zoom_len(history.jump_to(2).unwrap()), 2);
+        assert!(history.jump_to(2).is_none(), "already there");
+        // A fresh edit drops the steps after the cursor
+        history.record(&with_zoom_count(5));
+        assert_eq!(history.labels().len(), 4);
+        assert_eq!(history.labels()[3], "Added zoom");
     }
 
     #[test]
