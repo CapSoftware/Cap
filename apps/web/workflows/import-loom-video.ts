@@ -407,7 +407,7 @@ async function startMediaServerProcessJob(
 		maxImportBytes: number;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
-		previewGifPresignedUrl: string;
+		previewGifPresignedUrl?: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension?: string;
@@ -654,7 +654,7 @@ async function processVideoOnMediaServer(
 		};
 	}).pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true${worker === "importer" ? "&transcription=on-view" : ""}`;
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true${worker === "importer" ? "&transcription=on-view&preview=on-view" : ""}`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	try {
@@ -688,7 +688,8 @@ async function processVideoOnMediaServer(
 				maxImportBytes: LOOM_IMPORT_MAX_BYTES,
 				outputPresignedUrl,
 				thumbnailPresignedUrl,
-				previewGifPresignedUrl,
+				previewGifPresignedUrl:
+					worker === "importer" ? undefined : previewGifPresignedUrl,
 				webhookUrl,
 				webhookSecret: webhookSecret || undefined,
 				inputExtension: getInputExtension(rawVideoUrl),

@@ -22,6 +22,7 @@ import {
 	importRequestSchema,
 	runLoomImport,
 } from "./job";
+import { previewRequestSchema, renderPreviewGif } from "./preview";
 
 function positiveInt(value: string | undefined, fallback: number): number {
 	const parsed = Number.parseInt(value ?? "", 10);
@@ -53,10 +54,12 @@ export function loadImporterSettings(
 		settings,
 		maxActiveJobs: positiveInt(env.LOOM_IMPORTER_MAX_JOBS, 16),
 		maxQueuedJobs: positiveInt(env.LOOM_IMPORTER_MAX_QUEUED, 400),
+		maxPreviewJobs: positiveInt(env.LOOM_IMPORTER_PREVIEW_JOBS, 4),
 	};
 }
 
 const JOB_LIFETIME_MS = 4 * 60 * 60 * 1000;
+const PREVIEW_TIMEOUT_MS = 120_000;
 const JOB_HEARTBEAT_MS = 60_000;
 
 interface QueuedImport {
@@ -78,6 +81,8 @@ export function createLoomImporter(
 	const queue: QueuedImport[] = [];
 	const running = new Map<string, AbortController>();
 	let draining = false;
+	const previewSemaphore = new Semaphore(config.maxPreviewJobs);
+	const previews = new Set<AbortController>();
 
 	const startJob = ({ jobId, request }: QueuedImport) =>
 		createJob(
@@ -188,6 +193,44 @@ export function createLoomImporter(
 		});
 	});
 
+	app.post("/video/preview-gif", async (c) => {
+		if (!validateMediaServerSecret(c))
+			return c.json({ error: "Unauthorized" }, 401);
+		if (draining)
+			return c.json(
+				{ error: "Importer is draining", code: "SERVER_BUSY" },
+				503,
+			);
+		const parsed = previewRequestSchema.safeParse(
+			await c.req.json().catch(() => null),
+		);
+		if (!parsed.success)
+			return c.json({ error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+		if (previews.size >= config.maxPreviewJobs * 2)
+			return c.json(
+				{ error: "Preview queue is full", code: "SERVER_BUSY" },
+				503,
+			);
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), PREVIEW_TIMEOUT_MS);
+		previews.add(controller);
+		try {
+			await previewSemaphore.run(() =>
+				renderPreviewGif(parsed.data, controller.signal),
+			);
+			return c.json({ ok: true });
+		} catch (error) {
+			console.warn("[loom-importer] Preview GIF failed", error);
+			return c.json(
+				{ error: "Preview GIF failed", code: "PREVIEW_FAILED" },
+				502,
+			);
+		} finally {
+			clearTimeout(timeout);
+			previews.delete(controller);
+		}
+	});
+
 	app.get("/video/process/:jobId/status", (c) => {
 		if (!validateMediaServerSecret(c))
 			return c.json({ error: "Unauthorized" }, 401);
@@ -218,13 +261,17 @@ export function createLoomImporter(
 	const drain = async (timeoutMs: number) => {
 		draining = true;
 		const deadline = Date.now() + timeoutMs;
-		while ((queue.length > 0 || running.size > 0) && Date.now() < deadline)
+		while (
+			(queue.length > 0 || running.size > 0 || previews.size > 0) &&
+			Date.now() < deadline
+		)
 			await new Promise((resolve) => setTimeout(resolve, 500));
+		for (const controller of previews) controller.abort();
 		await Promise.all(
 			queue.splice(0).map((entry) => cancelJob(startJob(entry))),
 		);
 		for (const controller of running.values()) controller.abort();
-		while (running.size > 0)
+		while (running.size > 0 || previews.size > 0)
 			await new Promise((resolve) => setTimeout(resolve, 250));
 	};
 

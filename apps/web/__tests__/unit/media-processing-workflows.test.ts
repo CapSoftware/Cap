@@ -277,8 +277,10 @@ describe("media processing workflows", () => {
 			expect(body).toMatchObject({
 				videoUrl: "https://luna.loom.com/id/x/playlist.m3u8",
 				webhookUrl:
-					"https://cap.example.com/api/webhooks/media-server/progress?retryable=true&transcription=on-view",
+					"https://cap.example.com/api/webhooks/media-server/progress?retryable=true&transcription=on-view&preview=on-view",
 			});
+			expect(body.previewGifPresignedUrl).toBeUndefined();
+			expect(body.thumbnailPresignedUrl).toBeDefined();
 			expect(body.sourcePresignedUrl).toBeUndefined();
 			expect(body.sourceUpload).toBeUndefined();
 		});
@@ -328,9 +330,10 @@ describe("media processing workflows", () => {
 			expect(mocks.fetch.mock.calls[0]?.[0]).toBe(
 				"https://worker.example.com/video/process",
 			);
-			expect(
-				JSON.parse(mocks.fetch.mock.calls[0]?.[1].body).webhookUrl,
-			).not.toContain("transcription=on-view");
+			const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1].body);
+			expect(body.webhookUrl).not.toContain("transcription=on-view");
+			expect(body.webhookUrl).not.toContain("preview=on-view");
+			expect(body.previewGifPresignedUrl).toBeDefined();
 		});
 
 		it("waits for the importer when it cannot confirm Loom support", async () => {

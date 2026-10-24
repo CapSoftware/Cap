@@ -922,6 +922,30 @@ describe("Loom importer completions", () => {
 		expect(mocks.transcribe).toHaveBeenCalledWith(videoId);
 	});
 
+	it("leaves the preview GIF for the first view of importer completions", async () => {
+		const database = loomVideo();
+		await request(
+			complete(),
+			"media-secret",
+			"?retryable=true&transcription=on-view&preview=on-view",
+		);
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"'$.loomPreviewGif', COALESCE(JSON_EXTRACT(?, '$.loomPreviewGif'), JSON_OBJECT('status', 'pending'))",
+		);
+	});
+
+	it("does not wait for a preview view when the original still needs processing", async () => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: `${ownerId}/${videoId}/raw-upload.webm` }),
+			"media-secret",
+			"?retryable=true&transcription=on-view&preview=on-view",
+		);
+		for (const write of metadataWrites(database.mutations))
+			expect(write.sql).not.toContain("loomPreviewGif");
+	});
+
 	it("keeps queueing transcription for media server completions", async () => {
 		const database = loomVideo();
 		await request(

@@ -29,6 +29,10 @@ export interface VideoMetadata {
 		startedAt?: string;
 	};
 	transcribeOnView?: boolean;
+	loomPreviewGif?: {
+		status: "pending" | "started" | "complete";
+		startedAt?: string;
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;
