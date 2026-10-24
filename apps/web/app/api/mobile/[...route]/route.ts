@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
 import { hashPassword } from "@cap/database/crypto";
-import { sendEmail } from "@cap/database/emails/config";
+import { getEmailDeliveryStatus, sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
@@ -158,12 +158,17 @@ const hashEmailCode = (code: string) =>
 		.digest("hex");
 
 const sendMobileEmailCode = async (email: string, code: string) => {
-	if (!serverEnv().RESEND_API_KEY) {
-		if (process.env.NODE_ENV === "production") {
-			throw new Error("RESEND_API_KEY is required to send mobile email codes");
+	const emailStatus = getEmailDeliveryStatus();
+	if (!emailStatus.configured) {
+		if (
+			process.env.NODE_ENV === "production" &&
+			buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+		) {
+			throw new Error(emailStatus.reason);
 		}
 		console.log("");
-		console.log("Cap mobile verification code");
+		console.log("Cap mobile verification code (email delivery disabled)");
+		console.log(emailStatus.reason);
 		console.log(`Email: ${email}`);
 		console.log(`Code: ${code}`);
 		console.log("Expires in: 10 minutes");
@@ -171,11 +176,16 @@ const sendMobileEmailCode = async (email: string, code: string) => {
 		return;
 	}
 
-	await sendEmail({
+	const delivery = await sendEmail({
 		email,
 		subject: "Your Cap Verification Code",
 		react: OTPEmail({ code, email }),
 	});
+	if (delivery?.error) {
+		throw new Error(
+			`Failed to send verification email: ${delivery.error.message}`,
+		);
+	}
 };
 
 const getMobileRedirectUrl = (redirectUri: string) => {
