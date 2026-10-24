@@ -338,6 +338,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 						  }
 						| undefined,
 					source: video.source,
+					duration: video.duration ?? undefined,
 					isScreenshot: video.isScreenshot,
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,
