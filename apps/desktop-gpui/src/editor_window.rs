@@ -12317,6 +12317,130 @@ mod tests {
         }
     }
 
+    /// The style-edit scope swaps the overridden configuration into
+    /// `self.project`; controls built inside it must borrow that project
+    /// instead of cloning it once per slider. Pin both halves: the override is
+    /// visible while the scope is active, and the base project comes back
+    /// (with a clone) once it ends.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn style_controls_borrow_the_scoped_project(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, _window, _cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            padding: 77.5,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            editor.project = config;
+            editor.sidebar.style_target = Some((0, crate::editor_sidebar::StyleGroup::Background));
+            let base_padding = editor.project.background.padding;
+
+            editor.with_style_controls(|editor| {
+                assert_eq!(editor.project.background.padding, 77.5);
+                let scoped = editor.style_control_project();
+                assert!(matches!(&scoped, std::borrow::Cow::Borrowed(_)));
+                assert_eq!(scoped.background.padding, 77.5);
+            });
+
+            assert_eq!(editor.project.background.padding, base_padding);
+            // Outside the scope the method still owns the override for the
+            // control builders; only the base project itself is restored.
+            let restored = editor.style_control_project();
+            assert!(matches!(&restored, std::borrow::Cow::Owned(_)));
+            assert_eq!(restored.background.padding, 77.5);
+        });
+    }
+
+    /// Manual A/B benchmark for the style-edit scope. Run with:
+    /// `cargo test -p cap-desktop-gpui --bin cap-gpui -- --ignored benchmark_style_control_repaint --nocapture`
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    #[ignore = "manual style-control repaint benchmark"]
+    fn benchmark_style_control_repaint(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, _window, _cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: vec![cap_project::TimelineSegment::default(); 2_000],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            padding: 77.5,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            editor.project = config;
+            editor.sidebar.style_target = Some((0, crate::editor_sidebar::StyleGroup::Background));
+            editor.sidebar.tab = crate::editor_sidebar::SidebarTab::Background;
+        });
+
+        let mut samples = Vec::new();
+        for _ in 0..32 {
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(800.), px(600.)),
+                |_, cx| {
+                    editor.update(cx, |editor, cx| {
+                        let started = std::time::Instant::now();
+                        for _ in 0..10 {
+                            drop(std::hint::black_box(editor.with_style_controls(|editor| {
+                                editor.render_sidebar(cx).into_any_element()
+                            })));
+                        }
+                        samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+                    });
+                    div()
+                },
+            );
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "style_controls timeline_segments=2000 samples=31 repaints_per_sample=10 median_us={:.3}",
+            samples[samples.len() / 2]
+        );
+    }
+
     #[test]
     fn auto_zoom_loads_clicks_without_losing_take_indices() {
         let root =
