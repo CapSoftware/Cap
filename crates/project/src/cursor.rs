@@ -5,7 +5,7 @@ use std::ops::Range;
 
 pub const SHORT_CURSOR_SHAPE_DEBOUNCE_MS: f64 = 1000.0;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use crate::XY;
@@ -79,14 +79,14 @@ impl CursorEvents {
         }
 
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
-        serde_json::from_reader::<_, Clicks>(BufReader::new(file))
+        deserialize_cursor_file::<Clicks>(file)
             .map(|events| events.clicks)
             .map_err(|e| format!("Failed to parse cursor clicks: {e}"))
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
-        Self::load_from_reader(BufReader::new(file))
+        deserialize_cursor_file(file).map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 
     pub fn load_from_reader(reader: impl std::io::Read) -> Result<Self, String> {
@@ -291,6 +291,31 @@ impl From<CursorData> for CursorEvents {
     }
 }
 
+const MAX_BUFFERED_CURSOR_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+fn deserialize_cursor_file<T: serde::de::DeserializeOwned>(file: File) -> serde_json::Result<T> {
+    if let Ok(metadata) = file.metadata()
+        && metadata.is_file()
+        && metadata.len() <= MAX_BUFFERED_CURSOR_FILE_BYTES
+    {
+        let mut reader = file.take(MAX_BUFFERED_CURSOR_FILE_BYTES + 1);
+        let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(serde_json::Error::io)?;
+        if bytes.len() as u64 <= MAX_BUFFERED_CURSOR_FILE_BYTES {
+            // The reader and slice parsers report different columns for some malformed numbers.
+            return serde_json::from_slice(&bytes)
+                .or_else(|_| serde_json::from_reader(bytes.as_slice()));
+        }
+        // A file can grow after metadata is read; keep the prefix and stream the remainder.
+        return serde_json::from_reader(BufReader::new(
+            std::io::Cursor::new(bytes).chain(reader.into_inner()),
+        ));
+    }
+    serde_json::from_reader(BufReader::new(file))
+}
+
 #[derive(Clone)]
 struct CursorSegment {
     range: Range<usize>,
@@ -408,6 +433,66 @@ mod tests {
             expected
         );
         assert_eq!(CursorData::load_from_file(&missing).unwrap_err(), expected);
+    }
+
+    #[test]
+    fn cursor_file_parsing_matches_streaming_at_the_buffer_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cursor.json");
+        let events = CursorEvents {
+            clicks: vec![click_event(12.5, "文字🖱")],
+            moves: vec![move_event(0.125, "文字🖱")],
+        };
+        let json = serde_json::to_vec(&events).unwrap();
+        for length in [
+            json.len(),
+            MAX_BUFFERED_CURSOR_FILE_BYTES as usize - 1,
+            MAX_BUFFERED_CURSOR_FILE_BYTES as usize,
+            MAX_BUFFERED_CURSOR_FILE_BYTES as usize + 1,
+        ] {
+            let mut bytes = vec![b' '; length - json.len()];
+            bytes.extend_from_slice(&json);
+            std::fs::write(&path, &bytes).unwrap();
+            let loaded = CursorEvents::load_from_file(&path).unwrap();
+            assert_eq!(loaded.moves, events.moves);
+            assert_eq!(loaded.clicks, events.clicks);
+            assert_eq!(
+                CursorEvents::load_clicks_from_file(&path).unwrap(),
+                events.clicks
+            );
+
+            bytes.push(b'!');
+            std::fs::write(&path, &bytes).unwrap();
+            let expected =
+                CursorEvents::load_from_reader(BufReader::new(File::open(&path).unwrap()));
+            assert_eq!(
+                CursorEvents::load_from_file(&path).unwrap_err(),
+                expected.unwrap_err()
+            );
+            assert!(CursorEvents::load_clicks_from_file(&path).is_err());
+        }
+    }
+
+    #[test]
+    fn slice_cursor_parsing_preserves_malformed_input_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cursor.json");
+        for json in [
+            br#"{"clicks":[],"moves":[],"unknown":"\uD800"}"#.as_slice(),
+            b"{\"clicks\":[],\"moves\":[],\"unknown\":\"\xff\"}",
+            br#"{"clicks":[],"moves":[],"unknown":1e999}"#,
+            br#"{"clicks":[],"moves":[{"active_modifiers":[],"cursor_id":"0","time_ms":1.25,"x":0.125,"y":-0.0}],"moves":[]}"#,
+            r#"{"clicks":[],"moves":[],"unknown":[true,false,null,{"value":"文字"}]}"#.as_bytes(),
+        ] {
+            std::fs::write(&path, json).unwrap();
+            let expected = CursorEvents::load_from_reader(BufReader::new(File::open(&path).unwrap()));
+            let actual = CursorEvents::load_from_file(&path);
+            match (actual, expected) {
+                (Ok(actual), Ok(expected)) => assert_eq!(serde_json::to_vec(&actual).unwrap(), serde_json::to_vec(&expected).unwrap()),
+                (Err(actual), Err(expected)) => assert_eq!(actual, expected),
+                values => panic!("different parsing outcomes: {values:?}"),
+            }
+        }
     }
 
     #[test]
