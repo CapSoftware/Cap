@@ -1530,7 +1530,9 @@ async function processVideoAsync(
 			progress: 0,
 			message: "Downloading video...",
 		});
-		await sendWebhook(job);
+		// Progress webhooks only update the upload row, so don't wait on cap.so between stages. sendWebhook keeps one
+		// delivery in flight per job and always sends the latest state, so the awaited terminal webhook still lands last.
+		void sendWebhook(job);
 
 		const input = await withJobHeartbeat(jobId, () =>
 			downloadVideoToTemp(
@@ -1562,7 +1564,7 @@ async function processVideoAsync(
 		const sourcePresignedUrl = options.sourcePresignedUrl;
 		if (sourcePresignedUrl || options.sourceUpload) {
 			updateJob(jobId, { message: "Saving original video..." });
-			await sendWebhook(job);
+			void sendWebhook(job);
 			await withJobHeartbeat(jobId, () =>
 				options.sourceUpload
 					? uploadFileToStorage(
@@ -1594,7 +1596,7 @@ async function processVideoAsync(
 			progress: 5,
 			message: "Analyzing video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
 		const { metadata, repairedFile } = await withJobHeartbeat(jobId, () =>
 			options.existingOutput
@@ -1622,7 +1624,7 @@ async function processVideoAsync(
 				? "Processing repaired video..."
 				: "Processing video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
 		const processed = options.existingOutput
 			? { outputFile: input, lastResortRepairFile: null }
@@ -1651,7 +1653,7 @@ async function processVideoAsync(
 			progress: 80,
 			message: "Uploading processed video...",
 		});
-		await sendWebhook(job);
+		void sendWebhook(job);
 
 		// Previews only read the finished output, so render them while it uploads; they are still
 		// uploaded after the output, so a failed upload never leaves previews behind.
@@ -1692,7 +1694,7 @@ async function processVideoAsync(
 					progress: 90,
 					message: "Generating preview assets...",
 				});
-				await sendWebhook(job);
+				void sendWebhook(job);
 			}
 
 			await withJobHeartbeat(jobId, async () => {
