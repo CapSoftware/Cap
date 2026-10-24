@@ -176,6 +176,7 @@ export interface PrefetchOptions extends Omit<DownloadToFileOptions, "signal"> {
 	signal: AbortSignal;
 	jobSemaphore: Semaphore;
 	globalSemaphore: Semaphore;
+	priority?: boolean;
 	maxBytes: number;
 	onProgress?: (progress: PrefetchProgress) => void;
 }
@@ -247,7 +248,7 @@ export async function prefetchMaterializedHls(
 							throw error;
 						}
 						options.onProgress?.({ ...progress });
-					}),
+					}, options.priority),
 				)
 				.catch((error) => {
 					failure.abort(error);
