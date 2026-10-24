@@ -2369,3 +2369,86 @@ describe("Google Drive rate limits", () => {
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 });
+
+describe("Google Drive uploads with a stored checksum", () => {
+	const uploadHarness = () => {
+		const harness = makeRepoHarness([
+			{
+				id: videoId,
+				name: "Checksummed",
+				ownerId: videoOwnerId,
+				storageIntegrationId: integrationId,
+			},
+		]);
+		harness.putObject(
+			storedObjectInput(".cap-folders/video-1", "folder-id", {
+				contentType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+			}),
+		);
+		harness.putObject(
+			storedObjectInput(
+				".cap-warnings/video-1/DO_NOT_EDIT_OR_DELETE.txt",
+				"warning-id",
+				{ contentType: "text/plain" },
+			),
+		);
+		return harness;
+	};
+	const stubUpload = (stored: Record<string, unknown> | string) =>
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.includes("/files/generateIds"))
+					return jsonResponse({ ids: ["page-id"] });
+				if (url.includes("uploadType=resumable") && init?.method === "POST")
+					return new Response(null, {
+						status: 200,
+						headers: { Location: "https://upload.test/session" },
+					});
+				if (url === "https://upload.test/session" && init?.method === "PUT")
+					return typeof stored === "string"
+						? new Response(stored, { status: 200 })
+						: jsonResponse(stored);
+				throw new Error(`Unexpected Drive request: ${init?.method} ${url}`);
+			}),
+		);
+
+	it("returns the SHA-256 Drive computed for the stored file", async () => {
+		const harness = uploadHarness();
+		stubUpload({
+			id: "page-id",
+			size: "7",
+			sha256Checksum: "ABCDEF0123",
+		});
+		const access = await getStorageAccess(harness);
+		if (!("putObjectWithChecksum" in access))
+			throw new Error("Drive access has no checksum upload");
+		await expect(
+			Effect.runPromise(
+				access.putObjectWithChecksum(resultKey, '{"a":1}', {
+					contentType: "application/json",
+				}),
+			),
+		).resolves.toEqual({ sha256Checksum: "abcdef0123" });
+		expect(
+			[...harness.objects.values()].find(
+				(object) => object.objectKey === resultKey,
+			)?.uploadStatus,
+		).toBe("complete");
+	});
+
+	it.each([
+		["no checksum field", { id: "page-id", size: "7" }],
+		["an unreadable body", "not json"],
+	])("returns no checksum when Drive's response has %s", async (_, stored) => {
+		const harness = uploadHarness();
+		stubUpload(stored);
+		const access = await getStorageAccess(harness);
+		if (!("putObjectWithChecksum" in access))
+			throw new Error("Drive access has no checksum upload");
+		await expect(
+			Effect.runPromise(access.putObjectWithChecksum(resultKey, '{"a":1}')),
+		).resolves.toEqual({ sha256Checksum: null });
+	});
+});
