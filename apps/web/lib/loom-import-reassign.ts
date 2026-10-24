@@ -284,7 +284,7 @@ async function moveClaimedVideo({
 			.set({
 				...(movedOriginalKey
 					? {
-							metadata: sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) = ${originalKey}, JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', ${movedOriginalKey}), ${videos.metadata})`,
+							metadata: sql`JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', ${movedOriginalKey})`,
 						}
 					: {}),
 				ownerId: User.UserId.make(toUserId),
@@ -299,6 +299,7 @@ async function moveClaimedVideo({
 					eq(videos.ownerId, User.UserId.make(fromUserId)),
 					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.token')) = ${token}`,
 					sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.status')), '') <> 'started'`,
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) <=> ${typeof originalKey === "string" ? originalKey : null}`,
 				),
 			);
 		if (getAffectedRows(result) !== 1) return false;

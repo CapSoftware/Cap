@@ -380,10 +380,7 @@ describe("reassignLoomImport", () => {
 			mocks.updates[0]?.metadata as SQL,
 		);
 		expect(query.sql).toContain("'$.loomDeferredProcessing.rawFileKey', ?)");
-		expect(query.params).toContain(
-			`someoneaaaaaaaa/${ids.video}/raw-upload.webm`,
-		);
-		expect(query.params).toContain(`${ids.to}/${ids.video}/raw-upload.webm`);
+		expect(query.params).toEqual([`${ids.to}/${ids.video}/raw-upload.webm`]);
 	});
 
 	it("leaves metadata alone for videos without a pending conversion", async () => {
