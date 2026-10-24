@@ -1081,6 +1081,11 @@ impl CacheSlot {
     }
 }
 
+#[cfg(test)]
+pub fn thumbnail_cache_file(source: &Path) -> Option<PathBuf> {
+    CacheSlot::for_source(source).map(|slot| slot.file())
+}
+
 /// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
 /// same swap gpui's own asset loader does after decoding).
 pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
