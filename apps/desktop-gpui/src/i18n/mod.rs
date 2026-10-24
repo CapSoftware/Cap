@@ -79,9 +79,20 @@ pub fn resolve(preference: Preference) -> Locale {
     {
         return locale;
     }
+    resolve_preference(preference, picker_enabled(), system)
+}
+
+/// Without the picker a release build stays English on a non-English system,
+/// so nobody gets a half-translated app they can't switch back from.
+fn resolve_preference(
+    preference: Preference,
+    picker_enabled: bool,
+    system: impl FnOnce() -> Locale,
+) -> Locale {
     match preference {
         Preference::Fixed(locale) => locale,
-        Preference::System => system(),
+        Preference::System if picker_enabled => system(),
+        Preference::System => Locale::En,
     }
 }
 
