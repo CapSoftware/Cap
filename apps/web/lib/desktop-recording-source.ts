@@ -9,10 +9,13 @@ import { z } from "zod";
 import {
 	type DesktopRecordingSourceCheckpoint,
 	desktopRecordingSourceCheckpointSchema,
+	SOURCE_COMMIT_AWS_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
+	SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 	SOURCE_COMMIT_PAGE_SIZE,
 	SOURCE_COMMIT_PART_BATCH_SIZE,
 	SOURCE_COMMIT_PART_PAGE_SIZE,
+	SOURCE_COMMIT_TREE_PAGE_SIZE,
 	type SourceCommitPageReference,
 	type SourceCommitReference,
 	sourceCommitPageReferenceSchema,
@@ -60,9 +63,10 @@ export type DesktopRecordingSource = z.infer<
 >;
 type SourceObject = z.infer<typeof sourceObjectSchema>;
 type DbVideo = typeof videos.$inferSelect;
-type RecordingStorage = Effect.Effect.Success<
+type RecordingStorageAccess = Effect.Effect.Success<
 	ReturnType<typeof Storage.getAccessForVideo>
->[0];
+>;
+type RecordingStorage = RecordingStorageAccess[0];
 
 const sourceInventorySchema = z.object({
 	version: z.literal(1),
@@ -199,6 +203,8 @@ type SourceContext = {
 	bucket: RecordingStorage;
 	prefix: string;
 	run: SourceRun;
+	concurrency: number;
+	pageSize: number;
 };
 type TreeKind = "plan" | "objects" | "parts";
 
@@ -229,7 +235,10 @@ const treePageSchema = z.discriminatedUnion("type", [
 		kind: z.enum(["plan", "objects", "parts"]),
 		scope: z.string(),
 		start: z.number().int().nonnegative(),
-		entries: z.array(z.unknown()).min(1).max(SOURCE_COMMIT_PART_PAGE_SIZE),
+		entries: z
+			.array(z.unknown())
+			.min(1)
+			.max(SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES),
 	}),
 	z.object({
 		version: z.literal(1),
@@ -256,6 +265,20 @@ const committedInventorySchema = z.union([
 ]);
 const SOURCE_COMMIT_STEP_TIMEOUT_MS = 180_000;
 const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
+const SOURCE_COMMIT_CONCURRENCY = 8;
+const SOURCE_COMMIT_AWS_CONCURRENCY = 128;
+
+function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
+	return bucket.provider === "s3" && Option.isNone(customBucket)
+		? {
+				concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
+				pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
+			}
+		: {
+				concurrency: SOURCE_COMMIT_CONCURRENCY,
+				pageSize: SOURCE_COMMIT_PAGE_SIZE,
+			};
+}
 
 function invalidSource(message: string): never {
 	throw new DesktopRecordingSourceError("source-invalid", message);
@@ -272,12 +295,13 @@ function parseSourceJson(content: string): unknown {
 async function mapBounded<T, R>(
 	items: T[],
 	operation: (item: T) => Promise<R>,
+	concurrency = SOURCE_COMMIT_CONCURRENCY,
 ) {
 	const output = new Array<R>(items.length);
 	const entries = items.entries();
 	let failure: unknown;
 	await Promise.all(
-		Array.from({ length: Math.min(8, items.length) }, async () => {
+		Array.from({ length: Math.min(concurrency, items.length) }, async () => {
 			while (failure === undefined) {
 				const next = entries.next();
 				if (next.done) return;
@@ -367,7 +391,7 @@ async function appendTree(
 	scope: string,
 	entries: unknown[],
 ) {
-	if (entries.length === 0 || entries.length > SOURCE_COMMIT_PART_PAGE_SIZE)
+	if (entries.length === 0 || entries.length > SOURCE_COMMIT_TREE_PAGE_SIZE)
 		invalidSource("Invalid source page size");
 	const start = treeCount(roots);
 	const leaf = await writeReference(context, {
@@ -424,51 +448,57 @@ async function readTree<T>(
 	let pending = roots.filter(overlaps);
 	const leaves: { start: number; entries: T[] }[] = [];
 	while (pending.length > 0) {
-		const pages = await mapBounded(pending, async (reference) => {
-			const parsed = treePageSchema.safeParse(
-				await readReference(context, reference),
-			);
-			if (!parsed.success) invalidSource("Recording source page is invalid");
-			const page = parsed.data;
-			if (page.kind !== kind || page.scope !== scope)
-				invalidSource("Recording source page belongs to a different snapshot");
-			if (page.type === "leaf") {
+		const pages = await mapBounded(
+			pending,
+			async (reference) => {
+				const parsed = treePageSchema.safeParse(
+					await readReference(context, reference),
+				);
+				if (!parsed.success) invalidSource("Recording source page is invalid");
+				const page = parsed.data;
+				if (page.kind !== kind || page.scope !== scope)
+					invalidSource(
+						"Recording source page belongs to a different snapshot",
+					);
+				if (page.type === "leaf") {
+					if (
+						reference.level !== 0 ||
+						page.start !== reference.start ||
+						page.entries.length !== reference.count
+					)
+						invalidSource(
+							"Recording source leaf does not match its committed range",
+						);
+					return {
+						children: [],
+						leaf: {
+							start: page.start,
+							entries: page.entries.map((entry) => {
+								const parsed = schema.safeParse(entry);
+								if (!parsed.success)
+									invalidSource(
+										"Recording source page contains an invalid receipt",
+									);
+								return parsed.data;
+							}),
+						},
+					};
+				}
+				const [left, right] = page.children;
 				if (
-					reference.level !== 0 ||
-					page.start !== reference.start ||
-					page.entries.length !== reference.count
+					left.start !== reference.start ||
+					left.start + left.count !== right.start ||
+					left.count + right.count !== reference.count ||
+					left.level + 1 !== reference.level ||
+					right.level !== left.level
 				)
 					invalidSource(
-						"Recording source leaf does not match its committed range",
+						"Recording source branch does not match its committed range",
 					);
-				return {
-					children: [],
-					leaf: {
-						start: page.start,
-						entries: page.entries.map((entry) => {
-							const parsed = schema.safeParse(entry);
-							if (!parsed.success)
-								invalidSource(
-									"Recording source page contains an invalid receipt",
-								);
-							return parsed.data;
-						}),
-					},
-				};
-			}
-			const [left, right] = page.children;
-			if (
-				left.start !== reference.start ||
-				left.start + left.count !== right.start ||
-				left.count + right.count !== reference.count ||
-				left.level + 1 !== reference.level ||
-				right.level !== left.level
-			)
-				invalidSource(
-					"Recording source branch does not match its committed range",
-				);
-			return { children: page.children.filter(overlaps), leaf: null };
-		});
+				return { children: page.children.filter(overlaps), leaf: null };
+			},
+			context.concurrency,
+		);
 		pending = [];
 		for (const page of pages) {
 			pending.push(...page.children);
@@ -922,6 +952,8 @@ export async function prepareDesktopRecordingSegments(
 		bucket,
 		run,
 		prefix: sourcePrefix(video).slice(0, -1),
+		concurrency: SOURCE_COMMIT_CONCURRENCY,
+		pageSize: SOURCE_COMMIT_PAGE_SIZE,
 	};
 	const unique = [
 		...new Map(
@@ -1153,7 +1185,7 @@ async function advanceSourceSnapshot(
 			invalidSource("Recording source plan cursor is incomplete");
 		const end = Math.min(
 			plan.objectCount,
-			checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE,
+			checkpoint.cursor + context.pageSize,
 		);
 		const originals = await mapBounded(
 			Array.from(
@@ -1166,6 +1198,7 @@ async function advanceSourceSnapshot(
 					originalAt(context.video, plan, position),
 					verification,
 				),
+			context.concurrency,
 		);
 		const planRoots = await appendTree(
 			context,
@@ -1198,7 +1231,7 @@ async function advanceSourceSnapshot(
 			scope,
 			originalObjectSchema,
 			checkpoint.cursor,
-			Math.min(plan.objectCount, checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE),
+			Math.min(plan.objectCount, checkpoint.cursor + context.pageSize),
 		);
 		const large =
 			context.bucket.provider === "s3"
@@ -1235,6 +1268,7 @@ async function advanceSourceSnapshot(
 						position,
 						plan.sourcePreparation === true,
 					),
+				context.concurrency,
 			);
 		}
 		const receiptRoots = await appendTree(
@@ -1261,7 +1295,7 @@ async function advanceSourceSnapshot(
 	if (checkpoint.phase === "verify") {
 		const end = Math.min(
 			plan.objectCount,
-			checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE,
+			checkpoint.cursor + context.pageSize,
 		);
 		const [originals, objects] = await Promise.all([
 			readTree(
@@ -1299,6 +1333,7 @@ async function advanceSourceSnapshot(
 					);
 				await checkCopy(context, original, object.key, object.objectIdentity);
 			},
+			context.concurrency,
 		);
 		return {
 			checkpoint: {
@@ -1419,7 +1454,7 @@ export async function advanceDesktopRecordingSourceCommit(
 		);
 	};
 	try {
-		const [bucket] = await run(
+		const access = await run(
 			Storage.getAccessForVideo(decodeStorageVideo(video), {
 				resolvePublishedOutput: false,
 			}),
@@ -1427,9 +1462,10 @@ export async function advanceDesktopRecordingSourceCommit(
 		const result = await advanceSourceSnapshot(
 			{
 				video,
-				bucket,
+				bucket: access[0],
 				run,
 				prefix: `${sourcePrefix(video)}${parsed.generation}/${parsed.snapshotId}`,
+				...sourceLimits(access),
 			},
 			parsed,
 			verification,
@@ -1480,9 +1516,10 @@ export async function buildDesktopRecordingSourceUrls(
 	source: DesktopRecordingSource,
 ) {
 	assertSourceKey(video, source.inventoryKey);
-	const [bucket] = await runWorkflowPromise(
+	const access = await runWorkflowPromise(
 		Storage.getAccessForVideo(decodeStorageVideo(video)),
 	);
+	const [bucket] = access;
 	const content = await readRequiredObject(bucket, source.inventoryKey);
 	if (hash(content) !== source.inventorySha256) {
 		throw new DesktopRecordingSourceError(
@@ -1526,6 +1563,7 @@ export async function buildDesktopRecordingSourceUrls(
 						bucket,
 						run,
 						prefix: sourcePrefix(video).slice(0, -1),
+						...sourceLimits(access),
 					},
 					inventory.roots,
 					"objects",

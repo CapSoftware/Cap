@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, open, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
 import {
@@ -687,6 +686,31 @@ class ChunkedDecodeUnavailable extends Error {}
 const DECODED_STREAM_METADATA =
 	/^#(tb|media_type|sample_rate|dimensions|sar|channel_layout_name) (\d+):/;
 
+const metadataOf = (lines: string[]) =>
+	lines.filter((line) => DECODED_STREAM_METADATA.test(line)).join("\n");
+
+function describeHeaderChange(first: string, other: string): string {
+	const fields = (header: string) =>
+		new Map(
+			header
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => {
+					const [name, ...value] = line.slice(1).split(": ");
+					return [name, value.join(": ")] as const;
+				}),
+		);
+	const before = fields(first);
+	const after = fields(other);
+	const changes = [...new Set([...before.keys(), ...after.keys()])]
+		.filter((name) => before.get(name) !== after.get(name))
+		.map(
+			(name) =>
+				`${name}: ${before.get(name) ?? "none"} -> ${after.get(name) ?? "none"}`,
+		);
+	return changes.join("; ").slice(0, 200) || "unknown";
+}
+
 async function collectDecoderLines(
 	stream: AsyncIterable<Uint8Array>,
 	lines: string[],
@@ -723,19 +747,27 @@ async function concatFiles(
 	target: string,
 	signal?: AbortSignal,
 ): Promise<void> {
-	const output = createWriteStream(target);
+	const output = await open(target, "w");
 	try {
 		for (const path of paths) {
 			signal?.throwIfAborted();
-			await pipeline(createReadStream(path), output, {
-				end: false,
-				...(signal ? { signal } : {}),
-			});
+			for await (const chunk of createReadStream(path, { signal })) {
+				for (let offset = 0; offset < chunk.byteLength; ) {
+					const { bytesWritten } = await output.write(
+						chunk,
+						offset,
+						chunk.byteLength - offset,
+					);
+					if (bytesWritten <= 0)
+						throw new Error(
+							"Recording verification chunk could not be written",
+						);
+					offset += bytesWritten;
+				}
+			}
 		}
 	} finally {
-		await new Promise<void>((resolve, reject) =>
-			output.end((error?: Error | null) => (error ? reject(error) : resolve())),
-		);
+		await output.close();
 	}
 }
 
@@ -1041,13 +1073,39 @@ async function decodePacketProvenChunks(
 				: []),
 		];
 		const errors: Promise<{ error: string }>[] = [];
-		for (const args of jobs) {
+		// A chunk's header describes its first decoded frame, so a mismatch is known
+		// as soon as each chunk emits one frame; stop then instead of decoding everything first.
+		const headers = new Map<number, string>();
+		const checkHeader = (index: number, lines: string[]) => {
+			if (headers.has(index)) return;
+			headers.set(index, metadataOf(lines));
+			const first = headers.get(0);
+			if (first === undefined) return;
+			for (const [other, header] of headers) {
+				if (other === 0 || header === first) continue;
+				failure ??= new ChunkedDecodeUnavailable(
+					`chunk stream parameters differ (${describeHeaderChange(first, header)})`,
+				);
+				stopAll();
+				return;
+			}
+		};
+		for (const [index, args] of jobs.entries()) {
 			options.abortSignal?.throwIfAborted();
 			const decoder = registerSubprocess(await spawnRecordingDecoder(args, 0));
 			decoders.push(decoder);
 			const lines: string[] = [];
 			outputs.push(lines);
-			const frames = collectDecoderLines(decoder.stdout, lines, onFrame);
+			const frames = collectDecoderLines(
+				decoder.stdout,
+				lines,
+				index < chunkPaths.length
+					? () => {
+							checkHeader(index, lines);
+							onFrame();
+						}
+					: onFrame,
+			);
 			const stderr = readDecoderErrors(decoder.stderr, outputPath);
 			frames.catch(stopAll);
 			stderr.catch(stopAll);
@@ -1066,13 +1124,14 @@ async function decodePacketProvenChunks(
 		}
 		const streams = new Map<number, DecodedStream>();
 		const videoOutputs = outputs.slice(0, chunkPaths.length);
-		const metadataOf = (lines: string[]) =>
-			lines.filter((line) => DECODED_STREAM_METADATA.test(line)).join("\n");
 		const videoMetadata = metadataOf(videoOutputs[0]);
 		let offset = 0;
 		for (const [index, lines] of videoOutputs.entries()) {
-			if (index > 0 && metadataOf(lines) !== videoMetadata)
-				throw new ChunkedDecodeUnavailable("chunk stream parameters differ");
+			const metadata = metadataOf(lines);
+			if (index > 0 && metadata !== videoMetadata)
+				throw new ChunkedDecodeUnavailable(
+					`chunk stream parameters differ (${describeHeaderChange(videoMetadata, metadata)})`,
+				);
 			let frames = 0;
 			for (const line of lines) {
 				if (line.startsWith("#")) {

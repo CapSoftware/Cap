@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	organizationInvites,
@@ -12,7 +13,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	if (!user) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}

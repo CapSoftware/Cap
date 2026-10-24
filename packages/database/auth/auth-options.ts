@@ -7,6 +7,7 @@ import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import { decode, type JWT, type JWTDecodeParams } from "next-auth/jwt";
 import AppleProvider from "next-auth/providers/apple";
+import CredentialsProvider from "next-auth/providers/credentials";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
@@ -31,6 +32,10 @@ import { ssoLoginErrorPath } from "./sso-state.ts";
 export const maxDuration = 120;
 
 const OTP_CODE_MAX_AGE_SECONDS = 10 * 60;
+
+// authOptions() is rebuilt per request (getServerSession, getCurrentUser), so
+// the trusted-proxy warning is gated at module scope to log once per process.
+let trustedProxyWarned = false;
 
 export async function decodeSessionToken(
 	params: JWTDecodeParams,
@@ -104,6 +109,16 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			const oidcIssuer = serverEnv().OIDC_ISSUER;
 			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
 			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
+			const trustedProxyEnabled =
+				serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
+				serverEnv().TRUSTED_PROXY_AUTH_EMAIL &&
+				serverEnv().TRUSTED_PROXY_AUTH_SECRET?.trim();
+			if (!trustedProxyWarned && trustedProxyEnabled) {
+				trustedProxyWarned = true;
+				console.warn(
+					"[auth] trusted-proxy sign-in is ENABLED. Keep the origin private and use an authenticating reverse proxy that strips client-sent copies of both the trust and secret headers and sets them only on owner-authenticated requests.",
+				);
+			}
 			_providers = [
 				...(oidcIssuer && oidcClientId && oidcClientSecret
 					? [
@@ -176,6 +191,59 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 											profile.id,
 										email: profile.email?.trim().toLowerCase(),
 										image: null,
+									};
+								},
+							}),
+						]
+					: []),
+				...(trustedProxyEnabled
+					? [
+							CredentialsProvider({
+								id: "trusted-proxy",
+								name: "Reverse Proxy",
+								credentials: {},
+								// SECURITY: this header is trusted ONLY because the operator
+								// opted in via env, asserting Cap runs behind a reverse proxy
+								// that strips client-sent copies of both trust headers and sets
+								// them only on owner-authenticated requests. Never enable without such a
+								// proxy — it would be a login bypass. Fails closed below.
+								async authorize(_credentials, req) {
+									const env = serverEnv();
+									const header = env.TRUSTED_PROXY_AUTH_HEADER?.toLowerCase();
+									const email = env.TRUSTED_PROXY_AUTH_EMAIL?.toLowerCase();
+									const secret = env.TRUSTED_PROXY_AUTH_SECRET;
+									if (!header || !email || !secret?.trim()) return null;
+									// The router is the sole authority for this header (it strips
+									// any client-sent copy), so its presence means the request was
+									// owner-authenticated. Fail closed on anything else.
+									if (req?.headers?.[header] !== "true") return null;
+
+									// Always require the proxy's secret, even if a caller can reach
+									// the origin directly. Compare fixed-size digests in constant time.
+									const provided = req?.headers?.["x-trusted-proxy-secret"];
+									if (typeof provided !== "string" || !provided) return null;
+									const digest = (s: string) =>
+										crypto.createHash("sha256").update(s).digest();
+									if (!crypto.timingSafeEqual(digest(provided), digest(secret)))
+										return null;
+
+									const [user] = await db()
+										.select({
+											id: users.id,
+											email: users.email,
+											name: users.name,
+											image: users.image,
+										})
+										.from(users)
+										.where(eq(users.email, email))
+										.limit(1);
+									if (!user) return null;
+
+									return {
+										id: user.id,
+										email: user.email,
+										name: user.name,
+										image: user.image,
 									};
 								},
 							}),
