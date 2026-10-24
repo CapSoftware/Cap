@@ -1,5 +1,16 @@
 export type Granularity = "hour" | "day" | "week";
 
+export const granularityOf = (
+	buckets: ReadonlyArray<{ bucket: string }>,
+): Granularity => {
+	const first = buckets[0];
+	const second = buckets[1];
+	if (!first || !second) return "day";
+	const gap =
+		new Date(second.bucket).getTime() - new Date(first.bucket).getTime();
+	return gap > 0 && gap <= 60 * 60 * 1000 ? "hour" : "day";
+};
+
 export const formatCompact = (value: number) => {
 	if (value >= 1_000_000)
 		return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;

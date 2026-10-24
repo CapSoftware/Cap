@@ -3,6 +3,7 @@ import {
 	formatBucketTick,
 	formatBucketTitle,
 	formatRelative,
+	granularityOf,
 } from "@/app/(org)/dashboard/analytics/components/format";
 
 describe.each(["America/Los_Angeles", "Asia/Kolkata", "UTC"])(
@@ -58,6 +59,37 @@ describe("formatRelative", () => {
 		);
 		expect(formatRelative("2026-10-24T12:00:00Z", "hour", now)).toBe(
 			"3 hours ago",
+		);
+	});
+});
+
+describe("granularityOf", () => {
+	it("detects hourly buckets from their spacing", () => {
+		expect(
+			granularityOf([
+				{ bucket: "2026-10-24T01:00:00Z" },
+				{ bucket: "2026-10-24T02:00:00Z" },
+			]),
+		).toBe("hour");
+	});
+
+	it("treats daily or missing buckets as daily", () => {
+		expect(
+			granularityOf([
+				{ bucket: "2026-10-23T00:00:00Z" },
+				{ bucket: "2026-10-24T00:00:00Z" },
+			]),
+		).toBe("day");
+		expect(granularityOf([])).toBe("day");
+	});
+});
+
+describe("weekly titles", () => {
+	it("uses the bucket's real end date when the week is short", () => {
+		expect(
+			formatBucketTitle("2026-07-01T00:00:00Z", "week", "2026-07-03T00:00:00Z"),
+		).toBe(
+			`${new Date("2026-07-01T00:00:00Z").toLocaleDateString([], { day: "numeric", month: "short", timeZone: "UTC" })} to ${new Date("2026-07-03T00:00:00Z").toLocaleDateString([], { day: "numeric", month: "short", timeZone: "UTC" })}`,
 		);
 	});
 });

@@ -21,6 +21,7 @@ import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext } from "../../Contexts";
 import type { AnalyticsRange, OrgAnalyticsResponse } from "../types";
 import { DoodleFilters } from "./Doodles";
+import { granularityOf } from "./format";
 import Header from "./Header";
 import OtherStats from "./OtherStats";
 import StatsChart from "./StatsChart";
@@ -217,7 +218,7 @@ export function AnalyticsDashboard() {
 					data={analytics?.chart ?? []}
 					isLoading={query.isLoading}
 					capId={capId}
-					granularity={range === "24h" ? "hour" : "day"}
+					granularity={granularityOf(analytics?.chart ?? [])}
 					animationKey={`${orgId}-${selectedSpaceId ?? ""}-${capId ?? ""}`}
 					emptyAction={
 						capId ? (
