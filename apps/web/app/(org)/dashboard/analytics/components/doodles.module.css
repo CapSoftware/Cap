@@ -76,8 +76,6 @@
 	animation: scribble 2.4s ease-in-out infinite;
 }
 
-/* Hover behaviours: the parent sets data-doodle-hover when hovered. */
-
 [data-doodle-hover] .blink {
 	transform-box: fill-box;
 	transform-origin: center;
