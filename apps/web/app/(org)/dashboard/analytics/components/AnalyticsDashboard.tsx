@@ -20,15 +20,17 @@ import { useEffectQuery } from "@/lib/EffectRuntime";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext } from "../../Contexts";
 import type { AnalyticsRange, OrgAnalyticsResponse } from "../types";
+import { DoodleFilters } from "./Doodles";
+import { granularityOf } from "./format";
 import Header from "./Header";
 import OtherStats from "./OtherStats";
 import StatsChart from "./StatsChart";
 
 const RANGE_OPTIONS: { value: AnalyticsRange; label: string }[] = [
-	{ value: "24h", label: "Last 24 hours" },
-	{ value: "7d", label: "Last 7 days" },
-	{ value: "30d", label: "Last 30 days" },
-	{ value: "lifetime", label: "Lifetime" },
+	{ value: "24h", label: "24 hours" },
+	{ value: "7d", label: "7 days" },
+	{ value: "30d", label: "30 days" },
+	{ value: "lifetime", label: "All time" },
 ];
 
 const ProRiveArt = memo(() => {
@@ -139,6 +141,15 @@ export function AnalyticsDashboard() {
 			}),
 		enabled: Boolean(orgId),
 		staleTime: 60 * 1000,
+		placeholderData: (previous, previousQuery) => {
+			const key = previousQuery?.queryKey;
+			return key &&
+				key[1] === orgId &&
+				key[2] === selectedSpaceId &&
+				key[4] === capId
+				? previous
+				: undefined;
+		},
 	});
 
 	const analytics = (query.data as { data: OrgAnalyticsResponse } | undefined)
@@ -177,12 +188,15 @@ export function AnalyticsDashboard() {
 				showOverlay && "overflow-hidden max-h-screen",
 			)}
 		>
-			<div className="space-y-8">
+			<DoodleFilters />
+			<div className="flex flex-col gap-5 mx-auto w-full max-w-[1280px]">
 				<Header
 					options={RANGE_OPTIONS}
 					value={range}
 					onChange={setRange}
-					isLoading={query.isFetching}
+					isLoading={query.isLoading}
+					isFetching={query.isFetching}
+					onRefresh={() => query.refetch()}
 					organizations={organizationData}
 					activeOrganization={activeOrganization}
 					spacesData={spacesData}
@@ -204,6 +218,20 @@ export function AnalyticsDashboard() {
 					data={analytics?.chart ?? []}
 					isLoading={query.isLoading}
 					capId={capId}
+					granularity={granularityOf(analytics?.chart ?? [])}
+					animationKey={`${orgId}-${selectedSpaceId ?? ""}-${capId ?? ""}`}
+					emptyAction={
+						capId ? (
+							<a
+								href={`/s/${capId}`}
+								target="_blank"
+								rel="noreferrer"
+								className="inline-flex gap-2 items-center px-5 h-10 text-sm font-medium rounded-full transition-colors bg-gray-12 text-gray-1 hover:bg-gray-11"
+							>
+								Open Cap
+							</a>
+						) : undefined
+					}
 				/>
 				<OtherStats data={otherStats} isLoading={query.isLoading} />
 			</div>

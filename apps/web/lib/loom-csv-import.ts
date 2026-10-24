@@ -239,6 +239,7 @@ export async function importLoomVideoForOwner({
 	destination = {},
 	migrationRequestId,
 	migrationLeaseToken,
+	importPriority,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
@@ -246,6 +247,7 @@ export async function importLoomVideoForOwner({
 	destination?: LoomImportDestination;
 	migrationRequestId?: string;
 	migrationLeaseToken?: string;
+	importPriority?: "customer" | "bulk";
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -372,6 +374,7 @@ export async function importLoomVideoForOwner({
 					bucketId: existingVideo.bucketId,
 					loomVideoId,
 					reuseExistingRawUpload: true,
+					importPriority,
 				});
 			} catch (error) {
 				if (error instanceof LoomImportStartError && error.canRetry) {
@@ -543,6 +546,7 @@ export async function importLoomVideoForOwner({
 			bucketId: Option.getOrNull(writable.bucketId),
 			loomVideoId,
 			loomDownloadUrl: downloadUrl,
+			importPriority,
 		});
 	} catch (error) {
 		if (error instanceof LoomImportStartError && error.canRetry) {
@@ -780,6 +784,7 @@ export async function processLoomCsvRows({
 	migrationRequestId,
 	migrationLeaseToken,
 	allowFolders = false,
+	importPriority,
 }: {
 	rows: LoomCsvImportRow[];
 	orgId: Organisation.OrganisationId;
@@ -787,6 +792,7 @@ export async function processLoomCsvRows({
 	migrationRequestId?: string;
 	migrationLeaseToken?: string;
 	allowFolders?: boolean;
+	importPriority?: "customer" | "bulk";
 }): Promise<LoomCsvImportResult> {
 	const inputRows = Array.isArray(rows) ? rows : [];
 	const normalizedRows = inputRows
@@ -918,6 +924,7 @@ export async function processLoomCsvRows({
 				destination: folderId ? { folderId } : {},
 				migrationRequestId,
 				migrationLeaseToken,
+				importPriority,
 			});
 
 			let spaceName = row.spaceName || undefined;

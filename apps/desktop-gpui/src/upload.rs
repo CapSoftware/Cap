@@ -15,9 +15,12 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+pub(crate) mod instant_cleanup;
 #[cfg(test)]
 mod multipart_tests;
 pub(crate) mod queue;
+#[cfg(test)]
+mod real_app_tests;
 #[cfg(test)]
 mod verify_tests;
 
@@ -226,6 +229,51 @@ impl SegmentUploadManifest {
 
     fn has_video_content(&self) -> bool {
         self.video_init_uploaded && !self.video_segments.is_empty()
+    }
+}
+
+// Only the share page's early playback reads this; the complete manifest stays
+// the source of truth for everything else.
+const RECORDED_LENGTH_SUBPATH: &str = "segments/recording.json";
+const RECORDED_LENGTH_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn recorded_length_json(manifest: &SegmentUploadManifest) -> Option<Vec<u8>> {
+    let duration: f64 = manifest
+        .video_segments
+        .iter()
+        .map(|segment| segment.duration)
+        .sum();
+    if manifest.video_segments.is_empty() || !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    serde_json::to_vec(&json!({
+        "version": 1,
+        "duration": duration,
+        "video_segments": manifest.video_segments.len(),
+        "audio_segments": manifest.audio_segments.len(),
+    }))
+    .ok()
+}
+
+async fn publish_recorded_length(video_id: String, bytes: Vec<u8>, cancel: Arc<AtomicBool>) {
+    match tokio::time::timeout(
+        RECORDED_LENGTH_TIMEOUT,
+        presigned_put_bytes_inner(&video_id, RECORDED_LENGTH_SUBPATH, bytes, Some(&cancel)),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::debug!(%error, "Recorded length upload failed"),
+        Err(_) => tracing::debug!("Recorded length upload timed out"),
+    }
+}
+
+async fn alongside<T>(main: impl Future<Output = T>, side: impl Future<Output = ()>) -> T {
+    let main = std::pin::pin!(main);
+    let side = std::pin::pin!(side);
+    match futures_util::future::select(main, side).await {
+        futures_util::future::Either::Left((output, _)) => output,
+        futures_util::future::Either::Right(((), main)) => main.await,
     }
 }
 
@@ -461,7 +509,7 @@ impl InstantUpload {
         result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
     }
 
-    pub async fn cancel(&mut self) -> Result<(), String> {
+    pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
         self.abort_segments().await;
         if let Some(ownership) = &self.ownership {
             queue::record_cancelled(ownership.project_path())?;
@@ -469,7 +517,7 @@ impl InstantUpload {
         with_upload_context(
             self.request_context.clone(),
             self.reads.clone(),
-            delete_instant_video(&self.video.id),
+            delete_instant_video_with_query(&self.video.id, query),
         )
         .await
     }
@@ -491,11 +539,18 @@ impl InstantUpload {
     }
 }
 
-pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
-    let path = format!(
+pub(crate) async fn delete_instant_video_with_query(
+    video_id: &str,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let mut path = format!(
         "/api/desktop/video/delete?videoId={}",
         urlencoding(video_id)
     );
+    if let Some(query) = query {
+        path.push('&');
+        path.push_str(query);
+    }
     let response = auth::authed_request(reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|error| format!("Failed to delete instant recording: {error}"))?;
@@ -2736,6 +2791,112 @@ mod tests {
             is_init,
             media_type,
         }
+    }
+
+    /// The finished segment manifest this app uploads, checked against the
+    /// files the web server's own parser is tested with
+    /// (`apps/web/__tests__/unit/desktop-segments-manifest-contract.test.ts`),
+    /// so neither side can change the format without the other noticing. Run
+    /// with `CAP_UPDATE_CONTRACT_FIXTURES=1` to rewrite the files after an
+    /// intended change.
+    #[test]
+    fn finished_segment_manifests_match_the_server_contract_fixtures() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web/__tests__/fixtures/desktop-segments");
+        for (name, audio) in [("with-audio", 2), ("video-only", 0)] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+            for (index, duration) in [(1, 2.0), (2, 2.0), (3, 1.25)] {
+                manifest.record(&segment_event(
+                    index,
+                    duration,
+                    false,
+                    SegmentMediaType::Video,
+                ));
+            }
+            if audio > 0 {
+                manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Audio));
+                for index in 1..=audio {
+                    manifest.record(&segment_event(index, 3.0, false, SegmentMediaType::Audio));
+                }
+            }
+            manifest.is_complete = true;
+            let uploaded = serde_json::to_value(&manifest).unwrap();
+            let path = fixtures.join(format!("finished-manifest-{name}.json"));
+            if std::env::var_os("CAP_UPDATE_CONTRACT_FIXTURES").is_some() {
+                std::fs::create_dir_all(&fixtures).unwrap();
+                let mut json = Vec::new();
+                let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+                let mut serializer = serde_json::Serializer::with_formatter(&mut json, formatter);
+                serde::Serialize::serialize(&uploaded, &mut serializer).unwrap();
+                json.push(b'\n');
+                std::fs::write(&path, json).unwrap();
+            }
+            let fixture: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),
+            )
+            .unwrap();
+            assert_eq!(
+                fixture,
+                uploaded,
+                "{} no longer matches what the app uploads",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_length_sums_the_complete_local_video_track() {
+        let mut manifest = SegmentUploadManifest::default();
+        manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+        manifest.record(&segment_event(2, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(3, 0.5, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Audio));
+
+        let value: Value =
+            serde_json::from_slice(&recorded_length_json(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            value,
+            json!({ "version": 1, "duration": 4.5, "video_segments": 3, "audio_segments": 1 })
+        );
+    }
+
+    #[test]
+    fn recorded_length_is_skipped_without_a_usable_video_length() {
+        assert!(recorded_length_json(&SegmentUploadManifest::default()).is_none());
+        for duration in [0.0, f64::NAN, f64::INFINITY] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(1, duration, false, SegmentMediaType::Video));
+            assert!(recorded_length_json(&manifest).is_none(), "{duration}");
+        }
+    }
+
+    #[tokio::test]
+    async fn alongside_never_waits_for_its_side_task() {
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { 7 }, async move {
+            std::future::pending::<()>().await;
+            flag.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert_eq!(output, 7);
+        assert!(!side_ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn alongside_finishes_its_main_task_after_a_quick_side_task() {
+        let (sender, receiver) = tokio::sync::oneshot::channel::<u32>();
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { receiver.await.unwrap() }, async move {
+            flag.store(true, Ordering::SeqCst);
+            sender.send(9).unwrap();
+        })
+        .await;
+        assert_eq!(output, 9);
+        assert!(side_ran.load(Ordering::SeqCst));
     }
 
     #[test]

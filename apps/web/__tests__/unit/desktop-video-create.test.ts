@@ -124,6 +124,10 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 	invalidateGoogleDriveStorageQuotaCache: vi.fn(),
 }));
 
+vi.mock("@/lib/server-analytics", () => ({
+	trackServerEvent: vi.fn(),
+}));
+
 // The live-transcription stack drags in the whole workflow graph
 // (server-only modules included); these tests only care that create works.
 vi.mock("@/lib/live-transcribe", () => ({
@@ -143,6 +147,7 @@ const { invalidateGoogleDriveStorageQuotaCache } = await import(
 	"@/lib/google-drive-storage-quota"
 );
 const { maybeStartLiveTranscription } = await import("@/lib/live-transcribe");
+const { trackServerEvent } = await import("@/lib/server-analytics");
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
@@ -439,6 +444,74 @@ describe("DELETE /delete", () => {
 		expect(response.status).toBe(400);
 		expect(deletion.deleteVideo).not.toHaveBeenCalled();
 		expect(mockDb.delete).not.toHaveBeenCalled();
+	});
+
+	it("reports why the desktop app cleaned up an Instant start after deleting it", async () => {
+		mockDb.where.mockResolvedValue([
+			{ video: { ...ownedVideo, source: { type: "desktopSegments" } } },
+		]);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=start-failed&cause=microphone",
+			{
+				method: "DELETE",
+				headers: { "X-Cap-Desktop-Features": "googleDriveUpload,gpui" },
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toBe(true);
+		expect(trackServerEvent).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"desktop_instant_cleanup",
+			{
+				reason: "start-failed",
+				cause: "microphone",
+				app: "gpui",
+				sourceType: "desktopSegments",
+			},
+		);
+	});
+
+	it.each([
+		"https://cap.test/delete?videoId=video-1",
+		"https://cap.test/delete?videoId=video-1&reason=unknown&cause=microphone",
+	])(
+		"deletes without reporting when no known reason is sent: %s",
+		async (url) => {
+			const response = await app.request(url, { method: "DELETE" });
+			expect(response.status).toBe(200);
+			expect(await response.json()).toBe(true);
+			expect(deletion.deleteVideo).toHaveBeenCalledExactlyOnceWith("video-1");
+			expect(trackServerEvent).not.toHaveBeenCalled();
+		},
+	);
+
+	it("drops an unknown cause and labels other desktop apps", async () => {
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=interrupted&cause=../../etc",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(200);
+		expect(trackServerEvent).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"desktop_instant_cleanup",
+			{ reason: "interrupted", cause: null, app: "desktop", sourceType: null },
+		);
+	});
+
+	it("reports nothing when the deletion itself fails", async () => {
+		deletion.deleteVideo.mockReturnValue(
+			Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error("Provider deletion failed"),
+				}),
+			),
+		);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1&reason=start-failed",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(500);
+		expect(trackServerEvent).not.toHaveBeenCalled();
 	});
 });
 

@@ -26,6 +26,7 @@ vi.mock("workflow", () => ({
 
 import {
 	readVideoProcessingStatus,
+	waitForSignalledVideoProcessing,
 	waitForVideoProcessing,
 } from "@/workflows/video-processing-status";
 
@@ -106,5 +107,77 @@ describe("durable video processing completion", () => {
 		expect(Math.max(...mocks.sleep.mock.calls.map(([delay]) => delay))).toBe(
 			30_000,
 		);
+	});
+});
+
+describe("signalled video processing completion", () => {
+	beforeEach(() => {
+		mocks.rows = [];
+		mocks.now = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => mocks.now);
+		mocks.where.mockReset().mockImplementation(async () => mocks.rows.shift());
+		mocks.sleep.mockReset().mockImplementation(async (delay: number) => {
+			mocks.now += delay;
+		});
+	});
+
+	afterEach(() => vi.restoreAllMocks());
+
+	it("reads the status once when the worker signals", async () => {
+		mocks.sleep.mockImplementation(() => new Promise(() => undefined));
+		mocks.rows = [[], [metadata]];
+		await expect(
+			waitForSignalledVideoProcessing("video", Promise.resolve()),
+		).resolves.toEqual(metadata);
+		expect(mocks.where).toHaveBeenCalledTimes(2);
+	});
+
+	it("checks every five minutes when no signal arrives", async () => {
+		mocks.rows = [[pending], [pending], [], [metadata]];
+		await expect(
+			waitForSignalledVideoProcessing("video", new Promise(() => undefined)),
+		).resolves.toEqual(metadata);
+		expect(mocks.sleep.mock.calls).toEqual([[300_000], [300_000], [300_000]]);
+	});
+
+	it("falls back to short polling if the signal beats the saved state", async () => {
+		const sleeps: number[] = [];
+		let signalled = false;
+		mocks.sleep.mockImplementation((delay: number) => {
+			sleeps.push(delay);
+			mocks.now += delay;
+			return delay === 300_000
+				? new Promise(() => undefined)
+				: Promise.resolve();
+		});
+		mocks.rows = [[pending], [pending], [], [metadata]];
+		await expect(
+			waitForSignalledVideoProcessing(
+				"video",
+				Promise.resolve().then(() => {
+					signalled = true;
+				}),
+			),
+		).resolves.toEqual(metadata);
+		expect(signalled).toBe(true);
+		expect(sleeps).toEqual([300_000, 5_000, 10_000]);
+	});
+
+	it("propagates worker failures after the signal", async () => {
+		mocks.sleep.mockImplementation(() => new Promise(() => undefined));
+		mocks.rows = [[{ ...pending, processingError: "Loom 404" }]];
+		await expect(
+			waitForSignalledVideoProcessing("video", Promise.resolve()),
+		).rejects.toThrow("Loom 404");
+	});
+
+	it("subscribes to the signal only once", async () => {
+		const then = vi.fn();
+		mocks.where.mockResolvedValue([pending]);
+		await expect(
+			waitForSignalledVideoProcessing("video", { then }),
+		).rejects.toThrow("Video processing timed out");
+		expect(then).toHaveBeenCalledTimes(1);
+		expect(mocks.now).toBeLessThanOrEqual(60 * 60 * 1000 + 300_000);
 	});
 });

@@ -1,10 +1,20 @@
 [common]
 add = "添加"
+back = "返回"
 cancel = "取消"
+choose_allow_prompt = "请在 macOS 提示中选择“允许”。"
+close = "关闭"
+copied = "已拷贝"
+dismiss = "关闭"
+go_back = "返回"
+loading = "正在加载..."
+no = "否"
 ok = "确定"
 reset = "重置"
 reset_to_default = "恢复默认"
 save = "保存"
+search = "搜索"
+yes = "是"
 
 [menu.app]
 about = "关于 Cap"
@@ -226,3 +236,350 @@ title = "隐私"
 [settings.general.privacy.telemetry]
 description = "Cap 使用匿名遥测数据来提升稳定性并修复问题。我们绝不会收集录制内容、窗口标题、文件路径或任何个人信息。"
 label = "共享匿名遥测数据"
+
+[main]
+delete_recording_confirm = "确定要删除这段录制吗？"
+delete_screenshot_confirm = "确定要删除这张截图吗？"
+
+[main.clean_capture]
+title = "保持画面整洁"
+
+[main.clip]
+add_to_project = "添加到当前项目"
+record_new = "录制新片段"
+
+[main.device]
+camera = "摄像头"
+fallback_camera = "摄像头"
+heading = "选择摄像头和麦克风"
+microphone = "麦克风"
+no_camera = "无摄像头"
+no_cameras = "未找到摄像头"
+no_matching_cameras = "没有匹配的摄像头"
+no_matching_microphones = "没有匹配的麦克风"
+no_microphone = "无麦克风"
+no_microphones = "未找到麦克风"
+system_audio_off = "不录制系统音频"
+system_audio_on = "录制系统音频"
+
+[main.device.access]
+allow_access = "允许访问"
+camera_denied = "Cap 无法使用你的摄像头。请在系统设置中开启。"
+camera_needed = "Cap 需要你的同意才能使用摄像头。"
+microphone_denied = "Cap 无法使用你的麦克风。请在系统设置中开启。"
+microphone_needed = "Cap 需要你的同意才能使用麦克风。"
+open_system_settings = "打开系统设置"
+turn_on_in_settings = "在设置中开启"
+
+[main.device.format]
+apply_failed = "无法应用设备格式：{error}"
+applying = "正在应用格式..."
+available = "可用：{format}"
+camera_changed = "摄像头已更换或断开连接。请重新打开它的格式设置。"
+channels = { other = "{count} 声道" }
+current = "当前：{format}"
+default = "默认"
+loading = "正在加载格式..."
+mono = "单声道"
+preferred = "首选格式"
+save_failed = "无法保存设备首选格式。请重试。"
+stereo = "立体声"
+
+[main.device.pill]
+allow = "允许"
+allow_in_settings = "在设置中允许"
+asking = "正在请求…"
+not_connected = "未连接"
+off = "关"
+on = "开"
+
+[main.error]
+camera_only_needs_camera = "仅摄像头录制需要先选择摄像头。"
+copy = "拷贝错误信息"
+devices_not_ready = "录制设备尚未就绪。请打开录制器后重试。"
+title = "出了点问题"
+
+[main.header]
+changelog = "更新日志"
+help = "帮助与导览"
+recordings = "录制"
+screenshots = "截图"
+settings = "设置"
+teleprompter = "提词器"
+
+[main.library]
+clips = { other = "{count} 个片段" }
+copy_screenshot_failed = "无法拷贝截图"
+import_recordings = "导入"
+import_screenshots = "导入图片"
+importing = "正在导入"
+no_matching_recordings = "没有匹配的录制"
+no_matching_screenshots = "没有匹配的截图"
+no_recordings = "还没有录制"
+no_screenshots = "还没有截图"
+recordings_description = "你的屏幕录制会显示在这里。开始录制吧！"
+screenshots_description = "你的截图会显示在这里。截一张图开始吧！"
+view_all_recordings = "查看所有录制"
+view_all_screenshots = "查看所有截图"
+
+[main.mic_warning]
+body = "这段录制不会包含你的声音。请选择一个麦克风，或在没有麦克风的情况下继续。"
+dont_show_again = "不再显示"
+record_without = "不使用麦克风录制"
+save_failed = "无法保存你的偏好设置。请重试，或保持该选项未勾选。"
+title = "未检测到麦克风"
+
+[main.mode]
+info_tooltip = "录制模式说明"
+
+[main.mode.header]
+instant = "Instant 模式"
+screenshot = "截图模式"
+studio = "Studio 模式"
+
+[main.mode.hover]
+instant = "Instant 模式"
+instant_description = "无需渲染：边录边上传，停止的那一刻就能分享链接。"
+quality_settings = "画质设置"
+screenshot = "截图模式"
+screenshot_description = "截取静态图片并添加标注。"
+studio = "Studio 模式"
+studio_description = "保存到你的电脑，停止后打开编辑器。录制质量可在设置中选择。"
+
+[main.mode.info]
+instant = "通过链接即时分享。录制内容会边录边上传，结束后即可立即分享。"
+screenshot = "即时截图并添加标注。非常适合快速截图、报告问题和视觉沟通。"
+studio = "以最高画质在本地录制，方便后期编辑。非常适合制作带特效和转场的精致内容。"
+title = "录制模式"
+
+[main.mode.name]
+instant = "Instant"
+screenshot = "截图"
+studio = "Studio"
+
+[main.plan]
+commercial = "商业版"
+personal = "个人版"
+
+[main.recording]
+cancel = "取消录制"
+paused_notice = "录制已暂停。继续录制前 Cap 会先隐藏。"
+resume = "继续"
+starting = "正在开始..."
+starts_in = "{remaining} 秒后开始录制"
+stop = "停止录制"
+stopping = "正在停止..."
+
+[main.recovery]
+discard = "丢弃"
+duration_minutes = "约 {minutes} 分钟"
+duration_minutes_seconds = "约 {minutes} 分 {seconds} 秒"
+duration_seconds = "约 {seconds} 秒"
+recover = "恢复"
+segments = { other = "{count} 个分段" }
+segments_with_duration = { other = "{count} 个分段 · {duration}" }
+title = "未完成的录制"
+
+[main.sign_in]
+message = "Instant 模式会边录边上传，停止的那一刻分享链接就已就绪。"
+not_now = "以后再说"
+open_browser_again = "重新打开浏览器"
+pending_message = "请在浏览器中完成 Cap 登录。完成后 Cap 会回到这里并打开录制器。"
+sign_in = "登录"
+timed_out = "登录超时。请重试。"
+title = "登录以使用 Instant 模式"
+use_studio = "使用 Studio"
+waiting = "正在等待浏览器"
+
+[main.storage]
+blocked = "录制所用磁盘仅剩 {available} GB 可用空间。请先释放空间，确保录制前至少有 512 MB 可用。"
+can_start = "录制所用磁盘仅剩 {available} GB 可用空间。如果空间过低，Cap 会自动停止并保留你的录制。"
+check_failed = "无法检查录制存储空间：{error}"
+record_anyway = "仍要录制"
+title = "存储空间不足"
+
+[main.target]
+area = "区域"
+camera_only = "仅摄像头"
+choose_display = "选择屏幕"
+choose_window = "选择窗口"
+display = "屏幕"
+heading = "选择捕获来源"
+no_displays = "未找到屏幕"
+no_matching_displays = "没有匹配的屏幕"
+no_matching_windows = "没有匹配的窗口"
+no_windows = "未找到窗口"
+window = "窗口"
+
+[controls]
+disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"
+low_storage = "存储空间不足。Cap 即将停止以保存你的录制。"
+
+[controls.confirm]
+delete = "删除"
+delete_message = "确定要删除这段录制吗？"
+delete_title = "确认删除"
+restart = "重新开始"
+restart_message = "确定要重新开始录制吗？当前录制将被丢弃。"
+restart_title = "确认重新开始"
+
+[controls.pause]
+pause = "暂停录制"
+pausing = "正在暂停录制…"
+resume = "继续录制"
+resuming = "正在继续录制…"
+unconfirmed = "无法确认录制状态。请使用“停止”。"
+
+[controls.stop]
+error = "错误"
+paused = "已暂停"
+pausing = "暂停中…"
+resuming = "恢复中…"
+saving = "保存中…"
+starting = "正在开始"
+
+[camera]
+waiting_title = "正在等待摄像头权限"
+
+[camera.effects]
+blur_message = "你的摄像头画面未模糊。"
+blur_title = "背景模糊不可用"
+both_message = "你的摄像头画面未模糊，也未镜像。"
+both_title = "摄像头特效不可用"
+mirror_message = "你的摄像头预览未镜像。"
+mirror_title = "镜像不可用"
+
+[camera.issue]
+access_message = "点击以在系统设置中允许 Cap 使用你的摄像头。"
+access_title = "需要摄像头权限"
+generic = "无法启动所选摄像头。请选择其他摄像头，或重新连接此摄像头。"
+invalid_format = "此摄像头未提供可用的捕获格式。"
+not_found = "此摄像头已不可用。请检查它是否已连接，并已在系统权限中允许。"
+start_failed = "系统无法启动此摄像头。它可能不可用，或正被其他应用使用。"
+timeout = "未从此摄像头收到任何画面。它可能已关闭、断开连接、被遮挡，或正被其他应用使用。"
+unavailable_title = "摄像头不可用"
+
+[onboarding.customize]
+footer = "以上内容都可以随时在设置中更改"
+subtitle = "从键盘快捷键到存储，一切皆可自定义。Cap 会适应你的工作方式。"
+title = "打造你的专属 Cap"
+
+[onboarding.customize.domain]
+description = "分享链接使用你自己的域名，而不是 cap.so"
+title = "自定义域名"
+
+[onboarding.customize.preferences]
+description = "帧率、画质、倒计时、光标特效等"
+title = "录制偏好"
+
+[onboarding.customize.s3]
+description = "连接你自己的 S3 兼容存储桶，完全掌控你的录制"
+title = "自定义 S3 存储"
+
+[onboarding.customize.shortcuts]
+description = "用于录制、截图和切换模式的全局快捷键"
+title = "键盘快捷键"
+
+[onboarding.demo]
+background = "背景"
+copied = "已拷贝！"
+copied_to_clipboard = "已拷贝到剪贴板"
+copy = "拷贝"
+editor = "Cap 编辑器"
+export = "导出"
+export_complete = "导出完成！"
+exporting = "正在导出..."
+link_ready = "链接已可分享！"
+save = "保存"
+start_recording = "开始录制"
+stopped = "已停止"
+style = "样式"
+
+[onboarding.demo.steps]
+beautify = "美化"
+edit = "编辑"
+record = "录制"
+select_area = "选择区域"
+share_link = "分享链接"
+stop = "停止"
+
+[onboarding.error]
+save_progress = "无法保存引导进度。请重试。"
+save_sound = "无法保存声音偏好设置。"
+
+[onboarding.faq]
+pricing = "查看价格方案"
+pricing_link = "查看价格方案 ↗"
+subtitle = "开始使用前需要了解的一切。"
+title = "常见问题"
+
+[onboarding.faq.free]
+answer = "Cap 个人使用免费。团队和商业用途请查看我们的价格方案。"
+question = "Cap 可以免费使用吗？"
+
+[onboarding.faq.instant_vs_studio]
+answer = "Instant 模式边录边上传，停止录制后就能立即拿到分享链接。Studio 模式在本地以完整画质录制，分享前可以添加背景、特效等进行编辑。"
+question = "Instant 和 Studio 有什么区别？"
+
+[onboarding.faq.sharing]
+answer = "在 Instant 模式下，停止录制时会自动生成分享链接。在 Studio 模式下，导出编辑好的视频，然后通过 Cap 云分享或保存在本地。"
+question = "如何分享？"
+
+[onboarding.faq.shortcuts]
+answer = "随时前往 设置 → 快捷键，自定义所有键盘快捷键。"
+question = "以后可以更改快捷键吗？"
+
+[onboarding.faq.storage]
+answer = "所有录制都保存在你电脑本地。在 Instant 模式下，它们还会上传到 Cap 云以便分享。你可以在设置中管理存储。"
+question = "我的录制保存在哪里？"
+
+[onboarding.modes.instant]
+description = "边录制边上传。停止录制即可立刻获得分享链接，无需等待。"
+feature_1 = "即时分享链接"
+feature_2 = "后台上传"
+feature_3 = "AI 转录与摘要"
+feature_4 = "浏览器播放"
+tagline = "几秒内录制并分享"
+title = "Instant 模式"
+
+[onboarding.modes.screenshot]
+description = "一个快捷键即可截图，添加标注和漂亮的背景，然后立即分享或拷贝。"
+feature_1 = "快捷键一键截图"
+feature_2 = "标注与绘图工具"
+feature_3 = "漂亮的背景"
+feature_4 = "拷贝、保存或分享"
+tagline = "即时截图与美化"
+title = "截图模式"
+
+[onboarding.modes.studio]
+description = "在本地以完整画质录制，然后用内置编辑器添加背景、边距、光标特效等。"
+feature_1 = "完整画质本地录制"
+feature_2 = "内置编辑器与特效"
+feature_3 = "自定义背景与边距"
+feature_4 = "准备好后导出或分享"
+tagline = "专业编辑工具"
+title = "Studio 模式"
+
+[onboarding.nav]
+back = "←  返回"
+continue_to_cap = "继续使用 Cap"
+keyboard_hint = "按 Enter ↵ 或使用 ← → 方向键"
+next = "继续"
+permissions_needed = "请授予所需权限以继续"
+relaunch = "重新启动 Cap"
+skip = "跳过导览"
+start = "开始使用 Cap"
+
+[onboarding.overview]
+subtitle = "无论你需要速度、专业画质，还是快速截图，Cap 都有对应的模式。"
+title = "一个应用，满足所有工作流"
+
+[onboarding.toggle]
+subtitle = "在 Cap 主窗口中单击即可切换模式。"
+title = "随时切换模式"
+
+[onboarding.welcome]
+click_or_press = "点击此处，或按下"
+get_started = "开始使用"
+space_key = "空格"
+tagline = "人人可用的开源屏幕分享应用。"

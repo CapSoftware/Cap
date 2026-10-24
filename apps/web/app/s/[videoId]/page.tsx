@@ -38,7 +38,6 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
@@ -46,6 +45,7 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
+import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -78,6 +78,7 @@ import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { getVideoViewCount } from "@/lib/video-view-count";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
@@ -501,6 +502,10 @@ async function AuthorizedContent({
 		Option.map(Comment.CommentId.make),
 	);
 	const recordingStopped = hasRecordingStoppedParam(searchParams);
+	const earlySegmentPlayback =
+		recordingStopped &&
+		video.source?.type === "desktopSegments" &&
+		isEarlyInstantPlaybackEnabled(video.owner.id);
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
@@ -717,7 +722,7 @@ async function AuthorizedContent({
 			);
 	}).pipe(EffectRuntime.runPromise);
 
-	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const viewsPromise = getVideoViewCount(videoId).then((v) => v.count);
 
 	const videoOrganizationRolePromise = (async () => {
 		if (!userId) return null;
@@ -1000,6 +1005,7 @@ async function AuthorizedContent({
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}
+				earlySegmentPlayback={earlySegmentPlayback}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
