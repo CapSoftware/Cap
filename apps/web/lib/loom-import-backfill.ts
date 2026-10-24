@@ -17,6 +17,7 @@ import {
 	normalizeImportEmail,
 } from "@/lib/loom-csv-import";
 import { reassignLoomImport } from "@/lib/loom-import-reassign";
+import { getOwnerOriginalKey } from "@/lib/loom-original-key";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 
 export type LoomBackfillItem = {
@@ -155,29 +156,26 @@ export async function backfillLoomImport(
 	}
 
 	const deferredKey = video.metadata?.loomDeferredProcessing?.rawFileKey;
-	const ownerPrefix = `${ownerId}/${item.videoId}/`;
+	const repairedKey = getOwnerOriginalKey(deferredKey, ownerId, item.videoId);
 	if (
 		ownerId === video.ownerId &&
 		video.metadata?.loomDeferredProcessing?.status === "pending" &&
-		typeof deferredKey === "string" &&
-		!deferredKey.startsWith(ownerPrefix)
+		repairedKey &&
+		repairedKey !== deferredKey
 	) {
-		const fileName = deferredKey.split("/").slice(2).join("/");
-		if (deferredKey.split("/")[1] === item.videoId && fileName) {
-			await db()
-				.update(videos)
-				.set({
-					metadata: sql`JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', ${`${ownerPrefix}${fileName}`})`,
-				})
-				.where(
-					and(
-						eq(videos.id, id),
-						eq(videos.ownerId, ownerId),
-						sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) = ${deferredKey}`,
-					),
-				);
-			changes.push("original");
-		}
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', ${repairedKey})`,
+			})
+			.where(
+				and(
+					eq(videos.id, id),
+					eq(videos.ownerId, ownerId),
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) = ${deferredKey}`,
+				),
+			);
+		changes.push("original");
 	}
 
 	if (date && video.effectiveCreatedAt?.getTime() !== date.getTime()) {

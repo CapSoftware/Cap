@@ -156,6 +156,7 @@ import {
 	encryptEditTranscriptObject,
 } from "@/lib/edit-transcript-storage";
 import { reassignLoomImport } from "@/lib/loom-import-reassign";
+import { getOwnerOriginalKey } from "@/lib/loom-original-key";
 
 const call = (
 	handler: (request: Request) => Promise<Response>,
@@ -361,18 +362,34 @@ describe("reassignLoomImport", () => {
 	});
 
 	it("points a pending conversion at the new owner's copy", async () => {
-		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		mocks.selects = [
+			[
+				importedVideo({
+					metadata: {
+						loomDeferredProcessing: {
+							status: "pending",
+							rawFileKey: `someoneaaaaaaaa/${ids.video}/raw-upload.webm`,
+						},
+					},
+				}),
+			],
+			[{ userId: ids.to }],
+		];
 		await reassignLoomImport(input);
 		const query = new MySqlDialect().sqlToQuery(
 			mocks.updates[0]?.metadata as SQL,
 		);
-		expect(query.sql).toContain("'$.loomDeferredProcessing.rawFileKey'");
-		expect(query.params).toEqual(
-			expect.arrayContaining([
-				`${ids.from}/${ids.video}/%`,
-				`${ids.to}/${ids.video}/`,
-			]),
+		expect(query.sql).toContain("'$.loomDeferredProcessing.rawFileKey', ?)");
+		expect(query.params).toContain(
+			`someoneaaaaaaaa/${ids.video}/raw-upload.webm`,
 		);
+		expect(query.params).toContain(`${ids.to}/${ids.video}/raw-upload.webm`);
+	});
+
+	it("leaves metadata alone for videos without a pending conversion", async () => {
+		mocks.selects = [[importedVideo()], [{ userId: ids.to }]];
+		await reassignLoomImport(input);
+		expect(mocks.updates[0]).not.toHaveProperty("metadata");
 	});
 
 	it("keeps sharing and visibility when asked", async () => {
@@ -491,5 +508,17 @@ describe("POST /api/internal/loom-imports/reassign", () => {
 				},
 			],
 		});
+	});
+});
+
+describe("getOwnerOriginalKey", () => {
+	it.each([
+		["a/vid/raw-upload.webm", "b/vid/raw-upload.webm"],
+		["a/vid/nested/file.webm", "b/vid/nested/file.webm"],
+		["a/other/raw-upload.webm", null],
+		["a/vid/", null],
+		[undefined, null],
+	])("%s -> %s", (key, expected) => {
+		expect(getOwnerOriginalKey(key, "b", "vid")).toBe(expected);
 	});
 });

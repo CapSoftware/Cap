@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -320,6 +322,15 @@ describe("backfillLoomImport", () => {
 			backfillLoomImport(org, { videoId: "videoaaaaaaaaaa" }),
 		).resolves.toMatchObject({ status: "updated", changes: ["original"] });
 		expect(mocks.updates).toHaveLength(1);
+		const query = new MySqlDialect().sqlToQuery(
+			mocks.updates[0]?.metadata as SQL,
+		);
+		expect(query.sql).toContain(
+			"JSON_SET(?, '$.loomDeferredProcessing.rawFileKey', ?)",
+		);
+		expect(query.params).toContain(
+			"zephyaaaaaaaaaa/videoaaaaaaaaaa/raw-upload.webm",
+		);
 	});
 
 	it("leaves a conversion already on the owner's path alone", async () => {

@@ -19,6 +19,10 @@ import {
 	decryptEditTranscriptObject,
 	encryptEditTranscriptObject,
 } from "@/lib/edit-transcript-storage";
+import {
+	getOwnerOriginalKey,
+	LOOM_REASSIGN_CLAIM_TTL_MS,
+} from "@/lib/loom-original-key";
 import { runPromise } from "@/lib/server";
 
 export type LoomReassignOptions = {
@@ -34,8 +38,6 @@ export type LoomReassignOutcome =
 			cleanup: "done" | "failed";
 	  }
 	| { videoId: string; status: "skipped" | "failed"; reason: string };
-
-const CLAIM_TTL_MS = 60 * 60 * 1000;
 
 function getAffectedRows(result: unknown) {
 	const header = Array.isArray(result) ? result[0] : result;
@@ -163,7 +165,7 @@ export async function reassignLoomImport({
 			and(
 				eq(videos.id, id),
 				eq(videos.ownerId, User.UserId.make(fromUserId)),
-				sql`(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.at')) < ${new Date(claimedAt.getTime() - CLAIM_TTL_MS).toISOString()})`,
+				sql`(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.at')) < ${new Date(claimedAt.getTime() - LOOM_REASSIGN_CLAIM_TTL_MS).toISOString()})`,
 			),
 		);
 	if (getAffectedRows(claim) !== 1)
@@ -177,6 +179,7 @@ export async function reassignLoomImport({
 			toUserId,
 			token,
 			options,
+			originalKey: video.metadata?.loomDeferredProcessing?.rawFileKey,
 		});
 	} finally {
 		await db()
@@ -201,6 +204,7 @@ async function moveClaimedVideo({
 	toUserId,
 	token,
 	options,
+	originalKey,
 }: {
 	id: Video.VideoId;
 	videoId: string;
@@ -209,6 +213,7 @@ async function moveClaimedVideo({
 	toUserId: string;
 	token: string;
 	options: LoomReassignOptions;
+	originalKey: unknown;
 }): Promise<LoomReassignOutcome> {
 	const source = await listObjects(videoId, fromUserId, organizationId);
 	if (source.objects.length === 0)
@@ -272,11 +277,16 @@ async function moveClaimedVideo({
 	}
 	const copiedObjects = written.length;
 
+	const movedOriginalKey = getOwnerOriginalKey(originalKey, toUserId, videoId);
 	const updated = await db().transaction(async (tx) => {
 		const result = await tx
 			.update(videos)
 			.set({
-				metadata: sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) LIKE ${`${fromUserId}/${videoId}/%`}, JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', CONCAT(${`${toUserId}/${videoId}/`}, SUBSTRING(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')), ${`${fromUserId}/${videoId}/`.length + 1}))), ${videos.metadata})`,
+				...(movedOriginalKey
+					? {
+							metadata: sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey')) = ${originalKey}, JSON_SET(${videos.metadata}, '$.loomDeferredProcessing.rawFileKey', ${movedOriginalKey}), ${videos.metadata})`,
+						}
+					: {}),
 				ownerId: User.UserId.make(toUserId),
 				folderId: options.folderId
 					? Folder.FolderId.make(options.folderId)
@@ -288,6 +298,7 @@ async function moveClaimedVideo({
 					eq(videos.id, id),
 					eq(videos.ownerId, User.UserId.make(fromUserId)),
 					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomReassignClaim.token')) = ${token}`,
+					sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.status')), '') <> 'started'`,
 				),
 			);
 		if (getAffectedRows(result) !== 1) return false;
@@ -301,7 +312,11 @@ async function moveClaimedVideo({
 		await runPromise(
 			source.bucket.deleteObjects(written.map((key) => ({ Key: key }))),
 		).catch(() => undefined);
-		return { videoId, status: "failed", reason: "move claim was lost" };
+		return {
+			videoId,
+			status: "failed",
+			reason: "video changed during the move",
+		};
 	}
 
 	try {
