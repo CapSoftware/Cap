@@ -311,21 +311,51 @@ async function explainTrackMismatch(
 	}
 }
 
-function describeTrackDifference(
-	source: Awaited<ReturnType<typeof readTrack>>,
-	output: Awaited<ReturnType<typeof readTrack>>,
-): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function configurationDifferences(
+	left: Record<string, unknown>,
+	right: Record<string, unknown>,
+	path = "",
+): string[] {
 	const parts: string[] = [];
-	const left = source.summary.configuration as Record<string, unknown>;
-	const right = output.summary.configuration as Record<string, unknown>;
+	const value = (raw: unknown) => {
+		const text = JSON.stringify(raw) ?? "none";
+		return text.length > 40 ? `${text.slice(0, 37)}...` : text;
+	};
 	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
 		if (JSON.stringify(left[key]) === JSON.stringify(right[key])) continue;
-		const value = (raw: unknown) => {
-			const text = JSON.stringify(raw) ?? "none";
-			return text.length > 40 ? "(differs)" : text;
-		};
-		parts.push(`${key} ${value(left[key])} vs ${value(right[key])}`);
+		const [a, b] = [left[key], right[key]];
+		// Name the tag or disposition that changed instead of printing two long objects.
+		if (!path && (isRecord(a) || isRecord(b)))
+			parts.push(
+				...configurationDifferences(
+					isRecord(a) ? a : {},
+					isRecord(b) ? b : {},
+					`${key}.`,
+				),
+			);
+		else parts.push(`${path}${key} ${value(a)} vs ${value(b)}`);
 	}
+	return parts;
+}
+
+export function describeTrackDifference(
+	source: Pick<
+		Awaited<ReturnType<typeof readTrack>>,
+		"summary" | "log" | "timeBase"
+	>,
+	output: Pick<
+		Awaited<ReturnType<typeof readTrack>>,
+		"summary" | "log" | "timeBase"
+	>,
+): string {
+	const parts = configurationDifferences(
+		source.summary.configuration as Record<string, unknown>,
+		output.summary.configuration as Record<string, unknown>,
+	);
 	if (source.summary.count !== output.summary.count)
 		parts.push(`packets ${source.summary.count} vs ${output.summary.count}`);
 	if (source.summary.startTime !== output.summary.startTime)
@@ -338,6 +368,8 @@ function describeTrackDifference(
 		output.log
 	)
 		parts.push(firstPacketDifference(source.log, output.log));
+	if (source.timeBase !== output.timeBase)
+		parts.push(`time base ${source.timeBase} vs ${output.timeBase}`);
 	return parts.join("; ").slice(0, 400) || "track summaries differ";
 }
 
@@ -522,6 +554,7 @@ async function readTrack(
 			tail,
 		},
 		log,
+		timeBase: base,
 	};
 }
 
