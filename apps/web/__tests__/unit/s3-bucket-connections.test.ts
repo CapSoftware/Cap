@@ -100,25 +100,27 @@ async function storageFixture() {
 }
 
 describe("S3 connection reuse", () => {
-	it("bounds connections across simultaneous recording checkpoints", async () => {
+	it("reuses one bounded set of connections across recording checkpoints", async () => {
 		const fixture = await storageFixture();
 		try {
-			await Promise.all(
-				Array.from({ length: 24 }, async (_, recording) => {
-					const [access] = await fixture.runtime.runPromise(
-						fixture.service.getBucketAccess(Option.none()),
-					);
-					await Promise.all(
-						Array.from({ length: 8 }, (_, index) =>
-							fixture.runtime.runPromise(
-								access.headObject(`recording/${recording}/${index}`),
+			// Two waves of checkpoints: the second must reuse the first wave's sockets instead of opening its own.
+			for (let wave = 0; wave < 2; wave++)
+				await Promise.all(
+					Array.from({ length: 16 }, async (_, recording) => {
+						const [access] = await fixture.runtime.runPromise(
+							fixture.service.getBucketAccess(Option.none()),
+						);
+						await Promise.all(
+							Array.from({ length: 8 }, (_, index) =>
+								fixture.runtime.runPromise(
+									access.headObject(`recording/${wave}/${recording}/${index}`),
+								),
 							),
-						),
-					);
-				}),
-			);
-			expect(fixture.authorizations).toHaveLength(192);
-			expect(fixture.connections()).toBeLessThanOrEqual(50);
+						);
+					}),
+				);
+			expect(fixture.authorizations).toHaveLength(256);
+			expect(fixture.connections()).toBeLessThanOrEqual(128);
 		} finally {
 			await fixture.close();
 		}
@@ -225,9 +227,9 @@ describe("S3 connection reuse", () => {
 			),
 		);
 		expect(pools.map((pool) => pool.httpsAgent.maxFreeSockets)).toEqual([
-			8, 32,
+			8, 256,
 		]);
-		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 50]);
+		expect(pools.map((pool) => pool.httpsAgent.maxSockets)).toEqual([50, 256]);
 	});
 
 	it("reuses custom bucket connections while using current credentials", async () => {

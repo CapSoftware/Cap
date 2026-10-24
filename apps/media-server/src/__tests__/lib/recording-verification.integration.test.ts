@@ -720,6 +720,44 @@ describe("encoded recording preservation", () => {
 			verifyRemuxedRecording(silent, silent, output, { requireAudio: true }),
 		).rejects.toThrow();
 	});
+	test("names what differs when the packet proof fails", async () => {
+		const shifted = join(directory, "proof-explained-shift.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-itsoffset",
+			"0.5",
+			"-i",
+			silent,
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a:0",
+			"-c",
+			"copy",
+			shifted,
+		]);
+		await expect(
+			proveRecordingPackets(silent, silent, shifted, AbortSignal.timeout(5000)),
+		).rejects.toThrow(
+			/audio does not preserve the source \(.*first difference at packet 0: pts -?[\d.]+ vs [\d.]+, dts/,
+		);
+
+		const changed = join(directory, "proof-explained-data.mp4");
+		const bytes = await readFile(silent);
+		const mdat = bytes.indexOf(Buffer.from("mdat"));
+		if (mdat < 0) throw new Error("Fixture has no media data");
+		bytes[mdat + 64] ^= 0xff;
+		await writeFile(changed, bytes);
+		await expect(
+			proveRecordingPackets(silent, silent, changed, AbortSignal.timeout(5000)),
+		).rejects.toThrow(
+			/does not preserve the source \(first difference at packet \d+: data differs\)/,
+		);
+	});
 	test("does not start cancelled packet verification", async () => {
 		const controller = new AbortController();
 		controller.abort();
@@ -1123,7 +1161,7 @@ describe("source-preserving recording mux", () => {
 		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
 		expect(timing.terminalPacketCount).toBe(3);
 		await expect(inspectRecordingSources(input, null)).rejects.toThrow(
-			"Recording container timing does not match decoded video",
+			"Recording container timing does not match decoded video (final tied packets 3 vs decoded 2)",
 		);
 	});
 
@@ -1323,7 +1361,7 @@ describe("source-preserving recording mux", () => {
 		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
 		expect(timing.videoPacketCount).toBe(31);
 		await expect(inspectRecordingSources(input, null)).rejects.toThrow(
-			"Recording container timing does not match decoded video",
+			"Recording container timing does not match decoded video (packets 31 vs decoded frames 30)",
 		);
 	});
 
@@ -1967,14 +2005,17 @@ function expectExited(pid: number) {
 
 describe("recording timing metadata budget", () => {
 	const mb = 1024 * 1024;
-	test("keeps the 64 MB budget for normal recordings", () => {
+	test("keeps at least 64 MB for small recordings", () => {
 		expect(timingMetadataBudget(0)).toBe(64 * mb);
-		expect(timingMetadataBudget(300 * mb)).toBe(64 * mb);
-		expect(timingMetadataBudget(4096 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(2 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(32 * mb)).toBe(64 * mb);
 	});
 
-	test("scales with very long recordings up to 1 GB", () => {
-		expect(timingMetadataBudget(20 * 1024 * mb)).toBe(320 * mb);
+	test("allows twice the file size, up to 1 GB", () => {
+		// Production failures: 64 MB read for a 156 MB and a 324 MB recording of tiny frames.
+		expect(timingMetadataBudget(156 * mb)).toBe(312 * mb);
+		expect(timingMetadataBudget(324 * mb)).toBe(648 * mb);
+		expect(timingMetadataBudget(4096 * mb)).toBe(1024 * mb);
 		expect(timingMetadataBudget(200 * 1024 * mb)).toBe(1024 * mb);
 	});
 
