@@ -229,6 +229,54 @@ impl SegmentUploadManifest {
     }
 }
 
+/// Written once a recording stops so the share page can show its full length
+/// while it plays the start and the last segments are still uploading. Only
+/// that preview reads it; the complete manifest stays the source of truth.
+const RECORDED_LENGTH_SUBPATH: &str = "segments/recording.json";
+const RECORDED_LENGTH_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn recorded_length_json(manifest: &SegmentUploadManifest) -> Option<Vec<u8>> {
+    let duration: f64 = manifest
+        .video_segments
+        .iter()
+        .map(|segment| segment.duration)
+        .sum();
+    if manifest.video_segments.is_empty() || !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    serde_json::to_vec(&json!({
+        "version": 1,
+        "duration": duration,
+        "video_segments": manifest.video_segments.len(),
+        "audio_segments": manifest.audio_segments.len(),
+    }))
+    .ok()
+}
+
+async fn publish_recorded_length(video_id: String, bytes: Vec<u8>, cancel: Arc<AtomicBool>) {
+    match tokio::time::timeout(
+        RECORDED_LENGTH_TIMEOUT,
+        presigned_put_bytes_inner(&video_id, RECORDED_LENGTH_SUBPATH, bytes, Some(&cancel)),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::debug!(%error, "Recorded length upload failed"),
+        Err(_) => tracing::debug!("Recorded length upload timed out"),
+    }
+}
+
+/// Runs `side` while `main` runs, without ever waiting on it: when `main`
+/// finishes first, `side` is dropped where it is.
+async fn alongside<T>(main: impl Future<Output = T>, side: impl Future<Output = ()>) -> T {
+    let main = std::pin::pin!(main);
+    let side = std::pin::pin!(side);
+    match futures_util::future::select(main, side).await {
+        futures_util::future::Either::Left((output, _)) => output,
+        futures_util::future::Either::Right(((), main)) => main.await,
+    }
+}
+
 pub async fn prepare_instant_upload(
     camera_only: bool,
     project_name: String,
@@ -2736,6 +2784,60 @@ mod tests {
             is_init,
             media_type,
         }
+    }
+
+    #[test]
+    fn recorded_length_sums_the_complete_local_video_track() {
+        let mut manifest = SegmentUploadManifest::default();
+        manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+        manifest.record(&segment_event(2, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(3, 0.5, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Audio));
+
+        let value: Value =
+            serde_json::from_slice(&recorded_length_json(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            value,
+            json!({ "version": 1, "duration": 4.5, "video_segments": 3, "audio_segments": 1 })
+        );
+    }
+
+    #[test]
+    fn recorded_length_is_skipped_without_a_usable_video_length() {
+        assert!(recorded_length_json(&SegmentUploadManifest::default()).is_none());
+        for duration in [0.0, f64::NAN, f64::INFINITY] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(1, duration, false, SegmentMediaType::Video));
+            assert!(recorded_length_json(&manifest).is_none(), "{duration}");
+        }
+    }
+
+    #[tokio::test]
+    async fn alongside_never_waits_for_its_side_task() {
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { 7 }, async move {
+            std::future::pending::<()>().await;
+            flag.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert_eq!(output, 7);
+        assert!(!side_ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn alongside_finishes_its_main_task_after_a_quick_side_task() {
+        let (sender, receiver) = tokio::sync::oneshot::channel::<u32>();
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { receiver.await.unwrap() }, async move {
+            flag.store(true, Ordering::SeqCst);
+            sender.send(9).unwrap();
+        })
+        .await;
+        assert_eq!(output, 9);
+        assert!(side_ran.load(Ordering::SeqCst));
     }
 
     #[test]
