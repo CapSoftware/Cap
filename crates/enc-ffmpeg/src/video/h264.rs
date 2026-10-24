@@ -923,7 +923,7 @@ impl H264Encoder {
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
             let converted = self.converted_frame_pool.as_mut().unwrap();
-            super::packed_yuv::convert_or_scale(&frame, converted, converter)
+            super::convert_or_scale(&frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -952,7 +952,7 @@ impl H264Encoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
-            super::packed_yuv::convert_or_scale(frame, converted, converter)
+            super::convert_or_scale(frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -2093,6 +2093,58 @@ mod rgb_color_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn queue_frame_to_bgrz_flat_red_decodes_as_bt709() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bgrz.mp4");
+        let mut output = format::output_as(&path, "mp4").unwrap();
+        let info = VideoInfo::from_raw_ffmpeg(format::Pixel::BGRZ, 64, 64, 30);
+        let mut encoder = H264Encoder::builder(info)
+            .with_preset(H264Preset::Ultrafast)
+            .with_crf(18)
+            .with_encoder_priority_override(&["libx264"])
+            .build(&mut output)
+            .unwrap();
+        let mut frame = frame::Video::new(format::Pixel::BGRZ, 64, 64);
+        for y in 0..64 {
+            let stride = frame.stride(0);
+            for x in 0..64 {
+                let offset = y * stride + x * 4;
+                frame.data_mut(0)[offset..offset + 4].copy_from_slice(&[40, 40, 220, 255]);
+            }
+        }
+        let mut sink = crate::PacketQueue::new(ffmpeg::Rational(1, 90_000));
+        encoder
+            .queue_frame_to(frame, Duration::ZERO, &mut sink)
+            .unwrap();
+        encoder.flush_to(&mut sink).unwrap();
+        let packets = sink.take();
+        assert!(!packets.is_empty());
+
+        let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264).unwrap();
+        let mut decoder = context::Context::new_with_codec(codec)
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frames = Vec::new();
+        for packet in &packets {
+            decoder.send_packet(packet).unwrap();
+            receive_frames(&mut decoder, &mut frames);
+        }
+        decoder.send_eof().unwrap();
+        receive_frames(&mut decoder, &mut frames);
+        assert_eq!(frames.len(), 1);
+        let decoded = &frames[0];
+        assert_eq!(decoded.color_space(), color::Space::BT709);
+        assert_eq!(decoded.color_range(), color::Range::MPEG);
+        let y = decoded.data(0)[32 * decoded.stride(0) + 32];
+        assert!(
+            y.abs_diff(83) <= 2,
+            "decoded luma {y} is not limited BT.709 red"
+        );
     }
 
     #[test]
