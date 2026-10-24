@@ -2,9 +2,16 @@ import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/dashboard/analytics/route";
 
+type TinybirdStub = {
+	querySql: (
+		statement: string,
+	) => import("effect").Effect.Effect<{ data: unknown[] }>;
+};
+
 const mocks = vi.hoisted(() => ({
 	query: vi.fn(),
 	getOrgAnalyticsData: vi.fn(),
+	topCapRows: [] as { pathname: string; views: number }[],
 }));
 
 vi.mock("server-only", () => ({}));
@@ -17,13 +24,20 @@ vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: async () => ({ id: "user-1", activeOrganizationId: "org-1" }),
 }));
 vi.mock("@cap/web-backend", async () => {
+	const { Context } = await import("effect");
 	const { AgentManagement } = await import(
 		"../../../../packages/web-backend/src/AgentManagement"
 	);
-	return { AgentManagement };
+	return {
+		AgentManagement,
+		Tinybird: Context.GenericTag<TinybirdStub>("Tinybird"),
+	};
 });
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
+	const { Tinybird } = (await import("@cap/web-backend")) as unknown as {
+		Tinybird: import("effect").Context.Tag<TinybirdStub, TinybirdStub>;
+	};
 	const { Database } = await import(
 		"../../../../packages/web-backend/src/Database"
 	);
@@ -32,48 +46,62 @@ vi.mock("@/lib/server", async () => {
 			effect: import("effect").Effect.Effect<
 				A,
 				E,
-				InstanceType<typeof Database>
+				InstanceType<typeof Database> | TinybirdStub
 			>,
-		) => Effect.runPromise(Effect.provide(effect, Database.Default)),
+		) =>
+			Effect.runPromise(
+				effect.pipe(
+					Effect.provideService(Tinybird, {
+						querySql: (statement: string) =>
+							Effect.succeed({
+								data: statement.includes("GROUP BY pathname")
+									? mocks.topCapRows
+									: [],
+							}),
+					}),
+					Effect.provide(Database.Default),
+				),
+			),
 	};
 });
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({
 	getOrgAnalyticsData: mocks.getOrgAnalyticsData,
 }));
 
-type CapAccessRow = {
-	orgId: string;
-	ownerId: string;
-	sharedWithOrganization: number | string;
-	inOrganizationSpace: number | string;
-};
-
-const capRow = (overrides: Partial<CapAccessRow> = {}) => {
-	const row: CapAccessRow = {
-		orgId: "org-2",
-		ownerId: "someone-else",
-		sharedWithOrganization: 0,
-		inOrganizationSpace: 0,
-		...overrides,
-	};
-	return [
-		row.orgId,
-		row.ownerId,
-		row.sharedWithOrganization,
-		row.inOrganizationSpace,
-	];
-};
-
 const request = (params: Record<string, string>) =>
 	({
 		url: `https://cap.test/api/dashboard/analytics?${new URLSearchParams(params)}`,
 	}) as NextRequest;
+
+const spaceRow = (organizationId: string, organizationRole: string) => [
+	organizationId,
+	"user-1",
+	"Private",
+	null,
+	organizationRole,
+];
+
+const expectOrganizationScope = (statement: string, params: unknown[]) => {
+	expect(statement).toContain("`videos`.`orgId` = ?");
+	expect(statement).toContain("exists (select `id` from `shared_videos` where");
+	expect(statement).toContain(
+		"`shared_videos`.`videoId` = `videos`.`id` and `shared_videos`.`organizationId` = ?",
+	);
+	expect(statement).toContain(
+		"left join `spaces` on `spaces`.`id` = `space_videos`.`spaceId`",
+	);
+	expect(statement).toContain(
+		"`space_videos`.`videoId` = `videos`.`id` and (`space_videos`.`spaceId` = ? or `spaces`.`organizationId` = ?)",
+	);
+	expect(params.filter((value) => value === "org-1")).toHaveLength(4);
+};
 
 beforeEach(() => {
 	mocks.query.mockReset();
 	mocks.query.mockResolvedValue({ rows: [] });
 	mocks.getOrgAnalyticsData.mockReset();
 	mocks.getOrgAnalyticsData.mockResolvedValue({ counts: {}, capName: "Cap" });
+	mocks.topCapRows = [];
 });
 
 describe("dashboard analytics cap access", () => {
@@ -84,11 +112,7 @@ describe("dashboard analytics cap access", () => {
 		expect(mocks.query).not.toHaveBeenCalled();
 	});
 
-	it("scopes the share and space lookups to the requested cap and organization", async () => {
-		mocks.query.mockResolvedValueOnce({
-			rows: [capRow({ orgId: "org-1" })],
-		});
-
+	it("matches the cap by owner or by its place in the organization", async () => {
 		await GET(request({ orgId: "org-1", capId: "cap-1" }));
 
 		expect(mocks.query).toHaveBeenCalledTimes(1);
@@ -96,21 +120,15 @@ describe("dashboard analytics cap access", () => {
 			string,
 			unknown[],
 		];
-		expect(statement).toContain("`shared_videos`");
-		expect(statement).toContain("`space_videos`");
-		expect(statement).toContain("`spaces`");
-		expect(params.filter((value) => value === "cap-1")).toHaveLength(3);
-		expect(params.filter((value) => value === "org-1")).toHaveLength(3);
+		expect(statement).toContain("`videos`.`id` = ?");
+		expect(statement).toContain("`videos`.`ownerId` = ?");
+		expectOrganizationScope(statement, params);
+		expect(params).toContain("cap-1");
+		expect(params).toContain("user-1");
 	});
 
-	it.each([
-		["a cap owned by the organization", { orgId: "org-1" }],
-		["the user's own cap from another organization", { ownerId: "user-1" }],
-		["a cap shared into the organization", { sharedWithOrganization: 1 }],
-		["a cap added to a space in the organization", { inOrganizationSpace: 1 }],
-		["a share flag returned as a string", { sharedWithOrganization: "1" }],
-	])("allows %s", async (_, overrides) => {
-		mocks.query.mockResolvedValueOnce({ rows: [capRow(overrides)] });
+	it("loads the cap analytics when the cap matches", async () => {
+		mocks.query.mockResolvedValueOnce({ rows: [["cap-1"]] });
 
 		const response = await GET(
 			request({ orgId: "org-1", capId: "cap-1", range: "30d" }),
@@ -128,12 +146,10 @@ describe("dashboard analytics cap access", () => {
 		});
 	});
 
-	it("allows a cap together with an accessible space", async () => {
+	it("loads a cap together with an accessible space", async () => {
 		mocks.query
-			.mockResolvedValueOnce({
-				rows: [["org-1", "user-1", "Private", null, "member"]],
-			})
-			.mockResolvedValueOnce({ rows: [capRow({ inOrganizationSpace: 1 })] });
+			.mockResolvedValueOnce({ rows: [spaceRow("org-1", "member")] })
+			.mockResolvedValueOnce({ rows: [["cap-1"]] });
 
 		const response = await GET(
 			request({ orgId: "org-1", spaceId: "space-1", capId: "cap-1" }),
@@ -148,26 +164,16 @@ describe("dashboard analytics cap access", () => {
 		);
 	});
 
-	it("rejects a cap from another organization that was never shared in", async () => {
-		mocks.query.mockResolvedValueOnce({ rows: [capRow()] });
-
-		const response = await GET(request({ orgId: "org-1", capId: "cap-1" }));
+	it("rejects a cap that does not match the user or the organization", async () => {
+		const response = await GET(request({ orgId: "org-1", capId: "cap-2" }));
 
 		expect(response.status).toBe(403);
-		expect(mocks.getOrgAnalyticsData).not.toHaveBeenCalled();
-	});
-
-	it("rejects a cap that does not exist", async () => {
-		const response = await GET(request({ orgId: "org-1", capId: "missing" }));
-
-		expect(response.status).toBe(403);
+		expect(mocks.query).toHaveBeenCalledTimes(1);
 		expect(mocks.getOrgAnalyticsData).not.toHaveBeenCalled();
 	});
 
 	it("rejects a cap when the space check fails first", async () => {
-		mocks.query.mockResolvedValueOnce({
-			rows: [["org-2", "user-1", "Private", null, "owner"]],
-		});
+		mocks.query.mockResolvedValueOnce({ rows: [spaceRow("org-2", "owner")] });
 
 		const response = await GET(
 			request({ orgId: "org-1", spaceId: "space-1", capId: "cap-1" }),
@@ -176,5 +182,36 @@ describe("dashboard analytics cap access", () => {
 		expect(response.status).toBe(403);
 		expect(mocks.query).toHaveBeenCalledTimes(1);
 		expect(mocks.getOrgAnalyticsData).not.toHaveBeenCalled();
+	});
+});
+
+describe("dashboard analytics top cap names", () => {
+	it("names only the top caps that belong to the organization", async () => {
+		const { getOrgAnalyticsData } = await vi.importActual<
+			typeof import("@/app/(org)/dashboard/analytics/data")
+		>("@/app/(org)/dashboard/analytics/data");
+		mocks.topCapRows = [
+			{ pathname: "/s/cap-in-org", views: 3 },
+			{ pathname: "/s/cap-elsewhere", views: 1 },
+		];
+		mocks.query.mockImplementation(async (statement: string) => ({
+			rows: statement.startsWith("select `id`, `name` from `videos`")
+				? [["cap-in-org", "Org cap"]]
+				: [],
+		}));
+
+		const data = await getOrgAnalyticsData("org-1", "7d");
+
+		const nameQuery = mocks.query.mock.calls.find(([statement]) =>
+			(statement as string).startsWith("select `id`, `name` from `videos`"),
+		) as [string, unknown[]];
+		expect(nameQuery[0]).toContain("`videos`.`id` in (?, ?)");
+		expectOrganizationScope(nameQuery[0], nameQuery[1]);
+		expect(
+			data.breakdowns.topCaps.map(({ id, name }) => ({ id, name })),
+		).toEqual([
+			{ id: "cap-in-org", name: "Org cap" },
+			{ id: "cap-elsewhere", name: "cap-elsewhere" },
+		]);
 	});
 });
