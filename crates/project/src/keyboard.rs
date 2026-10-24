@@ -59,12 +59,16 @@ impl KeyboardEvents {
             .map_err(|e| format!("Failed to parse keyboard events legacy JSON: {e}"))
     }
 
-    pub fn write_to_file(&self, path: &Path) -> Result<(), String> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut bytes = KEYBOARD_EVENTS_MAGIC.to_vec();
         let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|e| format!("Failed to serialize keyboard events: {e}"))?;
         bytes.extend(payload);
-        std::fs::write(path, bytes)
+        Ok(bytes)
+    }
+
+    pub fn write_to_file(&self, path: &Path) -> Result<(), String> {
+        std::fs::write(path, self.to_bytes()?)
             .map_err(|e| format!("Failed to write keyboard events file: {e}"))
     }
 }

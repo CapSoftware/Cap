@@ -54,7 +54,7 @@ describe("canViewFolder", () => {
 		expect(mocks.spaceAccess).not.toHaveBeenCalled();
 	});
 
-	it("requires an organization or space role for space folders", async () => {
+	it("requires a space role or organization admin for space folders", async () => {
 		const folder = { organizationId, spaceId, createdById: otherUserId };
 
 		mocks.spaceAccess.mockResolvedValueOnce({
@@ -80,6 +80,22 @@ describe("canViewFolder", () => {
 
 		mocks.spaceAccess.mockResolvedValueOnce(null);
 		await expect(canViewFolder(userId, folder)).resolves.toBe(false);
+	});
+
+	it("rejects an organization member who is not in the space", async () => {
+		mocks.spaceAccess.mockResolvedValueOnce({
+			organizationId,
+			organizationRole: "member",
+			spaceRole: null,
+		});
+
+		await expect(
+			canViewFolder(userId, {
+				organizationId,
+				spaceId,
+				createdById: otherUserId,
+			}),
+		).resolves.toBe(false);
 	});
 
 	it("rejects space folders whose space belongs to another organization", async () => {

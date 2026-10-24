@@ -3126,7 +3126,10 @@ impl EditorWindow {
                     .timer(Duration::from_millis(150))
                     .await;
                 let active = transcription::download_active();
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                if this
+                    .update(cx, |this, cx| this.repaint_caption_download(cx))
+                    .is_err()
+                {
                     break;
                 }
                 if !active {
@@ -3135,6 +3138,12 @@ impl EditorWindow {
             }
         })
         .detach();
+    }
+
+    /// One tick of [`Self::spawn_caption_download_poll`]. Only the captions
+    /// tab reads the download, so only the sidebar is rebuilt.
+    pub(crate) fn repaint_caption_download(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_sidebar(cx);
     }
 
     /// `downloadModel` (`CaptionsTab.tsx:643-690`). The download runs on the

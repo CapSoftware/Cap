@@ -5,7 +5,7 @@ use std::{
     io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex, Weak},
 };
 
 use cap_cursor_info::CursorFamily;
@@ -2748,6 +2748,68 @@ impl Default for ProjectConfiguration {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ProjectStyleCache {
+    cached: Mutex<Option<CachedStyle>>,
+}
+
+#[derive(Debug)]
+struct CachedStyle {
+    source: Weak<ProjectConfiguration>,
+    styles: [Option<usize>; 3],
+    project: Arc<ProjectConfiguration>,
+}
+
+impl CachedStyle {
+    fn matches(&self, source: &Weak<ProjectConfiguration>, styles: [Option<usize>; 3]) -> bool {
+        self.source.ptr_eq(source) && self.styles == styles
+    }
+}
+
+impl ProjectStyleCache {
+    pub fn resolve(
+        &self,
+        project: &Arc<ProjectConfiguration>,
+        time: f64,
+    ) -> Arc<ProjectConfiguration> {
+        let styles = project.style_indices_at(time);
+        if styles == [None; 3] {
+            return Arc::clone(project);
+        }
+
+        // A Weak keeps the allocation identity alive and makes Arc::make_mut
+        // detach before editing, even when the source has only one strong owner.
+        let source = Arc::downgrade(project);
+        {
+            let cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+        }
+
+        let resolved = Arc::new(project.style_at(time).into_owned());
+        let previous = {
+            let mut cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+            cached.replace(CachedStyle {
+                source,
+                styles,
+                project: Arc::clone(&resolved),
+            })
+        };
+        drop(previous);
+        resolved
+    }
+}
+
 impl ProjectConfiguration {
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let mut ordered = Vec::with_capacity(available.len());
@@ -2839,12 +2901,12 @@ impl ProjectConfiguration {
             .unwrap_or(&self.cursor)
     }
 
-    pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+    fn style_indices_at(&self, time: f64) -> [Option<usize>; 3] {
+        let mut selected: [Option<usize>; 3] = [None; 3];
         let Some(timeline) = &self.timeline else {
-            return Cow::Borrowed(self);
+            return selected;
         };
-        let mut selected: [Option<&StyleSegment>; 3] = [None; 3];
-        for segment in &timeline.style_segments {
+        for (index, segment) in timeline.style_segments.iter().enumerate() {
             if !segment.is_active_at(time) {
                 continue;
             }
@@ -2855,25 +2917,37 @@ impl ProjectConfiguration {
             ]) {
                 if present
                     && current.is_none_or(|previous| {
+                        let previous = &timeline.style_segments[previous];
                         segment.track > previous.track
                             || (segment.track == previous.track && segment.start >= previous.start)
                     })
                 {
-                    *current = Some(segment);
+                    *current = Some(index);
                 }
             }
         }
-        let [background, camera, cursor] = selected;
+        selected
+    }
+
+    pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let Some(timeline) = &self.timeline else {
+            return Cow::Borrowed(self);
+        };
+        let [background, camera, cursor] = self.style_indices_at(time);
         let mut configuration = Cow::Borrowed(self);
-        if let Some(background) =
-            background.and_then(|segment| segment.overrides.background.as_ref())
+        if let Some(background) = background
+            .and_then(|index| timeline.style_segments[index].overrides.background.as_ref())
         {
             configuration.to_mut().background = background.clone();
         }
-        if let Some(camera) = camera.and_then(|segment| segment.overrides.camera.as_ref()) {
+        if let Some(camera) =
+            camera.and_then(|index| timeline.style_segments[index].overrides.camera.as_ref())
+        {
             configuration.to_mut().camera = camera.clone();
         }
-        if let Some(cursor) = cursor.and_then(|segment| segment.overrides.cursor.as_ref()) {
+        if let Some(cursor) =
+            cursor.and_then(|index| timeline.style_segments[index].overrides.cursor.as_ref())
+        {
             configuration.to_mut().cursor = cursor.clone();
         }
         configuration

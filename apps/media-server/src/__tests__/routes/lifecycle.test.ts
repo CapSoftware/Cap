@@ -445,6 +445,60 @@ describe("process jobs", () => {
 		expect(preview.gifs.every((gif) => !existsSync(gif.path))).toBe(true);
 	});
 
+	test("does not wait on slow progress webhooks and still delivers completion last", async () => {
+		const received: string[] = [];
+		const hook = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const { phase } = (await request.json()) as { phase: string };
+				received.push(phase);
+				await new Promise((resolve) => setTimeout(resolve, 500));
+				return Response.json({ success: true });
+			},
+		});
+		try {
+			spyOn(mediaVideo, "downloadVideoToTemp").mockImplementation(() =>
+				tempFileWith(".mp4", "input"),
+			);
+			spyOn(mediaProbe, "probeVideoFile").mockResolvedValue({
+				...metadata,
+				duration: 10,
+			});
+			spyOn(mediaVideo, "processVideo").mockImplementation(() =>
+				tempFileWith(".mp4", "output"),
+			);
+			spyOn(mediaVideo, "uploadFileToS3").mockResolvedValue({});
+			const started = Date.now();
+			const response = await app.fetch(
+				post("/video/process", {
+					videoId: "video-slow-webhooks",
+					userId: "user-id",
+					videoUrl: "https://example.com/input.mp4",
+					outputPresignedUrl: "https://example.com/output.mp4",
+					webhookUrl: `http://127.0.0.1:${hook.port}/webhook`,
+				}),
+			);
+			const { jobId } = await response.json();
+			createdJobs.push(jobId);
+			await waitFor(() => getJob(jobId)?.phase === "complete", 5_000);
+			await waitFor(() => received.at(-1) === "complete", 5_000);
+			// Waiting on each 500 ms progress webhook delays completion by about 2 s; without waiting it lands in about 0.5 s.
+			expect(Date.now() - started).toBeLessThan(1_500);
+			const job = getJob(jobId);
+			await waitFor(
+				() =>
+					Boolean(job?.terminalWebhookAcknowledgedAt) && !job?.webhookInFlight,
+				5_000,
+			);
+			expect(received[0]).toBe("downloading");
+			expect(received.filter((phase) => phase === "complete")).toHaveLength(1);
+			expect(received.at(-1)).toBe("complete");
+		} finally {
+			hook.stop(true);
+		}
+	});
+
 	test("releases the job slot and temp files when processing fails", async () => {
 		const before = getActiveVideoProcessCount();
 		let input: TempFileHandle | undefined;

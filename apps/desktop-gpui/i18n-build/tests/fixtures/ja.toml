@@ -1,0 +1,7 @@
+[common]
+save = "保存"
+greeting = "こんにちは、{name}さん"
+
+[editor.selection]
+clips = { other = "{count}件のクリップ" }
+segments = { other = "{kind}セグメントを{count}件選択" }
