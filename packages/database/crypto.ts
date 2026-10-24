@@ -100,7 +100,7 @@ export async function encrypt(text: string): Promise<string> {
 const DECRYPT_KEY_CACHE_SIZE = 256;
 const decryptKeys = new Map<string, Promise<CryptoKey>>();
 
-function decryptKey(salt: Uint8Array): Promise<CryptoKey> {
+function decryptKey(salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
 	const id = `${ENCRYPTION_KEY() ?? ""}:${Buffer.from(salt).toString("hex")}`;
 	const cached = decryptKeys.get(id);
 	if (cached) {

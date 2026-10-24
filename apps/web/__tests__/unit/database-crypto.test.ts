@@ -37,7 +37,10 @@ describe("database encryption", () => {
 		const stored = await encrypt("drive-config");
 		await decrypt(stored);
 		const bytes = Buffer.from(stored, "base64");
-		bytes[bytes.length - 1] ^= 0xff;
+		bytes.writeUInt8(
+			bytes.readUInt8(bytes.length - 1) ^ 0xff,
+			bytes.length - 1,
+		);
 		await expect(decrypt(bytes.toString("base64"))).rejects.toThrow(
 			"Decryption failed",
 		);
