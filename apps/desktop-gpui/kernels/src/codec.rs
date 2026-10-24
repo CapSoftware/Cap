@@ -99,11 +99,8 @@ pub fn encode_jpeg_rgba_as_rgb(
     rgba: &image::RgbaImage,
     quality: u8,
 ) -> image::ImageResult<Vec<u8>> {
-    use image::buffer::ConvertBuffer as _;
-    let rgb: image::RgbImage = rgba.convert();
-    let mut encoded = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality).encode_image(&rgb)?;
-    Ok(encoded)
+    let rgb = rgba_to_rgb(rgba.as_raw());
+    encode_jpeg_rgb(&rgb, rgba.width(), rgba.height(), quality)
 }
 
 pub fn save_rgb_image(
@@ -339,9 +336,18 @@ mod tests {
         let rgba = image::RgbaImage::from_fn(9, 7, |x, y| {
             image::Rgba([(x * 20) as u8, (y * 30) as u8, 90, 128])
         });
-        let from_slice = encode_jpeg_rgb(&rgba_to_rgb(rgba.as_raw()), 9, 7, 80).unwrap();
+        use image::buffer::ConvertBuffer as _;
+
+        let legacy_rgb: image::RgbImage = rgba.convert();
+        let mut legacy = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut legacy, 80)
+            .encode_image(&legacy_rgb)
+            .unwrap();
+
         let from_image = encode_jpeg_rgba_as_rgb(&rgba, 80).unwrap();
-        assert_eq!(from_slice, from_image);
+        assert_eq!(from_image, legacy);
+        let from_slice = encode_jpeg_rgb(&rgba_to_rgb(rgba.as_raw()), 9, 7, 80).unwrap();
+        assert_eq!(from_slice, legacy);
         let bgra = decode_jpeg_to_bgra(&from_slice).unwrap();
         assert_eq!(bgra.dimensions(), (9, 7));
     }
