@@ -3,7 +3,7 @@ import { agentApiOperations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import {
 	FatalError,
@@ -734,7 +734,12 @@ async function saveMetadataAndComplete(
 
 	await db()
 		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+		.where(
+			and(
+				eq(videoUploads.videoId, videoId as Video.VideoId),
+				sql`NOT EXISTS (SELECT 1 FROM ${videos} WHERE ${videos.id} = ${videoId} AND JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing.status')) = 'started')`,
+			),
+		);
 }
 
 async function setProcessingError(
