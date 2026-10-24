@@ -616,18 +616,11 @@ async function createSourcePlan(
 				"The recording source inventory exceeds the supported object count",
 			);
 		const manifestKey = `${directory}/manifest.json`;
-		await writeSourceText(context, manifestKey, content);
-		plan = {
-			version: 1,
-			kind: "segments",
-			manifestSha256: manifest.manifestSha256,
-			manifestKey,
-			originalManifestKey,
-			requiredAudio: manifest.hasAudio,
-			videoCount,
-			audioCount,
-			objectCount: videoCount + audioCount,
-			sourcePreparation: await context
+		// The plan is only referenced once both files are durable, so the manifest copy can be written
+		// alongside the plan; a failure leaves both unreferenced in this plan's own directory.
+		const [, planReference] = await Promise.all([
+			writeSourceText(context, manifestKey, content),
+			context
 				.run(
 					context.bucket
 						.getObject(preparationMarkerKey(context.video))
@@ -640,8 +633,27 @@ async function createSourcePlan(
 							.object({ version: z.literal(1) })
 							.safeParse(JSON.parse(marker.value)).success,
 				)
-				.catch(() => false),
-		};
+				.catch(() => false)
+				.then((sourcePreparation) =>
+					writeSourceText(
+						context,
+						`${directory}/plan.json`,
+						JSON.stringify({
+							version: 1,
+							kind: "segments",
+							manifestSha256: manifest.manifestSha256,
+							manifestKey,
+							originalManifestKey,
+							requiredAudio: manifest.hasAudio,
+							videoCount,
+							audioCount,
+							objectCount: videoCount + audioCount,
+							sourcePreparation,
+						} satisfies SourcePlan),
+					),
+				),
+		]);
+		return planReference;
 	} else {
 		const video = context.video;
 		const publishedKey = getPublishedRecordingOutputKey(video);
@@ -1417,6 +1429,7 @@ async function advanceSourceSnapshot(
 	let inventoryKey: string;
 	let inventory: unknown;
 	let mp4: DesktopRecordingSource["mp4"];
+	let manifestCopy: Promise<unknown> | undefined;
 	if (plan.kind === "mp4") {
 		const [object] = await readTree(
 			context,
@@ -1451,7 +1464,6 @@ async function advanceSourceSnapshot(
 				"Recording manifest changed while its durable snapshot was being saved",
 			);
 		const directory = `${context.prefix}/commits/${randomUUID()}`;
-		await writeSourceText(context, `${directory}/manifest.json`, saved);
 		inventoryKey = `${directory}/inventory.json`;
 		inventory = {
 			version: 2,
@@ -1461,12 +1473,17 @@ async function advanceSourceSnapshot(
 			scope,
 			roots: checkpoint.receiptRoots,
 		};
+		// The commit directory is new and only referenced once both writes are durable.
+		manifestCopy = writeSourceText(
+			context,
+			`${directory}/manifest.json`,
+			saved,
+		);
 	}
-	const saved = await writeSourceText(
-		context,
-		inventoryKey,
-		JSON.stringify(inventory),
-	);
+	const [saved] = await Promise.all([
+		writeSourceText(context, inventoryKey, JSON.stringify(inventory)),
+		manifestCopy,
+	]);
 	return {
 		source: desktopRecordingSourceSchema.parse({
 			version: 1,
