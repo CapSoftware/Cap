@@ -80,13 +80,29 @@ const postPanelMessage = (
 // teardown answers with "close" since no extension API can close a side
 // panel from the outside.
 if (!IS_EMBEDDED) {
-	void sendServiceWorkerMessage({
-		target: "service-worker",
-		type: "standalone-panel-opened",
-	}).catch(() => undefined);
+	let knownWindowId: number | null = null;
+	const ownWindowId = new Promise<number | null>((resolve) => {
+		chrome.windows.getCurrent((currentWindow) => {
+			resolve(chrome.runtime.lastError ? null : (currentWindow?.id ?? null));
+		});
+	}).then((windowId) => {
+		knownWindowId = windowId;
+		return windowId;
+	});
+	void ownWindowId.then((windowId) =>
+		sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "standalone-panel-opened",
+			windowId,
+		}).catch(() => undefined),
+	);
 	window.addEventListener("pagehide", () => {
 		chrome.runtime.sendMessage(
-			{ target: "service-worker", type: "standalone-panel-closed" },
+			{
+				target: "service-worker",
+				type: "standalone-panel-closed",
+				windowId: knownWindowId,
+			},
 			() => {
 				void chrome.runtime.lastError;
 			},
@@ -98,10 +114,18 @@ if (!IS_EMBEDDED) {
 				target?: string;
 				type?: string;
 				bootedAt?: number;
+				windowId?: number;
 			} | null;
 			if (candidate?.target !== "standalone-panel") return;
 			if (candidate.type === "close") {
-				window.close();
+				const targetWindowId = candidate.windowId;
+				if (typeof targetWindowId !== "number") {
+					window.close();
+					return;
+				}
+				void ownWindowId.then((windowId) => {
+					if (windowId === targetWindowId) window.close();
+				});
 				return;
 			}
 			// Only a panel that outlived the previous worker answers; one opened
@@ -111,7 +135,8 @@ if (!IS_EMBEDDED) {
 				typeof candidate.bootedAt === "number" &&
 				performance.timeOrigin < candidate.bootedAt
 			) {
-				sendResponse(true);
+				void ownWindowId.then((windowId) => sendResponse({ windowId }));
+				return true;
 			}
 		},
 	);

@@ -393,10 +393,12 @@ export type ServiceWorkerRequest =
 	| {
 			target: "service-worker";
 			type: "standalone-panel-opened";
+			windowId?: number | null;
 	  }
 	| {
 			target: "service-worker";
 			type: "standalone-panel-closed";
+			windowId?: number | null;
 	  }
 	| {
 			target: "service-worker";

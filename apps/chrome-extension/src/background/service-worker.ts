@@ -90,16 +90,41 @@ let externalCaptureAutoPipPending = false;
 let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 // The standalone recorder (side panel or fallback popup window) reports its
 // lifecycle so the action click can toggle it and UI teardown can reach it —
-// there is no chrome.sidePanel API to query or close a panel directly.
-let standalonePanelOpen = false;
+// there is no chrome.sidePanel API to query or close a panel directly. A side
+// panel belongs to one window, so the owner is tracked: a click in another
+// window moves the recorder there instead of closing it. `windowId` is null
+// when a panel is known to be open but its window is not.
+let standalonePanel: { windowId: number | null } | null = null;
 
-const closeStandalonePanel = () => {
-	// Unconditional: the flag is best-effort (a restarted worker boots with
-	// false while the panel survives), and a close broadcast with no panel
+const ownsStandalonePanel = (windowId: number | undefined) =>
+	standalonePanel !== null &&
+	(standalonePanel.windowId === null || standalonePanel.windowId === windowId);
+
+// Called once sidePanel.open has succeeded for `windowId`. Set eagerly: the
+// panel page reports itself on load, but the toggle must work even if that
+// message loses a race. One recorder at a time: a panel left in another
+// window is closed only now, so the click's gesture went to opening.
+const adoptStandaloneSidePanel = (windowId: number) => {
+	const previous = standalonePanel?.windowId;
+	standalonePanel = { windowId };
+	if (typeof previous === "number" && previous !== windowId) {
+		closeStandalonePanel(previous);
+	}
+};
+
+const closeStandalonePanel = (windowId?: number) => {
+	if (
+		windowId === undefined ||
+		standalonePanel?.windowId === null ||
+		standalonePanel?.windowId === windowId
+	) {
+		standalonePanel = null;
+	}
+	// Unconditional: the state is best-effort (a restarted worker boots
+	// without it while the panel survives), and a close with no panel
 	// listening is harmless.
-	standalonePanelOpen = false;
 	chrome.runtime.sendMessage(
-		{ target: "standalone-panel", type: "close" },
+		{ target: "standalone-panel", type: "close", windowId },
 		() => {
 			void chrome.runtime.lastError;
 		},
@@ -113,33 +138,48 @@ const closeStandalonePanel = () => {
 // that woke this worker and would mistake it for a survivor.
 const workerBootedAt = Date.now();
 const SURVIVOR_CHECK_TIMEOUT_MS = 1000;
-const checkForSurvivingStandalonePanel = (): Promise<boolean> =>
-	new Promise<boolean>((resolve) => {
-		const timeout = setTimeout(() => resolve(false), SURVIVOR_CHECK_TIMEOUT_MS);
+const checkForSurvivingStandalonePanel = (): Promise<{
+	windowId: number | null;
+} | null> =>
+	new Promise((resolve) => {
+		const timeout = setTimeout(() => resolve(null), SURVIVOR_CHECK_TIMEOUT_MS);
 		chrome.runtime.sendMessage(
 			{
 				target: "standalone-panel",
 				type: "survivor-check",
 				bootedAt: workerBootedAt,
 			},
-			(response) => {
+			(response: { windowId?: unknown } | undefined) => {
 				clearTimeout(timeout);
-				resolve(!chrome.runtime.lastError && response === true);
+				if (chrome.runtime.lastError || !response) {
+					resolve(null);
+					return;
+				}
+				resolve({
+					windowId:
+						typeof response.windowId === "number" ? response.windowId : null,
+				});
 			},
 		);
 	});
 let isStandaloneFlagReady = false;
-// Resolves with whether a standalone panel survived into this worker, i.e.
-// the panel state as it was before any click that woke the worker.
-const standaloneFlagReady = checkForSurvivingStandalonePanel().then(
-	(survived) => {
-		// Never clear: a panel opened by a click that woke this worker may
-		// already have reported in.
-		if (survived) standalonePanelOpen = true;
-		isStandaloneFlagReady = true;
-		return survived;
-	},
-);
+let standaloneFlagCheck: Promise<{ windowId: number | null } | null> | null =
+	null;
+// Resolves with the standalone panel that survived into this worker, i.e.
+// the panel state as it was before any click that woke the worker. Asked on
+// first need rather than at startup, which an MV3 worker repeats constantly.
+const standaloneFlagReady = () => {
+	standaloneFlagCheck ??= checkForSurvivingStandalonePanel().then(
+		(survivor) => {
+			// Never overwrite: a panel opened by a click that woke this worker
+			// may already have reported in.
+			if (survivor && standalonePanel === null) standalonePanel = survivor;
+			isStandaloneFlagReady = true;
+			return survivor;
+		},
+	);
+	return standaloneFlagCheck;
+};
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
@@ -811,8 +851,10 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 		await closeAllExtensionUi();
 		return;
 	}
-	if (standalonePanelOpen) {
-		closeStandalonePanel();
+	await standaloneFlagReady();
+	const clickWindowId = actionTab?.windowId ?? (await getActiveTab())?.windowId;
+	if (ownsStandalonePanel(clickWindowId)) {
+		closeStandalonePanel(standalonePanel?.windowId ?? undefined);
 		return;
 	}
 
@@ -847,12 +889,10 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 	// If Chrome still rejects (gesture expired, API missing), fall back to
 	// the standalone window.
 	try {
-		const windowId = actionTab?.windowId ?? (await getActiveTab())?.windowId;
+		const windowId = clickWindowId;
 		if (windowId !== undefined && chrome.sidePanel) {
 			await chrome.sidePanel.open({ windowId });
-			// Set eagerly: the panel page pings standalone-panel-opened on load,
-			// but the toggle must work even if that message loses a race.
-			standalonePanelOpen = true;
+			adoptStandaloneSidePanel(windowId);
 			return;
 		}
 	} catch (error) {
@@ -1781,12 +1821,21 @@ const handleRequest = async (
 	}
 
 	if (message.type === "standalone-panel-opened") {
-		standalonePanelOpen = true;
+		standalonePanel = { windowId: message.windowId ?? null };
 		return { ok: true };
 	}
 
 	if (message.type === "standalone-panel-closed") {
-		standalonePanelOpen = false;
+		// A panel being replaced in another window can report its close after
+		// the new one took over; only the owner's close clears the state.
+		if (
+			message.windowId === undefined ||
+			message.windowId === null ||
+			standalonePanel?.windowId === null ||
+			standalonePanel?.windowId === message.windowId
+		) {
+			standalonePanel = null;
+		}
 		return { ok: true };
 	}
 
@@ -1960,7 +2009,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 const openStandaloneSidePanel = (tab: chrome.tabs.Tab, windowId: number) => {
 	chrome.sidePanel.open({ windowId }).then(
 		() => {
-			standalonePanelOpen = true;
+			adoptStandaloneSidePanel(windowId);
 			// One recorder at a time: the side panel survives tab switches, so an
 			// in-page panel left open on another tab would show up beside it.
 			void updateSharedUiState((current) =>
@@ -1976,8 +2025,6 @@ const openStandaloneSidePanel = (tab: chrome.tabs.Tab, windowId: number) => {
 	);
 };
 
-void syncRecordingStatus().catch(() => undefined);
-
 chrome.action.onClicked.addListener((tab) => {
 	const workerStateKnown = isStandaloneFlagReady && isRecordingStatusSynced;
 	if (
@@ -1987,9 +2034,10 @@ chrome.action.onClicked.addListener((tab) => {
 		!(workerStateKnown && isCapturingRecordingStatus(recordingStatus))
 	) {
 		if (workerStateKnown) {
-			// Second click toggles the panel closed, mirroring the overlay panel.
-			if (standalonePanelOpen) {
-				closeStandalonePanel();
+			// A second click in the same window toggles the panel closed,
+			// mirroring the overlay panel; a click in another window moves it.
+			if (ownsStandalonePanel(tab.windowId)) {
+				closeStandalonePanel(standalonePanel?.windowId ?? undefined);
 				return;
 			}
 			openStandaloneSidePanel(tab, tab.windowId);
@@ -2001,15 +2049,22 @@ chrome.action.onClicked.addListener((tab) => {
 		// restart) and reconcile the toggle once both are known.
 		openStandaloneSidePanel(tab, tab.windowId);
 		void Promise.all([
-			standaloneFlagReady,
+			standaloneFlagReady(),
 			syncRecordingStatus().catch(() => recordingStatus),
 		])
-			.then(([wasOpen, currentStatus]) => {
+			.then(([survivor, currentStatus]) => {
+				const survivedHere =
+					survivor !== null &&
+					(survivor.windowId === null || survivor.windowId === tab.windowId);
 				if (isCapturingRecordingStatus(currentStatus)) {
-					if (!wasOpen) closeStandalonePanel();
+					if (!survivedHere) closeStandalonePanel(tab.windowId);
 					return stopRecordingAndOpenDestination().then(() => undefined);
 				}
-				if (wasOpen) closeStandalonePanel();
+				if (survivedHere) {
+					closeStandalonePanel(survivor.windowId ?? undefined);
+				} else if (typeof survivor?.windowId === "number") {
+					closeStandalonePanel(survivor.windowId);
+				}
 			})
 			.catch(() => undefined);
 		return;
