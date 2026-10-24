@@ -512,6 +512,26 @@ fn traditional_chinese_falls_through_to_the_next_language() {
 }
 
 #[test]
+fn system_language_waits_for_the_picker() {
+    assert_eq!(
+        resolve_preference(Preference::System, false, || Locale::Ja),
+        Locale::En
+    );
+    assert_eq!(
+        resolve_preference(Preference::System, true, || Locale::Ja),
+        Locale::Ja
+    );
+    assert_eq!(
+        resolve_preference(Preference::Fixed(Locale::De), false, || Locale::Ja),
+        Locale::De
+    );
+    assert_eq!(
+        resolve_preference(Preference::Fixed(Locale::De), true, || Locale::Ja),
+        Locale::De
+    );
+}
+
+#[test]
 fn stored_preferences_round_trip_and_unknown_values_follow_the_system() {
     assert_eq!(Preference::from_setting(None), Preference::System);
     assert_eq!(Preference::from_setting(Some("system")), Preference::System);
