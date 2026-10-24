@@ -621,10 +621,10 @@ const addAudioTracks = ({
 	const audioContext = new AudioContext();
 	const destination = audioContext.createMediaStreamDestination();
 
-	streamsWithAudio.forEach((stream, index) => {
+	streamsWithAudio.forEach((stream) => {
 		const source = audioContext.createMediaStreamSource(stream);
 		source.connect(destination);
-		if (routeFirstStreamToSpeakers && index === 0) {
+		if (routeFirstStreamToSpeakers && stream === streams[0]) {
 			source.connect(audioContext.destination);
 		}
 	});
