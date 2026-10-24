@@ -303,13 +303,17 @@ export default function TrafficChart({
 	const barWidth = Math.max(2, Math.min(22, step * 0.56));
 	const ready = width > 0 && n > 0;
 
-	const tooltipWidth = 236;
-	const tooltipLeft =
+	const tooltipWidth = Math.max(0, Math.min(236, width - 16));
+	const tooltipPreferred =
 		hoverX === null
 			? 0
 			: hoverX + 18 + tooltipWidth > width
 				? hoverX - 18 - tooltipWidth
 				: hoverX + 18;
+	const tooltipLeft = Math.max(
+		8,
+		Math.min(width - tooltipWidth - 8, tooltipPreferred),
+	);
 
 	const ratio =
 		hovered && average > 0 && !isLastBucket ? hovered.views / average : 0;
