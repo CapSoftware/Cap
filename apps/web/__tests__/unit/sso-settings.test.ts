@@ -438,7 +438,7 @@ describe("organization SSO settings authorization", () => {
 			expect(markup).toContain("Manage SSO");
 			expect(markup).toContain("Share your SSO sign-in link");
 			expect(markup).not.toMatch(/Manage (SSO )?subscription/);
-			expect(markup).toContain("View invoices");
+			expect(markup).not.toContain("View invoices");
 			if (cancelAtPeriodEnd) {
 				expect(markup).toContain("scheduled to end on 3 October 2026");
 			}
@@ -462,7 +462,7 @@ describe("organization SSO settings authorization", () => {
 		expect(markup).toContain('href="mailto:hello@cap.so"');
 		expect(markup).toContain("purchase it again");
 		expect(markup).not.toMatch(/Manage (SSO )?subscription/);
-		expect(markup).toContain("View invoices");
+		expect(markup).not.toContain("View invoices");
 		expect(markup).not.toContain("Add SAML SSO");
 	});
 
