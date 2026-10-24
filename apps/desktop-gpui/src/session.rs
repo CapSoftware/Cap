@@ -440,6 +440,10 @@ pub struct RecordingSession {
     /// A capture pipeline that finished warming up while the countdown or the
     /// start cue was still running; activated the moment the cue ends.
     primed: Option<ActiveRecording>,
+    /// Flips to `true` once the current start's capture pipeline is built.
+    /// The start cue waits on it, so the cue never plays while start-up
+    /// (e.g. Instant mode creating the shareable link) is still in flight.
+    engine_ready: tokio::sync::watch::Sender<bool>,
     /// Teardown of a cancelled primed start still releasing its devices; the
     /// next start waits for it before locking the mic and camera again.
     discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
@@ -488,6 +492,7 @@ impl RecordingSession {
             start_gate: None,
             start_cue: None,
             primed: None,
+            engine_ready: tokio::sync::watch::channel(false).0,
             discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
@@ -665,6 +670,7 @@ impl RecordingSession {
         self.start_gate = Some(start_gate);
         self.start_cue = Some(crate::app_sounds::prime_recording_start_sound());
         self.discard_primed(cx);
+        self.engine_ready.send_replace(false);
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
@@ -750,12 +756,17 @@ impl RecordingSession {
     ) -> std::pin::Pin<Box<dyn Future<Output = ()>>> {
         let gate = self.start_gate.clone().unwrap_or_default();
         let cue = self.start_cue.take();
+        let mut engine_ready = self.engine_ready.subscribe();
         let (abort, registration) = futures_util::future::AbortHandle::new_pair();
         self.countdown_cue_abort = Some(abort);
         let task = gpui_tokio::Tokio::spawn(
             cx,
             futures_util::future::Abortable::new(
                 async move {
+                    // The cue tells the user recording has started, so hold it
+                    // until capture can actually begin. A failed start aborts
+                    // this future through `abort_start_cue`.
+                    let _ = engine_ready.wait_for(|ready| *ready).await;
                     match cue {
                         Some(cue) => crate::app_sounds::play_recording_start_sound(cue, gate).await,
                         None => {
@@ -840,6 +851,7 @@ impl RecordingSession {
                 }
                 match result {
                     Ok(Ok(active)) => {
+                        this.engine_ready.send_replace(true);
                         if this.countdown_remaining.is_some() {
                             this.primed = Some(active);
                         } else {
