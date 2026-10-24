@@ -2764,8 +2764,10 @@ impl Injection {
     }
 
     /// First of three consecutive presented indices, around 60 % of the
-    /// recording, that were all captured and each stayed on screen long
-    /// enough that the capture rate guarantees a sample.
+    /// recording, that were all captured, each stayed on screen long
+    /// enough that the capture rate guarantees a sample, and each reached
+    /// the stimulus's own capture stream (a picture that did not would be
+    /// excused as a capture-service drop once removed).
     fn target(frames: &[(f64, Readout)], check: &VideoCheck) -> Option<u32> {
         let mut seen: Vec<u32> = Vec::new();
         for (_, readout) in frames {
@@ -2782,7 +2784,10 @@ impl Injection {
             i > 1
                 && captured.contains(&(i - 1))
                 && (i..i + 3).all(|j| {
-                    captured.contains(&j) && check.truth.contains_key(&j) && !(check.may_skip)(j)
+                    captured.contains(&j)
+                        && check.truth.contains_key(&j)
+                        && !(check.may_skip)(j)
+                        && !check.dropped_for_every_client(j)
                 })
         })
     }
