@@ -56,6 +56,7 @@ interface ProgressWebhookPayload {
 		bitrate: number;
 		fileSize: number;
 	};
+	deferredSourceKey?: string;
 }
 
 const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
@@ -232,6 +233,36 @@ export async function POST(request: NextRequest) {
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 
+			const transcribeOnView =
+				request.nextUrl.searchParams.get("transcription") === "on-view";
+			const deferredSourceKey =
+				currentVideo &&
+				typeof payload.deferredSourceKey === "string" &&
+				payload.deferredSourceKey.startsWith(
+					`${currentVideo.ownerId}/${currentVideo.id}/`,
+				) &&
+				payload.deferredSourceKey.endsWith(".webm")
+					? payload.deferredSourceKey
+					: undefined;
+			const metadataUpdates = [
+				...(transcribeOnView
+					? [sql`'$.transcribeOnView', JSON_EXTRACT('true', '$')`]
+					: []),
+				...(deferredSourceKey
+					? [
+							sql`'$.loomDeferredProcessing', JSON_OBJECT('rawFileKey', ${deferredSourceKey}, 'status', 'pending')`,
+						]
+					: []),
+			];
+			if (currentVideo && metadataUpdates.length > 0) {
+				await db()
+					.update(videos)
+					.set({
+						metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(metadataUpdates, sql`, `)})`,
+					})
+					.where(eq(videos.id, currentVideo.id));
+			}
+
 			if (receipt) {
 				await db()
 					.update(videos)
@@ -267,6 +298,7 @@ export async function POST(request: NextRequest) {
 			);
 
 			if (
+				!transcribeOnView &&
 				shouldQueueTranscriptionAfterMediaComplete(
 					currentVideo?.source.type,
 					Boolean(isEditUpload),

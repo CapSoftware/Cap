@@ -47,6 +47,10 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
+import {
+	getPendingLoomProcessing,
+	startDeferredLoomProcessing,
+} from "@/lib/loom-deferred-processing";
 import { createNotification } from "@/lib/Notification";
 import {
 	canManageOrganizationSettings,
@@ -873,6 +877,22 @@ async function AuthorizedContent({
 	}
 
 	const metadata = (video.metadata as VideoMetadata) || {};
+	const deferredLoomRawFileKey = hasActiveUpload
+		? null
+		: getPendingLoomProcessing(metadata, video.owner.id, videoId);
+	if (deferredLoomRawFileKey) {
+		startDeferredLoomProcessing({
+			videoId,
+			ownerId: video.owner.id,
+			bucketId: video.bucket,
+			rawFileKey: deferredLoomRawFileKey,
+		}).catch((error) => {
+			console.error(
+				`[ShareVideoPage] Error starting deferred processing for ${videoId}:`,
+				error,
+			);
+		});
+	}
 	const aiGenerationStatus = metadata.aiGenerationStatus || null;
 
 	const initialAiData = {

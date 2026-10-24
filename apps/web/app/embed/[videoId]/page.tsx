@@ -27,6 +27,10 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import {
+	getPendingLoomProcessing,
+	startDeferredLoomProcessing,
+} from "@/lib/loom-deferred-processing";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
@@ -270,6 +274,22 @@ async function EmbedContent({
 	}
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
+	const deferredLoomRawFileKey = video.hasActiveUpload
+		? null
+		: getPendingLoomProcessing(currentMetadata, video.ownerId, video.id);
+	if (deferredLoomRawFileKey) {
+		startDeferredLoomProcessing({
+			videoId: video.id,
+			ownerId: video.ownerId,
+			bucketId: video.bucket,
+			rawFileKey: deferredLoomRawFileKey,
+		}).catch((error) => {
+			console.error(
+				`[EmbedVideoPage] Error starting deferred processing for ${video.id}:`,
+				error,
+			);
+		});
+	}
 	let initialAiData = null;
 
 	if (
