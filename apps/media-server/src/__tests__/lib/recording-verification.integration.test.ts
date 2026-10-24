@@ -1967,14 +1967,17 @@ function expectExited(pid: number) {
 
 describe("recording timing metadata budget", () => {
 	const mb = 1024 * 1024;
-	test("keeps the 64 MB budget for normal recordings", () => {
+	test("keeps at least 64 MB for small recordings", () => {
 		expect(timingMetadataBudget(0)).toBe(64 * mb);
-		expect(timingMetadataBudget(300 * mb)).toBe(64 * mb);
-		expect(timingMetadataBudget(4096 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(2 * mb)).toBe(64 * mb);
+		expect(timingMetadataBudget(32 * mb)).toBe(64 * mb);
 	});
 
-	test("scales with very long recordings up to 1 GB", () => {
-		expect(timingMetadataBudget(20 * 1024 * mb)).toBe(320 * mb);
+	test("allows twice the file size, up to 1 GB", () => {
+		// Production failures: 64 MB read for a 156 MB and a 324 MB recording of tiny frames.
+		expect(timingMetadataBudget(156 * mb)).toBe(312 * mb);
+		expect(timingMetadataBudget(324 * mb)).toBe(648 * mb);
+		expect(timingMetadataBudget(4096 * mb)).toBe(1024 * mb);
 		expect(timingMetadataBudget(200 * 1024 * mb)).toBe(1024 * mb);
 	});
 
