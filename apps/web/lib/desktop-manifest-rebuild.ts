@@ -16,6 +16,7 @@ import {
 import { readCompletedRecordingManifest } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
+	FragmentedMp4Error,
 	type FragmentedTrackTiming,
 	readFragmentDuration,
 	readInitTiming,
@@ -190,9 +191,8 @@ async function trackDurations(
 			await rangeReader(bucket, initKey)(0, inventory.initSize),
 		);
 	} catch (error) {
-		incomplete(
-			`${track} init segment is unreadable (${error instanceof Error ? error.message : String(error)})`,
-		);
+		if (!(error instanceof FragmentedMp4Error)) throw error;
+		incomplete(`${track} init segment is unreadable (${error.message})`);
 	}
 	return mapBounded(
 		inventory.segments,
@@ -210,8 +210,10 @@ async function trackDurations(
 					timing,
 				);
 			} catch (error) {
+				// Only the bytes themselves prove a segment is broken; a failed read is retried on the next run.
+				if (!(error instanceof FragmentedMp4Error)) throw error;
 				incomplete(
-					`${track} segment ${segment.index} is unreadable (${error instanceof Error ? error.message : String(error)})`,
+					`${track} segment ${segment.index} is unreadable (${error.message})`,
 				);
 			}
 			if (!(duration > 0 && duration <= MAX_SEGMENT_SECONDS))
@@ -263,12 +265,9 @@ export async function inspectMissingManifestRecording(
 	const { bucket, cap } = await loadStorage(video);
 	if (!cap) return { status: "unsupported-storage" };
 	const source = new Video.SegmentsSource({ videoId, ownerId: video.ownerId });
-	if (
-		Option.isSome(
-			await bucket.getObject(source.getManifestKey()).pipe(runPromise),
-		)
-	)
-		return { status: "manifest-exists" };
+	const existing = Option.getOrUndefined(
+		await bucket.getObject(source.getManifestKey()).pipe(runPromise),
+	);
 
 	try {
 		const [videoTrack, audioTrack] = await Promise.all([
@@ -315,6 +314,9 @@ export async function inspectMissingManifestRecording(
 			2,
 		)}\n`;
 		readCompletedRecordingManifest(manifest);
+		// The rebuild is deterministic, so an identical manifest is one an earlier run wrote before it could queue.
+		if (existing !== undefined && existing !== manifest)
+			return { status: "manifest-exists" };
 		return {
 			status: "ready",
 			videoId,
@@ -325,9 +327,10 @@ export async function inspectMissingManifestRecording(
 			durationSeconds: Number(videoSeconds.toFixed(3)),
 		};
 	} catch (error) {
-		if (error instanceof IncompleteSegmentsError)
-			return { status: "incomplete", reason: error.message };
-		throw error;
+		if (!(error instanceof IncompleteSegmentsError)) throw error;
+		return existing === undefined
+			? { status: "incomplete", reason: error.message }
+			: { status: "manifest-exists" };
 	}
 }
 
@@ -370,17 +373,17 @@ export async function rebuildMissingManifest(
 		ownerId: inspected.ownerId,
 	});
 	// The desktop client that owned this upload stopped months ago, so the only writer to race is another operator run.
-	if (
-		Option.isSome(
-			await bucket.getObject(source.getManifestKey()).pipe(runPromise),
-		)
-	)
+	const current = Option.getOrUndefined(
+		await bucket.getObject(source.getManifestKey()).pipe(runPromise),
+	);
+	if (current !== undefined && current !== inspected.manifest)
 		return { status: "manifest-exists" };
-	await bucket
-		.putObject(source.getManifestKey(), inspected.manifest, {
-			contentType: "application/json",
-		})
-		.pipe(runPromise);
+	if (current === undefined)
+		await bucket
+			.putObject(source.getManifestKey(), inspected.manifest, {
+				contentType: "application/json",
+			})
+			.pipe(runPromise);
 
 	let status: "queued" | "already-processing";
 	try {

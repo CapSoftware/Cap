@@ -394,6 +394,46 @@ describe("rebuildMissingManifest", () => {
 		});
 	});
 
+	it("resumes a rebuild whose manifest was written before it could queue", async () => {
+		seedTrack("video", [2_000, 2_000]);
+		const first = await inspectMissingManifestRecording(videoId);
+		if (first.status !== "ready") throw new Error(JSON.stringify(first));
+		mocks.objects.set(`${prefix}/manifest.json`, first.manifest);
+		await expect(
+			rebuildMissingManifest(videoId, { dryRun: false }),
+		).resolves.toMatchObject({ status: "queued", videoSegments: 2 });
+		expect(mocks.put).not.toHaveBeenCalled();
+		expect(mocks.queue).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a recording eligible when a segment read fails", async () => {
+		seedTrack("video", [2_000, 2_000]);
+		const fetch = globalThis.fetch;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) =>
+				url.endsWith("segment_002.m4s")
+					? new Response(null, { status: 503 })
+					: fetch(url, init),
+			),
+		);
+		await expect(
+			rebuildMissingManifest(videoId, { dryRun: false }),
+		).rejects.toThrow("HTTP 503");
+		expect(mocks.updates).toHaveLength(0);
+		expect(mocks.put).not.toHaveBeenCalled();
+	});
+
+	it("leaves someone else's manifest alone even when segments are missing", async () => {
+		seedTrack("video", [2_000, 2_000]);
+		mocks.objects.delete(`${prefix}/video/segment_001.m4s`);
+		mocks.objects.set(`${prefix}/manifest.json`, "{}");
+		await expect(
+			rebuildMissingManifest(videoId, { dryRun: false }),
+		).resolves.toEqual({ status: "manifest-exists" });
+		expect(mocks.updates).toHaveLength(0);
+	});
+
 	it("never overwrites a manifest that appeared after inspection", async () => {
 		seedTrack("video", [2_000]);
 		const original = mocks.db.getMockImplementation();
