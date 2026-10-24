@@ -132,6 +132,7 @@ jobs:
           __tests__/unit/homepage-demo-accessibility.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/media-comment-playback-cleanup.test.ts
           __tests__/unit/media-format-converter-selection.test.ts
           __tests__/unit/media-format-converter.test.ts
           __tests__/unit/media-player-store-refs.test.ts
@@ -146,6 +147,7 @@ jobs:
           __tests__/unit/sso-login-pages.test.ts
           __tests__/unit/transcript-numbers.test.ts
           __tests__/unit/video-analytics-access.test.ts
+          __tests__/unit/voice-note-playback.test.ts
 
       - name: Typecheck
         run: bun run typecheck
