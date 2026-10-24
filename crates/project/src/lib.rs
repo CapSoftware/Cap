@@ -8,7 +8,10 @@ pub mod keyboard;
 mod meta;
 
 pub use animated_gradient::*;
-pub use caption_timing::{derive_caption_track_segments, source_caption_id, synchronize_captions};
+pub use caption_timing::{
+    derive_caption_track_segments, source_caption_id, synchronize_captions,
+    transcription_ranges_cover, transcription_source_ranges,
+};
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;
