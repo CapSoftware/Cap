@@ -4,8 +4,12 @@ import type { VideoMetadata } from "@cap/database/types";
 import { User, Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { getRun, start } from "workflow/api";
+import { WorkflowRunNotFoundError } from "workflow/internal/errors";
 import { getWorld } from "workflow/runtime";
-import { isLoomMediaJobFailed } from "@/lib/loom-media-dispatch";
+import {
+	getLoomImporterJobState,
+	isLoomMediaJobFailed,
+} from "@/lib/loom-media-dispatch";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 type LoomImportRun = NonNullable<VideoMetadata["loomImportRun"]>;
@@ -57,32 +61,36 @@ export async function getLoomImportRunState(
 	receipt?: LoomImportRun,
 ): Promise<"inactive" | "pending" | "active" | "unconfirmed"> {
 	if (!receipt || receipt.dispatch === "rejected") return "inactive";
+	let status: string;
 	try {
-		const status = await getRun(receipt.runId).status;
-		if (
-			status === "completed" ||
-			status === "failed" ||
-			status === "cancelled"
-		) {
-			const mediaDispatch = receipt.mediaDispatch;
-			if (mediaDispatch?.state === "accepted") {
-				return mediaDispatch.jobId &&
-					mediaDispatch.videoId &&
-					(await isLoomMediaJobFailed(
-						mediaDispatch.jobId,
-						mediaDispatch.videoId,
-					))
-					? "inactive"
-					: "unconfirmed";
-			}
-			return receipt.mediaDispatch?.state === "uncertain"
-				? "unconfirmed"
-				: "inactive";
-		}
-		return status === "pending" ? "pending" : "active";
-	} catch {
-		return "unconfirmed";
+		status = await getRun(receipt.runId).status;
+	} catch (error) {
+		return WorkflowRunNotFoundError.is(error) &&
+			receipt.dispatch === "uncertain" &&
+			!receipt.mediaDispatch
+			? "inactive"
+			: "unconfirmed";
 	}
+	if (status !== "completed" && status !== "failed" && status !== "cancelled")
+		return status === "pending" ? "pending" : "active";
+	const mediaDispatch = receipt.mediaDispatch;
+	if (!mediaDispatch || mediaDispatch.state === "rejected") return "inactive";
+	if (mediaDispatch.worker !== "media" && mediaDispatch.videoId) {
+		const importerState = await getLoomImporterJobState({
+			jobId: mediaDispatch.jobId,
+			videoId: mediaDispatch.videoId,
+		});
+		if (importerState === "running") return "active";
+		if (importerState === "finished") return "inactive";
+		if (importerState === "missing" && mediaDispatch.worker === "importer")
+			return "inactive";
+	}
+	if (mediaDispatch.state === "accepted" && mediaDispatch.jobId)
+		return mediaDispatch.videoId &&
+			(await isLoomMediaJobFailed(mediaDispatch.jobId, mediaDispatch.videoId))
+			? "inactive"
+			: "unconfirmed";
+	return "unconfirmed";
 }
 
 async function saveReceipt(payload: ImportPayload, receipt: LoomImportRun) {

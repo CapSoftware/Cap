@@ -11,6 +11,7 @@ export async function recordLoomMediaDispatch({
 	attemptId,
 	state,
 	jobId,
+	worker,
 }: {
 	videoId: string;
 	userId: string;
@@ -18,11 +19,18 @@ export async function recordLoomMediaDispatch({
 	attemptId: string;
 	state: "accepted" | "rejected" | "uncertain";
 	jobId?: string;
+	worker?: "importer" | "media";
 }) {
 	const receipt = {
 		runId,
 		dispatch: "accepted",
-		mediaDispatch: { attemptId, videoId, state, jobId: jobId ?? null },
+		mediaDispatch: {
+			attemptId,
+			videoId,
+			state,
+			jobId: jobId ?? null,
+			worker: worker ?? null,
+		},
 	};
 	const result = await db()
 		.update(videos)
@@ -92,5 +100,69 @@ async function isJobFailedOnWorker(
 		);
 	} catch {
 		return false;
+	}
+}
+
+export type LoomImporterJobState =
+	| "running"
+	| "finished"
+	| "missing"
+	| "unknown";
+
+type ImporterJob = { jobId?: unknown; videoId?: unknown; phase?: unknown };
+
+function importerHeaders() {
+	const secret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+	return secret ? { "x-media-server-secret": secret } : undefined;
+}
+
+export async function getLoomImporterJobState({
+	jobId,
+	videoId,
+}: {
+	jobId?: string | null;
+	videoId: string;
+}): Promise<LoomImporterJobState> {
+	const importerUrl = serverEnv().LOOM_IMPORTER_URL;
+	const headers = importerHeaders();
+	if (!importerUrl || !headers) return "unknown";
+	try {
+		if (jobId) {
+			const response = await fetch(
+				`${importerUrl}/video/process/${encodeURIComponent(jobId)}/status`,
+				{ headers, signal: AbortSignal.timeout(15_000), redirect: "error" },
+			);
+			if (response.status === 404) {
+				await response.body?.cancel();
+				return "missing";
+			}
+			if (!response.ok) {
+				await response.body?.cancel();
+				return "unknown";
+			}
+			const job = (await response.json()) as ImporterJob;
+			if (job.jobId !== jobId || job.videoId !== videoId) return "unknown";
+			return job.phase === "complete" ||
+				job.phase === "error" ||
+				job.phase === "cancelled"
+				? "finished"
+				: "running";
+		}
+		const response = await fetch(`${importerUrl}/video/status`, {
+			headers,
+			signal: AbortSignal.timeout(15_000),
+			redirect: "error",
+		});
+		if (!response.ok) {
+			await response.body?.cancel();
+			return "unknown";
+		}
+		const status = (await response.json()) as { jobs?: ImporterJob[] };
+		if (!Array.isArray(status.jobs)) return "unknown";
+		return status.jobs.some((job) => job.videoId === videoId)
+			? "running"
+			: "missing";
+	} catch {
+		return "unknown";
 	}
 }

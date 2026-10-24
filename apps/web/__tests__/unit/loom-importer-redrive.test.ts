@@ -149,7 +149,7 @@ describe("redriveLoomImport", () => {
 		[[], "not an unfinished Loom import"],
 		[[failedImport({ phase: "uploading" })], "phase uploading"],
 		[
-			[failedImport({ phase: "processing", uploadUpdatedAt: hoursAgo(30) })],
+			[failedImport({ phase: "processing", uploadUpdatedAt: hoursAgo(0.1) })],
 			"phase processing",
 		],
 	])("skips imports that are not failed: %#", async (rows, reason) => {
@@ -192,14 +192,34 @@ describe("redriveLoomImport", () => {
 		expect(mocks.updates).toEqual([]);
 	});
 
+	it("restarts an import left processing when nothing is running it", async () => {
+		mocks.rows = [
+			failedImport({ phase: "processing", uploadUpdatedAt: hoursAgo(1) }),
+		];
+		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
+			status: "restarted",
+		});
+	});
+
+	it("leaves an import processing while its run is active", async () => {
+		mocks.runState.mockResolvedValue("active");
+		mocks.rows = [
+			failedImport({ phase: "processing", uploadUpdatedAt: hoursAgo(1) }),
+		];
+		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
+			status: "skipped",
+		});
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
 	it("only restarts an unconfirmed worker once it can no longer be running", async () => {
 		mocks.runState.mockResolvedValue("unconfirmed");
-		mocks.rows = [failedImport({ uploadUpdatedAt: hoursAgo(2) })];
+		mocks.rows = [failedImport({ uploadUpdatedAt: hoursAgo(0.5) })];
 		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
 			status: "skipped",
 			reason: "run unconfirmed",
 		});
-		mocks.rows = [failedImport({ uploadUpdatedAt: hoursAgo(7) })];
+		mocks.rows = [failedImport({ uploadUpdatedAt: hoursAgo(2) })];
 		await expect(redriveLoomImport("video", now)).resolves.toMatchObject({
 			status: "restarted",
 		});

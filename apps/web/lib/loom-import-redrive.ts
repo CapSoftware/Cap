@@ -9,7 +9,8 @@ import {
 	startLoomImportWorkflow,
 } from "@/lib/loom-import-start";
 
-const FINISHED_WORKER_AGE_MS = 6 * 60 * 60 * 1000;
+const ABANDONED_PROCESSING_AGE_MS = 10 * 60 * 1000;
+const FINISHED_WORKER_AGE_MS = 60 * 60 * 1000;
 const STALE_PROCESSING_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type LoomRedriveOutcome =
@@ -58,9 +59,13 @@ export async function redriveLoomImport(
 	const stalled =
 		(row.phase === "processing" || row.phase === "uploading") &&
 		age > STALE_PROCESSING_AGE_MS;
-	if (row.phase !== "error" && !stalled)
-		return { videoId, status: "skipped", reason: `phase ${row.phase}` };
 	const runState = await getLoomImportRunState(row.metadata?.loomImportRun);
+	const abandoned =
+		row.phase === "processing" &&
+		runState === "inactive" &&
+		age > ABANDONED_PROCESSING_AGE_MS;
+	if (row.phase !== "error" && !stalled && !abandoned)
+		return { videoId, status: "skipped", reason: `phase ${row.phase}` };
 	if (runState === "pending" || runState === "active")
 		return { videoId, status: "skipped", reason: `run ${runState}` };
 	if (runState === "unconfirmed" && age < FINISHED_WORKER_AGE_MS)
