@@ -289,17 +289,7 @@ impl WindowImpl {
     }
 
     pub fn display(&self) -> Option<DisplayImpl> {
-        let bounds = self.physical_bounds()?;
-        let center = PhysicalPosition::new(
-            bounds.position().x() + bounds.size().width() / 2.0,
-            bounds.position().y() + bounds.size().height() / 2.0,
-        );
-
-        DisplayImpl::list().into_iter().find(|display| {
-            display
-                .physical_bounds()
-                .is_some_and(|display_bounds| display_bounds.contains_point(center))
-        })
+        display_for_bounds(self.physical_bounds()?, &DisplayImpl::list())
     }
 
     pub fn name(&self) -> Option<String> {
@@ -315,6 +305,24 @@ impl WindowImpl {
     pub fn level(&self) -> Option<i32> {
         Some(0)
     }
+}
+
+fn display_for_bounds(bounds: PhysicalBounds, displays: &[DisplayImpl]) -> Option<DisplayImpl> {
+    displays
+        .iter()
+        .filter_map(|display| {
+            let display_bounds = display.physical_bounds()?;
+            let left = bounds.position().x().max(display_bounds.position().x());
+            let top = bounds.position().y().max(display_bounds.position().y());
+            let right = (bounds.position().x() + bounds.size().width())
+                .min(display_bounds.position().x() + display_bounds.size().width());
+            let bottom = (bounds.position().y() + bounds.size().height())
+                .min(display_bounds.position().y() + display_bounds.size().height());
+            let area = (right - left).max(0.0) * (bottom - top).max(0.0);
+            (area > 0.0).then_some((*display, area))
+        })
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(display, _)| display)
 }
 
 fn filter_window_candidates(windows: Vec<Window>) -> Vec<WindowImpl> {
@@ -846,15 +854,7 @@ fn parse_window_replies(
         PhysicalPosition::new(dst_x.into(), dst_y.into()),
         PhysicalSize::new(width.into(), height.into()),
     );
-    let center = PhysicalPosition::new(
-        bounds.position().x() + bounds.size().width() / 2.0,
-        bounds.position().y() + bounds.size().height() / 2.0,
-    );
-    let display = displays.iter().copied().find(|display| {
-        display
-            .physical_bounds()
-            .is_some_and(|display_bounds| display_bounds.contains_point(center))
-    })?;
+    let display = display_for_bounds(bounds, displays)?;
     Some(ParsedWindow {
         name,
         owner_name: resolve_owner_name(owner_pid, wm_class, proc_name),
@@ -882,8 +882,9 @@ fn resolve_owner_name(
 #[cfg(test)]
 mod tests {
     use super::{
-        DisplayImpl, ReplyOutcome, WindowImpl, WindowReplies, cardinal_from_reply,
-        is_vanished_error_kind, parse_window_replies, property_text, resolve_owner_name,
+        DisplayImpl, PhysicalBounds, PhysicalPosition, PhysicalSize, ReplyOutcome, WindowImpl,
+        WindowReplies, cardinal_from_reply, display_for_bounds, is_vanished_error_kind,
+        parse_window_replies, property_text, resolve_owner_name,
     };
     use x11rb::protocol::{
         ErrorKind,
@@ -897,6 +898,19 @@ mod tests {
     fn display_box(x: i32, y: i32, width: u32, height: u32) -> DisplayImpl {
         DisplayImpl {
             id: 0,
+            x,
+            y,
+            width,
+            height,
+            refresh_rate: 60.0,
+            logical_bounds: None,
+            wayland_uuid: None,
+        }
+    }
+
+    fn display(id: u32, x: i32, y: i32, width: u32, height: u32) -> DisplayImpl {
+        DisplayImpl {
+            id,
             x,
             y,
             width,
@@ -1443,5 +1457,93 @@ mod tests {
         .expect("change_property")
         .check()
         .expect("property accepted");
+    }
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> PhysicalBounds {
+        PhysicalBounds::new(
+            PhysicalPosition::new(x, y),
+            PhysicalSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn window_center_in_monitor_gap_still_resolves_to_visible_display() {
+        let displays = [display(0, 0, 0, 1000, 800), display(1, 1200, 0, 1000, 800)];
+        let window = bounds(900.0, 100.0, 350.0, 200.0);
+        assert_eq!(display_for_bounds(window, &displays).unwrap().id, 0);
+    }
+
+    #[test]
+    fn window_uses_largest_overlap_on_offset_monitors() {
+        let displays = [
+            display(0, -1920, 0, 1920, 1080),
+            display(1, 0, -900, 1440, 900),
+        ];
+        let window = bounds(-150.0, -100.0, 400.0, 300.0);
+        assert_eq!(display_for_bounds(window, &displays).unwrap().id, 0);
+        assert_eq!(
+            display_for_bounds(window, &[displays[1], displays[0]])
+                .unwrap()
+                .id,
+            0
+        );
+        assert_eq!(
+            display_for_bounds(bounds(-150.0, -200.0, 400.0, 300.0), &displays)
+                .unwrap()
+                .id,
+            1
+        );
+    }
+
+    #[test]
+    fn nonoverlapping_and_edge_touching_windows_have_no_display() {
+        let displays = [display(0, 0, 0, 1920, 1080)];
+        for window in [
+            bounds(-320.0, 100.0, 320.0, 240.0),
+            bounds(1920.0, 100.0, 320.0, 240.0),
+            bounds(100.0, -240.0, 320.0, 240.0),
+            bounds(100.0, 1080.0, 320.0, 240.0),
+            bounds(-400.0, -400.0, 320.0, 240.0),
+        ] {
+            assert!(display_for_bounds(window, &displays).is_none());
+        }
+        assert!(display_for_bounds(bounds(0.0, 0.0, 320.0, 240.0), &[]).is_none());
+    }
+
+    #[test]
+    fn spanning_window_resolves_to_the_display_it_overlaps_most() {
+        let displays = [
+            display(0, -1920, 0, 1920, 1080),
+            display(1, 0, -900, 1440, 900),
+        ];
+        let parsed = parse_window_replies(placed(-150, -100, 400, 300), &displays, &|_| None)
+            .expect("window");
+        assert_eq!(parsed.display.id, 0);
+        let parsed = parse_window_replies(
+            placed(-150, -100, 400, 300),
+            &[displays[1], displays[0]],
+            &|_| None,
+        )
+        .expect("window");
+        assert_eq!(parsed.display.id, 0);
+        let parsed = parse_window_replies(placed(-150, -200, 400, 300), &displays, &|_| None)
+            .expect("window");
+        assert_eq!(parsed.display.id, 1);
+
+        let gapped = [display(0, 0, 0, 1000, 800), display(1, 1200, 0, 1000, 800)];
+        let parsed =
+            parse_window_replies(placed(900, 100, 350, 200), &gapped, &|_| None).expect("window");
+        assert_eq!(parsed.display.id, 0);
+    }
+
+    fn placed(x: i16, y: i16, width: u16, height: u16) -> WindowReplies {
+        replies(
+            ReplyOutcome::Present((width, height)),
+            ReplyOutcome::Present((x, y)),
+            ReplyOutcome::Present(Some("span".to_string())),
+            ReplyOutcome::Present(None),
+            ReplyOutcome::Present(None),
+            ReplyOutcome::Present(Some("Span".to_string())),
+        )
     }
 }

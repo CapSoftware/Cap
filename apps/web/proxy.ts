@@ -35,22 +35,47 @@ const mainOrigins = [
 	addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST),
 ].filter(Boolean) as string[];
 
+const FRAME_PROTECTED_PATHS = [
+	"/dashboard",
+	"/onboarding",
+	"/invite",
+	"/cli/authorize",
+	"/mcp/authorize",
+	"/admin",
+	"/signup",
+	"/verify-otp",
+];
+
+const isFrameProtectedPath = (path: string) =>
+	FRAME_PROTECTED_PATHS.some(
+		(protectedPath) =>
+			path === protectedPath || path.startsWith(`${protectedPath}/`),
+	);
+
+const setFrameHeaders = (response: NextResponse) => {
+	response.headers.set("X-Frame-Options", "SAMEORIGIN");
+	response.headers.set(
+		"Content-Security-Policy",
+		"frame-ancestors https://cap.so",
+	);
+	return response;
+};
+
 export async function proxy(request: NextRequest) {
+	const path = new URL(request.url).pathname;
+
+	if (path.startsWith("/login")) return setFrameHeaders(NextResponse.next());
+
+	const response = await route(request);
+	return isFrameProtectedPath(path) ? setFrameHeaders(response) : response;
+}
+
+async function route(request: NextRequest) {
 	const url = new URL(request.url);
 	const path = url.pathname;
 
 	if (path === "/" && request.cookies.has("next-auth.session-token")) {
 		return NextResponse.redirect(new URL("/dashboard/caps", url.origin));
-	}
-
-	if (path.startsWith("/login")) {
-		const response = NextResponse.next();
-		response.headers.set("X-Frame-Options", "SAMEORIGIN");
-		response.headers.set(
-			"Content-Security-Policy",
-			"frame-ancestors https://cap.so",
-		);
-		return response;
 	}
 
 	const shareIframeRedirectUrl = getShareIframeRedirectUrl({

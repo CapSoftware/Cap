@@ -25,122 +25,14 @@ import { formatTranscriptAsParagraphs } from "@/lib/transcript-text";
 import { normalizeTranscriptCueText } from "@/lib/transcript-vtt";
 import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
+import type { TranscriptEntry } from "../utils/parse-transcript-vtt";
+import { parseTranscriptVTT } from "../utils/parse-transcript-vtt";
 
 interface TranscriptProps {
 	data: VideoData;
 	onSeek?: (time: number) => void;
 	user?: { id: string } | null;
 }
-
-interface TranscriptEntry {
-	id: number;
-	timestamp: string;
-	text: string;
-	startTime: number;
-	endTime: number;
-}
-
-const parseVTT = (vttContent: string): TranscriptEntry[] => {
-	const lines = vttContent.split("\n");
-	const entries: TranscriptEntry[] = [];
-	let currentEntry: Partial<TranscriptEntry & { startTime: number }> = {};
-	let currentId = 0;
-
-	const timeToSeconds = (timeStr: string): number | null => {
-		const parts = timeStr.split(":");
-		if (parts.length !== 3) return null;
-
-		const [hoursStr, minutesStr, secondsStr] = parts;
-		if (!hoursStr || !minutesStr || !secondsStr) return null;
-
-		const hours = parseInt(hoursStr, 10);
-		const minutes = parseInt(minutesStr, 10);
-		const seconds = parseInt(secondsStr, 10);
-
-		if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds))
-			return null;
-
-		return hours * 3600 + minutes * 60 + seconds;
-	};
-
-	const parseTimestamp = (
-		timestamp: string,
-	): { mm_ss: string; totalSeconds: number } | null => {
-		const parts = timestamp.split(":");
-		if (parts.length !== 3) return null;
-
-		const [hoursStr, minutesStr, secondsWithMs] = parts;
-		if (!hoursStr || !minutesStr || !secondsWithMs) return null;
-
-		const secondsPart = secondsWithMs.split(".")[0];
-		if (!secondsPart) return null;
-
-		const totalSeconds = timeToSeconds(
-			`${hoursStr}:${minutesStr}:${secondsPart}`,
-		);
-		if (totalSeconds === null) return null;
-
-		const fractionPart = secondsWithMs.split(".")[1];
-		const fraction = fractionPart ? Number(`0.${fractionPart}`) : 0;
-
-		return {
-			mm_ss: `${minutesStr}:${secondsPart}`,
-			totalSeconds: totalSeconds + (Number.isFinite(fraction) ? fraction : 0),
-		};
-	};
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (!line?.trim()) continue;
-
-		const trimmedLine = line.trim();
-
-		if (trimmedLine === "WEBVTT") continue;
-
-		if (/^\d+$/.test(trimmedLine)) {
-			currentId = parseInt(trimmedLine, 10);
-			continue;
-		}
-
-		if (trimmedLine.includes("-->")) {
-			const [startTimeStr, endTimeStr] = trimmedLine.split(" --> ");
-			if (!startTimeStr || !endTimeStr) continue;
-
-			const startTimestamp = parseTimestamp(startTimeStr);
-			const endTimestamp = parseTimestamp(endTimeStr);
-			if (startTimestamp) {
-				currentEntry = {
-					id: currentId,
-					timestamp: startTimestamp.mm_ss,
-					startTime: startTimestamp.totalSeconds,
-					endTime: endTimestamp?.totalSeconds ?? startTimestamp.totalSeconds,
-				};
-			}
-			continue;
-		}
-
-		if (currentEntry.timestamp && !currentEntry.text) {
-			const textContent =
-				trimmedLine.startsWith('"') && trimmedLine.endsWith('"')
-					? trimmedLine.slice(1, -1)
-					: trimmedLine;
-
-			currentEntry.text = textContent;
-			if (
-				currentEntry.id !== undefined &&
-				currentEntry.timestamp &&
-				currentEntry.text &&
-				currentEntry.startTime !== undefined
-			) {
-				entries.push(currentEntry as TranscriptEntry);
-			}
-			currentEntry = {};
-		}
-	}
-
-	const sortedEntries = entries.sort((a, b) => a.startTime - b.startTime);
-	return sortedEntries;
-};
 
 /** Module-level so the last live transcript survives component remounts and
  * router refreshes during the live→canonical handoff. */
@@ -268,7 +160,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const isLiveTranscriptActive =
 		liveTranscript?.kind === "ready" && liveTranscript.state === "active";
 	const liveTranscriptData = useMemo(
-		() => (liveTranscriptContent ? parseVTT(liveTranscriptContent) : []),
+		() =>
+			liveTranscriptContent ? parseTranscriptVTT(liveTranscriptContent) : [],
 		[liveTranscriptContent],
 	);
 
@@ -313,10 +206,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	useEffect(() => {
 		const vttContent = captionContext.currentVttContent;
 		if (vttContent) {
-			const parsed = parseVTT(vttContent);
+			const parsed = parseTranscriptVTT(vttContent);
 			setTranscriptData(parsed);
 		} else if (transcriptContent && selectedLanguage === "original") {
-			const parsed = parseVTT(transcriptContent);
+			const parsed = parseTranscriptVTT(transcriptContent);
 			setTranscriptData(parsed);
 		}
 	}, [captionContext.currentVttContent, transcriptContent, selectedLanguage]);

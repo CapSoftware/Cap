@@ -16,6 +16,7 @@ import {
 	getReusableLoomDownloadUrl,
 	LoomDownloadTemporaryError,
 } from "@/lib/loom-download-url";
+import { cleanupLoomFileSource } from "@/lib/loom-file-cleanup";
 import {
 	LOOM_IMPORT_MAX_BYTES,
 	type LoomMultipartUploadTarget,
@@ -46,6 +47,7 @@ interface ImportLoomPayload {
 	loomDownloadUrl?: string;
 	agentOperationId?: string;
 	reuseExistingRawUpload?: boolean;
+	cleanupRawUpload?: boolean;
 }
 
 const MINIMUM_VIDEO_SIZE = 1024;
@@ -272,6 +274,7 @@ export async function importLoomVideoWorkflow(
 		}
 		await saveMetadataAndComplete(payload.videoId, metadata);
 		await completeAgentImport(payload.agentOperationId, payload.videoId);
+		if (payload.cleanupRawUpload) await cleanupLoomFileSource(payload);
 
 		return {
 			success: true,
