@@ -1,0 +1,17 @@
+{
+	"actionDefaultTitle": {
+		"message": "Record your screen with Cap"
+	},
+	"extensionDescription": {
+		"message": "Free, open source screen recorder. Capture your screen, tab, camera & mic in Chrome and share a video link the moment you stop."
+	},
+	"extensionName": {
+		"message": "Cap - Screen Recorder & Screen Capture"
+	},
+	"extensionShortName": {
+		"message": "Cap"
+	},
+	"offscreenJustification": {
+		"message": "Record and upload Cap videos from an extension page."
+	}
+}

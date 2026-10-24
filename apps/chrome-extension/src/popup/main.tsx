@@ -699,7 +699,10 @@ function App() {
 							</div>
 						)}
 						{status.phase === "error" && (
-							<div className="cap-fade-up rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
+							<div
+								className="cap-fade-up rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12"
+								data-testid="recording-start-error"
+							>
 								<span className="font-medium">Recording failed.</span>{" "}
 								{status.message}
 							</div>
