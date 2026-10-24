@@ -50,6 +50,11 @@ describe("proxy frame headers", () => {
 		"/invite/invite-id",
 		"/cli/authorize",
 		"/mcp/authorize",
+		"/admin",
+		"/admin/replace-video",
+		"/admin/reprocess-video",
+		"/signup",
+		"/verify-otp",
 	])("sets frame headers on %s", async (path) => {
 		const response = await send(`https://cap.so${path}`);
 		expect(response.status).toBe(200);
@@ -66,6 +71,9 @@ describe("proxy frame headers", () => {
 		"/cli/complete",
 		"/dashboards",
 		"/invited",
+		"/administrator",
+		"/signups",
+		"/verify-otp-help",
 	])("leaves %s without frame headers", async (path) => {
 		const response = await send(`https://cap.so${path}`);
 		expectNoFrameHeaders(response);
