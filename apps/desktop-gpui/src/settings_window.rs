@@ -220,6 +220,7 @@ pub(crate) enum MenuKind {
 
 struct OpenMenu {
     kind: MenuKind,
+    return_focus: Option<FocusHandle>,
     /// Anchor, row count and keyboard highlight. `Menu.popup()` with no
     /// position argument opens at the pointer, so the origin is the faithful
     /// anchor; the highlight is what makes arrows and Enter work.
@@ -1501,11 +1502,15 @@ impl SettingsWindow {
         // them first -- its bindings sit deeper in the dispatch path. Opening
         // a menu therefore takes focus back, which is also what clicking a
         // `<button>` does to a focused `<input>` in the webview.
+        let return_focus = ui::keyboard_nav::active(window, cx)
+            .then(|| window.focused(cx))
+            .flatten();
         let focus = self.focus.clone();
         window.focus(&focus, cx);
         let items = self.menu_items(kind);
         self.menu = Some(OpenMenu {
             kind,
+            return_focus,
             state: ui::MenuState::new(origin, &items),
         });
         cx.notify();
@@ -1528,11 +1533,21 @@ impl SettingsWindow {
                 true
             }
             ui::MenuKey::Dismiss => {
-                self.menu = None;
+                self.close_menu(window, cx);
                 cx.notify();
                 true
             }
             ui::MenuKey::Ignored => false,
+        }
+    }
+
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = self.menu.take()
+            && ui::keyboard_nav::active(window, cx)
+            && self.focus.is_focused(window)
+            && let Some(focus) = menu.return_focus
+        {
+            window.focus(&focus, cx);
         }
     }
 
@@ -1576,7 +1591,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.menu = None;
+        self.close_menu(window, cx);
         match kind {
             MenuKind::Countdown => {
                 if let Some((value, _)) = COUNTDOWN_OPTIONS.get(index) {
