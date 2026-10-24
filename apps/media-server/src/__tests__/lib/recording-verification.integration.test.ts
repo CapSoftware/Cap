@@ -15,6 +15,7 @@ import { Readable } from "node:stream";
 import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import { muxMediaTracksToMp4 } from "../../lib/media-video";
 import {
+	describeTrackDifference,
 	proveRecordingPackets,
 	readRecordingAudioTail,
 } from "../../lib/recording-packet-proof";
@@ -746,6 +747,32 @@ describe("encoded recording preservation", () => {
 			/audio does not preserve the source \(.*first difference at packet 0: pts -?[\d.]+ vs [\d.]+, dts/,
 		);
 
+		const retagged = join(directory, "proof-explained-tags.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-metadata:s:v:0",
+			"handler_name=Retagged",
+			retagged,
+		]);
+		await expect(
+			proveRecordingPackets(
+				silent,
+				silent,
+				retagged,
+				AbortSignal.timeout(5000),
+			),
+		).rejects.toThrow(
+			/video does not preserve the source \(tags\.handler_name "[^"]*" vs "Retagged"/,
+		);
+
 		const changed = join(directory, "proof-explained-data.mp4");
 		const bytes = await readFile(silent);
 		const mdat = bytes.indexOf(Buffer.from("mdat"));
@@ -757,6 +784,45 @@ describe("encoded recording preservation", () => {
 		).rejects.toThrow(
 			/does not preserve the source \(first difference at packet \d+: data differs\)/,
 		);
+	});
+	test("shows both time bases when packet timing differs", () => {
+		const summary = (packets: string) => ({
+			configuration: { codec_type: "video" as const, start: "0/1" },
+			count: 2,
+			packets,
+			startTime: 0,
+			tail: undefined,
+		});
+		expect(
+			describeTrackDifference(
+				{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+				{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+			),
+		).toBe("time base 1/15000 vs 1/90000");
+	});
+	test("keeps the time bases when many tags differ", () => {
+		const summary = (value: string) => ({
+			configuration: {
+				codec_type: "video" as const,
+				start: "0/1",
+				tags: Object.fromEntries(
+					Array.from({ length: 20 }, (_, index) => [
+						`tag_${index}`,
+						`${value}-${"x".repeat(30)}`,
+					]),
+				),
+			},
+			count: 2,
+			packets: value,
+			startTime: 0,
+			tail: undefined,
+		});
+		const explanation = describeTrackDifference(
+			{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+			{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+		);
+		expect(explanation.length).toBeLessThanOrEqual(400);
+		expect(explanation).toStartWith("time base 1/15000 vs 1/90000; tags.tag_0");
 	});
 	test("does not start cancelled packet verification", async () => {
 		const controller = new AbortController();
