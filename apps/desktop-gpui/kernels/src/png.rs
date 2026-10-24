@@ -597,6 +597,7 @@ fn adaptive_filter(
     best
 }
 
+#[cfg(not(target_arch = "aarch64"))]
 fn sum_abs(buf: &[u8]) -> u64 {
     buf.chunks(32)
         .map(|chunk| {
