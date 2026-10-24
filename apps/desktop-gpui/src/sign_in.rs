@@ -178,7 +178,10 @@ impl SignIn {
         let origin = attempt.origin;
         attempt.task.detach();
         match &outcome {
-            SignInOutcome::SignedIn => tracing::info!("signed in"),
+            SignInOutcome::SignedIn => {
+                tracing::info!("signed in");
+                crate::network_health::run_upload_health_check(cx);
+            }
             SignInOutcome::TimedOut => tracing::info!("sign-in timed out"),
             SignInOutcome::Failed(error) => tracing::warn!("sign-in failed: {error}"),
             SignInOutcome::Cancelled => {}

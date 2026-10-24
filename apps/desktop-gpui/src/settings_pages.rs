@@ -4558,6 +4558,7 @@ impl SettingsWindow {
                 match result {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
                         this.info_dialog("S3 configuration saved successfully", window, cx);
                     }
                     _ => this.pages.s3.error = Some("Failed to save S3 config".to_string()),
@@ -4594,6 +4595,7 @@ impl SettingsWindow {
                 match result {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
                         this.info_dialog("S3 configuration deleted successfully", window, cx);
                     }
                     _ => this.pages.s3.error = Some("Failed to delete S3 config".to_string()),
@@ -4793,6 +4795,7 @@ impl SettingsWindow {
                             if connected {
                                 this.pages.gdrive.waiting = false;
                                 this.gdrive_fetch_s3_presence(window, cx);
+                                crate::network_health::run_upload_health_check(cx);
                             }
                             cx.notify();
                             window.refresh();
@@ -4908,7 +4911,10 @@ impl SettingsWindow {
             |this, result, window, cx| {
                 this.pages.gdrive.set_active_pending = false;
                 match result {
-                    Ok((200, _)) => this.gdrive_refresh(window, cx),
+                    Ok((200, _)) => {
+                        this.gdrive_refresh(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
+                    }
                     _ => {
                         this.pages.gdrive.error =
                             Some("Failed to update active storage provider".to_string())
@@ -4949,6 +4955,7 @@ impl SettingsWindow {
                 match result {
                     Ok((200, _)) => {
                         this.gdrive_refresh(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
                         this.info_dialog("Google Drive disconnected", window, cx);
                     }
                     _ => {
