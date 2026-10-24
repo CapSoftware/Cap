@@ -104,6 +104,70 @@ impl Drop for WindowsTimerResolution {
     }
 }
 
+/// Above normal, so a wake preempts decode and render threads instead of
+/// queueing behind them: at normal priority on a loaded machine the wake
+/// landed up to 10 ms late, with or without the spin.
+#[cfg(target_os = "windows")]
+fn raise_playback_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsWaitableTimer(windows::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl WindowsWaitableTimer {
+    /// How long before the deadline the timer wait ends and spinning starts.
+    /// The timer fires up to about 0.5 ms late.
+    const SPIN: Duration = Duration::from_micros(500);
+
+    /// `None` before Windows 10 1803, which rejects the high-resolution flag.
+    fn high_resolution() -> Option<Self> {
+        use windows::Win32::System::Threading::{
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_ALL_ACCESS,
+        };
+        unsafe {
+            CreateWaitableTimerExW(
+                None,
+                windows::core::PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+        }
+        .ok()
+        .map(Self)
+    }
+
+    fn sleep(&self, duration: Duration) -> bool {
+        use windows::Win32::{
+            Foundation::WAIT_OBJECT_0,
+            System::Threading::{INFINITE, SetWaitableTimer, WaitForSingleObject},
+        };
+        // Negative: relative, in 100 ns intervals.
+        let due = -i64::try_from(duration.as_nanos() / 100)
+            .unwrap_or(i64::MAX)
+            .max(1);
+        unsafe {
+            SetWaitableTimer(self.0, &due, 0, None, None, false).is_ok()
+                && WaitForSingleObject(self.0, INFINITE) == WAIT_OBJECT_0
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsWaitableTimer {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 fn precision_sleep_sync(deadline: Instant) {
     let now = Instant::now();
     if now >= deadline {
@@ -114,9 +178,25 @@ fn precision_sleep_sync(deadline: Instant) {
 
     #[cfg(target_os = "windows")]
     {
-        let spin_threshold = Duration::from_millis(2);
-        if remaining > spin_threshold {
-            std::thread::sleep(remaining.saturating_sub(spin_threshold));
+        thread_local! {
+            static WAITABLE_TIMER: Option<WindowsWaitableTimer> =
+                WindowsWaitableTimer::high_resolution();
+        }
+        // A high-resolution timer wakes within a fraction of a millisecond,
+        // so only the last 500 us are spun. Without one, `thread::sleep` can
+        // wake a full 1 ms timer period late and the last 2 ms are spun.
+        let timed = WAITABLE_TIMER.with(|timer| {
+            timer.as_ref().is_some_and(|timer| {
+                remaining <= WindowsWaitableTimer::SPIN
+                    || timer.sleep(remaining.saturating_sub(WindowsWaitableTimer::SPIN))
+            })
+        });
+        if !timed {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let spin_threshold = Duration::from_millis(2);
+            if remaining > spin_threshold {
+                std::thread::sleep(remaining.saturating_sub(spin_threshold));
+            }
         }
         while Instant::now() < deadline {
             std::hint::spin_loop();
@@ -1309,6 +1389,8 @@ impl Playback {
 
             #[cfg(target_os = "windows")]
             let _timer_guard = WindowsTimerResolution::set_high_precision();
+            #[cfg(target_os = "windows")]
+            raise_playback_thread_priority();
 
             // Attach this playback's audio to the session's persistent output
             // stream. Blocks until the live callback is consuming the source,
@@ -2092,6 +2174,90 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precision_sleep_returns_at_its_deadline() {
+        for micros in [0, 50, 250, 900, 2_100, 16_667, 33_333] {
+            let deadline = Instant::now() + Duration::from_micros(micros);
+            precision_sleep_sync(deadline);
+            let late = Instant::now()
+                .checked_duration_since(deadline)
+                .unwrap_or_else(|| panic!("{micros} us sleep returned early"));
+            assert!(
+                late < Duration::from_secs(1),
+                "{micros} us sleep returned {late:?} late"
+            );
+        }
+        let start = Instant::now();
+        precision_sleep_sync(start);
+        assert!(start.elapsed() < Duration::from_millis(100));
+    }
+
+    // Every supported runner is Windows 10 1803 or later; the spin fallback
+    // is for older builds.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_has_a_high_resolution_waitable_timer() {
+        let timer = WindowsWaitableTimer::high_resolution().expect("high-resolution timer");
+        let start = Instant::now();
+        assert!(timer.sleep(Duration::from_millis(5)));
+        assert!(start.elapsed() >= Duration::from_millis(4));
+    }
+
+    /// Pacing cost and accuracy of the playback sleep at 30 and 60 fps:
+    /// `cargo test -p cap-editor --lib playback::tests::precision_sleep_pacing -- --ignored --nocapture`
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore]
+    fn precision_sleep_pacing() {
+        fn thread_cpu() -> Duration {
+            use windows::Win32::{
+                Foundation::FILETIME,
+                System::Threading::{GetCurrentThread, GetThreadTimes},
+            };
+            let [mut creation, mut exit, mut kernel, mut user] = [FILETIME::default(); 4];
+            unsafe {
+                GetThreadTimes(
+                    GetCurrentThread(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+                .unwrap();
+            }
+            let ticks =
+                |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+            Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
+        }
+
+        let _timer_guard = WindowsTimerResolution::set_high_precision();
+        raise_playback_thread_priority();
+        for fps in [30u32, 60] {
+            let frame = Duration::from_secs(1) / fps;
+            let frames = fps * 10;
+            let cpu_start = thread_cpu();
+            let start = Instant::now();
+            let mut late_us = Vec::with_capacity(frames as usize);
+            for n in 1..=frames {
+                let deadline = start + frame * n;
+                precision_sleep_sync(deadline);
+                late_us.push(Instant::now().duration_since(deadline).as_secs_f64() * 1e6);
+            }
+            let cpu = thread_cpu().saturating_sub(cpu_start).as_secs_f64()
+                / start.elapsed().as_secs_f64();
+            late_us.sort_by(f64::total_cmp);
+            let at = |q: f64| late_us[((late_us.len() - 1) as f64 * q).round() as usize];
+            println!(
+                "pacing fps={fps} cpu={:.1}% late_us p50={:.0} p95={:.0} p99={:.0} max={:.0}",
+                cpu * 100.0,
+                at(0.5),
+                at(0.95),
+                at(0.99),
+                at(1.0)
+            );
+        }
+    }
 
     #[test]
     fn source_audio_offset_edits_refresh_playback_for_the_recording_clip() {

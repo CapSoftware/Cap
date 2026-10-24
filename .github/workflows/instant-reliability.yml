@@ -1,0 +1,187 @@
+name: Instant reliability (real app)
+# Drives the real GPUI app through Instant recordings against the in-process
+# mock Cap server (`apps/desktop-gpui/src/upload/real_app_tests.rs`): a normal
+# recording, a start stopped while it is still in flight, force-kills from the
+# server video's creation through the first seconds of capture, and a crash
+# followed by Recover. Each case checks what reached the mock server and what
+# was left on disk, so a regression that loses a recording, deletes one with
+# media, or leaves an empty video behind fails here.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/desktop-gpui/src/upload.rs"
+      - "apps/desktop-gpui/src/upload/**"
+      - "apps/desktop-gpui/src/recording.rs"
+      - "apps/desktop-gpui/src/session.rs"
+      - "apps/desktop-gpui/src/library.rs"
+      - "apps/desktop-gpui/src/main_window.rs"
+      - "apps/desktop-gpui/src/auth.rs"
+      - "apps/desktop-gpui/src/store.rs"
+      - "crates/recording/src/upload_resume.rs"
+      - "crates/recording/src/upload_verification.rs"
+      - "crates/recording/src/instant_recording.rs"
+      - "crates/recording/src/recovery.rs"
+      - "crates/enc-ffmpeg/src/mux/segmented_stream.rs"
+      - "crates/enc-ffmpeg/src/mux/dash_audio.rs"
+      - ".github/workflows/instant-reliability.yml"
+  schedule:
+    - cron: "40 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: instant-reliability-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A pull request from a fork that changes only this workflow does not queue
+  # the macOS job; one that also changes Instant code does, and so does any
+  # change from this repository.
+  scope:
+    name: Scope
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request || "$SAME_REPO" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          instant='^(apps/desktop-gpui/src/(upload\.rs|upload/.*|recording\.rs|session\.rs|library\.rs|main_window\.rs|auth\.rs|store\.rs)|crates/recording/src/(upload_resume|upload_verification|instant_recording|recovery)\.rs|crates/enc-ffmpeg/src/mux/(segmented_stream|dash_audio)\.rs)$'
+          if grep -qE "$instant" "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "A fork pull request that changes no Instant code does not run the real-app suite." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  real-app:
+    name: Instant crash, cancel and recovery (real app)
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      TARGET: aarch64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build the app and its tests
+        run: |
+          set -euo pipefail
+          # The tests load frameworks from debug/Frameworks (beside deps/), the
+          # app binary from the directory above debug/.
+          for frameworks in \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug/Frameworks" \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/Frameworks"; do
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          done
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui --no-run --message-format=json \
+            | python3 -c 'import json, sys
+          for line in sys.stdin:
+              m = json.loads(line)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "cap-gpui" and m["profile"]["test"]:
+                  print(m["executable"])' > "$RUNNER_TEMP/test-binary"
+          test -s "$RUNNER_TEMP/test-binary"
+          echo "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug/cap-gpui" > "$RUNNER_TEMP/app-binary"
+          cat "$RUNNER_TEMP/test-binary" "$RUNNER_TEMP/app-binary"
+
+      # Blacksmith runs a logged-in GUI session, but ScreenCaptureKit is denied
+      # until TCC grants the capturing binaries and the runner ancestry, the
+      # display starts asleep, and there is no audio device (the start chime
+      # plays before capture begins), as in verify-recording.yml.
+      - name: Capture permissions, display and audio device
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx
+          sudo killall coreaudiod || true
+          for _ in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          cat "$RUNNER_TEMP/test-binary" "$RUNNER_TEMP/app-binary" > "$RUNNER_TEMP/capture-binaries"
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/capture-binaries"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+
+      - name: Real-app Instant reliability
+        run: |
+          set -euo pipefail
+          export CAP_GPUI_REAL_APP_BIN="$(cat "$RUNNER_TEMP/app-binary")"
+          export CAP_GPUI_REAL_APP_ARTIFACTS="$RUNNER_TEMP/real-app"
+          "$(cat "$RUNNER_TEMP/test-binary")" real_app --ignored --test-threads=1 --nocapture
+
+      - name: Upload sandboxes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instant-reliability-sandboxes
+          path: ${{ runner.temp }}/real-app
+          retention-days: 7
