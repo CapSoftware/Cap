@@ -257,8 +257,19 @@ export const EmbedVideo = forwardRef<
 		);
 
 		useEffect(() => {
-			const player = videoRef.current;
-			if (player && player.readyState >= 1) handleLoadedMetadata(player);
+			const container = playerContainerRef.current;
+			if (!container) return;
+			let currentPlayer: HTMLVideoElement | null = null;
+			const syncMetadata = () => {
+				const player = container.querySelector("video");
+				if (player === currentPlayer) return;
+				currentPlayer = player;
+				if (player && player.readyState >= 1) handleLoadedMetadata(player);
+			};
+			const observer = new MutationObserver(syncMetadata);
+			observer.observe(container, { childList: true, subtree: true });
+			syncMetadata();
+			return () => observer.disconnect();
 		}, [handleLoadedMetadata]);
 
 		return (

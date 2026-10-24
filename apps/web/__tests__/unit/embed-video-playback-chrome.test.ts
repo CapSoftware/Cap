@@ -28,6 +28,7 @@ import {
 const dynamicImports = vi.hoisted(() => [] as Promise<unknown>[]);
 const dynamicControl = vi.hoisted(() => ({
 	gate: null as Promise<void> | null,
+	metadataReady: false,
 }));
 
 vi.mock("next/dynamic", async () => {
@@ -123,6 +124,20 @@ vi.mock("@/app/embed/[videoId]/_components/use-player-js-receiver", () => ({
 	usePlayerJsReceiver: () => undefined,
 }));
 
+function attachVideoRef(
+	ref: Ref<HTMLVideoElement>,
+	video: HTMLVideoElement | null,
+) {
+	if (video && dynamicControl.metadataReady) {
+		Object.defineProperties(video, {
+			duration: { configurable: true, value: 60 },
+			readyState: { configurable: true, value: 1 },
+		});
+	}
+	if (typeof ref === "function") return ref(video);
+	if (ref) ref.current = video;
+}
+
 vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 	const { createElement, useEffect, useState } = await import("react");
 	const DeferredVideoPlayer = ({
@@ -136,7 +151,8 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 		useEffect(() => setIsMounted(true), []);
 		return isMounted
 			? createElement("video", {
-					ref: videoRef,
+					ref: (video: HTMLVideoElement | null) =>
+						attachVideoRef(videoRef, video),
 					"data-default-speed": defaultPlaybackSpeed,
 				})
 			: null;
@@ -155,7 +171,8 @@ vi.mock("@/app/s/[videoId]/_components/HLSVideoPlayer", async () => {
 			defaultPlaybackSpeed?: number;
 		}) =>
 			createElement("video", {
-				ref: videoRef,
+				ref: (video: HTMLVideoElement | null) =>
+					attachVideoRef(videoRef, video),
 				"data-default-speed": defaultPlaybackSpeed,
 			}),
 	};
@@ -231,12 +248,21 @@ describe("EmbedVideo playback chrome", () => {
 
 	afterEach(() => {
 		dynamicControl.gate = null;
+		dynamicControl.metadataReady = false;
 		document.body.replaceChildren();
 	});
 
-	it.each([{ type: "desktopMP4" } as const, { type: "MediaConvert" } as const])(
-		"seeks and updates chrome when the $type player loads after mount",
-		async (source) => {
+	it.each(
+		[
+			{ type: "desktopMP4" } as const,
+			{ type: "MediaConvert" } as const,
+		].flatMap((source) =>
+			[false, true].map((metadataReady) => ({ source, metadataReady })),
+		),
+	)(
+		"seeks and updates chrome when the $source.type player loads after mount with metadataReady=$metadataReady",
+		async ({ source, metadataReady }) => {
+			dynamicControl.metadataReady = metadataReady;
 			let release = () => {};
 			dynamicControl.gate = new Promise<void>((resolve) => {
 				release = resolve;
@@ -257,10 +283,12 @@ describe("EmbedVideo playback chrome", () => {
 			});
 			const video = container.querySelector("video");
 			if (!video) throw new Error("Player did not load");
-			Object.defineProperty(video, "duration", { value: 60 });
-			await act(async () => {
-				video.dispatchEvent(new Event("loadedmetadata"));
-			});
+			if (!metadataReady) {
+				Object.defineProperty(video, "duration", { value: 60 });
+				await act(async () => {
+					video.dispatchEvent(new Event("loadedmetadata"));
+				});
+			}
 			expect(video.currentTime).toBe(15);
 			await act(async () => {
 				video.dispatchEvent(new Event("play"));
