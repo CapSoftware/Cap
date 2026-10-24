@@ -160,7 +160,10 @@ const hashEmailCode = (code: string) =>
 const sendMobileEmailCode = async (email: string, code: string) => {
 	const emailStatus = getEmailDeliveryStatus();
 	if (!emailStatus.configured) {
-		if (process.env.NODE_ENV === "production" && buildEnv.NEXT_PUBLIC_IS_CAP) {
+		if (
+			process.env.NODE_ENV === "production" &&
+			buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+		) {
 			throw new Error(emailStatus.reason);
 		}
 		console.log("");

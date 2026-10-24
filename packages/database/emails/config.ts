@@ -19,7 +19,10 @@ export function getEmailDeliveryStatus(): EmailDeliveryStatus {
 			reason: `${EMAIL_NOT_CONFIGURED_MESSAGE}: RESEND_API_KEY is not set`,
 		};
 	}
-	if (!buildEnv.NEXT_PUBLIC_IS_CAP && !env.RESEND_FROM_DOMAIN?.trim()) {
+	if (
+		buildEnv.NEXT_PUBLIC_IS_CAP !== "true" &&
+		!env.RESEND_FROM_DOMAIN?.trim()
+	) {
 		return {
 			configured: false,
 			reason: `${EMAIL_NOT_CONFIGURED_MESSAGE}: RESEND_FROM_DOMAIN is not set`,
@@ -85,12 +88,13 @@ export const sendEmail = async ({
 		};
 	}
 
-	if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
+	const isCap = buildEnv.NEXT_PUBLIC_IS_CAP === "true";
+	if (marketing && !isCap) return;
 	const from = fromOverride
 		? fromOverride
 		: marketing
 			? "Richie from Cap <richie@send.cap.so>"
-			: buildEnv.NEXT_PUBLIC_IS_CAP
+			: isCap
 				? "Cap Auth <no-reply@auth.cap.so>"
 				: env.RESEND_FROM_DOMAIN?.trim()
 					? `auth@${env.RESEND_FROM_DOMAIN.trim()}`

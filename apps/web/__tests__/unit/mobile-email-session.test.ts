@@ -255,25 +255,29 @@ describe("mobile email sessions", () => {
 
 	const wrongCode = (code: string) => (code === "123456" ? "654321" : "123456");
 
-	it("logs a usable code for a self-host with email disabled", async () => {
-		mocks.emailStatus = {
-			configured: false,
-			reason: "Email is not configured",
-		};
-		vi.stubEnv("NODE_ENV", "production");
-		const log = vi.spyOn(console, "log").mockImplementation(() => {});
-		const response = await post("request", { email: "person@example.com" });
-		expect(response.status).toBe(200);
-		expect(mocks.sendEmail).not.toHaveBeenCalled();
-		const codeLine = log.mock.calls.find(([line]) =>
-			/^Code: \d{6}$/.test(line),
-		);
-		expect(codeLine).toBeDefined();
-		const code = String(codeLine?.[0]).slice("Code: ".length);
-		expect(
-			(await post("verify", { email: "person@example.com", code })).status,
-		).toBe(200);
-	});
+	it.each([undefined, "", "false"])(
+		"logs a usable self-host code with NEXT_PUBLIC_IS_CAP=%j and email disabled",
+		async (isCap) => {
+			mocks.isCap = isCap;
+			mocks.emailStatus = {
+				configured: false,
+				reason: "Email is not configured",
+			};
+			vi.stubEnv("NODE_ENV", "production");
+			const log = vi.spyOn(console, "log").mockImplementation(() => {});
+			const response = await post("request", { email: "person@example.com" });
+			expect(response.status).toBe(200);
+			expect(mocks.sendEmail).not.toHaveBeenCalled();
+			const codeLine = log.mock.calls.find(([line]) =>
+				/^Code: \d{6}$/.test(line),
+			);
+			expect(codeLine).toBeDefined();
+			const code = String(codeLine?.[0]).slice("Code: ".length);
+			expect(
+				(await post("verify", { email: "person@example.com", code })).status,
+			).toBe(200);
+		},
+	);
 
 	it("fails on Cap Cloud without printing a code when email is disabled", async () => {
 		mocks.emailStatus = {

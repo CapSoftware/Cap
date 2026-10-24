@@ -263,7 +263,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						if (!emailStatus.configured) {
 							if (
 								process.env.NODE_ENV === "production" &&
-								buildEnv.NEXT_PUBLIC_IS_CAP
+								buildEnv.NEXT_PUBLIC_IS_CAP === "true"
 							) {
 								throw new Error(emailStatus.reason);
 							}

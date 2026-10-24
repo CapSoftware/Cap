@@ -40,14 +40,18 @@ describe("email config", () => {
 		);
 	});
 
-	it("treats a missing RESEND_FROM_DOMAIN as not configured on self-hosted builds", async () => {
-		mocks.env.RESEND_API_KEY = "re_test";
-		expect(getEmailDeliveryStatus().configured).toBe(false);
+	it.each([undefined, "", "false"])(
+		"requires a sender domain with NEXT_PUBLIC_IS_CAP=%j",
+		async (isCap) => {
+			mocks.build.NEXT_PUBLIC_IS_CAP = isCap;
+			mocks.env.RESEND_API_KEY = "re_test";
+			expect(getEmailDeliveryStatus().configured).toBe(false);
 
-		const result = await sendEmail(message);
-		expect(mocks.send).not.toHaveBeenCalled();
-		expect(result?.error?.name).toBe("email_not_configured");
-	});
+			const result = await sendEmail(message);
+			expect(mocks.send).not.toHaveBeenCalled();
+			expect(result?.error?.name).toBe("email_not_configured");
+		},
+	);
 
 	it("sends an explicit sender without a default from-domain", async () => {
 		mocks.env.RESEND_API_KEY = "re_test";
@@ -64,15 +68,46 @@ describe("email config", () => {
 		expect(result).toEqual({ data: { id: "email_2" }, error: null });
 	});
 
-	it("sends from the configured domain and returns the provider id", async () => {
-		mocks.env.RESEND_API_KEY = "re_test";
-		mocks.env.RESEND_FROM_DOMAIN = "example.com";
-		mocks.send.mockResolvedValue({ data: { id: "email_1" }, error: null });
+	it.each([undefined, "false"])(
+		"sends from the configured domain with NEXT_PUBLIC_IS_CAP=%j",
+		async (isCap) => {
+			mocks.build.NEXT_PUBLIC_IS_CAP = isCap;
+			mocks.env.RESEND_API_KEY = "re_test";
+			mocks.env.RESEND_FROM_DOMAIN = "example.com";
+			mocks.send.mockResolvedValue({ data: { id: "email_1" }, error: null });
 
-		const result = await sendEmail(message);
-		expect(mocks.send.mock.calls[0]?.[0].from).toBe("auth@example.com");
-		expect(result).toEqual({ data: { id: "email_1" }, error: null });
+			const result = await sendEmail(message);
+			expect(mocks.send.mock.calls[0]?.[0].from).toBe("auth@example.com");
+			expect(result).toEqual({ data: { id: "email_1" }, error: null });
+		},
+	);
+
+	it("uses the Cap Cloud sender when explicitly enabled", async () => {
+		mocks.build.NEXT_PUBLIC_IS_CAP = "true";
+		mocks.env.RESEND_API_KEY = "re_test";
+		mocks.send.mockResolvedValue({ data: { id: "cloud_email" }, error: null });
+
+		expect(getEmailDeliveryStatus().configured).toBe(true);
+		await sendEmail(message);
+
+		expect(mocks.send.mock.calls[0]?.[0].from).toBe(
+			"Cap Auth <no-reply@auth.cap.so>",
+		);
 	});
+
+	it.each([undefined, "false"])(
+		"skips marketing on self-hosts with NEXT_PUBLIC_IS_CAP=%j",
+		async (isCap) => {
+			mocks.build.NEXT_PUBLIC_IS_CAP = isCap;
+			mocks.env.RESEND_API_KEY = "re_test";
+			mocks.env.RESEND_FROM_DOMAIN = "example.com";
+			mocks.send.mockResolvedValue({ data: { id: "marketing" }, error: null });
+
+			await sendEmail({ ...message, marketing: true });
+
+			expect(mocks.send).not.toHaveBeenCalled();
+		},
+	);
 
 	it("surfaces provider rejections instead of claiming success", async () => {
 		mocks.env.RESEND_API_KEY = "re_test";

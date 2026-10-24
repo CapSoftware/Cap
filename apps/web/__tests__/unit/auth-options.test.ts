@@ -170,10 +170,10 @@ describe("authOptions", () => {
 
 	afterEach(() => vi.unstubAllEnvs());
 
-	it.each([false, true])(
-		"only logs undelivered codes for self-hosts (Cap Cloud: %j)",
+	it.each([undefined, "", "false", "true"])(
+		"only logs undelivered codes for self-hosts (NEXT_PUBLIC_IS_CAP: %j)",
 		async (isCap) => {
-			mocks.isCap = isCap ? "true" : undefined;
+			mocks.isCap = isCap;
 			vi.stubEnv("NODE_ENV", "production");
 			const log = vi.spyOn(console, "log").mockImplementation(() => {});
 			const provider = authOptions().providers.find(
@@ -188,7 +188,7 @@ describe("authOptions", () => {
 				provider,
 				theme: {},
 			});
-			if (isCap) {
+			if (isCap === "true") {
 				await expect(result).rejects.toThrow("RESEND_API_KEY");
 				expect(log).not.toHaveBeenCalled();
 			} else {
