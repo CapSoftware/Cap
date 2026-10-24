@@ -1,3 +1,4 @@
+import type * as Db from "@cap/database/schema";
 import {
 	CurrentUser,
 	Folder,
@@ -19,15 +20,18 @@ const childId = Folder.FolderId.make("child");
 const parentSpaceId = Space.SpaceId.make("space-a");
 const childSpaceId = Space.SpaceId.make("space-b");
 
-const parent = {
+const parent: typeof Db.folders.$inferSelect = {
 	id: parentId,
 	name: "Parent",
-	color: "normal" as const,
+	color: "normal",
 	public: false,
+	settings: null,
 	organizationId,
 	createdById: userId,
 	spaceId: parentSpaceId,
 	parentId: null,
+	createdAt: new Date(0),
+	updatedAt: new Date(0),
 };
 
 function makeFixture() {
@@ -42,7 +46,7 @@ function makeFixture() {
 				),
 			),
 		create,
-		delete: () => Effect.void,
+		delete: () => Effect.die("Unexpected folder delete"),
 		update: () => Effect.succeed(Option.none()),
 	});
 	const policy = FoldersPolicy.make({
