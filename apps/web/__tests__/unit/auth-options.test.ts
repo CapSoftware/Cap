@@ -11,7 +11,8 @@ import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { Account, NextAuthOptions } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmailConfig } from "next-auth/providers/email";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type AuthUser = {
 	id: string;
@@ -34,6 +35,7 @@ const mocks = vi.hoisted(() => ({
 			options: { getSsoIdentity: () => ValidatedSsoIdentity | null },
 		) => Adapter
 	>(() => ({})),
+	isCap: undefined as string | undefined,
 }));
 
 const env = vi.hoisted(() => ({
@@ -57,6 +59,11 @@ const env = vi.hoisted(() => ({
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => env,
+	buildEnv: {
+		get NEXT_PUBLIC_IS_CAP() {
+			return mocks.isCap;
+		},
+	},
 }));
 
 vi.mock("@cap/database", () => ({
@@ -122,6 +129,7 @@ function providerIds(options: NextAuthOptions) {
 
 describe("authOptions", () => {
 	beforeEach(() => {
+		mocks.isCap = undefined;
 		env.APPLE_CLIENT_ID = "so.cap.auth";
 		env.APPLE_CLIENT_SECRET = "apple-secret";
 		env.WORKOS_CLIENT_ID = "workos-client";
@@ -159,6 +167,36 @@ describe("authOptions", () => {
 			},
 		}));
 	});
+
+	afterEach(() => vi.unstubAllEnvs());
+
+	it.each([undefined, "", "false", "true"])(
+		"only logs undelivered codes for self-hosts (NEXT_PUBLIC_IS_CAP: %j)",
+		async (isCap) => {
+			mocks.isCap = isCap;
+			vi.stubEnv("NODE_ENV", "production");
+			const log = vi.spyOn(console, "log").mockImplementation(() => {});
+			const provider = authOptions().providers.find(
+				(provider) => provider.id === "email",
+			) as EmailConfig;
+			const options = provider.options as EmailConfig;
+			const result = options.sendVerificationRequest({
+				identifier: "person@example.com",
+				token: "123456",
+				url: "http://localhost/verify",
+				expires: new Date(),
+				provider,
+				theme: {},
+			});
+			if (isCap === "true") {
+				await expect(result).rejects.toThrow("RESEND_API_KEY");
+				expect(log).not.toHaveBeenCalled();
+			} else {
+				await result;
+				expect(log).toHaveBeenCalledWith("🔢 Code: 123456");
+			}
+		},
+	);
 
 	it("enables Apple when both OAuth credentials are configured", () => {
 		const options = authOptions();
