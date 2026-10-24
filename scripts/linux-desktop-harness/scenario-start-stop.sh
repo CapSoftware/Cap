@@ -106,7 +106,8 @@ result app_id_required "$(count 'An app id is required')"
 result tray_unavailable "$(count 'Stop tray is no longer available')"
 result preflight_failed "$(count 'clean capture preflight failed')"
 result pipeline_failed "$(count 'recording pipeline failed')"
-result panics "$(count 'panicked at\|cap_desktop_panic\|panic location')"
+crashes="$out/profile/logs/cap-gpui.log.crashes"
+result panics "$(( $(count 'panicked at\|cap_desktop_panic\|panic location') + $(grep -E 'panic thread=|native crash' "$crashes" 2>/dev/null | wc -l) ))"
 result projects "$(find "$out/profile/recordings" -maxdepth 1 -name '*.cap' | wc -l)"
 kill "$pid" 2>/dev/null
 sleep 1
