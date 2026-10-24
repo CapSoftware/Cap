@@ -121,7 +121,7 @@ Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, D
 Requirements:
 
 - Node.js 20 or newer
-- Bun 1.4.0
+- Bun 1.4.4
 - Rust 1.88 or newer
 - Docker for MySQL, MinIO, and local services
 
