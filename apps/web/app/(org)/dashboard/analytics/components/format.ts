@@ -38,7 +38,7 @@ export const formatBucketTick = (
 	if (spanDays > 300) {
 		return date.toLocaleDateString([], {
 			month: "short",
-			year: "2-digit",
+			year: "numeric",
 			timeZone: "UTC",
 		});
 	}
@@ -53,9 +53,11 @@ export const formatBucketTitle = (
 	bucket: string,
 	granularity: Granularity,
 	bucketEnd?: string,
+	now = Date.now(),
 ) => {
 	const date = new Date(bucket);
 	if (Number.isNaN(date.getTime())) return bucket;
+	const thisYear = new Date(now).getUTCFullYear();
 	if (granularity === "hour") {
 		const day = date.toLocaleDateString([], {
 			weekday: "short",
@@ -73,10 +75,13 @@ export const formatBucketTitle = (
 		const end = bucketEnd
 			? new Date(bucketEnd)
 			: new Date(date.getTime() + 6 * 24 * 60 * 60 * 1000);
+		const showYear =
+			date.getUTCFullYear() !== thisYear || end.getUTCFullYear() !== thisYear;
 		const short = (d: Date) =>
 			d.toLocaleDateString([], {
 				day: "numeric",
 				month: "short",
+				year: showYear ? "numeric" : undefined,
 				timeZone: "UTC",
 			});
 		return `${short(date)} to ${short(end)}`;
@@ -85,6 +90,7 @@ export const formatBucketTitle = (
 		weekday: "long",
 		day: "numeric",
 		month: "long",
+		year: date.getUTCFullYear() !== thisYear ? "numeric" : undefined,
 		timeZone: "UTC",
 	});
 };
@@ -120,7 +126,7 @@ export const formatRelative = (
 	if (days < 60) return `${days} days ago`;
 	const months = Math.round(days / 30.4);
 	if (months < 24) return `${months} months ago`;
-	return `${Math.round(days / 365)} years ago`;
+	return `${Math.floor(days / 365)} years ago`;
 };
 
 const regionNames =
