@@ -5601,15 +5601,15 @@ mod tests {
                         if secs < 1.9 {
                             assert_eq!(deferred[index], previous[index], "frame {index}");
                         } else if (2.1..2.9).contains(&secs) {
-                            let step = deferred[index] - deferred[index - 1];
+                            let step = deferred[index].saturating_sub(deferred[index - 1]);
                             assert!(
                                 step.as_nanos().abs_diff(u128::from(frame_ns)) < 1_000,
                                 "frame {index}: {step:?}"
                             );
                         } else if secs > 3.2 {
                             assert_eq!(
-                                deferred[index] - deferred[index - 1],
-                                previous[index] - previous[index - 1],
+                                deferred[index].saturating_sub(deferred[index - 1]),
+                                previous[index].saturating_sub(previous[index - 1]),
                                 "frame {index}"
                             );
                         }
