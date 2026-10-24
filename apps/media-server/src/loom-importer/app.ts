@@ -4,13 +4,14 @@ import { Hono } from "hono";
 import { validateMediaServerSecret } from "../lib/auth";
 import {
 	createJob,
-	deleteJob,
+	extendJobLifetime,
 	generateJobId,
 	getAllJobs,
 	getJob,
 	getJobProgress,
 	type Job,
 	sendWebhook,
+	touchJob,
 	updateJob,
 } from "../lib/job-manager";
 import { LOOM_IMPORT_MAX_BYTES } from "../lib/media-video";
@@ -55,7 +56,13 @@ export function loadImporterSettings(
 	};
 }
 
-const TERMINAL_JOB_TTL_MS = 24 * 60 * 60 * 1000;
+const JOB_LIFETIME_MS = 4 * 60 * 60 * 1000;
+const JOB_HEARTBEAT_MS = 60_000;
+
+interface QueuedImport {
+	jobId: string;
+	request: ImportRequest;
+}
 
 function isActive(job: Job) {
 	return (
@@ -68,28 +75,41 @@ function isActive(job: Job) {
 export function createLoomImporter(
 	config: ReturnType<typeof loadImporterSettings> = loadImporterSettings(),
 ) {
-	const queue: Array<{ job: Job; request: ImportRequest }> = [];
+	const queue: QueuedImport[] = [];
 	const running = new Map<string, AbortController>();
 	let draining = false;
+
+	const startJob = ({ jobId, request }: QueuedImport) =>
+		createJob(
+			jobId,
+			request.videoId,
+			request.userId,
+			request.webhookUrl,
+			request.webhookSecret,
+		);
 
 	const pump = () => {
 		while (running.size < config.maxActiveJobs && queue.length > 0) {
 			const next = queue.shift();
 			if (!next) break;
+			const job = startJob(next);
 			const controller = new AbortController();
-			running.set(next.job.jobId, controller);
+			updateJob(job.jobId, { abortController: controller });
+			extendJobLifetime(job.jobId, JOB_LIFETIME_MS);
+			const heartbeat = setInterval(
+				() => touchJob(job.jobId),
+				JOB_HEARTBEAT_MS,
+			);
+			running.set(job.jobId, controller);
 			void runLoomImport(
-				next.job,
+				job,
 				next.request,
 				config.settings,
 				new Semaphore(config.settings.jobConnections),
 				controller.signal,
 			).finally(() => {
-				running.delete(next.job.jobId);
-				setTimeout(
-					() => deleteJob(next.job.jobId),
-					TERMINAL_JOB_TTL_MS,
-				).unref?.();
+				clearInterval(heartbeat);
+				running.delete(job.jobId);
 				pump();
 			});
 		}
@@ -158,18 +178,11 @@ export function createLoomImporter(
 				503,
 			);
 		}
-		const request = parsed.data;
-		const job = createJob(
-			generateJobId(),
-			request.videoId,
-			request.userId,
-			request.webhookUrl,
-			request.webhookSecret,
-		);
-		queue.push({ job, request });
+		const jobId = generateJobId();
+		queue.push({ jobId, request: parsed.data });
 		pump();
 		return c.json({
-			jobId: job.jobId,
+			jobId,
 			status: "queued",
 			message: "Loom import queued",
 		});
@@ -178,9 +191,19 @@ export function createLoomImporter(
 	app.get("/video/process/:jobId/status", (c) => {
 		if (!validateMediaServerSecret(c))
 			return c.json({ error: "Unauthorized" }, 401);
-		const job = getJob(c.req.param("jobId"));
-		if (!job) return c.json({ error: "Job not found", code: "NOT_FOUND" }, 404);
-		return c.json(getJobProgress(job));
+		const jobId = c.req.param("jobId");
+		const job = getJob(jobId);
+		if (job) return c.json(getJobProgress(job));
+		const queued = queue.find((entry) => entry.jobId === jobId);
+		if (queued)
+			return c.json({
+				jobId,
+				videoId: queued.request.videoId,
+				phase: "queued",
+				progress: 0,
+				message: "Waiting for a Loom import slot",
+			});
+		return c.json({ error: "Job not found", code: "NOT_FOUND" }, 404);
 	});
 
 	const cancelJob = async (job: Job) => {
@@ -197,7 +220,9 @@ export function createLoomImporter(
 		const deadline = Date.now() + timeoutMs;
 		while ((queue.length > 0 || running.size > 0) && Date.now() < deadline)
 			await new Promise((resolve) => setTimeout(resolve, 500));
-		await Promise.all(queue.splice(0).map(({ job }) => cancelJob(job)));
+		await Promise.all(
+			queue.splice(0).map((entry) => cancelJob(startJob(entry))),
+		);
 		for (const controller of running.values()) controller.abort();
 		while (running.size > 0)
 			await new Promise((resolve) => setTimeout(resolve, 250));
