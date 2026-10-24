@@ -177,10 +177,6 @@ fn covers(stride: usize, row_bytes: usize, height: usize, len: usize) -> bool {
         .is_some_and(|need| need <= len)
 }
 
-/// Converts same-size packed BGRZ/BGRA/RGBZ/RGBA into `dst` when both
-/// dimensions are even, `dst` is YUV420P or NV12, and AVX2 is available at
-/// runtime. Returns false so the caller keeps swscale. That includes an odd
-/// width or height, and every machine without AVX2.
 pub(crate) fn try_convert(src: &frame::Video, dst: &mut frame::Video) -> bool {
     if src.width() != dst.width() || src.height() != dst.height() {
         return false;
@@ -768,8 +764,6 @@ mod tests {
 
     #[test]
     fn two_by_two_box_average_matches_reference() {
-        // (10,20,30), (40,50,60), (70,80,90), (100,110,120)
-        // luma 32, 58, 84, 109 and chroma 133, 123.
         let sample = |x: usize, y: usize| match (x, y) {
             (0, 0) => (10, 20, 30),
             (1, 0) => (40, 50, 60),
