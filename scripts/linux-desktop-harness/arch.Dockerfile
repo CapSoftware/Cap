@@ -1,7 +1,7 @@
 # Arch Linux with the compositors Omarchy (Hyprland) and NixOS/Niri users run,
 # their portals, and a waybar tray. Each runs on the host's vkms KMS device
 # through seatd with llvmpipe rendering, the way it runs from a tty (load vkms
-# and vgem on the host first). systemd is PID 1 for the same reason as the
+# on the host first). systemd is PID 1 for the same reason as the
 # GNOME image: user services, and app scopes the portal reads app ids from.
 FROM archlinux:latest
 RUN pacman -Syu --noconfirm --needed \

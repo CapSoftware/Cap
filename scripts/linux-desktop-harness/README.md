@@ -25,7 +25,7 @@ Each run (`run-desktop.sh <desktop> <package> <out-dir> [KEY=VALUE...]`):
 4. writes `result.txt`, which `check-results.sh` turns into pass or fail.
 
 `report.sh <out-dir>` prints the results with Cap's own log lines. The
-Hyprland image needs `modprobe vkms vgem` on the host. With `GNOME_UNSAFE=1`,
+Hyprland image needs `modprobe vkms` on the host. With `GNOME_UNSAFE=1`,
 `shot.sh` takes a screenshot of the GNOME session.
 
 Harness-only workarounds (not in the app): Mesa's device_select Vulkan layer is

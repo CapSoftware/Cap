@@ -12,7 +12,7 @@ kms=
 for card in /sys/class/drm/card[0-9]*; do
   if [[ $(readlink -f "$card/device") == */vkms ]]; then kms=/dev/dri/$(basename "$card"); break; fi
 done
-[[ -n "$kms" ]] || { echo "arch-up: no vkms device; run 'modprobe vkms vgem' on the host" >&2; exit 1; }
+[[ -n "$kms" ]] || { echo "arch-up: no vkms device; run 'modprobe vkms' on the host" >&2; exit 1; }
 mkdir -p "$out" "$HOME/.config/waybar" "$HOME/.config/hypr" "$HOME/.config/niri" "$HOME/.config/sway"
 
 cat >"$HOME/.config/waybar/config" <<'JSON'
