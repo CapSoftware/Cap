@@ -180,7 +180,7 @@ mod windows_bench {
         formats.retain(|format| {
             matches!(
                 format.pixel_format_name().as_deref(),
-                Some("YUYV422" | "UYVY422" | "NV12" | "RGB32" | "ARGB")
+                Some("YUYV422" | "NV12" | "RGB32" | "ARGB")
             )
         });
         formats.sort_by_key(|format| {
@@ -220,6 +220,9 @@ mod windows_bench {
             .map(|_| rx.recv_timeout(Duration::from_secs(15)))
             .collect::<Result<Vec<_>, _>>()?;
         handle.stop_capturing().map_err(anyhow::Error::msg)?;
+        if frames.iter().any(|frame| frame.bottom_up) {
+            bail!("The before path does not support bottom-up frames");
+        }
 
         let mut file = BufWriter::new(File::create(path)?);
         for frame in &frames {
