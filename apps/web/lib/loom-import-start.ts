@@ -158,7 +158,13 @@ export async function startLoomImportWorkflow(payload: ImportPayload) {
 			queue: async (name, message, options) => {
 				if (!("runId" in message))
 					throw new Error("Missing Loom import run ID");
-				receipt = { runId: message.runId, dispatch: "pending" };
+				receipt = {
+					runId: message.runId,
+					dispatch: "pending",
+					...(payload.importPriority === "bulk"
+						? { importPriority: "bulk" as const }
+						: {}),
+				};
 				await saveReceipt(payload, receipt);
 				attempted = true;
 				try {
