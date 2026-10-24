@@ -1,10 +1,10 @@
 .page {
 	--paper: #fbfaf7;
 	--ink: #20242c;
-	--ink-soft: #8b8f98;
+	--ink-soft: #6b7079;
 	--accent: #4785ff;
 	--track: #dcdcd4;
-	--error: #e5484d;
+	--error: #ce2c31;
 
 	position: relative;
 	display: flex;
@@ -166,7 +166,7 @@
 }
 
 .input::placeholder {
-	color: #b4b7bd;
+	color: var(--ink-soft);
 }
 
 .input:focus {

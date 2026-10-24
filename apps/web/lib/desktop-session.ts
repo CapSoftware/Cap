@@ -82,7 +82,7 @@ export function createDesktopRedirectPage(
 			:root {
 				--paper: #fbfaf7;
 				--ink: #20242c;
-				--ink-soft: #8b8f98;
+				--ink-soft: #6b7079;
 				--accent: #4785ff;
 				--accent-soft: #adc9ff;
 				--track: #dcdcd4;
