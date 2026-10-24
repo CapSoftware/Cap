@@ -54,7 +54,13 @@ jobs:
           $tests = "${{ inputs.tests || 'camera_blur_ffmpeg_once_export camera_blur_twice_default_export camera_blur_twice_ffmpeg_export captions_export' }}".Split(' ')
           foreach ($test in $tests) {
             Write-Output "::group::$test"
-            & $cdb -g -G -lines -y $symbols -c "sxd av; sxd -c `"`" eh; g; .echo CRASH; .ecxr; kn 80; ~*kn 25; q" $exe.FullName $test --exact --nocapture --test-threads=1 2>&1 | Select-Object -Last 400
+            $log = Join-Path $env:RUNNER_TEMP "dumps\cdb-$test.log"
+            & $cdb -g -G -lines -y $symbols -c "sxd av; sxd -c `"`" eh; g; .echo CRASH_STACK; .lastevent; .ecxr; kn 80; .echo END_CRASH_STACK; ~*kn 25; q" $exe.FullName $test --exact --nocapture --test-threads=1 *> $log
+            $lines = Get-Content $log
+            $lines | Select-String -Pattern 'test result|panicked|^test |Last event|exit code' | ForEach-Object { $_.Line }
+            $start = ($lines | Select-String -Pattern 'CRASH_STACK' | Select-Object -First 1).LineNumber
+            $end = ($lines | Select-String -Pattern 'END_CRASH_STACK' | Select-Object -First 1).LineNumber
+            if ($start -and $end) { $lines[($start - 1)..($end - 1)] }
             Write-Output "::endgroup::"
           }
 
