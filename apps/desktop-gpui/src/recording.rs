@@ -1449,7 +1449,7 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
 /// `.../segment-0/display` *directory*, and afterwards at the muxed
 /// `display.mp4` beside it. The Tauri app has the same ordering, and uses its
 /// `updated_studio_meta` for the same reason.
-fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
+pub(crate) fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
     use cap_project::{RecordingMeta, StudioRecordingMeta};
 
     let meta = RecordingMeta::load_for_project(project_path).ok()?;
