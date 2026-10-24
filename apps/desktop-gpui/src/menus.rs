@@ -34,6 +34,7 @@ use crate::{
     settings_window::Page,
     store,
     ui::text_input,
+    updates,
 };
 
 /// `productName` in `tauri.conf.json`, which is what macOS renames the first
@@ -60,8 +61,8 @@ const DOWNLOAD_TITLE: &str = "Download update…";
 const RESTART_TITLE: &str = "Restart to update…";
 
 impl UpdateRow {
-    fn of(status: &crate::updates::UpdateStatus) -> Self {
-        use crate::updates::UpdateStatus;
+    fn of(status: &updates::UpdateStatus) -> Self {
+        use updates::UpdateStatus;
 
         let title = match status {
             UpdateStatus::Idle => CHECK_TITLE,
@@ -78,8 +79,8 @@ impl UpdateRow {
 }
 
 #[cfg(target_os = "macos")]
-fn update_menu_badge(status: &crate::updates::UpdateStatus) -> Option<String> {
-    use crate::updates::UpdateStatus;
+fn update_menu_badge(status: &updates::UpdateStatus) -> Option<String> {
+    use updates::UpdateStatus;
 
     match status {
         UpdateStatus::Downloading {
@@ -98,7 +99,7 @@ fn update_menu_badge(status: &crate::updates::UpdateStatus) -> Option<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn update_menu_badge(_: &crate::updates::UpdateStatus) -> Option<String> {
+fn update_menu_badge(_: &updates::UpdateStatus) -> Option<String> {
     None
 }
 
@@ -123,8 +124,8 @@ actions!(
         HideOthers,
         /// The Cap menu's explicit Quit item -- ⌘Q.
         Quit,
-        /// Open General settings from the application menu.
-        Preferences,
+        /// Settings… -- ⌘, on macOS, Ctrl+, on Windows and Linux.
+        OpenSettings,
         /// Choose a Cap recording to open.
         OpenFile,
         /// Import a video or image into the library.
@@ -148,8 +149,6 @@ actions!(
         Zoom,
         /// `PredefinedMenuItem::fullscreen` -- ⌃⌘F.
         ToggleFullscreen,
-        /// Settings… -- ⌘, on macOS, Ctrl+, on Windows and Linux.
-        OpenSettings,
     ]
 );
 
@@ -164,14 +163,11 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(bindings());
 
     cx.on_action(|_: &CheckForUpdate, cx: &mut App| {
-        crate::updates::check_manually(cx);
+        updates::check_manually(cx);
     });
     cx.on_action(|_: &HideSelf, cx: &mut App| cx.hide());
     cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
     cx.on_action(|_: &Quit, cx: &mut App| quit(cx));
-    cx.on_action(|_: &Preferences, cx: &mut App| {
-        cx.defer(|cx| app_windows::open_settings(crate::settings_window::Page::General, cx));
-    });
     cx.on_action(|_: &OpenFile, cx: &mut App| {
         let (files, directories) = if cfg!(target_os = "macos") {
             (true, false)
@@ -243,7 +239,7 @@ pub fn init(cx: &mut App) {
         with_key_native(cx, platform::toggle_fullscreen_native)
     });
 
-    cx.set_global(MenuRegistration(UpdateRow::of(&crate::updates::status(cx))));
+    cx.set_global(MenuRegistration(UpdateRow::of(&updates::status(cx))));
     install_menus(cx);
 }
 
@@ -252,7 +248,7 @@ pub(crate) fn refresh_update_menu(cx: &mut App) {
         return;
     }
 
-    let row = UpdateRow::of(&crate::updates::status(cx));
+    let row = UpdateRow::of(&updates::status(cx));
     if cx.global::<MenuRegistration>().0 == row {
         return;
     }
@@ -265,17 +261,35 @@ pub(crate) fn refresh_update_menu(cx: &mut App) {
 }
 
 fn install_menus(cx: &mut App) {
-    let update_status = crate::updates::status(cx);
+    let update_status = updates::status(cx);
     cx.set_menus(build_menus(&update_status));
     #[cfg(target_os = "macos")]
     platform::patch_standard_application_menu();
+}
+
+pub(crate) fn bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-h", HideSelf, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+    ]
+}
+
+fn settings_shortcut_allowed(idle: bool, onboarding_open: bool, hotkeys_paused: bool) -> bool {
+    idle && !onboarding_open && !hotkeys_paused
 }
 
 /// The menu bar model.
 ///
 /// One-to-one with `build_macos_app_menu`, including the empty Help submenu
 /// (`Submenu::with_id_and_items(.., HELP_SUBMENU_ID, "Help", true, &[])`).
-pub fn build_menus() -> Vec<Menu> {
+pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
+    let update_row = UpdateRow::of(update_status);
+
     vec![
         Menu {
             name: APP_NAME.into(),
@@ -283,8 +297,6 @@ pub fn build_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action(format!("About {APP_NAME}"), About),
                 MenuItem::action(update_row.title, CheckForUpdate).disabled(!update_row.enabled),
-                MenuItem::separator(),
-                // MenuItem::action("Preferences…", Preferences),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
@@ -1143,7 +1155,7 @@ mod tests {
 
     #[test]
     fn menu_bar_includes_native_and_cap_destinations() {
-        let menus: Vec<_> = build_menus(&crate::updates::UpdateStatus::Idle)
+        let menus: Vec<_> = build_menus(&updates::UpdateStatus::Idle)
             .iter()
             .map(describe)
             .collect();
@@ -1218,7 +1230,7 @@ mod tests {
     /// cannot fire another one.
     #[test]
     fn the_update_row_greys_out_while_checking() {
-        fn row(status: &crate::updates::UpdateStatus) -> (String, bool) {
+        fn row(status: &updates::UpdateStatus) -> (String, bool) {
             let menus = build_menus(status);
             match &menus[0].items[1] {
                 MenuItem::Action { name, disabled, .. } => (name.to_string(), *disabled),
@@ -1227,11 +1239,11 @@ mod tests {
         }
 
         assert_eq!(
-            row(&crate::updates::UpdateStatus::Idle),
+            row(&updates::UpdateStatus::Idle),
             ("Check for Update".to_string(), false)
         );
         assert_eq!(
-            row(&crate::updates::UpdateStatus::Checking),
+            row(&updates::UpdateStatus::Checking),
             ("Checking for Update…".to_string(), true)
         );
     }
@@ -1241,8 +1253,8 @@ mod tests {
     /// menu bar on every progress event.
     #[test]
     fn the_update_row_keeps_the_version_out_of_the_title() {
-        use crate::updates::UpdateStatus;
         use semver::Version;
+        use updates::UpdateStatus;
 
         let version = Version::parse("0.4.0").unwrap();
         let downloading = |fraction| UpdateStatus::Downloading {
@@ -1276,8 +1288,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_update_badge_shows_the_version_and_live_progress() {
-        use crate::updates::UpdateStatus;
         use semver::Version;
+        use updates::UpdateStatus;
 
         let version = Version::parse("0.4.0").unwrap();
         let badge = |status| UpdateRow::of(&status).badge;

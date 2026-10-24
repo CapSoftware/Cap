@@ -831,13 +831,10 @@ mod mac {
     use objc2::runtime::{NSObjectProtocol, ProtocolObject, Sel};
     use objc2::{AnyThread, MainThreadOnly, define_class, msg_send, sel};
     use objc2_app_kit::{
-        NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate,
-        NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem,
+        NSEventModifierFlags, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar,
+        NSStatusBarButton, NSStatusItem,
     };
-    use objc2_foundation::{
-        MainThreadMarker, NSData, NSString,
-    };
-
+    use objc2_foundation::{MainThreadMarker, NSData, NSString};
 
     use super::mac_mode_picker::{append_mode_picker, install_key_hook};
     use super::{
@@ -990,18 +987,10 @@ mod mac {
 
     fn create_status_item() -> Option<Tray> {
         unsafe {
-            let status_bar: *mut AnyObject = msg_send![class!(NSStatusBar), systemStatusBar];
-            if status_bar.is_null() {
-                return None;
-            }
-            let raw: *mut AnyObject =
-                msg_send![status_bar, statusItemWithLength: NS_VARIABLE_STATUS_ITEM_LENGTH];
-            // `statusItemWithLength:` hands back an autoreleased object owned
-            // by the status bar; retain it for as long as we hold it, and never
-            // release it -- removing a status item is what makes it disappear
-            // from the menu bar, and this one lives for the process.
-            let status_item = Id::retain(raw)?;
-            let target: Id<TrayTarget> = msg_send_id![TrayTarget::alloc(), init];
+            let mtm = MainThreadMarker::new()?;
+            let status_item =
+                NSStatusBar::systemStatusBar().statusItemWithLength(NS_VARIABLE_STATUS_ITEM_LENGTH);
+            let target: Retained<TrayTarget> = unsafe { msg_send![TrayTarget::alloc(mtm), init] };
 
             let mode = Mode::from_store();
             let tray = Tray {
@@ -1015,19 +1004,20 @@ mod mac {
                 recording: false,
             };
             set_button_image(&tray, mode_icon(mode));
-            let button: *mut AnyObject = msg_send![&*tray.status_item, button];
-            let visible: bool = msg_send![&*tray.status_item, isVisible];
-            let frame: objc2_foundation::NSRect = if button.is_null() {
-                objc2_foundation::NSRect::new(
-                    objc2_foundation::NSPoint::new(0., 0.),
-                    objc2_foundation::NSSize::new(0., 0.),
-                )
-            } else {
-                msg_send![button, frame]
-            };
+            let button = tray.status_item.button(mtm);
+            let frame = button.as_ref().map_or_else(
+                || {
+                    objc2_foundation::NSRect::new(
+                        objc2_foundation::NSPoint::new(0.0, 0.0),
+                        objc2_foundation::NSSize::new(0.0, 0.0),
+                    )
+                },
+                |button| button.frame(),
+            );
+
             tracing::info!(
-                has_button = !button.is_null(),
-                visible,
+                has_button = button.is_some(),
+                visible = tray.status_item.isVisible(),
                 width = frame.size.width,
                 height = frame.size.height,
                 ?mode,
