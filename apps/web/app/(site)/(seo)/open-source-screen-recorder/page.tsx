@@ -14,14 +14,14 @@ const ogImage = ogImageUrl({
 export const metadata: Metadata = {
 	title: "Open Source Screen Recorder — Free, Private, Self-Hostable | Cap",
 	description:
-		"Cap is the leading open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and own your data. MIT-licensed, 4K quality, no watermarks.",
+		"Cap is the leading open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and own your data. AGPLv3 and MIT crates, 4K quality, no watermarks.",
 	alternates: {
 		canonical: "https://cap.so/open-source-screen-recorder",
 	},
 	openGraph: {
 		title: "Open Source Screen Recorder — Free, Private, Self-Hostable | Cap",
 		description:
-			"Cap is the leading open-source screen recorder for Mac and Windows. MIT-licensed, 4K quality, instant sharing, self-hostable storage. No watermarks, no vendor lock-in.",
+			"Cap is the leading open-source screen recorder for Mac and Windows. AGPLv3 and MIT crates, 4K quality, instant sharing, self-hostable storage. No watermarks, no vendor lock-in.",
 		url: "https://cap.so/open-source-screen-recorder",
 		siteName: "Cap",
 		images: [
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
 		card: "summary_large_image",
 		title: "Open Source Screen Recorder — Free, Private, Self-Hostable | Cap",
 		description:
-			"Cap is the leading open-source screen recorder for Mac and Windows. MIT-licensed, 4K quality, instant sharing, self-hostable storage. No watermarks, no vendor lock-in.",
+			"Cap is the leading open-source screen recorder for Mac and Windows. AGPLv3 and MIT crates, 4K quality, instant sharing, self-hostable storage. No watermarks, no vendor lock-in.",
 		images: [ogImage],
 	},
 };

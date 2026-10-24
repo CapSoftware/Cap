@@ -11,7 +11,7 @@ use cap_project::{
     StudioRecordingStatus, VideoMeta,
 };
 
-use super::{IncompleteRecording, RecoveryManager, reject_recovery_link};
+use super::{IncompleteRecording, RecoveryManager, is_apple_double, reject_recovery_link};
 use crate::studio_recording::CleanStoppedStudioClaim;
 
 const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
@@ -451,6 +451,9 @@ impl Inventory {
                 std::fs::read_dir(root.join(&directory)).map_err(|error| error.to_string())?
             {
                 let entry = entry.map_err(|error| error.to_string())?;
+                if is_apple_double(&entry.file_name()) {
+                    continue;
+                }
                 let relative = directory.join(entry.file_name());
                 local_relative(&relative)?;
                 entry_count += 1;
@@ -767,6 +770,9 @@ fn validate_cursor_inventory(
         .collect();
     for entry in std::fs::read_dir(project.join(directory)).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
+        if is_apple_double(&entry.file_name()) {
+            continue;
+        }
         let path = directory.join(entry.file_name());
         checked_metadata(project, &path, false)?;
         if !remaining.remove(&path) {
@@ -984,12 +990,14 @@ mod tests {
                     overlap_dropped_frames: 2,
                     startup_overlap_drops: 1,
                 }),
+                digital_silence_ms: None,
             });
             metadata.segments[0].system_audio = Some(AudioMeta {
                 path: RelativePathBuf::from(format!("{base}/system_audio.ogg")),
                 start_time: Some(0.375),
                 device_id: None,
                 gap_summary: None,
+                digital_silence_ms: None,
             });
             metadata.segments[0].cursor =
                 Some(RelativePathBuf::from(format!("{base}/cursor.json")));
@@ -1113,6 +1121,22 @@ mod tests {
             first.cursor_images()[0].bytes(),
             b"\x89PNG\r\n\x1a\nimmutable asset"
         );
+    }
+
+    #[test]
+    fn preparing_projection_ignores_apple_double_siblings() {
+        let fixture = Fixture::new(1);
+        let content = fixture.directory.path().join("content");
+        let apple_double = b"\x00\x05\x16\x07";
+        std::fs::write(content.join("segments/._segment-0"), apple_double).unwrap();
+        std::fs::write(
+            content.join("segments/segment-0/display/._init.mp4"),
+            apple_double,
+        )
+        .unwrap();
+        std::fs::create_dir(content.join("cursors")).unwrap();
+        std::fs::write(content.join("cursors/._cursor_0.png"), apple_double).unwrap();
+        assert!(fixture.project().is_ok());
     }
 
     #[test]

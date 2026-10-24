@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     fmt,
+    io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
     sync::LazyLock,
@@ -12,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::DisplayNotch;
+
+#[cfg(test)]
+mod style_resolution_tests;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1824,6 +1828,15 @@ where
     Ok(by_segment.into_values().collect())
 }
 
+fn deserialize_scene_segments<'de, D>(deserializer: D) -> Result<Vec<SceneSegment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut segments = Vec::<SceneSegment>::deserialize(deserializer)?;
+    segments.sort_by(|left, right| left.start.total_cmp(&right.start));
+    Ok(segments)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -1835,7 +1848,7 @@ pub struct TimelineConfiguration {
     )]
     pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_segments")]
     pub scene_segments: Vec<SceneSegment>,
     #[serde(default)]
     pub mask_segments: Vec<MaskSegment>,
@@ -1969,14 +1982,15 @@ impl TimelineConfiguration {
             return windows;
         }
         windows.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(windows.len());
-        for window in windows {
-            match merged.last_mut() {
-                Some(last) if window.0 <= last.1 => last.1 = last.1.max(window.1),
-                _ => merged.push(window),
+        windows.dedup_by(|next, previous| {
+            if next.0 <= previous.1 {
+                previous.1 = previous.1.max(next.1);
+                true
+            } else {
+                false
             }
-        }
-        merged
+        });
+        windows
     }
 
     /// Total output seconds inserted by fullscreen text holds.
@@ -2826,16 +2840,40 @@ impl ProjectConfiguration {
     }
 
     pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let Some(timeline) = &self.timeline else {
+            return Cow::Borrowed(self);
+        };
+        let mut selected: [Option<&StyleSegment>; 3] = [None; 3];
+        for segment in &timeline.style_segments {
+            if !segment.is_active_at(time) {
+                continue;
+            }
+            for (current, present) in selected.iter_mut().zip([
+                segment.overrides.background.is_some(),
+                segment.overrides.camera.is_some(),
+                segment.overrides.cursor.is_some(),
+            ]) {
+                if present
+                    && current.is_none_or(|previous| {
+                        segment.track > previous.track
+                            || (segment.track == previous.track && segment.start >= previous.start)
+                    })
+                {
+                    *current = Some(segment);
+                }
+            }
+        }
+        let [background, camera, cursor] = selected;
         let mut configuration = Cow::Borrowed(self);
         if let Some(background) =
-            self.style_override_at(time, |overrides| overrides.background.as_ref())
+            background.and_then(|segment| segment.overrides.background.as_ref())
         {
             configuration.to_mut().background = background.clone();
         }
-        if let Some(camera) = self.style_override_at(time, |overrides| overrides.camera.as_ref()) {
+        if let Some(camera) = camera.and_then(|segment| segment.overrides.camera.as_ref()) {
             configuration.to_mut().camera = camera.clone();
         }
-        if let Some(cursor) = self.style_override_at(time, |overrides| overrides.cursor.as_ref()) {
+        if let Some(cursor) = cursor.and_then(|segment| segment.overrides.cursor.as_ref()) {
             configuration.to_mut().cursor = cursor.clone();
         }
         configuration
@@ -2984,17 +3022,16 @@ impl ProjectConfiguration {
 
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let temp_path =
-            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4()));
+        let temp_path = tempfile::TempPath::from_path(
+            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4())),
+        );
+        let config = serde_json::to_string_pretty(self)?;
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(config.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
 
-        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
-
-        if let Err(error) = std::fs::rename(&temp_path, &config_path) {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(error);
-        }
-
-        Ok(())
+        std::fs::rename(&temp_path, &config_path)
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
@@ -3858,6 +3895,25 @@ mod tests {
         assert_eq!(frozen, 2.0);
         let (after, _) = timeline.get_segment_time(6.5).unwrap();
         assert_eq!(after, 2.5);
+    }
+
+    #[test]
+    fn fullscreen_holds_merge_unsorted_nested_and_touching_windows() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![
+            fullscreen_text(8.0, 9.0),
+            fullscreen_text(4.0, 6.0),
+            fullscreen_text(3.0, 4.0),
+            fullscreen_text(2.0, 5.0),
+            fullscreen_text(6.0, 7.0),
+            fullscreen_text(1.0, 1.0),
+            fullscreen_text(10.0, 9.0),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(2.0, 7.0), (8.0, 9.0)]);
+        assert_eq!(timeline.held_duration(), 6.0);
+        assert_eq!(timeline.text_segments[0].start, 8.0);
+        assert_eq!(timeline.text_segments[3].end, 5.0);
     }
 
     #[test]

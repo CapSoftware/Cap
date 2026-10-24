@@ -11,7 +11,7 @@ use ffmpeg::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::base::EncoderBase;
+use crate::base::{EncoderBase, PacketSink};
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
@@ -879,6 +879,14 @@ impl H264Encoder {
             .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))
     }
 
+    /// Whether the selected codec is a hardware encoder, which can fail at
+    /// runtime after opening (a busy or reset media engine).
+    pub fn is_hardware(&self) -> bool {
+        self.encoder
+            .codec()
+            .is_some_and(|codec| is_hardware_h264(codec.name()))
+    }
+
     pub fn conversion_requirements(&self) -> ConversionRequirements {
         let needs_conversion = self.input_format != self.output_format
             || self.input_width != self.output_width
@@ -896,9 +904,18 @@ impl H264Encoder {
 
     pub fn queue_frame(
         &mut self,
-        mut frame: frame::Video,
+        frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
+        self.queue_frame_to(frame, timestamp, output)
+    }
+
+    pub fn queue_frame_to<S: PacketSink + ?Sized>(
+        &mut self,
+        mut frame: frame::Video,
+        timestamp: Duration,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
@@ -906,8 +923,7 @@ impl H264Encoder {
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
             let converted = self.converted_frame_pool.as_mut().unwrap();
-            converter
-                .run(&frame, converted)
+            super::packed_yuv::convert_or_scale(&frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -936,8 +952,7 @@ impl H264Encoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
-            converter
-                .run(frame, converted)
+            super::packed_yuv::convert_or_scale(frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -980,6 +995,28 @@ impl H264Encoder {
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.process_eof(output, &mut self.encoder)
+    }
+
+    pub fn flush_to<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.process_eof(output, &mut self.encoder)
+    }
+
+    /// Configured target bitrate in bits per second, estimated from the
+    /// output geometry when the encoder runs without a bitrate target.
+    pub fn bit_rate(&self) -> u64 {
+        let configured = unsafe { (*self.encoder.as_ptr()).bit_rate };
+        if configured > 0 {
+            return configured as u64;
+        }
+        get_bitrate(
+            self.output_width,
+            self.output_height,
+            30.0,
+            H264EncoderBuilder::QUALITY_BPP,
+        ) as u64
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {

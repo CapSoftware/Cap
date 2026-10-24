@@ -792,6 +792,7 @@ pub struct MainWindow {
     camera_id: Option<recording::DeviceOrModelID>,
     microphone: Option<MicrophoneOption>,
     microphone_level: Entity<ui::MicrophoneLevel>,
+    device_microphone_level: Entity<ui::MicrophoneLevel>,
     pending_device_restore: crate::store::RecordingInputSettings,
     device_restore_suspended: bool,
     device_format_target: Option<DeviceFormatTarget>,
@@ -851,6 +852,8 @@ pub struct MainWindow {
     input_enumeration_gate: devices::InputEnumerationGate,
     /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`).
     prewarm_task: Option<gpui::Task<()>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 /// `createLicenseQuery` (`utils/queries.ts:257-273`): pro from the auth
@@ -942,11 +945,20 @@ impl MainWindow {
 
         // Track the app-scoped feeds: the camera bubble's close button
         // deselects the camera there, and this window's selection has to
-        // follow. Repaints are gated to what is actually visible -- the mic
-        // meter notifies at ~20Hz and would otherwise repaint the home view
-        // for a level bar only the microphone picker shows.
+        // follow. Repaints are gated to what is actually visible.
         let feeds = Feeds::global(cx);
-        let microphone_level = cx.new(|cx| ui::MicrophoneLevel::new(&feeds, window, cx));
+        let mic_level = feeds.read(cx).mic_level().clone();
+        let microphone_level = cx.new(|cx| {
+            ui::MicrophoneLevel::new(
+                ui::MicrophoneLevelKind::CaptureButton,
+                &mic_level,
+                window,
+                cx,
+            )
+        });
+        let device_microphone_level = cx.new(|cx| {
+            ui::MicrophoneLevel::new(ui::MicrophoneLevelKind::DeviceRow, &mic_level, window, cx)
+        });
         cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let feeds = feeds.read(cx);
             let camera_id = feeds.camera.as_ref().map(|camera| &camera.id);
@@ -1059,6 +1071,8 @@ impl MainWindow {
         })
         .detach();
 
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, Self::keyboard_nav_blocked);
+
         Self {
             theme,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
@@ -1075,6 +1089,7 @@ impl MainWindow {
             camera_id: None,
             microphone: None,
             microphone_level,
+            device_microphone_level,
             pending_device_restore: crate::store::RecordingInputSettings::load(),
             device_restore_suspended: false,
             device_format_target: None,
@@ -1113,7 +1128,17 @@ impl MainWindow {
             input_poll_generation: 0,
             input_enumeration_gate: devices::InputEnumerationGate::default(),
             prewarm_task: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
+    }
+
+    fn keyboard_nav_blocked(&self, cx: &gpui::App) -> bool {
+        self.session.read(cx).phase != Phase::Idle
+            || self.microphone_warning.is_some()
+            || self.sign_in_prompt.is_some()
+            || self.idle_error(cx).is_some()
+            || app_windows::clean_capture_pending(cx)
     }
 
     /// Kick off device enumeration.
@@ -1265,11 +1290,14 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for image in self.thumbnails.retain_displays(&displays) {
+        let dropped = self.thumbnails.retain_displays(&displays);
+        let changed = self.devices.install_displays(displays) || !dropped.is_empty();
+        for image in dropped {
             let _ = window.drop_image(image);
         }
-        self.devices.displays = displays;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     fn install_windows(
@@ -1278,11 +1306,14 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for image in self.thumbnails.retain_windows(&windows) {
+        let dropped = self.thumbnails.retain_windows(&windows);
+        let changed = self.devices.install_windows(windows) || !dropped.is_empty();
+        for image in dropped {
             let _ = window.drop_image(image);
         }
-        self.devices.windows = windows;
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     /// Start one capture sweep, or return `None` because one is already in
@@ -1304,6 +1335,9 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<()>> {
+        if target_thumbnails::captures_paused() {
+            return None;
+        }
         match kind {
             TargetType::Display => {
                 if self.thumbnails.display_inflight() {
@@ -1346,9 +1380,13 @@ impl MainWindow {
                     // `setDisplayThumbnailsSignature` runs
                     // (`new-main/index.tsx:2617-2620`). Committing the
                     // signature at `Listed` time instead would mark a sweep
-                    // that never landed as up to date.
+                    // that never landed as up to date. Likewise a sweep that a
+                    // capture hang cut short: it stays stale so the picker
+                    // retries it once the pause lifts.
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_display_signature(signature);
                         }
                         this.thumbnails.set_display_inflight(false);
@@ -1368,8 +1406,9 @@ impl MainWindow {
                 self.thumbnails.set_window_inflight(true);
 
                 let (events_tx, events) = flume::unbounded();
+                let current = self.thumbnails.captured_windows();
                 let capture = gpui_tokio::Tokio::spawn(cx, async move {
-                    target_thumbnails::capture_windows(events_tx).await;
+                    target_thumbnails::capture_windows(events_tx, current).await;
                 });
 
                 Some(cx.spawn_in(window, async move |this, cx| {
@@ -1393,7 +1432,9 @@ impl MainWindow {
                         }
                     }
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_window_signature(signature);
                         }
                         this.thumbnails.set_window_inflight(false);
@@ -1589,11 +1630,12 @@ impl MainWindow {
                     id,
                     image,
                     app_icon,
+                    entry,
                 } => {
                     let icon = app_icon.map(|bytes| {
                         std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
                     });
-                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon) {
+                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon, entry) {
                         let _ = window.drop_image(old);
                     }
                 }
@@ -2695,12 +2737,35 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.keyboard_nav_blocked(cx) {
+            ui::keyboard_nav::leave(window, cx);
+        }
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         let meter_active = self.panel.is_none()
             && self.microphone.is_some()
             && self.session.read(cx).phase == Phase::Idle;
         self.microphone_level.update(cx, |meter, cx| {
-            meter.configure(meter_active, theme.blue_9.into(), cx);
+            meter.configure(
+                meter_active,
+                theme.blue_9.into(),
+                gpui::transparent_black(),
+                cx,
+            );
+        });
+        let device_meter_active = self.microphone.is_some()
+            && matches!(self.panel, Some(Panel::Device(DeviceMenu::Microphone)));
+        self.device_microphone_level.update(cx, |meter, cx| {
+            meter.configure(
+                device_meter_active,
+                theme.blue_500.into(),
+                if theme.is_dark() {
+                    gpui::hsla(0., 0., 1., 0.1)
+                } else {
+                    gpui::hsla(0., 0., 0., 0.07)
+                },
+                cx,
+            );
         });
 
         div()
@@ -2762,6 +2827,7 @@ impl Render for MainWindow {
                     cx.stop_propagation();
                 }
             }))
+            .child(ui::keyboard_nav::pointer_watcher())
     }
 }
 
@@ -3456,6 +3522,7 @@ impl MainWindow {
     /// 8px from the window edges (`mx-2`).
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let keyboard_nav = self.keyboard_nav;
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
@@ -3474,6 +3541,9 @@ impl MainWindow {
                 .group(id)
                 .when(cfg!(target_os = "windows"), |this| this.occlude())
                 .tab_index(0)
+                .when(keyboard_nav, ui::keyboard_nav::ring)
+                .role(gpui::Role::Button)
+                .aria_label(label)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3901,6 +3971,9 @@ impl MainWindow {
                     .child(
                         div()
                             .id("panel-back")
+                            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                            .role(gpui::Role::Button)
+                            .aria_label("Back")
                             .flex()
                             .flex_row()
                             .items_center()
@@ -4131,8 +4204,8 @@ impl MainWindow {
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {
-                            let mut items = library::list_screenshots();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_screenshots_limited(library::LIBRARY_PANEL_LIMIT);
                             (None, Some(items))
                         }
                     }
@@ -4712,13 +4785,14 @@ impl MainWindow {
                 self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
                     let png = png.clone();
                     move |_, _, cx| {
-                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png, cx) {
-                            tracing::warn!("copying screenshot failed: {error}");
-                            cx.spawn(async move |_| {
+                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                        cx.spawn(async move |_| {
+                            if let Err(error) = copied.await {
+                                tracing::warn!("copying screenshot failed: {error}");
                                 crate::platform::alert_dialog("Could not copy screenshot", &error);
-                            })
-                            .detach();
-                        }
+                            }
+                        })
+                        .detach();
                     }
                 }),
             )
@@ -5149,9 +5223,7 @@ impl MainWindow {
                                             .map(|description| format!("Available: {description}"))
                                     },
                                     selected,
-                                    selected.then(|| {
-                                        feeds::picker_level(Feeds::global(cx).read(cx).mic_level_db)
-                                    }),
+                                    selected.then(|| self.device_microphone_level.clone()),
                                     cx.listener(move |this, _, _window, cx| {
                                         if !this.device_changes_allowed(cx) {
                                             return;
@@ -5631,6 +5703,10 @@ impl MainWindow {
 
         div()
             .id(id)
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_selected(selected)
             .flex()
             .flex_col()
             .w(px(self.target_card_width()))
@@ -5865,10 +5941,9 @@ impl MainWindow {
         label: String,
         detail: Option<String>,
         selected: bool,
-        // `MicrophoneListItem`'s live level wash: a white 25% overlay whose
-        // right edge sits at `level * 100%` (1 = silence, the web app's
-        // orientation). Only the selected microphone row gets one.
-        audio_level: Option<f64>,
+        // `MicrophoneListItem`'s live level bar. Only the selected
+        // microphone row gets one.
+        audio_level: Option<Entity<ui::MicrophoneLevel>>,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
@@ -5876,6 +5951,10 @@ impl MainWindow {
 
         div()
             .id(id)
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_selected(selected)
             .relative()
             .flex()
             .flex_row()
@@ -5921,26 +6000,7 @@ impl MainWindow {
                             .child(detail)
                     }))
                     .when_some(audio_level.filter(|_| selected), |this, level| {
-                        this.child(
-                            div()
-                                .mt(px(3.))
-                                .h(px(3.))
-                                .w_full()
-                                .rounded_full()
-                                .overflow_hidden()
-                                .bg(if theme.is_dark() {
-                                    gpui::hsla(0., 0., 1., 0.1)
-                                } else {
-                                    gpui::hsla(0., 0., 0., 0.07)
-                                })
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .rounded_full()
-                                        .bg(accent)
-                                        .w(gpui::relative(1. - level.clamp(0., 1.) as f32)),
-                                ),
-                        )
+                        this.child(level)
                     }),
             )
             .when(selected, |this| {
@@ -6150,6 +6210,10 @@ impl MainWindow {
             div()
                 .id(SharedString::from(id))
                 .tab_index(0)
+                .when(self.keyboard_nav, ui::keyboard_nav::ring)
+                .role(gpui::Role::Button)
+                .aria_label(mode.panel_title())
+                .aria_selected(selected)
                 .relative()
                 .on_hover(cx.listener(move |this, hovered, _, cx| {
                     this.update_mode_hover(mode, false, *hovered, cx);
@@ -6218,6 +6282,9 @@ impl MainWindow {
                 div()
                     .id("mode-info")
                     .tab_index(0)
+                    .when(self.keyboard_nav, ui::keyboard_nav::ring)
+                    .role(gpui::Role::Button)
+                    .aria_label("Recording mode info")
                     .tooltip(move |_, cx| ui::Tooltip::new(&theme, "Recording mode info").view(cx))
                     .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .absolute()
@@ -6303,6 +6370,12 @@ impl MainWindow {
             .child(
                 div()
                     .id(dropdown_id.clone())
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Button)
+                    .aria_label(match target {
+                        TargetType::Display => "Choose a display",
+                        _ => "Choose a window",
+                    })
                     .flex()
                     .w(px(28.))
                     .rounded_r(px(9.))
@@ -6394,6 +6467,10 @@ impl MainWindow {
 
         let base = div()
             .id(SharedString::from(target.label()))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(target.label())
+            .aria_selected(selected)
             .flex()
             .flex_1()
             .py(px(8.))
@@ -6567,6 +6644,9 @@ impl MainWindow {
 
         div()
             .id(SharedString::from(id))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
             .relative()
             .flex()
             .flex_row()

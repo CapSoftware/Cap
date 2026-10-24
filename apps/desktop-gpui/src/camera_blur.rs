@@ -356,6 +356,9 @@ impl Worker {
 }
 
 #[cfg(test)]
+mod bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use cap_camera_effects::BlurMode;

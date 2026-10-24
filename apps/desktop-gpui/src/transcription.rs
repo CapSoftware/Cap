@@ -83,6 +83,32 @@ pub fn is_parakeet_model(model: &str) -> bool {
     matches!(model, "best" | "best-max")
 }
 
+/// The 25 languages parakeet-tdt-0.6b-v3 transcribes. It takes no language
+/// hint and its vocabulary has no other scripts, so any other language comes
+/// out as phonetic Latin text.
+const PARAKEET_LANGUAGES: [&str; 25] = [
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+const PARAKEET_UNSUPPORTED_LANGUAGE: &str = "Parakeet cannot transcribe language";
+
+/// The model that transcribes `language`: a Parakeet model hands a language
+/// it cannot write to a downloaded Whisper model, larger first.
+fn transcription_model<'a>(
+    model: &'a str,
+    language: &str,
+    downloaded: impl Fn(&str) -> bool,
+) -> Result<&'a str, String> {
+    if !is_parakeet_model(model) || language == "auto" || PARAKEET_LANGUAGES.contains(&language) {
+        return Ok(model);
+    }
+    ["medium", "small"]
+        .into_iter()
+        .find(|whisper| downloaded(whisper))
+        .ok_or_else(|| format!("{PARAKEET_UNSUPPORTED_LANGUAGE} {language}"))
+}
+
 /// Tauri's `appLocalDataDir()` for the `so.cap.desktop` identifier: on macOS
 /// `~/Library/Application Support`, on Windows `%LOCALAPPDATA%` (deliberately
 /// *not* the roaming dir [`store::app_data_dir`] uses), on Linux
@@ -158,6 +184,12 @@ struct Hub {
 }
 
 impl Hub {
+    fn downloading(&self, model: &str) -> bool {
+        self.download.as_ref().is_some_and(|download| {
+            download.model == model && download.state == DownloadState::Downloading
+        })
+    }
+
     fn work_in_flight(&self) -> bool {
         self.download
             .as_ref()
@@ -1610,6 +1642,15 @@ pub fn transcribe_blocking(
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
 ) -> Result<Vec<CaptionSegment>, String> {
+    let requested = model;
+    // A download writes straight to the model's final path, so a model still
+    // downloading looks present but cannot load yet.
+    let model = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
+    if model != requested {
+        tracing::info!("{requested} cannot transcribe {language}; using the {model} Whisper model");
+    }
     let model_file = model_path(model);
     if !project_path.exists() {
         return Err(format!(
@@ -2004,7 +2045,6 @@ pub fn sync_caption_words_with_text(
         .iter()
         .enumerate()
         .map(|(index, token)| {
-            let source = existing.get(index);
             let word_start = start + step * index as f64;
             let word_end = if index == tokens.len() - 1 {
                 end
@@ -2013,8 +2053,8 @@ pub fn sync_caption_words_with_text(
             };
             CaptionWord {
                 text: (*token).to_string(),
-                start: source.map_or(word_start as f32, |word| word.start),
-                end: source.map_or(word_end as f32, |word| word.end),
+                start: word_start as f32,
+                end: word_end as f32,
             }
         })
         .collect()
@@ -2147,6 +2187,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
     if message.contains("Failed to load Whisper model") {
         return "Failed to load the caption model. Try downloading it again".to_string();
     }
+    if message.contains(PARAKEET_UNSUPPORTED_LANGUAGE) {
+        return "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language".to_string();
+    }
     if message.contains("Parakeet transcription is not available on Intel macOS") {
         return "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
             .to_string();
@@ -2160,6 +2203,38 @@ mod verify_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parakeet_keeps_the_languages_it_can_write() {
+        for language in ["auto", "en", "de", "ru", "uk", "pl"] {
+            assert_eq!(transcription_model("best", language, |_| true), Ok("best"));
+            assert_eq!(
+                transcription_model("best-max", language, |_| true),
+                Ok("best-max")
+            );
+        }
+    }
+
+    #[test]
+    fn other_languages_move_to_a_downloaded_whisper_model() {
+        for language in ["zh", "ja", "ko", "ar", "hi", "tr", "he", "fa"] {
+            assert_eq!(
+                transcription_model("best", language, |_| true),
+                Ok("medium")
+            );
+            assert_eq!(
+                transcription_model("best-max", language, |model| model == "small"),
+                Ok("small")
+            );
+            assert_eq!(
+                transcription_model("best", language, |model| model != "medium"),
+                Ok("small")
+            );
+            let error = transcription_model("best", language, |_| false).unwrap_err();
+            assert!(caption_generation_error_message(&error).contains("Small or Medium"));
+        }
+        assert_eq!(transcription_model("small", "zh", |_| false), Ok("small"));
+    }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
@@ -2248,6 +2323,100 @@ mod tests {
             end,
             text: caption_text_from_words(&words),
             words,
+        }
+    }
+
+    #[test]
+    fn caption_text_edits_redistribute_timings_when_word_count_changes() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 1.5, 4.0)],
+        );
+
+        for text in ["hello", "hello new world"] {
+            let words = sync_caption_words_with_text(text, &existing.words, 1.0, 4.0);
+            assert_eq!(caption_text_from_words(&words), text);
+            assert_eq!(words.first().unwrap().start, 1.0);
+            assert_eq!(words.last().unwrap().end, 4.0);
+            assert!(words.iter().all(|word| word.start < word.end));
+            assert!(words.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        }
+    }
+
+    #[test]
+    fn caption_spelling_edits_preserve_timings_and_empty_text_clears_words() {
+        let existing = caption(
+            "caption",
+            1.0,
+            4.0,
+            &[("hello", 1.0, 1.5), ("world", 2.0, 4.0)],
+        );
+        let words = sync_caption_words_with_text("Hello world!", &existing.words, 1.0, 4.0);
+        assert_eq!(caption_text_from_words(&words), "Hello world!");
+        for (word, original) in words.iter().zip(&existing.words) {
+            assert_eq!((word.start, word.end), (original.start, original.end));
+        }
+        assert!(sync_caption_words_with_text(" \n\t", &existing.words, 1.0, 4.0).is_empty());
+    }
+
+    #[test]
+    fn caption_text_edits_survive_source_write_and_reload() {
+        for text in ["hello new world", "hello"] {
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 1, "timescale": 2.0, "start": 1.0, "end": 6.0 }
+                    ],
+                    "zoomSegments": [],
+                    "textSegments": [
+                        { "start": 0.5, "end": 1.5, "layout": "fullscreen" }
+                    ]
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![caption(
+                        "caption",
+                        11.0,
+                        13.0,
+                        &[("hello", 11.0, 11.5), ("world", 11.5, 13.0)],
+                    )],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0, 10.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            project.timeline.as_mut().unwrap().caption_segments[0].text = text.into();
+
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            cap_project::synchronize_captions(&mut project, &durations);
+            let dir = tempfile::tempdir().unwrap();
+            project.write(dir.path()).unwrap();
+            let mut loaded = ProjectConfiguration::load(dir.path()).unwrap();
+            cap_project::synchronize_captions(&mut loaded, &durations);
+
+            let source = &loaded.captions.as_ref().unwrap().segments[0];
+            assert_eq!(source.text, text);
+            assert_eq!(source.words.first().unwrap().start, 11.0);
+            assert_eq!(source.words.last().unwrap().end, 13.0);
+            assert!(
+                source
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
+            let track = &loaded.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!(track.text, text);
+            assert_eq!((track.start, track.end), (0.0, 2.0));
+            assert_eq!(track.words.len(), text.split_whitespace().count());
+            assert!(
+                track
+                    .words
+                    .windows(2)
+                    .all(|pair| pair[0].end <= pair[1].start)
+            );
         }
     }
 
@@ -2380,6 +2549,22 @@ mod tests {
         assert_eq!(model_path("best-max"), base.join("parakeet-best-max"));
         assert_eq!(model_path("small"), base.join("small.bin"));
         assert_eq!(model_path("medium"), base.join("medium.bin"));
+    }
+
+    #[test]
+    fn only_the_model_being_downloaded_counts_as_downloading() {
+        let mut state = Hub::default();
+        assert!(!state.downloading("medium"));
+        state.download = Some(ModelDownload {
+            model: "medium".to_string(),
+            state: DownloadState::Downloading,
+            progress: 40.0,
+            message: "Downloading".to_string(),
+        });
+        assert!(state.downloading("medium"));
+        assert!(!state.downloading("small"));
+        state.download.as_mut().unwrap().state = DownloadState::Completed;
+        assert!(!state.downloading("medium"));
     }
 
     #[test]

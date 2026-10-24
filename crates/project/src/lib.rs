@@ -1,5 +1,7 @@
 mod animated_gradient;
 mod caption_timing;
+#[cfg(test)]
+mod config_write_tests;
 mod configuration;
 pub mod cursor;
 pub mod keyboard;

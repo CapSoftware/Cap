@@ -179,6 +179,8 @@ fn configure_software_threading(decoder: &mut avcodec::decoder::Decoder, width: 
 
 pub struct FFmpegDecoder {
     input: DecoderInput,
+    // Declared before `hw_device` so the codec context, whose get_format
+    // callback writes to the device's fallback flag, is freed first.
     decoder: avcodec::decoder::Video,
     stream_index: usize,
     hw_device: Option<HwDevice>,
@@ -265,7 +267,14 @@ pub fn open_fragmented_input(
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("read fragmented directory / {error}"))?;
-    fragments.retain(|path| path.extension().is_some_and(|extension| extension == "m4s"));
+    // exFAT stores macOS metadata in `._name` AppleDouble sidecars, which also
+    // end in .m4s and would sort ahead of the real fragments.
+    fragments.retain(|path| {
+        path.extension().is_some_and(|extension| extension == "m4s")
+            && !path
+                .file_name()
+                .is_some_and(|name| name.as_encoded_bytes().starts_with(b"._"))
+    });
     fragments.sort();
     if fragments.is_empty() {
         return Err(format!(
@@ -452,8 +461,13 @@ impl FFmpegDecoder {
         self.start_time
     }
 
+    /// Whether frames come from the hardware decoder. False once FFmpeg has
+    /// fallen back to software because the hardware setup failed, which is
+    /// only known after the first packet is decoded.
     pub fn is_hardware_accelerated(&self) -> bool {
-        self.hw_device.is_some()
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -470,6 +484,13 @@ pub struct FramesIter<'a> {
 impl FramesIter<'_> {
     pub fn decoder(&self) -> &avcodec::decoder::Video {
         self.decoder
+    }
+
+    /// [`FFmpegDecoder::is_hardware_accelerated`] while frames are read.
+    pub fn is_hardware_accelerated(&self) -> bool {
+        self.hw_device
+            .as_ref()
+            .is_some_and(|device| !device.is_software_fallback())
     }
 }
 
@@ -621,6 +642,27 @@ mod tests {
             assert!(!expected.is_empty());
             assert_eq!(frames(&mut candidate), expected);
         }
+    }
+
+    #[test]
+    fn fragmented_decoder_skips_apple_double_sidecars() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("segments");
+        encode_segments(&source);
+        let expected = frames(&mut FFmpegDecoder::new(&source, None).unwrap());
+        let fragments = std::fs::read_dir(&source)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".m4s"))
+            .collect::<Vec<_>>();
+        for name in fragments {
+            let sidecar = format!("._{}", name.to_string_lossy());
+            std::fs::write(source.join(sidecar), b"\x00\x05\x16\x07").unwrap();
+        }
+        assert_eq!(
+            frames(&mut FFmpegDecoder::new(&source, None).unwrap()),
+            expected
+        );
     }
 
     #[test]

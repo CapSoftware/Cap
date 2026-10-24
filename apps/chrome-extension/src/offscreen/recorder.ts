@@ -95,6 +95,7 @@ type ActiveRecording = {
 	recorder: MediaRecorder;
 	stopPromise: Promise<void>;
 	streams: MediaStream[];
+	microphoneTracks: MediaStreamTrack[];
 	recordingStream: MediaStream;
 	statusTimer: number | null;
 	spool: RecordingSpool;
@@ -154,7 +155,15 @@ let cameraPreviewStreamRequest: {
 	deviceId: string | null;
 	promise: Promise<MediaStream>;
 } | null = null;
+let cameraPreviewReleaseTimer: number | null = null;
 const cameraPreviewSessions = new Map<string, RTCPeerConnection>();
+// A tab hand-off disconnects the old tab's session before the new tab's
+// connect arrives. Releasing the camera the instant the session count hits
+// zero closes and reopens the physical device on every tab switch — and a
+// reopen that lands too soon after the close fails with NotReadableError on
+// exclusive-access platforms. Keep the stream warm across that gap instead.
+const CAMERA_PREVIEW_RELEASE_GRACE_MS = 2000;
+const CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS = 5000;
 const activeRecordingSounds = new Set<HTMLAudioElement>();
 
 const playRecordingSound = (
@@ -269,7 +278,15 @@ const stopTracks = (stream: MediaStream) => {
 	}
 };
 
+const cancelCameraPreviewRelease = () => {
+	if (cameraPreviewReleaseTimer !== null) {
+		window.clearTimeout(cameraPreviewReleaseTimer);
+		cameraPreviewReleaseTimer = null;
+	}
+};
+
 const stopCameraPreviewStream = () => {
+	cancelCameraPreviewRelease();
 	if (!cameraPreviewStream) return;
 	stopTracks(cameraPreviewStream);
 	cameraPreviewStream = null;
@@ -282,18 +299,32 @@ const disconnectCameraPreview = (sessionId: string) => {
 	cameraPreviewSessions.delete(sessionId);
 	peer.close();
 	if (cameraPreviewSessions.size === 0) {
-		stopCameraPreviewStream();
+		cancelCameraPreviewRelease();
+		cameraPreviewReleaseTimer = window.setTimeout(() => {
+			cameraPreviewReleaseTimer = null;
+			if (cameraPreviewSessions.size === 0) {
+				stopCameraPreviewStream();
+			}
+		}, CAMERA_PREVIEW_RELEASE_GRACE_MS);
 	}
 };
 
-const disconnectCameraPreviews = () => {
+const disconnectCameraPreviewsExcept = (keepSessionId?: string) => {
 	for (const sessionId of Array.from(cameraPreviewSessions.keys())) {
+		if (sessionId === keepSessionId) continue;
 		disconnectCameraPreview(sessionId);
 	}
 	stopCameraPreviewStream();
 };
 
-const getCameraPreviewStream = async (settings: WebcamSettings) => {
+const disconnectCameraPreviews = () => {
+	disconnectCameraPreviewsExcept();
+};
+
+const getCameraPreviewStream = async (
+	settings: WebcamSettings,
+	keepSessionId?: string,
+) => {
 	const videoTrack = cameraPreviewStream?.getVideoTracks()[0];
 	if (
 		cameraPreviewStream?.active &&
@@ -312,8 +343,18 @@ const getCameraPreviewStream = async (settings: WebcamSettings) => {
 		await cameraPreviewStreamRequest.promise.catch(() => undefined);
 	}
 
-	disconnectCameraPreviews();
+	disconnectCameraPreviewsExcept(keepSessionId);
 	const promise = getCameraMediaStream(settings, false).then((stream) => {
+		// The camera can take long enough to open that every waiting session
+		// may have disconnected (or moved to another device) in the meantime;
+		// adopting the stream then would leave the camera lit with no consumer.
+		if (
+			cameraPreviewStreamRequest?.promise !== promise ||
+			cameraPreviewSessions.size === 0
+		) {
+			stopTracks(stream);
+			throw new Error("Camera preview was disconnected while opening.");
+		}
 		cameraPreviewStream = stream;
 		cameraPreviewDeviceId = settings.deviceId;
 		return stream;
@@ -580,10 +621,10 @@ const addAudioTracks = ({
 	const audioContext = new AudioContext();
 	const destination = audioContext.createMediaStreamDestination();
 
-	streamsWithAudio.forEach((stream, index) => {
+	streamsWithAudio.forEach((stream) => {
 		const source = audioContext.createMediaStreamSource(stream);
 		source.connect(destination);
-		if (routeFirstStreamToSpeakers && index === 0) {
+		if (routeFirstStreamToSpeakers && stream === streams[0]) {
 			source.connect(audioContext.destination);
 		}
 	});
@@ -959,6 +1000,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 			recorder,
 			stopPromise: Promise.resolve(),
 			streams,
+			microphoneTracks:
+				request.mode === "camera"
+					? mainStream.getAudioTracks()
+					: (microphoneStream?.getAudioTracks() ?? []),
 			recordingStream,
 			statusTimer: null,
 			spool,
@@ -1134,9 +1179,12 @@ const startRecording = async (request: StartRecordingRequest) => {
 			);
 			await ownedSpool.dispose().catch(() => undefined);
 		}
-		// Reset the "creating" status so later status syncs do not report a
-		// phantom in-progress recording.
-		if (status.phase === "creating") {
+		// Reset the status this attempt set so later status syncs do not report
+		// a phantom in-progress recording. "recording" is already set before
+		// recorder.start(), so a throw there would otherwise leave a capture
+		// phase with no session behind it: stop becomes a no-op and the idle
+		// self-close never fires.
+		if (status.phase === "creating" || status.phase === "recording") {
 			status = isUserCancellationError(error)
 				? { phase: "idle" }
 				: {
@@ -1618,18 +1666,43 @@ const queryMediaPermissions = async (): Promise<MediaPermissionSnapshot> => {
 
 const connectCameraPreview = async (request: ConnectCameraPreviewRequest) => {
 	disconnectCameraPreview(request.sessionId);
-	const stream = await getCameraPreviewStream(request.settings);
 	const peer = new RTCPeerConnection();
+	// Register before the first await: once the previous tab's session
+	// disconnects, only a registered successor keeps the shared camera
+	// stream from being released mid-connect.
 	cameraPreviewSessions.set(request.sessionId, peer);
 
 	try {
+		const stream = await getCameraPreviewStream(
+			request.settings,
+			request.sessionId,
+		);
+		let disconnectTimer: number | null = null;
 		peer.addEventListener("connectionstatechange", () => {
+			if (disconnectTimer !== null) {
+				window.clearTimeout(disconnectTimer);
+				disconnectTimer = null;
+			}
 			if (
 				peer.connectionState === "closed" ||
-				peer.connectionState === "disconnected" ||
 				peer.connectionState === "failed"
 			) {
 				disconnectCameraPreview(request.sessionId);
+				return;
+			}
+			// The preview page drives recovery from a transient disconnect with
+			// its own shorter grace; this only reaps a peer whose page died
+			// without sending disconnect-camera-preview.
+			if (peer.connectionState === "disconnected") {
+				disconnectTimer = window.setTimeout(() => {
+					disconnectTimer = null;
+					if (
+						peer.connectionState === "disconnected" &&
+						cameraPreviewSessions.get(request.sessionId) === peer
+					) {
+						disconnectCameraPreview(request.sessionId);
+					}
+				}, CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS);
 			}
 		});
 
@@ -1708,12 +1781,7 @@ const handleRequest = async (
 	if (message.type === "toggle-microphone-mute") {
 		const recording = activeRecording;
 		if (recording) {
-			for (const stream of recording.streams) {
-				for (const track of stream.getAudioTracks()) {
-					track.enabled = !message.muted;
-				}
-			}
-			for (const track of recording.recordingStream.getAudioTracks()) {
+			for (const track of recording.microphoneTracks) {
 				track.enabled = !message.muted;
 			}
 		}

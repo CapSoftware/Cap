@@ -59,6 +59,10 @@ import {
 } from "@/lib/account-deletion-request";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+} from "@/lib/email-code-rate-limit";
+import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
 } from "@/lib/mobile-request-origin";
@@ -472,10 +476,15 @@ const createMobileApiKey = Effect.fn("Mobile.createMobileApiKey")(function* (
 
 const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
+	headers: Headers,
 ) {
 	const email = normalizeEmail(rawEmail);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
+
+	if (yield* Effect.promise(() => isEmailCodeSendLimited(email, headers))) {
+		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	}
 
 	const code = crypto.randomInt(100000, 1000000).toString();
 	const token = hashEmailCode(code);
@@ -513,10 +522,13 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	return { success: true as const };
 });
 
-const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
-	email: rawEmail,
-	code: rawCode,
-}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"]) {
+const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
+	{
+		email: rawEmail,
+		code: rawCode,
+	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
+	headers: Headers,
+) {
 	const email = normalizeEmail(rawEmail);
 	const code = rawCode.trim();
 
@@ -526,6 +538,10 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
+
+	if (yield* Effect.promise(() => isEmailCodeVerifyLimited(email, headers))) {
+		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	}
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
@@ -539,32 +555,21 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 
 		if (!verificationToken) return "missing" as const;
 
-		if (verificationToken.expires.valueOf() < Date.now()) {
-			await db
-				.delete(Db.verificationTokens)
-				.where(eq(Db.verificationTokens.identifier, identifier));
-			return "expired" as const;
-		}
-
-		if (verificationToken.token !== token) {
-			await db
-				.delete(Db.verificationTokens)
-				.where(eq(Db.verificationTokens.identifier, identifier));
-			return "invalid" as const;
-		}
-
-		const result = await db
+		const claim = await db
 			.delete(Db.verificationTokens)
 			.where(
 				and(
-					eq(Db.verificationTokens.identifier, identifier),
-					eq(Db.verificationTokens.token, token),
+					eq(Db.verificationTokens.identifier, verificationToken.identifier),
+					eq(Db.verificationTokens.token, verificationToken.token),
 				),
 			);
 
-		return getAffectedRows(result) === 1
-			? ("verified" as const)
-			: ("used" as const);
+		if (getAffectedRows(claim) !== 1) return "used" as const;
+		if (verificationToken.expires.valueOf() < Date.now()) {
+			return "expired" as const;
+		}
+		if (verificationToken.token !== token) return "invalid" as const;
+		return "verified" as const;
 	});
 
 	if (verificationStatus !== "verified") {
@@ -2111,6 +2116,22 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	const id = Comment.CommentId.make(nanoId());
 	const now = new Date();
 	const database = yield* Database;
+	if (parentCommentId) {
+		const [parent] = yield* database.use((db) =>
+			db
+				.select({ id: Db.comments.id })
+				.from(Db.comments)
+				.where(
+					and(
+						eq(Db.comments.id, parentCommentId),
+						eq(Db.comments.videoId, videoId),
+						eq(Db.comments.type, "text"),
+					),
+				)
+				.limit(1),
+		);
+		if (!parent) return yield* Effect.fail(new HttpApiError.NotFound());
+	}
 	yield* database.use((db) =>
 		db.insert(Db.comments).values({
 			id,
@@ -2474,30 +2495,29 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
-	const videoId = yield* repo.create({
-		ownerId: user.id,
-		orgId: organizationId,
-		name: getUploadTitle(input.fileName),
-		public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
-		source: { type: "webMP4" },
-		bucketId: writable.bucketId,
-		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.fromNullable(input.width),
-		height: Option.fromNullable(input.height),
-		duration: Option.fromNullable(input.durationSeconds),
-		metadata: Option.none(),
-		transcriptionStatus: Option.none(),
-	});
-
-	yield* database.use((db) =>
-		db.insert(Db.videoUploads).values({
-			videoId,
-			total: input.contentLength ?? 0,
-			mode: "singlepart",
-		}),
+	const videoId = yield* repo.create(
+		{
+			ownerId: user.id,
+			orgId: organizationId,
+			name: getUploadTitle(input.fileName),
+			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			source: { type: "webMP4" },
+			bucketId: writable.bucketId,
+			storageIntegrationId: writable.storageIntegrationId,
+			folderId: Option.fromNullable(folderId),
+			width: Option.fromNullable(input.width),
+			height: Option.fromNullable(input.height),
+			duration: Option.fromNullable(input.durationSeconds),
+			metadata: Option.none(),
+			transcriptionStatus: Option.none(),
+		},
+		{
+			initialUpload: {
+				total: input.contentLength ?? 0,
+				mode: "singlepart",
+			},
+		},
 	);
-
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
 		contentType: input.contentType,
@@ -2569,28 +2589,28 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		user.id,
 		organizationId,
 	);
-	const videoId = yield* repo.create({
-		ownerId: user.id,
-		orgId: organizationId,
-		name: getUploadTitle(input.fileName),
-		public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
-		source: { type: "desktopSegments" },
-		bucketId: writable.bucketId,
-		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.some(input.width),
-		height: Option.some(input.height),
-		duration: Option.none(),
-		metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
-		transcriptionStatus: Option.none(),
-	});
-
-	yield* database.use((db) =>
-		db.insert(Db.videoUploads).values({
-			videoId,
-			total: 0,
-			mode: "singlepart",
-		}),
+	const videoId = yield* repo.create(
+		{
+			ownerId: user.id,
+			orgId: organizationId,
+			name: getUploadTitle(input.fileName),
+			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			source: { type: "desktopSegments" },
+			bucketId: writable.bucketId,
+			storageIntegrationId: writable.storageIntegrationId,
+			folderId: Option.fromNullable(folderId),
+			width: Option.some(input.width),
+			height: Option.some(input.height),
+			duration: Option.none(),
+			metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
+			transcriptionStatus: Option.none(),
+		},
+		{
+			initialUpload: {
+				total: 0,
+				mode: "singlepart",
+			},
+		},
 	);
 
 	return {
@@ -2814,11 +2834,15 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("requestEmailSession", ({ payload }) =>
-						withMappedErrors(requestEmailSession(payload.email)),
+					.handle("requestEmailSession", ({ payload, request }) =>
+						withMappedErrors(
+							requestEmailSession(payload.email, toHeaders(request.headers)),
+						),
 					)
-					.handle("verifyEmailSession", ({ payload }) =>
-						withMappedErrors(verifyEmailSession(payload)),
+					.handle("verifyEmailSession", ({ payload, request }) =>
+						withMappedErrors(
+							verifyEmailSession(payload, toHeaders(request.headers)),
+						),
 					)
 					.handle("revokeSession", ({ headers }) =>
 						withMappedErrors(
@@ -2990,6 +3014,11 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											),
 										),
 								);
+								yield* Effect.sync(() => {
+									revalidatePath("/dashboard/caps");
+									revalidatePath("/dashboard/shared-caps");
+									revalidatePath(`/s/${path.id}`);
+								});
 								const { cap } = yield* getCapById(path.id, publicOrigin);
 								return cap;
 							}),

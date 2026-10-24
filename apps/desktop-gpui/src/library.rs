@@ -72,9 +72,11 @@ pub struct RecentItem {
 /// `media_sort_time_millis` (`lib.rs:3966-3972`): the filesystem `created()`
 /// time of the path, falling back to `modified()`, then to the epoch.
 fn media_sort_time_millis(path: &Path) -> f64 {
-    let Ok(metadata) = path.metadata() else {
-        return 0.0;
-    };
+    path.metadata()
+        .map_or(0.0, |metadata| metadata_sort_time_millis(&metadata))
+}
+
+fn metadata_sort_time_millis(metadata: &std::fs::Metadata) -> f64 {
     metadata
         .created()
         .or_else(|_| metadata.modified())
@@ -570,6 +572,9 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     };
 
     if let Some(canonical_path) = canonical_path {
+        let _thumbnails = crate::recording::hold_studio_thumbnail_writes().ok_or_else(|| {
+            "Timed out waiting for the recording's thumbnail to finish writing".to_string()
+        })?;
         std::fs::remove_dir_all(canonical_path)
             .map_err(|error| format!("Failed to delete recording: {error}"))?;
     }
@@ -672,42 +677,59 @@ pub struct ScreenshotItem {
 /// `list_screenshots` (`lib.rs:4055-4091`): `*.cap` directories only, and the
 /// sort key is the PNG's timestamp rather than the directory's.
 pub fn list_screenshots_in(dir: &Path) -> Vec<ScreenshotItem> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
+    screenshot_items_in(dir).collect()
+}
 
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let bundle = entry.path();
-        if !bundle.is_dir() || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") {
-            continue;
+fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
+    let mut bundles = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let bundle = entry.path();
+            if bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") || !bundle.is_dir() {
+                continue;
+            }
+            if let Some((png, sort_time_millis)) = screenshot_png(&bundle) {
+                bundles.push((bundle, png, sort_time_millis));
+            }
         }
-        let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
-            continue;
-        };
-        let Some(png) = std::fs::read_dir(&bundle).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))
-        }) else {
-            continue;
-        };
-
-        out.push(ScreenshotItem {
-            path: png.clone(),
-            pretty_name: meta.pretty_name,
-            sort_time_millis: media_sort_time_millis(&png),
-            thumbnail: Some(png),
-            bundle,
-        });
     }
-    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-    out
+    bundles.sort_by(|(_, _, a), (_, _, b)| b.total_cmp(a));
+    bundles
+        .into_iter()
+        .filter_map(|(bundle, png, sort_time_millis)| {
+            let meta = RecordingMeta::load_for_project(&bundle).ok()?;
+            Some(ScreenshotItem {
+                path: png.clone(),
+                pretty_name: meta.pretty_name,
+                sort_time_millis,
+                thumbnail: Some(png),
+                bundle,
+            })
+        })
+}
+
+fn screenshot_png(bundle: &Path) -> Option<(PathBuf, f64)> {
+    let original = bundle.join("original.png");
+    if let Ok(metadata) = original.metadata() {
+        return Some((original, metadata_sort_time_millis(&metadata)));
+    }
+    let png = std::fs::read_dir(bundle)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))?;
+    let sort_time_millis = media_sort_time_millis(&png);
+    Some((png, sort_time_millis))
 }
 
 pub fn list_screenshots() -> Vec<ScreenshotItem> {
     list_screenshots_in(&screenshots_dir())
+}
+
+pub fn list_screenshots_limited(limit: usize) -> Vec<ScreenshotItem> {
+    screenshot_items_in(&screenshots_dir())
+        .take(limit)
+        .collect()
 }
 
 /// Delete the `.cap` bundle that owns `path` (the PNG or the directory).
@@ -750,16 +772,20 @@ pub fn delete_screenshot(path: &Path) -> Result<(), String> {
 }
 
 fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
-    out.extend(list_screenshots_in(dir).into_iter().map(|item| RecentItem {
-        kind: MediaKind::Screenshot,
-        bundle: item.bundle,
-        pretty_name: item.pretty_name,
-        clip_count: 1,
-        sort_time_millis: item.sort_time_millis,
-        thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
-        thumbnail: item.thumbnail,
-        sharing: None,
-    }));
+    out.extend(
+        screenshot_items_in(dir)
+            .take(RECENT_MEDIA_LIMIT)
+            .map(|item| RecentItem {
+                kind: MediaKind::Screenshot,
+                bundle: item.bundle,
+                pretty_name: item.pretty_name,
+                clip_count: 1,
+                sort_time_millis: item.sort_time_millis,
+                thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
+                thumbnail: item.thumbnail,
+                sharing: None,
+            }),
+    );
 }
 
 fn newest_first(items: &mut [RecentItem]) {
@@ -777,13 +803,8 @@ pub fn recent_media_in(recording_dirs: &[PathBuf], screenshots_dir: &Path) -> Ve
     let mut recordings = Vec::new();
     scan_recordings(recording_dirs, &mut recordings);
 
-    let mut screenshots = Vec::new();
-    scan_screenshots(screenshots_dir, &mut screenshots);
-    newest_first(&mut screenshots);
-    screenshots.truncate(RECENT_MEDIA_LIMIT);
-
     let mut merged = recordings;
-    merged.extend(screenshots);
+    scan_screenshots(screenshots_dir, &mut merged);
     newest_first(&mut merged);
     merged.truncate(RECENT_MEDIA_LIMIT);
     merged
@@ -1060,6 +1081,11 @@ impl CacheSlot {
     }
 }
 
+#[cfg(test)]
+pub fn thumbnail_cache_file(source: &Path) -> Option<PathBuf> {
+    CacheSlot::for_source(source).map(|slot| slot.file())
+}
+
 /// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
 /// same swap gpui's own asset loader does after decoding).
 pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
@@ -1094,32 +1120,50 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     // Sniff rather than trust the extension: `list_screenshots` finds the
     // preview by extension scan, and a bundle could hold a mislabelled file.
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .max(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .min(1.0);
-    let target_width = ((width as f32 * scale).round() as u32).max(1);
-    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
+        crate::jpeg_thumbnail::decode_jpeg_thumbnail(&bytes, |width, height| {
+            let (_, target_width, target_height) = crate::jpeg_thumbnail::cover_target(
+                width,
+                height,
+                THUMBNAIL_WIDTH,
+                THUMBNAIL_HEIGHT,
+            );
+            (target_width, target_height)
+        })
+        .or_else(|| {
+            let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+            let dimensions = (decoded.width(), decoded.height());
+            Some((decoded, dimensions.0, dimensions.1))
+        })?
+    } else {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width(), decoded.height());
+        (decoded, dimensions.0, dimensions.1)
+    };
+    let (width, height) = (width.max(1), height.max(1));
+    let (_, target_width, target_height) =
+        crate::jpeg_thumbnail::cover_target(width, height, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     // Box sampling for the big ratios (one pass over a multi-megapixel
     // source, and at 8x down every output pixel averages a whole block);
     // Triangle when the sizes are close, where box would alias and costs
     // nothing to avoid.
-    let rgba = if scale <= 0.5 {
-        decoded
+    let rgba = match crate::jpeg_thumbnail::thumbnail_resize(
+        decoded.width(),
+        decoded.height(),
+        target_width,
+        target_height,
+    ) {
+        crate::jpeg_thumbnail::ThumbnailResize::Box => decoded
             .thumbnail_exact(target_width, target_height)
-            .into_rgba8()
-    } else if scale < 1.0 {
-        decoded
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Triangle => decoded
             .resize_exact(
                 target_width,
                 target_height,
                 image::imageops::FilterType::Triangle,
             )
-            .into_rgba8()
-    } else {
-        decoded.into_rgba8()
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Identity => decoded.into_rgba8(),
     };
 
     if let Some(cache) = &cache {
@@ -1143,14 +1187,33 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
 /// rather than deferred.
 ///
 /// Faithful in the parts that matter to the output: decode packets until the
-/// *first* video frame comes out, scale to RGB24 at the source's own size
-/// (`size: None` at both call sites, so a native-resolution JPEG, not a
-/// thumbnail), save as JPEG. Blocking; callers hand it to `spawn_blocking`.
+/// *first* video frame comes out and save it as a JPEG at the source's own
+/// size (`size: None` at every call site, so a native-resolution JPEG, not a
+/// thumbnail). Blocking; callers hand it to `spawn_blocking`.
 pub fn create_screenshot(
     input: &Path,
     output: &Path,
     size: Option<(u32, u32)>,
 ) -> Result<(), String> {
+    let frame = first_video_frame(input)?;
+    let size = size.unwrap_or((frame.width(), frame.height()));
+    let jpeg = match encode_mjpeg(&frame, size) {
+        Some(jpeg) => jpeg,
+        None => encode_rgb_jpeg(&frame, size)?,
+    };
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
+    std::fs::write(&staged, jpeg)
+        .and_then(|()| std::fs::rename(&staged, output))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            e.to_string()
+        })
+}
+
+fn first_video_frame(input: &Path) -> Result<ffmpeg::frame::Video, String> {
     let mut ictx = ffmpeg::format::input(input).map_err(|e| e.to_string())?;
     let input_stream = ictx
         .streams()
@@ -1164,65 +1227,123 @@ pub fn create_screenshot(
         .video()
         .map_err(|e| e.to_string())?;
 
-    let mut scaler = ffmpeg::software::scaling::context::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::format::Pixel::RGB24,
-        size.map_or(decoder.width(), |s| s.0),
-        size.map_or(decoder.height(), |s| s.1),
-        ffmpeg::software::scaling::flag::Flags::BILINEAR,
-    )
-    .map_err(|e| e.to_string())?;
-
     let mut frame = ffmpeg::frame::Video::empty();
     for (stream, packet) in ictx.packets() {
         if stream.index() != video_stream_index {
             continue;
         }
         decoder.send_packet(&packet).map_err(|e| e.to_string())?;
-        if decoder.receive_frame(&mut frame).is_err() {
-            continue;
+        if decoder.receive_frame(&mut frame).is_ok() {
+            return Ok(frame);
         }
-
-        let mut rgb_frame = ffmpeg::frame::Video::empty();
-        scaler
-            .run(&frame, &mut rgb_frame)
-            .map_err(|e| e.to_string())?;
-
-        // The scaler's rows are padded to its own stride; the image buffer is
-        // tight, so the copy is row by row.
-        let width = rgb_frame.width() as usize;
-        let height = rgb_frame.height() as usize;
-        let src_stride = rgb_frame.stride(0);
-        let dst_stride = width * 3;
-        let buffer = cap_gpui_kernels::frame::copy_rows(
-            rgb_frame.data(0),
-            dst_stride,
-            src_stride,
-            height,
-            false,
-        )
-        .ok_or("Failed to create image from frame data")?;
-
-        let image = image::RgbImage::from_raw(width as u32, height as u32, buffer)
-            .ok_or("Failed to create image from frame data")?;
-        if let Some(parent) = output.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
-        cap_gpui_kernels::codec::save_rgb_image(&image, &staged, image::ImageFormat::Jpeg)
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&staged);
-                e.to_string()
-            })?;
-        return std::fs::rename(&staged, output).map_err(|e| {
-            let _ = std::fs::remove_file(&staged);
-            e.to_string()
-        });
     }
 
     Err("Failed to create screenshot".to_string())
+}
+
+/// FFmpeg's MJPEG encoder takes the decoded YUV frame directly, so a 4K
+/// thumbnail skips the RGB round trip and `image`'s much slower JPEG encoder.
+/// 4:4:4 at qscale 4 keeps the unsubsampled layout of the quality-75 JPEG
+/// `image` wrote, with at least its quality.
+fn encode_mjpeg(frame: &ffmpeg::frame::Video, (width, height): (u32, u32)) -> Option<Vec<u8>> {
+    const QSCALE: i32 = 4;
+    let format = ffmpeg::format::Pixel::YUV444P;
+    let codec = ffmpeg::codec::encoder::find(ffmpeg::codec::Id::MJPEG)?;
+    let mut scaler = ffmpeg::software::scaling::context::Context::get(
+        frame.format(),
+        frame.width(),
+        frame.height(),
+        format,
+        width,
+        height,
+        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+    )
+    .ok()?;
+    write_full_range(&mut scaler)?;
+    let mut yuv = ffmpeg::frame::Video::empty();
+    scaler.run(frame, &mut yuv).ok()?;
+
+    let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+        .encoder()
+        .video()
+        .ok()?;
+    encoder.set_width(width);
+    encoder.set_height(height);
+    encoder.set_format(format);
+    encoder.set_color_range(ffmpeg::color::Range::JPEG);
+    encoder.set_time_base((1, 1));
+    encoder.set_flags(ffmpeg::codec::Flags::QSCALE);
+    encoder.set_global_quality(QSCALE * ffmpeg::ffi::FF_QP2LAMBDA);
+    encoder.set_qmin(QSCALE);
+    encoder.set_qmax(QSCALE);
+    let mut encoder = encoder.open().ok()?;
+
+    yuv.set_pts(Some(0));
+    encoder.send_frame(&yuv).ok()?;
+    encoder.send_eof().ok()?;
+    let mut packet = ffmpeg::Packet::empty();
+    encoder.receive_packet(&mut packet).ok()?;
+    packet.data().map(<[u8]>::to_vec)
+}
+
+/// JPEG stores full-range YUV, while swscale writes limited range unless told
+/// otherwise; the source keeps whatever range swscale detected for it.
+fn write_full_range(scaler: &mut ffmpeg::software::scaling::context::Context) -> Option<()> {
+    let mut inv_table = std::ptr::null_mut();
+    let mut table = std::ptr::null_mut();
+    let (mut src_range, mut dst_range) = (0, 0);
+    let (mut brightness, mut contrast, mut saturation) = (0, 0, 0);
+    unsafe {
+        let context = scaler.as_mut_ptr();
+        let read = ffmpeg::ffi::sws_getColorspaceDetails(
+            context,
+            &mut inv_table,
+            &mut src_range,
+            &mut table,
+            &mut dst_range,
+            &mut brightness,
+            &mut contrast,
+            &mut saturation,
+        );
+        (read >= 0
+            && ffmpeg::ffi::sws_setColorspaceDetails(
+                context, inv_table, src_range, table, 1, brightness, contrast, saturation,
+            ) >= 0)
+            .then_some(())
+    }
+}
+
+/// The original path, for an FFmpeg build without the MJPEG encoder.
+fn encode_rgb_jpeg(
+    frame: &ffmpeg::frame::Video,
+    (width, height): (u32, u32),
+) -> Result<Vec<u8>, String> {
+    let mut rgb_frame = ffmpeg::frame::Video::empty();
+    ffmpeg::software::scaling::context::Context::get(
+        frame.format(),
+        frame.width(),
+        frame.height(),
+        ffmpeg::format::Pixel::RGB24,
+        width,
+        height,
+        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+    )
+    .map_err(|e| e.to_string())?
+    .run(frame, &mut rgb_frame)
+    .map_err(|e| e.to_string())?;
+
+    // The scaler's rows are padded to its own stride; the image buffer is
+    // tight, so the copy is row by row.
+    let row_bytes = width as usize * 3;
+    let buffer = cap_gpui_kernels::frame::copy_rows(
+        rgb_frame.data(0),
+        row_bytes,
+        rgb_frame.stride(0),
+        height as usize,
+        false,
+    )
+    .ok_or("Failed to create image from frame data")?;
+    cap_gpui_kernels::codec::encode_jpeg_rgb(&buffer, width, height, 75).map_err(|e| e.to_string())
 }
 
 pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
@@ -1291,6 +1412,163 @@ mod tests {
         // The scan finds the preview by extension, not by name.
         std::fs::write(bundle.join("shot.png"), b"not really a png").unwrap();
         bundle
+    }
+
+    fn psnr(jpeg: &[u8], screen: &image::RgbImage) -> f64 {
+        let decoded = image::load_from_memory(jpeg).unwrap().into_rgb8();
+        assert_eq!(decoded.dimensions(), screen.dimensions());
+        let squared: f64 = decoded
+            .as_raw()
+            .iter()
+            .zip(screen.as_raw())
+            .map(|(&a, &b)| (f64::from(a) - f64::from(b)).powi(2))
+            .sum();
+        10.0 * (255.0_f64.powi(2) * screen.as_raw().len() as f64 / squared).log10()
+    }
+
+    /// `screen` as a recording would hand it over: limited-range BT.709 4:2:0.
+    fn recorded_frame(screen: &image::RgbImage) -> ffmpeg::frame::Video {
+        let (width, height) = screen.dimensions();
+        let mut rgb = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGB24, width, height);
+        let stride = rgb.stride(0);
+        for (row, pixels) in rgb
+            .data_mut(0)
+            .chunks_mut(stride)
+            .zip(screen.as_raw().chunks(width as usize * 3))
+        {
+            row[..pixels.len()].copy_from_slice(pixels);
+        }
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            ffmpeg::format::Pixel::RGB24,
+            width,
+            height,
+            ffmpeg::format::Pixel::YUV420P,
+            width,
+            height,
+            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+        )
+        .unwrap();
+        unsafe {
+            let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+            let set = ffmpeg::ffi::sws_setColorspaceDetails(
+                scaler.as_mut_ptr(),
+                bt709,
+                1,
+                bt709,
+                0,
+                0,
+                1 << 16,
+                1 << 16,
+            );
+            assert!(set >= 0);
+        }
+        let mut frame = ffmpeg::frame::Video::empty();
+        scaler.run(&rgb, &mut frame).unwrap();
+        frame.set_color_space(ffmpeg::color::Space::BT709);
+        frame.set_color_range(ffmpeg::color::Range::MPEG);
+        frame
+    }
+
+    #[test]
+    fn screenshot_is_written_with_the_mjpeg_encoder() {
+        ffmpeg::init().unwrap();
+        let root = temp_dir("mjpeg-screenshot");
+        let source = root.join("display.mp4");
+        std::fs::write(
+            &source,
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        let output = bundle_thumbnail_path(&root);
+
+        create_screenshot(&source, &output, None).unwrap();
+
+        let frame = first_video_frame(&source).unwrap();
+        let written = std::fs::read(&output).unwrap();
+        let size = (frame.width(), frame.height());
+        assert_eq!(written, encode_mjpeg(&frame, size).unwrap());
+        let decoded = image::load_from_memory_with_format(&written, image::ImageFormat::Jpeg);
+        assert_eq!(decoded.unwrap().to_rgb8().dimensions(), size);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mjpeg_screenshot_is_at_least_as_close_to_the_screen() {
+        ffmpeg::init().unwrap();
+        let screen = image::RgbImage::from_fn(640, 360, |x, y| {
+            let text = (x / 2 + y / 3) % 7 == 0 && y % 24 < 14;
+            match (x / 160, text) {
+                (0, _) => image::Rgb([61, 106, 242]),
+                (_, true) => image::Rgb([212, 212, 212]),
+                (3, false) => image::Rgb([(x - 480) as u8, 53, (y / 2) as u8 + 60]),
+                _ => image::Rgb([30, 31, 34]),
+            }
+        });
+        let frame = recorded_frame(&screen);
+        let size = screen.dimensions();
+
+        let mjpeg = psnr(&encode_mjpeg(&frame, size).unwrap(), &screen);
+        let rgb = psnr(&encode_rgb_jpeg(&frame, size).unwrap(), &screen);
+
+        assert!(mjpeg >= rgb, "mjpeg {mjpeg:.2} dB, rgb {rgb:.2} dB");
+    }
+
+    /// Each source is a video; a `.png` beside it with the same name is the
+    /// screen it recorded, which both JPEGs are scored against.
+    #[test]
+    #[ignore = "needs CAP_SCREENSHOT_BENCH_SOURCES"]
+    fn benchmark_create_screenshot() {
+        ffmpeg::init().unwrap();
+        let sources = std::env::var("CAP_SCREENSHOT_BENCH_SOURCES").unwrap();
+        let median = |mut runs: Vec<f64>| {
+            runs.sort_by(f64::total_cmp);
+            runs[runs.len() / 2]
+        };
+        println!(
+            "source,width,height,decode_ms,rgb_ms,mjpeg_ms,rgb_bytes,mjpeg_bytes,rgb_psnr,mjpeg_psnr"
+        );
+        for source in sources.split(',').map(Path::new) {
+            let started = std::time::Instant::now();
+            let frame = first_video_frame(source).unwrap();
+            let decode = started.elapsed().as_secs_f64() * 1e3;
+            let size = (frame.width(), frame.height());
+            let rgb = || encode_rgb_jpeg(&frame, size).unwrap();
+            let mjpeg = || encode_mjpeg(&frame, size).unwrap();
+            let time = |encode: &dyn Fn() -> Vec<u8>| {
+                let started = std::time::Instant::now();
+                std::hint::black_box(encode());
+                started.elapsed().as_secs_f64() * 1e3
+            };
+            let (mut rgb_runs, mut mjpeg_runs) = (Vec::new(), Vec::new());
+            for run in 0..15 {
+                if run % 2 == 0 {
+                    rgb_runs.push(time(&rgb));
+                    mjpeg_runs.push(time(&mjpeg));
+                } else {
+                    mjpeg_runs.push(time(&mjpeg));
+                    rgb_runs.push(time(&rgb));
+                }
+            }
+            let (rgb, mjpeg) = (rgb(), mjpeg());
+            let screen = image::open(source.with_extension("png")).map(|png| png.into_rgb8());
+            let score = |jpeg: &[u8]| {
+                screen
+                    .as_ref()
+                    .map_or(String::new(), |screen| format!("{:.2}", psnr(jpeg, screen)))
+            };
+            println!(
+                "{},{},{},{decode:.1},{:.1},{:.1},{},{},{},{}",
+                source.display(),
+                size.0,
+                size.1,
+                median(rgb_runs),
+                median(mjpeg_runs),
+                rgb.len(),
+                mjpeg.len(),
+                score(&rgb),
+                score(&mjpeg),
+            );
+        }
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1479,6 +1757,129 @@ mod tests {
         assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_screenshots_match_the_full_listing_and_parse_lazily() {
+        fn eager_listing(dir: &Path) -> Vec<ScreenshotItem> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let bundle = entry.path();
+                if !bundle.is_dir()
+                    || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap")
+                {
+                    continue;
+                }
+                let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
+                    continue;
+                };
+                let Some(png) = std::fs::read_dir(&bundle)
+                    .unwrap()
+                    .flatten()
+                    .find_map(|entry| {
+                        let path = entry.path();
+                        (path.extension().and_then(|ext| ext.to_str()) == Some("png"))
+                            .then_some(path)
+                    })
+                else {
+                    continue;
+                };
+                out.push(ScreenshotItem {
+                    path: png.clone(),
+                    pretty_name: meta.pretty_name,
+                    sort_time_millis: media_sort_time_millis(&png),
+                    thumbnail: Some(png),
+                    bundle,
+                });
+            }
+            out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+            out
+        }
+
+        fn write_shot(dir: &Path, name: &str) -> PathBuf {
+            write_bundle(
+                dir,
+                name,
+                &format!(r#"{{"pretty_name":"{name}","sharing":null,"fps":0}}"#),
+            )
+        }
+
+        let root = temp_dir("bounded-screenshots");
+        let legacy = write_shot(&root, "legacy");
+        std::fs::write(legacy.join("shot.png"), b"png").unwrap();
+        write_shot(&root, "no-png");
+        let not_a_bundle = root.join("not-a-bundle");
+        std::fs::create_dir_all(&not_a_bundle).unwrap();
+        std::fs::write(not_a_bundle.join("original.png"), b"png").unwrap();
+        std::fs::write(root.join("loose.cap"), b"").unwrap();
+        for i in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(6));
+            let bundle = write_shot(&root, &format!("shot-{:02}", (i * 7) % 30));
+            std::fs::write(bundle.join("original.png"), b"png").unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let tie_a = write_shot(&root, "tie-a");
+        std::fs::write(tie_a.join("original.png"), b"png").unwrap();
+        let tie_b = write_shot(&root, "tie-b");
+        std::fs::hard_link(tie_a.join("original.png"), tie_b.join("original.png")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let corrupt = write_bundle(&root, "corrupt", "{ not json ");
+        std::fs::write(corrupt.join("original.png"), b"png").unwrap();
+
+        let full = list_screenshots_in(&root);
+        assert_eq!(full, eager_listing(&root));
+        assert_eq!(full.len(), 33);
+        assert!(full.iter().all(|item| item.bundle != corrupt));
+        let legacy_item = full.iter().find(|item| item.bundle == legacy).unwrap();
+        assert_eq!(legacy_item.path, legacy.join("shot.png"));
+
+        let read_dir_order: Vec<PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        let read_dir_position = |bundle: &Path| {
+            read_dir_order
+                .iter()
+                .position(|path| path == bundle)
+                .unwrap()
+        };
+        let tie_time = |bundle: &Path| {
+            full.iter()
+                .find(|item| item.bundle == bundle)
+                .unwrap()
+                .sort_time_millis
+        };
+        assert_eq!(tie_time(&tie_a), tie_time(&tie_b));
+        assert!(
+            full.windows(2).all(|pair| {
+                pair[0].sort_time_millis > pair[1].sort_time_millis
+                    || (pair[0].sort_time_millis == pair[1].sort_time_millis
+                        && read_dir_position(&pair[0].bundle) < read_dir_position(&pair[1].bundle))
+            }),
+            "newest first, equal timestamps keep directory order"
+        );
+
+        for limit in [0, 1, 9, 20, 100] {
+            assert_eq!(
+                screenshot_items_in(&root).take(limit).collect::<Vec<_>>(),
+                full[..limit.min(full.len())],
+                "limit {limit}"
+            );
+        }
+
+        let mut lazy = screenshot_items_in(&root);
+        let head: Vec<_> = lazy.by_ref().take(RECENT_MEDIA_LIMIT).collect();
+        assert_eq!(head, full[..RECENT_MEDIA_LIMIT]);
+        for item in &full[RECENT_MEDIA_LIMIT..] {
+            std::fs::remove_file(item.bundle.join("recording-meta.json")).unwrap();
+        }
+        assert!(
+            lazy.next().is_none(),
+            "metas past the consumed prefix are read on demand"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

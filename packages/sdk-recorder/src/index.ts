@@ -14,10 +14,10 @@ import type {
 import { MultipartClient } from "./upload/multipart-client";
 
 export type {
+	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
 	RecordingResult,
-	RecorderEventMap,
 };
 
 const DEFAULT_API_BASE = "https://cap.so";
@@ -35,7 +35,9 @@ export class CapRecorder {
 	private _videoId: string | null = null;
 	private _durationMs = 0;
 	private recorder: MediaRecorder | null = null;
+	private recordingStopped = Promise.resolve();
 	private streams: ManagedStreams | null = null;
+	private startup: AbortController | null = null;
 	private chunks: Blob[] = [];
 	private durationInterval: ReturnType<typeof setInterval> | null = null;
 	private accumulatedMs = 0;
@@ -51,9 +53,9 @@ export class CapRecorder {
 
 	constructor(options: RecorderOptions) {
 		this.options = {
-			apiBase: DEFAULT_API_BASE,
-			mode: "fullscreen",
 			...options,
+			apiBase: options.apiBase ?? DEFAULT_API_BASE,
+			mode: options.mode ?? "fullscreen",
 		};
 		this.maxDurationMs = options.maxDurationMs ?? 4 * 60 * 60 * 1000;
 		this.client = new MultipartClient(
@@ -109,30 +111,46 @@ export class CapRecorder {
 		this.emit("phasechange", { phase });
 	}
 
-	async start(): Promise<void> {
+	async start(options?: Pick<RecorderOptions, "maxDurationMs">): Promise<void> {
 		if (this._phase !== "idle") {
 			throw new Error(`Cannot start from phase "${this._phase}"`);
 		}
+		const maxDurationMs = options?.maxDurationMs ?? this.maxDurationMs;
+		const startup = new AbortController();
+		this.startup = startup;
 
 		try {
 			this.setPhase("requesting-permission");
 
-			this.streams = await acquireStreams({
-				mode: this.options.mode,
-				camera: this.options.camera,
-				microphone: this.options.microphone,
-				systemAudio: this.options.systemAudio,
-			});
+			const streams = await acquireStreams(
+				{
+					mode: this.options.mode,
+					camera: this.options.camera,
+					microphone: this.options.microphone,
+					systemAudio: this.options.systemAudio,
+				},
+				startup.signal,
+			);
+			if (startup.signal.aborted) {
+				releaseStreams(streams);
+				return;
+			}
+			this.streams = streams;
 
-			const composite = buildCompositeStream(this.streams);
+			const composite = await buildCompositeStream(streams);
+			if (startup.signal.aborted) return;
 			if (composite.getTracks().length === 0) {
 				throw new Error("No media tracks available");
 			}
 
 			const mimeType = getSupportedMimeType();
 			this.selectedMimeType = mimeType;
-			this.recorder = new MediaRecorder(composite, {
+			const recorder = new MediaRecorder(composite, {
 				mimeType: mimeType || undefined,
+			});
+			this.recorder = recorder;
+			this.recordingStopped = new Promise<void>((resolve) => {
+				recorder.onstop = () => resolve();
 			});
 
 			this.chunks = [];
@@ -157,14 +175,15 @@ export class CapRecorder {
 			this.startDurationTimer();
 			this.maxDurationTimeout = setTimeout(() => {
 				this.stop();
-			}, this.maxDurationMs);
+			}, maxDurationMs);
 			this.setPhase("recording");
 		} catch (error) {
+			if (startup.signal.aborted) return;
+			this.cleanup();
 			this.setPhase("error");
 			this.emit("error", {
 				error: error instanceof Error ? error : new Error(String(error)),
 			});
-			this.cleanup();
 			throw error;
 		}
 	}
@@ -193,21 +212,17 @@ export class CapRecorder {
 			throw new Error(`Cannot stop from phase "${this._phase}"`);
 		}
 
+		this._durationMs =
+			this.accumulatedMs +
+			(this._phase === "recording" ? Date.now() - this.lastResumeTime : 0);
 		this.setPhase("stopping");
 		this.stopDurationTimer();
 
 		const recorder = this.recorder;
-		return new Promise((resolve, reject) => {
-			recorder.onstop = async () => {
-				try {
-					const result = await this.uploadRecording();
-					resolve(result);
-				} catch (err) {
-					reject(err);
-				}
-			};
-			recorder.stop();
-		});
+		const stopped = this.recordingStopped;
+		if (recorder.state !== "inactive") recorder.stop();
+		await stopped;
+		return this.uploadRecording();
 	}
 
 	destroy(): void {
@@ -232,8 +247,6 @@ export class CapRecorder {
 
 			this._videoId = videoId;
 
-			this._durationMs =
-				this.accumulatedMs + (Date.now() - this.lastResumeTime);
 			await this.client.uploadBlob(videoId, blob, {
 				durationMs: this._durationMs,
 			});
@@ -274,6 +287,8 @@ export class CapRecorder {
 	}
 
 	private cleanup() {
+		this.startup?.abort();
+		this.startup = null;
 		this.stopDurationTimer();
 		if (this.maxDurationTimeout) {
 			clearTimeout(this.maxDurationTimeout);

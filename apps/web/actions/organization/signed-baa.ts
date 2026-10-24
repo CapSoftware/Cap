@@ -40,6 +40,10 @@ const CAP_PRO_STATUSES = new Set([
 	"past_due",
 ]);
 
+// Production server actions replace thrown messages with a generic React error,
+// so customer-facing failures are thrown as this type and returned as results.
+class SignedBaaError extends Error {}
+
 function ownerCanPurchaseSignedBaa(user: {
 	stripeCustomerId?: string | null;
 	stripeSubscriptionStatus?: string | null;
@@ -84,7 +88,7 @@ function getBaaPriceId() {
 		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
 	const priceId = STRIPE_SIGNED_BAA_PRICE_IDS[environment];
 	if (!priceId || priceId.includes("REPLACE")) {
-		throw new Error(
+		throw new SignedBaaError(
 			"Signed BAA billing is not configured. Please contact support.",
 		);
 	}
@@ -93,7 +97,7 @@ function getBaaPriceId() {
 
 async function getOwnerContext(organizationId: Organisation.OrganisationId) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new SignedBaaError("Unauthorized");
 
 	const [organization] = await db()
 		.select()
@@ -101,9 +105,11 @@ async function getOwnerContext(organizationId: Organisation.OrganisationId) {
 		.where(eq(organizations.id, organizationId))
 		.limit(1);
 
-	if (!organization) throw new Error("Organization not found");
+	if (!organization) throw new SignedBaaError("Organization not found");
 	if (organization.ownerId !== user.id)
-		throw new Error("Only the organization owner can manage the Signed BAA");
+		throw new SignedBaaError(
+			"Only the organization owner can manage the Signed BAA",
+		);
 
 	return { user, organization };
 }
@@ -166,7 +172,9 @@ export async function confirmSignedBaaPayment(
 ): Promise<SignedBaaStatus> {
 	const { user } = await getOwnerContext(organizationId);
 	if (!sessionId.startsWith("cs_") || sessionId.length > 255) {
-		throw new Error("Invalid payment confirmation. Please contact support.");
+		throw new SignedBaaError(
+			"Invalid payment confirmation. Please contact support.",
+		);
 	}
 	const session = await stripe().checkout.sessions.retrieve(sessionId);
 	const subscriptionId =
@@ -174,7 +182,7 @@ export async function confirmSignedBaaPayment(
 			? session.subscription
 			: session.subscription?.id;
 	if (!subscriptionId) {
-		throw new Error("No BAA subscription was found for this payment.");
+		throw new SignedBaaError("No BAA subscription was found for this payment.");
 	}
 	const subscription = await stripe().subscriptions.retrieve(subscriptionId);
 	const record = await attachPaidBaaCheckout(session, subscription, {
@@ -182,7 +190,7 @@ export async function confirmSignedBaaPayment(
 		organizationId,
 	});
 	if (!record) {
-		throw new Error(
+		throw new SignedBaaError(
 			"We couldn't confirm a paid BAA for this organization. Please retry once payment completes, or contact support. Do not pay again.",
 		);
 	}
@@ -206,7 +214,9 @@ function validateInput(input: SignedBaaInput) {
 
 	const requireLength = (value: string, label: string, max: number) => {
 		if (value.length < 2 || value.length > max) {
-			throw new Error(`${label} must be between 2 and ${max} characters`);
+			throw new SignedBaaError(
+				`${label} must be between 2 and ${max} characters`,
+			);
 		}
 	};
 
@@ -219,21 +229,21 @@ function validateInput(input: SignedBaaInput) {
 		!EMAIL_REGEX.test(trimmed.noticesEmail) ||
 		trimmed.noticesEmail.length > 255
 	) {
-		throw new Error("Please provide a valid notices email address");
+		throw new SignedBaaError("Please provide a valid notices email address");
 	}
 	if (
 		!trimmed.signatureDataUrl.startsWith(SIGNATURE_PREFIX) ||
 		trimmed.signatureDataUrl.length < 200 ||
 		trimmed.signatureDataUrl.length > 700_000
 	) {
-		throw new Error("Please provide a valid signature");
+		throw new SignedBaaError("Please provide a valid signature");
 	}
 
 	return trimmed;
 }
 
 async function resolvePaymentMethod(
-	customerId: string,
+	customer: Stripe.Customer | Stripe.DeletedCustomer,
 	proSubscriptionId: string | null,
 ): Promise<{ paymentMethod?: string }> {
 	if (proSubscriptionId) {
@@ -249,7 +259,6 @@ async function resolvePaymentMethod(
 		}
 	}
 
-	const customer = await stripe().customers.retrieve(customerId);
 	if (!customer.deleted) {
 		const invoiceDefault = customer.invoice_settings?.default_payment_method;
 		// A customer-level default (payment method or legacy source) is applied
@@ -258,14 +267,14 @@ async function resolvePaymentMethod(
 	}
 
 	const methods = await stripe().paymentMethods.list({
-		customer: customerId,
+		customer: customer.id,
 		type: "card",
 		limit: 1,
 	});
 	const method = methods.data[0];
 	if (method) return { paymentMethod: method.id };
 
-	throw new Error(
+	throw new SignedBaaError(
 		"No payment method on file. Add a card via Manage Billing first, then try again.",
 	);
 }
@@ -292,15 +301,17 @@ async function findExistingBaaSubscription(
 function throwSignedBaaStripeError(error: unknown): never {
 	const stripeError = error as { type?: string; message?: string };
 	if (stripeError.type === "StripeCardError") {
-		throw new Error(
+		throw new SignedBaaError(
 			`Your card was declined: ${stripeError.message ?? "payment failed"}. No subscription was started.`,
 		);
 	}
 	if (error instanceof Error && error.message.includes("payment method")) {
-		throw error;
+		throw error instanceof SignedBaaError
+			? error
+			: new SignedBaaError(error.message);
 	}
 	console.error("Signed BAA: subscription creation failed", error);
-	throw new Error(
+	throw new SignedBaaError(
 		"We couldn't confirm the Signed BAA subscription. Please try again or contact support if you were charged.",
 	);
 }
@@ -310,6 +321,7 @@ async function createBaaSubscription({
 	organizationId,
 	userId,
 	recordId,
+	claimedAt,
 	proSubscriptionId,
 	priceId,
 }: {
@@ -317,6 +329,7 @@ async function createBaaSubscription({
 	organizationId: string;
 	userId: string;
 	recordId: string;
+	claimedAt: Date;
 	proSubscriptionId: string | null;
 	priceId: string;
 }): Promise<Stripe.Subscription> {
@@ -326,14 +339,19 @@ async function createBaaSubscription({
 	);
 	if (existing) return existing;
 
+	const customer = await stripe().customers.retrieve(customerId);
 	const { paymentMethod } = await resolvePaymentMethod(
-		customerId,
+		customer,
 		proSubscriptionId,
 	);
+	// Stripe bills new subscriptions in the price's default currency (USD)
+	// unless told otherwise, which a customer already billed in EUR/GBP rejects.
+	const currency = customer.deleted ? null : customer.currency;
 	return stripe().subscriptions.create(
 		{
 			customer: customerId,
 			items: [{ price: priceId, quantity: 1 }],
+			...(currency ? { currency } : {}),
 			...(paymentMethod ? { default_payment_method: paymentMethod } : {}),
 			payment_behavior: "error_if_incomplete",
 			metadata: {
@@ -342,22 +360,46 @@ async function createBaaSubscription({
 				userId,
 			},
 		},
-		{ idempotencyKey: `signed-baa-${recordId}` },
+		// Scoped to the claim so a failed attempt's stored Stripe error isn't
+		// replayed on retry; findExistingBaaSubscription covers lost responses.
+		{ idempotencyKey: `signed-baa-${recordId}-${claimedAt.getTime()}` },
 	);
+}
+
+export type SignedBaaResult =
+	| { success: true; emailSent: boolean }
+	| { success: false; error: string };
+
+async function toSignedBaaResult(
+	complete: Promise<{ success: true; emailSent: boolean }>,
+): Promise<SignedBaaResult> {
+	try {
+		return await complete;
+	} catch (error) {
+		if (error instanceof SignedBaaError) {
+			return { success: false, error: error.message };
+		}
+		console.error("Signed BAA: unexpected failure", error);
+		return {
+			success: false,
+			error:
+				"We couldn't complete your Signed BAA. Please try again or contact hello@cap.so.",
+		};
+	}
 }
 
 export async function purchaseSignedBaa(
 	organizationId: Organisation.OrganisationId,
 	input: SignedBaaInput,
-): Promise<{ success: true; emailSent: boolean }> {
-	return completeSignedBaa(organizationId, input, false);
+): Promise<SignedBaaResult> {
+	return toSignedBaaResult(completeSignedBaa(organizationId, input, false));
 }
 
 export async function signPaidBaa(
 	organizationId: Organisation.OrganisationId,
 	input: SignedBaaInput,
-): Promise<{ success: true; emailSent: boolean }> {
-	return completeSignedBaa(organizationId, input, true);
+): Promise<SignedBaaResult> {
+	return toSignedBaaResult(completeSignedBaa(organizationId, input, true));
 }
 
 async function completeSignedBaa(
@@ -377,7 +419,9 @@ async function completeSignedBaa(
 		.limit(1);
 
 	if (existing?.status === "active" && existing.emailSentAt) {
-		throw new Error("A Signed BAA is already active for this organization.");
+		throw new SignedBaaError(
+			"A Signed BAA is already active for this organization.",
+		);
 	}
 	let paidSubscription: Stripe.Subscription | null = null;
 	if (existing?.stripeSubscriptionId && existing.status !== "canceled") {
@@ -392,13 +436,15 @@ async function completeSignedBaa(
 				existing.status !== "paid" &&
 				!hasPaidBaaInvoice(paidSubscription))
 		) {
-			throw new Error(
+			throw new SignedBaaError(
 				"The existing BAA payment is not confirmed. Please contact support; no additional payment was taken.",
 			);
 		}
 	}
 	if (requirePaid && !paidSubscription) {
-		throw new Error("A confirmed BAA payment is required before signing.");
+		throw new SignedBaaError(
+			"A confirmed BAA payment is required before signing.",
+		);
 	}
 
 	const proRequirementWaived =
@@ -411,7 +457,7 @@ async function completeSignedBaa(
 			!user.stripeSubscriptionId ||
 			!ownerCanPurchaseSignedBaa(user)
 		) {
-			throw new Error(
+			throw new SignedBaaError(
 				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 			);
 		}
@@ -422,7 +468,7 @@ async function completeSignedBaa(
 				user.stripeSubscriptionId,
 			);
 		} catch {
-			throw new Error(
+			throw new SignedBaaError(
 				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 			);
 		}
@@ -430,7 +476,7 @@ async function completeSignedBaa(
 			!CAP_PRO_STATUSES.has(liveProSubscription.status) ||
 			!isProSubscription(liveProSubscription)
 		) {
-			throw new Error(
+			throw new SignedBaaError(
 				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 			);
 		}
@@ -476,7 +522,7 @@ async function completeSignedBaa(
 				),
 			);
 		if (getAffectedRows(claim) === 0) {
-			throw new Error(
+			throw new SignedBaaError(
 				"A Signed BAA purchase is already in progress. Please wait a moment and refresh.",
 			);
 		}
@@ -494,7 +540,7 @@ async function completeSignedBaa(
 					...recordFields,
 				});
 		} catch {
-			throw new Error(
+			throw new SignedBaaError(
 				"A Signed BAA purchase is already in progress. Please wait a moment and refresh.",
 			);
 		}
@@ -562,7 +608,7 @@ async function completeSignedBaa(
 	} catch (error) {
 		console.error("Signed BAA: PDF generation failed", error);
 		await revertToPending();
-		throw new Error(
+		throw new SignedBaaError(
 			"We couldn't generate the agreement from your signature. Please clear the signature and try again.",
 		);
 	}
@@ -575,6 +621,7 @@ async function completeSignedBaa(
 				organizationId,
 				userId: user.id,
 				recordId,
+				claimedAt,
 				proSubscriptionId: user.stripeSubscriptionId,
 				priceId,
 			});
@@ -585,6 +632,7 @@ async function completeSignedBaa(
 					organizationId,
 					userId: user.id,
 					recordId,
+					claimedAt,
 					proSubscriptionId: user.stripeSubscriptionId,
 					priceId,
 				});
@@ -597,7 +645,7 @@ async function completeSignedBaa(
 
 	if (!subscription) {
 		await revertToPending();
-		throw new Error(
+		throw new SignedBaaError(
 			"We couldn't confirm the Signed BAA subscription. Please try again or contact support if you were charged.",
 		);
 	}
@@ -636,13 +684,13 @@ async function completeSignedBaa(
 			current.status !== "processing" ||
 			current.updatedAt.getTime() !== claimedAt.getTime()
 		) {
-			throw new Error(
+			throw new SignedBaaError(
 				"The BAA changed while confirming payment. Please refresh or contact support; do not pay again.",
 			);
 		}
 	}
 	if (!(await ensureBaaHasPro(user, subscription, recordIdentity))) {
-		throw new Error(
+		throw new SignedBaaError(
 			"Cap Pro ended before the BAA could be signed. The BAA subscription has been canceled; please contact support about your payment.",
 		);
 	}
@@ -664,7 +712,7 @@ async function completeSignedBaa(
 		);
 	if (getAffectedRows(finalized) === 0) {
 		await cancelIfUnlinked();
-		throw new Error(
+		throw new SignedBaaError(
 			"The BAA changed while signing. Please refresh or contact support; do not pay again.",
 		);
 	}
@@ -698,7 +746,7 @@ async function completeSignedBaa(
 				idempotencyKey: `signed-baa-email-${recordId}`,
 			});
 			if (!delivery?.data?.id || delivery.error) {
-				throw new Error(
+				throw new SignedBaaError(
 					delivery?.error?.message ??
 						"The email provider did not confirm delivery.",
 				);
