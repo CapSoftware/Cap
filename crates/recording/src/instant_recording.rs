@@ -1778,9 +1778,9 @@ mod tests {
 mod quiescence_tests {
     use super::*;
     use crate::output_pipeline::{
-        AudioFrame, AudioMuxer, AudioSource, ChannelAudioSource, ChannelAudioSourceConfig,
-        ChannelVideoSource, ChannelVideoSourceConfig, Muxer, SetupCtx, TaskPool, VideoFrame,
-        VideoMuxer,
+        AUDIO_SOURCE_CHANNEL_CAPACITY, AudioFrame, AudioMuxer, AudioSource, ChannelAudioSource,
+        ChannelAudioSourceConfig, ChannelVideoSource, ChannelVideoSourceConfig, Muxer, SetupCtx,
+        TaskPool, VideoFrame, VideoMuxer,
     };
     use cap_timestamp::Timestamp;
     use std::{
@@ -2464,7 +2464,7 @@ mod quiescence_tests {
             .try_send(combined_audio_frame(fixture.timestamps, 0.25))
             .unwrap();
         let mut full = false;
-        for _ in 0..256 {
+        for _ in 0..(AUDIO_SOURCE_CHANNEL_CAPACITY + 8) {
             if let Err(error) = fixture
                 .audio
                 .try_send(combined_audio_frame(fixture.timestamps, 0.75))
