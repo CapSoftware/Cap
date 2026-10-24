@@ -99,6 +99,12 @@ jobs:
       - name: Build cap-gpui
         run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
 
+      - name: Confirmation dialog without zenity (X11 input)
+        run: |
+          sudo apt-get install -y -qq xdotool xvfb >/dev/null
+          bash scripts/linux-desktop-harness/dialog-x11.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib
+
       - name: Fetch the Cap package for desktop integration
         run: |
           curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
