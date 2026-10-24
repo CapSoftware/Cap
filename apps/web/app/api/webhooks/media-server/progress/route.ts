@@ -3,7 +3,7 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { handleAudioLevelPublication } from "@/lib/audio-level-publication";
 import { SourceCommitPendingError } from "@/lib/desktop-recording-jobs";
@@ -248,9 +248,14 @@ export async function POST(request: NextRequest) {
 				...(transcribeOnView
 					? [sql`'$.transcribeOnView', JSON_EXTRACT('true', '$')`]
 					: []),
+				...(currentVideo?.metadata?.loomDeferredProcessing &&
+				currentUpload?.rawFileKey ===
+					currentVideo.metadata.loomDeferredProcessing.rawFileKey
+					? [sql`'$.loomDeferredProcessing.status', 'complete'`]
+					: []),
 				...(deferredSourceKey
 					? [
-							sql`'$.loomDeferredProcessing', JSON_OBJECT('rawFileKey', ${deferredSourceKey}, 'status', 'pending')`,
+							sql`'$.loomDeferredProcessing', IF(JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing') IS NULL, JSON_OBJECT('rawFileKey', ${deferredSourceKey}, 'status', 'pending'), JSON_EXTRACT(${videos.metadata}, '$.loomDeferredProcessing'))`,
 						]
 					: []),
 			];
@@ -291,7 +296,17 @@ export async function POST(request: NextRequest) {
 			} else {
 				await db()
 					.delete(videoUploads)
-					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+					.where(
+						and(
+							eq(videoUploads.videoId, payload.videoId as Video.VideoId),
+							deferredSourceKey
+								? or(
+										isNull(videoUploads.rawFileKey),
+										ne(videoUploads.rawFileKey, deferredSourceKey),
+									)
+								: undefined,
+						),
+					);
 			}
 			await invalidateGoogleDriveStorageQuotaCache(
 				currentVideo?.storageIntegrationId,

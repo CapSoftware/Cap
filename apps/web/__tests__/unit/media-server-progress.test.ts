@@ -873,7 +873,9 @@ describe("Loom importer completions", () => {
 			"?retryable=true&transcription=on-view",
 		);
 		const [write] = metadataWrites(database.mutations);
-		expect(write?.sql).toContain("'$.loomDeferredProcessing', JSON_OBJECT(");
+		expect(write?.sql).toContain(
+			"JSON_OBJECT('rawFileKey', ?, 'status', 'pending')",
+		);
 		expect(write?.params).toContain(key);
 	});
 
@@ -890,6 +892,34 @@ describe("Loom importer completions", () => {
 		);
 		for (const write of metadataWrites(database.mutations))
 			expect(write.sql).not.toContain("loomDeferredProcessing");
+	});
+
+	it("keeps an existing deferred claim when a completion is repeated", async () => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: `${ownerId}/${videoId}/raw-upload.webm` }),
+			"media-secret",
+			"?retryable=true&transcription=on-view",
+		);
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"IF(JSON_EXTRACT(?, '$.loomDeferredProcessing') IS NULL",
+		);
+	});
+
+	it("marks a deferred original complete once it has been processed", async () => {
+		const database = loomVideo();
+		const key = `${ownerId}/${videoId}/raw-upload.webm`;
+		database.video.metadata = {
+			loomDeferredProcessing: { rawFileKey: key, status: "started" },
+		};
+		database.setRawFileKey(key);
+		await request(complete(), "media-secret", "?retryable=true");
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"'$.loomDeferredProcessing.status', 'complete'",
+		);
+		expect(mocks.transcribe).toHaveBeenCalledWith(videoId);
 	});
 
 	it("keeps queueing transcription for media server completions", async () => {

@@ -25,7 +25,7 @@ export interface VideoMetadata {
 	};
 	loomDeferredProcessing?: {
 		rawFileKey: string;
-		status: "pending" | "started";
+		status: "pending" | "started" | "complete";
 		startedAt?: string;
 	};
 	transcribeOnView?: boolean;

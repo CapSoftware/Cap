@@ -27,6 +27,7 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -278,17 +279,20 @@ async function EmbedContent({
 		? null
 		: getPendingLoomProcessing(currentMetadata, video.ownerId, video.id);
 	if (deferredLoomRawFileKey) {
-		startDeferredLoomProcessing({
-			videoId: video.id,
-			ownerId: video.ownerId,
-			bucketId: video.bucket,
-			rawFileKey: deferredLoomRawFileKey,
-		}).catch((error) => {
-			console.error(
-				`[EmbedVideoPage] Error starting deferred processing for ${video.id}:`,
-				error,
-			);
-		});
+		const rawFileKey = deferredLoomRawFileKey;
+		after(() =>
+			startDeferredLoomProcessing({
+				videoId: video.id,
+				ownerId: video.ownerId,
+				bucketId: video.bucket,
+				rawFileKey,
+			}).catch((error) => {
+				console.error(
+					`[EmbedVideoPage] Error starting deferred processing for ${video.id}:`,
+					error,
+				);
+			}),
+		);
 	}
 	let initialAiData = null;
 

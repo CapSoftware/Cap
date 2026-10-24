@@ -39,6 +39,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardSpacesData,
@@ -881,17 +882,20 @@ async function AuthorizedContent({
 		? null
 		: getPendingLoomProcessing(metadata, video.owner.id, videoId);
 	if (deferredLoomRawFileKey) {
-		startDeferredLoomProcessing({
-			videoId,
-			ownerId: video.owner.id,
-			bucketId: video.bucket,
-			rawFileKey: deferredLoomRawFileKey,
-		}).catch((error) => {
-			console.error(
-				`[ShareVideoPage] Error starting deferred processing for ${videoId}:`,
-				error,
-			);
-		});
+		const rawFileKey = deferredLoomRawFileKey;
+		after(() =>
+			startDeferredLoomProcessing({
+				videoId,
+				ownerId: video.owner.id,
+				bucketId: video.bucket,
+				rawFileKey,
+			}).catch((error) => {
+				console.error(
+					`[ShareVideoPage] Error starting deferred processing for ${videoId}:`,
+					error,
+				);
+			}),
+		);
 	}
 	const aiGenerationStatus = metadata.aiGenerationStatus || null;
 
