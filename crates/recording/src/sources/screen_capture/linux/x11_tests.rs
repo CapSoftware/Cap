@@ -47,7 +47,12 @@ async fn capture_frame(
     (info, frame.unwrap().unwrap().inner)
 }
 
-fn paint_display() -> RustConnection {
+static DISPLAY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The tests share one root window, so each holds the display from painting
+/// until its last capture.
+async fn paint_display() -> (tokio::sync::MutexGuard<'static, ()>, RustConnection) {
+    let guard = DISPLAY.lock().await;
     let (conn, screen) = x11rb::connect(None).unwrap();
     let root = conn.setup().roots[screen].root;
     let gc = conn.generate_id().unwrap();
@@ -86,7 +91,7 @@ fn paint_display() -> RustConnection {
     .check()
     .unwrap();
     conn.free_gc(gc).unwrap().check().unwrap();
-    conn
+    (guard, conn)
 }
 
 fn assert_frame(info: VideoInfo, frame: &ffmpeg::frame::Video, expected: (u32, u32)) {
@@ -103,7 +108,7 @@ fn assert_frame(info: VideoInfo, frame: &ffmpeg::frame::Video, expected: (u32, u
 #[tokio::test]
 #[ignore = "requires a dedicated 800x600 Xvfb display"]
 async fn x11_resolution_limit_preserves_the_whole_display_and_area() {
-    let _display = paint_display();
+    let _display = paint_display().await;
     let (info, frame) = capture_frame(None, Some((320, 240))).await;
     assert_frame(info, &frame, (320, 240));
 
@@ -121,7 +126,7 @@ async fn x11_resolution_limit_preserves_the_whole_display_and_area() {
 #[tokio::test]
 #[ignore = "requires a dedicated 800x600 Xvfb display"]
 async fn x11_resolution_without_a_limit_keeps_native_dimensions() {
-    let _display = paint_display();
+    let _display = paint_display().await;
     let (info, frame) = capture_frame(None, None).await;
     assert_frame(info, &frame, (800, 600));
 
@@ -147,7 +152,7 @@ async fn x11_resolution_without_a_limit_keeps_native_dimensions() {
 #[tokio::test]
 #[ignore = "requires a dedicated 800x600 Xvfb display"]
 async fn x11_resolution_limit_reaches_the_encoded_recording() {
-    let _display = paint_display();
+    let _display = paint_display().await;
     let source = configured_source(None, Some((320, 240))).await;
     let output = tempfile::tempdir().unwrap();
     let pipeline = output_pipeline::OutputPipeline::builder(output.path().to_path_buf())
