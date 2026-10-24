@@ -252,6 +252,8 @@ export const MediaFormatConverter = ({
 	};
 
 	const validateAndSetFile = (selectedFile: File) => {
+		if (isConverting) return;
+
 		setError(null);
 		setFile(null);
 		if (outputUrl) {
@@ -985,6 +987,7 @@ export const MediaFormatConverter = ({
 				<input
 					type="file"
 					accept={getAcceptAttribute(currentSourceFormat)}
+					disabled={isConverting}
 					className="hidden"
 					onChange={handleFileChange}
 					ref={fileInputRef}
