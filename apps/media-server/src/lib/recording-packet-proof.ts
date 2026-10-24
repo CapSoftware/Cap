@@ -328,7 +328,6 @@ function configurationDifferences(
 	for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
 		if (JSON.stringify(left[key]) === JSON.stringify(right[key])) continue;
 		const [a, b] = [left[key], right[key]];
-		// Name the tag or disposition that changed instead of printing two long objects.
 		if (!path && (isRecord(a) || isRecord(b)))
 			parts.push(
 				...configurationDifferences(
