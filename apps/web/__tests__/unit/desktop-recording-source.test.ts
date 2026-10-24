@@ -1764,8 +1764,8 @@ describe("source commit page size", () => {
 		};
 	}
 
-	async function referenceOutput(pageSize: number) {
-		const storage = pagedFixture();
+	async function referenceOutput(pageSize: number, segments = segmentCount) {
+		const storage = pagedFixture("s3", false, segments);
 		const result = await advanceWithPageSize(pageSize, snapshotCheckpoint());
 		if (!result.source) throw new Error("Snapshot did not complete");
 		return {
@@ -1791,9 +1791,9 @@ describe("source commit page size", () => {
 
 	it("resumes a commit saved with 256-entry pages using the previous 128-entry writer, as after a rollback", async () => {
 		mocks.treePageSize = 128;
-		const reference = await referenceOutput(128);
+		const reference = await referenceOutput(128, 300);
 		mocks.treePageSize = undefined;
-		const storage = pagedFixture();
+		const storage = pagedFixture("s3", false, 300);
 		const partial = await advanceWithPageSize(
 			256,
 			snapshotCheckpoint(),
@@ -1801,6 +1801,15 @@ describe("source commit page size", () => {
 		);
 		expect(partial.source).toBeUndefined();
 		expect(partial.checkpoint.phase).toBe("verify");
+		const savedLeaves = [...storage.objects.values()].flatMap((object) => {
+			try {
+				const page = JSON.parse(object.body ?? "");
+				return page?.type === "leaf" ? [page.entries.length] : [];
+			} catch {
+				return [];
+			}
+		});
+		expect(savedLeaves).toContain(256);
 		mocks.treePageSize = 128;
 		const resumed = await advanceWithPageSize(128, partial.checkpoint);
 		mocks.treePageSize = undefined;
