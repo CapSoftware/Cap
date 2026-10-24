@@ -63,6 +63,7 @@ import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { DashboardBackLink } from "./DashboardBackLink";
+import { ShareNavigation } from "./ShareNavigation";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
@@ -609,7 +610,9 @@ export const ShareHeader = ({
 					className="max-w-full px-3"
 					onClick={handleCopyClick}
 				>
-					<span className="max-w-96 truncate">{getDisplayLink()}</span>
+					<span className="max-w-[70vw] truncate sm:max-w-96">
+						{getDisplayLink()}
+					</span>
 					{linkCopied ? (
 						<Check className="ml-2 w-4 h-4 svgpathanimation" />
 					) : (
@@ -637,7 +640,7 @@ export const ShareHeader = ({
 			{showCopyOptions && (
 				<div
 					className={clsx(
-						"absolute top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-white shadow-lg",
+						"absolute top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-gray-1 shadow-lg",
 						variant === "link" ? "right-0" : "left-1/2 -translate-x-1/2",
 					)}
 				>
@@ -774,7 +777,7 @@ export const ShareHeader = ({
 			<div className="group relative inline-flex shrink-0 items-center">
 				{canManageSharePageBranding && (
 					<div className="pointer-events-none absolute left-0 top-full z-10 pt-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-						<div className="flex items-center gap-1 rounded-full border border-gray-5 bg-white p-1 shadow-sm">
+						<div className="flex items-center gap-1 rounded-full border border-gray-5 bg-gray-1 p-1 shadow-sm">
 							<Button
 								variant="gray"
 								size="xs"
@@ -937,11 +940,13 @@ export const ShareHeader = ({
 			{/* Sits in the page bar above both panes, so the spacing is the bar's
 			    own padding rather than a top margin against the video. */}
 			<div className={clsx("pb-4", dashboardDestination ? "pt-2" : "pt-4")}>
-				{dashboardDestination && (
+				{dashboardDestination ? (
 					<DashboardBackLink
 						destination={dashboardDestination}
-						className="-ml-1.5 mb-1.5"
+						className="-ml-1.5 mb-1.5 min-h-11"
 					/>
+				) : (
+					<ShareNavigation />
 				)}
 				<div className="flex flex-col gap-4">
 					<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
