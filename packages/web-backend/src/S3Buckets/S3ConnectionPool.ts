@@ -20,13 +20,13 @@ function boundIdleConnections<T extends HttpAgent>(agent: T) {
 	return agent;
 }
 
-const makeS3ConnectionPool = (maxFreeSockets: number) =>
+const makeS3ConnectionPool = (maxFreeSockets: number, maxSockets = 50) =>
 	Effect.acquireRelease(
 		Effect.sync(() => {
 			const options = {
 				keepAlive: true,
-				maxSockets: 50,
-				maxTotalSockets: 128,
+				maxSockets,
+				maxTotalSockets: Math.max(128, maxSockets * 2),
 				maxFreeSockets,
 			};
 			return {
@@ -42,4 +42,6 @@ const makeS3ConnectionPool = (maxFreeSockets: number) =>
 	);
 
 export const s3ConnectionPool = makeS3ConnectionPool(8);
-export const defaultBucketS3ConnectionPool = makeS3ConnectionPool(32);
+// Desktop source commits copy 256 objects at once in Cap's own bucket, page after page; keeping those
+// sockets between pages (they still expire after 30 s idle) avoids re-opening TLS to S3 for every page.
+export const defaultBucketS3ConnectionPool = makeS3ConnectionPool(256, 256);

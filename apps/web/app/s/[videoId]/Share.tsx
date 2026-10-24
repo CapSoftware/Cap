@@ -8,7 +8,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	Suspense,
 	startTransition,
@@ -21,13 +21,13 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	getVideoStatus,
-	type VideoStatusResult,
-} from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import {
+	VideoStatusNotFoundError,
+	videoStatusQueryOptions,
+} from "@/lib/video-status-query";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { DashboardBackLink } from "./_components/DashboardBackLink";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
@@ -238,13 +238,7 @@ const useVideoStatus = (
 	enabled: boolean = true,
 ) => {
 	return useQuery({
-		queryKey: ["videoStatus", videoId],
-		queryFn: async (): Promise<VideoStatusResult> => {
-			const res = await getVideoStatus(videoId);
-			if ("success" in res && res.success === false)
-				throw new Error("Failed to fetch video status");
-			return res as VideoStatusResult;
-		},
+		...videoStatusQueryOptions(videoId),
 		initialData: initialData
 			? {
 					transcriptionStatus:
@@ -260,6 +254,7 @@ const useVideoStatus = (
 			: undefined,
 		enabled,
 		refetchInterval: (query) => {
+			if (query.state.error instanceof VideoStatusNotFoundError) return false;
 			const data = query.state.data;
 			if (!data) return 2000;
 
@@ -365,7 +360,7 @@ export const Share = ({
 		},
 	);
 
-	const { data: videoStatus } = useVideoStatus(
+	const { data: videoStatus, error: videoStatusError } = useVideoStatus(
 		data.id,
 		{
 			aiGeneration: aiGenerationAvailable,
@@ -378,6 +373,11 @@ export const Share = ({
 		},
 		!isScreenshot,
 	);
+	const router = useRouter();
+	const videoWasDeleted = videoStatusError instanceof VideoStatusNotFoundError;
+	useEffect(() => {
+		if (videoWasDeleted) router.refresh();
+	}, [videoWasDeleted, router]);
 
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;

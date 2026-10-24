@@ -1260,31 +1260,55 @@ impl TemporaryExportOutput {
         self.path.to_path_buf()
     }
 
+    #[cfg(unix)]
+    fn restore_permissions(&self, output: Option<&std::path::Path>) -> std::io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let path_metadata = std::fs::symlink_metadata(&self.path)?;
+        let file_metadata = self.file.metadata()?;
+        if !path_metadata.is_file()
+            || path_metadata.dev() != file_metadata.dev()
+            || path_metadata.ino() != file_metadata.ino()
+        {
+            return Err(std::io::Error::other("Export temporary file was replaced"));
+        }
+        let existing_permissions = match output {
+            Some(path) => match std::fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+                _ => None,
+            },
+            None => None,
+        };
+        self.file
+            .set_permissions(existing_permissions.unwrap_or_else(|| self.final_permissions.clone()))
+    }
+
     pub(crate) fn persist_noclobber(
         self,
         output: &std::path::Path,
     ) -> Result<(), tempfile::PathPersistError> {
         #[cfg(unix)]
-        let prepare_permissions = || {
-            use std::os::unix::fs::MetadataExt;
-            let path_metadata = std::fs::symlink_metadata(&self.path)?;
-            let file_metadata = self.file.metadata()?;
-            if !path_metadata.is_file()
-                || path_metadata.dev() != file_metadata.dev()
-                || path_metadata.ino() != file_metadata.ino()
-            {
-                return Err(std::io::Error::other("Export temporary file was replaced"));
-            }
-            self.file.set_permissions(self.final_permissions.clone())
-        };
-        #[cfg(unix)]
-        if let Err(error) = prepare_permissions() {
+        if let Err(error) = self.restore_permissions(None) {
             return Err(tempfile::PathPersistError {
                 error,
                 path: self.path,
             });
         }
         self.path.persist_noclobber(output)
+    }
+
+    pub(crate) fn persist_replace(
+        self,
+        output: &std::path::Path,
+    ) -> Result<(), tempfile::PathPersistError> {
+        #[cfg(unix)]
+        if let Err(error) = self.restore_permissions(Some(output)) {
+            return Err(tempfile::PathPersistError {
+                error,
+                path: self.path,
+            });
+        }
+        self.path.persist(output)
     }
 }
 

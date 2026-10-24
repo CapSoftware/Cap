@@ -10,10 +10,13 @@ import {
 	type DesktopRecordingSourceCheckpoint,
 	desktopRecordingSourceCheckpointSchema,
 	SOURCE_COMMIT_AWS_PAGE_SIZE,
+	SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
+	SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 	SOURCE_COMMIT_PAGE_SIZE,
 	SOURCE_COMMIT_PART_BATCH_SIZE,
 	SOURCE_COMMIT_PART_PAGE_SIZE,
+	SOURCE_COMMIT_TREE_PAGE_SIZE,
 	type SourceCommitPageReference,
 	type SourceCommitReference,
 	sourceCommitPageReferenceSchema,
@@ -233,7 +236,10 @@ const treePageSchema = z.discriminatedUnion("type", [
 		kind: z.enum(["plan", "objects", "parts"]),
 		scope: z.string(),
 		start: z.number().int().nonnegative(),
-		entries: z.array(z.unknown()).min(1).max(SOURCE_COMMIT_PART_PAGE_SIZE),
+		entries: z
+			.array(z.unknown())
+			.min(1)
+			.max(SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES),
 	}),
 	z.object({
 		version: z.literal(1),
@@ -261,18 +267,25 @@ const committedInventorySchema = z.union([
 const SOURCE_COMMIT_STEP_TIMEOUT_MS = 180_000;
 const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
 const SOURCE_COMMIT_CONCURRENCY = 8;
-const SOURCE_COMMIT_AWS_CONCURRENCY = 32;
+const SOURCE_COMMIT_AWS_CONCURRENCY = 256;
+// About 100 Drive requests a second, half of Drive's 12,000-a-minute per-user quota; driveFetch backs off on rate limits.
+const SOURCE_COMMIT_GOOGLE_DRIVE_CONCURRENCY = 32;
 
 function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
-	return bucket.provider === "s3" && Option.isNone(customBucket)
-		? {
-				concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
-				pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
-			}
-		: {
-				concurrency: SOURCE_COMMIT_CONCURRENCY,
-				pageSize: SOURCE_COMMIT_PAGE_SIZE,
-			};
+	if (bucket.provider === "s3" && Option.isNone(customBucket))
+		return {
+			concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
+			pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
+		};
+	if (bucket.provider === "googleDrive")
+		return {
+			concurrency: SOURCE_COMMIT_GOOGLE_DRIVE_CONCURRENCY,
+			pageSize: SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE,
+		};
+	return {
+		concurrency: SOURCE_COMMIT_CONCURRENCY,
+		pageSize: SOURCE_COMMIT_PAGE_SIZE,
+	};
 }
 
 function invalidSource(message: string): never {
@@ -386,7 +399,7 @@ async function appendTree(
 	scope: string,
 	entries: unknown[],
 ) {
-	if (entries.length === 0 || entries.length > SOURCE_COMMIT_PART_PAGE_SIZE)
+	if (entries.length === 0 || entries.length > SOURCE_COMMIT_TREE_PAGE_SIZE)
 		invalidSource("Invalid source page size");
 	const start = treeCount(roots);
 	const leaf = await writeReference(context, {
@@ -783,10 +796,13 @@ function objectDirectory(key: string) {
 }
 
 async function saveObjectReceipt(context: SourceContext, object: SourceObject) {
-	await writeSourceText(
-		context,
-		`${objectDirectory(object.key)}/receipt.json`,
-		JSON.stringify(object),
+	const key = `${objectDirectory(object.key)}/receipt.json`;
+	const content = JSON.stringify(object);
+	// A receipt only lets a retry find this copy, and a retry re-checks the receipt and the copy
+	// before reusing it, so a receipt skips the readback that inventory pages need.
+	assertContextKey(context, key);
+	await context.run(
+		context.bucket.putObject(key, content, { contentType: "application/json" }),
 	);
 	return object;
 }
@@ -795,8 +811,9 @@ async function reusableCopy(
 	context: SourceContext,
 	original: OriginalObject,
 	position: number,
+	checkFirst = true,
 ) {
-	await checkOriginal(context, original);
+	if (checkFirst) await checkOriginal(context, original);
 	let continuationToken: string | undefined;
 	for (let page = 0; page < 4; page++) {
 		const listing = await context.run(
@@ -865,30 +882,38 @@ async function copySmallObject(
 	position: number,
 	prepared = false,
 ) {
+	// Every reuse and every new copy ends in checkCopy, which re-checks the original, so the
+	// original is checked up front only when a copy fails and its error needs classifying.
 	if (prepared && original.index > 0) {
 		const existing = await reusableCopy(
 			{ ...context, prefix: preparedSourcePrefix(context.video, original) },
 			original,
 			original.index,
+			false,
 		).catch(() => null);
 		if (existing) return existing;
 	}
-	const existing = await reusableCopy(context, original, position);
+	const existing = await reusableCopy(context, original, position, false);
 	if (existing) return existing;
 	const key = newCopyKey(context, original, position);
-	await context.run(
-		context.bucket.copyObject(
-			`${context.bucket.bucketName}/${original.originalKey}`,
-			key,
-			{
-				CopySourceIfMatch: original.originalIdentity,
-				IfNoneMatch: "*",
-				MetadataDirective: "REPLACE",
-				Metadata: copyMetadata(original),
-				ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
-			},
-		),
-	);
+	try {
+		await context.run(
+			context.bucket.copyObject(
+				`${context.bucket.bucketName}/${original.originalKey}`,
+				key,
+				{
+					CopySourceIfMatch: original.originalIdentity,
+					IfNoneMatch: "*",
+					MetadataDirective: "REPLACE",
+					Metadata: copyMetadata(original),
+					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
+				},
+			),
+		);
+	} catch (error) {
+		await checkOriginal(context, original);
+		throw error;
+	}
 	return saveObjectReceipt(context, await checkCopy(context, original, key));
 }
 

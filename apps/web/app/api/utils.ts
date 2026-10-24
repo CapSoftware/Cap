@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	authApiKeys,
@@ -93,7 +94,7 @@ async function getAuth(c: Context) {
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
 		if (user && isBlockedAccountEmail(user.email)) user = undefined;
-	} else {
+	} else if (!isCrossSiteCookieWrite(c.req.raw)) {
 		user = await getCurrentUser();
 	}
 

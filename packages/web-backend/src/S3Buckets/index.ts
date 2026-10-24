@@ -1,5 +1,4 @@
 import * as S3 from "@aws-sdk/client-s3";
-import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
 import type { Organisation, S3Bucket, User } from "@cap/web-domain";
 import type { RequestPresigningArguments } from "@smithy/types";
@@ -7,6 +6,7 @@ import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
+import { createCloudFrontSignedUrl } from "./cloudfront-signed-url.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
@@ -111,29 +111,15 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						key: string,
 						signingArgs?: RequestPresigningArguments,
 					) => {
-						const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
 						const expiresIn = signingArgs?.expiresIn ?? 3600;
-						const expires = Math.floor((Date.now() + expiresIn * 1000) / 1000);
-
-						const policy = {
-							Statement: [
-								{
-									Resource: url,
-									Condition: {
-										DateLessThan: {
-											"AWS:EpochTime": Math.floor(expires),
-										},
-									},
-								},
-							],
-						};
 
 						return Effect.succeed(
-							CloudFrontPresigner.getSignedUrl({
-								url,
+							createCloudFrontSignedUrl({
+								bucketUrl: cloudfrontEnvs.bucketUrl,
+								key,
 								keyPairId: cloudfrontEnvs.keypairId,
 								privateKey: cloudfrontEnvs.privateKey,
-								policy: JSON.stringify(policy),
+								expiresAt: Math.floor((Date.now() + expiresIn * 1000) / 1000),
 							}),
 						);
 					};

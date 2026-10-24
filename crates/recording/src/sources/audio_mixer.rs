@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use cap_media_info::AudioInfo;
 use cap_timestamp::{MasterClock, SourceClockOutcome, SourceClockState, Timestamp, Timestamps};
+use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use std::time::Instant;
 use std::{
@@ -151,6 +152,7 @@ impl AudioMixerBuilder {
             required_stop: self.required_stop,
             drain_deadline: None,
             finishing: false,
+            input_waker: std::task::Waker::noop().clone(),
         })
     }
 
@@ -173,6 +175,7 @@ impl AudioMixerBuilder {
         };
 
         let _ = ready_tx.send(Ok(()));
+        mixer.input_waker = std::task::Waker::from(Arc::new(ThreadUnpark(std::thread::current())));
 
         loop {
             if stop_flag.load(Ordering::Relaxed)
@@ -193,7 +196,7 @@ impl AudioMixerBuilder {
                 break;
             }
 
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::park_timeout(mixer.idle_wait());
         }
         for source in &mixer.sources {
             if source.late_samples_dropped > 0 {
@@ -229,6 +232,7 @@ pub struct AudioMixer {
     required_stop: Option<CancellationToken>,
     drain_deadline: Option<Instant>,
     finishing: bool,
+    input_waker: std::task::Waker,
 }
 
 #[derive(Debug, Clone)]
@@ -520,6 +524,8 @@ impl AudioMixer {
     fn buffer_sources(&mut self, now: Timestamp) -> anyhow::Result<()> {
         let mut format_change: Option<(usize, AudioInfo, AudioInfo)> = None;
         let clock_anchor = self.master_clock.timestamps().instant();
+        let waker = self.input_waker.clone();
+        let mut input_context = std::task::Context::from_waker(&waker);
         for (index, source) in self.sources.iter_mut().enumerate() {
             let rate = source.info.rate();
 
@@ -533,9 +539,9 @@ impl AudioMixer {
                 let AudioFrame {
                     inner: frame,
                     timestamp: raw_timestamp,
-                } = match source.rx.try_next() {
-                    Ok(Some(frame)) => frame,
-                    Ok(None) => {
+                } = match source.rx.poll_next_unpin(&mut input_context) {
+                    std::task::Poll::Ready(Some(frame)) => frame,
+                    std::task::Poll::Ready(None) => {
                         source.ended = true;
                         anyhow::ensure!(
                             self.required_stop
@@ -545,7 +551,7 @@ impl AudioMixer {
                         );
                         break;
                     }
-                    Err(_) => break,
+                    std::task::Poll::Pending => break,
                 };
                 source.last_input_timestamp = Some(raw_timestamp);
 
@@ -874,6 +880,13 @@ impl AudioMixer {
     pub fn builder() -> AudioMixerBuilder {
         AudioMixerBuilder::new()
     }
+
+    /// How long the run loop sleeps when no input arrives first: half the
+    /// shortest source buffer timeout, so a source that went quiet is still
+    /// filled with silence on time, while arriving input wakes it at once.
+    fn idle_wait(&self) -> Duration {
+        idle_wait_for(self.sources.iter().map(|source| source.buffer_timeout))
+    }
 }
 
 fn mixer_now() -> Timestamp {
@@ -1097,6 +1110,30 @@ fn mixer_source_label(index: usize) -> &'static str {
         "mixer-src-7",
     ];
     LABELS.get(index).copied().unwrap_or("mixer-src-overflow")
+}
+
+const MIN_IDLE_WAIT: Duration = Duration::from_millis(5);
+const MAX_IDLE_WAIT: Duration = Duration::from_millis(25);
+
+fn idle_wait_for(timeouts: impl IntoIterator<Item = Duration>) -> Duration {
+    timeouts
+        .into_iter()
+        .map(|timeout| timeout / 2)
+        .min()
+        .unwrap_or(MIN_IDLE_WAIT)
+        .clamp(MIN_IDLE_WAIT, MAX_IDLE_WAIT)
+}
+
+struct ThreadUnpark(std::thread::Thread);
+
+impl std::task::Wake for ThreadUnpark {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
 }
 
 fn buffer_timeout_for(info: &AudioInfo) -> Duration {
@@ -2028,6 +2065,59 @@ mod test {
                 action_followup.is_none(),
                 "force reset must only fire once per sustained stall"
             );
+        }
+    }
+
+    mod input_wake {
+        use super::*;
+
+        struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+        impl std::task::Wake for CountingWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        #[tokio::test]
+        async fn a_frame_arriving_after_a_drain_wakes_the_mixer() {
+            let (output_tx, _) = mpsc::channel::<AudioFrame>(4);
+            let mut builder = AudioMixerBuilder::new();
+            let (mut tx, rx) = mpsc::channel(4);
+            builder.add_source(SOURCE_INFO, rx);
+            let mut mixer = builder.build(output_tx).unwrap();
+            let wakes = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+            mixer.input_waker = std::task::Waker::from(wakes.clone());
+
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            mixer.buffer_sources(now).unwrap();
+            assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+
+            tx.send(AudioFrame::new(
+                SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 10]),
+                now,
+            ))
+            .await
+            .unwrap();
+            assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+
+            mixer.buffer_sources(now).unwrap();
+            assert_eq!(mixer.sources[0].buffer.len(), 1);
+        }
+
+        #[test]
+        fn idle_wait_is_half_the_shortest_buffer_timeout_within_bounds() {
+            assert_eq!(
+                idle_wait_for([Duration::from_millis(40), Duration::from_millis(100)]),
+                Duration::from_millis(20)
+            );
+            assert_eq!(
+                idle_wait_for([MIN_BUFFER_TIMEOUT_WIRED]),
+                Duration::from_millis(10)
+            );
+            assert_eq!(idle_wait_for([MAX_BUFFER_TIMEOUT]), MAX_IDLE_WAIT);
+            assert_eq!(idle_wait_for([Duration::from_millis(4)]), MIN_IDLE_WAIT);
+            assert_eq!(idle_wait_for([]), MIN_IDLE_WAIT);
         }
     }
 
