@@ -159,6 +159,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "download.svg",
     "flip-vertical-2.svg",
     "maximize.svg",
+    "minimize.svg",
     "mouse-pointer-2.svg",
     "mouse-pointer-ban.svg",
     "move.svg",
@@ -334,6 +335,7 @@ mod tests {
         include_str!("editor_clips.rs"),
         // The export page's destination cards and share-status glyphs.
         include_str!("editor_export.rs"),
+        include_str!("editor_watch.rs"),
         // The screenshot editor's toolbar, popovers and zoom HUD; the
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),
