@@ -913,6 +913,12 @@ impl RecordingSession {
 
     fn activate(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
         tracing::info!(dir = %active.project_dir.display(), "recording started");
+        if let Some(video_id) = active.instant_video_id().map(str::to_owned) {
+            cx.background_spawn(async move {
+                crate::upload::instant_cleanup::started(&video_id);
+            })
+            .detach();
+        }
         let project_dir = active.project_dir.clone();
         let done = active.done_fut();
         self.active = Some(active);
@@ -945,16 +951,28 @@ impl RecordingSession {
 
     fn discard_stale_start(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
         let previous = self.discarding.take();
+        let video_id = active.instant_video_id().map(str::to_owned);
         self.discarding = Some(gpui_tokio::Tokio::spawn(cx, async move {
+            use crate::upload::instant_cleanup::{self, CleanupReason};
+            if let Some(video_id) = &video_id {
+                instant_cleanup::abandon(video_id, CleanupReason::StartCancelled, None);
+            }
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
             #[cfg(target_os = "linux")]
             let discarded = active.cancel_preserving().await;
             #[cfg(not(target_os = "linux"))]
-            let discarded = active.cancel_and_delete().await;
-            if let Err(error) = discarded {
-                tracing::warn!(%error, "discarding a cancelled recording start failed");
+            let discarded = active.discard_cancelled_start().await;
+            match discarded {
+                Ok(()) => {
+                    if let Some(video_id) = &video_id {
+                        instant_cleanup::resolved(video_id);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "discarding a cancelled recording start failed");
+                }
             }
         }));
     }

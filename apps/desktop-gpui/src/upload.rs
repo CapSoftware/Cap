@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+pub(crate) mod instant_cleanup;
 #[cfg(test)]
 mod multipart_tests;
 pub(crate) mod queue;
@@ -506,7 +507,7 @@ impl InstantUpload {
         result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
     }
 
-    pub async fn cancel(&mut self) -> Result<(), String> {
+    pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
         self.abort_segments().await;
         if let Some(ownership) = &self.ownership {
             queue::record_cancelled(ownership.project_path())?;
@@ -514,7 +515,7 @@ impl InstantUpload {
         with_upload_context(
             self.request_context.clone(),
             self.reads.clone(),
-            delete_instant_video(&self.video.id),
+            delete_instant_video_with_query(&self.video.id, query),
         )
         .await
     }
@@ -536,11 +537,18 @@ impl InstantUpload {
     }
 }
 
-pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
-    let path = format!(
+pub(crate) async fn delete_instant_video_with_query(
+    video_id: &str,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let mut path = format!(
         "/api/desktop/video/delete?videoId={}",
         urlencoding(video_id)
     );
+    if let Some(query) = query {
+        path.push('&');
+        path.push_str(query);
+    }
     let response = auth::authed_request(reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|error| format!("Failed to delete instant recording: {error}"))?;
