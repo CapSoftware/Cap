@@ -2290,6 +2290,27 @@ pub fn refresh_target_overlays(cx: &mut App) {
     }
 }
 
+/// [`refresh_target_overlays`] for a mic level change: only the overlays whose
+/// meter would visibly move repaint.
+pub fn refresh_microphone_overlays(cx: &mut App) {
+    let handles: Vec<_> = cx
+        .global::<AppWindows>()
+        .overlays
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
+    for handle in handles {
+        handle
+            .update(cx, |view, window, cx| {
+                if view.microphone_level_moved(window, cx) {
+                    cx.notify();
+                    window.refresh();
+                }
+            })
+            .ok();
+    }
+}
+
 /// The overlays' native window numbers, for capture exclusion.
 fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
     let handles: Vec<_> = cx
@@ -6631,10 +6652,14 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         .ok();
 
     let behaviour = crate::store::GeneralSettings::load().post_screenshot_behaviour;
-    if behaviour.copies()
-        && let Err(error) = platform::copy_image_to_clipboard(&png, cx)
-    {
-        tracing::error!("copying the screenshot to the clipboard failed: {error}");
+    if behaviour.copies() {
+        let copied = platform::copy_image_to_clipboard(png.clone(), cx);
+        cx.spawn(async move |_| {
+            if let Err(error) = copied.await {
+                tracing::error!("copying the screenshot to the clipboard failed: {error}");
+            }
+        })
+        .detach();
     }
 
     if behaviour.opens_editor() {

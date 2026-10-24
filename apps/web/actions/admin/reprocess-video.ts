@@ -1,47 +1,16 @@
 "use server";
 
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
-import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
+import { parseAdminVideoId, requireAdmin } from "@/lib/admin-access";
 import { adminReprocessVideoWorkflow } from "@/workflows/admin-reprocess-video";
-
-async function requireAdmin() {
-	const user = await getCurrentUser();
-	if (!user || user.email !== MESSENGER_ADMIN_EMAIL) {
-		throw new Error("Unauthorized");
-	}
-	return user;
-}
-
-function parseVideoId(input: string) {
-	const trimmed = input.trim();
-	if (!trimmed) {
-		throw new Error("Enter a video ID or share URL");
-	}
-
-	try {
-		const url = new URL(trimmed);
-		const pathMatch = url.pathname.match(/\/s\/([^/?#]+)/);
-		if (pathMatch?.[1]) {
-			return Video.VideoId.make(pathMatch[1]);
-		}
-		const lastSegment = url.pathname.split("/").filter(Boolean).at(-1);
-		if (lastSegment) {
-			return Video.VideoId.make(lastSegment);
-		}
-	} catch {}
-
-	return Video.VideoId.make(trimmed);
-}
 
 export async function adminReprocessVideo(input: string) {
 	await requireAdmin();
-	const videoId = parseVideoId(input);
+	const videoId = parseAdminVideoId(input);
 
 	const [video] = await db()
 		.select({

@@ -1982,8 +1982,14 @@ impl ScreenshotEditorWindow {
             match result {
                 Ok(bytes) => match destination {
                     ExportDestination::Clipboard => {
+                        let image = cx
+                            .background_executor()
+                            .spawn(async move { crate::platform::prepare_clipboard_image(bytes) })
+                            .await;
                         this.update_in(cx, |this, window, cx| {
-                            match crate::platform::copy_image_bytes_to_clipboard(&bytes, cx) {
+                            match image
+                                .and_then(|image| crate::platform::write_clipboard_image(image, cx))
+                            {
                                 Ok(()) => {
                                     this.toast_success(
                                         "Screenshot copied to clipboard!",

@@ -394,7 +394,10 @@ export async function recoverStalledVideoPipeline({
 				gte(videos.createdAt, recentBefore),
 				lte(videos.updatedAt, staleBefore),
 				or(
-					isNull(videos.transcriptionStatus),
+					and(
+						isNull(videos.transcriptionStatus),
+						sql`JSON_EXTRACT(${videos.metadata}, '$.transcribeOnView') IS NULL`,
+					),
 					eq(videos.transcriptionStatus, "PROCESSING"),
 				),
 			),

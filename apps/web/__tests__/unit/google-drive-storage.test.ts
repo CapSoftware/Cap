@@ -19,6 +19,7 @@ import {
 	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
 	type GoogleDriveTokenStore,
+	getGoogleDriveRateLimitDelayMs,
 	getGoogleDriveRecordingDownload,
 	getGoogleDriveRecordingResponse,
 	syncGoogleDriveVideoNames,
@@ -2191,5 +2192,180 @@ describe("Google Drive title synchronization", () => {
 			),
 		).resolves.toBe(true);
 		expect(files.get("file-id")?.name).toBe("New title: 测试 🎬.mp4");
+	});
+});
+
+describe("Google Drive rate limits", () => {
+	const copyHarness = () => {
+		const harness = makeRepoHarness([
+			{
+				id: videoId,
+				name: "Rate limited",
+				ownerId: videoOwnerId,
+				storageIntegrationId: integrationId,
+			},
+		]);
+		harness.putObject(
+			storedObjectInput(".cap-folders/video-1", "folder-id", {
+				contentType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+			}),
+		);
+		harness.putObject(
+			storedObjectInput(
+				".cap-warnings/video-1/DO_NOT_EDIT_OR_DELETE.txt",
+				"warning-id",
+				{ contentType: "text/plain" },
+			),
+		);
+		return harness;
+	};
+	const copy = (harness: RepoHarness) =>
+		Effect.runPromiseExit(
+			copyGoogleDriveFile({
+				repo: harness.repo,
+				config: makeConfig(),
+				sourceFileId: "source-file-id",
+				input: {
+					integrationId,
+					ownerId: integrationOwnerId,
+					videoId,
+					key: resultKey,
+					contentType: "video/mp4",
+				},
+				tokenStore: makeTokenStore(),
+			}),
+		);
+	const copied = () =>
+		jsonResponse({
+			id: "copied-file-id",
+			name: "Rate limited.mp4",
+			mimeType: "video/mp4",
+			size: "1234",
+		});
+	const forbidden = (reason: string) =>
+		jsonResponse(
+			{ error: { code: 403, errors: [{ reason, domain: "usageLimits" }] } },
+			{ status: 403 },
+		);
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it.each([
+		["429", () => jsonResponse({ error: { code: 429 } }, { status: 429 })],
+		["403 userRateLimitExceeded", () => forbidden("userRateLimitExceeded")],
+		["403 rateLimitExceeded", () => forbidden("rateLimitExceeded")],
+	])("backs off and retries a %s response", async (_name, limited) => {
+		vi.useFakeTimers();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValueOnce(limited())
+				.mockResolvedValueOnce(limited())
+				.mockResolvedValueOnce(copied()),
+		);
+		const pending = copy(copyHarness());
+		await vi.advanceTimersByTimeAsync(10_000);
+		const exit = await pending;
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(fetch).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([
+		"insufficientPermissions",
+		"storageQuotaExceeded",
+		"dailyLimitExceeded",
+	])("fails a 403 %s at once", async (reason) => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(forbidden(reason)));
+		const exit = await copy(copyHarness());
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives up after four retries and reports the rate limit", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockImplementation(async () =>
+					jsonResponse({ error: { code: 429 } }, { status: 429 }),
+				),
+		);
+		const pending = copy(copyHarness());
+		await vi.advanceTimersByTimeAsync(60_000);
+		const exit = await pending;
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(fetch).toHaveBeenCalledTimes(5);
+		expect(
+			Exit.isFailure(exit) && JSON.stringify(Cause.squash(exit.cause)),
+		).toContain("429");
+	});
+
+	it("doubles the delay with jitter, honours Retry-After, and caps both", () => {
+		expect(getGoogleDriveRateLimitDelayMs(0, null, () => 0)).toBe(1_000);
+		expect(getGoogleDriveRateLimitDelayMs(3, null, () => 0.5)).toBe(8_500);
+		expect(getGoogleDriveRateLimitDelayMs(6, null, () => 0)).toBe(16_000);
+		expect(getGoogleDriveRateLimitDelayMs(0, "3", () => 0.9)).toBe(3_000);
+		expect(getGoogleDriveRateLimitDelayMs(0, "600", () => 0)).toBe(16_000);
+		expect(getGoogleDriveRateLimitDelayMs(1, "soon", () => 0)).toBe(2_000);
+	});
+
+	it("reads an HTTP-date Retry-After against the current time", () => {
+		const now = Date.parse("Sat, 24 Oct 2026 11:00:00 GMT");
+		expect(
+			getGoogleDriveRateLimitDelayMs(
+				0,
+				"Sat, 24 Oct 2026 11:00:05 GMT",
+				() => 0.9,
+				now,
+			),
+		).toBe(5_000);
+		expect(
+			getGoogleDriveRateLimitDelayMs(
+				0,
+				"Sat, 24 Oct 2026 11:05:00 GMT",
+				() => 0,
+				now,
+			),
+		).toBe(16_000);
+		expect(
+			getGoogleDriveRateLimitDelayMs(
+				0,
+				"Sat, 24 Oct 2026 10:59:00 GMT",
+				() => 0,
+				now,
+			),
+		).toBe(0);
+	});
+
+	it("stops retrying before the waits would outlast a 60 s caller deadline", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockImplementation(async () =>
+					jsonResponse(
+						{ error: { code: 429 } },
+						{ status: 429, headers: { "Retry-After": "16" } },
+					),
+				),
+		);
+		let settled = false;
+		const pending = copy(copyHarness()).then((exit) => {
+			settled = true;
+			return exit;
+		});
+		await vi.advanceTimersByTimeAsync(31_000);
+		expect(settled).toBe(true);
+		const exit = await pending;
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 });

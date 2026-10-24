@@ -990,12 +990,14 @@ mod tests {
                     overlap_dropped_frames: 2,
                     startup_overlap_drops: 1,
                 }),
+                digital_silence_ms: None,
             });
             metadata.segments[0].system_audio = Some(AudioMeta {
                 path: RelativePathBuf::from(format!("{base}/system_audio.ogg")),
                 start_time: Some(0.375),
                 device_id: None,
                 gap_summary: None,
+                digital_silence_ms: None,
             });
             metadata.segments[0].cursor =
                 Some(RelativePathBuf::from(format!("{base}/cursor.json")));

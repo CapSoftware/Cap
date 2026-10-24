@@ -160,6 +160,12 @@ AI_CHAT_MODEL=your-model     # Support chat
 AI_STREAM_MODEL=your-model   # Streaming docs Ask AI
 ```
 
+To keep transcription in the EU, set:
+
+```bash
+ASSEMBLY_BASE_URL=https://api.eu.assemblyai.com
+```
+
 For the AssemblyAI EU gateway, set
 `AI_BASE_URL=https://llm-gateway.eu.assemblyai.com/v1`. The EU gateway only
 serves Claude and Gemini models, so you must also override `AI_MODEL` and

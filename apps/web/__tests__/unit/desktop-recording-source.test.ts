@@ -10,6 +10,7 @@ import type { RecordingVerification } from "@/lib/desktop-recording-verification
 const mocks = vi.hoisted(() => ({
 	storage: vi.fn(),
 	pageSize: undefined as number | undefined,
+	treePageSize: undefined as number | undefined,
 }));
 
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
@@ -27,6 +28,9 @@ vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 		},
 		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
 			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
+		},
+		get SOURCE_COMMIT_TREE_PAGE_SIZE() {
+			return mocks.treePageSize ?? actual.SOURCE_COMMIT_TREE_PAGE_SIZE;
 		},
 	};
 });
@@ -446,6 +450,7 @@ function seedSegments(
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.pageSize = undefined;
+	mocks.treePageSize = undefined;
 });
 
 describe("recording source preparation during upload", () => {
@@ -1265,6 +1270,38 @@ describe("durable desktop recording source commit", () => {
 			).rejects.toThrow();
 		},
 	);
+	it("checks each S3 original once per phase and does not read receipts back", async () => {
+		const storage = storageFixture();
+		seedSegments(storage);
+		await commitDesktopRecordingSource(recording(), generation);
+		const segmentKey = `${prefix}/segments/video/segment_001.m4s`;
+		expect(
+			storage.bucket.headObject.mock.calls.filter(
+				([key]) => key === segmentKey,
+			),
+		).toHaveLength(3);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
+	});
+
+	it("writes Drive receipts without reading them back", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		await commitDesktopRecordingSource(recording(), generation);
+		expect(
+			storage.bucket.putObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(true);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
+	});
 });
 
 describe("large desktop recording snapshots", () => {
@@ -1394,15 +1431,15 @@ describe("large desktop recording snapshots", () => {
 	});
 
 	it.each([
-		["s3", 64],
-		["googleDrive", 16],
+		["s3", 256],
+		["googleDrive", 64],
 	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
 		async (provider, page) => {
 			const storage = storageFixture(provider);
 			seedSegments(
 				storage,
-				Array.from({ length: 129 }, (_, index) => index + 1),
+				Array.from({ length: 299 }, (_, index) => index + 1),
 				false,
 			);
 			const video = recording();
@@ -1427,8 +1464,8 @@ describe("large desktop recording snapshots", () => {
 			expect(replay.checkpoint.snapshotId).toBe(checkpoint.snapshotId);
 			const source = await finishSnapshot(video, replay.checkpoint);
 			const urls = await buildDesktopRecordingSourceUrls(video, source);
-			expect(urls.sourceObjects).toHaveLength(130);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(130);
+			expect(urls.sourceObjects).toHaveLength(300);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(300);
 			expect(JSON.stringify(replay.checkpoint).length).toBeLessThan(5_000);
 		},
 	);
@@ -1657,11 +1694,15 @@ describe("large desktop recording snapshots", () => {
 describe("source commit page size", () => {
 	const segmentCount = 130;
 
-	function pagedFixture(provider = "s3", customBucket = false) {
+	function pagedFixture(
+		provider = "s3",
+		customBucket = false,
+		segments = segmentCount,
+	) {
 		const storage = storageFixture(provider, customBucket);
 		seedSegments(
 			storage,
-			Array.from({ length: segmentCount }, (_, index) => index + 1),
+			Array.from({ length: segments }, (_, index) => index + 1),
 		);
 		return storage;
 	}
@@ -1755,8 +1796,8 @@ describe("source commit page size", () => {
 		};
 	}
 
-	async function referenceOutput(pageSize: number) {
-		const storage = pagedFixture();
+	async function referenceOutput(pageSize: number, segments = segmentCount) {
+		const storage = pagedFixture("s3", false, segments);
 		const result = await advanceWithPageSize(pageSize, snapshotCheckpoint());
 		if (!result.source) throw new Error("Snapshot did not complete");
 		return {
@@ -1766,23 +1807,81 @@ describe("source commit page size", () => {
 		};
 	}
 
-	it("uses 64-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
+	it("uses 256-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
 		const actual = await vi.importActual<
 			typeof import("@/lib/desktop-recording-source-checkpoint")
 		>("@/lib/desktop-recording-source-checkpoint");
-		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(64);
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(256);
 		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
 		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
-			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
+			actual.SOURCE_COMMIT_TREE_PAGE_SIZE,
+		);
+		expect(actual.SOURCE_COMMIT_TREE_PAGE_SIZE).toBeLessThanOrEqual(
+			actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
+		);
+	});
+
+	it("resumes a commit saved with 256-entry pages using the previous 128-entry writer, as after a rollback", async () => {
+		mocks.treePageSize = 128;
+		const reference = await referenceOutput(128, 300);
+		mocks.treePageSize = undefined;
+		const storage = pagedFixture("s3", false, 300);
+		const partial = await advanceWithPageSize(
+			256,
+			snapshotCheckpoint(),
+			(checkpoint) => checkpoint.phase === "verify",
+		);
+		expect(partial.source).toBeUndefined();
+		expect(partial.checkpoint.phase).toBe("verify");
+		const savedLeaves = [...storage.objects.values()].flatMap((object) => {
+			try {
+				const page = JSON.parse(object.body ?? "");
+				return page?.type === "leaf" ? [page.entries.length] : [];
+			} catch {
+				return [];
+			}
+		});
+		expect(savedLeaves).toContain(256);
+		mocks.treePageSize = 128;
+		const resumed = await advanceWithPageSize(128, partial.checkpoint);
+		mocks.treePageSize = undefined;
+		if (!resumed.source) throw new Error("Resumed commit did not complete");
+		expect(await snapshotOutput(storage, resumed.source)).toEqual(
+			reference.output,
 		);
 	});
 
 	it.each([
-		["a custom S3-compatible bucket", "s3", true],
-		["Google Drive", "googleDrive", false],
+		[256, true],
+		[257, false],
 	] as const)(
-		"keeps 16-entry checkpoints for %s",
-		async (_, provider, customBucket) => {
+		"reads a commit with %i-entry tree pages only within the read limit",
+		async (size, readable) => {
+			const storage = storageFixture("s3");
+			seedSegments(
+				storage,
+				Array.from({ length: 300 }, (_, index) => index + 1),
+			);
+			mocks.treePageSize = size;
+			const commit = advanceWithPageSize(size, snapshotCheckpoint());
+			if (readable) {
+				const result = await commit;
+				if (!result.source) throw new Error("Commit did not complete");
+				expect(
+					Math.max(...leafSizes(storage, result.source.inventoryKey)),
+				).toBe(size);
+			} else {
+				await expect(commit).rejects.toMatchObject({ code: "source-invalid" });
+			}
+		},
+	);
+
+	it.each([
+		["a custom S3-compatible bucket", "s3", true, 16],
+		["Google Drive", "googleDrive", false, 64],
+	] as const)(
+		"uses %s's checkpoint page size",
+		async (_, provider, customBucket, pageSize) => {
 			pagedFixture(provider, customBucket);
 			mocks.pageSize = undefined;
 			let checkpoint = snapshotCheckpoint();
@@ -1796,7 +1895,9 @@ describe("source commit page size", () => {
 				if ("source" in result) break;
 				checkpoint = result.checkpoint;
 			}
-			expect(checkpoints).toBe(2 + 3 * Math.ceil((segmentCount + 3) / 16));
+			expect(checkpoints).toBe(
+				2 + 3 * Math.ceil((segmentCount + 3) / pageSize),
+			);
 		},
 	);
 
@@ -1857,13 +1958,13 @@ describe("source commit page size", () => {
 	}
 
 	it.each([
-		["Cap's AWS bucket", "s3", false, 32],
+		["Cap's AWS bucket", "s3", false, 256],
 		["a custom S3-compatible bucket", "s3", true, 8],
-		["Google Drive", "googleDrive", false, 8],
+		["Google Drive", "googleDrive", false, 32],
 	] as const)(
 		"bounds parallel storage requests for %s",
 		async (_, provider, customBucket, expected) => {
-			const storage = pagedFixture(provider, customBucket);
+			const storage = pagedFixture(provider, customBucket, 300);
 			const active = { head: 0, copy: 0 };
 			const peak = { head: 0, copy: 0 };
 			const track = <A, E>(
@@ -1908,7 +2009,7 @@ describe("source commit page size", () => {
 			// bound is on objects in flight; requests peak at two per object.
 			expect(peak.head).toBeLessThanOrEqual(expected * 2);
 			expect(readInventory(storage, source.inventoryKey).objects).toHaveLength(
-				segmentCount + 3,
+				300 + 3,
 			);
 		},
 	);

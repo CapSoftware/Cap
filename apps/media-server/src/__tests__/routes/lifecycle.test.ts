@@ -313,6 +313,192 @@ describe("process jobs", () => {
 		expect(files.every((handle) => !existsSync(handle.path))).toBe(true);
 	});
 
+	function previewJob(videoId: string) {
+		return post("/video/process", {
+			videoId,
+			userId: "user-id",
+			videoUrl: "https://example.com/input.mp4",
+			outputPresignedUrl: "https://example.com/output.mp4",
+			thumbnailPresignedUrl: "https://example.com/screenshot.jpg",
+			previewGifPresignedUrl: "https://example.com/preview.gif",
+		});
+	}
+
+	function mockPreviewJob() {
+		const events: string[] = [];
+		const signals: AbortSignal[] = [];
+		const gifs: TempFileHandle[] = [];
+		spyOn(mediaVideo, "downloadVideoToTemp").mockImplementation(() =>
+			tempFileWith(".mp4", "input"),
+		);
+		spyOn(mediaProbe, "probeVideoFile").mockResolvedValue({
+			...metadata,
+			duration: 10,
+		});
+		spyOn(mediaVideo, "processVideo").mockImplementation(() =>
+			tempFileWith(".mp4", "output"),
+		);
+		spyOn(mediaVideo, "generateThumbnail").mockImplementation(
+			async (_path, _duration, _options, signal) => {
+				events.push("thumbnail rendered");
+				if (signal) signals.push(signal);
+				return new Uint8Array([1]);
+			},
+		);
+		spyOn(mediaVideo, "generatePreviewGif").mockImplementation(
+			async (_path, _duration, _options, signal) => {
+				events.push("gif rendered");
+				if (signal) signals.push(signal);
+				const gif = await tempFileWith(".gif", "gif");
+				gifs.push(gif);
+				return gif;
+			},
+		);
+		spyOn(mediaVideo, "uploadToS3").mockImplementation(async () => {
+			events.push("thumbnail uploaded");
+		});
+		const output = deferred<mediaVideo.StorageUploadReceipt>();
+		const outputStarted = deferred();
+		const outputFailure = deferred<Error | null>();
+		spyOn(mediaVideo, "uploadFileToS3").mockImplementation(
+			async (_path, _url, contentType) => {
+				if (contentType === "image/gif") {
+					events.push("gif uploaded");
+					return {};
+				}
+				events.push("output upload started");
+				outputStarted.resolve();
+				const failure = await Promise.race([
+					output.promise.then(() => null),
+					outputFailure.promise,
+				]);
+				if (failure) throw failure;
+				events.push("output uploaded");
+				return {};
+			},
+		);
+		return { events, signals, gifs, output, outputStarted, outputFailure };
+	}
+
+	test("renders previews while the output uploads and uploads them after it", async () => {
+		const preview = mockPreviewJob();
+		const response = await app.fetch(previewJob("video-preview-overlap"));
+		const { jobId } = await response.json();
+		createdJobs.push(jobId);
+		await preview.outputStarted.promise;
+		await waitFor(() => preview.events.includes("gif rendered"));
+		expect(preview.events).toContain("thumbnail rendered");
+		expect(preview.events).not.toContain("thumbnail uploaded");
+		expect(preview.events).not.toContain("gif uploaded");
+
+		preview.output.resolve({});
+		await waitFor(() => getJob(jobId)?.phase === "complete");
+		const uploaded = preview.events.indexOf("output uploaded");
+		expect(preview.events.indexOf("thumbnail uploaded")).toBeGreaterThan(
+			uploaded,
+		);
+		expect(preview.events.indexOf("gif uploaded")).toBeGreaterThan(uploaded);
+		await waitForDrain(2_000);
+		expect(preview.gifs.every((gif) => !existsSync(gif.path))).toBe(true);
+	});
+
+	test("reports an upload failure only after the thumbnail render has stopped", async () => {
+		const preview = mockPreviewJob();
+		let thumbnailStopped = false;
+		spyOn(mediaVideo, "generateThumbnail").mockImplementation(
+			(_path, _duration, _options, signal) =>
+				new Promise((_resolve, reject) => {
+					signal?.addEventListener("abort", () => {
+						setTimeout(() => {
+							thumbnailStopped = true;
+							reject(new Error("Thumbnail render stopped"));
+						}, 100);
+					});
+				}),
+		);
+		const response = await app.fetch(previewJob("video-preview-thumb-stop"));
+		const { jobId } = await response.json();
+		createdJobs.push(jobId);
+		await preview.outputStarted.promise;
+
+		preview.outputFailure.resolve(new Error("Storage upload failed: 403"));
+		await waitFor(() => getJob(jobId)?.phase === "error");
+		expect(thumbnailStopped).toBe(true);
+		expect(await waitForDrain(2_000)).toBe(true);
+	});
+
+	test("uploads no previews and stops rendering when the output upload fails", async () => {
+		const preview = mockPreviewJob();
+		const response = await app.fetch(previewJob("video-preview-upload-fails"));
+		const { jobId } = await response.json();
+		createdJobs.push(jobId);
+		await preview.outputStarted.promise;
+		await waitFor(() => preview.events.includes("gif rendered"));
+
+		preview.outputFailure.resolve(new Error("Storage upload failed: 403"));
+		expect(await waitForDrain(2_000)).toBe(true);
+		expect(getJob(jobId)?.phase).toBe("error");
+		expect(preview.events).not.toContain("thumbnail uploaded");
+		expect(preview.events).not.toContain("gif uploaded");
+		expect(preview.signals.length).toBe(2);
+		expect(preview.signals.every((signal) => signal.aborted)).toBe(true);
+		expect(preview.gifs.every((gif) => !existsSync(gif.path))).toBe(true);
+	});
+
+	test("does not wait on slow progress webhooks and still delivers completion last", async () => {
+		const received: string[] = [];
+		const hook = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const { phase } = (await request.json()) as { phase: string };
+				received.push(phase);
+				await new Promise((resolve) => setTimeout(resolve, 500));
+				return Response.json({ success: true });
+			},
+		});
+		try {
+			spyOn(mediaVideo, "downloadVideoToTemp").mockImplementation(() =>
+				tempFileWith(".mp4", "input"),
+			);
+			spyOn(mediaProbe, "probeVideoFile").mockResolvedValue({
+				...metadata,
+				duration: 10,
+			});
+			spyOn(mediaVideo, "processVideo").mockImplementation(() =>
+				tempFileWith(".mp4", "output"),
+			);
+			spyOn(mediaVideo, "uploadFileToS3").mockResolvedValue({});
+			const started = Date.now();
+			const response = await app.fetch(
+				post("/video/process", {
+					videoId: "video-slow-webhooks",
+					userId: "user-id",
+					videoUrl: "https://example.com/input.mp4",
+					outputPresignedUrl: "https://example.com/output.mp4",
+					webhookUrl: `http://127.0.0.1:${hook.port}/webhook`,
+				}),
+			);
+			const { jobId } = await response.json();
+			createdJobs.push(jobId);
+			await waitFor(() => getJob(jobId)?.phase === "complete", 5_000);
+			await waitFor(() => received.at(-1) === "complete", 5_000);
+			// Waiting on each 500 ms progress webhook delays completion by about 2 s; without waiting it lands in about 0.5 s.
+			expect(Date.now() - started).toBeLessThan(1_500);
+			const job = getJob(jobId);
+			await waitFor(
+				() =>
+					Boolean(job?.terminalWebhookAcknowledgedAt) && !job?.webhookInFlight,
+				5_000,
+			);
+			expect(received[0]).toBe("downloading");
+			expect(received.filter((phase) => phase === "complete")).toHaveLength(1);
+			expect(received.at(-1)).toBe("complete");
+		} finally {
+			hook.stop(true);
+		}
+	});
+
 	test("releases the job slot and temp files when processing fails", async () => {
 		const before = getActiveVideoProcessCount();
 		let input: TempFileHandle | undefined;
