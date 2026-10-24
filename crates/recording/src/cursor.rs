@@ -535,6 +535,39 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
     (display.to_string(), code.to_string())
 }
 
+/// Appends a down event for each key held now but not before, then an up event
+/// for each key released since, in that order.
+fn push_key_changes(
+    previous: &[device_query::Keycode],
+    current: &[device_query::Keycode],
+    time_ms: f64,
+    presses: &mut Vec<KeyPressEvent>,
+) {
+    for key in current {
+        if !previous.contains(key) {
+            let (display, code) = keycode_to_string(key);
+            presses.push(KeyPressEvent {
+                key: display,
+                key_code: code,
+                time_ms,
+                down: true,
+            });
+        }
+    }
+
+    for key in previous {
+        if !current.contains(key) {
+            let (display, code) = keycode_to_string(key);
+            presses.push(KeyPressEvent {
+                key: display,
+                key_code: code,
+                time_ms,
+                down: false,
+            });
+        }
+    }
+}
+
 /// Time zero for cursor, click and key events: the start gate's arm point
 /// when the pipeline was primed ahead of the recording, else the pipeline
 /// epoch. `None` while a primed recording is still waiting for its cue.
@@ -548,6 +581,7 @@ fn input_epoch(start_gate: Option<&RecordingStartGate>, start_time: Timestamps) 
 }
 
 #[tracing::instrument(name = "cursor", skip_all)]
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_cursor_recorder(
     target: CursorCaptureTarget,
     cursors_dir: PathBuf,
@@ -556,6 +590,7 @@ pub fn spawn_cursor_recorder(
     start_time: Timestamps,
     start_gate: Option<RecordingStartGate>,
     incremental_outputs: IncrementalCaptureOutputs,
+    keyboard_capture: bool,
 ) -> CursorActor {
     #[cfg(target_os = "linux")]
     if prefers_wayland_portal_cursor() {
@@ -602,8 +637,18 @@ pub fn spawn_cursor_recorder(
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
         let device_state = DeviceState::new();
+        // Reading the held keys asks the OS about every key it knows (two
+        // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
+        // on Windows), so skip it when the keys are not being recorded.
+        let held_keys = || {
+            if keyboard_capture {
+                device_state.get_keys()
+            } else {
+                Vec::new()
+            }
+        };
         let mut last_mouse_state = device_state.get_mouse();
-        let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
+        let mut last_keys: Vec<device_query::Keycode> = held_keys();
 
         let mut last_position =
             cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
@@ -648,7 +693,7 @@ pub fn spawn_cursor_recorder(
                 last_mouse_state = device_state.get_mouse();
                 last_position =
                     cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
-                last_keys = device_state.get_keys();
+                last_keys = held_keys();
                 continue;
             };
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
@@ -762,32 +807,13 @@ pub fn spawn_cursor_recorder(
 
             last_mouse_state = mouse_state;
 
-            let current_keys = device_state.get_keys();
-
-            for key in &current_keys {
-                if !last_keys.contains(key) {
-                    let (display, code) = keycode_to_string(key);
-                    response.keyboard_presses.push(KeyPressEvent {
-                        key: display,
-                        key_code: code,
-                        time_ms: elapsed,
-                        down: true,
-                    });
-                }
-            }
-
-            for key in &last_keys {
-                if !current_keys.contains(key) {
-                    let (display, code) = keycode_to_string(key);
-                    response.keyboard_presses.push(KeyPressEvent {
-                        key: display,
-                        key_code: code,
-                        time_ms: elapsed,
-                        down: false,
-                    });
-                }
-            }
-
+            let current_keys = held_keys();
+            push_key_changes(
+                &last_keys,
+                &current_keys,
+                elapsed,
+                &mut response.keyboard_presses,
+            );
             last_keys = current_keys;
 
             if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
@@ -1639,6 +1665,53 @@ fn get_cursor_data() -> Option<CursorData> {
         };
         LAST_CURSOR.set(Some((handle, data.clone())));
         Some(data)
+    }
+}
+
+#[cfg(test)]
+mod key_change_tests {
+    use super::*;
+    use device_query::Keycode;
+
+    fn press(key: &str, key_code: &str, down: bool) -> KeyPressEvent {
+        KeyPressEvent {
+            key: key.to_string(),
+            key_code: key_code.to_string(),
+            time_ms: 32.0,
+            down,
+        }
+    }
+
+    #[test]
+    fn new_keys_go_down_in_held_order_before_released_keys_go_up() {
+        let mut presses = vec![];
+        push_key_changes(
+            &[Keycode::A, Keycode::LShift],
+            &[Keycode::LShift, Keycode::Space, Keycode::B],
+            32.0,
+            &mut presses,
+        );
+        assert_eq!(
+            presses,
+            vec![
+                press("Space", "Space", true),
+                press("b", "B", true),
+                press("a", "A", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn held_or_absent_keys_record_nothing() {
+        let mut presses = vec![];
+        push_key_changes(
+            &[Keycode::LMeta, Keycode::A],
+            &[Keycode::LMeta, Keycode::A],
+            32.0,
+            &mut presses,
+        );
+        push_key_changes(&[], &[], 48.0, &mut presses);
+        assert!(presses.is_empty());
     }
 }
 
