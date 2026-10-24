@@ -20,6 +20,7 @@ import { withMediaTransfers } from "../../lib/media-transfer";
 import { processVideo } from "../../lib/media-video";
 import {
 	getActiveDirectVideoProcessCount,
+	getMaxConcurrentDirectVideoProcesses,
 	tryAcquireDirectVideoProcessSlot,
 } from "../../lib/video-capacity";
 
@@ -238,15 +239,19 @@ describe("local audio levels integration", () => {
 		expect(objects.publications()).toBe(0);
 	});
 	test("leaves an occupied conversion slot available to its current owner", async () => {
-		const slot = tryAcquireDirectVideoProcessSlot(() => true);
-		expect(slot).not.toBeNull();
+		// The default slot count follows the CPUs, so occupy every slot.
+		const max = getMaxConcurrentDirectVideoProcesses();
+		const slots = Array.from({ length: max }, () =>
+			tryAcquireDirectVideoProcessSlot(() => true),
+		);
+		expect(slots.every((slot) => slot !== null)).toBe(true);
 		try {
 			const objects = storage();
 			expect(await call()).toEqual({ status: "unchanged", reason: "capacity" });
 			expect(objects.preparations()).toBe(0);
-			expect(getActiveDirectVideoProcessCount()).toBe(1);
+			expect(getActiveDirectVideoProcessCount()).toBe(max);
 		} finally {
-			slot?.release();
+			for (const slot of slots) slot?.release();
 		}
 	});
 	test("cancels optional work on shutdown and releases its processing slot", async () => {

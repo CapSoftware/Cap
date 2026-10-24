@@ -55,7 +55,15 @@ services:
       context: ./apps/media-server
       dockerfile: Dockerfile.standalone
     restart: unless-stopped
+    # Shutdown budget: up to 25s drain (MEDIA_SERVER_SHUTDOWN_GRACE_MS), then
+    # cancel webhooks for aborted jobs (an in-flight attempt finishes first, up
+    # to 5s, then 3 tries x 5s + 1.5s backoff = 16.5s), then cleanup.
+    # 25 + 5 + 16.5 = 46.5s, so 60s leaves ~13s for cleanup before SIGKILL.
+    stop_grace_period: 60s
     environment:
+      MEDIA_SERVER_SHUTDOWN_GRACE_MS: "25000"
+      MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS: ${MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS:-0}
+      MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES: ${MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES:-0}
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: fe337b52749070bb7b5d2c78cff9948439ea73cbc1869ba39d350e6c24db53b1
     ports:
