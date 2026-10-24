@@ -111,7 +111,7 @@ By default, login links are printed to the server logs. To send emails:
 The media server only fetches the URLs cap-web sends it, and it checks each one first:
 
 - Only `http` and `https` URLs are accepted.
-- Hosts that resolve to loopback, private, link-local (including cloud metadata at `169.254.169.254`), CGNAT or IPv6 ULA addresses are rejected, unless the host is trusted.
+- Hosts that resolve to loopback, private, link-local (including cloud metadata at `169.254.169.254`), CGNAT or IPv6 ULA/site-local addresses are rejected, unless the host is trusted. IPv4-compatible IPv6 (`::/96`) and NAT64 (`64:ff9b::/96`) addresses are also blocked, matching the S3 endpoint policy.
 - Trusted hosts are those in `S3_INTERNAL_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `CAP_AWS_ENDPOINT`, `MEDIA_SERVER_WEBHOOK_URL` and `WEB_URL` (set them on the media server too), plus anything in `MEDIA_SERVER_ALLOWED_HOSTS`.
 - When `MEDIA_SERVER_ALLOWED_HOSTS` is set, it becomes a strict allow-list: every URL must use one of those hosts or the trusted hosts above. Entries are comma-separated and may use a `*.` prefix, e.g. `minio.railway.internal,*.r2.cloudflarestorage.com`.
 

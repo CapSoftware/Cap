@@ -34,7 +34,18 @@ describe("isPrivateAddress", () => {
 	test("allows public addresses", () => {
 		expect(isPrivateAddress("93.184.216.34")).toBe(false);
 		expect(isPrivateAddress("2606:4700::6810:85e5")).toBe(false);
+		expect(isPrivateAddress("::ffff:8.8.8.8")).toBe(false);
 	});
+
+	test.each(["::a9fe:a9fe", "::7f00:1", "64:ff9b::a9fe:a9fe", "fec0::1"])(
+		"blocks IPv6 translation and site-local address %s",
+		async (address) => {
+			expect(isPrivateAddress(address)).toBe(true);
+			await expect(
+				assertUrlAllowed(`http://[${address}]/`, getUrlPolicy({})),
+			).rejects.toThrow("private address");
+		},
+	);
 });
 
 describe("assertUrlAllowed", () => {

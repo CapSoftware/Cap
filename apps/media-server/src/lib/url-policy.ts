@@ -20,10 +20,11 @@ for (const [network, prefix] of [
 	blockedRanges.addSubnet(network, prefix, "ipv4");
 }
 for (const [network, prefix] of [
-	["::", 128],
-	["::1", 128],
+	["::", 96],
+	["64:ff9b::", 96],
 	["fc00::", 7],
 	["fe80::", 10],
+	["fec0::", 10],
 	["ff00::", 8],
 ] as const) {
 	blockedRanges.addSubnet(network, prefix, "ipv6");
