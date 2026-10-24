@@ -485,6 +485,12 @@ describe("process jobs", () => {
 			await waitFor(() => received.at(-1) === "complete", 5_000);
 			// Waiting on each 500 ms progress webhook delays completion by about 2 s; without waiting it lands in about 0.5 s.
 			expect(Date.now() - started).toBeLessThan(1_500);
+			const job = getJob(jobId);
+			await waitFor(
+				() =>
+					Boolean(job?.terminalWebhookAcknowledgedAt) && !job?.webhookInFlight,
+				5_000,
+			);
 			expect(received[0]).toBe("downloading");
 			expect(received.filter((phase) => phase === "complete")).toHaveLength(1);
 			expect(received.at(-1)).toBe("complete");
