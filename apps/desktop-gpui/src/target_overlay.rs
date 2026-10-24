@@ -1245,7 +1245,8 @@ impl OverlayWindow {
             return div().into_any_element();
         };
         let selected = if camera {
-            view.camera_selection().map(|camera| camera.label.clone())
+            view.camera_selection()
+                .map(|camera| crate::main_window::camera_label(&camera.label))
         } else {
             view.microphone_selection().map(|mic| mic.name.clone())
         };

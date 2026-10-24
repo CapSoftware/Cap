@@ -46,6 +46,7 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
+import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -501,6 +502,10 @@ async function AuthorizedContent({
 		Option.map(Comment.CommentId.make),
 	);
 	const recordingStopped = hasRecordingStoppedParam(searchParams);
+	const earlySegmentPlayback =
+		recordingStopped &&
+		video.source?.type === "desktopSegments" &&
+		isEarlyInstantPlaybackEnabled(video.owner.id);
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
@@ -1000,6 +1005,7 @@ async function AuthorizedContent({
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}
+				earlySegmentPlayback={earlySegmentPlayback}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}
