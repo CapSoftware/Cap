@@ -158,6 +158,7 @@ async fn run_drift_measurement(
         target_fps,
         duration: Duration::from_secs(duration_secs),
         include_mic: true,
+        include_camera: false,
         include_system_audio: false,
         fragmented: true,
     };

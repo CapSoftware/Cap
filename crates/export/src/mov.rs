@@ -5,9 +5,9 @@ use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use crate::{ExportError, ExporterBase};
+use crate::{ExportError, ExporterBase, mp4::temporary_export_output};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct MovExportSettings {
@@ -21,8 +21,45 @@ impl MovExportSettings {
     pub async fn export(
         self,
         base: ExporterBase,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
+        use cap_utils::operation_diagnostics::{Field, observe};
+        observe(
+            "export_mov",
+            &[
+                Field::number("requested_fps", self.fps as u64),
+                Field::number("requested_width", self.resolution_base.x as u64),
+                Field::number("requested_height", self.resolution_base.y as u64),
+                Field::identifier(
+                    "resource",
+                    cap_utils::operation_diagnostics::resource_id(&base.project_path),
+                ),
+                Field::number(
+                    "source_width",
+                    base.render_constants.options.screen_size.x as u64,
+                ),
+                Field::number(
+                    "source_height",
+                    base.render_constants.options.screen_size.y as u64,
+                ),
+                Field::number("source_segments", base.segments.len() as u64),
+                Field::number("clips", base.project_config.clips.len() as u64),
+                Field::flag("captions", base.project_config.captions.is_some()),
+                Field::flag("streaming_audio", base.streaming_audio.is_some()),
+            ],
+            self.export_inner(base, on_progress),
+        )
+        .await
+    }
+
+    async fn export_inner(
+        self,
+        base: ExporterBase,
         mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        if self.fps == 0 {
+            return Err("Export frame rate must be at least 1 fps".to_string());
+        }
         let meta = &base.studio_meta;
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
@@ -42,12 +79,17 @@ impl MovExportSettings {
         if let Some(parent) = mov_output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        let temporary_output = Arc::new(temporary_export_output(&mov_output_path)?);
+        let encoder_output_path = temporary_output.to_path_buf();
+        let encoder_temporary_output = temporary_output.clone();
 
         let video_info =
             VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
 
+        let sample_timing = base.sample_timing.clone();
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let mut mov_encoder = MOVFile::init(mov_output_path.clone(), |output| {
+            let _temporary_output_guard = encoder_temporary_output;
+            let mut mov_encoder = MOVFile::init(encoder_output_path, |output| {
                 ProResEncoder::builder(video_info).build(output)
             })
             .map_err(|e| ExportError::Other(format!("Failed to create MOV encoder: {e}")))?;
@@ -66,20 +108,34 @@ impl MovExportSettings {
 
                 fill_rgba_frame(&mut reusable_frame, &frame)
                     .map_err(|e| ExportError::Other(format!("Failed to prepare frame: {e}")))?;
-                let timestamp = Duration::from_secs_f64(frame_number as f64 / fps as f64);
+                let encoded_frame = if sample_timing.is_some() {
+                    frame_count
+                } else {
+                    frame_number
+                };
+                let timestamp = Duration::from_secs_f64(encoded_frame as f64 / fps as f64);
 
                 mov_encoder
                     .queue_video_frame(&mut reusable_frame, timestamp)
                     .map_err(|e| ExportError::Other(format!("Failed to encode MOV frame: {e}")))?;
 
+                if sample_timing
+                    .as_ref()
+                    .is_some_and(|timing| timing.is_cancelled())
+                {
+                    return Err(ExportError::Other("Export cancelled".into()));
+                }
                 frame_count += 1;
+                if let Some(timing) = &sample_timing {
+                    timing.record_frame(frame.frame_number);
+                }
             }
 
             mov_encoder
                 .finish()
                 .map_err(|e| ExportError::Other(format!("Failed to finish MOV: {e}")))?;
 
-            Ok(mov_output_path)
+            Ok(())
         })
         .then(|f| async {
             f.map_err(|e| e.to_string())
@@ -98,19 +154,25 @@ impl MovExportSettings {
                     cursor: s.cursor.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
-                    render_display: false,
+                    render_display: !self.cursor_only,
                 })
                 .collect(),
             fps,
             self.resolution_base,
             &base.recordings,
+            base.sample_windows.clone(),
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 
-        let (output_path, _) =
-            tokio::try_join!(encoder_thread, render_video_task).map_err(|e| e.to_string())?;
+        let (encoder_result, render_result) = tokio::join!(encoder_thread, render_video_task);
+        encoder_result?;
+        render_result?;
+        Arc::try_unwrap(temporary_output)
+            .map_err(|_| "Export output is still in use".to_string())?
+            .persist_replace(&mov_output_path)
+            .map_err(|error| error.to_string())?;
 
-        Ok(output_path)
+        Ok(mov_output_path)
     }
 }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import {
 	Button,
 	Dialog,
@@ -9,6 +10,11 @@ import {
 	DialogTitle,
 	Input,
 	Select,
+	SelectContent,
+	SelectItem,
+	SelectRoot,
+	SelectTrigger,
+	SelectValue,
 	Table,
 	TableBody,
 	TableCell,
@@ -16,6 +22,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@cap/ui";
+import { Folder } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faCircleCheck,
@@ -26,25 +33,47 @@ import {
 	faUpload,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	type ChangeEvent,
 	type DragEvent,
+	useId,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { toast } from "sonner";
 import {
+	getLoomImportFolders,
 	importFromLoom,
 	importFromLoomCsv,
 	type LoomCsvImportResult,
+	type LoomCsvImportRowResult,
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import {
+	formatLoomCsvCell,
+	isLoomCsvResultsFile,
+	LOOM_CSV_RESULTS_HEADERS,
+	parseLoomCsvRecords,
+	readLoomCsvCell,
+} from "@/lib/loom-csv";
+import {
+	type LoomImportDestination,
+	loomImportDestinationHref,
+	loomImportPageHref,
+} from "@/lib/loom-import-destination";
+import { buildMoveFolderDestinationRows } from "@/lib/move-items";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
+import { LoomConciergeRow } from "./LoomConciergeRow";
 
 type Mode = "single" | "csv";
 
@@ -70,64 +99,132 @@ type MappedRow = {
 const LOOM_CSV_TEMPLATE =
 	"loom_video_url,user_email,space_name\nhttps://www.loom.com/share/0123456789abcdef,user@example.com,Sales\n";
 
+const ROOT_FOLDER_VALUE = "__cap_root_folder__";
+
 const OPTIONAL_COLUMN_VALUE = "__cap_skip_column__";
 const MAX_SPACE_NAME_LENGTH = 255;
+const MAX_LOOM_CSV_IMPORT_ROWS = 500;
+const LOOM_CSV_BATCH_SIZE = 10;
+const LOOM_CSV_BATCH_DELAY_MS = 1500;
+const LOOM_CSV_RETRY_DELAY_MS = 30000;
+const LOOM_CSV_NOT_ATTEMPTED_MESSAGE = "Not attempted.";
+const LOOM_CSV_LIMIT_MESSAGE =
+	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
+const LOOM_CSV_PERMISSION_MESSAGE =
+	"Only organization admins and owners can import Loom videos from a CSV.";
 
-function parseCsvRecords(text: string) {
-	const records: string[][] = [];
-	let field = "";
-	let row: string[] = [];
-	let inQuotes = false;
-	const input = text.replace(/^\uFEFF/, "");
+function delay(ms: number) {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
 
-	for (let index = 0; index < input.length; index += 1) {
-		const char = input.charAt(index);
-		const next = input.charAt(index + 1);
-
-		if (char === '"') {
-			if (inQuotes && next === '"') {
-				field += '"';
-				index += 1;
-			} else {
-				inQuotes = !inQuotes;
-			}
-			continue;
-		}
-
-		if (char === "," && !inQuotes) {
-			row.push(field.trim());
-			field = "";
-			continue;
-		}
-
-		if ((char === "\n" || char === "\r") && !inQuotes) {
-			if (char === "\r" && next === "\n") index += 1;
-			row.push(field.trim());
-			if (row.some((cell) => cell.length > 0)) records.push(row);
-			row = [];
-			field = "";
-			continue;
-		}
-
-		field += char;
+function chunkRows<T>(rows: T[], size: number) {
+	const chunks: T[][] = [];
+	for (let index = 0; index < rows.length; index += size) {
+		chunks.push(rows.slice(index, index + size));
 	}
+	return chunks;
+}
 
-	if (inQuotes) throw new Error("CSV has an unclosed quoted field.");
+function buildCsvImportResult(
+	results: LoomCsvImportRowResult[],
+	error?: string,
+): LoomCsvImportResult {
+	const importedCount = results.filter((row) => row.success).length;
+	const failedCount = results.length - importedCount;
 
-	if (field.length > 0 || row.length > 0) {
-		row.push(field.trim());
-		if (row.some((cell) => cell.length > 0)) records.push(row);
-	}
+	return {
+		success: importedCount > 0,
+		importedCount,
+		failedCount,
+		results,
+		error:
+			error ??
+			(importedCount > 0 ? undefined : "No Loom videos were imported."),
+	};
+}
 
-	return records;
+function buildRowFailure(
+	row: MappedRow,
+	error: string,
+): LoomCsvImportRowResult {
+	return {
+		rowNumber: row.rowNumber,
+		userEmail: row.userEmail,
+		spaceName: row.spaceName || undefined,
+		success: false,
+		error,
+	};
+}
+
+function withNotAttemptedRows(
+	rows: MappedRow[],
+	results: LoomCsvImportRowResult[],
+): LoomCsvImportRowResult[] {
+	const attempted = new Set(results.map((row) => row.rowNumber));
+	const missing = rows.filter((row) => !attempted.has(row.rowNumber));
+	if (missing.length === 0) return results;
+
+	return [
+		...results,
+		...missing.map((row) =>
+			buildRowFailure(row, LOOM_CSV_NOT_ATTEMPTED_MESSAGE),
+		),
+	].sort((a, b) => a.rowNumber - b.rowNumber);
+}
+
+function retryableBatchRows(
+	batch: MappedRow[],
+	results: LoomCsvImportRowResult[],
+) {
+	const retryable = new Set(
+		results
+			.filter(
+				(row) =>
+					!row.success && row.errorCode === "loom_temporarily_unavailable",
+			)
+			.map((row) => row.rowNumber),
+	);
+	return batch.filter((row) => retryable.has(row.rowNumber));
+}
+
+function importErrorMessage(error: unknown) {
+	return error instanceof Error && error.message
+		? error.message
+		: "The import request failed for this batch.";
+}
+
+function buildResultsCsv(
+	results: LoomCsvImportRowResult[],
+	sourceRows: MappedRow[],
+) {
+	const rowsByNumber = new Map(sourceRows.map((row) => [row.rowNumber, row]));
+	const lines = [
+		LOOM_CSV_RESULTS_HEADERS,
+		...results.map((row) => [
+			String(row.rowNumber),
+			rowsByNumber.get(row.rowNumber)?.loomUrl ?? "",
+			row.userEmail,
+			row.spaceName ?? "",
+			row.success
+				? "started"
+				: row.error === LOOM_CSV_NOT_ATTEMPTED_MESSAGE
+					? "not_attempted"
+					: "failed",
+			row.error ?? "",
+		]),
+	];
+	return `${lines.map((line) => line.map(formatLoomCsvCell).join(",")).join("\n")}\n`;
 }
 
 function parseCsv(text: string, fileName: string): CsvData {
-	const records = parseCsvRecords(text);
+	const records = parseLoomCsvRecords(text);
 	const headers = records[0]?.map((header) => header.trim()) ?? [];
-	const rows = records
+	const dataRows = records
 		.slice(1)
 		.filter((row) => row.some((cell) => cell.trim().length > 0));
+	const rows = isLoomCsvResultsFile(headers)
+		? dataRows.map((row) => row.map(readLoomCsvCell))
+		: dataRows;
 
 	if (headers.length === 0) {
 		throw new Error("No CSV headers found.");
@@ -190,17 +287,72 @@ const LoomMark = ({ size = 18 }: { size?: number }) => (
 	</svg>
 );
 
-export const ImportLoomPage = () => {
-	const { user, activeOrganization } = useDashboardContext();
+export const ImportLoomPage = ({
+	initialDestination = {},
+}: {
+	initialDestination?: LoomImportDestination;
+}) => {
+	const { user, activeOrganization, spacesData } = useDashboardContext();
 	const router = useRouter();
+	const searchParams = useSearchParams();
+	const prefilledLoomUrl = searchParams?.get("url")?.trim() ?? "";
+	const prefilledMode: Mode =
+		searchParams?.get("mode") === "csv" ? "csv" : "single";
 
-	const isOrganizationOwner =
-		!!user && user.id === activeOrganization?.organization.ownerId;
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user?.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user?.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canUseCsvImport = canManageOrganizationSettings(currentRole);
 
-	const [mode, setMode] = useState<Mode>("single");
+	const [mode, setMode] = useState<Mode>(prefilledMode);
+	const activeMode = canUseCsvImport ? mode : "single";
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(!user?.isPro);
 
-	const [loomUrl, setLoomUrl] = useState("");
+	const [selectedFolderId, setSelectedFolderId] = useState(
+		initialDestination.folderId ?? ROOT_FOLDER_VALUE,
+	);
+	const destinationInputId = useId();
+	const orgId = activeOrganization?.organization.id;
+	const spaceId = initialDestination.spaceId;
+	const foldersQuery = useQuery({
+		queryKey: ["loom-import-folders", user.id, orgId, spaceId],
+		queryFn: () =>
+			orgId ? getLoomImportFolders({ orgId, spaceId }) : Promise.resolve([]),
+		enabled: Boolean(orgId) && activeMode === "single",
+	});
+	const folderRows = useMemo(
+		() => buildMoveFolderDestinationRows(foldersQuery.data ?? []),
+		[foldersQuery.data],
+	);
+	const destination: LoomImportDestination = {
+		folderId:
+			selectedFolderId === ROOT_FOLDER_VALUE
+				? undefined
+				: Folder.FolderId.make(selectedFolderId),
+		spaceId,
+	};
+	const rootLabel = !spaceId
+		? "My Caps"
+		: spaceId === orgId
+			? (activeOrganization?.organization.name ?? "Organization")
+			: (spacesData?.find((space) => space.id === spaceId)?.name ?? "Space");
+	const selectedFolder = folderRows.find(
+		(folder) => folder.id === selectedFolderId,
+	);
+	const destinationAvailable =
+		foldersQuery.isSuccess &&
+		(selectedFolderId === ROOT_FOLDER_VALUE || Boolean(selectedFolder));
+	const destinationLabel = selectedFolder
+		? `${rootLabel} / ${selectedFolder.path}`
+		: rootLabel;
+	const importPageHref = loomImportPageHref(destination);
+
+	const [loomUrl, setLoomUrl] = useState(prefilledLoomUrl);
 	const [isImporting, setIsImporting] = useState(false);
 
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -209,7 +361,9 @@ export const ImportLoomPage = () => {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isCsvImporting, setIsCsvImporting] = useState(false);
+	const [csvImportProgress, setCsvImportProgress] = useState(0);
 	const [result, setResult] = useState<LoomCsvImportResult | null>(null);
+	const importRowsRef = useRef<MappedRow[]>([]);
 
 	const selectedColumnValues = [
 		mapping.loomUrl,
@@ -257,10 +411,13 @@ export const ImportLoomPage = () => {
 
 	const invalidRows = mappedRows.length - readyRows.length;
 	const previewRows = mappedRows.slice(0, 5);
+	const csvLimitExceeded = readyRows.length > MAX_LOOM_CSV_IMPORT_ROWS;
 	const canImport =
+		canUseCsvImport &&
 		!!activeOrganization &&
 		!selectedColumnsConflict &&
 		readyRows.length > 0 &&
+		!csvLimitExceeded &&
 		!isCsvImporting;
 
 	const columnOptions =
@@ -286,7 +443,7 @@ export const ImportLoomPage = () => {
 			return;
 		}
 
-		if (!loomUrl.trim()) return;
+		if (!loomUrl.trim() || !destinationAvailable || isImporting) return;
 
 		setIsImporting(true);
 
@@ -294,18 +451,18 @@ export const ImportLoomPage = () => {
 			const importResult = await importFromLoom({
 				loomUrl: loomUrl.trim(),
 				orgId: activeOrganization.organization.id,
+				...destination,
 			});
 
-			if (!importResult.success) {
-				toast.error(importResult.error || "Failed to import video.");
+			if (!importResult?.success) {
+				toast.error(importResult?.error || "Failed to import video.");
 				setIsImporting(false);
 				return;
 			}
 
-			toast.success(
-				"Loom video import started! It will appear in your caps shortly.",
-			);
-			router.push("/dashboard/caps");
+			toast.success(`Loom import started in ${destinationLabel}.`);
+			router.push(loomImportDestinationHref(destination));
+			router.refresh();
 		} catch {
 			toast.error("An unexpected error occurred. Please try again.");
 		} finally {
@@ -328,6 +485,11 @@ export const ImportLoomPage = () => {
 	const loadCsvFile = async (file: File) => {
 		if (!user) return;
 
+		if (!canUseCsvImport) {
+			toast.error(LOOM_CSV_PERMISSION_MESSAGE);
+			return;
+		}
+
 		if (!user.isPro) {
 			setUpgradeModalOpen(true);
 			return;
@@ -340,6 +502,10 @@ export const ImportLoomPage = () => {
 
 		try {
 			const parsed = parseCsv(await file.text(), file.name);
+			if (parsed.rows.length > MAX_LOOM_CSV_IMPORT_ROWS) {
+				toast.error(LOOM_CSV_LIMIT_MESSAGE);
+			}
+
 			const loomUrlGuess = guessColumn(parsed.headers, [
 				"loomvideourl",
 				"loomurl",
@@ -367,6 +533,7 @@ export const ImportLoomPage = () => {
 				spaceName: spaceNameGuess,
 			});
 			setResult(null);
+			setCsvImportProgress(0);
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Could not parse CSV.",
@@ -390,44 +557,135 @@ export const ImportLoomPage = () => {
 	};
 
 	const handleCsvImport = async () => {
+		if (csvLimitExceeded) {
+			toast.error(LOOM_CSV_LIMIT_MESSAGE);
+			return;
+		}
+
 		if (!activeOrganization || !canImport) return;
 
+		const orgId = activeOrganization.organization.id;
+		const importRows = readyRows;
+		importRowsRef.current = importRows;
+		let combinedResults: LoomCsvImportRowResult[] = [];
+
 		setIsCsvImporting(true);
+		setResult(null);
+		setCsvImportProgress(0);
 
 		try {
-			const importResult = await importFromLoomCsv({
-				orgId: activeOrganization.organization.id,
-				rows: readyRows,
-			});
+			const batches = chunkRows(importRows, LOOM_CSV_BATCH_SIZE);
+			let blockedError: string | undefined;
 
-			setResult(importResult);
+			for (const [batchIndex, batch] of batches.entries()) {
+				let batchResults: LoomCsvImportRowResult[];
+				let retryRows: MappedRow[] = [];
 
-			if (importResult.importedCount > 0) {
+				try {
+					const importResult = await importFromLoomCsv({
+						orgId,
+						rows: batch,
+					});
+
+					if (importResult.results.length === 0 && importResult.error) {
+						blockedError = importResult.error;
+						const message = importResult.error;
+						combinedResults = [
+							...combinedResults,
+							...batch.map((row) => buildRowFailure(row, message)),
+						];
+						setCsvImportProgress(combinedResults.length);
+						break;
+					}
+
+					batchResults = importResult.results;
+					retryRows = retryableBatchRows(batch, batchResults);
+				} catch (error) {
+					const message = importErrorMessage(error);
+					batchResults = batch.map((row) => buildRowFailure(row, message));
+				}
+
+				if (retryRows.length > 0) {
+					await delay(LOOM_CSV_RETRY_DELAY_MS);
+
+					try {
+						const retryResult = await importFromLoomCsv({
+							orgId,
+							rows: retryRows,
+						});
+
+						if (retryResult.results.length > 0) {
+							const retriedByRowNumber = new Map(
+								retryResult.results.map((row) => [row.rowNumber, row]),
+							);
+							batchResults = batchResults.map(
+								(row) => retriedByRowNumber.get(row.rowNumber) ?? row,
+							);
+						}
+					} catch {
+						// Keep the first attempt's failures for this batch.
+					}
+				}
+
+				combinedResults = [...combinedResults, ...batchResults];
+				setCsvImportProgress(combinedResults.length);
+				setResult(buildCsvImportResult(combinedResults));
+
+				if (batchIndex < batches.length - 1) {
+					await delay(LOOM_CSV_BATCH_DELAY_MS);
+				}
+			}
+
+			const finalResult = buildCsvImportResult(
+				withNotAttemptedRows(importRows, combinedResults),
+				blockedError,
+			);
+			setResult(finalResult);
+
+			if (finalResult.importedCount > 0) {
 				toast.success(
-					`${importResult.importedCount} ${pluralize(
-						importResult.importedCount,
+					`${finalResult.importedCount} ${pluralize(
+						finalResult.importedCount,
 						"Loom import",
 						"Loom imports",
 					)} started.`,
 				);
 				router.refresh();
 			} else {
-				toast.error(importResult.error || "No Loom videos were imported.");
+				toast.error(finalResult.error || "No Loom videos were imported.");
 			}
 
 			setConfirmOpen(false);
 		} catch {
+			setResult(
+				buildCsvImportResult(withNotAttemptedRows(importRows, combinedResults)),
+			);
 			toast.error("An unexpected error occurred. Please try again.");
 		} finally {
 			setIsCsvImporting(false);
 		}
 	};
 
+	const handleResultsDownload = () => {
+		if (!result) return;
+
+		const blob = new Blob(
+			[buildResultsCsv(result.results, importRowsRef.current)],
+			{ type: "text/csv;charset=utf-8" },
+		);
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = "cap-loom-import-results.csv";
+		link.click();
+		URL.revokeObjectURL(url);
+	};
+
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
 				<Link
-					href="/dashboard/import"
+					href={importPageHref}
 					className="inline-flex gap-2 items-center mb-4 text-sm transition-colors text-gray-10 hover:text-gray-12"
 				>
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
@@ -442,8 +700,8 @@ export const ImportLoomPage = () => {
 							Import from Loom
 						</h1>
 						<p className="mt-1 max-w-xl text-sm text-gray-10">
-							{isOrganizationOwner
-								? "Bring a single Loom video into Cap, or bulk import recordings for organization members from a CSV."
+							{canUseCsvImport
+								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
 								: "Paste a Loom share link to bring it into Cap."}
 						</p>
 					</div>
@@ -451,20 +709,20 @@ export const ImportLoomPage = () => {
 			</div>
 
 			<div className="flex flex-col gap-6 w-full max-w-4xl">
-				{isOrganizationOwner && (
+				{canUseCsvImport && (
 					<div
 						role="tablist"
 						aria-label="Loom import mode"
 						className="flex gap-1 p-1 rounded-full border w-fit border-gray-3 bg-gray-2"
 					>
 						<ModeTab
-							active={mode === "single"}
+							active={activeMode === "single"}
 							icon={faLink}
 							label="Single Video"
 							onClick={() => setMode("single")}
 						/>
 						<ModeTab
-							active={mode === "csv"}
+							active={activeMode === "csv"}
 							icon={faFileCsv}
 							label="Bulk Import"
 							onClick={() => setMode("csv")}
@@ -472,7 +730,7 @@ export const ImportLoomPage = () => {
 					</div>
 				)}
 
-				{mode === "single" ? (
+				{activeMode === "single" ? (
 					<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
 						<div className="flex flex-col gap-1 px-6 py-5 border-b border-gray-3">
 							<p className="text-sm font-medium text-gray-12">Loom video URL</p>
@@ -488,18 +746,98 @@ export const ImportLoomPage = () => {
 								onChange={(event) => setLoomUrl(event.target.value)}
 								placeholder="https://www.loom.com/share/..."
 								onKeyDown={(event) => {
-									if (event.key === "Enter" && isValidLoomUrl && !isImporting) {
+									if (
+										event.key === "Enter" &&
+										isValidLoomUrl &&
+										!isImporting &&
+										destinationAvailable
+									) {
 										handleSingleImport();
 									}
 								}}
 							/>
+
+							<div className="flex flex-col gap-2">
+								<label
+									htmlFor={destinationInputId}
+									className="text-sm font-medium text-gray-12"
+								>
+									Import to
+								</label>
+								<SelectRoot
+									value={foldersQuery.isPending ? "" : selectedFolderId}
+									onValueChange={setSelectedFolderId}
+									disabled={
+										foldersQuery.isPending ||
+										foldersQuery.isError ||
+										isImporting
+									}
+								>
+									<SelectTrigger
+										id={destinationInputId}
+										className="w-full min-w-0 [&_span]:truncate"
+									>
+										<SelectValue
+											placeholder={
+												foldersQuery.isPending
+													? "Loading folders..."
+													: "Choose a destination"
+											}
+										/>
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value={ROOT_FOLDER_VALUE}>
+											{rootLabel}
+										</SelectItem>
+										{folderRows.map((folder) => (
+											<SelectItem key={folder.id} value={folder.id}>
+												{rootLabel} / {folder.path}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</SelectRoot>
+								{foldersQuery.isError ? (
+									<div
+										role="alert"
+										className="flex flex-wrap gap-2 items-center text-sm text-red-11"
+									>
+										<p>
+											We couldn't load this destination. Check your access or
+											try again.
+										</p>
+										<Button
+											type="button"
+											size="sm"
+											variant="gray"
+											onClick={() => foldersQuery.refetch()}
+											disabled={foldersQuery.isFetching}
+										>
+											Retry
+										</Button>
+										{spaceId && (
+											<Link href="/dashboard/import/loom" className="underline">
+												Import to My Caps instead
+											</Link>
+										)}
+									</div>
+								) : foldersQuery.isSuccess && !destinationAvailable ? (
+									<p role="alert" className="text-sm text-red-11">
+										This folder is no longer available. Choose another
+										destination.
+									</p>
+								) : spaceId ? (
+									<p className="text-xs text-gray-10">
+										This video will be shared with {rootLabel}.
+									</p>
+								) : null}
+							</div>
 
 							<div className="flex flex-col-reverse gap-3 justify-end sm:flex-row">
 								<Button
 									type="button"
 									size="sm"
 									variant="gray"
-									onClick={() => router.push("/dashboard/import")}
+									onClick={() => router.push(importPageHref)}
 								>
 									Cancel
 								</Button>
@@ -509,9 +847,11 @@ export const ImportLoomPage = () => {
 									size="sm"
 									spinner={isImporting}
 									variant="dark"
-									disabled={!isValidLoomUrl || isImporting}
+									disabled={
+										!isValidLoomUrl || isImporting || !destinationAvailable
+									}
 								>
-									{isImporting ? "Importing..." : "Import Video"}
+									{isImporting ? "Importing..." : "Import Loom"}
 								</Button>
 							</div>
 						</div>
@@ -542,7 +882,8 @@ export const ImportLoomPage = () => {
 												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
 													space_name
 												</code>{" "}
-												to place videos in spaces.
+												to place videos in spaces. Emails that are not members
+												yet will be added without an email invite.
 											</p>
 										</div>
 									</div>
@@ -632,6 +973,7 @@ export const ImportLoomPage = () => {
 											setCsvData(null);
 											setMapping({});
 											setResult(null);
+											setCsvImportProgress(0);
 										}}
 									>
 										Replace CSV
@@ -704,6 +1046,28 @@ export const ImportLoomPage = () => {
 										/>
 									</div>
 
+									{csvLimitExceeded && (
+										<div className="flex gap-3 items-start p-4 rounded-lg border bg-red-2 border-red-4 text-red-11">
+											<FontAwesomeIcon
+												className="mt-0.5 size-4"
+												icon={faTriangleExclamation}
+											/>
+											<div className="text-sm">
+												<p className="font-medium">
+													CSV imports are limited to {MAX_LOOM_CSV_IMPORT_ROWS}{" "}
+													videos at a time.
+												</p>
+												<p className="mt-1 text-red-10">
+													Split this file into smaller batches or{" "}
+													<a className="underline" href="mailto:hello@cap.so">
+														contact support
+													</a>{" "}
+													to raise the limit.
+												</p>
+											</div>
+										</div>
+									)}
+
 									{previewRows.length > 0 && (
 										<div className="overflow-hidden rounded-lg border border-gray-3">
 											<Table>
@@ -758,6 +1122,7 @@ export const ImportLoomPage = () => {
 												setCsvData(null);
 												setMapping({});
 												setResult(null);
+												setCsvImportProgress(0);
 											}}
 										>
 											Clear
@@ -790,7 +1155,7 @@ export const ImportLoomPage = () => {
 											{pluralize(result.failedCount, "failed", "failed")}
 										</p>
 									</div>
-									<div className="flex gap-2 items-center">
+									<div className="flex flex-wrap gap-2 items-center">
 										<StatusPill
 											ready
 											label={`${result.importedCount} started`}
@@ -801,6 +1166,17 @@ export const ImportLoomPage = () => {
 												label={`${result.failedCount} failed`}
 											/>
 										)}
+										<Button
+											type="button"
+											variant="white"
+											size="sm"
+											onClick={handleResultsDownload}
+											disabled={isCsvImporting}
+											className="flex-shrink-0"
+										>
+											<FontAwesomeIcon className="size-3.5" icon={faDownload} />
+											Download Results
+										</Button>
 									</div>
 								</div>
 								<div className="overflow-hidden">
@@ -839,6 +1215,14 @@ export const ImportLoomPage = () => {
 						)}
 					</div>
 				)}
+
+				{buildEnv.NEXT_PUBLIC_IS_CAP &&
+					canUseCsvImport &&
+					activeOrganization?.organization.id && (
+						<LoomConciergeRow
+							organizationId={activeOrganization.organization.id}
+						/>
+					)}
 			</div>
 
 			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -850,7 +1234,8 @@ export const ImportLoomPage = () => {
 					</DialogHeader>
 					<div className="p-5 text-sm text-gray-11">
 						{readyRows.length} {pluralize(readyRows.length, "video", "videos")}{" "}
-						will be imported for organization members.
+						will be imported for existing members or newly added users in
+						batches of {LOOM_CSV_BATCH_SIZE}.
 						{readyRows.some((row) => row.spaceName) && (
 							<span className="block mt-2">
 								Rows with a space name will be added to that space. Missing
@@ -881,7 +1266,9 @@ export const ImportLoomPage = () => {
 							variant="dark"
 							disabled={!canImport}
 						>
-							{isCsvImporting ? "Importing..." : "Start Import"}
+							{isCsvImporting
+								? `Importing ${csvImportProgress}/${readyRows.length}`
+								: "Start Import"}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

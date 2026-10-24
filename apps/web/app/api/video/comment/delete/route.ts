@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { comments } from "@cap/database/schema";
 import { Comment } from "@cap/web-domain";
@@ -8,7 +9,7 @@ import type { NextRequest } from "next/server";
 import { getHeaders } from "@/utils/helpers";
 
 export async function DELETE(request: NextRequest) {
-	const user = await getCurrentUser();
+	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	const { searchParams } = request.nextUrl;
 	const commentId = Option.fromNullable(searchParams.get("commentId")).pipe(
 		Option.map(Comment.CommentId.make),
@@ -41,13 +42,18 @@ export async function DELETE(request: NextRequest) {
 			);
 		}
 
-		// Delete the comment and all its replies
+		// Delete the comment and only the replies authored by the same user.
+		// Replies written by other users are preserved (never delete others'
+		// content), even though that can leave them visually orphaned.
 		await db()
 			.delete(comments)
 			.where(
-				or(
-					eq(comments.id, commentId.value),
-					eq(comments.parentCommentId, commentId.value),
+				and(
+					eq(comments.authorId, user.id),
+					or(
+						eq(comments.id, commentId.value),
+						eq(comments.parentCommentId, commentId.value),
+					),
 				),
 			);
 

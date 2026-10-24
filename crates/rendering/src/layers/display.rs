@@ -5,8 +5,12 @@ use std::sync::Arc;
 use crate::{
     DecodedSegmentFrames, PixelFormat,
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
+    decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
+
+#[cfg(target_os = "macos")]
+use crate::yuv_converter::RetainedImageBuf;
 
 struct PendingTextureCopy {
     width: u32,
@@ -22,12 +26,23 @@ pub struct DisplayLayer {
     pipeline: std::sync::Arc<CompositeVideoFramePipeline>,
     bind_groups: [Option<wgpu::BindGroup>; 2],
     last_recording_time: Option<f32>,
+    last_frame_storage: Option<DecodedFrameStorageIdentity>,
     yuv_converter: YuvToRgbaConverter,
+    #[cfg(target_os = "macos")]
+    frame_sources: [Option<RetainedImageBuf>; 2],
     pending_copy: Option<PendingTextureCopy>,
     prefer_cpu_conversion: bool,
+    has_valid_frame: bool,
 }
 
 impl DisplayLayer {
+    /// Forget the last frame shown, as a new layer would.
+    pub(crate) fn reset_frame_state(&mut self) {
+        self.last_recording_time = None;
+        self.last_frame_storage = None;
+        self.has_valid_frame = false;
+    }
+
     #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_with_options(device, false)
@@ -73,9 +88,13 @@ impl DisplayLayer {
             pipeline: composite_pipeline,
             bind_groups: [bind_group_0, bind_group_1],
             last_recording_time: None,
+            last_frame_storage: None,
             yuv_converter,
+            #[cfg(target_os = "macos")]
+            frame_sources: [None, None],
             pending_copy: None,
             prefer_cpu_conversion,
+            has_valid_frame: false,
         }
     }
 
@@ -143,30 +162,38 @@ impl DisplayLayer {
                 "DisplayLayer::prepare - screen_frame is None, skipping display rendering"
             );
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
-            return (true, frame_size.x, frame_size.y);
+            return (false, frame_size.x, frame_size.y);
         };
 
-        let frame_data = screen_frame.data();
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
+        let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        self.yuv_converter.set_matrix(screen_frame.matrix());
         let current_recording_time = segment_frames.recording_time;
+        let frame_storage = screen_frame.storage_identity();
 
         let skipped = self
-            .last_recording_time
-            .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+            .last_frame_storage
+            .as_ref()
+            .is_some_and(|last| last.matches(&frame_storage))
+            || self
+                .last_recording_time
+                .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+
+        let mut frame_uploaded = false;
 
         if !skipped {
             let next_texture = 1 - self.current_texture;
 
-            if self.frame_textures[next_texture].width() != frame_size.x
-                || self.frame_textures[next_texture].height() != frame_size.y
+            if self.frame_textures[next_texture].width() != source_size.x
+                || self.frame_textures[next_texture].height() != source_size.y
             {
                 self.frame_textures[next_texture] =
                     CompositeVideoFramePipeline::create_frame_texture(
                         device,
-                        frame_size.x,
-                        frame_size.y,
+                        source_size.x,
+                        source_size.y,
                     );
                 self.frame_texture_views[next_texture] =
                     self.frame_textures[next_texture].create_view(&Default::default());
@@ -178,9 +205,10 @@ impl DisplayLayer {
                 ));
             }
 
-            let frame_uploaded = match format {
+            frame_uploaded = match format {
                 PixelFormat::Rgba => {
-                    let src_bytes_per_row = frame_size.x * 4;
+                    let frame_data = screen_frame.data();
+                    let src_bytes_per_row = source_size.x * 4;
 
                     queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
@@ -193,11 +221,11 @@ impl DisplayLayer {
                         wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(frame_size.y),
+                            rows_per_image: Some(source_size.y),
                         },
                         wgpu::Extent3d {
-                            width: frame_size.x,
-                            height: frame_size.y,
+                            width: source_size.x,
+                            height: source_size.y,
                             depth_or_array_layers: 1,
                         },
                     );
@@ -206,7 +234,22 @@ impl DisplayLayer {
                 PixelFormat::Nv12 => {
                     #[cfg(target_os = "macos")]
                     if !self.prefer_cpu_conversion {
-                        if let (Some(y_data), Some(uv_data)) =
+                        let iosurface_converted = screen_frame
+                            .with_image_buf(|image_buf| {
+                                self.yuv_converter
+                                    .convert_nv12_from_iosurface(device, queue, image_buf)
+                                    .is_ok()
+                            })
+                            .unwrap_or(false);
+
+                        if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: source_size.x,
+                                height: source_size.y,
+                                dst_texture_index: next_texture,
+                            });
+                            true
+                        } else if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();
@@ -216,8 +259,8 @@ impl DisplayLayer {
                                 queue,
                                 y_data,
                                 uv_data,
-                                frame_size.x,
-                                frame_size.y,
+                                source_size.x,
+                                source_size.y,
                                 y_stride,
                                 uv_stride,
                             );
@@ -226,8 +269,8 @@ impl DisplayLayer {
                                 Ok(_) => {
                                     if self.yuv_converter.output_texture().is_some() {
                                         self.pending_copy = Some(PendingTextureCopy {
-                                            width: frame_size.x,
-                                            height: frame_size.y,
+                                            width: source_size.x,
+                                            height: source_size.y,
                                             dst_texture_index: next_texture,
                                         });
                                         true
@@ -250,8 +293,8 @@ impl DisplayLayer {
                             queue,
                             y_data,
                             uv_data,
-                            frame_size.x,
-                            frame_size.y,
+                            source_size.x,
+                            source_size.y,
                             y_stride,
                             uv_stride,
                         );
@@ -260,8 +303,8 @@ impl DisplayLayer {
                             Ok(_) => {
                                 if self.yuv_converter.output_texture().is_some() {
                                     self.pending_copy = Some(PendingTextureCopy {
-                                        width: frame_size.x,
-                                        height: frame_size.y,
+                                        width: source_size.x,
+                                        height: source_size.y,
                                         dst_texture_index: next_texture,
                                     });
                                     true
@@ -366,53 +409,81 @@ impl DisplayLayer {
                     }
 
                     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                    if let (Some(y_data), Some(uv_data)) =
-                        (screen_frame.y_plane(), screen_frame.uv_plane())
                     {
-                        let y_stride = screen_frame.y_stride();
-                        let uv_stride = screen_frame.uv_stride();
-
-                        let convert_result = if self.prefer_cpu_conversion {
-                            self.yuv_converter.convert_nv12_cpu(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                frame_size.x,
-                                frame_size.y,
-                                y_stride,
-                                uv_stride,
-                            )
-                        } else {
-                            self.yuv_converter.convert_nv12(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                frame_size.x,
-                                frame_size.y,
-                                y_stride,
-                                uv_stride,
-                            )
-                        };
-
-                        match convert_result {
-                            Ok(_) => {
-                                if self.yuv_converter.output_texture().is_some() {
+                        #[cfg(target_os = "linux")]
+                        let cuda_result = screen_frame.cuda_nv12().map(|cuda| {
+                            let converted = self
+                                .yuv_converter
+                                .convert_nv12_cuda(device, queue, cuda)
+                                .map(|_| ());
+                            match converted {
+                                Ok(()) if self.yuv_converter.output_texture().is_some() => {
                                     self.pending_copy = Some(PendingTextureCopy {
-                                        width: frame_size.x,
-                                        height: frame_size.y,
+                                        width: source_size.x,
+                                        height: source_size.y,
                                         dst_texture_index: next_texture,
                                     });
                                     true
-                                } else {
+                                }
+                                Ok(()) => false,
+                                Err(error) => {
+                                    tracing::warn!(%error, "CUDA frame conversion failed");
                                     false
                                 }
                             }
-                            Err(_) => false,
+                        });
+                        #[cfg(not(target_os = "linux"))]
+                        let cuda_result: Option<bool> = None;
+                        if let Some(converted) = cuda_result {
+                            converted
+                        } else if let (Some(y_data), Some(uv_data)) =
+                            (screen_frame.y_plane(), screen_frame.uv_plane())
+                        {
+                            let y_stride = screen_frame.y_stride();
+                            let uv_stride = screen_frame.uv_stride();
+
+                            let convert_result = if self.prefer_cpu_conversion {
+                                self.yuv_converter.convert_nv12_cpu(
+                                    device,
+                                    queue,
+                                    y_data,
+                                    uv_data,
+                                    source_size.x,
+                                    source_size.y,
+                                    y_stride,
+                                    uv_stride,
+                                )
+                            } else {
+                                self.yuv_converter.convert_nv12(
+                                    device,
+                                    queue,
+                                    y_data,
+                                    uv_data,
+                                    source_size.x,
+                                    source_size.y,
+                                    y_stride,
+                                    uv_stride,
+                                )
+                            };
+
+                            match convert_result {
+                                Ok(_) => {
+                                    if self.yuv_converter.output_texture().is_some() {
+                                        self.pending_copy = Some(PendingTextureCopy {
+                                            width: source_size.x,
+                                            height: source_size.y,
+                                            dst_texture_index: next_texture,
+                                        });
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                                Err(_) => false,
+                            }
+                        } else {
+                            false
                         }
-                    } else {
-                        false
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -429,8 +500,8 @@ impl DisplayLayer {
                                 y_data,
                                 u_data,
                                 v_data,
-                                frame_size.x,
-                                frame_size.y,
+                                source_size.x,
+                                source_size.y,
                                 screen_frame.y_stride(),
                                 screen_frame.uv_stride(),
                             )
@@ -441,8 +512,8 @@ impl DisplayLayer {
                                 y_data,
                                 u_data,
                                 v_data,
-                                frame_size.x,
-                                frame_size.y,
+                                source_size.x,
+                                source_size.y,
                                 screen_frame.y_stride(),
                                 screen_frame.uv_stride(),
                             )
@@ -452,8 +523,8 @@ impl DisplayLayer {
                             Ok(_) => {
                                 if self.yuv_converter.output_texture().is_some() {
                                     self.pending_copy = Some(PendingTextureCopy {
-                                        width: frame_size.x,
-                                        height: frame_size.y,
+                                        width: source_size.x,
+                                        height: source_size.y,
                                         dst_texture_index: next_texture,
                                     });
                                     true
@@ -471,12 +542,26 @@ impl DisplayLayer {
 
             if frame_uploaded {
                 self.last_recording_time = Some(current_recording_time);
+                self.last_frame_storage = Some(frame_storage);
                 self.current_texture = next_texture;
+                self.has_valid_frame = true;
+            } else {
+                tracing::warn!(
+                    recording_time = current_recording_time,
+                    width = actual_width,
+                    height = actual_height,
+                    format = ?format,
+                    "Display frame upload failed"
+                );
             }
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
-        (skipped, actual_width, actual_height)
+        (
+            (skipped && self.has_valid_frame) || frame_uploaded,
+            actual_width,
+            actual_height,
+        )
     }
 
     pub fn prepare_with_encoder(
@@ -484,10 +569,9 @@ impl DisplayLayer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         segment_frames: &DecodedSegmentFrames,
-        frame_size: XY<u32>,
         uniforms: CompositeVideoFrameUniforms,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> (bool, u32, u32) {
+    ) -> bool {
         self.pending_copy = None;
 
         let Some(screen_frame) = &segment_frames.screen_frame else {
@@ -495,29 +579,38 @@ impl DisplayLayer {
                 "DisplayLayer::prepare_with_encoder - screen_frame is None, skipping display rendering"
             );
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
-            return (true, frame_size.x, frame_size.y);
+            return false;
         };
 
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
+        let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        self.yuv_converter.set_matrix(screen_frame.matrix());
         let current_recording_time = segment_frames.recording_time;
+        let frame_storage = screen_frame.storage_identity();
 
         let skipped = self
-            .last_recording_time
-            .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+            .last_frame_storage
+            .as_ref()
+            .is_some_and(|last| last.matches(&frame_storage))
+            || self
+                .last_recording_time
+                .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+
+        let mut frame_uploaded = false;
 
         if !skipped {
             let next_texture = 1 - self.current_texture;
 
-            if self.frame_textures[next_texture].width() != frame_size.x
-                || self.frame_textures[next_texture].height() != frame_size.y
+            if self.frame_textures[next_texture].width() != source_size.x
+                || self.frame_textures[next_texture].height() != source_size.y
             {
                 self.frame_textures[next_texture] =
                     CompositeVideoFramePipeline::create_frame_texture(
                         device,
-                        frame_size.x,
-                        frame_size.y,
+                        source_size.x,
+                        source_size.y,
                     );
                 self.frame_texture_views[next_texture] =
                     self.frame_textures[next_texture].create_view(&Default::default());
@@ -529,10 +622,13 @@ impl DisplayLayer {
                 ));
             }
 
-            let frame_uploaded = match format {
+            #[cfg(target_os = "macos")]
+            let mut frame_source = None;
+
+            frame_uploaded = match format {
                 PixelFormat::Rgba => {
                     let frame_data = screen_frame.data();
-                    let src_bytes_per_row = frame_size.x * 4;
+                    let src_bytes_per_row = source_size.x * 4;
 
                     queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
@@ -545,11 +641,11 @@ impl DisplayLayer {
                         wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(frame_size.y),
+                            rows_per_image: Some(source_size.y),
                         },
                         wgpu::Extent3d {
-                            width: frame_size.x,
-                            height: frame_size.y,
+                            width: source_size.x,
+                            height: source_size.y,
                             depth_or_array_layers: 1,
                         },
                     );
@@ -679,7 +775,50 @@ impl DisplayLayer {
 
                     #[cfg(not(target_os = "windows"))]
                     if !self.prefer_cpu_conversion {
-                        if let (Some(y_data), Some(uv_data)) =
+                        #[cfg(target_os = "macos")]
+                        let converted_into_frame = {
+                            frame_source = screen_frame
+                                .with_image_buf(|image_buf| {
+                                    self.yuv_converter
+                                        .convert_nv12_from_iosurface_into(
+                                            device,
+                                            encoder,
+                                            image_buf,
+                                            &self.frame_texture_views[next_texture],
+                                        )
+                                        .ok()
+                                })
+                                .flatten();
+                            frame_source.is_some()
+                        };
+                        #[cfg(not(target_os = "macos"))]
+                        let converted_into_frame = false;
+                        // Submitted ahead of `encoder`, so the conversion
+                        // lands before the pending copy recorded below.
+                        #[cfg(target_os = "linux")]
+                        let iosurface_converted = screen_frame.cuda_nv12().is_some_and(|cuda| {
+                            self.yuv_converter
+                                .convert_nv12_cuda(device, queue, cuda)
+                                .inspect_err(
+                                    |error| tracing::warn!(%error, "CUDA frame conversion failed"),
+                                )
+                                .is_ok()
+                        });
+                        #[cfg(not(target_os = "linux"))]
+                        let iosurface_converted = false;
+
+                        if converted_into_frame {
+                            true
+                        } else if iosurface_converted
+                            && self.yuv_converter.output_texture().is_some()
+                        {
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: source_size.x,
+                                height: source_size.y,
+                                dst_texture_index: next_texture,
+                            });
+                            true
+                        } else if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();
@@ -691,8 +830,8 @@ impl DisplayLayer {
                                 encoder,
                                 y_data,
                                 uv_data,
-                                frame_size.x,
-                                frame_size.y,
+                                source_size.x,
+                                source_size.y,
                                 y_stride,
                                 uv_stride,
                             );
@@ -701,8 +840,8 @@ impl DisplayLayer {
                                 Ok(_) => {
                                     if self.yuv_converter.output_texture().is_some() {
                                         self.pending_copy = Some(PendingTextureCopy {
-                                            width: frame_size.x,
-                                            height: frame_size.y,
+                                            width: source_size.x,
+                                            height: source_size.y,
                                             dst_texture_index: next_texture,
                                         });
                                         true
@@ -725,8 +864,8 @@ impl DisplayLayer {
                             queue,
                             y_data,
                             uv_data,
-                            frame_size.x,
-                            frame_size.y,
+                            source_size.x,
+                            source_size.y,
                             y_stride,
                             uv_stride,
                         );
@@ -735,8 +874,8 @@ impl DisplayLayer {
                             Ok(_) => {
                                 if self.yuv_converter.output_texture().is_some() {
                                     self.pending_copy = Some(PendingTextureCopy {
-                                        width: frame_size.x,
-                                        height: frame_size.y,
+                                        width: source_size.x,
+                                        height: source_size.y,
                                         dst_texture_index: next_texture,
                                     });
                                     true
@@ -764,8 +903,8 @@ impl DisplayLayer {
                                 y_data,
                                 u_data,
                                 v_data,
-                                frame_size.x,
-                                frame_size.y,
+                                source_size.x,
+                                source_size.y,
                                 screen_frame.y_stride(),
                                 screen_frame.uv_stride(),
                             )
@@ -777,8 +916,8 @@ impl DisplayLayer {
                                 y_data,
                                 u_data,
                                 v_data,
-                                frame_size.x,
-                                frame_size.y,
+                                source_size.x,
+                                source_size.y,
                                 screen_frame.y_stride(),
                                 screen_frame.uv_stride(),
                             )
@@ -788,8 +927,8 @@ impl DisplayLayer {
                             Ok(_) => {
                                 if self.yuv_converter.output_texture().is_some() {
                                     self.pending_copy = Some(PendingTextureCopy {
-                                        width: frame_size.x,
-                                        height: frame_size.y,
+                                        width: source_size.x,
+                                        height: source_size.y,
                                         dst_texture_index: next_texture,
                                     });
                                     true
@@ -806,13 +945,29 @@ impl DisplayLayer {
             };
 
             if frame_uploaded {
+                #[cfg(target_os = "macos")]
+                RetainedImageBuf::replace(
+                    queue,
+                    &mut self.frame_sources[next_texture],
+                    frame_source,
+                );
                 self.last_recording_time = Some(current_recording_time);
+                self.last_frame_storage = Some(frame_storage);
                 self.current_texture = next_texture;
+                self.has_valid_frame = true;
+            } else {
+                tracing::warn!(
+                    recording_time = current_recording_time,
+                    width = actual_width,
+                    height = actual_height,
+                    format = ?format,
+                    "Display frame upload failed"
+                );
             }
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
-        (skipped, actual_width, actual_height)
+        (skipped && self.has_valid_frame) || frame_uploaded
     }
 
     pub fn copy_to_texture(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -847,6 +1002,10 @@ impl DisplayLayer {
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if !self.has_valid_frame {
+            return;
+        }
+
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
@@ -857,6 +1016,10 @@ impl DisplayLayer {
                 "DisplayLayer::render - no bind group available"
             );
         }
+    }
+
+    pub fn has_valid_frame(&self) -> bool {
+        self.has_valid_frame
     }
 
     pub fn prepare_for_video_dimensions(&mut self, device: &wgpu::Device, width: u32, height: u32) {

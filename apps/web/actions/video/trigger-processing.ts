@@ -3,9 +3,33 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Schedule } from "effect";
+import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { decodeStorageVideo } from "@/lib/video-storage";
+import { isVideoStorageKey } from "@/lib/video-storage-key";
+
+async function verifyRawFileUploaded(
+	video: typeof videos.$inferSelect,
+	rawFileKey: string,
+) {
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runPromise);
+	const head = await bucket
+		.headObject(rawFileKey)
+		.pipe(
+			Effect.retry({ times: 3, schedule: Schedule.exponential("100 millis") }),
+			runPromise,
+		);
+
+	if ((head.ContentLength ?? 0) <= 0) {
+		throw new Error("Uploaded video file is empty");
+	}
+}
 
 export async function triggerVideoProcessing({
 	videoId,
@@ -26,6 +50,14 @@ export async function triggerVideoProcessing({
 
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
+	if (!isVideoStorageKey(video, rawFileKey)) {
+		throw new Error("Upload file does not belong to this video");
+	}
+	if ((video.bucket ?? null) !== (bucketId ?? null)) {
+		throw new Error("Upload bucket does not match this video");
+	}
+
+	await verifyRawFileUploaded(video, rawFileKey);
 
 	await startVideoProcessingWorkflow({
 		videoId,

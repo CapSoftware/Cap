@@ -8,10 +8,7 @@ import {
 } from "@/utils/blog-registry";
 import { generateGradientFromSlug } from "@/utils/gradients";
 
-const FEATURED_SLUGS = [
-	"handling-a-stripe-payment-attack",
-	"september-23-outage-deep-dive",
-];
+const FEATURED_SLUGS = ["rebuilding-cap-in-gpui"];
 
 export const UpdatesPage = () => {
 	const allUpdates = getBlogPosts() as BlogPost[];
@@ -39,27 +36,65 @@ export const UpdatesPage = () => {
 			}
 			return 0;
 		});
+	const featuredGridClassName =
+		featuredPosts.length === 1
+			? "grid grid-cols-1 gap-6"
+			: "grid grid-cols-1 gap-6 md:grid-cols-2";
+	const featuredImageClassName =
+		featuredPosts.length === 1
+			? "object-cover w-full h-80 md:h-[460px]"
+			: "object-cover w-full h-48";
 
 	return (
 		<div className="pt-24 pb-32 md:py-40 wrapper wrapper-sm">
 			{featuredPosts.length > 0 && (
 				<div className="mb-6">
-					<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+					<div className={featuredGridClassName}>
 						{featuredPosts.map((post) => (
 							<article
 								key={post.slug}
 								className="overflow-hidden w-full rounded-xl border transition-shadow bg-gray-1 border-gray-5 hover:shadow-md"
 							>
 								<Link href={`/blog/${post.slug}`}>
-									{post.metadata.image ? (
+									{"video" in post.metadata && post.metadata.video ? (
+										<div className="w-full border-b bg-black">
+											{/* The animated cover from og:video. Its first frame is
+											saved next to it as the poster. */}
+											<video
+												src={post.metadata.video}
+												poster={post.metadata.video.replace(
+													/\.mp4$/,
+													"-poster.jpg",
+												)}
+												autoPlay
+												muted
+												loop
+												playsInline
+												preload="auto"
+												aria-label={post.metadata.title}
+												className="block aspect-[40/21] w-full object-cover motion-reduce:hidden"
+											/>
+											{post.metadata.image && (
+												<Image
+													src={post.metadata.image}
+													width={2000}
+													height={1000}
+													sizes="(min-width: 1100px) 1024px, 100vw"
+													alt={post.metadata.title}
+													className={`${featuredImageClassName} hidden motion-reduce:block`}
+												/>
+											)}
+										</div>
+									) : post.metadata.image ? (
 										<div className="w-full border-b">
 											<Image
 												src={post.metadata.image}
-												width={900}
-												height={400}
+												width={2000}
+												height={1000}
+												sizes="(min-width: 1100px) 1024px, 100vw"
 												objectFit="cover"
 												alt={post.metadata.title}
-												className="object-cover w-full h-48"
+												className={featuredImageClassName}
 											/>
 										</div>
 									) : isInteractiveBlogPost(post.slug) ? (
@@ -105,9 +140,9 @@ export const UpdatesPage = () => {
 											)}
 										</div>
 										<div className="flex flex-wrap gap-2">
-											{post.metadata.tags?.split(", ").map((tag, index) => (
+											{post.metadata.tags?.split(", ").map((tag) => (
 												<p
-													key={index}
+													key={tag}
 													className="rounded-md bg-gray-3 font-medium px-2 py-0.5 text-sm text-gray-12"
 												>
 													{tag}
@@ -182,9 +217,9 @@ export const UpdatesPage = () => {
 										)}
 									</div>
 									<div className="flex flex-wrap gap-2">
-										{post.metadata.tags?.split(", ").map((tag, index) => (
+										{post.metadata.tags?.split(", ").map((tag) => (
 											<p
-												key={index}
+												key={tag}
 												className="rounded-md bg-gray-3 font-medium px-2 py-0.5 text-sm text-gray-12"
 											>
 												{tag}

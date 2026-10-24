@@ -1,7 +1,7 @@
+import type { UploadTarget, VideoId } from "@cap/recorder-core/recorder-types";
 import { uploadWithTarget } from "@/utils/upload-target";
 import type { UploadStatus } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
-import type { UploadTarget, VideoId } from "./web-recorder-types";
 
 export const uploadRecording = (
 	blob: Blob,

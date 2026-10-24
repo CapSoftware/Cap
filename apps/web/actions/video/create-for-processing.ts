@@ -4,8 +4,8 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
 	type Folder,
@@ -45,7 +45,18 @@ export async function createVideoForServerProcessing({
 
 	if (!user) throw new Error("Unauthorized");
 
-	if (!userIsPro(user) && duration && duration > 300) {
+	// Free-tier length cap. `duration` here is client-supplied metadata sent at
+	// upload-start, so it is only authoritative when a positive value is given
+	// (instant recordings legitimately start with 0/unknown duration). A
+	// positive declared duration over the cap is rejected up-front; the real
+	// duration is only known at finalize, which is where the cap must ultimately
+	// be enforced.
+	if (
+		!userIsPro(user) &&
+		typeof duration === "number" &&
+		Number.isFinite(duration) &&
+		duration > 300
+	) {
 		throw new Error("upgrade_required");
 	}
 
@@ -59,12 +70,15 @@ export async function createVideoForServerProcessing({
 	})} ${date.getFullYear()}`;
 
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
+	const videoTitle = `Cap Upload - ${formattedDate}`;
 
 	const uploadResult = await StorageService.createUploadTargetForUser(
 		user.id,
 		rawFileKey,
 		{
 			contentType: "video/mp4",
+			videoTitle,
+			method: "put",
 			fields: {
 				"x-amz-meta-userid": user.id,
 				"x-amz-meta-duration": duration?.toString() ?? "",
@@ -74,37 +88,27 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
-	await db()
-		.insert(videos)
-		.values({
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
-			name: `Cap Upload - ${formattedDate}`,
+			name: videoTitle,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(folderId ? { folderId } : {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		phase: "uploading",
-		processingProgress: 0,
+		await tx.insert(videoUploads).values({
+			videoId,
+			mode: "singlepart",
+			phase: "uploading",
+			processingProgress: 0,
+			rawFileKey,
+		});
 	});
-
-	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-		await dub()
-			.links.create({
-				url: `${serverEnv().WEB_URL}/s/${videoId}`,
-				domain: "cap.link",
-				key: videoId,
-			})
-			.catch((err) => {
-				console.error("Dub link create failed", err);
-			});
-	}
 
 	revalidatePath("/dashboard/caps");
 	revalidatePath("/dashboard/folder");

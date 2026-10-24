@@ -1,35 +1,271 @@
+mod account;
+mod agent_auth;
+mod agent_client;
+mod agents;
+mod analytics;
+mod atomic;
+mod automation;
+mod caps;
+mod confirmation;
+mod credentials;
+mod developers;
+mod doctor;
+mod export;
+mod guide;
+mod jobs;
+mod library;
+mod mcp;
+mod notifications;
+mod organizations;
+mod project;
 mod record;
+mod recordings;
+mod screenshot;
+mod selftest;
+mod session;
+mod targets;
+mod update;
+mod upload;
 
 use std::{
-    io::{Write, stdout},
+    io::{IsTerminal, Write, stderr, stdout},
     path::PathBuf,
 };
 
-use cap_export::ExporterBase;
-use cap_project::XY;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use export::{Export, ExportPreview};
 use record::RecordStart;
-use serde_json::json;
-use tracing::*;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use serde::Serialize;
+use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_BLUE: &str = "\x1b[38;2;71;133;255m";
+const ANSI_SOFT_BLUE: &str = "\x1b[38;2;173;201;255m";
+const ANSI_WHITE: &str = "\x1b[38;2;255;255;255m";
+const ANSI_MUTED: &str = "\x1b[38;2;118;128;145m";
+
+const WELCOME_LINES: &[&[(&str, &str)]] = &[
+    &[(ANSI_BLUE, "      ██████████")],
+    &[
+        (ANSI_BLUE, "    ███"),
+        (ANSI_SOFT_BLUE, "████████"),
+        (ANSI_BLUE, "███"),
+        (ANSI_BOLD, "     ____"),
+    ],
+    &[
+        (ANSI_BLUE, "  ███"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "███"),
+        (ANSI_BOLD, "    / ___|__ _ _ __"),
+    ],
+    &[
+        (ANSI_BLUE, "  ██"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "██████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "██"),
+        (ANSI_BOLD, "   | |   / _` | '_ \\"),
+    ],
+    &[
+        (ANSI_BLUE, "  ██"),
+        (ANSI_SOFT_BLUE, "█"),
+        (ANSI_WHITE, "████████████"),
+        (ANSI_SOFT_BLUE, "█"),
+        (ANSI_BLUE, "██"),
+        (ANSI_BOLD, "   | |__| (_| | |_) |"),
+    ],
+    &[
+        (ANSI_BLUE, "  ██"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "██████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "██"),
+        (ANSI_BOLD, "    \\____\\__,_| .__/"),
+    ],
+    &[
+        (ANSI_BLUE, "  ███"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "███"),
+        (ANSI_BOLD, "              |_|"),
+    ],
+    &[
+        (ANSI_BLUE, "    ███"),
+        (ANSI_SOFT_BLUE, "████████"),
+        (ANSI_BLUE, "███"),
+    ],
+    &[(ANSI_BLUE, "      ██████████")],
+    &[],
+    &[(
+        ANSI_BOLD,
+        "  Record, edit, and share screen recordings from the command line.",
+    )],
+    &[],
+    &[(ANSI_BLUE, "  cap record start --screen <id> --detach")],
+    &[(
+        ANSI_MUTED,
+        "  cap targets     cap doctor     cap guide --json     cap --help",
+    )],
+];
+
+/// Long-form help epilogue. Agents read `cap --help` before doing anything, so the conventions they
+/// need to drive the CLI correctly (JSON on stdout, env vars, the canonical workflow) live here.
+const AGENT_HELP: &str = "\
+OUTPUT
+  Pass --json (global) for machine-readable JSON on stdout; stderr stays human-readable.
+  stdout is the authoritative result. On failure the process exits non-zero and, in --json
+  mode, prints a final object/event containing an \"error\" field. Streaming commands (record,
+  export) emit newline-delimited JSON (NDJSON) events. Run `cap guide --json` for the full
+  machine-readable capability + schema manifest.
+
+AUTH
+  `cap upload` authenticates automatically by reusing the login Cap Desktop already stored — no
+  key to copy when you are signed in there. Check with `cap auth status --json`. For headless/CI,
+  create a CLI API key in the Cap dashboard under Settings -> Account and set it as CAP_API_KEY.
+
+ENVIRONMENT
+  CAP_API_KEY         Overrides auth (CLI API key from the Cap dashboard, Settings -> Account);
+                      optional when signed into Cap Desktop.
+  CAP_SERVER_URL      Cap server base URL; defaults to Cap Desktop's server, else https://cap.so.
+  CAP_NO_MODIFY_PATH  Set to skip editing shell profiles during `cap desktop install-cli`.
+  CAP_DESKTOP_FORCE_INSTALL
+                      Force the web installer scripts to replace Cap Desktop before linking the CLI.
+
+TYPICAL AGENT WORKFLOW
+  cap doctor --json                          # verify permissions & capture readiness
+  cap targets --json                         # discover screens/windows/cameras/mics
+  cap record start --screen <id> --json --detach  # start in background -> {recordingId, pid, path}
+  cap record stop --id <recordingId> --json  # finalize the .cap recording
+  cap project validate <path.cap> --json     # confirm the recording is complete
+  cap export <path.cap> --output out.mp4 --json
+  cap upload out.mp4 --json                   # get a shareable link (needs CAP_API_KEY)";
 
 #[derive(Parser)]
+#[command(
+    name = "cap",
+    version,
+    about = "Cap screen recording from the command line",
+    long_about = "Cap screen recording from the command line.\n\nDesigned to be driven by automation and AI agents: add --json to any command for \
+machine-readable output. See the sections below for the JSON convention, environment variables, and \
+the canonical record -> export -> upload workflow.",
+    after_help = AGENT_HELP,
+    after_long_help = AGENT_HELP
+)]
 struct Cli {
+    #[arg(long, value_enum, global = true, default_value_t = CliLogLevel::Warn)]
+    log_level: CliLogLevel,
+    /// Emit machine-readable JSON to stdout (overrides each command's --format)
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum CliLogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl CliLogLevel {
+    fn level_filter(self) -> LevelFilter {
+        match self {
+            Self::Trace => LevelFilter::TRACE,
+            Self::Debug => LevelFilter::DEBUG,
+            Self::Info => LevelFilter::INFO,
+            Self::Warn => LevelFilter::WARN,
+            Self::Error => LevelFilter::ERROR,
+        }
+    }
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Export a '.cap' project to an mp4 file
+    /// Export one or more '.cap' projects to video files
     Export(Export),
+    /// Render an export preview frame
+    ExportPreview(ExportPreview),
+    /// Inspect or validate a '.cap' project
+    Project(ProjectArgs),
     /// Start a recording or list available capture targets and devices
     Record(RecordArgs),
+    /// Capture a still screenshot of a screen or window
+    Screenshot(screenshot::Screenshot),
+    /// List recordings discovered in the desktop library (or a custom directory)
+    Recordings(RecordingsArgs),
+    /// Upload a recording or video file and get a shareable link
+    Upload(upload::UploadArgs),
+    /// Update Cap Desktop and the bundled CLI
+    Update(FormatArgs),
+    /// Show how `cap upload` will authenticate (env key or Cap Desktop login)
+    Auth(AuthArgs),
+    /// Read and manage Caps in your personal library
+    Caps(caps::CapsArgs),
+    /// Read or update the authenticated Cap account
+    Account(account::AccountArgs),
+    /// Inspect Cap organizations, members, billing, and storage connections
+    Organizations(organizations::OrganizationsArgs),
+    /// Manage folders, spaces, and space membership
+    Library(library::LibraryArgs),
+    /// Read and manage account notifications
+    Notifications(notifications::NotificationsArgs),
+    /// Read organization, space, or Cap analytics
+    Analytics(analytics::AnalyticsArgs),
+    /// Inspect developer apps, domains, usage, and credits
+    Developers(developers::DevelopersArgs),
+    /// Inspect or wait for asynchronous Cap operations
+    Jobs(jobs::JobsArgs),
+    /// Run Cap's local Model Context Protocol server
+    Mcp(mcp::McpArgs),
+    /// Install Cap integrations for one explicitly selected agent
+    Agents(agents::AgentsArgs),
+    /// List available capture targets and devices
+    Targets(TargetsArgs),
+    /// Report CLI environment and capture-readiness diagnostics
+    Doctor(FormatArgs),
+    /// Run end-to-end diagnostics that verify Cap works on this machine
+    Selftest(selftest::SelftestArgs),
+    /// Print CLI version and execution context
+    Version(FormatArgs),
+    /// Inspect or manage the desktop-installed `cap` shim
+    Desktop(DesktopArgs),
+    /// Print the machine-readable capability & JSON-schema manifest for agents
+    Guide(FormatArgs),
+    /// List automation rules shared with Cap Desktop
+    Automations(AutomationsArgs),
+    /// Generate shell completion scripts
+    Completions(CompletionsArgs),
+}
+
+impl Commands {
+    fn exit_after_success(&self) -> bool {
+        // Selftest runs an export, so it shares export's teardown-crash
+        // avoidance on Windows.
+        matches!(
+            self,
+            Self::Export(_) | Self::ExportPreview(_) | Self::Selftest(_)
+        )
+    }
+}
+
+impl Cli {
+    fn exit_after_success(&self) -> bool {
+        self.command
+            .as_ref()
+            .is_some_and(Commands::exit_after_success)
+    }
 }
 
 #[derive(Args)]
 #[command(args_conflicts_with_subcommands = true)]
-// #[command(flatten_help = true)]
 struct RecordArgs {
     #[command(subcommand)]
     command: Option<RecordCommands>,
@@ -40,187 +276,597 @@ struct RecordArgs {
 
 #[derive(Subcommand)]
 enum RecordCommands {
+    /// Start a recording (use --detach to run in the background and stop later)
+    Start(RecordStart),
+    /// Stop a detached recording started with `cap record start --detach`
+    Stop(record::RecordStopArgs),
+    /// List active and recent detached recording sessions
+    Status(FormatArgs),
+    /// Internal: background worker for detached recordings (do not call directly)
+    #[command(name = "__session-run", hide = true)]
+    SessionRun(record::SessionRunArgs),
     /// List screens available for capturing
-    Screens,
+    Screens(FormatArgs),
     /// List windows available for capturing
-    Windows,
+    Windows(FormatArgs),
     /// List cameras available for capturing
-    Cameras,
-    // Mics,
-}
-
-#[tokio::main]
-async fn main() -> Result<(), String> {
-    // let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
-
-    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
-        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
-    ));
-
-    registry
-        // .with(layer)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(true)
-                .with_target(true),
-        )
-        .init();
-
-    let cli = Cli::parse();
-
-    match cli.command {
-        Commands::Export(e) => {
-            if let Err(e) = e.run().await {
-                eprint!("Export failed: {e}")
-            }
-        }
-        Commands::Record(RecordArgs { command, args }) => match command {
-            Some(RecordCommands::Screens) => {
-                let screens = cap_recording::screen_capture::list_displays();
-
-                for (i, (screen, target)) in screens.iter().enumerate() {
-                    println!(
-                        "
-screen {}:
-  id: {}
-  name: {}
-  fps: {}",
-                        i,
-                        screen.id,
-                        screen.name,
-                        target.refresh_rate()
-                    );
-                }
-            }
-            Some(RecordCommands::Windows) => {
-                let windows = cap_recording::screen_capture::list_windows();
-
-                for (i, (window, target)) in windows.iter().enumerate() {
-                    println!(
-                        "
-window {}:
-  id: {}
-  name: {}
-  fps: {}",
-                        i,
-                        window.id,
-                        window.name,
-                        target.display().unwrap().refresh_rate()
-                    );
-                }
-            }
-            Some(RecordCommands::Cameras) => {
-                let cameras = cap_camera::list_cameras().collect::<Vec<_>>();
-
-                let mut info = vec![];
-                for camera_info in cameras {
-                    // let format = RequestedFormat::new::<RgbAFormat>(
-                    //     RequestedFormatType::AbsoluteHighestFrameRate,
-                    // );
-
-                    // let Ok(mut camera) = Camera::new(camera_info.index().clone(), format) else {
-                    //     continue;
-                    // };
-
-                    info.push(json!({
-                        // "model_id": camera_info.model_id().to_string(),
-                        "display_name": camera_info.display_name()
-                        // "index": camera_info.index().to_string(),
-                        // "name": camera_info.human_name(),
-                        // "pixel_format": camera.frame_format(),
-                        // "formats":  camera
-                        // 		.compatible_camera_formats()
-                        //   	.unwrap()
-                        //    	.into_iter()
-                        //     .map(|f| format!("{}x{}@{}fps", f.resolution().x(), f.resolution().y(), f.frame_rate()))
-                        //     .collect::<Vec<_>>()
-                    }));
-                }
-
-                println!("{}", serde_json::to_string_pretty(&info).unwrap());
-            }
-            None => {
-                args.run().await?;
-            }
-        },
-    }
-
-    Ok(())
+    Cameras(FormatArgs),
+    /// List microphones available for capturing
+    Mics(FormatArgs),
 }
 
 #[derive(Args)]
-struct Export {
-    project_path: PathBuf,
-    output_path: Option<PathBuf>,
+#[command(args_conflicts_with_subcommands = true)]
+struct TargetsArgs {
+    #[command(subcommand)]
+    command: Option<TargetCommands>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
 }
 
-impl Export {
-    async fn run(self) -> Result<(), String> {
-        let exporter_base = ExporterBase::builder(self.project_path)
-            .build()
-            .await
-            .map_err(|v| format!("Exporter build error: {v}"))?;
+#[derive(Subcommand)]
+enum TargetCommands {
+    /// List screens available for capturing
+    Screens(FormatArgs),
+    /// List windows available for capturing
+    Windows(FormatArgs),
+    /// List cameras available for capturing
+    Cameras(FormatArgs),
+    /// List microphones available for capturing
+    Mics(FormatArgs),
+}
 
-        let mut stdout = stdout();
+#[derive(Args)]
+struct FormatArgs {
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
 
-        let exporter_output_path = cap_export::mp4::Mp4ExportSettings {
-            fps: 60,
-            resolution_base: XY::new(1920, 1080),
-            compression: cap_export::mp4::ExportCompression::Maximum,
-            custom_bpp: None,
-            force_ffmpeg_decoder: false,
-            optimize_filesize: false,
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum OutputFormat {
+    Text,
+    Json,
+}
+
+#[derive(Args)]
+struct ProjectArgs {
+    #[command(subcommand)]
+    command: ProjectCommands,
+}
+
+#[derive(Subcommand)]
+enum ProjectCommands {
+    /// Print project metadata and editor configuration
+    Inspect(ProjectTarget),
+    /// Verify a project's metadata and expected media files exist
+    Validate(ProjectTarget),
+    /// Read or write a project's editor configuration (project-config.json)
+    Config(ProjectConfigArgs),
+}
+
+#[derive(Args)]
+struct ProjectTarget {
+    project_path: PathBuf,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct ProjectConfigArgs {
+    #[command(subcommand)]
+    command: ProjectConfigCommands,
+}
+
+#[derive(Subcommand)]
+enum ProjectConfigCommands {
+    /// Print the project's editor configuration as JSON
+    Get(ProjectTarget),
+    /// Replace the project's editor configuration from a full JSON document
+    Set(ProjectConfigSet),
+}
+
+#[derive(Args)]
+struct ProjectConfigSet {
+    project_path: PathBuf,
+    /// Full ProjectConfiguration as a JSON string (camelCase keys); omitted fields reset to defaults
+    #[arg(long)]
+    settings_json: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct RecordingsArgs {
+    #[command(subcommand)]
+    command: RecordingsCommands,
+}
+
+#[derive(Subcommand)]
+enum RecordingsCommands {
+    /// List '.cap' recordings discovered on disk
+    List(RecordingsListArgs),
+}
+
+#[derive(Args)]
+struct RecordingsListArgs {
+    /// Directory to scan (defaults to the desktop recordings library)
+    #[arg(long)]
+    dir: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DesktopArgs {
+    #[command(subcommand)]
+    command: DesktopCommands,
+}
+
+#[derive(Subcommand)]
+enum DesktopCommands {
+    /// Show whether the `cap` shim is installed and on PATH
+    Status(FormatArgs),
+    /// Install the `cap` shim onto your PATH
+    InstallCli(FormatArgs),
+    /// Remove the `cap` shim from your PATH
+    UninstallCli(FormatArgs),
+}
+
+#[derive(Args)]
+struct AuthArgs {
+    #[command(subcommand)]
+    command: AuthCommands,
+}
+
+#[derive(Subcommand)]
+enum AuthCommands {
+    /// Report whether a credential is available and where it comes from (never prints the secret)
+    Status(FormatArgs),
+    /// Authorize Cap CLI in the browser using PKCE
+    Login(agent_auth::LoginArgs),
+    /// Revoke and remove the Cap CLI credential
+    Logout(agent_auth::LogoutArgs),
+}
+
+#[derive(Args)]
+struct AutomationsArgs {
+    #[command(subcommand)]
+    command: AutomationsCommands,
+}
+
+#[derive(Subcommand)]
+enum AutomationsCommands {
+    /// List the automation rules configured in Cap Desktop
+    List(FormatArgs),
+}
+
+#[derive(Args)]
+struct CompletionsArgs {
+    #[arg(value_enum)]
+    shell: clap_complete::Shell,
+}
+
+fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
+        // Mesa counts host CPUs inside containers; configure it before creating the CLI runtime.
+        unsafe {
+            std::env::set_var("LP_NUM_THREADS", threads.to_string());
         }
-        .export(exporter_base, move |_f| {
-            // print!("\rrendered frame {f}");
+    }
 
-            stdout.flush().unwrap();
-            true
-        })
-        .await
-        .map_err(|v| format!("Exporter error: {v}"))?;
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
 
-        let output_path = if let Some(output_path) = self.output_path {
-            std::fs::copy(&exporter_output_path, &output_path).unwrap();
-            output_path
-        } else {
-            exporter_output_path
-        };
+        let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+    }
 
-        info!("Exported video to '{}'", output_path.display());
+    let cli = Cli::parse();
+    let level_filter = cli.log_level.level_filter();
 
-        Ok(())
+    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
+        // The binary crate is named `cap`, so its own spans/events have target `cap`/`cap::…`,
+        // which a bare `cap_` prefix excludes — keep those alongside the `cap_*` library crates.
+        (|v| {
+            let target = v.target();
+            target == "cap" || target.starts_with("cap::") || target.starts_with("cap_")
+        }) as fn(&tracing::Metadata) -> bool,
+    ));
+
+    registry
+        .with(level_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(true)
+                .with_writer(stderr),
+        )
+        .init();
+
+    let _diagnostic_guard = if std::env::var_os("CAP_DIAGNOSTIC_PARENT").is_some() {
+        let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+        let queue_errors = writer.error_counter();
+        cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+            queue_errors.dropped_lines()
+        });
+        cap_utils::operation_diagnostics::install_sink(
+            cap_utils::operation_diagnostics::AppInfo {
+                flavor: "export_worker",
+                version: env!("CARGO_PKG_VERSION"),
+                source_revision: option_env!("CAP_BUILD_REVISION"),
+                debug_build: cfg!(debug_assertions),
+                source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+            },
+            move |bytes| {
+                use std::io::Write;
+                let _ = writer.clone().write_all(bytes);
+            },
+        );
+        Some(guard)
+    } else {
+        None
+    };
+
+    let exit_after_success = cli.exit_after_success();
+
+    // The self-test opens a window, which AppKit requires to live on the real
+    // process main thread — so the main thread stays here to serve pattern
+    // requests while the command itself runs on the runtime thread.
+    let pattern_rx = matches!(cli.command, Some(Commands::Selftest(_)))
+        .then(selftest::pattern::install_main_thread_runner);
+
+    // Windows export exercises deep WGPU/MediaFoundation/FFmpeg stacks. Running the CLI runtime
+    // on an explicitly large stack is what stopped the export worker from overflowing before
+    // the first frame; keep the sidecar and desktop runtimes in sync.
+    let runtime_thread = std::thread::Builder::new()
+        .name("cap-cli-runtime".to_string())
+        .stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
+        .spawn(move || -> Result<(), String> {
+            // serve_main_thread blocks the main thread until this shutdown
+            // runs; a drop guard keeps that true on every exit path, including
+            // the runtime failing to build and panics unwinding out of run().
+            struct PatternShutdown;
+            impl Drop for PatternShutdown {
+                fn drop(&mut self) {
+                    selftest::pattern::shutdown_main_thread_runner();
+                }
+            }
+            let _pattern_shutdown = PatternShutdown;
+
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
+                .build()
+                .map_err(|e| format!("Failed to build Tokio runtime: {e}"))?;
+
+            if _diagnostic_guard.is_some() {
+                drop(runtime.spawn(cap_utils::operation_diagnostics::run_checkpoints()));
+            }
+            let result = runtime.block_on(run(cli));
+            drop(_diagnostic_guard);
+            if exit_after_success && result.is_ok() {
+                // Successful export/preview workers have already written their output by here.
+                // Exiting directly avoids Windows GPU/MediaFoundation teardown crashes in the
+                // short-lived sidecar process.
+                let _ = stdout().flush();
+                let _ = stderr().flush();
+                std::process::exit(0);
+            }
+
+            result
+        });
+
+    // A failed spawn means nothing will ever call shutdown_main_thread_runner, so the
+    // pattern server below would block forever — bail out before serving.
+    let runtime_thread = match runtime_thread {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("error: Failed to spawn CLI runtime thread: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(rx) = pattern_rx {
+        selftest::pattern::serve_main_thread(rx);
+    }
+
+    // Surface failures as a clean, unquoted `error: ...` line on stderr (the default
+    // `Result`-returning main prints `Error: "debug-quoted"`, which is noisy for humans and brittle
+    // for agents scraping stderr). clap already exits 2 for usage/parse errors before we get here.
+    let outcome = runtime_thread.join();
+
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(message)) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            eprintln!("error: CLI runtime thread panicked");
+            std::process::exit(1);
+        }
     }
 }
 
-// fn ffmpeg_callback_experiment() {
-//     unsafe {
-//         unsafe extern "C" fn ffmpeg_log_callback(
-//             arg1: *mut std::ffi::c_void,
-//             arg2: std::ffi::c_int,
-//             arg3: *const std::ffi::c_char,
-//             arg4: *mut std::ffi::c_char,
-//         ) {
-//             // ffmpeg::sys::AVClass;
+async fn run(cli: Cli) -> Result<(), String> {
+    let json = cli.json;
+    let Some(command) = cli.command else {
+        return print_welcome(json);
+    };
 
-//             if !arg1.is_null() {
-//                 let arg1_ptr = arg1;
-//                 let arg1 = **(arg1 as *mut *mut AVClass);
-//                 dbg!(CStr::from_ptr(arg1.class_name));
-//                 if let Some(item_name_fn) = arg1.item_name {
-//                     dbg!(CStr::from_ptr(item_name_fn(arg1_ptr)));
-//                 }
-//             }
+    match command {
+        Commands::Export(e) => e.run(json).await,
+        Commands::ExportPreview(e) => e.run().await,
+        Commands::Selftest(args) => args.run(json).await,
+        Commands::Project(args) => args.run(json),
+        Commands::Record(RecordArgs { command, args }) => match command {
+            Some(RecordCommands::Start(args)) => args.run(json).await,
+            Some(RecordCommands::Stop(args)) => args.run(json).await,
+            Some(RecordCommands::Status(args)) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, record::status(format))
+            }
+            Some(RecordCommands::SessionRun(args)) => args.run().await,
+            Some(RecordCommands::Screens(args)) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, targets::print_screens(format))
+            }
+            Some(RecordCommands::Windows(args)) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, targets::print_windows(format))
+            }
+            Some(RecordCommands::Cameras(args)) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, targets::print_cameras(format))
+            }
+            Some(RecordCommands::Mics(args)) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, targets::print_mics(format))
+            }
+            None => args.run(json).await,
+        },
+        Commands::Screenshot(s) => s.run(json).await,
+        Commands::Recordings(args) => args.run(json),
+        Commands::Upload(args) => args.run(json).await,
+        Commands::Update(args) => {
+            let format = resolve_format(json, args.format);
+            finish_json(format, update::run(format))
+        }
+        Commands::Auth(args) => match args.command {
+            AuthCommands::Status(args) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, credentials::status(format).await)
+            }
+            AuthCommands::Login(args) => args.run(json).await,
+            AuthCommands::Logout(args) => args.run(json).await,
+        },
+        Commands::Caps(args) => args.run(json).await,
+        Commands::Account(args) => args.run(json).await,
+        Commands::Organizations(args) => args.run(json).await,
+        Commands::Library(args) => args.run(json).await,
+        Commands::Notifications(args) => args.run(json).await,
+        Commands::Analytics(args) => args.run(json).await,
+        Commands::Developers(args) => args.run(json).await,
+        Commands::Jobs(args) => args.run(json).await,
+        Commands::Mcp(args) => args.run().await,
+        Commands::Agents(args) => args.run(json),
+        Commands::Targets(args) => args.run(json),
+        Commands::Doctor(args) => doctor::run_doctor(resolve_format(json, args.format)).await,
+        Commands::Version(args) => {
+            let format = resolve_format(json, args.format);
+            finish_json(format, doctor::run_version(format))
+        }
+        Commands::Desktop(args) => args.run(json),
+        Commands::Guide(args) => {
+            let format = resolve_format(json, args.format);
+            finish_json(format, guide::run(format))
+        }
+        Commands::Automations(args) => match args.command {
+            AutomationsCommands::List(a) => {
+                let format = resolve_format(json, a.format);
+                finish_json(format, automation::list(format))
+            }
+        },
+        Commands::Completions(args) => {
+            args.run();
+            Ok(())
+        }
+    }
+}
 
-//             // let class_name = if !arg1.is_null() {
-//             //     CStr::from_ptr((*arg1).class_name)
-//             // } else {
-//             //     "unknown".to_string()
-//             // };
+fn print_welcome(json: bool) -> Result<(), String> {
+    if json {
+        return write_json(&serde_json::json!({
+            "name": "cap",
+            "about": "Cap screen recording from the command line",
+            "commands": ["record", "targets", "doctor", "guide", "upload"],
+        }));
+    }
 
-//             // println!("[{class_name}] {arg2} {s:?}",);
-//         }
+    let ansi = stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let mut stdout = stdout();
+    for line in WELCOME_LINES {
+        for segment in *line {
+            let (style, text) = *segment;
+            if ansi && !text.is_empty() {
+                write!(stdout, "{style}{text}{ANSI_RESET}").map_err(|e| e.to_string())?;
+            } else {
+                write!(stdout, "{text}").map_err(|e| e.to_string())?;
+            }
+        }
+        writeln!(stdout).map_err(|e| e.to_string())?;
+    }
+    stdout.flush().map_err(|e| e.to_string())
+}
 
-//         ffmpeg::sys::av_log_set_callback(Some(ffmpeg_log_callback));
-//     }
-// }
+/// `--json` is a global convenience that forces JSON regardless of a command's local `--format`
+/// (which stays for back-compat). Either one selecting JSON wins.
+pub fn resolve_format(global_json: bool, local: OutputFormat) -> OutputFormat {
+    if global_json {
+        OutputFormat::Json
+    } else {
+        local
+    }
+}
+
+impl TargetsArgs {
+    fn run(self, json: bool) -> Result<(), String> {
+        let (format, result) = match self.command {
+            Some(TargetCommands::Screens(args)) => {
+                let format = resolve_format(json, args.format);
+                (format, targets::print_screens(format))
+            }
+            Some(TargetCommands::Windows(args)) => {
+                let format = resolve_format(json, args.format);
+                (format, targets::print_windows(format))
+            }
+            Some(TargetCommands::Cameras(args)) => {
+                let format = resolve_format(json, args.format);
+                (format, targets::print_cameras(format))
+            }
+            Some(TargetCommands::Mics(args)) => {
+                let format = resolve_format(json, args.format);
+                (format, targets::print_mics(format))
+            }
+            None => {
+                let format = resolve_format(json, self.format);
+                (format, targets::print_all(format))
+            }
+        };
+        finish_json(format, result)
+    }
+}
+
+impl ProjectArgs {
+    fn run(self, json: bool) -> Result<(), String> {
+        match self.command {
+            // validate emits its own structured report (incl. JSON errors), so it is not wrapped.
+            ProjectCommands::Validate(args) => {
+                project::validate(args.project_path, resolve_format(json, args.format))
+            }
+            ProjectCommands::Inspect(args) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, project::inspect(args.project_path, format))
+            }
+            ProjectCommands::Config(ProjectConfigArgs { command }) => match command {
+                ProjectConfigCommands::Get(args) => finish_json(
+                    resolve_format(json, args.format),
+                    project::config_get(args.project_path),
+                ),
+                ProjectConfigCommands::Set(args) => {
+                    let format = resolve_format(json, args.format);
+                    finish_json(
+                        format,
+                        project::config_set(args.project_path, &args.settings_json, format),
+                    )
+                }
+            },
+        }
+    }
+}
+
+impl RecordingsArgs {
+    fn run(self, json: bool) -> Result<(), String> {
+        match self.command {
+            RecordingsCommands::List(args) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, recordings::list(args.dir, format))
+            }
+        }
+    }
+}
+
+impl DesktopArgs {
+    fn run(self, json: bool) -> Result<(), String> {
+        let (format, result) = match self.command {
+            DesktopCommands::Status(args) => {
+                let format = resolve_format(json, args.format);
+                (
+                    format,
+                    emit_install_status(cap_cli_install::status(), format),
+                )
+            }
+            DesktopCommands::InstallCli(args) => {
+                let format = resolve_format(json, args.format);
+                (
+                    format,
+                    emit_install_status(cap_cli_install::install(), format),
+                )
+            }
+            DesktopCommands::UninstallCli(args) => {
+                let format = resolve_format(json, args.format);
+                (
+                    format,
+                    emit_install_status(cap_cli_install::uninstall(), format),
+                )
+            }
+        };
+        finish_json(format, result)
+    }
+}
+
+/// When `--format json` is requested and a command fails before it could emit its own structured
+/// output, write a machine-readable `{"error": "..."}` to stdout so agents do not have to scrape
+/// the human-readable stderr line. The original `Err` still propagates for a non-zero exit code.
+fn finish_json(format: OutputFormat, result: Result<(), String>) -> Result<(), String> {
+    if format == OutputFormat::Json
+        && let Err(message) = &result
+    {
+        let _ = write_json(&serde_json::json!({ "error": message }));
+    }
+    result
+}
+
+fn emit_install_status(
+    status: Result<cap_cli_install::CliInstallStatus, String>,
+    format: OutputFormat,
+) -> Result<(), String> {
+    let status = status?;
+    match format {
+        OutputFormat::Json => write_json(&status),
+        OutputFormat::Text => {
+            println!("install dir: {}", status.install_dir);
+            println!("shim: {}", status.shim_path);
+            println!("target: {}", status.target_path);
+            println!("installed: {}", status.installed);
+            println!("on PATH: {}", status.on_path);
+            if let Some(conflict) = &status.conflict {
+                println!("conflict: {conflict}");
+            }
+            if !status.on_path {
+                if status.path_configured {
+                    println!(
+                        "PATH updated; restart your terminal or run: {}",
+                        status.shell_command
+                    );
+                } else {
+                    println!("add to PATH: {}", status.shell_command);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+impl CompletionsArgs {
+    fn run(self) {
+        let mut cmd = Cli::command();
+        let name = cmd.get_name().to_string();
+        clap_complete::generate(self.shell, &mut cmd, name, &mut stdout());
+    }
+}
+
+pub fn write_json<T: Serialize>(value: &T) -> Result<(), String> {
+    let mut stdout = stdout();
+    serde_json::to_writer_pretty(&mut stdout, value).map_err(|e| e.to_string())?;
+    writeln!(&mut stdout).map_err(|e| e.to_string())?;
+    stdout.flush().map_err(|e| e.to_string())
+}
+
+pub fn write_json_line<T: Serialize>(value: &T) -> Result<(), String> {
+    let mut stdout = stdout();
+    serde_json::to_writer(&mut stdout, value).map_err(|e| e.to_string())?;
+    writeln!(&mut stdout).map_err(|e| e.to_string())?;
+    stdout.flush().map_err(|e| e.to_string())
+}

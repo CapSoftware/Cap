@@ -1,17 +1,22 @@
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstView } from "@cap/database/emails/first-view";
+import { NewComment } from "@cap/database/emails/new-comment";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
-import { type Comment, User, Video } from "@cap/web-domain";
-import { and, eq, gte, isNull, sql } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
+import { Comment, User, Video } from "@cap/web-domain";
+import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
 
 export type NotificationType = Notification["type"];
+
+const COMMENT_EMAIL_THROTTLE_MS = 15 * 60 * 1000;
+
+const notificationSettingsUrl = () =>
+	`${serverEnv().WEB_URL}/dashboard/settings/notifications`;
 
 type NotificationSpecificData = DistributiveOmit<
 	Notification,
@@ -151,7 +156,6 @@ export async function createNotification(
 				videoId: notification.videoId,
 			});
 
-			revalidatePath("/dashboard");
 			return { success: true, notificationId };
 		}
 
@@ -227,12 +231,100 @@ export async function createNotification(
 			videoId: notification.videoId,
 		});
 
-		revalidatePath("/dashboard");
+		if (type === "comment") {
+			await sendNewCommentEmail({
+				videoId: notification.videoId,
+				recipientId: videoResult.ownerId,
+				authorId: notification.authorId,
+				comment: notification.comment,
+			});
+		}
 
 		return { success: true, notificationId };
 	} catch (error) {
 		console.error("Error creating notification:", error);
 		throw error;
+	}
+}
+
+async function sendNewCommentEmail(params: {
+	videoId: string;
+	recipientId: string;
+	authorId: string;
+	comment: { id: string; content: string };
+}) {
+	try {
+		const database = db();
+
+		// Throttle to the same set of events that actually trigger an email: a
+		// top-level comment authored by someone other than the owner. Replies and
+		// the owner's own comments share comments.type === "text", so without these
+		// filters they'd poison the window and suppress legitimate comment emails.
+		// Top-level comments persist parentCommentId as "" (not NULL) — see
+		// Comment.CommentId.make("") in the share-page comment UI.
+		const throttleStart = new Date(Date.now() - COMMENT_EMAIL_THROTTLE_MS);
+		const [recentComment] = await database
+			.select({ id: comments.id })
+			.from(comments)
+			.where(
+				and(
+					eq(comments.videoId, Video.VideoId.make(params.videoId)),
+					// Media comments email through the same path as text comments, so
+					// they must share the throttle window with them.
+					inArray(comments.type, ["text", "video", "audio"]),
+					or(
+						isNull(comments.parentCommentId),
+						eq(comments.parentCommentId, Comment.CommentId.make("")),
+					),
+					ne(comments.authorId, User.UserId.make(params.recipientId)),
+					gte(comments.createdAt, throttleStart),
+					ne(comments.id, Comment.CommentId.make(params.comment.id)),
+				),
+			)
+			.limit(1);
+
+		if (recentComment) return;
+
+		const [recipient] = await database
+			.select({ email: users.email })
+			.from(users)
+			.where(eq(users.id, User.UserId.make(params.recipientId)))
+			.limit(1);
+
+		if (!recipient?.email) return;
+
+		const [video] = await database
+			.select({ name: videos.name })
+			.from(videos)
+			.where(eq(videos.id, Video.VideoId.make(params.videoId)))
+			.limit(1);
+
+		const videoName = video?.name || "Untitled Video";
+
+		const [commenter] = await database
+			.select({ name: users.name })
+			.from(users)
+			.where(eq(users.id, User.UserId.make(params.authorId)))
+			.limit(1);
+
+		const commenterName = commenter?.name || "Someone";
+
+		const videoUrl = `${serverEnv().WEB_URL}/s/${params.videoId}`;
+
+		await sendEmail({
+			email: recipient.email,
+			subject: `New comment on your Cap: ${videoName}`,
+			react: NewComment({
+				email: recipient.email,
+				url: videoUrl,
+				videoName,
+				commenterName,
+				commentContent: params.comment.content,
+				manageNotificationsUrl: notificationSettingsUrl(),
+			}),
+		});
+	} catch (error) {
+		console.error("Failed to send new comment email:", error);
 	}
 }
 
@@ -304,7 +396,6 @@ export async function createAnonymousViewNotification({
 			videoId,
 			dedupKey,
 		});
-		revalidatePath("/dashboard");
 	} catch (error) {
 		if (isDuplicateEntryError(error)) return;
 		throw error;
@@ -373,9 +464,7 @@ export async function sendFirstViewEmail(
 			viewerName = viewer?.name || viewer?.email || "Someone";
 		}
 
-		const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-			? `https://cap.link/${params.videoId}`
-			: `${serverEnv().WEB_URL}/s/${params.videoId}`;
+		const videoUrl = `${serverEnv().WEB_URL}/s/${params.videoId}`;
 
 		const displayName = videoWithOwner.videoName || "Untitled Video";
 
@@ -387,6 +476,7 @@ export async function sendFirstViewEmail(
 				url: videoUrl,
 				videoName: displayName,
 				viewerName,
+				manageNotificationsUrl: notificationSettingsUrl(),
 			}),
 		});
 	} catch (error) {

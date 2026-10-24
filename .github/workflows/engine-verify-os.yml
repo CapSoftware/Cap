@@ -1,0 +1,260 @@
+name: Engine verify (one platform)
+
+# Called by engine-verify.yml once per platform. Cases are split across
+# `shards` jobs by a stable hash of the case id (CAP_VERIFY_SHARD), so a suite
+# whose test functions loop over many cases still spreads evenly.
+#
+# By default every shard builds for itself: with the Rust cache and
+# scripts/verify/mtime.py a warm build only compiles what changed, which is
+# cheaper than an artifact round trip and a second runner queue. With
+# `archive: true` one job builds a nextest archive and the shards run it.
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      target:
+        type: string
+        required: true
+      tier:
+        type: string
+        required: true
+      suites:
+        type: string
+        required: true
+      shards:
+        type: number
+        default: 1
+      shard-list:
+        type: string
+        default: "[1]"
+      archive:
+        type: boolean
+        default: false
+      save-cache:
+        type: boolean
+        default: false
+      cargo-config:
+        type: string
+        default: ""
+      cargo-log:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_NEXTEST_PROFILE: ci
+  CAP_VERIFY_LOCKED: "1"
+  CAP_VERIFY_CARGO_CONFIG: ${{ inputs.cargo-config }}
+  # A case this runner cannot run fails unless scripts/verify/suites.json
+  # allows it as unsupported on this platform (with the reason).
+  CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+  # Machine class for host-scoped expectations (crates/verify-expect hosts).
+  CAP_VERIFY_HOST: ${{ startsWith(inputs.runner, 'blacksmith-') && 'blacksmith' || 'github-hosted' }}
+
+jobs:
+  build:
+    name: build
+    if: inputs.archive
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        id: setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ inputs.target }}
+          tier: ${{ inputs.tier }}
+
+      - name: Build archive
+        shell: bash
+        run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --archive "$RUNNER_TEMP/verify.tar.zst"
+
+      - name: Record sources of the cached build
+        if: inputs.save-cache && steps.setup.outputs.build-cache-hit != 'true'
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
+      - name: Save build cache
+        if: inputs.save-cache && steps.setup.outputs.build-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-archive-${{ inputs.platform }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verify.tar.zst
+          retention-days: 1
+          compression-level: 0
+
+  test:
+    name: ${{ inputs.shards > 1 && format('test {0}/{1}', matrix.shard, inputs.shards) || 'build and test' }}
+    needs: build
+    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shard-list) }}
+    env:
+      CAP_VERIFY_SHARD: ${{ inputs.shards > 1 && format('{0}/{1}', matrix.shard, inputs.shards) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        id: setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ inputs.target }}
+          tier: ${{ inputs.tier }}
+          rust-cache: ${{ !inputs.archive }}
+
+      - name: Report location
+        shell: bash
+        run: |
+          echo "CAP_VERIFY_REPORT_DIR=$RUNNER_TEMP/verify-report" >> "$GITHUB_ENV"
+          echo "CAP_VERIFY_FLAKY_FILE=$RUNNER_TEMP/verify-report/flaky.txt" >> "$GITHUB_ENV"
+
+      - name: Build
+        if: ${{ !inputs.archive }}
+        shell: bash
+        env:
+          CARGO_LOG: ${{ inputs.cargo-log }}
+        run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --no-run
+
+      - name: Record sources of the cached build
+        if: ${{ !inputs.archive && inputs.save-cache && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true' }}
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
+      - name: Save build cache
+        if: ${{ !inputs.archive && inputs.save-cache && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
+
+      # The retry and flaky reruns read test names back from Python (CRLF on
+      # Windows): check that such a name selects exactly its test.
+      - name: Rerun selection self-check
+        if: ${{ !inputs.archive }}
+        shell: bash
+        run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --check-rerun-selection
+
+      - name: Download archive
+        if: inputs.archive
+        uses: actions/download-artifact@v4
+        with:
+          name: verify-archive-${{ inputs.platform }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+
+      # A test process that crashes (SIGSEGV) leaves no Rust backtrace;
+      # macOS writes a crash report instead, collected below on failure.
+      - name: Mark crash report start
+        if: inputs.platform == 'macos'
+        shell: bash
+        run: touch "$RUNNER_TEMP/crash-reports-since"
+
+      - name: Prepare recorded fixtures without concurrent rendering
+        if: contains(format(',{0},', inputs.suites), ',export,')
+        shell: bash
+        env:
+          CAP_VERIFY_TIER: ${{ inputs.tier }}
+        run: |
+          if [[ "${{ inputs.archive }}" == true ]]; then
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --prepare-fixtures --from-archive "$RUNNER_TEMP/verify.tar.zst"
+          else
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --prepare-fixtures
+          fi
+
+      - name: Test
+        id: test
+        shell: bash
+        run: |
+          if [[ "${{ inputs.archive }}" == true ]]; then
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --from-archive "$RUNNER_TEMP/verify.tar.zst"
+          else
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}"
+          fi
+
+      # Equivalent-mutant guards (scripts/verify/guards.toml): a failing
+      # sentinel is a warning for review, never a failure.
+      - name: Guard sentinels
+        if: always() && inputs.platform == 'linux' && matrix.shard == 1 && steps.test.outcome != 'skipped'
+        continue-on-error: true
+        shell: bash
+        run: python3 scripts/verify/guards.py --profile "$CAP_VERIFY_CARGO_PROFILE"
+
+      - name: Summary
+        if: always() && steps.test.outcome != 'skipped'
+        shell: bash
+        run: >-
+          "$(command -v python3 || command -v python)" scripts/verify/summary.py
+          --title "${{ inputs.platform }} ${{ inputs.tier }}${{ inputs.shards > 1 && format(' shard {0}/{1}', matrix.shard, inputs.shards) || '' }}"
+          --junit "$CAP_VERIFY_REPORT_DIR/junit.xml" --flaky "$CAP_VERIFY_FLAKY_FILE"
+          "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect macOS crash reports
+        id: crash-reports
+        if: failure() && inputs.platform == 'macos'
+        continue-on-error: true
+        shell: bash
+        run: |
+          dest="$RUNNER_TEMP/verify-report/crash-reports"
+          for dir in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            [[ -d "$dir" ]] || continue
+            { find "$dir" -type f \( -name '*.ips' -o -name '*.crash' \) -newer "$RUNNER_TEMP/crash-reports-since" -print0 2>/dev/null || true; } |
+              while IFS= read -r -d '' report; do
+                mkdir -p "$dest"
+                cp "$report" "$dest/" && echo "collected $report" || echo "could not copy $report"
+              done
+          done
+          if [[ -n "$(ls -A "$dest" 2>/dev/null)" ]]; then
+            echo "collected=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload report
+        if: always() && (steps.test.outcome != 'skipped' || steps.crash-reports.outputs.collected == 'true')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-report-${{ inputs.platform }}-${{ inputs.tier }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/verify-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save fixtures
+        if: always() && inputs.save-cache && steps.setup.outputs.fixtures-hit != 'true' && matrix.shard == 1
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/verify-fixtures
+          key: ${{ steps.setup.outputs.fixtures-key }}

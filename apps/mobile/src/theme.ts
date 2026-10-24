@@ -1,0 +1,95 @@
+import { StyleSheet } from "react-native";
+
+export const colors = {
+	white: "#ffffff",
+	black: "#000000",
+	gray1: "#fcfcfc",
+	gray2: "#f9f9f9",
+	gray3: "#f0f0f0",
+	gray4: "#e8e8e8",
+	gray5: "#e0e0e0",
+	gray6: "#d9d9d9",
+	gray7: "#cecece",
+	gray8: "#bbbbbb",
+	gray9: "#8d8d8d",
+	gray10: "#838383",
+	gray11: "#646464",
+	gray12: "#202020",
+	appBackground: "#f9f9f9",
+	blue1: "#fbfdff",
+	blue2: "#f4faff",
+	blue3: "#e6f4fe",
+	blue4: "#d5efff",
+	blue5: "#c2e5ff",
+	blue6: "#acd8fc",
+	blue7: "#8ec8f6",
+	blue8: "#5eb1ef",
+	blue9: "#0090ff",
+	blue10: "#0588f0",
+	blue11: "#0d74ce",
+	blue12: "#113264",
+	red1: "#fffcfc",
+	red2: "#fff7f7",
+	red3: "#feebec",
+	red4: "#ffdbdc",
+	red5: "#ffcdce",
+	red6: "#fdbdbe",
+	red7: "#f4a9aa",
+	red8: "#eb8e90",
+	red9: "#e5484d",
+	red10: "#dc3e42",
+	red11: "#ce2c31",
+	red12: "#641723",
+	primary: "#005cb1",
+	primary2: "#004c93",
+	secondary: "#2eb4ff",
+	tertiary: "#c5eaff",
+	buttonBlue: "#2563eb",
+	buttonBlueHover: "#1d4ed8",
+	buttonBlueBorder: "#1e40af",
+	glass: "rgba(252, 252, 252, 0.72)",
+	blackAlpha5: "rgba(18, 22, 31, 0.05)",
+	blackAlpha10: "rgba(18, 22, 31, 0.1)",
+	blackAlpha40: "rgba(18, 22, 31, 0.4)",
+	blackAlpha60: "rgba(18, 22, 31, 0.6)",
+	green9: "#30a46c",
+	yellow3: "#fffab8",
+	yellow5: "#ffe770",
+	yellow9: "#f5d90a",
+};
+
+export const fonts = {
+	regular: "NeueMontreal-Regular",
+	medium: "NeueMontreal-Medium",
+	bold: "NeueMontreal-Bold",
+};
+
+export const radius = {
+	xs: 6,
+	sm: 8,
+	md: 12,
+	lg: 16,
+	xl: 20,
+	full: 999,
+};
+
+export const squircle = {
+	borderCurve: "continuous" as const,
+};
+
+export const shadows = StyleSheet.create({
+	card: {
+		shadowColor: colors.black,
+		shadowOffset: { width: 0, height: 1 },
+		shadowOpacity: 0.04,
+		shadowRadius: 2,
+		elevation: 1,
+	},
+	popover: {
+		shadowColor: colors.black,
+		shadowOffset: { width: 0, height: 16 },
+		shadowOpacity: 0.12,
+		shadowRadius: 32,
+		elevation: 10,
+	},
+});

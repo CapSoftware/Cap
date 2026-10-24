@@ -1,0 +1,73 @@
+name: "promote-nightly"
+
+# Promotes a shipped nightly to a stable release by rebuilding its exact
+# commit with a plain x.y.z version (the version is baked into the binaries,
+# so a rebuild is required — the commit is identical, only the version
+# differs). The result is the normal stable flow: cap-v{version} tag, draft
+# GitHub release, draft CrabNebula release on the default channel, published
+# manually as usual.
+#
+# After promoting, bump apps/desktop/src-tauri/Cargo.toml on main past the
+# promoted version so future nightlies and stable releases version correctly.
+
+on:
+  workflow_dispatch:
+    inputs:
+      nightly_version:
+        description: "Nightly version to promote (e.g. 0.5.5-nightly.202607070300)"
+        required: true
+        type: string
+      stable_version:
+        description: "Stable version to release as (defaults to the nightly's base version)"
+        required: false
+        type: string
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve nightly tag
+        id: resolve
+        shell: bash
+        run: |
+          NIGHTLY="${{ inputs.nightly_version }}"
+          TAG="cap-nightly-v$NIGHTLY"
+          if ! SHA=$(git rev-list -n1 "$TAG" 2>/dev/null); then
+            echo "::error::Tag $TAG not found. Recent nightly tags:"
+            git for-each-ref --sort=-creatordate --format '%(refname:short)' 'refs/tags/cap-nightly-v*' | head -n 20
+            exit 1
+          fi
+
+          VERSION="${{ inputs.stable_version }}"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="${NIGHTLY%%-nightly*}"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Stable version '$VERSION' is not a plain x.y.z version."
+            exit 1
+          fi
+
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Promoting $TAG ($SHA) as $VERSION"
+
+  release:
+    needs: resolve
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+      channel: stable
+      sha: ${{ needs.resolve.outputs.sha }}
+      auto_publish: false
+    secrets: inherit

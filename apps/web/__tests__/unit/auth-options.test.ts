@@ -1,0 +1,691 @@
+import {
+	authOptions,
+	decodeSessionToken,
+} from "@cap/database/auth/auth-options";
+import type {
+	SsoAuthContext,
+	ValidatedSsoIdentity,
+} from "@cap/database/auth/sso";
+import { Organisation } from "@cap/web-domain";
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import type { Account, NextAuthOptions } from "next-auth";
+import type { Adapter } from "next-auth/adapters";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type AuthUser = {
+	id: string;
+	name: string;
+	lastName: string | null;
+	email: string;
+	image: string | null;
+	authSessionVersion: number;
+};
+
+const mocks = vi.hoisted(() => ({
+	users: [] as AuthUser[],
+	where: vi.fn(),
+	select: vi.fn(),
+	validate: vi.fn<(...args: unknown[]) => Promise<ValidatedSsoIdentity>>(),
+	provision: vi.fn<(...args: unknown[]) => Promise<void>>(),
+	adapter: vi.fn<
+		(
+			client: unknown,
+			options: { getSsoIdentity: () => ValidatedSsoIdentity | null },
+		) => Adapter
+	>(() => ({})),
+}));
+
+const env = vi.hoisted(() => ({
+	APPLE_CLIENT_ID: "so.cap.auth",
+	APPLE_CLIENT_SECRET: "apple-secret",
+	CAP_ALLOWED_SIGNUP_DOMAINS: undefined as string | undefined,
+	CAP_BLOCKED_SIGNUP_DOMAINS: undefined as string | undefined,
+	GOOGLE_CLIENT_ID: "google-client",
+	GOOGLE_CLIENT_SECRET: "google-secret",
+	NEXTAUTH_SECRET: "next-auth-secret",
+	OIDC_ISSUER: undefined as string | undefined,
+	OIDC_CLIENT_ID: undefined as string | undefined,
+	OIDC_CLIENT_SECRET: undefined as string | undefined,
+	RESEND_API_KEY: undefined,
+	WORKOS_API_KEY: "workos-secret",
+	WORKOS_CLIENT_ID: "workos-client",
+	TRUSTED_PROXY_AUTH_HEADER: undefined as string | undefined,
+	TRUSTED_PROXY_AUTH_EMAIL: undefined as string | undefined,
+	TRUSTED_PROXY_AUTH_SECRET: undefined as string | undefined,
+}));
+
+vi.mock("@cap/env", () => ({
+	serverEnv: () => env,
+}));
+
+vi.mock("@cap/database", () => ({
+	db: () => ({ select: mocks.select }),
+}));
+
+vi.mock("@cap/database/auth/sso", () => ({
+	validateSsoSignIn: mocks.validate,
+	provisionSsoMembership: mocks.provision,
+}));
+
+vi.mock("../../../../packages/database/auth/drizzle-adapter", () => ({
+	DrizzleAdapter: mocks.adapter,
+}));
+
+const WORKOS_ACCOUNT: Account = {
+	provider: "workos",
+	providerAccountId: "prof_01A",
+	type: "oauth",
+};
+const PROFILE = {
+	id: "prof_01A",
+	organization_id: "org_01A",
+	connection_id: "conn_01A",
+	email: "alex@company.example",
+};
+const IDENTITY: ValidatedSsoIdentity = {
+	organizationId: Organisation.OrganisationId.make("cap-org"),
+	workosOrganizationId: PROFILE.organization_id,
+	connectionId: PROFILE.connection_id,
+	profileId: PROFILE.id,
+	email: PROFILE.email,
+};
+const CONTEXT: SsoAuthContext = {
+	actorId: null,
+	intent: {
+		version: 1,
+		organizationId: IDENTITY.organizationId,
+		workosOrganizationId: IDENTITY.workosOrganizationId,
+		connectionId: IDENTITY.connectionId,
+		actorId: null,
+		issuedAt: 1,
+		nonce: "a".repeat(32),
+	},
+};
+const AUTHENTICATED_USER = { id: "authenticated-user", email: PROFILE.email };
+
+function callbacksFor(options: NextAuthOptions) {
+	const signIn = options.callbacks?.signIn;
+	const jwt = options.callbacks?.jwt;
+	if (!signIn || !jwt) throw new Error("Auth callbacks are missing");
+	return { signIn, jwt };
+}
+
+// next-auth keeps a Credentials provider's custom id in `options` until it
+// merges providers at runtime, so read it from there when present.
+function providerIds(options: NextAuthOptions) {
+	return options.providers.map(
+		(provider) =>
+			(provider.options as { id?: string } | undefined)?.id ?? provider.id,
+	);
+}
+
+describe("authOptions", () => {
+	beforeEach(() => {
+		env.APPLE_CLIENT_ID = "so.cap.auth";
+		env.APPLE_CLIENT_SECRET = "apple-secret";
+		env.WORKOS_CLIENT_ID = "workos-client";
+		env.WORKOS_API_KEY = "workos-secret";
+		env.OIDC_ISSUER = undefined;
+		env.OIDC_CLIENT_ID = undefined;
+		env.OIDC_CLIENT_SECRET = undefined;
+		env.CAP_ALLOWED_SIGNUP_DOMAINS = undefined;
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
+		env.TRUSTED_PROXY_AUTH_HEADER = undefined;
+		env.TRUSTED_PROXY_AUTH_EMAIL = undefined;
+		env.TRUSTED_PROXY_AUTH_SECRET = undefined;
+		mocks.validate.mockReset().mockResolvedValue(IDENTITY);
+		mocks.provision.mockReset().mockResolvedValue(undefined);
+		mocks.adapter.mockClear();
+		mocks.users = [
+			{
+				...AUTHENTICATED_USER,
+				name: "Alex",
+				lastName: null,
+				image: null,
+				authSessionVersion: 4,
+			},
+		];
+		mocks.select.mockReset().mockImplementation(() => ({
+			from: () => ({ where: mocks.where }),
+		}));
+		mocks.where.mockReset().mockImplementation((condition: SQL) => ({
+			limit: async () => {
+				const query = new MySqlDialect().sqlToQuery(condition);
+				const match = /^`users`\.`(id|email)` = \?$/.exec(query.sql);
+				if (!match?.[1]) throw new Error("Unexpected auth-user predicate");
+				const column = match[1] as "id" | "email";
+				return mocks.users.filter((user) => user[column] === query.params[0]);
+			},
+		}));
+	});
+
+	it("enables Apple when both OAuth credentials are configured", () => {
+		const options = authOptions();
+		const providers = options.providers.map((provider) => provider.id);
+
+		expect(providers).toContain("apple");
+		expect(options.cookies?.callbackUrl?.options.sameSite).toBe("none");
+		expect(options.cookies?.pkceCodeVerifier?.options.sameSite).toBe("none");
+	});
+
+	it("does not expose a partially configured Apple provider", () => {
+		env.APPLE_CLIENT_SECRET = "";
+
+		const providers = authOptions().providers.map((provider) => provider.id);
+
+		expect(providers).not.toContain("apple");
+	});
+
+	it.each(["WORKOS_CLIENT_ID", "WORKOS_API_KEY"] as const)(
+		"does not offer SSO when %s is missing",
+		(key) => {
+			env[key] = "";
+
+			expect(
+				authOptions().providers.map((provider) => provider.id),
+			).not.toContain("workos");
+		},
+	);
+
+	it("enables trusted-proxy sign-in when header, email and secret are configured", () => {
+		env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+		env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+		env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+
+		expect(providerIds(authOptions())).toContain("trusted-proxy");
+	});
+
+	it("does not expose trusted-proxy sign-in by default", () => {
+		expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+	});
+
+	it.each([
+		"TRUSTED_PROXY_AUTH_HEADER",
+		"TRUSTED_PROXY_AUTH_EMAIL",
+		"TRUSTED_PROXY_AUTH_SECRET",
+	] as const)(
+		"does not expose a partially configured trusted-proxy provider when %s is missing",
+		(key) => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+			env[key] = undefined;
+
+			expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+		},
+	);
+
+	it.each([undefined, "", "   "])(
+		"does not register trusted-proxy with only header/email and an unusable secret (%s)",
+		(secret) => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = secret;
+
+			expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+		},
+	);
+
+	it.each([undefined, "proxy-secret"])(
+		"preserves independent OIDC sign-in and its verified-email gate with proxy secret %s",
+		async (secret) => {
+			env.OIDC_ISSUER = "https://idp.example";
+			env.OIDC_CLIENT_ID = "oidc-client";
+			env.OIDC_CLIENT_SECRET = "oidc-secret";
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = secret;
+			const options = authOptions();
+			expect(providerIds(options)).toContain("oidc");
+			expect(providerIds(options).includes("trusted-proxy")).toBe(!!secret);
+			const { signIn } = callbacksFor(options);
+			const account: Account = {
+				provider: "oidc",
+				providerAccountId: "oidc-user",
+				type: "oauth",
+			};
+			for (const email_verified of [undefined, false, true]) {
+				const profile = { email: PROFILE.email, email_verified };
+				await expect(
+					signIn({
+						user: AUTHENTICATED_USER,
+						account,
+						profile,
+					}),
+				).resolves.toBe(
+					email_verified === true ? true : "/login?error=OidcEmailUnverified",
+				);
+			}
+		},
+	);
+
+	describe("trusted-proxy authorize", () => {
+		type Authorize = (
+			credentials: Record<string, string> | undefined,
+			req: { headers?: Record<string, string> },
+		) => Promise<unknown>;
+
+		function trustedProxyAuthorize() {
+			const options = authOptions();
+			const provider = options.providers[
+				providerIds(options).indexOf("trusted-proxy")
+			] as { options?: { authorize?: Authorize } } | undefined;
+			const authorize = provider?.options?.authorize;
+			if (!authorize) throw new Error("trusted-proxy provider is missing");
+			return authorize;
+		}
+
+		beforeEach(() => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "X-OpenHost-Is-Owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = "Alex@Company.example";
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+		});
+
+		const validHeaders = {
+			"x-openhost-is-owner": "true",
+			"x-trusted-proxy-secret": "proxy-secret",
+		};
+
+		it("signs in the configured user when the proxy sets both headers", async () => {
+			await expect(
+				trustedProxyAuthorize()({}, { headers: validHeaders }),
+			).resolves.toMatchObject({
+				id: AUTHENTICATED_USER.id,
+				email: AUTHENTICATED_USER.email,
+			});
+		});
+
+		it.each([
+			["header is absent", { "x-trusted-proxy-secret": "proxy-secret" }],
+			[
+				"header is not exactly 'true'",
+				{ ...validHeaders, "x-openhost-is-owner": "1" },
+			],
+		])("fails closed when the %s", async (_label, headers) => {
+			await expect(
+				trustedProxyAuthorize()({}, { headers }),
+			).resolves.toBeNull();
+			expect(mocks.select).not.toHaveBeenCalled();
+		});
+
+		it("fails closed when the configured user does not exist", async () => {
+			env.TRUSTED_PROXY_AUTH_EMAIL = "nobody@company.example";
+
+			await expect(
+				trustedProxyAuthorize()({}, { headers: validHeaders }),
+			).resolves.toBeNull();
+			expect(mocks.select).toHaveBeenCalledOnce();
+		});
+
+		it.each([undefined, "", "   "])(
+			"fails closed if the configured secret becomes unusable after registration (%s)",
+			async (secret) => {
+				const authorize = trustedProxyAuthorize();
+				env.TRUSTED_PROXY_AUTH_SECRET = secret;
+				await expect(
+					authorize({}, { headers: validHeaders }),
+				).resolves.toBeNull();
+				expect(mocks.select).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([undefined, "", "wrong", "x".repeat(1024), ["proxy-secret"]])(
+			"rejects missing, empty, incorrect or malformed request secrets (%s)",
+			async (secret) => {
+				await expect(
+					trustedProxyAuthorize()(
+						{},
+						{
+							headers: {
+								...validHeaders,
+								"x-trusted-proxy-secret": secret,
+							} as Record<string, string>,
+						},
+					),
+				).resolves.toBeNull();
+				expect(mocks.select).not.toHaveBeenCalled();
+			},
+		);
+
+		it("rejects requests without headers", async () => {
+			await expect(trustedProxyAuthorize()({}, {})).resolves.toBeNull();
+			expect(mocks.select).not.toHaveBeenCalled();
+		});
+
+		it("always requires the shared secret", async () => {
+			const authorize = trustedProxyAuthorize();
+
+			await expect(
+				authorize({}, { headers: { "x-openhost-is-owner": "true" } }),
+			).resolves.toBeNull();
+			await expect(
+				authorize(
+					{},
+					{
+						headers: {
+							"x-openhost-is-owner": "true",
+							"x-trusted-proxy-secret": "wrong",
+						},
+					},
+				),
+			).resolves.toBeNull();
+			await expect(
+				authorize(
+					{},
+					{
+						headers: {
+							"x-openhost-is-owner": "true",
+							"x-trusted-proxy-secret": "proxy-secret",
+						},
+					},
+				),
+			).resolves.toMatchObject({ id: AUTHENTICATED_USER.id });
+		});
+	});
+
+	// authOptions() is rebuilt on every session lookup, so a per-instance
+	// warning would log on every authenticated request.
+	it("warns about trusted-proxy sign-in once per process", async () => {
+		vi.resetModules();
+		const { authOptions: freshAuthOptions } = await import(
+			"@cap/database/auth/auth-options"
+		);
+		env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+		env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		try {
+			void freshAuthOptions().providers;
+			expect(warn).not.toHaveBeenCalled();
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+			for (let i = 0; i < 3; i++) void freshAuthOptions().providers;
+
+			expect(
+				warn.mock.calls.filter(([message]) =>
+					String(message).includes("trusted-proxy sign-in is ENABLED"),
+				),
+			).toHaveLength(1);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	// Without an explicit maxAge next-auth falls back to 24 hours, which is far
+	// too long for a 6-digit code and contradicts what the OTP email tells users.
+	it("expires email verification codes after the advertised 10 minutes", () => {
+		const email = authOptions().providers.find(
+			(provider) => provider.id === "email",
+		);
+
+		expect(email).toBeDefined();
+		expect((email as { options?: { maxAge?: number } }).options?.maxAge).toBe(
+			10 * 60,
+		);
+	});
+
+	it("sends blocked domains and addresses to the login page with SignupBlocked", async () => {
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = "blocked.example, someone@other.example";
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "Anyone@Blocked.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe("/login?error=SignupBlocked");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u2", email: "someone@other.example" },
+				account: {
+					provider: "email",
+					providerAccountId: "someone@other.example",
+					type: "email",
+				},
+				email: { verificationRequest: true },
+			}),
+		).resolves.toBe("/login?error=SignupBlocked");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u3", email: "else@other.example" },
+				account: { provider: "google", providerAccountId: "g3", type: "oauth" },
+			}),
+		).resolves.toBe(true);
+	});
+
+	it("expires existing sessions whose email is blocked", async () => {
+		const { encode } = await import("next-auth/jwt");
+		const secret = "next-auth-secret";
+		const token = await encode({
+			token: {
+				id: "user-1",
+				email: "someone@blocked.example",
+				sessionVersion: 0,
+			},
+			secret,
+		});
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = "blocked.example";
+		await expect(decodeSessionToken({ token, secret })).resolves.toBeNull();
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
+		mocks.select.mockReturnValueOnce({
+			from: () => ({
+				where: () => ({ limit: async () => [{ authSessionVersion: 0 }] }),
+			}),
+		} as never);
+		await expect(decodeSessionToken({ token, secret })).resolves.toMatchObject({
+			id: "user-1",
+			email: "someone@blocked.example",
+		});
+	});
+
+	it("does not block anyone when CAP_BLOCKED_SIGNUP_DOMAINS is unset", async () => {
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "anyone@blocked.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe(true);
+	});
+
+	it("validates the raw WorkOS profile before exposing it to the adapter", async () => {
+		const options = authOptions(CONTEXT);
+		const adapter = options.adapter;
+		const adapterOptions = mocks.adapter.mock.lastCall?.[1];
+		const callbacks = callbacksFor(options);
+		expect(adapter).toBeDefined();
+		expect(adapterOptions?.getSsoIdentity()).toBeNull();
+
+		await expect(
+			callbacks.signIn({
+				user: AUTHENTICATED_USER,
+				account: WORKOS_ACCOUNT,
+				profile: PROFILE,
+			}),
+		).resolves.toBe(true);
+
+		expect(mocks.validate).toHaveBeenCalledWith(
+			PROFILE,
+			WORKOS_ACCOUNT.providerAccountId,
+			CONTEXT,
+		);
+		expect(adapterOptions?.getSsoIdentity()).toEqual(IDENTITY);
+		expect(mocks.provision).not.toHaveBeenCalled();
+	});
+
+	it("rejects failed validation without retaining an adapter identity", async () => {
+		const options = authOptions(CONTEXT);
+		const callbacks = callbacksFor(options);
+		const adapter = options.adapter;
+		const adapterOptions = mocks.adapter.mock.lastCall?.[1];
+		expect(adapter).toBeDefined();
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE,
+		});
+		mocks.validate.mockRejectedValueOnce(new Error("Connection unavailable"));
+
+		await expect(
+			callbacks.signIn({
+				user: AUTHENTICATED_USER,
+				account: WORKOS_ACCOUNT,
+				profile: PROFILE,
+			}),
+		).resolves.toBe("/login?error=SsoSignInFailed");
+
+		expect(adapterOptions?.getSsoIdentity()).toBeNull();
+		expect(mocks.provision).not.toHaveBeenCalled();
+	});
+
+	it("does not provision membership without a successful signIn callback", async () => {
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+
+		await expect(
+			callbacks.jwt({
+				token: { id: "old-user", email: PROFILE.email },
+				user: AUTHENTICATED_USER,
+				account: WORKOS_ACCOUNT,
+			}),
+		).rejects.toThrow("not verified");
+
+		expect(mocks.provision).not.toHaveBeenCalled();
+		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it("preserves the signed mobile continuation when SSO validation fails", async () => {
+		if (!CONTEXT.intent) throw new Error("Missing fixture intent");
+		const returnTo = "/api/mobile/session/request?redirectUri=cap%3A%2F%2Fauth";
+		const callbacks = callbacksFor(
+			authOptions({
+				...CONTEXT,
+				intent: { ...CONTEXT.intent, returnTo },
+			}),
+		);
+		mocks.validate.mockRejectedValueOnce(new Error("SSO was canceled"));
+
+		const result = await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE,
+		});
+
+		if (typeof result !== "string") throw new Error("Missing error redirect");
+		const redirect = new URL(result, "https://cap.example");
+		expect(redirect.pathname).toBe("/login");
+		expect(redirect.searchParams.get("error")).toBe("SsoSignInFailed");
+		expect(redirect.searchParams.get("next")).toBe(returnTo);
+		expect(mocks.provision).not.toHaveBeenCalled();
+	});
+
+	it("does not share validation between separate authOptions instances", async () => {
+		const first = callbacksFor(authOptions(CONTEXT));
+		const second = callbacksFor(authOptions(CONTEXT));
+		await first.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE,
+		});
+
+		await expect(
+			second.jwt({
+				token: { id: "old-user", email: PROFILE.email },
+				user: AUTHENTICATED_USER,
+				account: WORKOS_ACCOUNT,
+			}),
+		).rejects.toThrow("not verified");
+		expect(mocks.provision).not.toHaveBeenCalled();
+	});
+
+	it("awaits membership provisioning before resolving a session token", async () => {
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE,
+		});
+		let release: (() => void) | undefined;
+		mocks.provision.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
+
+		const pending = callbacks.jwt({
+			token: { id: "old-user", email: PROFILE.email },
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+		});
+		expect(mocks.provision).toHaveBeenCalledWith(
+			AUTHENTICATED_USER.id,
+			IDENTITY,
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+		if (!release) throw new Error("Provisioning was not started");
+		release();
+		await expect(pending).resolves.toMatchObject({ id: AUTHENTICATED_USER.id });
+	});
+
+	it("does not resolve a token when membership provisioning fails", async () => {
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE,
+		});
+		mocks.provision.mockRejectedValueOnce(new Error("SSO billing revoked"));
+
+		await expect(
+			callbacks.jwt({
+				token: { id: "old-user", email: PROFILE.email },
+				user: AUTHENTICATED_USER,
+				account: WORKOS_ACCOUNT,
+			}),
+		).rejects.toThrow("SSO billing revoked");
+		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it.each(["workos", "google", "apple"])(
+		"anchors %s tokens to the authenticated user ID instead of token email",
+		async (provider) => {
+			const callbacks = callbacksFor(authOptions(CONTEXT));
+			const account = { ...WORKOS_ACCOUNT, provider };
+			mocks.users.push({
+				id: "wrong-email-user",
+				email: "stale@other.example",
+				name: "Wrong identity",
+				lastName: null,
+				image: null,
+				authSessionVersion: 9,
+			});
+			await callbacks.signIn({
+				user: AUTHENTICATED_USER,
+				account,
+				profile: PROFILE,
+			});
+
+			const token = await callbacks.jwt({
+				token: {
+					id: "old-user",
+					email: "stale@other.example",
+					sub: "provider-sub",
+				},
+				user: AUTHENTICATED_USER,
+				account,
+			});
+
+			expect(token).toMatchObject({
+				id: AUTHENTICATED_USER.id,
+				email: AUTHENTICATED_USER.email,
+				name: "Alex",
+				sessionVersion: 4,
+			});
+			expect(token.sub).toBeUndefined();
+			if (provider !== "workos") {
+				expect(mocks.validate).not.toHaveBeenCalled();
+				expect(mocks.provision).not.toHaveBeenCalled();
+			}
+		},
+	);
+});

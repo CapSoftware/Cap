@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Convert MKV to MP4 — free, in your browser",
+	tag: "Tools",
+});
 
 export const metadata: Metadata = {
 	title: "MKV to MP4 Converter | Free Online Video Converter | Cap",
@@ -14,10 +20,10 @@ export const metadata: Metadata = {
 			"Convert MKV videos to the widely compatible MP4 format. Process files locally in your browser with no uploads for maximum privacy.",
 		images: [
 			{
-				url: "/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap MKV to MP4 Converter Tool",
+				alt: "Convert MKV to MP4 — free, in your browser",
 			},
 		],
 	},
@@ -26,7 +32,7 @@ export const metadata: Metadata = {
 		title: "MKV to MP4 Converter | Free Online Video Converter",
 		description:
 			"Convert MKV videos to MP4 format for better compatibility. No uploads required, completely private and secure.",
-		images: ["/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/tools/convert/mkv-to-mp4",

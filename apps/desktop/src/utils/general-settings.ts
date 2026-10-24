@@ -1,10 +1,14 @@
-import type { GeneralSettingsStore as TauriGeneralSettingsStore } from "~/utils/tauri";
+import type {
+	RecordingMode,
+	GeneralSettingsStore as TauriGeneralSettingsStore,
+} from "~/utils/tauri";
 
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
+	enableGpuiApp?: boolean;
 };
 
 export const DEFAULT_TRANSCRIPTION_HINTS = [
@@ -14,6 +18,26 @@ export const DEFAULT_TRANSCRIPTION_HINTS = [
 	"mywebsite.com",
 ];
 
+export type RecordingStartSafetySettings = {
+	confirmBeforeRecordingWithoutMicrophone: boolean;
+};
+
+export const RECORDING_START_SAFETY_DEFAULTS: RecordingStartSafetySettings = {
+	confirmBeforeRecordingWithoutMicrophone: true,
+};
+
+export function shouldConfirmRecordingWithoutMicrophone(
+	mode: RecordingMode,
+	confirmBeforeRecordingWithoutMicrophone: boolean,
+	selectedMicrophone: string | null,
+): boolean {
+	return (
+		mode !== "screenshot" &&
+		confirmBeforeRecordingWithoutMicrophone &&
+		selectedMicrophone === null
+	);
+}
+
 export function createDefaultGeneralSettings(): GeneralSettingsStore {
 	return {
 		uploadIndividualFiles: false,
@@ -22,6 +46,8 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		enableNotifications: true,
 		enableNativeCameraPreview: false,
 		autoZoomOnClicks: false,
+		// Off until the backend seeds it from whether this machine has a notch.
+		macbookNotchOverlay: false,
 		captureKeyboardEvents: true,
 		custom_cursor_capture2: true,
 		excludedWindows: [],

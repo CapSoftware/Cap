@@ -37,40 +37,42 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 
 	const db = yield* Database;
 
-	// Fetch space-level sharing
-	const spaceSharing = yield* db.use((db) =>
-		db
-			.select({
-				videoId: spaceVideos.videoId,
-				id: spaces.id,
-				name: spaces.name,
-				organizationId: spaces.organizationId,
-				iconUrl: spaces.iconUrl,
-				settings: spaces.settings,
-				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
-			})
-			.from(spaceVideos)
-			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-			.where(inArray(spaceVideos.videoId, videoIds)),
-	);
-
-	// Fetch organization-level sharing
-	const orgSharing = yield* db.use((db) =>
-		db
-			.select({
-				videoId: sharedVideos.videoId,
-				id: organizations.id,
-				name: organizations.name,
-				organizationId: organizations.id,
-				iconUrl: organizations.iconUrl,
-			})
-			.from(sharedVideos)
-			.innerJoin(
-				organizations,
-				eq(sharedVideos.organizationId, organizations.id),
-			)
-			.where(inArray(sharedVideos.videoId, videoIds)),
+	const [spaceSharing, orgSharing] = yield* Effect.all(
+		[
+			db.use((db) =>
+				db
+					.select({
+						videoId: spaceVideos.videoId,
+						id: spaces.id,
+						name: spaces.name,
+						organizationId: spaces.organizationId,
+						iconUrl: spaces.iconUrl,
+						settings: spaces.settings,
+						hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+					})
+					.from(spaceVideos)
+					.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+					.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+					.where(inArray(spaceVideos.videoId, videoIds)),
+			),
+			db.use((db) =>
+				db
+					.select({
+						videoId: sharedVideos.videoId,
+						id: organizations.id,
+						name: organizations.name,
+						organizationId: organizations.id,
+						iconUrl: organizations.iconUrl,
+					})
+					.from(sharedVideos)
+					.innerJoin(
+						organizations,
+						eq(sharedVideos.organizationId, organizations.id),
+					)
+					.where(inArray(sharedVideos.videoId, videoIds)),
+			),
+		],
+		{ concurrency: "unbounded" },
 	);
 
 	// Combine and group by videoId
@@ -136,7 +138,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const userId = user.id;
 	const offset = (page - 1) * limit;
 
-	const totalCountResult = await db()
+	const totalCountPromise = db()
 		.select({ count: count() })
 		.from(videos)
 		.leftJoin(organizations, eq(videos.orgId, organizations.id))
@@ -144,19 +146,20 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			and(
 				eq(videos.ownerId, userId),
 				eq(organizations.id, user.activeOrganizationId),
+				isNull(videos.folderId),
 				isNull(organizations.tombstoneAt),
 			),
 		);
 
-	const totalCount = totalCountResult[0]?.count || 0;
-
-	const videoData = await db()
+	const videoDataPromise = db()
 		.select({
 			id: videos.id,
 			ownerId: videos.ownerId,
 			name: videos.name,
 			createdAt: videos.createdAt,
 			metadata: videos.metadata,
+			source: videos.source,
+			isScreenshot: videos.isScreenshot,
 			duration: videos.duration,
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
@@ -182,9 +185,10 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			ownerName: users.name,
 			effectiveDate: videos.effectiveCreatedAt,
 			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-				Boolean,
-			),
+			hasActiveUpload:
+				sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
+					Boolean,
+				),
 			settings: videos.settings,
 		})
 		.from(videos)
@@ -206,6 +210,8 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.name,
 			videos.createdAt,
 			videos.metadata,
+			videos.source,
+			videos.isScreenshot,
 			videos.duration,
 			videos.public,
 			videos.password,
@@ -217,12 +223,14 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		.limit(limit)
 		.offset(offset);
 
-	const foldersData = await db()
+	const foldersDataPromise = db()
 		.select({
 			id: folders.id,
 			name: folders.name,
 			color: folders.color,
+			public: folders.public,
 			parentId: folders.parentId,
+			createdAt: folders.createdAt,
 			videoCount: sql<number>`(
         SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
       )`,
@@ -237,18 +245,27 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			),
 		);
 
-	// Fetch shared spaces data for all videos
-	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap =
-		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
-	const [organizationSettingsRow] = user.activeOrganizationId
-		? await db()
+	const organizationSettingsPromise = user.activeOrganizationId
+		? db()
 				.select({ settings: organizations.settings })
 				.from(organizations)
 				.where(eq(organizations.id, user.activeOrganizationId))
 				.limit(1)
-		: [];
+		: Promise.resolve([]);
+
+	const [totalCountResult, videoData, foldersData, [organizationSettingsRow]] =
+		await Promise.all([
+			totalCountPromise,
+			videoDataPromise,
+			foldersDataPromise,
+			organizationSettingsPromise,
+		]);
+	const totalCount = totalCountResult[0]?.count || 0;
 	const organizationSettings = organizationSettingsRow?.settings ?? null;
+
+	const videoIds = videoData.map((video) => video.id);
+	const sharedSpacesMap =
+		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
 	const processedVideoData = await Effect.all(
 		videoData.map(

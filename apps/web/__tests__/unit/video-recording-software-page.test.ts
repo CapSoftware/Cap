@@ -34,8 +34,9 @@ describe("VideoRecordingSoftwarePage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets video-recording-software keyword", () => {
@@ -128,7 +129,7 @@ describe("VideoRecordingSoftwarePage FAQ schema", () => {
 		{
 			question: "Is Cap open-source video recording software?",
 			answer:
-				"Yes. Cap is fully open-source and MIT-licensed. The complete codebase is publicly available on GitHub.",
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. The source is available on GitHub.",
 		},
 	];
 

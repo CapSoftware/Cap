@@ -1,0 +1,51 @@
+<svg width="1400" height="560" viewBox="0 0 1400 560" fill="none" xmlns="http://www.w3.org/2000/svg">
+	<defs>
+		<linearGradient id="bg" x1="0" y1="0" x2="1400" y2="560" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#0E1320"/>
+			<stop offset="1" stop-color="#1C2B47"/>
+		</linearGradient>
+		<radialGradient id="glow" cx="0.28" cy="0.4" r="0.7">
+			<stop stop-color="#4785FF" stop-opacity="0.18"/>
+			<stop offset="1" stop-color="#4785FF" stop-opacity="0"/>
+		</radialGradient>
+		<linearGradient id="screen" x1="820" y1="160" x2="1300" y2="430" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#EAF1FF"/>
+			<stop offset="1" stop-color="#DBE7FD"/>
+		</linearGradient>
+	</defs>
+	<rect width="1400" height="560" fill="url(#bg)"/>
+	<rect width="1400" height="560" fill="url(#glow)"/>
+	<circle cx="156" cy="170" r="52" fill="#4785FF"/>
+	<circle cx="156" cy="170" r="42.25" fill="#ADC9FF"/>
+	<circle cx="156" cy="170" r="32.5" fill="#FFFFFF"/>
+	<text x="232" y="203" font-family="Neue Montreal" font-weight="500" font-size="96" fill="#FFFFFF">Cap</text>
+	<text x="104" y="305" font-family="Neue Montreal" font-weight="500" font-size="42" fill="#FFFFFF">The open source screen recorder</text>
+	<text x="104" y="356" font-family="Neue Montreal" font-size="27" fill="#A9B6CE">Record your tab, screen, or camera in Chrome,</text>
+	<text x="104" y="394" font-family="Neue Montreal" font-size="27" fill="#A9B6CE">your video uploads as you record, link ready instantly.</text>
+	<rect x="106" y="436" width="216" height="48" rx="24" fill="#4785FF"/>
+	<circle cx="136" cy="460" r="9" fill="#FFFFFF"/>
+	<text x="156" y="468" font-family="Neue Montreal" font-weight="500" font-size="22" fill="#FFFFFF">Start recording</text>
+	<rect x="790" y="96" width="520" height="368" rx="22" fill="#F8FAFC"/>
+	<rect x="790" y="96" width="520" height="54" fill="#E9EDF3"/>
+	<path d="M790 118c0-12.15 9.85-22 22-22h476c12.15 0 22 9.85 22 22v32H790v-32z" fill="#E9EDF3"/>
+	<circle cx="824" cy="123" r="7" fill="#FF5F57"/>
+	<circle cx="848" cy="123" r="7" fill="#F6BE4F"/>
+	<circle cx="872" cy="123" r="7" fill="#28C840"/>
+	<rect x="906" y="110" width="290" height="26" rx="13" fill="#F8FAFC"/>
+	<text x="922" y="128" font-family="Neue Montreal" font-size="16" fill="#5B6B85">app.example.com/demo</text>
+	<rect x="818" y="178" width="464" height="230" rx="16" fill="url(#screen)"/>
+	<rect x="850" y="212" width="200" height="18" rx="9" fill="#4785FF"/>
+	<rect x="850" y="252" width="310" height="16" rx="8" fill="#9DB1D1"/>
+	<rect x="850" y="288" width="262" height="16" rx="8" fill="#9DB1D1"/>
+	<rect x="850" y="324" width="288" height="16" rx="8" fill="#B8C8E2"/>
+	<circle cx="1212" cy="346" r="46" fill="#4785FF"/>
+	<circle cx="1212" cy="346" r="37.375" fill="#ADC9FF"/>
+	<circle cx="1212" cy="346" r="28.75" fill="#FFFFFF"/>
+	<circle cx="1212" cy="337" r="10" fill="#5B6B85"/>
+	<path d="M1194 366c2-10 9-15 18-15s16 5 18 15" fill="#5B6B85"/>
+	<rect x="858" y="436" width="384" height="56" rx="28" fill="#FFFFFF"/>
+	<rect x="858" y="436" width="384" height="56" rx="28" stroke="#D4DEED" stroke-width="2"/>
+	<circle cx="892" cy="464" r="14" fill="#28C840"/>
+	<path d="M885 464l5 5 10-11" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+	<text x="918" y="472" font-family="Neue Montreal" font-weight="500" font-size="22" fill="#12161F">Link copied: cap.so/s/demo</text>
+</svg>

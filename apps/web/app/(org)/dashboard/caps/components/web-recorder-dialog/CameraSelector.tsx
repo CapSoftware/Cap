@@ -36,14 +36,16 @@ export const CameraSelector = ({
 	onRefreshDevices,
 }: CameraSelectorProps) => {
 	const cameraEnabled = selectedCameraId !== null;
-	const { state: permissionState, requestPermission } = useMediaPermission(
-		"camera",
-		dialogOpen,
-	);
+	const { requestPermission } = useMediaPermission("camera", dialogOpen);
 
-	const permissionSupported = permissionState !== "unsupported";
-	const shouldRequestPermission =
-		permissionSupported && permissionState !== "granted";
+	// Device availability is the reliable cross-browser signal for camera
+	// access: a deviceId is only exposed once permission is actually active.
+	// permissions.query state is not dependable here — Safari and Firefox < 118
+	// can't report it, and Firefox can report "granted" after a restart while
+	// still exposing no usable devices until access is re-requested. Driving the
+	// re-grant affordance off device availability keeps the user from getting
+	// stuck on "No Camera" with no way to recover.
+	const shouldRequestPermission = availableCameras.length === 0;
 
 	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
 

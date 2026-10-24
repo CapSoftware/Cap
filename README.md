@@ -110,6 +110,10 @@ S3_PUBLIC_URL=https://s3.yourdomain.com
 
 See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
 
+For single-owner instances behind an authenticating reverse proxy, see
+[trusted-proxy authentication](docs/trusted-proxy-auth.md) for the required shared
+secret, proxy hardening, and how to trigger sign-in without a built-in login button.
+
 ## Local Development
 
 Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, MySQL, Tailwind CSS, and shared media crates.
@@ -117,39 +121,39 @@ Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, D
 Requirements:
 
 - Node.js 20 or newer
-- pnpm 10.5.2
+- Bun 1.4.0
 - Rust 1.88 or newer
 - Docker for MySQL, MinIO, and local services
 
 Install and set up the repo:
 
 ```bash
-pnpm install
-pnpm env-setup
-pnpm cap-setup
+bun install
+bun run env-setup
+bun run cap-setup
 ```
 
 Common commands:
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm dev` | Start the full local development stack |
-| `pnpm dev:web` | Start the web app without the desktop app |
-| `pnpm dev:desktop` | Start the desktop app |
-| `pnpm build` | Build the workspace |
-| `pnpm tauri:build` | Build the desktop release |
-| `pnpm lint` | Run Biome linting |
-| `pnpm format` | Format with Biome |
-| `pnpm typecheck` | Run TypeScript project references |
+| `bun run dev` | Start the full local development stack |
+| `bun run dev:web` | Start the web app without the desktop app |
+| `bun run dev:desktop` | Start the desktop app |
+| `bun run build` | Build the workspace |
+| `bun run tauri:build` | Build the desktop release |
+| `bun run lint` | Run Biome linting |
+| `bun run format` | Format with Biome |
+| `bun run typecheck` | Run TypeScript project references |
 | `cargo test -p <crate>` | Run Rust tests for a crate |
 
 Database commands:
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm db:generate` | Generate database artifacts |
-| `pnpm db:push` | Push schema changes |
-| `pnpm db:studio` | Open Drizzle Studio |
+| `bun run db:generate` | Generate database artifacts |
+| `bun run db:push` | Push schema changes |
+| `bun run db:studio` | Open Drizzle Studio |
 
 ## Repository Map
 
@@ -180,8 +184,8 @@ Cap uses [Tinybird](https://www.tinybird.co) for viewer telemetry dashboards. Se
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm analytics:setup` | Deploy Tinybird datasources and pipes from `scripts/analytics/tinybird` |
-| `pnpm analytics:check` | Validate that the Tinybird workspace matches the app expectations |
+| `bun run analytics:setup` | Deploy Tinybird datasources and pipes from `scripts/analytics/tinybird` |
+| `bun run analytics:check` | Validate that the Tinybird workspace matches the app expectations |
 
 `analytics:setup` can remove Tinybird resources outside the checked-in analytics configuration. Use it only against the workspace you intend to manage from this repo.
 

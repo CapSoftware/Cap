@@ -70,40 +70,43 @@ impl AuthStore {
         }
 
         let mut auth = auth;
-        println!(
-            "Fetching plan for user {}",
-            auth.user_id.as_deref().unwrap_or("unknown")
-        );
-        let response = app
+
+        match app
             .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
             .await
-            .map_err(|e| {
-                println!("Failed to fetch plan: {e}");
-                e.to_string()
-            })?;
-        println!("Plan fetch response status: {}", response.status());
-
-        if !response.status().is_success() {
-            let error_msg = format!("Failed to fetch plan: {}", response.status());
-            return Err(error_msg);
+        {
+            Ok(response) if response.status().is_success() => {
+                #[derive(Deserialize)]
+                struct PlanResponse {
+                    upgraded: bool,
+                }
+                match response.json::<PlanResponse>().await {
+                    Ok(plan_response) => {
+                        auth.plan = Some(Plan {
+                            upgraded: plan_response.upgraded,
+                            last_checked: chrono::Utc::now().timestamp() as i32,
+                            manual: auth.plan.as_ref().is_some_and(|p| p.manual),
+                        });
+                    }
+                    Err(e) => tracing::warn!("Failed to parse plan response: {e}"),
+                }
+            }
+            Ok(response) => tracing::warn!("Plan fetch returned {}", response.status()),
+            Err(e) => tracing::warn!("Failed to fetch plan: {e}"),
         }
 
-        #[derive(Deserialize)]
-        struct Response {
-            upgraded: bool,
+        match api::fetch_organizations(app).await {
+            Ok(orgs) => {
+                auth.organizations = orgs;
+                auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch organizations: {e}");
+                if auth.organizations.is_empty() {
+                    auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
+                }
+            }
         }
-
-        let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
-
-        auth.plan = Some(Plan {
-            upgraded: plan_response.upgraded,
-            last_checked: chrono::Utc::now().timestamp() as i32,
-            manual: auth.plan.as_ref().is_some_and(|p| p.manual),
-        });
-        auth.organizations = api::fetch_organizations(app)
-            .await
-            .map_err(|e| e.to_string())?;
-        auth.organizations_updated_at = Some(chrono::Utc::now().timestamp() as i32);
 
         Self::set(app, Some(auth))?;
 

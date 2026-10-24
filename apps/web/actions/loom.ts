@@ -1,13 +1,16 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
+	folders,
 	importedVideos,
+	loomMigrationImports,
+	loomMigrationRequests,
 	organizationMembers,
 	organizations,
+	sharedVideos,
 	spaceMembers,
 	spaces,
 	spaceVideos,
@@ -15,6 +18,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
@@ -22,32 +26,77 @@ import {
 	type Organisation,
 	Space,
 	SpaceMemberId,
+	type Storage as StorageDomain,
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, eq, isNull } from "drizzle-orm";
-import { Option } from "effect";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { Effect, Option, Schedule } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
-import { requireOrganizationAccess } from "@/actions/organization/authorization";
+import { getRun } from "workflow/api";
+import {
+	getOrganizationAccess,
+	requireOrganizationAccess,
+	requireOrganizationSettingsManager,
+} from "@/actions/organization/authorization";
+import { requireSpaceManager } from "@/actions/organization/space-authorization";
+import {
+	releaseConciergeImport,
+	renewConciergeImport,
+	requireMigrationOperator,
+	reserveConciergeImport,
+	toLoomMigrationResult,
+} from "@/lib/loom-concierge";
+import {
+	getLoomDownloadUrl,
+	LoomDownloadTemporaryError,
+} from "@/lib/loom-download-url";
+import {
+	LOOM_FILE_SINGLE_UPLOAD_MAX_BYTES,
+	startLoomFileProcessingWorkflow,
+} from "@/lib/loom-file-processing";
+import type { LoomImportDestination } from "@/lib/loom-import-destination";
+import { LOOM_IMPORT_MAX_BYTES } from "@/lib/loom-import-limits";
+import {
+	getLoomImportRunState,
+	LOOM_IMPORT_CONFIRMATION_MESSAGE,
+	LoomImportStartError,
+	restoreLoomImportStartError,
+	startLoomImportWorkflow,
+} from "@/lib/loom-import-start";
+import {
+	LoomMigrationError,
+	type LoomMigrationResult,
+} from "@/lib/loom-migration-state";
+import { isOrganizationOwnerPro } from "@/lib/org-pro";
+import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
+import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
-interface LoomUrlResponse {
-	url?: string;
-}
+type LoomDownloadMode = "direct-download" | "browser-conversion";
 
 interface LoomDownloadResult {
 	success: boolean;
 	videoId?: string;
 	videoName?: string;
+	downloadUrl?: string;
+	downloadMode?: LoomDownloadMode;
+	durationSeconds?: number;
+	width?: number;
+	height?: number;
+	requiresProxy?: boolean;
 	error?: string;
 }
+
+export type LoomImportErrorCode = "loom_temporarily_unavailable";
 
 export interface LoomImportResult {
 	success: boolean;
 	videoId?: Video.VideoId;
 	error?: string;
+	errorCode?: LoomImportErrorCode;
 }
 
 export interface LoomCsvImportRow {
@@ -64,6 +113,7 @@ export interface LoomCsvImportRowResult {
 	success: boolean;
 	videoId?: Video.VideoId;
 	error?: string;
+	errorCode?: LoomImportErrorCode;
 }
 
 export interface LoomCsvImportResult {
@@ -74,65 +124,32 @@ export interface LoomCsvImportResult {
 	error?: string;
 }
 
-const MAX_LOOM_CSV_ROWS = 100;
+const MAX_LOOM_CSV_ROWS = 500;
 const MAX_LOOM_SPACE_NAME_LENGTH = 255;
+const MAX_LOOM_VIDEO_NAME_LENGTH = 255;
+const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time. Contact support to raise this limit.`;
+const LOOM_CSV_PERMISSION_ERROR =
+	"Only organization admins and owners can import Loom videos from a CSV.";
+const LOOM_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;
 
 function extractLoomVideoId(url: string): string | null {
 	try {
 		const parsed = new URL(url);
-		if (!parsed.hostname.includes("loom.com")) {
+		if (
+			parsed.protocol !== "https:" ||
+			(parsed.hostname !== "loom.com" && !parsed.hostname.endsWith(".loom.com"))
+		) {
 			return null;
 		}
 
 		const pathParts = parsed.pathname.split("/").filter(Boolean);
 		const id = pathParts[pathParts.length - 1] ?? null;
 
-		if (!id || id.length < 10) {
+		if (!id || !LOOM_VIDEO_ID_PATTERN.test(id)) {
 			return null;
 		}
 
-		return id.split("?")[0] ?? null;
-	} catch {
-		return null;
-	}
-}
-
-async function fetchLoomEndpoint(
-	videoId: string,
-	endpoint: string,
-	includeBody = true,
-): Promise<string | null> {
-	try {
-		const options: RequestInit = { method: "POST" };
-		if (includeBody) {
-			options.headers = {
-				"Content-Type": "application/json",
-				Accept: "application/json",
-			};
-			options.body = JSON.stringify({
-				anonID: randomUUID(),
-				deviceID: null,
-				force_original: false,
-				password: null,
-			});
-		}
-
-		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
-			options,
-		);
-
-		if (!response.ok || response.status === 204) {
-			return null;
-		}
-
-		const text = await response.text();
-		if (!text.trim()) {
-			return null;
-		}
-
-		const data: LoomUrlResponse = JSON.parse(text);
-		return data.url ?? null;
+		return id;
 	} catch {
 		return null;
 	}
@@ -169,31 +186,9 @@ async function fetchVideoName(videoId: string): Promise<string | null> {
 	}
 }
 
-function isStreamingUrl(url: string): boolean {
+function isDirectMp4Url(url: string): boolean {
 	const path = (url.split("?")[0] ?? "").toLowerCase();
-	return path.endsWith(".m3u8") || path.endsWith(".mpd");
-}
-
-async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
-		{ endpoint: "transcoded-url", includeBody: true },
-		{ endpoint: "raw-url", includeBody: true },
-		{ endpoint: "transcoded-url", includeBody: false },
-		{ endpoint: "raw-url", includeBody: false },
-	];
-
-	let fallbackStreamingUrl: string | null = null;
-
-	for (const { endpoint, includeBody } of requestVariants) {
-		const url = await fetchLoomEndpoint(loomVideoId, endpoint, includeBody);
-		if (!url) continue;
-
-		if (!isStreamingUrl(url)) return url;
-
-		if (!fallbackStreamingUrl) fallbackStreamingUrl = url;
-	}
-
-	return fallbackStreamingUrl;
+	return path.endsWith(".mp4");
 }
 
 async function fetchLoomOEmbed(
@@ -201,7 +196,7 @@ async function fetchLoomOEmbed(
 ): Promise<{ duration?: number; width?: number; height?: number } | null> {
 	try {
 		const response = await fetch(
-			`https://www.loom.com/v1/oembed?url=https://www.loom.com/share/${loomVideoId}`,
+			`https://www.loom.com/v1/oembed?url=${encodeURIComponent(`https://www.loom.com/share/${loomVideoId}`)}`,
 			{ headers: { Accept: "application/json" } },
 		);
 		if (!response.ok) return null;
@@ -244,29 +239,95 @@ export async function downloadLoomVideo(
 			};
 		}
 
-		const videoName = await fetchVideoName(videoId);
+		const [videoName, oembedMeta] = await Promise.all([
+			fetchVideoName(videoId),
+			fetchLoomOEmbed(videoId),
+		]);
 		return {
 			success: true,
 			videoId,
 			videoName: videoName ?? undefined,
+			downloadUrl,
+			downloadMode: isDirectMp4Url(downloadUrl)
+				? "direct-download"
+				: "browser-conversion",
+			durationSeconds: oembedMeta?.duration,
+			width: oembedMeta?.width,
+			height: oembedMeta?.height,
+			requiresProxy: false,
 		};
-	} catch {
+	} catch (error) {
 		return {
 			success: false,
 			error:
-				"An unexpected error occurred. Please try again or check your internet connection.",
+				error instanceof LoomDownloadTemporaryError
+					? error.message
+					: "An unexpected error occurred. Please try again or check your internet connection.",
 		};
 	}
+}
+
+type LoomImportTransaction = Parameters<
+	Parameters<ReturnType<typeof db>["transaction"]>[0]
+>[0];
+
+async function assertConciergeLease(
+	tx: LoomImportTransaction,
+	requestId: string,
+	leaseToken: string | undefined,
+) {
+	const [reservation] = await tx
+		.select({
+			activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+			leaseToken: loomMigrationRequests.activeImportLeaseToken,
+			leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+		})
+		.from(loomMigrationRequests)
+		.where(eq(loomMigrationRequests.id, requestId))
+		.limit(1)
+		.for("update");
+	if (
+		!leaseToken ||
+		!reservation?.activeOrganizationId ||
+		reservation.leaseToken !== leaseToken ||
+		!reservation.leaseUntil ||
+		reservation.leaseUntil <= new Date()
+	) {
+		throw new LoomMigrationError(
+			"The concierge import expired. Retry this video.",
+		);
+	}
+}
+
+async function recordConciergeImport(
+	tx: LoomImportTransaction,
+	videoId: Video.VideoId,
+	requestId: string,
+) {
+	await tx.insert(loomMigrationImports).values({ videoId, requestId });
+	await tx
+		.update(loomMigrationRequests)
+		.set({
+			queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+			updatedAt: new Date(),
+		})
+		.where(eq(loomMigrationRequests.id, requestId));
 }
 
 async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
 	ownerId,
+	destination = {},
+	migrationRequestId,
+	migrationLeaseToken,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
 	ownerId: User.UserId;
+	destination?: LoomImportDestination;
+	migrationRequestId?: string;
+	migrationLeaseToken?: string;
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -280,6 +341,12 @@ async function importLoomVideoForOwner({
 	const existing = await db()
 		.select({
 			videoId: videos.id,
+			ownerId: videos.ownerId,
+			bucketId: videos.bucket,
+			metadata: videos.metadata,
+			phase: videoUploads.phase,
+			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
 		})
 		.from(importedVideos)
 		.leftJoin(
@@ -289,6 +356,7 @@ async function importLoomVideoForOwner({
 				eq(videos.orgId, importedVideos.orgId),
 			),
 		)
+		.leftJoin(videoUploads, eq(videoUploads.videoId, videos.id))
 		.where(
 			and(
 				eq(importedVideos.orgId, orgId),
@@ -297,7 +365,116 @@ async function importLoomVideoForOwner({
 			),
 		);
 
-	if (existing.some((row) => row.videoId !== null)) {
+	const existingVideo = existing.find((row) => row.videoId !== null);
+	if (existingVideo?.videoId) {
+		if (
+			existingVideo.phase === "error" &&
+			existingVideo.ownerId === ownerId &&
+			existingVideo.uploadUpdatedAt
+		) {
+			const runState = await getLoomImportRunState(
+				existingVideo.metadata?.loomImportRun,
+			);
+			if (runState === "unconfirmed") {
+				return { success: false, error: LOOM_IMPORT_CONFIRMATION_MESSAGE };
+			}
+			if (runState !== "inactive") {
+				return {
+					success: false,
+					error: "This Loom import is already restarting.",
+				};
+			}
+			const rawFileKey =
+				existingVideo.rawFileKey ??
+				`${ownerId}/${existingVideo.videoId}/raw-upload.mp4`;
+			const failedVideoId = existingVideo.videoId;
+			const failedUpdatedAt = existingVideo.uploadUpdatedAt;
+			const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+			const claimOutcome = await db().transaction(async (tx) => {
+				let mappedRequestId: string | undefined;
+				if (migrationRequestId) {
+					await assertConciergeLease(
+						tx,
+						migrationRequestId,
+						migrationLeaseToken,
+					);
+					const [mapped] = await tx
+						.select({ requestId: loomMigrationImports.requestId })
+						.from(loomMigrationImports)
+						.where(eq(loomMigrationImports.videoId, failedVideoId))
+						.limit(1);
+					mappedRequestId = mapped?.requestId;
+					if (mappedRequestId && mappedRequestId !== migrationRequestId) {
+						return "foreign" as const;
+					}
+				}
+				const claim = await tx
+					.update(videoUploads)
+					.set({
+						phase: "processing",
+						processingProgress: 0,
+						processingMessage: "Restarting Loom import...",
+						processingError: null,
+						rawFileKey,
+						updatedAt: claimedAt,
+					})
+					.where(
+						and(
+							eq(videoUploads.videoId, failedVideoId),
+							eq(videoUploads.phase, "error"),
+							eq(videoUploads.updatedAt, failedUpdatedAt),
+						),
+					);
+				const affectedRows = Array.isArray(claim)
+					? (claim[0] as { affectedRows?: number } | undefined)?.affectedRows
+					: (claim as { affectedRows?: number }).affectedRows;
+				if (affectedRows !== 1) return "busy" as const;
+				if (migrationRequestId && !mappedRequestId) {
+					await recordConciergeImport(tx, failedVideoId, migrationRequestId);
+				}
+				return "claimed" as const;
+			});
+			if (claimOutcome === "foreign") {
+				return {
+					success: false,
+					error: "This Loom import belongs to another migration request.",
+				};
+			}
+			if (claimOutcome === "busy") {
+				return {
+					success: false,
+					error: "This Loom import is already restarting.",
+				};
+			}
+			try {
+				await startLoomImportWorkflow({
+					videoId: existingVideo.videoId,
+					userId: ownerId,
+					rawFileKey,
+					bucketId: existingVideo.bucketId,
+					loomVideoId,
+					reuseExistingRawUpload: true,
+				});
+			} catch (error) {
+				if (error instanceof LoomImportStartError && error.canRetry) {
+					await restoreLoomImportStartError(
+						existingVideo.videoId,
+						"processing",
+						claimedAt,
+						error.message,
+					);
+				}
+				return {
+					success: false,
+					error:
+						error instanceof Error
+							? error.message
+							: "Loom import could not restart.",
+				};
+			}
+			revalidatePath("/dashboard/caps");
+			return { success: true, videoId: existingVideo.videoId };
+		}
 		return {
 			success: false,
 			error: "This Loom video has already been imported.",
@@ -316,7 +493,19 @@ async function importLoomVideoForOwner({
 			);
 	}
 
-	const downloadUrl = await getLoomDownloadUrl(loomVideoId);
+	let downloadUrl: string | null;
+	try {
+		downloadUrl = await getLoomDownloadUrl(loomVideoId);
+	} catch (error) {
+		if (error instanceof LoomDownloadTemporaryError) {
+			return {
+				success: false,
+				error: error.message,
+				errorCode: "loom_temporarily_unavailable",
+			};
+		}
+		throw error;
+	}
 	if (!downloadUrl) {
 		return {
 			success: false,
@@ -330,43 +519,90 @@ async function importLoomVideoForOwner({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writable = await Storage.getWritableAccessForUser(ownerId, orgId).pipe(
-		runPromise,
-	);
+	const writableResult = await Storage.getWritableAccessForUser(ownerId, orgId)
+		.pipe(runPromise)
+		.then(
+			(value) => ({ ok: true as const, value }),
+			(error) => ({ ok: false as const, error }),
+		);
+
+	if (!writableResult.ok) {
+		console.error(
+			`Loom import: failed to resolve storage access for user ${ownerId} in org ${orgId}:`,
+			writableResult.error,
+		);
+		return {
+			success: false,
+			error:
+				"Could not prepare storage for this import. Please try again or contact support.",
+		};
+	}
+
+	const writable = writableResult.value;
 
 	const videoId = Video.VideoId.make(nanoId());
-	const name =
+	const name = Array.from(
 		videoName ||
-		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
+			`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`,
+	)
+		.slice(0, MAX_LOOM_VIDEO_NAME_LENGTH)
+		.join("");
 
-	await db()
-		.insert(videos)
-		.values({
+	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+	await db().transaction(async (tx) => {
+		if (migrationRequestId) {
+			await assertConciergeLease(tx, migrationRequestId, migrationLeaseToken);
+		}
+		await tx.insert(videos).values({
 			id: videoId,
 			name,
 			ownerId,
 			orgId,
+			folderId: destination.spaceId ? undefined : destination.folderId,
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(writable.bucketId),
 			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(oembedMeta?.duration ? { duration: oembedMeta.duration } : {}),
 			...(oembedMeta?.width ? { width: oembedMeta.width } : {}),
 			...(oembedMeta?.height ? { height: oembedMeta.height } : {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		phase: "uploading",
-		processingProgress: 0,
-		processingMessage: "Importing from Loom...",
-	});
+		await tx.insert(videoUploads).values({
+			videoId,
+			phase: "uploading",
+			processingProgress: 0,
+			processingMessage: "Importing from Loom...",
+			updatedAt: claimedAt,
+		});
 
-	await db().insert(importedVideos).values({
-		id: videoId,
-		orgId,
-		source: "loom",
-		sourceId: loomVideoId,
+		await tx.insert(importedVideos).values({
+			id: videoId,
+			orgId,
+			source: "loom",
+			sourceId: loomVideoId,
+		});
+		if (migrationRequestId) {
+			await recordConciergeImport(tx, videoId, migrationRequestId);
+		}
+
+		if (destination.spaceId === orgId) {
+			await tx.insert(sharedVideos).values({
+				id: nanoId(),
+				videoId,
+				organizationId: orgId,
+				sharedByUserId: ownerId,
+				folderId: destination.folderId,
+			});
+		} else if (destination.spaceId) {
+			await tx.insert(spaceVideos).values({
+				id: nanoId(),
+				videoId,
+				spaceId: destination.spaceId,
+				addedById: ownerId,
+				folderId: destination.folderId,
+			});
+		}
 	});
 
 	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
@@ -381,29 +617,96 @@ async function importLoomVideoForOwner({
 			.catch(() => {});
 	}
 
-	await start(importLoomVideoWorkflow, [
-		{
+	try {
+		await startLoomImportWorkflow({
 			videoId,
 			userId: ownerId,
 			rawFileKey,
 			bucketId: Option.getOrNull(writable.bucketId),
-			loomDownloadUrl: downloadUrl,
 			loomVideoId,
-		},
-	]);
+			loomDownloadUrl: downloadUrl,
+		});
+	} catch (error) {
+		if (error instanceof LoomImportStartError && error.canRetry) {
+			await restoreLoomImportStartError(
+				videoId,
+				"uploading",
+				claimedAt,
+				error.message,
+			);
+		}
+		return {
+			success: false,
+			videoId,
+			error:
+				error instanceof Error ? error.message : "Loom import could not start.",
+		};
+	}
 
 	revalidatePath("/dashboard/caps");
+	if (destination.folderId) revalidatePath("/dashboard/folder/[id]", "page");
+	if (destination.spaceId) {
+		revalidatePath("/dashboard/spaces/[spaceId]", "page");
+		revalidatePath("/dashboard/spaces/[spaceId]/folder/[folderId]", "page");
+	}
 
 	return { success: true, videoId };
+}
+
+async function requireLoomImportLocationAccess(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+	spaceId?: Space.SpaceIdOrOrganisationId,
+) {
+	await requireOrganizationAccess(userId, orgId);
+	if (!spaceId) return;
+	if (spaceId === orgId) {
+		await requireOrganizationSettingsManager(userId, orgId);
+		return;
+	}
+	const access = await requireSpaceManager(userId, spaceId);
+	if (access.organizationId !== orgId) throw new Error("Space not found");
+}
+
+function loomImportFolderScope(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+	spaceId?: Space.SpaceIdOrOrganisationId,
+) {
+	return and(
+		eq(folders.organizationId, orgId),
+		spaceId
+			? eq(folders.spaceId, spaceId)
+			: and(isNull(folders.spaceId), eq(folders.createdById, userId)),
+	);
+}
+
+export async function getLoomImportFolders({
+	orgId,
+	spaceId,
+}: {
+	orgId: Organisation.OrganisationId;
+	spaceId?: Space.SpaceIdOrOrganisationId;
+}) {
+	const user = await getCurrentUser();
+	if (!user) throw new Error("Unauthorized");
+	await requireLoomImportLocationAccess(user.id, orgId, spaceId);
+	return db()
+		.select({ id: folders.id, name: folders.name, parentId: folders.parentId })
+		.from(folders)
+		.where(loomImportFolderScope(user.id, orgId, spaceId))
+		.orderBy(asc(folders.name));
 }
 
 export async function importFromLoom({
 	loomUrl,
 	orgId,
+	folderId,
+	spaceId,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
-}): Promise<LoomImportResult> {
+} & LoomImportDestination): Promise<LoomImportResult> {
 	const user = await getCurrentUser();
 	if (!user) return { success: false, error: "Unauthorized" };
 
@@ -414,12 +717,31 @@ export async function importFromLoom({
 		};
 	}
 
-	await requireOrganizationAccess(user.id, orgId);
+	await requireLoomImportLocationAccess(user.id, orgId, spaceId);
+	if (folderId) {
+		const [folder] = await db()
+			.select({ id: folders.id })
+			.from(folders)
+			.where(
+				and(
+					eq(folders.id, folderId),
+					loomImportFolderScope(user.id, orgId, spaceId),
+				),
+			)
+			.limit(1);
+		if (!folder)
+			return {
+				success: false,
+				error:
+					"Destination folder not found. Choose another folder and try again.",
+			};
+	}
 
 	return importLoomVideoForOwner({
 		loomUrl,
 		orgId,
 		ownerId: user.id,
+		destination: { folderId, spaceId },
 	});
 }
 
@@ -463,21 +785,6 @@ async function getOrganizationMemberByEmail(
 		.limit(1);
 
 	return member ?? null;
-}
-
-async function isOrganizationOwner(
-	userId: User.UserId,
-	orgId: Organisation.OrganisationId,
-) {
-	const [organization] = await db()
-		.select({
-			ownerId: organizations.ownerId,
-		})
-		.from(organizations)
-		.where(and(eq(organizations.id, orgId), isNull(organizations.tombstoneAt)))
-		.limit(1);
-
-	return organization?.ownerId === userId;
 }
 
 type ImportSpaceCacheValue = {
@@ -536,7 +843,7 @@ async function getOrCreateImportSpace({
 			id: SpaceMemberId.make(nanoId()),
 			spaceId,
 			userId: createdById,
-			role: "Admin",
+			role: "admin",
 		});
 	});
 
@@ -575,6 +882,33 @@ async function addImportedVideoToSpace({
 	});
 }
 
+async function addImportOwnerToSpace({
+	spaceId,
+	userId,
+}: {
+	spaceId: Space.SpaceIdOrOrganisationId;
+	userId: User.UserId;
+}) {
+	const [existingSpaceMember] = await db()
+		.select({ id: spaceMembers.id })
+		.from(spaceMembers)
+		.where(
+			and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.userId, userId)),
+		)
+		.limit(1);
+
+	if (existingSpaceMember) return;
+
+	await db()
+		.insert(spaceMembers)
+		.values({
+			id: SpaceMemberId.make(nanoId()),
+			spaceId,
+			userId,
+			role: "member",
+		});
+}
+
 export async function importFromLoomCsv({
 	rows,
 	orgId,
@@ -603,17 +937,33 @@ export async function importFromLoomCsv({
 		};
 	}
 
-	if (!(await isOrganizationOwner(user.id, orgId))) {
+	const access = await getOrganizationAccess(user.id, orgId);
+	if (!canManageOrganizationSettings(access?.role)) {
 		return {
 			success: false,
 			importedCount: 0,
 			failedCount: 0,
 			results: [],
-			error:
-				"Only the organization owner can import Loom videos from a CSV. Ask the owner to do it.",
+			error: LOOM_CSV_PERMISSION_ERROR,
 		};
 	}
 
+	return processLoomCsvRows({ rows, orgId, actorId: user.id });
+}
+
+async function processLoomCsvRows({
+	rows,
+	orgId,
+	actorId,
+	migrationRequestId,
+	migrationLeaseToken,
+}: {
+	rows: LoomCsvImportRow[];
+	orgId: Organisation.OrganisationId;
+	actorId: User.UserId;
+	migrationRequestId?: string;
+	migrationLeaseToken?: string;
+}): Promise<LoomCsvImportResult> {
 	const inputRows = Array.isArray(rows) ? rows : [];
 	const normalizedRows = inputRows
 		.map((row, index) => ({
@@ -649,7 +999,7 @@ export async function importFromLoomCsv({
 			importedCount: 0,
 			failedCount: normalizedRows.length,
 			results: [],
-			error: `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time.`,
+			error: LOOM_CSV_LIMIT_ERROR,
 		};
 	}
 
@@ -658,6 +1008,14 @@ export async function importFromLoomCsv({
 	const touchedSpaceIds = new Set<Space.SpaceIdOrOrganisationId>();
 
 	for (const row of normalizedRows) {
+		if (migrationRequestId) {
+			if (!migrationLeaseToken) {
+				throw new LoomMigrationError(
+					"The concierge import is missing its reservation.",
+				);
+			}
+			await renewConciergeImport(migrationRequestId, migrationLeaseToken);
+		}
 		if (!row.loomUrl) {
 			results.push({
 				rowNumber: row.rowNumber,
@@ -691,17 +1049,30 @@ export async function importFromLoomCsv({
 			continue;
 		}
 
-		const member = await getOrganizationMemberByEmail(orgId, row.userEmail);
+		let member = await getOrganizationMemberByEmail(orgId, row.userEmail);
 
 		if (!member) {
-			results.push({
-				rowNumber: row.rowNumber,
-				userEmail: row.userEmail,
-				spaceName: row.spaceName || undefined,
-				success: false,
-				error: "This email is not a member of the organization.",
-			});
-			continue;
+			try {
+				const provisionedMember = await provisionOrganizationInvitee({
+					organizationId: orgId,
+					email: row.userEmail,
+					invitedByUserId: actorId,
+					role: "member",
+				});
+				member = {
+					userId: provisionedMember.userId,
+					email: row.userEmail,
+				};
+			} catch {
+				results.push({
+					rowNumber: row.rowNumber,
+					userEmail: row.userEmail,
+					spaceName: row.spaceName || undefined,
+					success: false,
+					error: "Could not add this email to the organization.",
+				});
+				continue;
+			}
 		}
 
 		try {
@@ -709,6 +1080,8 @@ export async function importFromLoomCsv({
 				loomUrl: row.loomUrl,
 				orgId,
 				ownerId: member.userId,
+				migrationRequestId,
+				migrationLeaseToken,
 			});
 
 			let spaceName = row.spaceName || undefined;
@@ -717,14 +1090,18 @@ export async function importFromLoomCsv({
 				try {
 					const space = await getOrCreateImportSpace({
 						orgId,
-						createdById: user.id,
+						createdById: actorId,
 						name: row.spaceName,
 						spaceCache,
 					});
 					await addImportedVideoToSpace({
 						videoId: result.videoId,
 						spaceId: space.id,
-						addedById: user.id,
+						addedById: actorId,
+					});
+					await addImportOwnerToSpace({
+						spaceId: space.id,
+						userId: member.userId,
 					});
 					touchedSpaceIds.add(space.id);
 					spaceName = space.name;
@@ -740,6 +1117,7 @@ export async function importFromLoomCsv({
 				success: result.success,
 				videoId: result.videoId,
 				error: result.error ?? spaceError,
+				...(result.errorCode ? { errorCode: result.errorCode } : {}),
 			});
 		} catch {
 			results.push({
@@ -770,4 +1148,601 @@ export async function importFromLoomCsv({
 		results,
 		error: importedCount > 0 ? undefined : "No Loom videos were imported.",
 	};
+}
+
+export async function importFromLoomCsvForConcierge(input: {
+	requestId: string;
+	rows: LoomCsvImportRow[];
+}): Promise<LoomMigrationResult<LoomCsvImportResult>> {
+	return toLoomMigrationResult(() => importConciergeCsvRows(input));
+}
+
+async function importConciergeCsvRows({
+	requestId,
+	rows,
+}: {
+	requestId: string;
+	rows: LoomCsvImportRow[];
+}): Promise<LoomCsvImportResult> {
+	const operator = await requireMigrationOperator();
+	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
+		throw new LoomMigrationError("Invalid migration request.");
+	}
+	const [request] = await db()
+		.select({
+			organizationId: loomMigrationRequests.organizationId,
+			status: loomMigrationRequests.status,
+			ownerId: organizations.ownerId,
+		})
+		.from(loomMigrationRequests)
+		.innerJoin(
+			organizations,
+			eq(organizations.id, loomMigrationRequests.organizationId),
+		)
+		.where(
+			and(
+				eq(loomMigrationRequests.id, requestId),
+				isNotNull(loomMigrationRequests.activeOrganizationId),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.limit(1);
+	if (!request || request.status === "completed") {
+		throw new LoomMigrationError("The migration request is no longer active.");
+	}
+	if (!(await isOrganizationOwnerPro(request.organizationId))) {
+		throw new LoomMigrationError("The destination workspace needs Cap Pro.");
+	}
+	if (!Array.isArray(rows) || rows.length > 10) {
+		throw new LoomMigrationError(
+			"Concierge CSV imports run in batches of 10 videos.",
+		);
+	}
+	const leaseToken = await reserveConciergeImport(requestId, operator.id);
+	try {
+		const result = await processLoomCsvRows({
+			rows,
+			orgId: request.organizationId,
+			actorId: request.ownerId,
+			migrationRequestId: requestId,
+			migrationLeaseToken: leaseToken,
+		});
+		revalidatePath("/dashboard/import/loom");
+		revalidatePath("/dashboard/admin/loom-migrations");
+		return result;
+	} finally {
+		await releaseConciergeImport(requestId, leaseToken);
+	}
+}
+
+type ConciergeLoomFileUploadInput = {
+	requestId: string;
+	loomUrl: string;
+	userEmail: string;
+	spaceName: string;
+	videoTitle: string;
+};
+
+type ConciergeLoomFileUpload = {
+	videoId: Video.VideoId;
+	uploadTarget: StorageDomain.UploadTarget;
+};
+
+export async function createConciergeLoomFileUpload(
+	input: ConciergeLoomFileUploadInput,
+): Promise<LoomMigrationResult<ConciergeLoomFileUpload>> {
+	return toLoomMigrationResult(() => prepareConciergeLoomFileUpload(input));
+}
+
+export async function resumeConciergeLoomFileUpload(input: {
+	requestId: string;
+	loomUrl: string;
+	userEmail: string;
+	confirmedPreviousProcessingStopped: boolean;
+}) {
+	return toLoomMigrationResult(async () => {
+		await requireMigrationOperator();
+		if (input.confirmedPreviousProcessingStopped !== true) {
+			throw new LoomMigrationError(
+				"Confirm the previous processing has stopped before resuming this upload.",
+			);
+		}
+		if (
+			typeof input.requestId !== "string" ||
+			!/^[A-Za-z0-9_-]{15}$/.test(input.requestId)
+		) {
+			throw new LoomMigrationError("Invalid migration request.");
+		}
+		if (
+			typeof input.loomUrl !== "string" ||
+			typeof input.userEmail !== "string"
+		) {
+			throw new LoomMigrationError("Enter a valid Loom URL and owner email.");
+		}
+		const loomVideoId = extractLoomVideoId(input.loomUrl.trim());
+		const ownerEmail = normalizeImportEmail(input.userEmail);
+		if (!loomVideoId || !isValidImportEmail(ownerEmail)) {
+			throw new LoomMigrationError("Enter a valid Loom URL and owner email.");
+		}
+		const [record] = await db()
+			.select({
+				videoId: videos.id,
+				ownerId: videos.ownerId,
+				ownerEmail: users.email,
+				organizationId: videos.orgId,
+				metadata: videos.metadata,
+			})
+			.from(loomMigrationRequests)
+			.innerJoin(
+				loomMigrationImports,
+				eq(loomMigrationImports.requestId, loomMigrationRequests.id),
+			)
+			.innerJoin(
+				importedVideos,
+				eq(importedVideos.id, loomMigrationImports.videoId),
+			)
+			.innerJoin(
+				videos,
+				and(
+					eq(videos.id, importedVideos.id),
+					eq(videos.orgId, importedVideos.orgId),
+					eq(videos.orgId, loomMigrationRequests.organizationId),
+				),
+			)
+			.innerJoin(users, eq(users.id, videos.ownerId))
+			.innerJoin(organizations, eq(organizations.id, videos.orgId))
+			.where(
+				and(
+					eq(loomMigrationRequests.id, input.requestId),
+					isNotNull(loomMigrationRequests.activeOrganizationId),
+					isNull(organizations.tombstoneAt),
+					eq(importedVideos.source, "loom"),
+					eq(importedVideos.sourceId, loomVideoId),
+				),
+			)
+			.limit(1);
+		if (!record || normalizeImportEmail(record.ownerEmail) !== ownerEmail) {
+			throw new LoomMigrationError(
+				"No existing Loom recording matches this request and owner.",
+			);
+		}
+		if (!(await isOrganizationOwnerPro(record.organizationId))) {
+			throw new LoomMigrationError("The destination workspace needs Cap Pro.");
+		}
+		const previousRun = record.metadata?.loomImportRun;
+		if (previousRun && previousRun.dispatch !== "rejected") {
+			let status: string | null;
+			try {
+				status = await getRun(previousRun.runId).status;
+			} catch {
+				status = null;
+			}
+			if (
+				status !== "completed" &&
+				status !== "failed" &&
+				status !== "cancelled"
+			) {
+				throw new LoomMigrationError(
+					"The previous Loom workflow is active or could not be confirmed.",
+				);
+			}
+		}
+		return startConciergeLoomFileProcessing({
+			requestId: input.requestId,
+			videoId: record.videoId,
+			expectedOwnerId: record.ownerId,
+			maxBytes: LOOM_IMPORT_MAX_BYTES,
+		});
+	});
+}
+
+async function prepareConciergeLoomFileUpload({
+	requestId,
+	loomUrl,
+	userEmail,
+	spaceName,
+	videoTitle,
+}: ConciergeLoomFileUploadInput): Promise<ConciergeLoomFileUpload> {
+	const operator = await requireMigrationOperator();
+	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
+		throw new LoomMigrationError("Invalid migration request.");
+	}
+	const loomVideoId = extractLoomVideoId(loomUrl.trim());
+	if (!loomVideoId)
+		throw new LoomMigrationError("Enter a valid Loom video URL.");
+	const normalizedEmail = normalizeImportEmail(userEmail);
+	if (!isValidImportEmail(normalizedEmail)) {
+		throw new LoomMigrationError("Enter a valid destination owner email.");
+	}
+	const normalizedSpaceName = normalizeImportSpaceName(spaceName);
+	if (!isValidImportSpaceName(normalizedSpaceName)) {
+		throw new LoomMigrationError("Space name is too long.");
+	}
+	const normalizedTitle = videoTitle.trim();
+	if (!normalizedTitle || normalizedTitle.length > 255) {
+		throw new LoomMigrationError(
+			"Enter a video title of 255 characters or fewer.",
+		);
+	}
+	const [request] = await db()
+		.select({
+			organizationId: loomMigrationRequests.organizationId,
+			ownerId: organizations.ownerId,
+		})
+		.from(loomMigrationRequests)
+		.innerJoin(
+			organizations,
+			eq(organizations.id, loomMigrationRequests.organizationId),
+		)
+		.where(
+			and(
+				eq(loomMigrationRequests.id, requestId),
+				isNotNull(loomMigrationRequests.activeOrganizationId),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.limit(1);
+	if (!request)
+		throw new LoomMigrationError("The migration request is no longer active.");
+	if (!(await isOrganizationOwnerPro(request.organizationId))) {
+		throw new LoomMigrationError("The destination workspace needs Cap Pro.");
+	}
+	const leaseToken = await reserveConciergeImport(requestId, operator.id);
+	try {
+		const [existing] = await db()
+			.select({
+				id: importedVideos.id,
+				ownerId: videos.ownerId,
+				ownerEmail: users.email,
+				bucket: videos.bucket,
+				storageIntegrationId: videos.storageIntegrationId,
+				rawFileKey: videoUploads.rawFileKey,
+				phase: videoUploads.phase,
+				processingMessage: videoUploads.processingMessage,
+			})
+			.from(importedVideos)
+			.leftJoin(
+				videos,
+				and(
+					eq(videos.id, importedVideos.id),
+					eq(videos.orgId, importedVideos.orgId),
+				),
+			)
+			.leftJoin(users, eq(users.id, videos.ownerId))
+			.leftJoin(videoUploads, eq(videoUploads.videoId, importedVideos.id))
+			.where(
+				and(
+					eq(importedVideos.orgId, request.organizationId),
+					eq(importedVideos.source, "loom"),
+					eq(importedVideos.sourceId, loomVideoId),
+				),
+			)
+			.limit(1);
+		if (existing) {
+			const existingRawFileKey =
+				existing.rawFileKey ??
+				(existing.phase === "error" && existing.ownerId
+					? `${existing.ownerId}/${existing.id}/raw-upload.mp4`
+					: null);
+			if (
+				!existing.ownerId ||
+				!existing.ownerEmail ||
+				normalizeImportEmail(existing.ownerEmail) !== normalizedEmail ||
+				!existingRawFileKey ||
+				(existing.phase !== "error" &&
+					(existing.phase !== "uploading" ||
+						existing.processingMessage !== "Uploading Loom video..."))
+			) {
+				throw new LoomMigrationError(
+					"This Loom video is already in the Cap import inventory.",
+				);
+			}
+			const retryUpload = await Storage.createUploadTargetForUser(
+				existing.ownerId,
+				existingRawFileKey,
+				{
+					contentType: "video/mp4",
+					videoTitle: normalizedTitle,
+					method: "put",
+					fields: { "x-amz-meta-userid": existing.ownerId },
+				},
+				request.organizationId,
+			).pipe(runPromise);
+			if (
+				Option.getOrNull(retryUpload.bucketId) !== existing.bucket ||
+				Option.getOrNull(retryUpload.storageIntegrationId) !==
+					existing.storageIntegrationId
+			) {
+				throw new LoomMigrationError(
+					"The Cap storage destination changed. Review this upload before retrying.",
+				);
+			}
+			const [mapped] = await db()
+				.select({ requestId: loomMigrationImports.requestId })
+				.from(loomMigrationImports)
+				.where(
+					eq(loomMigrationImports.videoId, Video.VideoId.make(existing.id)),
+				)
+				.limit(1);
+			if (mapped && mapped.requestId !== requestId) {
+				throw new LoomMigrationError(
+					"This Loom import belongs to another migration request.",
+				);
+			}
+			if (!mapped || !existing.rawFileKey) {
+				await db().transaction(async (tx) => {
+					const [reservation] = await tx
+						.select({
+							activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+							leaseToken: loomMigrationRequests.activeImportLeaseToken,
+							leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+						})
+						.from(loomMigrationRequests)
+						.where(eq(loomMigrationRequests.id, requestId))
+						.limit(1)
+						.for("update");
+					if (
+						!reservation?.activeOrganizationId ||
+						reservation.leaseToken !== leaseToken ||
+						!reservation.leaseUntil ||
+						reservation.leaseUntil <= new Date()
+					) {
+						throw new LoomMigrationError(
+							"The concierge import expired. Retry this video.",
+						);
+					}
+					if (!existing.rawFileKey) {
+						await tx
+							.update(videoUploads)
+							.set({ rawFileKey: existingRawFileKey, updatedAt: new Date() })
+							.where(
+								and(
+									eq(videoUploads.videoId, Video.VideoId.make(existing.id)),
+									eq(videoUploads.phase, "error"),
+									isNull(videoUploads.rawFileKey),
+								),
+							);
+					}
+					if (mapped) return;
+					await tx.insert(loomMigrationImports).values({
+						videoId: Video.VideoId.make(existing.id),
+						requestId,
+					});
+					await tx
+						.update(loomMigrationRequests)
+						.set({
+							queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+							updatedAt: new Date(),
+						})
+						.where(eq(loomMigrationRequests.id, requestId));
+				});
+			}
+			return {
+				videoId: Video.VideoId.make(existing.id),
+				uploadTarget: retryUpload.upload,
+			};
+		}
+		let member = await getOrganizationMemberByEmail(
+			request.organizationId,
+			normalizedEmail,
+		);
+		if (!member) {
+			const provisioned = await provisionOrganizationInvitee({
+				organizationId: request.organizationId,
+				email: normalizedEmail,
+				invitedByUserId: request.ownerId,
+				role: "member",
+			});
+			member = { userId: provisioned.userId, email: normalizedEmail };
+		}
+		const space = normalizedSpaceName
+			? await getOrCreateImportSpace({
+					orgId: request.organizationId,
+					createdById: request.ownerId,
+					name: normalizedSpaceName,
+					spaceCache: new Map(),
+				})
+			: null;
+		if (space) {
+			await addImportOwnerToSpace({ spaceId: space.id, userId: member.userId });
+		}
+		const videoId = Video.VideoId.make(nanoId());
+		const rawFileKey = `${member.userId}/${videoId}/raw-upload.mp4`;
+		const upload = await Storage.createUploadTargetForUser(
+			member.userId,
+			rawFileKey,
+			{
+				contentType: "video/mp4",
+				videoTitle: normalizedTitle,
+				method: "put",
+				fields: { "x-amz-meta-userid": member.userId },
+			},
+			request.organizationId,
+		).pipe(runPromise);
+		const isPublic = await getNewVideoPublic(request.organizationId);
+		await db().transaction(async (tx) => {
+			const [reservation] = await tx
+				.select({
+					activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+					leaseToken: loomMigrationRequests.activeImportLeaseToken,
+					leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+				})
+				.from(loomMigrationRequests)
+				.where(eq(loomMigrationRequests.id, requestId))
+				.limit(1)
+				.for("update");
+			if (
+				!reservation?.activeOrganizationId ||
+				reservation.leaseToken !== leaseToken ||
+				!reservation.leaseUntil ||
+				reservation.leaseUntil <= new Date()
+			) {
+				throw new LoomMigrationError(
+					"The concierge import expired. Retry this video.",
+				);
+			}
+			await tx.insert(videos).values({
+				id: videoId,
+				name: normalizedTitle,
+				ownerId: member.userId,
+				orgId: request.organizationId,
+				source: { type: "webMP4" as const },
+				bucket: Option.getOrNull(upload.bucketId),
+				storageIntegrationId: Option.getOrNull(upload.storageIntegrationId),
+				public: isPublic,
+			});
+			await tx.insert(videoUploads).values({
+				videoId,
+				mode: "singlepart",
+				phase: "uploading",
+				processingProgress: 0,
+				processingMessage: "Uploading Loom video...",
+				rawFileKey,
+			});
+			await tx.insert(importedVideos).values({
+				id: videoId,
+				orgId: request.organizationId,
+				source: "loom",
+				sourceId: loomVideoId,
+			});
+			await tx.insert(loomMigrationImports).values({ videoId, requestId });
+			await tx
+				.update(loomMigrationRequests)
+				.set({
+					queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+					updatedAt: new Date(),
+				})
+				.where(eq(loomMigrationRequests.id, requestId));
+			if (space) {
+				await tx.insert(spaceVideos).values({
+					id: nanoId(),
+					videoId,
+					spaceId: space.id,
+					addedById: request.ownerId,
+				});
+			}
+		});
+		revalidatePath("/dashboard/admin/loom-migrations");
+		return { videoId, uploadTarget: upload.upload };
+	} finally {
+		await releaseConciergeImport(requestId, leaseToken);
+	}
+}
+
+export async function finishConciergeLoomFileUpload(input: {
+	requestId: string;
+	videoId: Video.VideoId;
+}) {
+	return toLoomMigrationResult(() => startConciergeLoomFileProcessing(input));
+}
+
+async function startConciergeLoomFileProcessing({
+	requestId,
+	videoId,
+	expectedOwnerId,
+	maxBytes,
+}: {
+	requestId: string;
+	videoId: Video.VideoId;
+	expectedOwnerId?: User.UserId;
+	maxBytes?: number;
+}) {
+	const operator = await requireMigrationOperator();
+	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
+		throw new LoomMigrationError("Invalid migration request.");
+	}
+	const leaseToken = await reserveConciergeImport(requestId, operator.id);
+	try {
+		const [record] = await db()
+			.select({
+				video: videos,
+				loomVideoId: importedVideos.sourceId,
+				rawFileKey: videoUploads.rawFileKey,
+				phase: videoUploads.phase,
+				processingMessage: videoUploads.processingMessage,
+			})
+			.from(videos)
+			.innerJoin(
+				importedVideos,
+				and(
+					eq(importedVideos.id, videos.id),
+					eq(importedVideos.orgId, videos.orgId),
+				),
+			)
+			.innerJoin(videoUploads, eq(videoUploads.videoId, videos.id))
+			.innerJoin(
+				loomMigrationImports,
+				eq(loomMigrationImports.videoId, videos.id),
+			)
+			.innerJoin(
+				loomMigrationRequests,
+				and(
+					eq(loomMigrationRequests.id, loomMigrationImports.requestId),
+					eq(loomMigrationRequests.organizationId, importedVideos.orgId),
+				),
+			)
+			.where(
+				and(
+					eq(videos.id, videoId),
+					expectedOwnerId ? eq(videos.ownerId, expectedOwnerId) : undefined,
+					eq(loomMigrationRequests.id, requestId),
+					eq(importedVideos.source, "loom"),
+					isNotNull(loomMigrationRequests.activeOrganizationId),
+				),
+			)
+			.limit(1);
+		if (
+			!record ||
+			(expectedOwnerId && record.video.ownerId !== expectedOwnerId) ||
+			!record.rawFileKey ||
+			(record.phase !== "error" &&
+				(record.phase !== "uploading" ||
+					record.processingMessage !== "Uploading Loom video..."))
+		) {
+			throw new LoomMigrationError("This Loom upload is no longer available.");
+		}
+		const [bucket] = await Storage.getAccessForVideo(
+			decodeStorageVideo(record.video),
+		).pipe(runPromise);
+		const head = await bucket
+			.headObject(record.rawFileKey)
+			.pipe(
+				Effect.retry({
+					times: 3,
+					schedule: Schedule.exponential("100 millis"),
+				}),
+				runPromise,
+			)
+			.catch(() => {
+				throw new LoomMigrationError(
+					"The uploaded file was not found in storage. Upload it again.",
+				);
+			});
+		if ((head.ContentLength ?? 0) <= 0)
+			throw new LoomMigrationError("The uploaded file is empty.");
+		if (maxBytes !== undefined && (head.ContentLength ?? 0) > maxBytes) {
+			throw new LoomMigrationError("The uploaded Loom file exceeds 10 GB.");
+		}
+		const processingInput = {
+			videoId,
+			userId: record.video.ownerId,
+			rawFileKey: record.rawFileKey,
+			bucketId: record.video.bucket,
+			processingMessage: "Processing Loom video...",
+			startFailureMessage: "Loom file processing could not start.",
+		};
+		const status =
+			bucket.provider === "s3" &&
+			(head.ContentLength ?? 0) > LOOM_FILE_SINGLE_UPLOAD_MAX_BYTES
+				? await startLoomFileProcessingWorkflow({
+						...processingInput,
+						loomVideoId: record.loomVideoId,
+					})
+				: await startVideoProcessingWorkflow(processingInput);
+		revalidatePath("/dashboard/import/loom");
+		revalidatePath("/dashboard/admin/loom-migrations");
+		return { status };
+	} finally {
+		await releaseConciergeImport(requestId, leaseToken);
+	}
 }

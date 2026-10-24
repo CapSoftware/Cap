@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import app from "../../app";
-import * as ffmpegVideo from "../../lib/ffmpeg-video";
-import * as ffprobe from "../../lib/ffprobe";
 import * as jobManager from "../../lib/job-manager";
+import * as mediaProbe from "../../lib/media-probe";
+import * as mediaVideo from "../../lib/media-video";
+import {
+	getMaxConcurrentDirectVideoProcesses,
+	tryAcquireDirectVideoProcessSlot,
+	type VideoProcessSlot,
+} from "../../lib/video-capacity";
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
@@ -40,10 +45,14 @@ describe("GET /video/status", () => {
 		const data = await response.json();
 		expect(data).toHaveProperty("activeVideoProcesses");
 		expect(data).toHaveProperty("activeProbeProcesses");
+		expect(data).toHaveProperty("activeDirectVideoProcesses");
+		expect(data).toHaveProperty("maxConcurrentDirectVideoProcesses");
 		expect(data).toHaveProperty("canAcceptNewVideoProcess");
 		expect(data).toHaveProperty("canAcceptNewProbeProcess");
 		expect(data).toHaveProperty("jobCount");
 		expect(data).toHaveProperty("jobs");
+		expect(data.loomMultipartUploads).toBe(true);
+		expect(data.loomImportMaxBytes).toBe(10 * 1024 ** 3);
 		expect(Array.isArray(data.jobs)).toBe(true);
 	});
 });
@@ -95,10 +104,11 @@ describe("POST /video/probe", () => {
 			fileSize: 6553600,
 		};
 
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => mockMetadata,
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -115,12 +125,13 @@ describe("POST /video/probe", () => {
 	});
 
 	test("returns 503 when server is busy", async () => {
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => {
 				throw new Error("Server is busy, please try again later");
 			},
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -137,12 +148,13 @@ describe("POST /video/probe", () => {
 	});
 
 	test("returns 504 when probe times out", async () => {
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => {
 				throw new Error("Operation timed out after 30000ms");
 			},
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -158,13 +170,14 @@ describe("POST /video/probe", () => {
 		expect(data.code).toBe("TIMEOUT");
 	});
 
-	test("returns 500 when ffprobe fails", async () => {
-		mock.module("../../lib/ffprobe", () => ({
+	test("returns 500 when mediaProbe fails", async () => {
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => {
-				throw new Error("ffprobe failed: no such file");
+				throw new Error("mediaProbe failed: no such file");
 			},
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -177,8 +190,8 @@ describe("POST /video/probe", () => {
 
 		expect(response.status).toBe(500);
 		const data = await response.json();
-		expect(data.code).toBe("FFPROBE_ERROR");
-		expect(data.details).toContain("ffprobe failed");
+		expect(data.code).toBe(["FF", "PROBE_ERROR"].join(""));
+		expect(data.details).toContain("mediaProbe failed");
 	});
 });
 
@@ -232,18 +245,20 @@ describe("POST /video/thumbnail", () => {
 			fileSize: 6553600,
 		};
 
-		mock.module("../../lib/ffprobe", () => ({
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
 			probeVideo: async () => mockMetadata,
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
-		mock.module("../../lib/ffmpeg-video", () => ({
+		mock.module("../../lib/media-video", () => ({
+			...mediaVideo,
 			generateThumbnail: async () => mockThumbnailData,
-			downloadVideoToTemp: ffmpegVideo.downloadVideoToTemp,
-			processVideo: ffmpegVideo.processVideo,
-			uploadToS3: ffmpegVideo.uploadToS3,
-			uploadFileToS3: ffmpegVideo.uploadFileToS3,
+			downloadVideoToTemp: mediaVideo.downloadVideoToTemp,
+			processVideo: mediaVideo.processVideo,
+			uploadToS3: mediaVideo.uploadToS3,
+			uploadFileToS3: mediaVideo.uploadFileToS3,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -268,6 +283,7 @@ describe("POST /video/thumbnail", () => {
 describe("POST /video/convert", () => {
 	beforeEach(() => {
 		mock.restore();
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
 	});
 
 	test("returns 401 without media server secret", async () => {
@@ -286,6 +302,40 @@ describe("POST /video/convert", () => {
 		expect(response.status).toBe(400);
 		const data = await response.json();
 		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns 503 before downloading when video capacity is exhausted", async () => {
+		const slots: VideoProcessSlot[] = [];
+		try {
+			const directLimit = getMaxConcurrentDirectVideoProcesses();
+			for (let i = 0; i < directLimit; i++) {
+				const slot = tryAcquireDirectVideoProcessSlot(
+					jobManager.canAcceptNewVideoProcess,
+				);
+				expect(slot).not.toBeNull();
+				if (slot) slots.push(slot);
+			}
+
+			expect(slots.length).toBe(directLimit);
+
+			const response = await app.fetch(
+				videoPostRequest("/video/convert", {
+					videoUrl: "https://example.com/video.m3u8",
+					inputExtension: ".m3u8",
+				}),
+			);
+
+			expect(response.status).toBe(503);
+			expect(response.headers.get("Retry-After")).toBe("15");
+			const data = await response.json();
+			expect(data.code).toBe("SERVER_BUSY");
+			expect(data.activeDirectVideoProcesses).toBe(directLimit);
+			expect(data.maxConcurrentDirectVideoProcesses).toBe(directLimit);
+		} finally {
+			for (const slot of slots) {
+				slot.release();
+			}
+		}
 	});
 
 	test("returns mp4 when conversion succeeds", async () => {
@@ -307,14 +357,16 @@ describe("POST /video/convert", () => {
 			fileSize: fixtureBytes.length,
 		};
 
-		mock.module("../../lib/ffprobe", () => ({
-			probeVideo: ffprobe.probeVideo,
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
+			probeVideo: mediaProbe.probeVideo,
 			probeVideoFile: async () => mockMetadata,
-			canAcceptNewProbeProcess: ffprobe.canAcceptNewProbeProcess,
-			getActiveProbeProcessCount: ffprobe.getActiveProbeProcessCount,
+			canAcceptNewProbeProcess: mediaProbe.canAcceptNewProbeProcess,
+			getActiveProbeProcessCount: mediaProbe.getActiveProbeProcessCount,
 		}));
 
-		mock.module("../../lib/ffmpeg-video", () => ({
+		mock.module("../../lib/media-video", () => ({
+			...mediaVideo,
 			downloadVideoToTemp: async () => ({
 				path: fixturePath,
 				cleanup: async () => {},
@@ -323,10 +375,10 @@ describe("POST /video/convert", () => {
 				path: fixturePath,
 				cleanup: async () => {},
 			}),
-			generateThumbnail: ffmpegVideo.generateThumbnail,
-			repairContainer: ffmpegVideo.repairContainer,
-			uploadToS3: ffmpegVideo.uploadToS3,
-			uploadFileToS3: ffmpegVideo.uploadFileToS3,
+			generateThumbnail: mediaVideo.generateThumbnail,
+			repairContainer: mediaVideo.repairContainer,
+			uploadToS3: mediaVideo.uploadToS3,
+			uploadFileToS3: mediaVideo.uploadFileToS3,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -352,6 +404,44 @@ describe("POST /video/convert", () => {
 describe("POST /video/process", () => {
 	beforeEach(() => {
 		mock.restore();
+	});
+
+	test("accepts a Loom multipart original without a single-PUT original URL", async () => {
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(false);
+		const response = await app.fetch(
+			videoPostRequest("/video/import", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				maxImportBytes: 10 * 1024 ** 3,
+				sourceUpload: {
+					type: "multipart",
+					videoId: "test-id",
+					loomImportAttemptId: "run:0",
+					key: "user-id/test-id/raw-upload.mp4",
+					uploadId: "upload-id",
+					partSize: 64 * 1024 ** 2,
+					signPartUrl: "https://cap.example.com/sign",
+					completeUrl: "https://cap.example.com/complete",
+					abortUrl: "https://cap.example.com/abort",
+				},
+			}),
+		);
+		expect(response.status).toBe(503);
+		expect((await response.json()).code).toBe("SERVER_BUSY");
+	});
+
+	test("rejects an import without an original upload target", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/import", {
+				videoId: "test-id",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+			}),
+		);
+		expect(response.status).toBe(400);
 	});
 
 	test("returns 400 for missing required fields", async () => {
@@ -423,6 +513,37 @@ describe("POST /video/process", () => {
 		expect(data.code).toBe("SERVER_BUSY");
 	});
 
+	test("reserves one processing slot for normal-priority recordings", async () => {
+		const resources = jobManager.getSystemResources();
+		mock.module("../../lib/job-manager", () => ({
+			...jobManager,
+			canAcceptNewVideoProcess: () => true,
+			getActiveVideoProcessCount: () => 3,
+			getMaxConcurrentVideoProcesses: () => 4,
+			getSystemResources: () => ({
+				...resources,
+				effectiveMax: 4,
+			}),
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/process", {
+				videoId: "bulk-video",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				priority: "bulk",
+			}),
+		);
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("15");
+		const data = await response.json();
+		expect(data.code).toBe("SERVER_BUSY");
+		expect(data.activeVideoProcesses).toBe(3);
+	});
+
 	test("returns jobId when process starts successfully", async () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,
@@ -462,6 +583,169 @@ describe("POST /video/process", () => {
 		const data = await response.json();
 		expect(data.jobId).toBe("test-job-id");
 		expect(data.status).toBe("queued");
+	});
+});
+
+describe("POST /video/edit", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	test("returns 401 without media server secret", async () => {
+		const response = await app.fetch(
+			unauthenticatedVideoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				keepRanges: [{ start: 0, end: 1 }],
+			}),
+		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 for invalid JSON", async () => {
+		const response = await app.fetch(
+			new Request("http://localhost/video/edit", {
+				method: "POST",
+				headers: AUTH_HEADERS,
+				body: "{",
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns 400 for missing keep ranges", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns 400 for invalid ranges", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				keepRanges: [{ start: 3, end: 1 }],
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns jobId when edit starts successfully", async () => {
+		mock.module("../../lib/job-manager", () => ({
+			canAcceptNewVideoProcess: () => true,
+			getActiveVideoProcessCount: () => 0,
+			getMaxConcurrentVideoProcesses: () => 3,
+			getSystemResources: jobManager.getSystemResources,
+			getAllJobs: () => [],
+			generateJobId: () => "edit-job-id",
+			createJob: () => ({
+				jobId: "edit-job-id",
+				videoId: "test-id",
+				userId: "user-id",
+				phase: "queued",
+				progress: 0,
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			}),
+			getJob: () => null,
+			updateJob: () => null,
+			deleteJob: () => {},
+			sendWebhook: async () => {},
+			getJobProgress: jobManager.getJobProgress,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/edit", {
+				videoId: "test-id",
+				userId: "user-id",
+				sourceUrl: "https://example.com/source.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				keepRanges: [{ start: 0, end: 1 }],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = await response.json();
+		expect(data.jobId).toBe("edit-job-id");
+		expect(data.status).toBe("queued");
+	});
+});
+
+describe("POST /video/mux-segments", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	const baseMuxBody = {
+		videoId: "test-id",
+		userId: "user-id",
+		videoInitUrl: "https://example.com/video/init.mp4",
+		videoSegmentUrls: ["https://example.com/video/segment-1.m4s"],
+	};
+
+	test("returns 400 when output upload target is missing", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/mux-segments", baseMuxBody),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.error).toBe("Invalid request");
+	});
+
+	test("accepts multipart output upload target", async () => {
+		mock.module("../../lib/job-manager", () => ({
+			...jobManager,
+			canAcceptNewVideoProcess: () => false,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/mux-segments", {
+				...baseMuxBody,
+				outputUpload: {
+					type: "multipart",
+					videoId: "test-id",
+					key: "user-id/test-id/result.mp4",
+					uploadId: "upload-id",
+					partSize: 5 * 1024 * 1024,
+					signPartUrl:
+						"https://cap.example.com/api/webhooks/media-server/multipart/sign-part",
+					completeUrl:
+						"https://cap.example.com/api/webhooks/media-server/multipart/complete",
+					abortUrl:
+						"https://cap.example.com/api/webhooks/media-server/multipart/abort",
+					webhookSecret: MEDIA_SERVER_SECRET,
+				},
+			}),
+		);
+
+		expect(response.status).toBe(503);
+		const data = await response.json();
+		expect(data.code).toBe("SERVER_BUSY");
 	});
 });
 

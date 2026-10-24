@@ -1,6 +1,6 @@
 use super::core::{
     BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
-    wait_for_blocking_thread_finish,
+    frame_timing_log_threshold_ms, resolve_oop_thread_finish, wait_for_blocking_thread_finish,
 };
 use super::macos_frame_convert::{
     FramePool, ffmpeg_pixel_format_for_cap, fill_frame_from_sample_buf,
@@ -219,12 +219,10 @@ impl Muxer for OutOfProcessFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(state) = self.state.take()
-            && let Err(error) = finish_oop_encoder(state, timestamp)
-        {
-            return Ok(Err(error));
+        match self.state.take() {
+            Some(state) => finish_oop_encoder(state, timestamp),
+            None => Ok(Ok(())),
         }
-        Ok(Ok(()))
     }
 
     fn set_health_sender(&mut self, tx: HealthSender) {
@@ -233,7 +231,10 @@ impl Muxer for OutOfProcessFragmentedM4SMuxer {
     }
 }
 
-fn finish_oop_encoder(mut state: EncoderState, _timestamp: Duration) -> anyhow::Result<()> {
+fn finish_oop_encoder(
+    mut state: EncoderState,
+    _timestamp: Duration,
+) -> anyhow::Result<anyhow::Result<()>> {
     if let Err(error) = state.video_tx.send(None) {
         trace!("OOP encoder channel already closed during finish: {error}");
     }
@@ -246,11 +247,7 @@ fn finish_oop_encoder(mut state: EncoderState, _timestamp: Duration) -> anyhow::
         })
         .unwrap_or(BlockingThreadFinish::Clean);
 
-    match thread_result {
-        BlockingThreadFinish::Clean => Ok(()),
-        BlockingThreadFinish::Failed(error) => Err(error),
-        BlockingThreadFinish::TimedOut(error) => Err(error),
-    }
+    resolve_oop_thread_finish(thread_result)
 }
 
 impl OutOfProcessFragmentedM4SMuxer {
@@ -389,7 +386,7 @@ impl OutOfProcessFragmentedM4SMuxer {
                 let mut keyframe_emitted = false;
                 let mut encoder_rebuild_attempts: u32 = 0;
                 const MAX_ENCODER_REBUILD_ATTEMPTS: u32 = 1;
-                const SLOW_THRESHOLD_MS: u128 = 5;
+                let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
                     last_timestamp = Some(timestamp);
@@ -417,14 +414,14 @@ impl OutOfProcessFragmentedM4SMuxer {
                     let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
+                    if convert_elapsed_ms > slow_threshold_ms {
                         slow_convert_count += 1;
                         if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
                             debug!(
                                 elapsed_ms = convert_elapsed_ms,
                                 count = slow_convert_count,
                                 "OOP fill_frame_from_sample_buf exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
+                                slow_threshold_ms
                             );
                         }
                     }
@@ -446,14 +443,14 @@ impl OutOfProcessFragmentedM4SMuxer {
                                 },
                             );
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
-                            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                            if encode_elapsed_ms > slow_threshold_ms {
                                 slow_encode_count += 1;
                                 if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
                                     debug!(
                                         elapsed_ms = encode_elapsed_ms,
                                         count = slow_encode_count,
                                         "OOP encode_frame exceeded {}ms threshold",
-                                        SLOW_THRESHOLD_MS
+                                        slow_threshold_ms
                                     );
                                 }
                             }
@@ -542,16 +539,18 @@ impl OutOfProcessFragmentedM4SMuxer {
                     }
                 }
 
-                let subprocess_report = match subprocess.finish() {
-                    Ok(report) => Some(report),
-                    Err(e) => {
-                        warn!("OOP subprocess finish error: {e:#}");
-                        None
-                    }
-                };
+                let subprocess_result = subprocess.finish();
 
                 tracker.flush_pending_segments();
                 tracker.finalize(final_ts);
+
+                let subprocess_report = match subprocess_result {
+                    Ok(report) => Some(report),
+                    Err(error) => {
+                        warn!("OOP subprocess finish error: {error:#}");
+                        return Err(error.into());
+                    }
+                };
 
                 if total_frames > 0 {
                     debug!(

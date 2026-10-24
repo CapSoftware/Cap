@@ -1,13 +1,13 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
-import { Organisation } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faEnvelope,
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -15,11 +15,22 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Suspense, useEffect, useState } from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+	useTransition,
+} from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
 import { usePublicEnv } from "@/utils/public-env";
+import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
+import { getSafeNextPath } from "../safe-next";
+import { SsoErrorNotice } from "../sso-error-notice";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
@@ -34,19 +45,41 @@ export function LoginForm() {
 	const [loading, setLoading] = useState(false);
 	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
-	const [showOrgInput, setShowOrgInput] = useState(false);
-	const [organizationId, setOrganizationId] = useState("");
+	const [showOrgInput, setShowOrgInput] = useState(
+		Boolean(
+			searchParams?.get("organizationId") ||
+				searchParams?.get("connection_id") ||
+				searchParams?.get("error") === "SsoMissingProfileAttributes" ||
+				searchParams?.get("sso") === "1" ||
+				searchParams?.get("mobileProvider") === "workos",
+		),
+	);
+	const [ssoIdentifier, setSsoIdentifier] = useState("");
+	const [ssoLoading, startSsoTransition] = useTransition();
 	const [organizationName, setOrganizationName] = useState<string | null>(null);
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const mobileAppleSignInStarted = useRef(false);
+	const mobileGoogleSignInStarted = useRef(false);
+	const workosSignInStarted = useRef(false);
+	const workosSignInPending = useRef(false);
+	const loginFormMounted = useRef(false);
 	const theme = Cookies.get("theme") || "light";
+	const getNextPath = useCallback(
+		() => (next ? getSafeNextPath(next, window.location.origin) : null),
+		[next],
+	);
 
 	useEffect(() => {
-		theme === "dark"
-			? (document.body.className = "dark")
-			: (document.body.className = "light");
-		//remove the dark mode when we leave the dashboard
+		loginFormMounted.current = true;
+		return () => {
+			loginFormMounted.current = false;
+		};
+	}, []);
+
+	useEffect(() => {
+		document.body.className = theme === "dark" ? "dark" : "light";
 		return () => {
 			document.body.className = "light";
 		};
@@ -54,23 +87,40 @@ export function LoginForm() {
 
 	useEffect(() => {
 		const error = searchParams?.get("error");
-		const errorDesc = searchParams?.get("error_description");
 
 		const handleErrors = () => {
-			if (error === "OAuthAccountNotLinked" && !errorDesc) {
+			if (error === "OAuthAccountNotLinked") {
 				setOauthError(true);
 				return toast.error(
-					"This email is already associated with a different sign-in method",
+					"This email already has a Cap account. Sign in using your original sign-in method.",
 				);
-			} else if (
-				error === "profile_not_allowed_outside_organization" &&
-				!errorDesc
-			) {
+			} else if (error === "SsoMissingProfileAttributes") {
+				setShowOrgInput(true);
+				return;
+			} else if (error === "SignupBlocked") {
+				return;
+			} else if (error === "SsoSessionExpired") {
+				setShowOrgInput(true);
+				return toast.error(
+					"Your SSO sign-in session expired. Enter your work email or domain to start again.",
+				);
+			} else if (error === "SsoSignInFailed") {
+				setShowOrgInput(true);
+				return toast.error(
+					"SSO sign-in could not be completed. Start again with your work email or domain, or contact your organization's administrator.",
+				);
+			} else if (error === "profile_not_allowed_outside_organization") {
 				return toast.error(
 					"Your email domain is not authorized for SSO access. Please use your work email or contact your administrator.",
 				);
-			} else if (error && errorDesc) {
-				return toast.error(errorDesc);
+			} else if (error === "signin_consent_denied") {
+				return toast.error(
+					"SSO sign-in was canceled. Only continue if you recognize your organization's identity provider.",
+				);
+			} else if (error) {
+				return toast.error(
+					"Sign-in could not be completed. Please try again, or contact your organization's administrator if you use SSO.",
+				);
 			}
 		};
 		handleErrors();
@@ -104,38 +154,145 @@ export function LoginForm() {
 		}
 	}, [emailSent]);
 
-	const handleGoogleSignIn = () => {
+	const handleGoogleSignIn = useCallback(() => {
+		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "google",
 			is_signup: false,
 			auth_surface: "login",
 		});
 		signIn("google", {
-			...(next && next.length > 0 ? { callbackUrl: next } : {}),
+			...(nextPath ? { callbackUrl: nextPath } : {}),
+		}).catch((error) => {
+			captureException(error, {
+				tags: { auth_provider: "google", auth_surface: "login" },
+			});
+			toast.error(
+				"Could not start sign-in. Check your connection and try again.",
+			);
 		});
-	};
+	}, [getNextPath]);
 
-	const handleOrganizationLookup = async (e: React.FormEvent) => {
-		e.preventDefault();
-		if (!organizationId) {
-			toast.error("Please enter an organization ID");
+	const handleAppleSignIn = useCallback(() => {
+		const startAppleSignIn = () => {
+			const nextPath = getNextPath();
+			trackEvent("auth_started", {
+				method: "apple",
+				is_signup: false,
+				auth_surface: "login",
+			});
+			signIn("apple", {
+				...(nextPath ? { callbackUrl: nextPath } : {}),
+			}).catch((error) => {
+				captureException(error, {
+					tags: { auth_provider: "apple", auth_surface: "login" },
+				});
+				toast.error(
+					"Could not start sign-in. Check your connection and try again.",
+					{ action: { label: "Try again", onClick: startAppleSignIn } },
+				);
+			});
+		};
+		startAppleSignIn();
+	}, [getNextPath]);
+
+	const handleOidcSignIn = useCallback(() => {
+		const nextPath = getNextPath();
+		trackEvent("auth_started", {
+			method: "oidc",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		signIn("oidc", {
+			...(nextPath ? { callbackUrl: nextPath } : {}),
+		});
+	}, [getNextPath]);
+
+	const handleWorkosSignIn = useCallback(
+		(identifier: string, connectionId?: string) => {
+			if (workosSignInPending.current) return;
+			workosSignInPending.current = true;
+			setOrganizationName(null);
+
+			startSsoTransition(async () => {
+				try {
+					const data = await getOrganizationSSOData(
+						identifier,
+						connectionId,
+						getNextPath() ?? "/dashboard",
+					);
+					if (!loginFormMounted.current) return;
+					setOrganizationName(data.name);
+					trackEvent("auth_started", {
+						method: "workos",
+						is_signup: false,
+						auth_surface: "login",
+					});
+					await signIn(
+						"workos",
+						{ callbackUrl: getNextPath() ?? "/dashboard" },
+						{
+							connection: data.connectionId,
+						},
+					);
+				} catch {
+					if (!loginFormMounted.current) return;
+					setOrganizationName(null);
+					setSsoIdentifier(identifier);
+					setShowOrgInput(true);
+					toast.error(
+						"SSO is not available for this organization yet. Check your work email or domain, or contact your administrator.",
+					);
+				} finally {
+					workosSignInPending.current = false;
+				}
+			});
+		},
+		[getNextPath],
+	);
+
+	useEffect(() => {
+		if (searchParams?.get("mobileProvider") === "apple") {
+			if (mobileAppleSignInStarted.current) return;
+			mobileAppleSignInStarted.current = true;
+			handleAppleSignIn();
 			return;
 		}
 
-		try {
-			const data = await getOrganizationSSOData(
-				Organisation.OrganisationId.make(organizationId),
-			);
-			setOrganizationName(data.name);
-
-			signIn("workos", undefined, {
-				organization: data.organizationId,
-				connection: data.connectionId,
-			});
-		} catch (error) {
-			console.error("Lookup Error:", error);
-			toast.error("Organization not found or SSO not configured");
+		if (searchParams?.get("mobileProvider") === "google") {
+			if (mobileGoogleSignInStarted.current) return;
+			mobileGoogleSignInStarted.current = true;
+			handleGoogleSignIn();
+			return;
 		}
+
+		if (searchParams?.get("error")) return;
+		const organizationId = searchParams?.get("organizationId");
+		const connectionId = searchParams?.get("connection_id");
+		if (
+			searchParams?.get("mobileProvider") !== "workos" &&
+			!organizationId &&
+			!connectionId
+		) {
+			return;
+		}
+		setShowOrgInput(true);
+		if (!organizationId && !connectionId) return;
+		if (workosSignInStarted.current) return;
+		workosSignInStarted.current = true;
+		setSsoIdentifier(organizationId ?? "");
+		handleWorkosSignIn(organizationId ?? "", connectionId ?? undefined);
+	}, [handleAppleSignIn, handleGoogleSignIn, handleWorkosSignIn, searchParams]);
+
+	const handleOrganizationLookup = (e: React.FormEvent) => {
+		e.preventDefault();
+		const identifier = ssoIdentifier.trim();
+		if (!identifier) {
+			toast.error("Enter your work email or domain.");
+			return;
+		}
+
+		handleWorkosSignIn(identifier);
 	};
 
 	return (
@@ -147,7 +304,8 @@ export function LoginForm() {
 			}}
 			className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[432px] bg-gray-3 border border-gray-5 rounded-2xl"
 		>
-			<motion.div
+			<motion.button
+				type="button"
 				layout="position"
 				key="back-button"
 				initial={{ opacity: 0, display: "none" }}
@@ -157,13 +315,14 @@ export function LoginForm() {
 					transition: { duration: 0.1, delay: 0.2 },
 				}}
 				onClick={() => setShowOrgInput(false)}
+				disabled={ssoLoading}
 				className="absolute overflow-hidden top-5 rounded-full left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
 			>
 				<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
 				<motion.p layout="position" className="text-xs text-inherit">
 					Back
 				</motion.p>
-			</motion.div>
+			</motion.button>
 			<MotionLink layout="position" className="flex mx-auto size-fit" href="/">
 				<MotionLogoBadge layout="position" className="size-12" />
 			</MotionLink>
@@ -187,6 +346,7 @@ export function LoginForm() {
 				</motion.p>
 			</motion.div>
 			<motion.div layout="position" className="flex flex-col space-y-3">
+				<SsoErrorNotice error={searchParams?.get("error")} />
 				<Suspense
 					fallback={
 						<>
@@ -223,9 +383,10 @@ export function LoginForm() {
 									>
 										<LoginWithSSO
 											handleOrganizationLookup={handleOrganizationLookup}
-											organizationId={organizationId}
-											setOrganizationId={setOrganizationId}
+											identifier={ssoIdentifier}
+											setIdentifier={setSsoIdentifier}
 											organizationName={organizationName}
+											loading={ssoLoading}
 										/>
 									</motion.div>
 								) : (
@@ -248,73 +409,47 @@ export function LoginForm() {
 											ease: "easeInOut",
 											opacity: { delay: 0.05 },
 										}}
+										noValidate
 										onSubmit={async (e) => {
 											e.preventDefault();
-											if (!email) return;
 
-											// Check if we're rate limited on the client side
-											if (lastEmailSentTime) {
-												const timeSinceLastRequest =
-													Date.now() - lastEmailSentTime;
-												const waitTime = 30000; // 30 seconds
-												if (timeSinceLastRequest < waitTime) {
-													const remainingSeconds = Math.ceil(
-														(waitTime - timeSinceLastRequest) / 1000,
-													);
-													toast.error(
-														`Please wait ${remainingSeconds} seconds before requesting a new code`,
-													);
-													return;
-												}
+											const remainingSeconds =
+												getEmailCodeCooldownSeconds(lastEmailSentTime);
+											if (remainingSeconds > 0) {
+												toast.error(
+													`Please wait ${remainingSeconds} seconds before requesting a new code.`,
+												);
+												return;
 											}
 
 											setLoading(true);
-											trackEvent("auth_started", {
-												method: "email",
-												is_signup: false,
-												auth_surface: "login",
-											});
-											const normalizedEmail = email.trim().toLowerCase();
-											signIn("email", {
-												email: normalizedEmail,
-												redirect: false,
-												...(next && next.length > 0
-													? { callbackUrl: next }
-													: {}),
-											})
-												.then((res) => {
-													setLoading(false);
-
-													if (res?.ok && !res?.error) {
-														setEmailSent(true);
-														setLastEmailSentTime(Date.now());
-														trackEvent("auth_email_sent", {
-															method: "email",
-															is_signup: false,
-															auth_surface: "login",
-															email_domain: normalizedEmail.split("@")[1],
-														});
-														const params = new URLSearchParams({
-															email: normalizedEmail,
-															...(next && { next }),
-															lastSent: Date.now().toString(),
-														});
-														router.push(`/verify-otp?${params.toString()}`);
-													} else {
-														// NextAuth always returns "EmailSignin" for all email provider errors
-														// Since we already check rate limiting on the client side before sending,
-														// if we get an error here, it's likely rate limiting from the server
-														toast.error(
-															"Please wait 30 seconds before requesting a new code",
-														);
-													}
-												})
-												.catch((_error) => {
-													setEmailSent(false);
-													setLoading(false);
-													// Catch block is rarely triggered with NextAuth
-													toast.error("Error sending email - try again?");
+											try {
+												const nextPath = getNextPath();
+												const normalizedEmail = await requestEmailCode({
+													email,
+													next: nextPath,
+													isSignup: false,
+													authSurface: "login",
 												});
+												if (!normalizedEmail) return;
+
+												const sentAt = Date.now();
+												setEmailSent(true);
+												setLastEmailSentTime(sentAt);
+												const params = new URLSearchParams({
+													email: normalizedEmail,
+													...(nextPath && { next: nextPath }),
+													lastSent: sentAt.toString(),
+												});
+												router.push(`/verify-otp?${params.toString()}`);
+											} catch {
+												setEmailSent(false);
+												toast.error(
+													"Sign in is taking longer than expected. Check your connection or browser extensions, then try again.",
+												);
+											} finally {
+												setLoading(false);
+											}
 										}}
 										className="flex flex-col space-y-3"
 									>
@@ -326,6 +461,7 @@ export function LoginForm() {
 											loading={loading}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
+											handleOidcSignIn={handleOidcSignIn}
 										/>
 									</motion.form>
 								)}
@@ -363,34 +499,55 @@ export function LoginForm() {
 
 const LoginWithSSO = ({
 	handleOrganizationLookup,
-	organizationId,
-	setOrganizationId,
+	identifier,
+	setIdentifier,
 	organizationName,
+	loading,
 }: {
 	handleOrganizationLookup: (e: React.FormEvent) => void;
-	organizationId: string;
-	setOrganizationId: (organizationId: string) => void;
+	identifier: string;
+	setIdentifier: (identifier: string) => void;
 	organizationName: string | null;
+	loading: boolean;
 }) => {
+	const identifierInputId = useId();
+
 	return (
 		<motion.form
 			layout
 			onSubmit={handleOrganizationLookup}
 			className="relative space-y-2"
 		>
+			<label htmlFor={identifierInputId} className="text-sm text-gray-12">
+				Work email or domain
+			</label>
 			<MotionInput
-				id="organizationId"
-				placeholder="Enter your Organization ID..."
-				value={organizationId}
-				onChange={(e) => setOrganizationId(e.target.value)}
+				id={identifierInputId}
+				name="organization"
+				placeholder="you@company.com or company.com"
+				autoComplete="username"
+				autoCapitalize="none"
+				autoCorrect="off"
+				required
+				value={identifier}
+				disabled={loading}
+				onChange={(e) => setIdentifier(e.target.value)}
 				className="w-full max-w-full"
 			/>
-			{organizationName && (
-				<p className="text-sm text-gray-1">Signing in to: {organizationName}</p>
-			)}
+			<p className="text-xs leading-5 text-gray-10" aria-live="polite">
+				{organizationName
+					? `Signing in to ${organizationName}…`
+					: "Your organization must have SSO set up before you can continue."}
+			</p>
 			<div>
-				<Button type="submit" variant="dark" className="w-full max-w-full">
-					Continue with SSO
+				<Button
+					type="submit"
+					variant="dark"
+					className="w-full max-w-full"
+					disabled={loading}
+					spinner={loading}
+				>
+					{loading ? "Connecting to SSO…" : "Continue with SSO"}
 				</Button>
 			</div>
 		</motion.form>
@@ -405,6 +562,7 @@ const NormalLogin = ({
 	loading,
 	oauthError,
 	handleGoogleSignIn,
+	handleOidcSignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -413,14 +571,16 @@ const NormalLogin = ({
 	loading: boolean;
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
+	handleOidcSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
+	const emailInputId = useId();
 
 	return (
 		<motion.div>
 			<motion.div layout className="flex flex-col space-y-3">
 				<MotionInput
-					id="email"
+					id={emailInputId}
 					name="email"
 					autoFocus
 					type="email"
@@ -437,9 +597,14 @@ const NormalLogin = ({
 					variant="dark"
 					type="submit"
 					disabled={loading || emailSent}
-					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+					spinner={loading}
+					icon={
+						loading ? undefined : (
+							<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />
+						)
+					}
 				>
-					Login with email
+					{loading ? "Sending code..." : "Login with email"}
 				</MotionButton>
 				{/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
@@ -465,7 +630,9 @@ const NormalLogin = ({
 				</Link>
 			</motion.p>
 
-			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
+			{(publicEnv.googleAuthAvailable ||
+				publicEnv.workosAuthAvailable ||
+				publicEnv.oidcAuthAvailable) && (
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">
 						<span className="flex-1 h-px bg-gray-5" />
@@ -500,6 +667,19 @@ const NormalLogin = ({
 									email login. Please enter your email.
 								</p>
 							</div>
+						)}
+						{publicEnv.oidcAuthAvailable && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="w-full"
+								layout
+								onClick={handleOidcSignIn}
+								disabled={loading || emailSent}
+							>
+								<LucideArrowUpRight size={20} />
+								Login with {publicEnv.oidcName}
+							</MotionButton>
 						)}
 						{publicEnv.workosAuthAvailable && (
 							<MotionButton

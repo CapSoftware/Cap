@@ -40,8 +40,9 @@ describe("HipaaCompliantScreenRecordingPage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets hipaa-compliant-screen-recording keyword", () => {
@@ -56,6 +57,13 @@ describe("HipaaCompliantScreenRecordingPage component content", () => {
 
 	it("includes comparison table", () => {
 		expect(componentSource).toContain("comparisonTable");
+	});
+
+	it("describes the license split in the comparison table", () => {
+		expect(componentSource).toContain(
+			'{ text: "Yes — AGPLv3 and MIT crates", status: "positive" }',
+		);
+		expect(componentSource).not.toContain('{ text: "Yes — MIT"');
 	});
 
 	it("includes recording modes section", () => {
@@ -106,7 +114,8 @@ describe("HipaaCompliantScreenRecordingPage FAQ schema", () => {
 		{
 			question:
 				"Is Cap open source and auditable for HIPAA vendor assessments?",
-			answer: "Yes. Cap is MIT-licensed and fully open source on GitHub.",
+			answer:
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. The source is available on GitHub.",
 		},
 		{
 			question: "Can I disable AI transcription in Cap for HIPAA compliance?",

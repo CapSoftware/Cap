@@ -1,26 +1,14 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { spawn } from "bun";
 import {
 	checkHasAudioTrack,
 	extractAudio,
 	extractAudioStream,
 	getActiveProcessCount,
-} from "../../lib/ffmpeg";
+} from "../../lib/media-audio";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
-
-async function countFFmpegProcesses(): Promise<number> {
-	const proc = spawn({
-		cmd: ["pgrep", "-f", "ffmpeg"],
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const output = await new Response(proc.stdout).text();
-	await proc.exited;
-	return output.trim().split("\n").filter(Boolean).length;
-}
 
 async function getProcessMemoryMB(): Promise<number> {
 	return process.memoryUsage().heapUsed / 1024 / 1024;
@@ -41,12 +29,6 @@ async function waitForProcessCleanup(
 }
 
 describe("memory and resource leak tests", () => {
-	let _initialFFmpegCount: number;
-
-	beforeAll(async () => {
-		_initialFFmpegCount = await countFFmpegProcesses();
-	});
-
 	afterAll(async () => {
 		await new Promise((r) => setTimeout(r, 1000));
 	});
@@ -228,9 +210,7 @@ describe("memory and resource leak tests", () => {
 							cleanup();
 						}
 					}
-				} catch {
-					// Server busy errors expected when hitting concurrency limit
-				}
+				} catch {}
 			});
 
 			await Promise.all(promises);
@@ -240,10 +220,9 @@ describe("memory and resource leak tests", () => {
 		});
 	});
 
-	describe("no orphaned ffmpeg processes", () => {
-		test("ffmpeg process count returns to baseline after operations", async () => {
-			const baselineCount = await countFFmpegProcesses();
-
+	describe("operation cleanup", () => {
+		test("active operation count returns to baseline after operations", async () => {
+			const baselineCount = getActiveProcessCount();
 			await checkHasAudioTrack(TEST_VIDEO_WITH_AUDIO);
 			await extractAudio(TEST_VIDEO_WITH_AUDIO);
 
@@ -253,10 +232,7 @@ describe("memory and resource leak tests", () => {
 
 			await new Promise((r) => setTimeout(r, 3000));
 
-			const finalCount = await countFFmpegProcesses();
-
-			const processGrowth = finalCount - baselineCount;
-			expect(processGrowth).toBeLessThanOrEqual(2);
+			expect(getActiveProcessCount()).toBe(baselineCount);
 		});
 	});
 });

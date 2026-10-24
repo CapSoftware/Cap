@@ -7,12 +7,18 @@ import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon, InfoIcon } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import CommentStamp from "./CommentStamp";
+import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
+import { bindCaptionTrackCueText } from "./caption-tracks";
+import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -20,17 +26,17 @@ import {
 	probeAvcLevelFromUrl,
 } from "./mp4-level-patch";
 import {
-	canRetryFailedProcessing,
-	getUploadFailureMessage,
-	shouldDeferPlaybackSource,
-	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
-import {
 	type ResolvedPlaybackSource,
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	type UploadProgress,
+} from "./upload-progress";
 import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -42,6 +48,7 @@ import {
 	MediaPlayerLoading,
 	MediaPlayerPiP,
 	MediaPlayerPlay,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerSeek,
 	MediaPlayerSeekBackward,
 	MediaPlayerSeekForward,
@@ -54,7 +61,18 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
 import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
 
+// Mounted only mid-upload; its RPC client drags the Effect runtime along, so
+// keeping it behind a dynamic import keeps that chunk off finished videos.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
+
 const { circumference } = getProgressCircleConfig();
+
+// Stable defaults: a `= []` in the destructuring mints a new array identity
+// every render, which re-runs every hook/memo that lists the prop as a dep.
+const NO_COMMENTS: NonNullable<Props["comments"]> = [];
+const NO_CAPTIONS: CaptionOption[] = [];
 
 function getProgressStatusText(
 	status: "uploading" | "processing" | "generating_thumbnail",
@@ -78,18 +96,31 @@ interface CaptionOption {
 
 interface Props {
 	videoSrc: string;
+	initialPlaybackUrl?: Promise<string | null>;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
 	disableCaptions?: boolean;
+	captionsInitiallyOff?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
+	blockPlaybackDuringProcessing?: boolean;
 	disableCommentStamps?: boolean;
 	disableReactionStamps?: boolean;
+	disablePreviewGif?: boolean;
+	disablePlaybackSpeedDial?: boolean;
+	/** The share page's timeline deck owns scrubbing while visible. */
+	externalTimeline?: boolean;
+	/**
+	 * With `externalTimeline`, the deck row the control bar renders into via a
+	 * portal. Context crosses portals, so the bar keeps its player store; the
+	 * timeline strip replaces the seek slider, everything else comes along.
+	 */
+	controlsPortalEl?: HTMLElement | null;
 	comments?: Array<{
 		id: string;
 		timestamp: number | null;
@@ -107,45 +138,64 @@ interface Props {
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
 	duration?: number | null;
+	defaultPlaybackSpeed?: number;
 	showPlaybackStatusBadge?: boolean;
+	showFloatingVolumeControl?: boolean;
+	onUploadComplete?: () => void;
+	callToAction?: ShareCallToAction | null;
 }
 
 export function CapVideoPlayer({
 	videoSrc,
+	initialPlaybackUrl,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
 	captionsSrc,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
-	comments = [],
+	blockPlaybackDuringProcessing = false,
+	comments = NO_COMMENTS,
 	disableCommentStamps = false,
 	disableReactionStamps = false,
+	disablePreviewGif = false,
+	disablePlaybackSpeedDial = false,
+	externalTimeline = false,
+	controlsPortalEl = null,
 	onSeek,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
 	onCaptionLanguageChange,
-	availableCaptions = [],
+	availableCaptions = NO_CAPTIONS,
 	isCaptionLoading = false,
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
+	defaultPlaybackSpeed,
 	showPlaybackStatusBadge = false,
+	showFloatingVolumeControl = false,
+	onUploadComplete,
+	callToAction = null,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
 	const [hasError, setHasError] = useState(false);
+	const [
+		isRefreshingInitialPlaybackSource,
+		setIsRefreshingInitialPlaybackSource,
+	] = useState(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
@@ -154,6 +204,16 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
+	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
+		undefined,
+	);
+	const hasRetriedInitialPlaybackSource = useRef(false);
+	const initialPlaybackSourceRetryPending = useRef(false);
+	const playbackToRestore = useRef<{
+		sourceUrl: string;
+		time: number;
+		wasPlaying: boolean;
+	} | null>(null);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -166,11 +226,25 @@ export function CapVideoPlayer({
 		return () => window.removeEventListener("resize", checkMobile);
 	}, []);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
-	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
+	// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+	// idle, "fetching" from the first enabled render. The hook itself now lives
+	// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+	const trackUploadProgress = hasActiveUpload || false;
+	const [uploadProgressRaw, setUploadProgressRaw] =
+		useState<UploadProgress | null>(
+			trackUploadProgress ? { status: "fetching" } : null,
+		);
+	useEffect(() => {
+		// Both directions of an enable/disable flip mirror the old inline hook:
+		// tracking starting mid-session reads "fetching" immediately (the lazy
+		// tracker hasn't mounted yet), and stopping reads null.
+		setUploadProgressRaw(trackUploadProgress ? { status: "fetching" } : null);
+	}, [trackUploadProgress]);
+	const uploadProgress = blockPlaybackDuringProcessing
+		? uploadProgressRaw
+		: videoLoaded
+			? null
+			: uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isProcessing = uploadProgress?.status === "processing";
 	const isGeneratingThumbnail =
@@ -189,13 +263,22 @@ export function CapVideoPlayer({
 		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
-			: () =>
-					resolvePlaybackSource({
+			: async () => {
+					const useInitialUrl =
+						preferredSource === "mp4" &&
+						initialPlaybackUrl !== initialPlaybackUrlUsed.current;
+					if (useInitialUrl)
+						initialPlaybackUrlUsed.current = initialPlaybackUrl;
+					return resolvePlaybackSource({
 						videoSrc,
+						initialUrl: useInitialUrl
+							? await resolveInitialPlaybackUrl(initialPlaybackUrl)
+							: undefined,
 						rawFallbackSrc,
 						enableCrossOrigin,
 						preferredSource,
-					}),
+					});
+				},
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
@@ -209,6 +292,10 @@ export function CapVideoPlayer({
 		setShowPlayButton(false);
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
+		hasRetriedInitialPlaybackSource.current = false;
+		initialPlaybackSourceRetryPending.current = false;
+		playbackToRestore.current = null;
+		setIsRefreshingInitialPlaybackSource(false);
 	}, [videoSrc, rawFallbackSrc]);
 
 	useEffect(() => {
@@ -346,10 +433,28 @@ export function CapVideoPlayer({
 	]);
 
 	useEffect(() => {
+		if (!captionsSrc) {
+			setCurrentCue("");
+		}
+	}, [captionsSrc]);
+
+	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				const restore = playbackToRestore.current;
+				if (
+					restore &&
+					resolvedSrc.data?.url !== restore.sourceUrl &&
+					!video.seeking &&
+					Math.abs(video.currentTime - restore.time) < 0.25
+				) {
+					finishPlaybackSourceRestore();
+				}
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -358,6 +463,10 @@ export function CapVideoPlayer({
 		};
 
 		const handleCanPlay = () => {
+			if (isRefreshingInitialPlaybackSource) {
+				handleLoadedData();
+				return;
+			}
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
@@ -370,6 +479,45 @@ export function CapVideoPlayer({
 		};
 
 		const handleError = () => {
+			if (initialPlaybackSourceRetryPending.current) return;
+			if (
+				!rawFallbackSrc &&
+				resolvedSrc.data?.fromInitialUrl &&
+				!hasRetriedInitialPlaybackSource.current
+			) {
+				hasRetriedInitialPlaybackSource.current = true;
+				initialPlaybackSourceRetryPending.current = true;
+				playbackToRestore.current = {
+					sourceUrl: resolvedSrc.data.url,
+					time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+					wasPlaying: !video.paused && !video.ended,
+				};
+				setIsRefreshingInitialPlaybackSource(true);
+				setVideoLoaded(false);
+				setHasError(false);
+				setShowPlayButton(false);
+				void resolvedSrc
+					.refetch()
+					.then((result) => {
+						if (
+							!result.data ||
+							result.data.url === playbackToRestore.current?.sourceUrl
+						) {
+							playbackToRestore.current = null;
+							setIsRefreshingInitialPlaybackSource(false);
+							setHasError(true);
+						}
+					})
+					.catch(() => {
+						playbackToRestore.current = null;
+						setIsRefreshingInitialPlaybackSource(false);
+						setHasError(true);
+					})
+					.finally(() => {
+						initialPlaybackSourceRetryPending.current = false;
+					});
+				return;
+			}
 			if (
 				shouldFallbackToRawPlaybackSource(
 					resolvedSrc.data?.type,
@@ -385,70 +533,70 @@ export function CapVideoPlayer({
 				return;
 			}
 
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
 			setHasError(true);
 		};
 
-		// Caption track setup
-		let captionTrack: TextTrack | null = null;
-
-		const handleCueChange = (): void => {
-			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
-				const cue = captionTrack.activeCues[0] as VTTCue;
-				const plainText = cue.text.replace(/<[^>]*>/g, "");
-				setCurrentCue(plainText);
-			} else {
-				setCurrentCue("");
-			}
-		};
-
-		const setupTracks = (): void => {
-			const tracks = Array.from(video.textTracks);
-
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					captionTrack = track;
-					track.mode = "hidden";
-					track.addEventListener("cuechange", handleCueChange);
-					break;
-				}
-			}
-		};
-
-		// Ensure all caption tracks remain hidden
-		const ensureTracksHidden = (): void => {
-			const tracks = Array.from(video.textTracks);
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
+		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
+		const finishPlaybackSourceRestore = () => {
+			const restore = playbackToRestore.current;
+			if (!restore) return;
+			playbackToRestore.current = null;
+			setIsRefreshingInitialPlaybackSource(false);
+			setVideoLoaded(true);
+			setHasError(false);
+			if (restore.wasPlaying) void video.play().catch(() => undefined);
 		};
 
 		const handleLoadedMetadataWithTracks = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				const duration = video.duration;
+				const time = Number.isFinite(duration)
+					? Math.min(restore.time, Math.max(0, duration - 0.1))
+					: restore.time;
+				restore.time = time;
+				if (time > 0) {
+					try {
+						video.currentTime = time;
+						return;
+					} catch {
+						finishPlaybackSourceRestore();
+						return;
+					}
+				}
+				finishPlaybackSourceRestore();
+				return;
+			}
+			if (isRefreshingInitialPlaybackSource) return;
 			setVideoLoaded(true);
 			setHasError(false);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
-			setupTracks();
 		};
-
-		const handleTrackChange = () => {
-			ensureTracksHidden();
-			setupTracks();
+		const handleSeeked = () => {
+			const restore = playbackToRestore.current;
+			if (
+				isRefreshingInitialPlaybackSource &&
+				restore &&
+				resolvedSrc.data?.url !== restore.sourceUrl
+			) {
+				finishPlaybackSourceRestore();
+			}
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
+		video.addEventListener("seeked", handleSeeked);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
-
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -459,30 +607,47 @@ export function CapVideoPlayer({
 			video.removeEventListener("canplay", handleCanPlay);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
+			video.removeEventListener("seeked", handleSeeked);
 			video.removeEventListener(
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
 			);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (captionTrack) {
-				captionTrack.removeEventListener("cuechange", handleCueChange);
-			}
+			cleanupCaptionTracks();
 		};
 	}, [
 		hasPlayedOnce,
 		hasTriedRawFallback,
+		isRefreshingInitialPlaybackSource,
 		rawFallbackSrc,
+		resolvedSrc.data?.fromInitialUrl,
 		resolvedSrc.data?.type,
+		resolvedSrc.data?.url,
+		resolvedSrc.refetch,
 		resolvedSrc.isPending,
 		videoRef.current,
 	]);
 
+	// The seek tooltip asks for a thumbnail on every render while the pointer is
+	// over the bar (per animation frame). The capture snapshots the *displayed*
+	// frame, so re-encoding is pure waste until the video has actually moved;
+	// caching by currentTime (with a small tolerance while playing) bounds the
+	// canvas + JPEG work to a few captures per second at most.
+	const thumbnailCacheRef = useRef<{ time: number; url: string } | null>(null);
 	const generateVideoFrameThumbnail = useCallback(
-		(_time: number): string | undefined =>
-			captureVideoFrameDataUrl({ video: videoRef.current }),
-		[videoRef.current],
+		(_time: number): string | undefined => {
+			const video = videoRef.current;
+			if (!video) return undefined;
+			const cached = thumbnailCacheRef.current;
+			if (cached && Math.abs(cached.time - video.currentTime) < 0.25) {
+				return cached.url;
+			}
+			const url = captureVideoFrameDataUrl({ video });
+			if (url) {
+				thumbnailCacheRef.current = { time: video.currentTime, url };
+			}
+			return url;
+		},
+		[videoRef],
 	);
 
 	const isUploadFailed = uploadProgress?.status === "failed";
@@ -524,15 +689,16 @@ export function CapVideoPlayer({
 		}
 	}, [canRetryUploadProcessing, isRetryingProcessing, queryClient, videoId]);
 
-	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	const prevUploadProgress =
+		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
-				uploadProgress,
-				videoLoaded,
+				uploadProgressRaw,
 			)
 		) {
+			setVideoLoaded(false);
 			setHasError(false);
 			void queryClient.invalidateQueries({
 				queryKey: [
@@ -543,16 +709,35 @@ export function CapVideoPlayer({
 					preferredSource,
 				],
 			});
+			onUploadComplete?.();
 		}
-		prevUploadProgress.current = uploadProgress;
+		prevUploadProgress.current = uploadProgressRaw;
 	}, [
 		enableCrossOrigin,
+		onUploadComplete,
 		preferredSource,
 		queryClient,
 		rawFallbackSrc,
-		uploadProgress,
-		videoLoaded,
+		uploadProgressRaw,
 		videoSrc,
+	]);
+
+	const editRecoveryRefreshTriggeredRef = useRef(false);
+	useEffect(() => {
+		if (
+			!blockPlaybackDuringProcessing ||
+			uploadProgressRaw?.status !== "error" ||
+			editRecoveryRefreshTriggeredRef.current
+		) {
+			return;
+		}
+
+		editRecoveryRefreshTriggeredRef.current = true;
+		onUploadComplete?.();
+	}, [
+		blockPlaybackDuringProcessing,
+		onUploadComplete,
+		uploadProgressRaw?.status,
 	]);
 
 	const showPreparingOverlay =
@@ -573,7 +758,8 @@ export function CapVideoPlayer({
 			? "The processed version is unavailable right now, so this page is playing the original uploaded file instead."
 			: "This page is temporarily playing the original uploaded file while Cap finishes processing the optimized version for smoother playback and broader compatibility.";
 	const blockPlaybackControls =
-		(!videoLoaded && hasActiveProgress) || showUploadFailureOverlay;
+		((blockPlaybackDuringProcessing || !videoLoaded) && hasActiveProgress) ||
+		showUploadFailureOverlay;
 
 	return (
 		<MediaPlayer
@@ -587,6 +773,12 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			{trackUploadProgress && (
+				<UploadProgressTracker
+					videoId={videoId}
+					onChange={setUploadProgressRaw}
+				/>
+			)}
 			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
@@ -648,7 +840,15 @@ export function CapVideoPlayer({
 			)}
 			<VideoPreviewGif
 				videoId={videoId}
+				preload={
+					!disablePreviewGif &&
+					!hasActiveUpload &&
+					!hasPlayedOnce &&
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError
+				}
 				visible={
+					!disablePreviewGif &&
 					videoLoaded &&
 					!hasPlayedOnce &&
 					!showUploadFailureOverlay &&
@@ -661,7 +861,7 @@ export function CapVideoPlayer({
 					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
-						setVideoLoaded(true);
+						if (!isRefreshingInitialPlaybackSource) setVideoLoaded(true);
 					}}
 					onPlay={() => {
 						setShowPlayButton(false);
@@ -676,72 +876,88 @@ export function CapVideoPlayer({
 					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 					{captionsSrc && (
 						<track
-							label="English"
+							key={captionsSrc}
+							label={
+								availableCaptions.find(
+									(caption) => caption.code === captionLanguage,
+								)?.name ?? "Original"
+							}
 							kind="captions"
-							srcLang="en"
+							srcLang={
+								captionLanguage &&
+								captionLanguage !== "original" &&
+								captionLanguage !== "off"
+									? captionLanguage
+									: "en"
+							}
 							src={captionsSrc}
 						/>
 					)}
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
-				{!videoLoaded && hasActiveProgress && !showUploadFailureOverlay && (
-					<>
-						<motion.div
-							initial={{ opacity: 0 }}
-							animate={{ opacity: 1 }}
-							exit={{ opacity: 0 }}
-							transition={{ duration: 0.2 }}
-							className="absolute inset-0 z-10 transition-all duration-300 bg-black/60 rounded-xl"
-						/>
-						<motion.div
-							initial={{ opacity: 0, y: 10 }}
-							animate={{ opacity: 1, y: 0 }}
-							exit={{ opacity: 0, y: 10 }}
-							transition={{ duration: 0.2 }}
-							className="flex absolute bottom-3 left-3 gap-2 items-center z-20"
-						>
-							<span className="text-sm font-semibold text-white">
-								{getProgressStatusText(
-									isProcessing
-										? "processing"
-										: isGeneratingThumbnail
-											? "generating_thumbnail"
-											: "uploading",
-								)}
-								{uploadProgress?.progress != null &&
-									uploadProgress.progress > 0 &&
-									` ${Math.round(uploadProgress.progress)}%`}
-							</span>
-							<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
-								<title>Progress</title>
-								<circle
-									cx="10"
-									cy="10"
-									r="8"
-									stroke="currentColor"
-									strokeWidth="3"
-									fill="none"
-									className="text-white/30"
-								/>
-								<circle
-									cx="10"
-									cy="10"
-									r="8"
-									stroke="currentColor"
-									strokeWidth="3"
-									fill="none"
-									strokeLinecap="round"
-									className="text-white transition-all duration-200 ease-out"
-									style={{
-										strokeDasharray: `${circumference} ${circumference}`,
-										strokeDashoffset: `${calculateStrokeDashoffset(uploadProgress?.progress ?? 0, circumference)}`,
-									}}
-								/>
-							</svg>
-						</motion.div>
-					</>
-				)}
+				{(blockPlaybackDuringProcessing || !videoLoaded) &&
+					hasActiveProgress &&
+					!showUploadFailureOverlay && (
+						<>
+							<motion.div
+								initial={{ opacity: 0 }}
+								animate={{ opacity: 1 }}
+								exit={{ opacity: 0 }}
+								transition={{ duration: 0.2 }}
+								className="absolute inset-0 z-10 transition-all duration-300 bg-black/60 rounded-xl"
+							/>
+							<motion.div
+								initial={{ opacity: 0, y: 10 }}
+								animate={{ opacity: 1, y: 0 }}
+								exit={{ opacity: 0, y: 10 }}
+								transition={{ duration: 0.2 }}
+								className="flex absolute bottom-3 left-3 gap-2 items-center z-20"
+							>
+								<span className="text-sm font-semibold text-white">
+									{getProgressStatusText(
+										isProcessing
+											? "processing"
+											: isGeneratingThumbnail
+												? "generating_thumbnail"
+												: "uploading",
+									)}
+									{uploadProgress?.progress != null &&
+										uploadProgress.progress > 0 &&
+										` ${Math.round(uploadProgress.progress)}%`}
+								</span>
+								<svg
+									className="w-4 h-4 transform -rotate-90"
+									viewBox="0 0 20 20"
+								>
+									<title>Progress</title>
+									<circle
+										cx="10"
+										cy="10"
+										r="8"
+										stroke="currentColor"
+										strokeWidth="3"
+										fill="none"
+										className="text-white/30"
+									/>
+									<circle
+										cx="10"
+										cy="10"
+										r="8"
+										stroke="currentColor"
+										strokeWidth="3"
+										fill="none"
+										strokeLinecap="round"
+										className="text-white transition-all duration-200 ease-out"
+										style={{
+											strokeDasharray: `${circumference} ${circumference}`,
+											strokeDashoffset: `${calculateStrokeDashoffset(uploadProgress?.progress ?? 0, circumference)}`,
+										}}
+									/>
+								</svg>
+							</motion.div>
+						</>
+					)}
 				{showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
@@ -764,6 +980,18 @@ export function CapVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
+			{resolvedSrc.data &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError &&
+				!disablePlaybackSpeedDial && (
+					<MediaPlayerPlaybackSpeedDial
+						defaultSpeed={defaultPlaybackSpeed}
+						fallbackDuration={playerDuration}
+						show={showPlayButton && !hasPlayedOnce}
+					/>
+				)}
 			{currentCue && toggleCaptions && (
 				<div
 					className={clsx(
@@ -779,9 +1007,29 @@ export function CapVideoPlayer({
 			)}
 			<MediaPlayerLoading />
 			{!isUploading &&
+				!isRefreshingInitialPlaybackSource &&
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
+			{callToAction &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<CallToActionOverlay
+						cta={callToAction}
+						videoId={videoId}
+						controlsDocked={externalTimeline && controlsPortalEl !== null}
+					/>
+				)}
+			{showFloatingVolumeControl &&
+				videoLoaded &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<div className="absolute bottom-3 left-3 z-50 rounded-full bg-black/45 p-1 text-white shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-md">
+						<MediaPlayerVolume expandable />
+					</div>
+				)}
 
 			{mainControlsVisible &&
 				markersReady &&
@@ -815,60 +1063,92 @@ export function CapVideoPlayer({
 					});
 				})()}
 
-			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
-				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={blockPlaybackControls}
-			>
-				<MediaPlayerControlsOverlay className="rounded-b-xl" />
-				<MediaPlayerSeek
-					fallbackDuration={playerDuration}
-					tooltipThumbnailSrc={
-						isMobile || !resolvedSrc.data?.supportsCrossOrigin
-							? undefined
-							: generateVideoFrameThumbnail
-					}
-				/>
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
-						<MediaPlayerVolume
-							expandable
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// enhancedAudioMuted={enhancedAudioMuted}
-							// setEnhancedAudioMuted={setEnhancedAudioMuted}
-						/>
-						<MediaPlayerTime fallbackDuration={playerDuration} />
-					</div>
-					<div className="flex gap-2 items-center">
-						{!disableCaptions && (
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
+			{(() => {
+				// Docked: the bar renders into the timeline deck's slot through a
+				// portal. Same tree, same store; only where it paints changes. The
+				// overrides pin it visible and static (twMerge drops the base
+				// absolute/opacity-0/auto-hide classes).
+				const docked = externalTimeline && controlsPortalEl !== null;
+				const controls = (
+					<MediaPlayerControls
+						// Docked, the bar sits on the timeline card's white row instead
+						// of on the video, so it drops its `dark` scope and the controls
+						// resolve to dark-on-light off the same gray scale.
+						tone={docked ? "light" : "dark"}
+						className={clsx(
+							docked
+								? "relative h-full flex-row items-center gap-2 opacity-100 pointer-events-auto"
+								: "flex-col items-start gap-2.5",
+							!docked && showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+						)}
+						mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
+						isUploadingOrFailed={blockPlaybackControls}
+					>
+						{!docked && <MediaPlayerControlsOverlay className="rounded-b-xl" />}
+						{!externalTimeline && (
+							<MediaPlayerSeek
+								fallbackDuration={playerDuration}
+								tooltipThumbnailSrc={
+									isMobile || !resolvedSrc.data?.supportsCrossOrigin
+										? undefined
+										: generateVideoFrameThumbnail
+								}
 							/>
 						)}
-						{/* <MediaPlayerEnhancedAudio
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/> */}
-						<MediaPlayerSettings
-							// enhancedAudioStatus={enhancedAudioStatus}
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-							captionLanguage={captionLanguage}
-							onCaptionLanguageChange={onCaptionLanguageChange}
-							availableCaptions={availableCaptions}
-							isCaptionLoading={isCaptionLoading}
-							hasCaptions={hasCaptions}
-						/>
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
-					</div>
-				</div>
-			</MediaPlayerControls>
+						<div className="flex gap-2 items-center w-full">
+							<div className="flex flex-1 gap-2 items-center">
+								<MediaPlayerPlay />
+								<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+								<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+								<MediaPlayerVolume
+									expandable
+									// Docked, the bar shares a phone-width row with the deck's
+									// zoom cluster; volume and PiP are the two controls a phone
+									// can live without (hardware rocker, and PiP is barely
+									// supported in mobile browsers).
+									className={docked ? "max-sm:hidden" : undefined}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// enhancedAudioMuted={enhancedAudioMuted}
+									// setEnhancedAudioMuted={setEnhancedAudioMuted}
+								/>
+								{(!externalTimeline || docked) && (
+									<MediaPlayerTime fallbackDuration={playerDuration} />
+								)}
+							</div>
+							<div className="flex gap-2 items-center">
+								{!disableCaptions && (
+									<MediaPlayerCaptions
+										setToggleCaptions={setToggleCaptions}
+										toggleCaptions={toggleCaptions}
+									/>
+								)}
+								{/* <MediaPlayerEnhancedAudio
+									enhancedAudioStatus={enhancedAudioStatus}
+									enhancedAudioEnabled={enhancedAudioEnabled}
+									setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+								/> */}
+								<MediaPlayerSettings
+									// enhancedAudioStatus={enhancedAudioStatus}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+									captionLanguage={captionLanguage}
+									onCaptionLanguageChange={onCaptionLanguageChange}
+									availableCaptions={availableCaptions}
+									isCaptionLoading={isCaptionLoading}
+									hasCaptions={hasCaptions}
+								/>
+								<MediaPlayerPiP
+									className={docked ? "max-sm:hidden" : undefined}
+								/>
+								<MediaPlayerFullscreen />
+							</div>
+						</div>
+					</MediaPlayerControls>
+				);
+				return docked && controlsPortalEl
+					? createPortal(controls, controlsPortalEl)
+					: controls;
+			})()}
 			{/* {enhancedAudioUrl && (
 				<>
 					<audio

@@ -2,9 +2,11 @@
 	"files": [],
 	"references": [
 		{ "path": "./packages/ui" },
+		{ "path": "./packages/recorder-core" },
 		{ "path": "./packages/ui-solid" },
 		{ "path": "./packages/utils" },
 		{ "path": "./apps/desktop" },
+		{ "path": "./apps/chrome-extension" },
 		{ "path": "./apps/web" }
 	],
 	"compilerOptions": {

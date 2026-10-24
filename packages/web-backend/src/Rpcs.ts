@@ -27,10 +27,12 @@ export const RpcAuthMiddlewareLive = Layer.effect(
 		return RpcAuthMiddleware.of(() =>
 			getCurrentUser.pipe(
 				Effect.provideService(Database, database),
-				Effect.catchAll(() => new InternalError({ type: "database" })),
+				Effect.catchAll(() =>
+					Effect.fail(new InternalError({ type: "database" })),
+				),
 				Effect.flatMap(
 					Option.match({
-						onNone: () => new UnauthenticatedError(),
+						onNone: () => Effect.fail(new UnauthenticatedError()),
 						onSome: (user) => Effect.succeed(makeCurrentUser(user)),
 					}),
 				),

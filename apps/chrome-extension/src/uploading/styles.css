@@ -1,0 +1,230 @@
+@import "../shared/paper.css";
+
+body {
+	overflow: hidden;
+}
+
+.cloud-path {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.9s ease 0.15s forwards;
+}
+
+.cloud-arrow {
+	stroke: var(--accent);
+	opacity: 0;
+	animation:
+		fade-in 0.4s ease 0.85s forwards,
+		bob 1.9s ease-in-out 1.25s infinite;
+}
+
+.doodle-check,
+.doodle-error {
+	display: none;
+}
+
+.stage[data-mode="completed"] .doodle-cloud {
+	display: none;
+}
+
+.stage[data-mode="completed"] .doodle-check {
+	display: inline;
+}
+
+.check-path {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.5s ease 0.1s forwards;
+}
+
+.spark-1 {
+	animation-delay: 0.5s;
+}
+
+.spark-2 {
+	animation-delay: 0.65s;
+}
+
+.spark-3 {
+	animation-delay: 0.8s;
+}
+
+.stage[data-mode="error"] .doodle-cloud {
+	display: none;
+}
+
+.stage[data-mode="error"] .doodle-error {
+	display: inline;
+}
+
+.error-path {
+	stroke: var(--error);
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw 0.45s ease 0.1s forwards;
+}
+
+#upload-title {
+	margin-top: 28px;
+	font-size: 24px;
+	font-weight: 500;
+	letter-spacing: -0.01em;
+	animation: fade-up 0.5s ease 0.1s both;
+}
+
+#upload-detail {
+	margin-top: 8px;
+	max-width: 400px;
+	min-height: 22px;
+	font-size: 15px;
+	line-height: 1.5;
+	color: var(--ink-soft);
+	animation: fade-up 0.5s ease 0.15s both;
+}
+
+.squiggle-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-top: 34px;
+	animation: fade-up 0.5s ease 0.2s both;
+}
+
+.squiggle {
+	width: min(340px, 64vw);
+	height: 26px;
+	overflow: visible;
+}
+
+.squiggle-track {
+	fill: none;
+	stroke: var(--track);
+	stroke-width: 2.5;
+	stroke-linecap: round;
+	stroke-dasharray: 0.45 1.15;
+}
+
+.squiggle-progress {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 3.2;
+	stroke-linecap: round;
+	stroke-dasharray: 100;
+	stroke-dashoffset: 100;
+}
+
+.stage[data-mode="waiting"] .squiggle-progress {
+	stroke: var(--ink-soft);
+	stroke-dasharray: 2 4.2;
+	animation: march 1.2s linear infinite;
+}
+
+.stage[data-mode="error"] .squiggle-progress {
+	stroke: var(--error);
+}
+
+.percent {
+	min-width: 44px;
+	text-align: left;
+	font-size: 15px;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+	transition: opacity 0.3s ease;
+}
+
+.stage[data-mode="waiting"] .percent {
+	opacity: 0;
+}
+
+.upload-meta {
+	margin-top: 16px;
+	min-height: 18px;
+	font-size: 12.5px;
+	color: var(--ink-soft);
+	font-variant-numeric: tabular-nums;
+	word-break: break-word;
+}
+
+.share-link {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	margin-top: 24px;
+	min-height: 40px;
+	padding: 0 22px;
+	border: 1.5px solid var(--ink);
+	border-radius: 999px;
+	color: var(--ink);
+	font-size: 14px;
+	font-weight: 500;
+	text-decoration: none;
+	animation: fade-up 0.4s ease both;
+}
+
+.share-link:not([hidden]) {
+	display: inline-flex;
+}
+
+.share-link:hover {
+	background: var(--ink);
+	color: var(--paper);
+}
+
+.error-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 12px;
+	margin-top: 24px;
+	animation: fade-up 0.4s ease both;
+}
+
+.error-actions[hidden] {
+	display: none;
+}
+
+.action-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 40px;
+	padding: 0 22px;
+	border: 1.5px solid var(--ink);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--ink);
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.action-button:hover:not(:disabled) {
+	background: var(--ink);
+	color: var(--paper);
+}
+
+.action-button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cloud-arrow {
+		animation: fade-in 0.01ms forwards;
+	}
+
+	.stage[data-mode="waiting"] .squiggle-progress {
+		animation: none;
+	}
+
+	#upload-title,
+	#upload-detail,
+	.squiggle-row,
+	.cloud-path,
+	.check-path,
+	.error-path {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+}

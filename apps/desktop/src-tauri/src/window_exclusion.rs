@@ -2,6 +2,8 @@
 use scap_targets::{Window, WindowId};
 use serde::{Deserialize, Serialize};
 use specta::Type;
+#[cfg(target_os = "macos")]
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +73,31 @@ pub fn filter_for_instant_mode(
     exclusions
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn matches_window_title(exclusions: &[WindowExclusion], title: &str) -> bool {
+    exclusions
+        .iter()
+        .any(|entry| entry.matches(None, None, Some(title)))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn excludes_own_window(
+    exclusions: &[WindowExclusion],
+    window: &crate::windows::CapWindowId,
+) -> bool {
+    matches!(window, crate::windows::CapWindowId::RecordingControls)
+        || matches_window_title(exclusions, &window.title())
+}
+
+#[cfg(target_os = "macos")]
+fn append_native_window_id(ids: &mut Vec<WindowId>, native_id: &WindowId) -> bool {
+    if ids.contains(native_id) {
+        return false;
+    }
+    ids.push(native_id.clone());
+    true
+}
+
 #[cfg(target_os = "macos")]
 pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
     if exclusions.is_empty() {
@@ -83,19 +110,86 @@ pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
             let owner_name = window.owner_name();
             let window_title = window.name();
             let bundle_identifier = window.raw_handle().bundle_identifier();
+            let matches = exclusions.iter().any(|entry| {
+                entry.matches(
+                    bundle_identifier.as_deref(),
+                    owner_name.as_deref(),
+                    window_title.as_deref(),
+                )
+            });
 
-            exclusions
-                .iter()
-                .find(|entry| {
-                    entry.matches(
-                        bundle_identifier.as_deref(),
-                        owner_name.as_deref(),
-                        window_title.as_deref(),
-                    )
-                })
-                .map(|_| window.id())
+            if !matches {
+                return None;
+            }
+
+            let window_id = window.id();
+            info!(
+                %window_id,
+                owner_name = ?owner_name,
+                window_title = ?window_title,
+                bundle_identifier = ?bundle_identifier,
+                "Resolved excluded macOS window"
+            );
+            Some(window_id)
         })
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+pub fn append_matching_webview_window_ids(
+    ids: &mut Vec<WindowId>,
+    app: &tauri::AppHandle,
+    exclusions: &[WindowExclusion],
+) {
+    use crate::windows::CapWindowId;
+    use std::str::FromStr;
+    use tauri::Manager;
+
+    for (label, window) in app.webview_windows() {
+        let Ok(window_id) = CapWindowId::from_str(&label) else {
+            continue;
+        };
+        let title = window_id.title();
+        if !excludes_own_window(exclusions, &window_id) {
+            continue;
+        }
+        let Some(native_id) = webview_window_id(&window) else {
+            warn!(
+                label = %label,
+                title = %title,
+                "Excluded Tauri webview window has no native window id"
+            );
+            continue;
+        };
+        if !append_native_window_id(ids, &native_id) {
+            debug!(
+                window_id = %native_id,
+                label = %label,
+                title = %title,
+                "Excluded Tauri webview window id already resolved"
+            );
+            continue;
+        }
+        info!(
+            window_id = %native_id,
+            label = %label,
+            title = %title,
+            "Resolved excluded Tauri webview window"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn webview_window_id(window: &tauri::WebviewWindow) -> Option<WindowId> {
+    let ns_window = window.ns_window().ok()? as *const objc2_app_kit::NSWindow;
+    let ns_window = unsafe { ns_window.as_ref() }?;
+    let number = unsafe { ns_window.windowNumber() };
+
+    if number <= 0 {
+        return None;
+    }
+
+    number.to_string().parse().ok()
 }
 
 #[cfg(test)]
@@ -231,6 +325,55 @@ mod tests {
     fn instant_mode_handles_empty_list() {
         let filtered = filter_for_instant_mode(vec![], "Cap Camera");
         assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn matches_webview_title_using_exclusion_rules() {
+        let exclusions = vec![title_exclusion("Cap Camera")];
+
+        assert!(matches_window_title(&exclusions, "Cap Camera"));
+        assert!(!matches_window_title(&exclusions, "Cap Recording Controls"));
+    }
+
+    #[test]
+    fn own_controls_are_excluded_with_empty_or_custom_rules() {
+        use crate::windows::CapWindowId;
+
+        assert!(excludes_own_window(&[], &CapWindowId::RecordingControls));
+        assert!(excludes_own_window(
+            &[title_exclusion("Unrelated window")],
+            &CapWindowId::RecordingControls,
+        ));
+        assert!(!excludes_own_window(&[], &CapWindowId::Camera));
+    }
+
+    #[test]
+    fn own_window_exclusions_preserve_default_and_instant_camera_rules() {
+        use crate::windows::CapWindowId;
+
+        let defaults = crate::general_settings::default_excluded_windows();
+        assert!(excludes_own_window(
+            &defaults,
+            &CapWindowId::RecordingControls
+        ));
+        assert!(excludes_own_window(&defaults, &CapWindowId::Camera));
+        let instant = filter_for_instant_mode(defaults, &CapWindowId::Camera.title());
+        assert!(!excludes_own_window(&instant, &CapWindowId::Camera));
+        assert!(excludes_own_window(
+            &instant,
+            &CapWindowId::RecordingControls
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_exclusion_ids_do_not_require_a_visible_cg_window() {
+        let native_id: WindowId = "4294967294".parse().unwrap();
+        let mut ids = Vec::new();
+        assert!(append_native_window_id(&mut ids, &native_id));
+        assert_eq!(ids, vec![native_id.clone()]);
+        assert!(!append_native_window_id(&mut ids, &native_id));
+        assert_eq!(ids.len(), 1);
     }
 
     #[test]

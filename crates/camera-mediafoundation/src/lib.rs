@@ -10,15 +10,17 @@ use std::{
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
     slice::from_raw_parts,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::{
+        OnceLock,
+        mpsc::{Receiver, Sender, channel},
+    },
     time::Duration,
 };
-use tracing::error;
 use windows::Win32::{
     Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
     System::{
-        Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
+        Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize, CoTaskMemFree},
         Performance::QueryPerformanceCounter,
     },
 };
@@ -73,6 +75,20 @@ impl DeviceSourcesIterator {
     }
 }
 
+// MFEnumDeviceSources hands over one IMFActivate reference per device plus the
+// CoTaskMemAlloc'd array itself; without this Drop every enumeration leaked
+// both for the life of the process (CapSoftware/Cap#2132).
+impl Drop for DeviceSourcesIterator {
+    fn drop(&mut self) {
+        unsafe {
+            for index in 0..self.count {
+                (*self.devices.add(index as usize)).take();
+            }
+            CoTaskMemFree(Some(self.devices as *const _));
+        }
+    }
+}
+
 impl Iterator for DeviceSourcesIterator {
     type Item = Device;
 
@@ -93,30 +109,29 @@ impl Iterator for DeviceSourcesIterator {
                 continue;
             };
 
-            let media_source = match unsafe { device.ActivateObject::<IMFMediaSource>() } {
-                Ok(v) => v,
-                Err(e) => {
-                    error!("Failed to activate IMFMediaSource: {}", e);
-                    return None;
-                }
-            };
-
             return Some(Device {
-                media_source,
                 activate: device.clone(),
+                media_source: OnceLock::new(),
             });
         }
     }
 }
 
+/// Activating the media source opens the physical device through its driver,
+/// which costs real OS resources that are only reclaimed by `Shutdown`. Plain
+/// enumeration (name/id/model) must never pay that price, so activation is
+/// deferred until formats or capture genuinely need it
+/// (CapSoftware/Cap#2132).
 #[derive(Clone)]
 pub struct Device {
     activate: IMFActivate,
-    pub media_source: IMFMediaSource,
+    media_source: OnceLock<IMFMediaSource>,
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum StartCapturingError {
+    #[error("ActivateDevice: {0}")]
+    ActivateDevice(windows_core::Error),
     #[error("CreateEngine: {0}")]
     CreateEngine(windows_core::Error),
     #[error("ConfigureEngine: {0}")]
@@ -132,27 +147,49 @@ pub enum StartCapturingError {
 }
 
 impl Device {
-    pub fn name(&self) -> windows_core::Result<OsString> {
-        let mut raw = PWSTR(&mut 0);
-        let mut length = 0;
-        unsafe {
-            self.activate
-                .GetAllocatedString(&MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &mut raw, &mut length)
-                .map(|_| OsString::from_wide(from_raw_parts(raw.0, length as usize)))
+    fn media_source(&self) -> windows_core::Result<&IMFMediaSource> {
+        if let Some(media_source) = self.media_source.get() {
+            return Ok(media_source);
         }
+
+        let media_source = unsafe { self.activate.ActivateObject::<IMFMediaSource>() }?;
+        let _ = self.media_source.set(media_source);
+        self.media_source.get().ok_or_else(|| E_FAIL.into())
+    }
+
+    /// Retires this instance's Media Foundation path for good, releasing the
+    /// device at the driver so another backend can open it. Any cached source
+    /// stays shut down afterwards; only call this when abandoning MF for this
+    /// device.
+    pub fn shutdown(&self) {
+        if let Some(media_source) = self.media_source.get() {
+            let _ = unsafe { media_source.Shutdown() };
+        }
+        let _ = unsafe { self.activate.ShutdownObject() };
+    }
+
+    pub fn name(&self) -> windows_core::Result<OsString> {
+        unsafe { self.read_allocated_string(&MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME) }
     }
 
     pub fn id(&self) -> windows_core::Result<OsString> {
-        let mut raw = PWSTR(&mut 0);
+        unsafe {
+            self.read_allocated_string(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK)
+        }
+    }
+
+    unsafe fn read_allocated_string(
+        &self,
+        key: &windows_core::GUID,
+    ) -> windows_core::Result<OsString> {
+        let mut raw = PWSTR::null();
         let mut length = 0;
         unsafe {
             self.activate
-                .GetAllocatedString(
-                    &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
-                    &mut raw,
-                    &mut length,
-                )
-                .map(|_| OsString::from_wide(from_raw_parts(raw.0, length as usize)))
+                .GetAllocatedString(key, &mut raw, &mut length)?;
+            let value = OsString::from_wide(from_raw_parts(raw.0, length as usize));
+            CoTaskMemFree(Some(raw.0 as *const _));
+            Ok(value)
         }
     }
 
@@ -166,6 +203,7 @@ impl Device {
     // Creates and disposes an IMFSourceReader internally,
     // so this device must be shut down manually after calling this function.
     pub fn formats(&self) -> windows_core::Result<impl Iterator<Item = IMFMediaType>> {
+        let media_source = self.media_source()?;
         let mut stream_index = 0;
 
         let reader = unsafe {
@@ -175,7 +213,7 @@ impl Device {
                 attributes.ok_or_else(|| windows_core::Error::from_hresult(S_FALSE))?;
             // Media source shuts down on drop if this isn't specified
             attributes.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1)?;
-            MFCreateSourceReaderFromMediaSource(&self.media_source, &attributes)
+            MFCreateSourceReaderFromMediaSource(media_source, &attributes)
                 .map(|inner| SourceReader { inner })
         }?;
 
@@ -197,6 +235,10 @@ impl Device {
         requested_format: &IMFMediaType,
         callback: Box<dyn FnMut(CallbackData) + 'static>,
     ) -> Result<CaptureHandle, StartCapturingError> {
+        let media_source = self
+            .media_source()
+            .map_err(StartCapturingError::ActivateDevice)?;
+
         unsafe {
             let capture_engine_factory: IMFCaptureEngineClassFactory = CoCreateInstance(
                 &CLSID_MFCaptureEngineClassFactory,
@@ -232,7 +274,7 @@ impl Device {
                     &video_callback.to_interface::<IMFCaptureEngineOnEventCallback>(),
                     &attributes,
                     None,
-                    &self.media_source,
+                    media_source,
                 )
                 .map_err(StartCapturingError::InitializeEngine)?;
 
@@ -377,20 +419,6 @@ impl CaptureHandle {
 
     pub fn stop_capturing(self) -> windows_core::Result<()> {
         unsafe { self.engine.StopPreview() }
-    }
-}
-
-impl Deref for Device {
-    type Target = IMFMediaSource;
-
-    fn deref(&self) -> &Self::Target {
-        &self.media_source
-    }
-}
-
-impl DerefMut for Device {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.media_source
     }
 }
 

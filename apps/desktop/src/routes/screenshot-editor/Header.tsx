@@ -2,15 +2,17 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, onCleanup, Suspense } from "solid-js";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { commands } from "~/utils/tauri";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
 import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideFolder from "~icons/lucide/folder";
+import IconLucideLink from "~icons/lucide/link";
 import IconLucideMoreHorizontal from "~icons/lucide/more-horizontal";
 import IconLucideSave from "~icons/lucide/save";
 import { AnnotationTools } from "./AnnotationTools";
@@ -42,7 +44,7 @@ export function Header() {
 	} = ctx;
 	const path = () => ctx.editorInstance()?.path ?? "";
 
-	const { exportImage, isExporting } = useScreenshotExport();
+	const { exportImage, exportStatus, isExporting } = useScreenshotExport();
 
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -91,6 +93,18 @@ export function Header() {
 	};
 
 	const isCropDisabled = () => !originalImageSize() || !isImageFileReady();
+	const shareTooltip = () => {
+		switch (exportStatus()) {
+			case "rendering":
+				return "Rendering screenshot";
+			case "encoding":
+				return "Preparing upload";
+			case "uploading":
+				return "Uploading screenshot";
+			default:
+				return "Create shareable link";
+		}
+	};
 
 	return (
 		<div
@@ -99,6 +113,7 @@ export function Header() {
 		>
 			<div class="flex items-center gap-4">
 				{ostype() === "macos" && <div class="w-14" />}
+				{ostype() === "linux" && <CaptionControlsMacOS />}
 			</div>
 
 			<div class="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
@@ -143,11 +158,19 @@ export function Header() {
 					leftIcon={<IconLucideSave class="size-4" />}
 				/>
 
+				<EditorButton
+					tooltipText={shareTooltip()}
+					onClick={() => exportImage("share")}
+					disabled={isExporting()}
+					leftIcon={<IconLucideLink class="size-4" />}
+				/>
+
 				<DropdownMenu gutter={8} placement="bottom-end">
 					<EditorButton<typeof DropdownMenu.Trigger>
 						as={DropdownMenu.Trigger}
 						tooltipText="More Actions"
 						leftIcon={<IconLucideMoreHorizontal class="size-4" />}
+						disabled={isExporting()}
 					/>
 					<DropdownMenu.Portal>
 						<Suspense>
@@ -161,7 +184,7 @@ export function Header() {
 								>
 									<DropdownItem
 										onSelect={() => {
-											revealItemInDir(path());
+											commands.revealItemInDir(path());
 										}}
 									>
 										<IconLucideFolder class="size-4 text-gray-11" />

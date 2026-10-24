@@ -1,0 +1,139 @@
+---
+title: Cap v0.5 is here
+description: Our biggest desktop release yet, with Google Drive storage, merged recordings, screenshot OCR, camera background blur, organization branding, and a much sturdier recorder.
+publishedAt: "2026-05-27"
+category: Release
+image: /blog/cap-v05.jpg
+author: Richie McIlroy
+tags: News, Updates, Release
+---
+
+Hey everyone,
+
+Cap v0.5 is here, and it is easily the biggest desktop release we have shipped so far.
+
+We did not just want this release to be a pile of features. We wanted the everyday parts of Cap to feel better: recording, editing, sharing, and deciding where your videos live.
+
+v0.5 is a big step in that direction.
+
+It brings Google Drive storage, merged recordings, screenshot OCR, camera background blur, organization branding, desktop backgrounds, better quality controls, and a long list of fixes to the recording, export, audio, camera, upload, and recovery pipelines.
+
+This is not a tiny version bump. It is a serious upgrade to how Cap works, and to where we are taking the product next.
+
+Some of it is obvious the moment you open the app. Some of it is less glamorous, but just as important.
+
+Cap is supposed to disappear while you work. You should be able to hit record, explain the thing, clean it up, and share it without wondering whether the audio drifted, the export stalled, the camera preview froze, or the recording can be recovered if something goes wrong.
+
+That is the shape of v0.5: bigger features on top, and a less fragile core underneath.
+
+## Bring your own Google Drive storage
+
+You can now connect Google Drive from `Settings > Integrations` and use it as a storage option for new shareable recordings.
+
+If you record in Instant Mode, or create a shareable link from Studio Mode, Cap can upload and serve that video from your connected Google Drive.
+
+This is a big step toward giving you more control over where your recordings live. We have always wanted Cap to feel local-first and user-owned, and storage choice is part of that.
+
+## Merge recordings and import local videos
+
+Studio Mode is now more flexible.
+
+You can bring previous Studio recordings into the editor and merge them with your current project. You can also import local videos, add media from the tray or the main window, open things from recording settings, or just drag and drop a file into Cap.
+
+Studio Mode is much more useful for real workflows now. Record a quick intro, bring in an older clip, stitch together a demo, trim the rough edges, then export or share it.
+
+It sounds small, but it changes how Cap feels. Recordings are no longer isolated sessions. They can become projects you build on.
+
+## Screenshot OCR and image importing
+
+Screenshots got a lot better in v0.5.
+
+You can now import screenshots and images into the screenshot editor, then crop, annotate, style, copy, or export them with the same tools you use after a fresh capture.
+
+We also added native screenshot OCR on macOS and Windows. Select an area, copy the recognized text, and keep the original screenshot layout intact while you work.
+
+This is useful for error messages, invoices, docs, dashboards, snippets from a call, and the annoying cases where the text is visible but the app it came from will not let you copy it.
+
+## Camera background blur
+
+Camera recordings now support background blur in both the live preview and the final export.
+
+You can choose the blur strength from camera controls or from the editor sidebar. Cap will use GPU acceleration where it can, with Core ML on macOS and DirectML on Windows, and fall back to CPU when needed.
+
+You can get a cleaner camera recording without setting up a perfect room before every video.
+
+## Organization branding in the editor
+
+If you use Cap with an organization, the editor can now pull in your brand colors and logos.
+
+Pick an organization in the editor and use its branding across backgrounds, gradients, captions, keyboard overlays, and exports. You can also manage brand colors and logos from the new organization dropdown.
+
+This is the first step toward deeper organization support inside the editor. Soon we will be expanding this into more parts of the editing experience, with more integrations that help teams keep videos consistent without manually setting everything up for each recording.
+
+## Better recording quality controls
+
+Studio Mode now has Compatibility, Balanced, and Ultra profiles.
+
+Compatibility mode lowers bitrate and capture pressure for older or lower-power machines. Balanced is the default path for most people. Ultra is there when you want the highest quality Cap can push.
+
+Instant Mode also has clearer quality controls now, so picking upload resolution is less ambiguous.
+
+## A much more reliable recorder
+
+This is the part of the release I care about most.
+
+We tightened a lot of the recording pipeline. Cap now does better disk-space checks before recording, tracks recording health while capture is running, and can recover more sessions after a crash or forced quit.
+
+Microphone and camera handling should also feel less fragile. Saved devices restore more reliably, microphone selection is locked during recording start, mic preview comes back more consistently after recording, and camera setup timeouts no longer block the recorder indefinitely.
+
+We also fixed a nasty class of audio issues caused by some microphone drivers misreporting their sample rate. If you ever heard choppy or gappy audio from a device that otherwise worked fine, this release should help.
+
+## Audio and video sync improvements
+
+Long Studio Mode recordings should keep audio locked to video more reliably now.
+
+Cap now reconciles late or overlapping microphone audio against the capture clock instead of accidentally layering in duplicate silence. It also handles unexpected gaps, cancelled capture pipelines, Windows system audio, microphone resampling, decoded sources, and surround downmixing more carefully.
+
+That is a lot of technical detail, but the user-facing version is simple: your voice and your screen should stay together.
+
+## Smoother editing and exports
+
+We spent time on export reliability and editor playback in this release too.
+
+The important bit: fewer stuck exports, fewer accidental interruptions, and smoother playback while editing.
+
+Cursor movement, zooms, crops, motion blur, and composited frames should all look better too. The defaults are less jumpy, and auto zooms ease out more naturally.
+
+## Desktop backgrounds and settings polish
+
+The editor now includes a bundled city wallpaper pack, supports manual image imports, can use your current desktop wallpaper as a background, and adds a screen background blur control.
+
+Settings also got a refresh. There is a shared layout, a cleaner recordings and integrations experience, an account profile in the sidebar, a manual `Check for Updates` action, native macOS material styling, and a telemetry opt-out toggle.
+
+None of this is complicated, but it makes the app feel more finished.
+
+## Platform fixes
+
+v0.5 includes a long list of platform-specific fixes as well.
+
+On macOS, Cap excludes more Cap-owned windows from recordings by default, including Tauri webviews and overlays. We also fixed duplicate Dock icons, app switcher persistence, panel focus issues, and the hide Dock icon setting.
+
+On Windows, exports and playback should be more stable, graphics adapter selection is safer, and text scaling issues that could make controls render at the wrong size have been addressed.
+
+## Try Cap v0.5
+
+You can download Cap v0.5 at [Cap.so/download](https://cap.so/download).
+
+This release has a lot in it, and not all of it is visible on the surface. That is intentional. We want Cap to feel faster, calmer, and more dependable every time you record.
+
+Every day, we are onboarding bigger and bigger teams. If you are moving a large team from Loom, we offer bulk discounts and can help with the migration.
+
+You can reach us at [hello@cap.so](mailto:hello@cap.so), or use our [direct Loom importer](/dashboard/import/loom) with a CSV to migrate all of your workspace at once.
+
+As always, thank you to everyone using Cap, testing builds, sending crash reports, opening issues, and telling us where the app still feels rough.
+
+There is a lot more coming.
+
+Richie McIlroy
+
+Founder of Cap

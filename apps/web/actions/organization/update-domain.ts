@@ -7,6 +7,7 @@ import { userIsPro } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "./authorization";
 import { addDomain, checkDomainStatus } from "./domain-utils";
 
 export async function updateDomain(
@@ -23,20 +24,22 @@ export async function updateDomain(
 		throw new Error("User is not subscribed");
 	}
 
+	const normalizedDomain = domain.trim().toLowerCase();
+
 	const [organization] = await db()
 		.select()
 		.from(organizations)
 		.where(eq(organizations.id, organizationId));
 
-	if (!organization || organization.ownerId !== user.id) {
-		throw new Error("Only the owner can update the custom domain");
-	}
+	if (!organization) throw new Error("Organization not found");
+
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	// Check if domain is already being used by another organization
 	const existingDomain = await db()
 		.select()
 		.from(organizations)
-		.where(eq(organizations.customDomain, domain))
+		.where(eq(organizations.customDomain, normalizedDomain))
 		.limit(1);
 
 	if (existingDomain.length > 0 && existingDomain[0]?.id !== organizationId) {
@@ -44,7 +47,7 @@ export async function updateDomain(
 	}
 
 	try {
-		const addDomainResponse = await addDomain(domain);
+		const addDomainResponse = await addDomain(normalizedDomain);
 
 		if (addDomainResponse.error) {
 			throw new Error(addDomainResponse.error.message);
@@ -53,12 +56,12 @@ export async function updateDomain(
 		await db()
 			.update(organizations)
 			.set({
-				customDomain: domain,
+				customDomain: normalizedDomain,
 				domainVerified: null,
 			})
 			.where(eq(organizations.id, organizationId));
 
-		const status = await checkDomainStatus(domain);
+		const status = await checkDomainStatus(normalizedDomain);
 
 		if (status.verified) {
 			await db()

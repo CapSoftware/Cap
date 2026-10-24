@@ -2,17 +2,28 @@
 
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
+import { generateText } from "ai";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { Effect, Exit, Option } from "effect";
+import { isAiConfigured } from "@/lib/ai/provider";
+import { runWithAiProviders } from "@/lib/ai/run";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
 } from "./translation-languages";
+import {
+	isCompleteTranslation,
+	joinTranslationChunks,
+	readCachedTranslation,
+	splitTranslationChunks,
+	withSourceFingerprint,
+} from "./translation-vtt";
 
 interface TranslateResult {
 	success: boolean;
@@ -38,18 +49,30 @@ export async function translateTranscript(
 		};
 	}
 
-	const groq = getGroqClient();
-	if (!groq) {
+	if (!isAiConfigured()) {
 		return {
 			success: false,
 			message: "Translation service not configured",
 		};
 	}
 
-	const query = await db()
-		.select({ video: videos })
-		.from(videos)
-		.where(eq(videos.id, videoId));
+	if (await isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT)) {
+		return { success: false, message: "Too many requests" };
+	}
+
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+
+		return yield* Effect.promise(() =>
+			db().select({ video: videos }).from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	if (Exit.isFailure(exit)) {
+		return { success: false, message: "Video not found" };
+	}
+
+	const query = exit.value;
 
 	if (query.length === 0 || !query[0]?.video) {
 		return { success: false, message: "Video not found" };
@@ -58,25 +81,6 @@ export async function translateTranscript(
 	const { video } = query[0];
 
 	const translatedKey = `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`;
-
-	try {
-		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
-			return yield* bucket.getObject(translatedKey);
-		}).pipe(runPromise);
-
-		if (Option.isSome(existingTranslation)) {
-			return {
-				success: true,
-				translatedVtt: existingTranslation.value,
-				message: "Retrieved cached translation",
-			};
-		}
-	} catch (e) {
-		console.debug("[translateTranscript] No cached translation found:", e);
-	}
 
 	const originalVtt = await Effect.gen(function* () {
 		const [bucket] = yield* Storage.getAccessForVideo(
@@ -91,27 +95,54 @@ export async function translateTranscript(
 		return { success: false, message: "Original transcript not found" };
 	}
 
+	try {
+		const existingTranslation = await Effect.gen(function* () {
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
+			);
+			return yield* bucket.getObject(translatedKey);
+		}).pipe(runPromise);
+
+		const cachedTranslation = Option.isSome(existingTranslation)
+			? readCachedTranslation(originalVtt.value, existingTranslation.value)
+			: null;
+		if (cachedTranslation) {
+			return {
+				success: true,
+				translatedVtt: cachedTranslation,
+				message: "Retrieved cached translation",
+			};
+		}
+	} catch (e) {
+		console.debug("[translateTranscript] No cached translation found:", e);
+	}
+
 	const translatedVtt = await translateVttContent(
 		originalVtt.value,
 		targetLanguage,
-		groq,
 	);
 
 	if (!translatedVtt) {
 		return { success: false, message: "Translation failed" };
 	}
 
-	try {
-		await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
+	const cacheBody = withSourceFingerprint(originalVtt.value, translatedVtt);
+	if (cacheBody) {
+		try {
+			await Effect.gen(function* () {
+				const [bucket] = yield* Storage.getAccessForVideo(
+					decodeStorageVideo(video),
+				);
+				yield* bucket.putObject(translatedKey, cacheBody, {
+					contentType: "text/vtt",
+				});
+			}).pipe(runPromise);
+		} catch (error) {
+			console.error(
+				"[translateTranscript] Failed to cache translation:",
+				error,
 			);
-			yield* bucket.putObject(translatedKey, translatedVtt, {
-				contentType: "text/vtt",
-			});
-		}).pipe(runPromise);
-	} catch (error) {
-		console.error("[translateTranscript] Failed to cache translation:", error);
+		}
 	}
 
 	return {
@@ -124,11 +155,14 @@ export async function translateTranscript(
 async function translateVttContent(
 	vttContent: string,
 	targetLanguage: LanguageCode,
-	groq: NonNullable<ReturnType<typeof getGroqClient>>,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
+	const chunks = splitTranslationChunks(vttContent);
+	if (!chunks) return null;
 
-	const prompt = `Translate the following WebVTT subtitle file to ${targetLanguageName}.
+	const translations: string[] = [];
+	for (const chunk of chunks) {
+		const prompt = `Translate the following WebVTT subtitle file to ${targetLanguageName}.
 
 IMPORTANT RULES:
 1. Keep the "WEBVTT" header exactly as is
@@ -141,24 +175,35 @@ IMPORTANT RULES:
 
 VTT content to translate:
 
-${vttContent}`;
+${chunk}`;
 
-	try {
-		const response = await groq.chat.completions.create({
-			model: GROQ_MODEL,
-			messages: [{ role: "user", content: prompt }],
-			temperature: 0.3,
-			max_tokens: 8000,
-		});
+		try {
+			const translatedChunk = await runWithAiProviders(
+				"generation",
+				async (selection) => {
+					const response = await generateText({
+						model: selection.model(),
+						prompt,
+						maxOutputTokens: 8000,
+						...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
+					});
 
-		const content = response.choices[0]?.message?.content;
-		if (content?.includes("WEBVTT")) {
-			return content.trim();
+					if (
+						response.finishReason === "length" ||
+						!isCompleteTranslation(chunk, response.text)
+					) {
+						throw new Error("translation response has missing or changed cues");
+					}
+
+					return response.text.trim();
+				},
+			);
+			translations.push(translatedChunk);
+		} catch (error) {
+			console.error("[translateVttContent] Translation error:", error);
+			return null;
 		}
-
-		return null;
-	} catch (error) {
-		console.error("[translateVttContent] Translation error:", error);
-		return null;
 	}
+
+	return joinTranslationChunks(vttContent, chunks, translations);
 }

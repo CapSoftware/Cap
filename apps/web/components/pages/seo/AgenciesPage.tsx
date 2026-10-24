@@ -7,6 +7,7 @@ import { Clapperboard, Minus, Plus, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useState } from "react";
 import type { SeoPageContent } from "@/components/seo/types";
+import { PRICING } from "@/data/pricing";
 
 const PlatformSupportArt = memo(() => {
 	const { RiveComponent: PlatformSupportRive } = useRive({
@@ -203,9 +204,10 @@ export const agenciesContent: SeoPageContent = {
 		],
 	},
 	video: {
-		url: "/videos/agencies-demo.mp4",
-		thumbnail: "/videos/agencies-thumbnail.png",
-		alt: "Cap screen recorder demonstration for agencies",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	useCasesTitle: "How Agencies Use Cap for Client Success",
@@ -264,8 +266,7 @@ export const agenciesContent: SeoPageContent = {
 		},
 		{
 			question: "How long can we record on the free version?",
-			answer:
-				"The free version supports recordings up to 5 minutes. For longer client presentations and unlimited recording time, upgrade to Cap Pro at $8.16/month (billed annually).",
+			answer: `The free version supports recordings up to 5 minutes. For longer client presentations and unlimited recording time, upgrade to Cap Pro at $${PRICING.pro.annualPerMonth}/month (billed annually).`,
 		},
 		{
 			question: "Is Cap secure enough for confidential client work?",
@@ -279,8 +280,7 @@ export const agenciesContent: SeoPageContent = {
 		},
 		{
 			question: "How does Cap pricing work for agency teams?",
-			answer:
-				"Cap Pro is $8.16/month per user (billed annually) and includes unlimited cloud storage, custom domains, team workspaces, and all collaboration features. Volume discounts are available for teams over 10 users.",
+			answer: `Cap Pro is $${PRICING.pro.annualPerMonth}/month per user (billed annually) and includes unlimited cloud storage, custom domains, team workspaces, and all collaboration features. Volume discounts are available for teams over 10 users.`,
 		},
 	],
 

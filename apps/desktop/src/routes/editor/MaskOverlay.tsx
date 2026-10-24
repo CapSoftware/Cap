@@ -3,8 +3,12 @@ import { cx } from "cva";
 import { createMemo, createRoot, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
+import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { useEditorContext } from "./context";
 import { evaluateMask, type MaskSegment } from "./masks";
+import { createOverlaySegments } from "./overlay-segments";
+import { SNAP_PX, snapMovingRect } from "./snapping";
+import { getOverlayZIndex } from "./timelineTracks";
 
 type MaskOverlayProps = {
 	size: { width: number; height: number };
@@ -17,13 +21,11 @@ export function MaskOverlay(props: MaskOverlayProps) {
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? 0;
 
-	const visibleMaskSegments = createMemo(() => {
-		const segments = project.timeline?.maskSegments ?? [];
-		const time = currentAbsoluteTime();
-		return segments
-			.map((segment, index) => ({ segment, index }))
-			.filter(({ segment }) => time >= segment.start && time < segment.end);
-	});
+	const { indexed: maskSegments, visible: visibleMaskSegments } =
+		createOverlaySegments(
+			() => project.timeline?.maskSegments ?? [],
+			currentAbsoluteTime,
+		);
 
 	const selectedMaskIndex = createMemo(() => {
 		const selection = editorState.timeline.selection;
@@ -88,9 +90,9 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		) {
 			return visible;
 		}
-		const segment = project.timeline?.maskSegments?.[hoveredIndex];
-		if (!segment) return visible;
-		return [...visible, { segment, index: hoveredIndex }];
+		const hovered = maskSegments()[hoveredIndex];
+		if (!hovered) return visible;
+		return [...visible, hovered];
 	});
 
 	const getMaskTime = (index: number) => {
@@ -118,32 +120,24 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		);
 	};
 
-	const handleBackgroundClick = (e: MouseEvent) => {
-		if (e.target === e.currentTarget && selectedMaskIndex() !== null) {
-			e.preventDefault();
-			e.stopPropagation();
-			setEditorState("timeline", "selection", null);
-		}
-	};
-
-	const hasMaskSelection = () => selectedMaskIndex() !== null;
-
 	return (
-		<div class="absolute inset-0 pointer-events-none">
-			<Show when={hasMaskSelection()}>
-				<div
-					class="absolute inset-0 pointer-events-auto"
-					onMouseDown={handleBackgroundClick}
-				/>
-			</Show>
+		<div
+			class="absolute inset-0 pointer-events-none"
+			style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+		>
 			<Show when={shouldRenderHoveredMask() ? hoveredMask() : null}>
 				{(hovered) => {
 					const rect = () =>
 						getMaskRectAtTime(hovered().segment, getMaskTime(hovered().index));
 					return (
 						<div
-							class="absolute z-20 pointer-events-none rounded-md border-2 border-gray-11/65 bg-gray-9/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
+							class="absolute z-20 pointer-events-none rounded-md border-2 border-gray-11/65 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
 							style={{
+								"z-index": getOverlayZIndex(
+									project,
+									"mask",
+									hovered().segment.track ?? 0,
+								),
 								left: `${rect().left}px`,
 								top: `${rect().top}px`,
 								width: `${rect().width}px`,
@@ -161,8 +155,8 @@ export function MaskOverlay(props: MaskOverlayProps) {
 					const maskState = () => evaluateMask(segment, getMaskTime(index));
 					const overlayClass = () =>
 						cx(
-							"border-transparent bg-transparent hover:border-gray-11/65 hover:bg-gray-9/5",
-							isHovered() && "border-gray-11/65 bg-gray-9/5",
+							"border-transparent bg-transparent hover:border-gray-11/65",
+							isHovered() && "border-gray-11/65",
 						);
 
 					return (
@@ -171,10 +165,15 @@ export function MaskOverlay(props: MaskOverlayProps) {
 							fallback={
 								<div
 									class={cx(
-										"absolute pointer-events-auto cursor-pointer rounded-md border-2 transition-colors",
+										"absolute pointer-events-auto rounded-md border-2 transition-colors",
 										overlayClass(),
 									)}
 									style={{
+										"z-index": getOverlayZIndex(
+											project,
+											"mask",
+											segment.track ?? 0,
+										),
 										left: `${rect().left}px`,
 										top: `${rect().top}px`,
 										width: `${rect().width}px`,
@@ -186,6 +185,8 @@ export function MaskOverlay(props: MaskOverlayProps) {
 						>
 							<MaskOverlayContent
 								size={props.size}
+								maskIndex={index}
+								zIndex={getOverlayZIndex(project, "mask", segment.track ?? 0)}
 								maskState={maskState}
 								updateSegment={updateSegment}
 								projectHistory={projectHistory}
@@ -200,11 +201,15 @@ export function MaskOverlay(props: MaskOverlayProps) {
 
 function MaskOverlayContent(props: {
 	size: { width: number; height: number };
+	maskIndex: number;
+	zIndex: number;
 	maskState: () => ReturnType<typeof evaluateMask>;
 	updateSegment: (fn: (segment: MaskSegment) => void) => void;
 	projectHistory: ReturnType<typeof useEditorContext>["projectHistory"];
 }) {
 	const { projectHistory, updateSegment } = props;
+	const { setSnapGuides } = useEditorContext();
+	const snapTargetsFor = useCanvasSnapTargets();
 
 	function createMouseDownDrag<T>(
 		setup: () => T,
@@ -228,6 +233,7 @@ function MaskOverlayContent(props: {
 
 			function finish() {
 				resumeHistory();
+				setSnapGuides([]);
 				dispose();
 			}
 
@@ -255,14 +261,37 @@ function MaskOverlayContent(props: {
 	const onMove = createMouseDownDrag(
 		() => ({
 			startPos: { ...state().position },
+			startSize: { ...state().size },
+			targets: snapTargetsFor({ mask: props.maskIndex }),
 		}),
-		(e, { startPos }, initialMouse) => {
+		(e, { startPos, startSize, targets }, initialMouse) => {
 			const dx = (e.clientX - initialMouse.x) / props.size.width;
 			const dy = (e.clientY - initialMouse.y) / props.size.height;
 
+			let snapDx = 0;
+			let snapDy = 0;
+			if (e.shiftKey) {
+				setSnapGuides([]);
+			} else {
+				const snap = snapMovingRect(
+					{
+						x: startPos.x + dx - startSize.x / 2,
+						y: startPos.y + dy - startSize.y / 2,
+						w: startSize.x,
+						h: startSize.y,
+					},
+					targets,
+					SNAP_PX / props.size.width,
+					SNAP_PX / props.size.height,
+				);
+				snapDx = snap.dx;
+				snapDy = snap.dy;
+				setSnapGuides(snap.guides);
+			}
+
 			updateSegment((s) => {
-				s.center.x = Math.max(0, Math.min(1, startPos.x + dx));
-				s.center.y = Math.max(0, Math.min(1, startPos.y + dy));
+				s.center.x = Math.max(0, Math.min(1, startPos.x + dx + snapDx));
+				s.center.y = Math.max(0, Math.min(1, startPos.y + dy + snapDy));
 			});
 		},
 	);
@@ -298,6 +327,7 @@ function MaskOverlayContent(props: {
 		<div
 			class="absolute pointer-events-auto group z-10"
 			style={{
+				"z-index": props.zIndex,
 				left: `${rect().left}px`,
 				top: `${rect().top}px`,
 				width: `${rect().width}px`,
@@ -305,7 +335,7 @@ function MaskOverlayContent(props: {
 			}}
 			onMouseDown={onMove}
 		>
-			<div class="absolute inset-0 rounded-md border-2 border-gray-12 bg-gray-9/10 cursor-move" />
+			<div class="absolute inset-0 rounded-md border-2 border-gray-12 cursor-move" />
 
 			<ResizeHandle
 				class="top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nw-resize"
@@ -351,7 +381,7 @@ function ResizeHandle(props: {
 	return (
 		<div
 			class={cx(
-				"absolute w-3 h-3 bg-gray-12 border border-white rounded-full shadow-sm transition-transform hover:scale-125",
+				"absolute w-3 h-3 bg-gray-12 border border-white rounded-full shadow-xs transition-transform hover:scale-125",
 				props.class,
 			)}
 			onMouseDown={props.onMouseDown}

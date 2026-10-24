@@ -15,20 +15,19 @@ export function DeveloperThemeForcer({
 	);
 
 	useEffect(() => {
-		if (theme !== "dark") {
-			setThemeHandler("dark");
-		}
-	}, [theme, setThemeHandler]);
+		return () => {
+			const savedTheme =
+				(Cookies.get("theme") as "light" | "dark" | undefined) ??
+				previousTheme.current;
+			setThemeHandler(savedTheme, { persist: false });
+		};
+	}, [setThemeHandler]);
 
 	useEffect(() => {
-		const saved = previousTheme.current;
-		return () => {
-			if (saved !== "dark") {
-				document.body.className = saved;
-				Cookies.set("theme", saved, { expires: 365 });
-			}
-		};
-	}, []);
+		if (theme !== "dark") {
+			setThemeHandler("dark", { persist: false });
+		}
+	}, [theme, setThemeHandler]);
 
 	return <>{children}</>;
 }

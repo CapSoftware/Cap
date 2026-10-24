@@ -4,8 +4,7 @@ use cap_project::{
 };
 use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderVideoConstants, RendererLayers,
-    ZoomFocusInterpolator, decoder::spawn_decoder,
-    spring_mass_damper::SpringMassDamperSimulationConfig,
+    ZoomTransformTimeline, decoder::spawn_decoder,
 };
 use std::{
     path::{Path, PathBuf},
@@ -48,6 +47,7 @@ struct PipelineTimings {
     decode_ms: Vec<f64>,
     render_ms: Vec<f64>,
     total_ms: Vec<f64>,
+    keyframe_decode_ms: Vec<(f64, f64)>,
     decode_failures: usize,
     render_failures: usize,
     frames_rendered: usize,
@@ -81,6 +81,162 @@ impl PipelineTimings {
         print_stats("Decode", &self.decode_ms);
         print_stats("GPU Render+Readback", &self.render_ms);
         print_stats("Total (decode+render)", &self.total_ms);
+        print_keyframe_distance_report(&self.keyframe_decode_ms);
+    }
+}
+
+fn print_keyframe_distance_report(samples: &[(f64, f64)]) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let distances_ms: Vec<f64> = samples
+        .iter()
+        .map(|(distance, _)| distance * 1000.0)
+        .collect();
+    println!();
+    print_stats("Distance after previous keyframe", &distances_ms);
+
+    let avg_distance =
+        samples.iter().map(|(distance, _)| *distance).sum::<f64>() / samples.len() as f64;
+    let avg_decode = samples.iter().map(|(_, decode)| *decode).sum::<f64>() / samples.len() as f64;
+    let covariance = samples
+        .iter()
+        .map(|(distance, decode)| (distance - avg_distance) * (decode - avg_decode))
+        .sum::<f64>();
+    let distance_variance = samples
+        .iter()
+        .map(|(distance, _)| (distance - avg_distance).powi(2))
+        .sum::<f64>();
+    let decode_variance = samples
+        .iter()
+        .map(|(_, decode)| (decode - avg_decode).powi(2))
+        .sum::<f64>();
+    if distance_variance > 0.0 && decode_variance > 0.0 {
+        let correlation = covariance / (distance_variance.sqrt() * decode_variance.sqrt());
+        println!("  Decode/keyframe-distance correlation: {correlation:.2}");
+    }
+
+    const BUCKETS: [(f64, f64, &str); 4] = [
+        (0.0, 0.25, "0-250ms"),
+        (0.25, 0.5, "250-500ms"),
+        (0.5, 0.75, "500-750ms"),
+        (0.75, f64::INFINITY, "750ms+"),
+    ];
+
+    println!("  Decode by distance after previous keyframe:");
+    for (min, max, label) in BUCKETS {
+        let values: Vec<f64> = samples
+            .iter()
+            .filter_map(|(distance, decode)| {
+                (*distance >= min && *distance < max).then_some(*decode)
+            })
+            .collect();
+        if values.is_empty() {
+            println!("    {label}: no samples");
+        } else {
+            let avg = values.iter().sum::<f64>() / values.len() as f64;
+            println!(
+                "    {label}: count={} avg={avg:.2}ms p95={:.2}ms",
+                values.len(),
+                percentile(&values, 95.0)
+            );
+        }
+    }
+}
+
+struct VideoKeyframeStats {
+    keyframes: Vec<(u32, f64)>,
+    fps: f64,
+    duration_secs: f64,
+}
+
+impl VideoKeyframeStats {
+    fn build(path: &Path) -> Result<Self, String> {
+        let mut input = ffmpeg::format::input(path)
+            .map_err(|e| format!("Failed to open video for keyframe scan: {e}"))?;
+
+        let (stream_index, time_base, fps, duration_secs) = {
+            let video_stream = input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .ok_or("No video stream found")?;
+
+            let stream_index = video_stream.index();
+            let time_base = video_stream.time_base();
+            let rate = video_stream.avg_frame_rate();
+            let fps = if rate.denominator() == 0 {
+                30.0
+            } else {
+                rate.numerator() as f64 / rate.denominator() as f64
+            };
+            let duration = video_stream.duration();
+            let duration_secs = if duration > 0 {
+                duration as f64 * time_base.numerator() as f64 / time_base.denominator() as f64
+            } else {
+                0.0
+            };
+
+            (stream_index, time_base, fps, duration_secs)
+        };
+
+        let mut keyframes = Vec::new();
+        for (stream, packet) in input.packets() {
+            if stream.index() != stream_index || !packet.is_key() {
+                continue;
+            }
+
+            let pts = packet.pts().unwrap_or(0);
+            let time_secs =
+                pts as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
+            let frame_number = (time_secs * fps).round() as u32;
+            keyframes.push((frame_number, time_secs));
+        }
+
+        Ok(Self {
+            keyframes,
+            fps,
+            duration_secs,
+        })
+    }
+
+    fn print_summary(&self, label: &str) {
+        let intervals: Vec<f64> = self
+            .keyframes
+            .windows(2)
+            .map(|pair| pair[1].1 - pair[0].1)
+            .collect();
+        let avg_interval = if intervals.is_empty() {
+            0.0
+        } else {
+            intervals.iter().sum::<f64>() / intervals.len() as f64
+        };
+        let max_interval = intervals.iter().copied().fold(0.0, f64::max);
+
+        println!(
+            "  Keyframes ({label}): count={} fps={:.2} duration={:.2}s avg_interval={avg_interval:.3}s max_interval={max_interval:.3}s",
+            self.keyframes.len(),
+            self.fps,
+            self.duration_secs,
+        );
+    }
+
+    fn distance_after_previous_keyframe(&self, time_secs: f64) -> Option<f64> {
+        if self.keyframes.is_empty() {
+            return None;
+        }
+
+        let target_frame = (time_secs * self.fps).round() as u32;
+        let pos = self
+            .keyframes
+            .binary_search_by_key(&target_frame, |(frame, _)| *frame);
+        let index = match pos {
+            Ok(i) => i,
+            Err(0) => return None,
+            Err(i) => i - 1,
+        };
+
+        Some((time_secs - self.keyframes[index].1).max(0.0))
     }
 }
 
@@ -118,6 +274,10 @@ async fn load_recording(
                     start: 0.0,
                     end: duration,
                     timescale: 1.0,
+                    name: None,
+                    speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -138,6 +298,10 @@ async fn load_recording(
                         start: 0.0,
                         end: duration,
                         timescale: 1.0,
+                        name: None,
+                        speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     })
                 })
                 .collect(),
@@ -146,12 +310,17 @@ async fn load_recording(
         if !timeline_segments.is_empty() {
             project.timeline = Some(TimelineConfiguration {
                 segments: timeline_segments,
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             });
         }
     }
@@ -170,6 +339,7 @@ async fn run_decode_only_benchmark(
     project: &ProjectConfiguration,
     fps: u32,
     frame_count: usize,
+    force_ffmpeg: bool,
 ) -> PipelineTimings {
     let mut timings = PipelineTimings::default();
 
@@ -187,14 +357,21 @@ async fn run_decode_only_benchmark(
         StudioRecordingMeta::MultipleSegments { inner } => inner.segments[0].display.fps,
     };
 
-    let decoder =
-        match spawn_decoder("benchmark-screen", display_path, display_fps, 0.0, false).await {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Failed to create decoder: {e}");
-                return timings;
-            }
-        };
+    let decoder = match spawn_decoder(
+        "benchmark-screen",
+        display_path,
+        display_fps,
+        0.0,
+        force_ffmpeg,
+    )
+    .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to create decoder: {e}");
+            return timings;
+        }
+    };
 
     println!("  Decoder type: {}", decoder.decoder_type());
     println!(
@@ -232,15 +409,27 @@ async fn run_decode_only_benchmark(
     timings
 }
 
+struct PipelineBenchmarkConfig {
+    fps: u32,
+    frame_count: usize,
+    resolution_base: XY<u32>,
+    force_ffmpeg: bool,
+}
+
 async fn run_full_pipeline_benchmark(
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
     project: &ProjectConfiguration,
     recordings: &ProjectRecordingsMeta,
-    fps: u32,
-    frame_count: usize,
-    resolution_base: XY<u32>,
+    config: PipelineBenchmarkConfig,
 ) -> PipelineTimings {
+    let project = &Arc::new(project.clone());
+    let PipelineBenchmarkConfig {
+        fps,
+        frame_count,
+        resolution_base,
+        force_ffmpeg,
+    } = config;
     let mut timings = PipelineTimings::default();
 
     let render_constants = match RenderVideoConstants::new(
@@ -263,7 +452,7 @@ async fn run_full_pipeline_benchmark(
         render_constants.is_software_adapter
     );
 
-    let segments = match cap_editor::create_segments(recording_meta, meta, false).await {
+    let segments = match cap_editor::create_segments(recording_meta, meta, force_ffmpeg).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to create segments: {e}");
@@ -306,11 +495,17 @@ async fn run_full_pipeline_benchmark(
         resolution_base.x, resolution_base.y
     );
 
-    let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-        tension: project.cursor.tension,
-        mass: project.cursor.mass,
-        friction: project.cursor.friction,
-    });
+    let mut zoom_timelines: Vec<ZoomTransformTimeline> = segments
+        .iter()
+        .map(|segment_media| {
+            ZoomTransformTimeline::from_project(
+                project,
+                &segment_media.cursor,
+                duration,
+                render_constants.options.screen_size,
+            )
+        })
+        .collect();
 
     for i in 0..max_frames {
         let frame_time = i as f64 / fps as f64;
@@ -365,18 +560,9 @@ async fn run_full_pipeline_benchmark(
 
         timings.decode_ms.push(decode_elapsed_ms);
 
-        let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-            &segment_media.cursor,
-            cursor_smoothing,
-            project.cursor.click_spring_config(),
-            project.screen_movement_spring,
-            duration,
-            project
-                .timeline
-                .as_ref()
-                .map(|t| t.zoom_segments.as_slice())
-                .unwrap_or(&[]),
-        );
+        let clip_index = segment.recording_clip as usize;
+        let zoom_timeline = &mut zoom_timelines[clip_index];
+        zoom_timeline.ensure_precomputed_until((i as f32 + 1.0) / fps as f32);
 
         let uniforms = ProjectUniforms::new(
             &render_constants,
@@ -387,7 +573,7 @@ async fn run_full_pipeline_benchmark(
             &segment_media.cursor,
             &segment_frames,
             duration,
-            &zoom_focus_interpolator,
+            zoom_timeline,
         );
 
         let render_start = Instant::now();
@@ -430,7 +616,9 @@ async fn run_scrubbing_benchmark(
     recordings: &ProjectRecordingsMeta,
     fps: u32,
     resolution_base: XY<u32>,
+    force_ffmpeg: bool,
 ) -> PipelineTimings {
+    let project = &Arc::new(project.clone());
     let mut timings = PipelineTimings::default();
 
     let render_constants = match RenderVideoConstants::new(
@@ -447,7 +635,7 @@ async fn run_scrubbing_benchmark(
         }
     };
 
-    let segments = match cap_editor::create_segments(recording_meta, meta, false).await {
+    let segments = match cap_editor::create_segments(recording_meta, meta, force_ffmpeg).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to create segments: {e}");
@@ -459,6 +647,31 @@ async fn run_scrubbing_benchmark(
         eprintln!("No segments found");
         return timings;
     }
+
+    let display_paths: Vec<PathBuf> = match meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            vec![recording_meta.path(&segment.display.path)]
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .map(|segment| recording_meta.path(&segment.display.path))
+            .collect(),
+    };
+    let keyframe_stats: Vec<Option<VideoKeyframeStats>> = display_paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| match VideoKeyframeStats::build(path) {
+            Ok(stats) => {
+                stats.print_summary(&format!("segment {index}"));
+                Some(stats)
+            }
+            Err(e) => {
+                eprintln!("  Failed to scan keyframes for {}: {e}", path.display());
+                None
+            }
+        })
+        .collect();
 
     let mut frame_renderer = FrameRenderer::new(&render_constants);
     let mut layers = RendererLayers::new_with_options(
@@ -484,11 +697,17 @@ async fn run_scrubbing_benchmark(
         .map(|t| t.duration())
         .unwrap_or(10.0);
 
-    let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-        tension: project.cursor.tension,
-        mass: project.cursor.mass,
-        friction: project.cursor.friction,
-    });
+    let mut zoom_timelines: Vec<ZoomTransformTimeline> = segments
+        .iter()
+        .map(|segment_media| {
+            ZoomTransformTimeline::from_project(
+                project,
+                &segment_media.cursor,
+                duration,
+                render_constants.options.screen_size,
+            )
+        })
+        .collect();
 
     let scrub_positions: Vec<f64> = {
         let golden_ratio = 1.618_034;
@@ -541,21 +760,21 @@ async fn run_scrubbing_benchmark(
         };
 
         timings.decode_ms.push(decode_elapsed_ms);
+        if let Some(distance) = keyframe_stats
+            .get(segment.recording_clip as usize)
+            .and_then(|stats| stats.as_ref())
+            .and_then(|stats| stats.distance_after_previous_keyframe(segment_time))
+        {
+            timings
+                .keyframe_decode_ms
+                .push((distance, decode_elapsed_ms));
+        }
 
         let frame_number = (scrub_time * fps as f64).round() as u32;
 
-        let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-            &segment_media.cursor,
-            cursor_smoothing,
-            project.cursor.click_spring_config(),
-            project.screen_movement_spring,
-            duration,
-            project
-                .timeline
-                .as_ref()
-                .map(|t| t.zoom_segments.as_slice())
-                .unwrap_or(&[]),
-        );
+        let clip_index = segment.recording_clip as usize;
+        let zoom_timeline = &mut zoom_timelines[clip_index];
+        zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
 
         let uniforms = ProjectUniforms::new(
             &render_constants,
@@ -566,7 +785,7 @@ async fn run_scrubbing_benchmark(
             &segment_media.cursor,
             &segment_frames,
             duration,
-            &zoom_focus_interpolator,
+            zoom_timeline,
         );
 
         let render_start = Instant::now();
@@ -631,6 +850,13 @@ async fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
+    let force_ffmpeg = args.iter().any(|arg| arg == "--force-ffmpeg");
+    // The editor holds a 1ms timer resolution while playing; this measures under the same condition.
+    let timer_1ms = args.iter().any(|arg| arg == "--timer-1ms");
+    #[cfg(target_os = "windows")]
+    if timer_1ms {
+        unsafe { windows::Win32::Media::timeBeginPeriod(1) };
+    }
 
     println!("{}", "=".repeat(60));
     println!("  CAP PLAYBACK PIPELINE BENCHMARK");
@@ -639,6 +865,8 @@ async fn main() {
     println!("Recording: {}", recording_path.display());
     println!("Target FPS: {fps}");
     println!("Max frames: {frame_count}");
+    println!("Force FFmpeg: {force_ffmpeg}");
+    println!("1ms timer: {timer_1ms}");
     println!();
 
     let (recording_meta, meta, project, recordings) = match load_recording(&recording_path).await {
@@ -663,8 +891,15 @@ async fn main() {
     ];
 
     println!("\n--- DECODE-ONLY BENCHMARK ---");
-    let decode_timings =
-        run_decode_only_benchmark(&recording_meta, meta.as_ref(), &project, fps, frame_count).await;
+    let decode_timings = run_decode_only_benchmark(
+        &recording_meta,
+        meta.as_ref(),
+        &project,
+        fps,
+        frame_count,
+        force_ffmpeg,
+    )
+    .await;
     decode_timings.print_report("DECODE-ONLY");
 
     for (resolution_base, label) in &resolutions {
@@ -674,9 +909,12 @@ async fn main() {
             meta.as_ref(),
             &project,
             &recordings,
-            fps,
-            frame_count,
-            *resolution_base,
+            PipelineBenchmarkConfig {
+                fps,
+                frame_count,
+                resolution_base: *resolution_base,
+                force_ffmpeg,
+            },
         )
         .await;
         pipeline_timings.print_report(&format!("FULL PIPELINE - {label}"));
@@ -690,6 +928,7 @@ async fn main() {
         &recordings,
         fps,
         XY::new(1248, 702),
+        force_ffmpeg,
     )
     .await;
     scrub_timings.print_report("SCRUBBING (Half resolution)");

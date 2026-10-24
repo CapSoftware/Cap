@@ -4,7 +4,7 @@
 	"main": "./src/index.tsx",
 	"types": "./src/index.tsx",
 	"scripts": {
-		"dev": "pnpm docker:up",
+		"dev": "bun run docker:up",
 		"docker:up": "docker compose up -d --wait",
 		"docker:stop": "docker compose stop",
 		"docker:clean": "docker compose down -v"

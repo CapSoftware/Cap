@@ -34,8 +34,9 @@ describe("OpenSourceScreenRecorderPage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets open-source-screen-recorder keyword", () => {
@@ -66,9 +67,10 @@ describe("OpenSourceScreenRecorderPage component content", () => {
 		expect(componentSource).toContain("OBS");
 	});
 
-	it("mentions open source and MIT license", () => {
+	it("mentions AGPLv3 and specified MIT crates", () => {
 		expect(componentSource.toLowerCase()).toContain("open source");
-		expect(componentSource.toLowerCase()).toContain("mit");
+		expect(componentSource).toContain("AGPLv3");
+		expect(componentSource).toContain("MIT");
 	});
 
 	it("mentions self-hosting capability", () => {
@@ -93,7 +95,7 @@ describe("OpenSourceScreenRecorderPage FAQ schema", () => {
 		{
 			question: "Is Cap really open source?",
 			answer:
-				"Yes. Cap is fully open source and MIT-licensed. The complete codebase is publicly available on GitHub.",
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. The source is available on GitHub.",
 		},
 		{
 			question: "Can I self-host Cap's screen recordings?",
@@ -129,7 +131,7 @@ describe("OpenSourceScreenRecorderPage FAQ schema", () => {
 		{
 			question: "What license does Cap use?",
 			answer:
-				"Cap is released under the MIT License. You are free to use, copy, modify, merge, publish, distribute, sublicense, and sell copies.",
+				"Most Cap code is under AGPLv3. The cap-camera* and scap-* Rust crate families are under MIT.",
 		},
 	];
 

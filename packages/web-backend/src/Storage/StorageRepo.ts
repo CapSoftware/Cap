@@ -57,7 +57,13 @@ export type StorageObjectInput = {
 	contentType?: string | null;
 	contentLength?: number | null;
 	metadata?: Storage.StorageObjectMetadata | null;
+	preserveMetadata?: boolean;
 };
+
+export type StorageObjectUpdate = Omit<
+	StorageObjectInput,
+	"integrationId" | "ownerId" | "videoId" | "objectKey"
+>;
 
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
@@ -338,11 +344,64 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 									uploadStatus: value.uploadStatus,
 									contentType: value.contentType,
 									contentLength: value.contentLength,
-									metadata: value.metadata,
+									metadata: input.preserveMetadata
+										? Dz.sql`${Db.storageObjects.metadata}`
+										: value.metadata,
 									updatedAt: new Date(),
 								},
 							}),
 					);
+				}),
+		);
+
+		const updateObjectIfCurrent = Effect.fn(
+			"StorageRepo.updateObjectIfCurrent",
+		)(
+			(
+				object: typeof Db.storageObjects.$inferSelect,
+				input: StorageObjectUpdate,
+			) =>
+				Effect.gen(function* () {
+					const uploadSessionUrl = input.uploadSessionUrl
+						? yield* Effect.tryPromise({
+								try: () => encrypt(input.uploadSessionUrl as string),
+								catch: (cause) => new Storage.StorageError({ cause }),
+							})
+						: null;
+
+					const result = yield* db.use((db) =>
+						db
+							.update(Db.storageObjects)
+							.set({
+								providerObjectId: input.providerObjectId,
+								uploadSessionUrl,
+								uploadStatus: input.uploadStatus ?? "pending",
+								contentType: input.contentType ?? null,
+								contentLength: input.contentLength ?? null,
+								metadata: input.preserveMetadata
+									? Dz.sql`${Db.storageObjects.metadata}`
+									: (input.metadata ?? null),
+								updatedAt: new Date(),
+							})
+							.where(
+								Dz.and(
+									Dz.eq(Db.storageObjects.id, object.id),
+									Dz.eq(Db.storageObjects.integrationId, object.integrationId),
+									Dz.eq(
+										Db.storageObjects.objectKeyHash,
+										getObjectKeyHash(object.objectKey),
+									),
+									Dz.eq(Db.storageObjects.objectKey, object.objectKey),
+									Dz.eq(
+										Db.storageObjects.providerObjectId,
+										object.providerObjectId,
+									),
+									Dz.eq(Db.storageObjects.uploadStatus, object.uploadStatus),
+								),
+							),
+					);
+
+					return getAffectedRows(result) > 0;
 				}),
 		);
 
@@ -418,26 +477,93 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 				}),
 		);
 
+		const getVideoForNameSync = Effect.fn("StorageRepo.getVideoForNameSync")(
+			(videoId: Video.VideoId) =>
+				db
+					.use((db) =>
+						db
+							.select({
+								id: Db.videos.id,
+								name: Db.videos.name,
+								ownerId: Db.videos.ownerId,
+								storageIntegrationId: Db.videos.storageIntegrationId,
+							})
+							.from(Db.videos)
+							.where(Dz.eq(Db.videos.id, videoId))
+							.limit(1),
+					)
+					.pipe(Effect.map((rows) => Option.fromNullable(rows[0]))),
+		);
+
+		const updateObjectFileName = Effect.fn("StorageRepo.updateObjectFileName")(
+			(object: typeof Db.storageObjects.$inferSelect, fileName: string) =>
+				db
+					.use((db) =>
+						db
+							.update(Db.storageObjects)
+							.set({
+								metadata: Dz.sql`JSON_SET(COALESCE(${Db.storageObjects.metadata}, JSON_OBJECT()), '$.fileName', ${fileName})`,
+								updatedAt: new Date(),
+							})
+							.where(
+								Dz.and(
+									Dz.eq(Db.storageObjects.id, object.id),
+									Dz.eq(Db.storageObjects.integrationId, object.integrationId),
+									Dz.eq(
+										Db.storageObjects.objectKeyHash,
+										getObjectKeyHash(object.objectKey),
+									),
+									Dz.eq(Db.storageObjects.objectKey, object.objectKey),
+									Dz.eq(
+										Db.storageObjects.providerObjectId,
+										object.providerObjectId,
+									),
+								),
+							),
+					)
+					.pipe(Effect.map((result) => getAffectedRows(result) > 0)),
+		);
+
 		const listObjectsByPrefix = Effect.fn("StorageRepo.listObjectsByPrefix")(
 			(
 				integrationId: Storage.StorageIntegrationId,
 				prefix: string | undefined,
 				maxKeys: number | undefined,
+				continuationToken: string | undefined,
 			) =>
-				db.use((db) => {
-					const where = prefix
-						? Dz.and(
-								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${`${escapeLikePattern(prefix)}%`}`,
-							)
-						: Dz.eq(Db.storageObjects.integrationId, integrationId);
-
-					return db
+				db.use(async (db) => {
+					const pageSize = Math.min(Math.max(maxKeys ?? 1_000, 1), 1_000);
+					const prefixPattern = prefix
+						? `${escapeLikePattern(prefix)}%`
+						: undefined;
+					const objects = await db
 						.select()
 						.from(Db.storageObjects)
-						.where(where)
-						.orderBy(Db.storageObjects.objectKey)
-						.limit(maxKeys ?? 1000);
+						.where(
+							Dz.and(
+								Dz.eq(Db.storageObjects.integrationId, integrationId),
+								// The collation-aware LIKE is a superset of the BINARY match and is
+								// what lets MySQL range-scan integration_object_key_prefix_idx;
+								// the BINARY LIKE keeps the result case-sensitive.
+								prefixPattern
+									? Dz.like(Db.storageObjects.objectKey, prefixPattern)
+									: undefined,
+								prefixPattern
+									? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${prefixPattern}`
+									: undefined,
+								continuationToken
+									? Dz.sql`BINARY ${Db.storageObjects.objectKey} > BINARY ${continuationToken}`
+									: undefined,
+							),
+						)
+						.orderBy(Dz.sql`BINARY ${Db.storageObjects.objectKey}`)
+						.limit(pageSize + 1);
+					const page = objects.slice(0, pageSize);
+					return {
+						objects: page,
+						nextContinuationToken:
+							objects.length > pageSize ? page.at(-1)?.objectKey : undefined,
+					};
 				}),
 		);
 
@@ -465,7 +591,11 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 		);
 
 		const deleteObjectByKey = Effect.fn("StorageRepo.deleteObjectByKey")(
-			(integrationId: Storage.StorageIntegrationId, key: string) =>
+			(
+				integrationId: Storage.StorageIntegrationId,
+				key: string,
+				providerObjectId?: string,
+			) =>
 				db.use((db) =>
 					db
 						.delete(Db.storageObjects)
@@ -473,6 +603,9 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 							Dz.and(
 								Dz.eq(Db.storageObjects.integrationId, integrationId),
 								Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
+								providerObjectId
+									? Dz.eq(Db.storageObjects.providerObjectId, providerObjectId)
+									: undefined,
 							),
 						),
 				),
@@ -489,8 +622,11 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 			saveGoogleDriveAccessTokenCache,
 			releaseGoogleDriveTokenRefreshLease,
 			upsertObject,
+			updateObjectIfCurrent,
 			reserveObject,
 			getObjectByKey,
+			getVideoForNameSync,
+			updateObjectFileName,
 			listObjectsByPrefix,
 			markObjectComplete,
 			deleteObjectByKey,

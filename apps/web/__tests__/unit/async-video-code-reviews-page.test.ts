@@ -34,8 +34,9 @@ describe("AsyncVideoCodeReviewsPage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets async video code reviews keyword", () => {
@@ -52,6 +53,13 @@ describe("AsyncVideoCodeReviewsPage component content", () => {
 
 	it("includes comparison table", () => {
 		expect(componentSource).toContain("comparisonTable");
+	});
+
+	it("describes the license split in the comparison table", () => {
+		expect(componentSource).toContain(
+			'{ text: "Yes — AGPLv3 and MIT crates", status: "positive" }',
+		);
+		expect(componentSource).not.toContain('{ text: "Yes — MIT"');
 	});
 
 	it("includes recording modes section", () => {

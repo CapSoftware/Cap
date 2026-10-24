@@ -8,6 +8,8 @@ use specta::Type;
 use std::time::SystemTime;
 use tracing::*;
 
+pub mod cadence;
+
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
@@ -17,6 +19,13 @@ pub use windows::*;
 mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+mod linux_shm;
+#[cfg(target_os = "linux")]
+pub use linux::*;
 
 pub struct StopCapturing;
 
@@ -65,6 +74,25 @@ pub enum ScreenCaptureTarget {
     CameraOnly,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+pub enum LinuxCaptureSource {
+    Display,
+    Window { id: WindowId },
+    Area,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxCaptureSource {
+    pub fn from_target(target: &ScreenCaptureTarget) -> Self {
+        match target {
+            ScreenCaptureTarget::Window { id } => Self::Window { id: id.clone() },
+            ScreenCaptureTarget::Area { .. } => Self::Area,
+            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
+        }
+    }
+}
+
 impl ScreenCaptureTarget {
     pub fn display(&self) -> Option<Display> {
         match self {
@@ -100,6 +128,16 @@ impl ScreenCaptureTarget {
                 {
                     let display = self.display()?;
                     return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
+                        PhysicalPosition::new(0.0, 0.0),
+                        display.raw_handle().physical_size()?,
+                    )));
+                }
+
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display = self.display()?;
+                    return Some(CursorCropBounds::new_linux(PhysicalBounds::new(
                         PhysicalPosition::new(0.0, 0.0),
                         display.raw_handle().physical_size()?,
                     )));
@@ -141,6 +179,24 @@ impl ScreenCaptureTarget {
                         ),
                     )));
                 }
+
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display_bounds = self.display()?.raw_handle().physical_bounds()?;
+                    let window_bounds = window.raw_handle().physical_bounds()?;
+
+                    return Some(CursorCropBounds::new_linux(PhysicalBounds::new(
+                        PhysicalPosition::new(
+                            window_bounds.position().x() - display_bounds.position().x(),
+                            window_bounds.position().y() - display_bounds.position().y(),
+                        ),
+                        PhysicalSize::new(
+                            window_bounds.size().width(),
+                            window_bounds.size().height(),
+                        ),
+                    )));
+                }
             }
             Self::Area { bounds, .. } => {
                 #[cfg(target_os = "macos")]
@@ -153,21 +209,26 @@ impl ScreenCaptureTarget {
                 #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
-                    let display_bounds = display.raw_handle().physical_bounds()?;
-                    let display_logical_size = display.logical_size()?;
+                    let bounds = logical_area_to_physical_bounds(
+                        *bounds,
+                        display.logical_size()?,
+                        display.physical_size()?,
+                    )?;
 
-                    let scale = display_bounds.size().width() / display_logical_size.width();
+                    return Some(CursorCropBounds::new_windows(bounds));
+                }
 
-                    return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
-                        PhysicalPosition::new(
-                            bounds.position().x() * scale,
-                            bounds.position().y() * scale,
-                        ),
-                        PhysicalSize::new(
-                            bounds.size().width() * scale,
-                            bounds.size().height() * scale,
-                        ),
-                    )));
+                #[cfg(target_os = "linux")]
+                #[allow(clippy::needless_return)]
+                {
+                    let display = self.display()?;
+                    let bounds = logical_area_to_physical_bounds(
+                        *bounds,
+                        display.logical_size()?,
+                        display.physical_size()?,
+                    )?;
+
+                    return Some(CursorCropBounds::new_linux(bounds));
                 }
             }
             Self::CameraOnly => None,
@@ -180,13 +241,29 @@ impl ScreenCaptureTarget {
             Self::Window { id } => Window::from_id(id).and_then(|w| w.physical_size()),
             Self::Area { bounds, .. } => {
                 let display = self.display()?;
-                let scale = display.physical_size()?.width() / display.logical_size()?.width();
-                let size = bounds.size();
 
-                Some(PhysicalSize::new(
-                    size.width() * scale,
-                    size.height() * scale,
-                ))
+                #[cfg(target_os = "macos")]
+                {
+                    let scale = display.physical_size()?.width() / display.logical_size()?.width();
+                    let size = bounds.size();
+
+                    Some(PhysicalSize::new(
+                        size.width() * scale,
+                        size.height() * scale,
+                    ))
+                }
+
+                #[cfg(any(windows, target_os = "linux"))]
+                {
+                    Some(
+                        logical_area_to_physical_bounds(
+                            *bounds,
+                            display.logical_size()?,
+                            display.physical_size()?,
+                        )?
+                        .size(),
+                    )
+                }
             }
             Self::CameraOnly => None,
         }
@@ -301,6 +378,8 @@ pub struct Config {
     crop_bounds: Option<CropBounds>,
     fps: u32,
     show_cursor: bool,
+    #[cfg(target_os = "linux")]
+    linux_source: LinuxCaptureSource,
 }
 
 #[cfg(target_os = "macos")]
@@ -308,6 +387,63 @@ pub type CropBounds = LogicalBounds;
 
 #[cfg(windows)]
 pub type CropBounds = PhysicalBounds;
+
+#[cfg(target_os = "linux")]
+pub type CropBounds = PhysicalBounds;
+
+#[cfg(any(windows, target_os = "linux", test))]
+pub(crate) fn logical_area_to_physical_bounds(
+    bounds: LogicalBounds,
+    logical_display_size: LogicalSize,
+    physical_display_size: PhysicalSize,
+) -> Option<PhysicalBounds> {
+    let (x, width) = logical_axis_to_physical(
+        bounds.position().x(),
+        bounds.size().width(),
+        logical_display_size.width(),
+        physical_display_size.width(),
+    )?;
+    let (y, height) = logical_axis_to_physical(
+        bounds.position().y(),
+        bounds.size().height(),
+        logical_display_size.height(),
+        physical_display_size.height(),
+    )?;
+
+    Some(PhysicalBounds::new(
+        PhysicalPosition::new(x, y),
+        PhysicalSize::new(width, height),
+    ))
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
+fn logical_axis_to_physical(
+    position: f64,
+    size: f64,
+    logical_extent: f64,
+    physical_extent: f64,
+) -> Option<(f64, f64)> {
+    if !position.is_finite()
+        || !size.is_finite()
+        || !logical_extent.is_finite()
+        || !physical_extent.is_finite()
+        || logical_extent <= 0.0
+        || physical_extent <= 0.0
+    {
+        return None;
+    }
+
+    let start = position.clamp(0.0, logical_extent);
+    let end = (position + size).clamp(0.0, logical_extent);
+    let scale = physical_extent / logical_extent;
+    let physical_start = (start.min(end) * scale).round();
+    let physical_end = (start.max(end) * scale).round();
+    let min_size = 2.0_f64.min(physical_extent);
+    let size = (physical_end - physical_start).clamp(min_size, physical_extent);
+    let position = physical_start.min(physical_extent - size).max(0.0);
+
+    Some((position, size))
+}
 
 impl Config {
     pub fn fps(&self) -> u32 {
@@ -335,6 +471,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
         system_audio: bool,
+        #[cfg(target_os = "linux")] linux_source: LinuxCaptureSource,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
         #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
@@ -360,10 +497,33 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             {
                 crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
             }
+
+            #[cfg(target_os = "linux")]
+            {
+                crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
+            }
         }
         .or_else(|| display.physical_size())
         .ok_or(ScreenCaptureInitError::NoBounds)?;
         let output_size = constrain_capture_size(native_output_size, max_capture_size);
+
+        // Diagnostic anchor for area/crop capture: `crop_bounds` is the region the
+        // capturer will read (physical px on Windows/Linux, logical pts on macOS).
+        // For a selection spanning the whole monitor the crop size should match the
+        // display's physical size — a smaller value here means the overlay/crop was
+        // computed against the wrong coordinate space.
+        // (Hoisted into a local because `use tracing::*` glob-imports a `display`
+        // helper that would otherwise shadow the `display` binding inside the macro.)
+        let display_physical_size = display.physical_size();
+        tracing::info!(
+            crop_bounds = ?crop_bounds,
+            ?display_physical_size,
+            native_output_width = native_output_size.width(),
+            native_output_height = native_output_size.height(),
+            output_width = output_size.width(),
+            output_height = output_size.height(),
+            "Screen capture configured"
+        );
 
         Ok(Self {
             config: Config {
@@ -371,6 +531,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 crop_bounds,
                 fps,
                 show_cursor,
+                #[cfg(target_os = "linux")]
+                linux_source,
             },
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),
@@ -437,22 +599,66 @@ where
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
     scap_targets::Display::list()
         .into_iter()
-        .filter_map(|display| {
+        .map(|display| {
             let refresh_rate = validated_refresh_rate(display.raw_handle().refresh_rate());
 
-            Some((
+            (
                 CaptureDisplay {
                     id: display.id(),
-                    name: display.name()?,
+                    name: display
+                        .name()
+                        .unwrap_or_else(|| format!("Display {}", display.id())),
                     refresh_rate,
                 },
                 display,
-            ))
+            )
         })
         .collect()
 }
 
+// NSFloatingWindowLevel is 3; Stay On Top moves Simulator windows to this level.
+#[cfg(target_os = "macos")]
+const MACOS_FLOATING_WINDOW_LEVEL: i32 = 3;
+
+#[cfg(target_os = "macos")]
+pub fn is_listable_macos_window(
+    level: Option<i32>,
+    owner_name: &str,
+    bundle_identifier: Option<&str>,
+    include_accessory_panels: bool,
+    is_accessory_application: bool,
+) -> bool {
+    if owner_name == "Window Server" {
+        return false;
+    }
+
+    if level == Some(0) {
+        return true;
+    }
+
+    let is_third_party_bundle = bundle_identifier.is_some_and(|identifier| {
+        !identifier.starts_with("com.apple.") && !identifier.starts_with("so.cap.desktop")
+    });
+
+    if is_accessory_application {
+        return matches!(level, Some(level) if level > 0)
+            && include_accessory_panels
+            && is_third_party_bundle;
+    }
+
+    level == Some(MACOS_FLOATING_WINDOW_LEVEL)
+        && bundle_identifier.is_some_and(|identifier| !identifier.starts_with("so.cap.desktop"))
+}
+
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
+    list_windows_inner(false)
+}
+
+pub fn list_excludable_windows() -> Vec<(CaptureWindow, Window)> {
+    list_windows_inner(true)
+}
+
+fn list_windows_inner(_include_accessory_panels: bool) -> Vec<(CaptureWindow, Window)> {
     scap_targets::Window::list()
         .into_iter()
         .flat_map(|v| {
@@ -463,13 +669,25 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
             }
 
             #[cfg(target_os = "macos")]
-            {
-                if v.raw_handle().level() != Some(0)
-                    || v.owner_name().filter(|v| v == "Window Server").is_some()
-                {
+            let (owner_name, bundle_identifier) = {
+                let owner_name = v.owner_name()?;
+                let level = v.raw_handle().level();
+                let bundle_identifier = v.raw_handle().bundle_identifier();
+                let is_accessory_application = matches!(level, Some(level) if level > 0)
+                    && v.raw_handle().is_accessory_application();
+
+                if !is_listable_macos_window(
+                    level,
+                    &owner_name,
+                    bundle_identifier.as_deref(),
+                    _include_accessory_panels,
+                    is_accessory_application,
+                ) {
                     return None;
                 }
-            }
+
+                (owner_name, bundle_identifier)
+            };
 
             #[cfg(windows)]
             {
@@ -478,10 +696,8 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
                 }
             }
 
+            #[cfg(not(target_os = "macos"))]
             let owner_name = v.owner_name()?;
-
-            #[cfg(target_os = "macos")]
-            let bundle_identifier = v.raw_handle().bundle_identifier();
 
             #[cfg(not(target_os = "macos"))]
             let bundle_identifier = None;
@@ -503,4 +719,389 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn h264_bounded_capture_matches_the_encoder_downscale() {
+        for (width, height) in [
+            (5120, 2880),
+            (6016, 3384),
+            (5120, 2160),
+            (2880, 5120),
+            (4096, 2304),
+        ] {
+            let bounded = constrain_capture_size(
+                PhysicalSize::new(width as f64, height as f64),
+                Some((crate::H264_MAX_DIMENSION, crate::H264_MAX_DIMENSION)),
+            );
+            let encoder_size =
+                crate::calculate_gpu_compatible_size(width, height, crate::H264_MAX_DIMENSION)
+                    .unwrap_or((width, height));
+            assert_eq!(
+                (bounded.width() as u32, bounded.height() as u32),
+                encoder_size,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_window_source_preserves_selected_window_id() {
+        let id: WindowId = "247".parse().unwrap();
+        let target = ScreenCaptureTarget::Window { id: id.clone() };
+        let LinuxCaptureSource::Window { id: selected } = LinuxCaptureSource::from_target(&target)
+        else {
+            panic!("window target must retain a window source");
+        };
+        assert_eq!(selected, id);
+    }
+
+    #[test]
+    fn logical_area_to_physical_bounds_scales_each_axis() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(120.0, 80.0),
+            LogicalSize::new(640.0, 360.0),
+        );
+        let physical = logical_area_to_physical_bounds(
+            bounds,
+            LogicalSize::new(1920.0, 1080.0),
+            PhysicalSize::new(3840.0, 2160.0),
+        )
+        .unwrap();
+
+        assert_eq!(physical.position().x(), 240.0);
+        assert_eq!(physical.position().y(), 160.0);
+        assert_eq!(physical.size().width(), 1280.0);
+        assert_eq!(physical.size().height(), 720.0);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_adds_only_third_party_accessory_panels() {
+        assert!(is_listable_macos_window(
+            Some(0),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(3),
+            "FreeCastNotes",
+            Some("fi.sherbakov.freecastnotes"),
+            false,
+            true,
+        ));
+        assert!(is_listable_macos_window(
+            Some(3),
+            "FreeCastNotes",
+            Some("fi.sherbakov.freecastnotes"),
+            true,
+            true,
+        ));
+        assert!(is_listable_macos_window(
+            Some(3),
+            "Example",
+            Some("com.example.app"),
+            true,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(25),
+            "Control Centre",
+            Some("com.apple.controlcenter"),
+            true,
+            true,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(3),
+            "Cap",
+            Some("so.cap.desktop.dev"),
+            true,
+            true,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(0),
+            "Window Server",
+            None,
+            true,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            None,
+            "Example",
+            Some("com.example.app"),
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_lists_floating_app_windows_in_the_picker() {
+        assert!(is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Simulator",
+            Some("com.apple.iphonesimulator"),
+            false,
+            false,
+        ));
+        assert!(is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "Cap",
+            Some("so.cap.desktop.dev"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL),
+            "cap-gpui",
+            None,
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(MACOS_FLOATING_WINDOW_LEVEL + 1),
+            "Example",
+            Some("com.example.app"),
+            false,
+            false,
+        ));
+        assert!(!is_listable_macos_window(
+            Some(25),
+            "Control Centre",
+            Some("com.apple.controlcenter"),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_preserves_normal_windows_and_rejects_other_levels() {
+        for accessory in [false, true] {
+            assert!(is_listable_macos_window(
+                Some(0),
+                "Example",
+                None,
+                false,
+                accessory
+            ));
+        }
+        for level in [None, Some(-1), Some(1), Some(2), Some(4), Some(25)] {
+            for include_accessory_panels in [false, true] {
+                assert!(!is_listable_macos_window(
+                    level,
+                    "Example",
+                    Some("com.example.app"),
+                    include_accessory_panels,
+                    false,
+                ));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_preserves_accessory_panel_exclusions() {
+        for level in [Some(3), Some(25)] {
+            for bundle in [
+                None,
+                Some("com.apple.controlcenter"),
+                Some("so.cap.desktop.dev"),
+            ] {
+                for include_accessory_panels in [false, true] {
+                    assert!(!is_listable_macos_window(
+                        level,
+                        "Panel",
+                        bundle,
+                        include_accessory_panels,
+                        true,
+                    ));
+                }
+            }
+            assert!(!is_listable_macos_window(
+                level,
+                "Panel",
+                Some("com.example.app"),
+                false,
+                true,
+            ));
+            assert!(is_listable_macos_window(
+                level,
+                "Panel",
+                Some("com.example.app"),
+                true,
+                true,
+            ));
+        }
+        for level in [Some(0), Some(3)] {
+            assert!(!is_listable_macos_window(
+                level,
+                "Window Server",
+                Some("com.example.app"),
+                false,
+                false,
+            ));
+        }
+    }
+
+    #[test]
+    fn logical_area_to_physical_bounds_clamps_to_display() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(-10.0, 100.0),
+            LogicalSize::new(2_000.0, 1_000.0),
+        );
+        let physical = logical_area_to_physical_bounds(
+            bounds,
+            LogicalSize::new(1920.0, 1080.0),
+            PhysicalSize::new(3840.0, 2160.0),
+        )
+        .unwrap();
+
+        assert_eq!(physical.position().x(), 0.0);
+        assert_eq!(physical.position().y(), 200.0);
+        assert_eq!(physical.size().width(), 3840.0);
+        assert_eq!(physical.size().height(), 1960.0);
+    }
+
+    #[test]
+    fn logical_area_to_physical_bounds_keeps_edge_crop_inside_display() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(1930.0, -20.0),
+            LogicalSize::new(100.0, 0.0),
+        );
+        let physical = logical_area_to_physical_bounds(
+            bounds,
+            LogicalSize::new(1920.0, 1080.0),
+            PhysicalSize::new(3840.0, 2160.0),
+        )
+        .unwrap();
+
+        assert_eq!(physical.position().x(), 3838.0);
+        assert_eq!(physical.position().y(), 0.0);
+        assert_eq!(physical.size().width(), 2.0);
+        assert_eq!(physical.size().height(), 2.0);
+    }
+
+    // Regression coverage for the HiDPI secondary-monitor area bug: a selection
+    // that spans the entire overlay (== the display's logical size) must map to
+    // the entire physical display, with no truncation, at every common scale.
+    // These pin the invariant that made "records ~70% of the selection" possible
+    // once the overlay is correctly sized to cover the monitor.
+    #[test]
+    fn full_selection_covers_full_display_at_every_scale() {
+        // (logical_size, physical_size) pairs for 100/125/150/175/200% scaling.
+        let scales = [
+            (
+                LogicalSize::new(1920.0, 1080.0),
+                PhysicalSize::new(1920.0, 1080.0),
+            ), // 100%
+            (
+                LogicalSize::new(1536.0, 864.0),
+                PhysicalSize::new(1920.0, 1080.0),
+            ), // 125%
+            (
+                LogicalSize::new(1280.0, 720.0),
+                PhysicalSize::new(1920.0, 1080.0),
+            ), // 150%
+            (
+                LogicalSize::new(1_097.142_857_142_857, 617.142_857_142_857),
+                PhysicalSize::new(1920.0, 1080.0),
+            ), // 175%
+            (
+                LogicalSize::new(1280.0, 720.0),
+                PhysicalSize::new(2560.0, 1440.0),
+            ), // 200%
+        ];
+
+        for (logical, physical) in scales {
+            let selection = LogicalBounds::new(LogicalPosition::new(0.0, 0.0), logical);
+            let crop = logical_area_to_physical_bounds(selection, logical, physical).unwrap();
+
+            assert_eq!(
+                crop.position().x(),
+                0.0,
+                "full selection must start at x=0 (logical {logical:?})"
+            );
+            assert_eq!(
+                crop.position().y(),
+                0.0,
+                "full selection must start at y=0 (logical {logical:?})"
+            );
+            assert_eq!(
+                crop.size().width(),
+                physical.width(),
+                "full selection must span full physical width (logical {logical:?})"
+            );
+            assert_eq!(
+                crop.size().height(),
+                physical.height(),
+                "full selection must span full physical height (logical {logical:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn fractional_area_edges_round_to_pixels_and_stay_inside_the_display() {
+        for (position, size, expected) in [
+            (100.2, 800.4, (150.0, 1201.0)),
+            (-0.2, 100.4, (0.0, 150.0)),
+            (1279.8, 10.0, (1918.0, 2.0)),
+        ] {
+            assert_eq!(
+                logical_axis_to_physical(position, size, 1280.0, 1920.0),
+                Some(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn full_overlay_selection_keeps_native_resolution_at_fractional_scales() {
+        for scale in [1.25, 1.5, 1.75] {
+            let physical = PhysicalSize::new(1920.0, 1080.0);
+            let logical = LogicalSize::new(physical.width() / scale, physical.height() / scale);
+            let overlay_size = LogicalSize::new(
+                f64::from(logical.width() as f32),
+                f64::from(logical.height() as f32),
+            );
+            let selection = LogicalBounds::new(LogicalPosition::new(0.0, 0.0), overlay_size);
+            let crop = logical_area_to_physical_bounds(selection, logical, physical).unwrap();
+            let output = constrain_capture_size(crop.size(), None);
+
+            assert_eq!(output.width(), physical.width(), "scale {scale}");
+            assert_eq!(output.height(), physical.height(), "scale {scale}");
+        }
+    }
+
+    #[test]
+    fn partial_selection_scales_by_display_dpi() {
+        // 150% display: logical 1280x720 backed by physical 1920x1080.
+        let logical = LogicalSize::new(1280.0, 720.0);
+        let physical = PhysicalSize::new(1920.0, 1080.0);
+        let selection = LogicalBounds::new(
+            LogicalPosition::new(100.0, 100.0),
+            LogicalSize::new(500.0, 300.0),
+        );
+
+        let crop = logical_area_to_physical_bounds(selection, logical, physical).unwrap();
+
+        // Every axis multiplied by the 1.5 device scale.
+        assert_eq!(crop.position().x(), 150.0);
+        assert_eq!(crop.position().y(), 150.0);
+        assert_eq!(crop.size().width(), 750.0);
+        assert_eq!(crop.size().height(), 450.0);
+    }
 }

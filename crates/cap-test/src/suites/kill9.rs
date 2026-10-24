@@ -307,6 +307,7 @@ pub async fn run_record_harness(args: RecordHarnessArgs) -> Result<()> {
         target_fps: args.fps,
         duration: Duration::from_secs(args.max_duration_secs),
         include_mic: args.include_mic,
+        include_camera: false,
         include_system_audio: args.include_system_audio,
         fragmented: true,
     };

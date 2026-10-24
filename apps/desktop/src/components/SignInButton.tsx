@@ -11,7 +11,7 @@ export function SignInButton(
 	return (
 		<Button
 			size="md"
-			class="flex flex-grow justify-center items-center"
+			class="flex grow justify-center items-center"
 			{...props}
 			variant={signIn.isPending ? "gray" : "primary"}
 			onClick={() => {

@@ -1,30 +1,37 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
+#[cfg(target_os = "linux")]
+use crate::sources::screen_capture::{
+    X11Grabber, X11InputConfig, prefers_wayland_portal, x11_capture_rect,
+};
 #[cfg(target_os = "macos")]
+use anyhow::Context;
+#[cfg(target_os = "linux")]
 use anyhow::Context;
 use anyhow::anyhow;
 use image::{DynamicImage, RgbImage, RgbaImage};
 #[cfg(target_os = "macos")]
 use scap_ffmpeg::AsFFmpeg;
+#[cfg(not(target_os = "linux"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "linux"))]
 use std::time::Duration;
+#[cfg(not(target_os = "linux"))]
 use tokio::sync::oneshot;
+#[cfg(not(target_os = "linux"))]
 use tracing::debug;
 #[cfg(target_os = "macos")]
 use tracing::error;
 
 #[cfg(target_os = "macos")]
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
-#[cfg(target_os = "macos")]
-use scap_screencapturekit::{Capturer, StreamCfgBuilder};
-
 #[cfg(target_os = "windows")]
 use scap_direct3d::{Capturer, Frame, NewCapturerError, PixelFormat, Settings};
+#[cfg(target_os = "macos")]
+use scap_screencapturekit::{Capturer, StreamCfgBuilder};
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{HMODULE, HWND};
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BOX, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
@@ -46,13 +53,15 @@ fn unsupported_error() -> anyhow::Error {
     anyhow!(WINDOWS_CAPTURE_UNSUPPORTED)
 }
 
-#[derive(Clone, Copy)]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Clone, Copy, Debug)]
 enum ChannelOrder {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Rgba,
     Bgra,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn rgb_from_rgba(
     data: &[u8],
     width: usize,
@@ -74,30 +83,108 @@ fn rgb_from_rgba(
     let rgb_len = height.checked_mul(width_stride)?;
     let mut rgb = vec![0u8; rgb_len];
 
-    for y in 0..height {
-        let src_start = y.checked_mul(bytes_per_row)?;
-        let src_end = src_start.checked_add(row_bytes)?;
-        let dst_start = y.checked_mul(width_stride)?;
-        let dst_end = dst_start.checked_add(width_stride)?;
-
-        let src_row = data.get(src_start..src_end)?;
-        let dst_row = rgb.get_mut(dst_start..dst_end)?;
-
-        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
-            let (r, b) = match order {
-                ChannelOrder::Rgba => (src[0], src[2]),
-                ChannelOrder::Bgra => (src[2], src[0]),
-            };
-
-            dst[0] = r;
-            dst[1] = src[1];
-            dst[2] = b;
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("ssse3") {
+            for y in 0..height {
+                let (src_row, dst_row) =
+                    rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+                unsafe {
+                    reorder_rgb_row_ssse3(src_row, dst_row, order);
+                }
+            }
+            return RgbImage::from_raw(width as u32, height as u32, rgb);
         }
+    }
+
+    for y in 0..height {
+        let (src_row, dst_row) =
+            rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+        reorder_rgb_row_scalar(src_row, dst_row, order);
     }
 
     RgbImage::from_raw(width as u32, height as u32, rgb)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn rgb_row_pair<'a>(
+    data: &'a [u8],
+    rgb: &'a mut [u8],
+    y: usize,
+    bytes_per_row: usize,
+    row_bytes: usize,
+    width_stride: usize,
+) -> Option<(&'a [u8], &'a mut [u8])> {
+    let src_start = y.checked_mul(bytes_per_row)?;
+    let src_end = src_start.checked_add(row_bytes)?;
+    let dst_start = y.checked_mul(width_stride)?;
+    let dst_end = dst_start.checked_add(width_stride)?;
+    let src_row = data.get(src_start..src_end)?;
+    let dst_row = rgb.get_mut(dst_start..dst_end)?;
+    Some((src_row, dst_row))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn reorder_rgb_row_scalar(src: &[u8], dst: &mut [u8], order: ChannelOrder) {
+    match order {
+        ChannelOrder::Rgba => rgba_to_rgb_scalar(src, dst),
+        ChannelOrder::Bgra => bgra_to_rgb_scalar(src, dst),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn rgba_to_rgb_scalar(src: &[u8], dst: &mut [u8]) {
+    for (src, dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn bgra_to_rgb_scalar(src: &[u8], dst: &mut [u8]) {
+    for (src, dst) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows", test),
+    target_arch = "x86_64"
+))]
+#[target_feature(enable = "ssse3")]
+unsafe fn reorder_rgb_row_ssse3(src: &[u8], dst: &mut [u8], order: ChannelOrder) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        let mask = match order {
+            ChannelOrder::Rgba => {
+                _mm_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1)
+            }
+            ChannelOrder::Bgra => {
+                _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1)
+            }
+        };
+
+        let pixels = (src.len() / 4).min(dst.len() / 3);
+        let simd_pixels = pixels & !3;
+        for i in (0..simd_pixels).step_by(4) {
+            let v = _mm_loadu_si128(src.as_ptr().add(i * 4) as *const __m128i);
+            let shuffled = _mm_shuffle_epi8(v, mask);
+            let dst_ptr = dst.as_mut_ptr().add(i * 3);
+            let lo = _mm_cvtsi128_si64(shuffled);
+            let hi = _mm_cvtsi128_si32(_mm_srli_si128(shuffled, 8));
+            std::ptr::write_unaligned(dst_ptr.cast::<i64>(), lo);
+            std::ptr::write_unaligned(dst_ptr.add(8).cast::<i32>(), hi);
+        }
+
+        reorder_rgb_row_scalar(&src[simd_pixels * 4..], &mut dst[simd_pixels * 3..], order);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn rgba_from_raw(
     data: &[u8],
     width: usize,
@@ -145,29 +232,111 @@ fn rgba_from_raw(
 }
 
 fn apply_window_rounded_corners(image: RgbImage, target: &ScreenCaptureTarget) -> RgbaImage {
+    round_rgb_corners(image, window_corner_radius_px(target))
+}
+
+fn round_rgb_corners(image: RgbImage, corner_radius: f32) -> RgbaImage {
     let width = image.width();
     let height = image.height();
-
-    let corner_radius = window_corner_radius_px(target);
 
     if corner_radius <= 0.0 {
         return image::buffer::ConvertBuffer::convert(&image);
     }
 
-    let fw = width as f32;
-    let fh = height as f32;
+    let geom = CornerGeom {
+        fw: width as f32,
+        fh: height as f32,
+        radius: corner_radius,
+    };
+    let corner_x = corner_band_px(corner_radius, width) as usize;
+    let corner_y = corner_band_px(corner_radius, height) as usize;
+    let width_us = width as usize;
+    let height_us = height as usize;
+    let src = image.into_raw();
     let mut rgba = RgbaImage::new(width, height);
+    let dst = rgba.as_mut();
+    let src_stride = width_us * 3;
+    let dst_stride = width_us * 4;
+    let right = width_us.saturating_sub(corner_x);
+    let x_covers_row = corner_x >= right;
 
-    for (x, y, rgb_pixel) in image.enumerate_pixels() {
-        let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, corner_radius);
-        rgba.put_pixel(
-            x,
-            y,
-            image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+    for y in 0..height_us {
+        let src_off = y * src_stride;
+        let dst_off = y * dst_stride;
+        let src_row = &src[src_off..src_off + src_stride];
+        let dst_row = &mut dst[dst_off..dst_off + dst_stride];
+        let y_in_band = y < corner_y || y.saturating_add(corner_y) >= height_us;
+
+        if !y_in_band || corner_x == 0 {
+            copy_rgb_opaque(src_row, dst_row);
+            continue;
+        }
+
+        if x_covers_row {
+            fill_corner_span(src_row, dst_row, 0, width_us, y, geom);
+            continue;
+        }
+
+        fill_corner_span(src_row, dst_row, 0, corner_x, y, geom);
+        copy_rgb_opaque(
+            &src_row[corner_x * 3..right * 3],
+            &mut dst_row[corner_x * 4..right * 4],
         );
+        fill_corner_span(src_row, dst_row, right, width_us, y, geom);
     }
 
     rgba
+}
+
+#[derive(Clone, Copy)]
+struct CornerGeom {
+    fw: f32,
+    fh: f32,
+    radius: f32,
+}
+
+fn corner_band_px(radius: f32, extent: u32) -> u32 {
+    if extent == 0 {
+        return 0;
+    }
+
+    let rounded = radius.ceil();
+    if !rounded.is_finite() || rounded >= extent as f32 {
+        extent
+    } else if rounded <= 0.0 {
+        0
+    } else {
+        rounded as u32
+    }
+}
+
+fn copy_rgb_opaque(src: &[u8], dst: &mut [u8]) {
+    for (src_px, dst_px) in src.chunks_exact(3).zip(dst.chunks_exact_mut(4)) {
+        dst_px[0] = src_px[0];
+        dst_px[1] = src_px[1];
+        dst_px[2] = src_px[2];
+        dst_px[3] = 255;
+    }
+}
+
+fn fill_corner_span(
+    src_row: &[u8],
+    dst_row: &mut [u8],
+    x_start: usize,
+    x_end: usize,
+    y: usize,
+    geom: CornerGeom,
+) {
+    let y_center = y as f32 + 0.5;
+    for x in x_start..x_end {
+        let src_i = x * 3;
+        let dst_i = x * 4;
+        let alpha = rounded_corner_alpha(x as f32 + 0.5, y_center, geom.fw, geom.fh, geom.radius);
+        dst_row[dst_i] = src_row[src_i];
+        dst_row[dst_i + 1] = src_row[src_i + 1];
+        dst_row[dst_i + 2] = src_row[src_i + 2];
+        dst_row[dst_i + 3] = alpha;
+    }
 }
 
 fn window_corner_radius_px(target: &ScreenCaptureTarget) -> f32 {
@@ -357,14 +526,24 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
 
 #[cfg(target_os = "windows")]
 fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+
     static DEVICE: OnceLock<Option<ID3D11Device>> = OnceLock::new();
 
     let device = DEVICE.get_or_init(|| {
+        let selected = match cap_d3d_adapter::select_capture_adapter(None) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "screenshot: no physical hardware adapter, fast path disabled");
+                return None;
+            }
+        };
+
         let mut device = None;
         let result = unsafe {
             D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+                Some(&selected.adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 Default::default(),
                 None,
@@ -375,7 +554,12 @@ fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
             )
         };
 
-        if result.is_err() {
+        if let Err(e) = result {
+            tracing::warn!(
+                adapter = %selected.description,
+                error = ?e,
+                "screenshot: D3D11CreateDevice failed on pinned adapter, fast path disabled"
+            );
             return None;
         }
 
@@ -794,6 +978,223 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
     Some(image)
 }
 
+#[cfg(target_os = "linux")]
+pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
+    if uses_wayland_portal() {
+        let image = capture_screenshot_wayland(&target).await?;
+        return Ok(finalize_screenshot(image, &target));
+    }
+
+    let image = capture_screenshot_x11(&target).await?;
+    Ok(finalize_screenshot(image, &target))
+}
+
+#[cfg(target_os = "linux")]
+pub fn uses_wayland_portal() -> bool {
+    prefers_wayland_portal()
+}
+
+#[cfg(target_os = "linux")]
+async fn capture_screenshot_wayland(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    let display_id = wayland_screenshot_display_id(target)?;
+
+    let displays = scap_targets::Display::list();
+    let [display] = displays.as_slice() else {
+        return Err(anyhow!(
+            "Wayland screenshot portal cannot safely isolate the selected display"
+        ));
+    };
+
+    if display.id() != *display_id {
+        return Err(anyhow!(
+            "Wayland screenshot portal cannot safely isolate the selected display"
+        ));
+    }
+
+    let display_size = display
+        .physical_size()
+        .ok_or_else(|| anyhow!("Selected Wayland display size unavailable"))?;
+    let (width, height) =
+        checked_wayland_display_size(display_size.width(), display_size.height())?;
+    let logical_size = display
+        .logical_size()
+        .ok_or_else(|| anyhow!("Selected Wayland display logical size unavailable"))?;
+    let crop = checked_wayland_screenshot_crop(target, width, height, logical_size)?;
+
+    let screenshot = ashpd::desktop::screenshot::Screenshot::request()
+        .interactive(false)
+        .send()
+        .await
+        .context("Request Wayland screenshot from desktop portal")?
+        .response()
+        .context("Wayland screenshot portal request was cancelled or rejected")?;
+
+    let uri = screenshot.uri();
+    if !is_local_wayland_screenshot_uri(uri.scheme(), uri.host_str()) {
+        return Err(anyhow!(
+            "Wayland screenshot portal returned a non-local file URI"
+        ));
+    }
+
+    let path = uri
+        .to_file_path()
+        .map_err(|()| anyhow!("Wayland screenshot portal returned a non-local file URI"))?;
+
+    let metadata = tokio::fs::symlink_metadata(&path)
+        .await
+        .context("Read Wayland screenshot portal file metadata")?;
+    if !metadata.file_type().is_file() {
+        return Err(anyhow!(
+            "Wayland screenshot portal returned a non-regular file"
+        ));
+    }
+
+    let image = tokio::task::spawn_blocking(move || {
+        use std::os::unix::fs::MetadataExt;
+
+        let file = std::fs::File::open(&path).context("Open Wayland screenshot portal image")?;
+        let opened_metadata = file
+            .metadata()
+            .context("Read opened Wayland screenshot portal file metadata")?;
+        if !opened_metadata.file_type().is_file()
+            || opened_metadata.dev() != metadata.dev()
+            || opened_metadata.ino() != metadata.ino()
+        {
+            return Err(anyhow!(
+                "Wayland screenshot portal image changed before it could be read"
+            ));
+        }
+
+        image::ImageReader::new(std::io::BufReader::new(file))
+            .with_guessed_format()
+            .context("Identify Wayland screenshot portal image format")?
+            .decode()
+            .map(DynamicImage::into_rgb8)
+            .context("Decode Wayland screenshot portal image")
+    })
+    .await
+    .context("Wayland screenshot image task failed")??;
+
+    if !wayland_screenshot_matches_display(image.width(), image.height(), width, height) {
+        return Err(anyhow!(
+            "Wayland screenshot contains content outside the selected display"
+        ));
+    }
+
+    match crop {
+        Some((x, y, width, height)) => {
+            Ok(image::imageops::crop_imm(&image, x, y, width, height).to_image())
+        }
+        None => Ok(image),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_screenshot_display_id(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<&scap_targets::DisplayId> {
+    match target {
+        ScreenCaptureTarget::Display { id } => Ok(id),
+        ScreenCaptureTarget::Area { screen, .. } => Ok(screen),
+        ScreenCaptureTarget::Window { .. } => Err(anyhow!(
+            "Wayland screenshot portal cannot safely isolate the selected window"
+        )),
+        ScreenCaptureTarget::CameraOnly => {
+            Err(anyhow!("Camera-only not supported for screenshots"))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_local_wayland_screenshot_uri(scheme: &str, host: Option<&str>) -> bool {
+    scheme == "file" && (host.is_none() || host == Some("localhost"))
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_screenshot_matches_display(
+    image_width: u32,
+    image_height: u32,
+    display_width: u32,
+    display_height: u32,
+) -> bool {
+    image_width == display_width && image_height == display_height
+}
+
+#[cfg(target_os = "linux")]
+fn checked_wayland_display_size(width: f64, height: f64) -> anyhow::Result<(u32, u32)> {
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || width.fract() != 0.0
+        || height.fract() != 0.0
+        || width > f64::from(u32::MAX)
+        || height > f64::from(u32::MAX)
+    {
+        return Err(anyhow!("Selected Wayland display size is invalid"));
+    }
+
+    Ok((width as u32, height as u32))
+}
+
+#[cfg(target_os = "linux")]
+fn checked_wayland_screenshot_crop(
+    target: &ScreenCaptureTarget,
+    image_width: u32,
+    image_height: u32,
+    logical_size: scap_targets::bounds::LogicalSize,
+) -> anyhow::Result<Option<(u32, u32, u32, u32)>> {
+    let ScreenCaptureTarget::Area { bounds, .. } = target else {
+        return Ok(None);
+    };
+
+    let x = bounds.position().x();
+    let y = bounds.position().y();
+    let width = bounds.size().width();
+    let height = bounds.size().height();
+    let right = x + width;
+    let bottom = y + height;
+
+    if !logical_size.width().is_finite()
+        || !logical_size.height().is_finite()
+        || logical_size.width() <= 0.0
+        || logical_size.height() <= 0.0
+        || image_width == 0
+        || image_height == 0
+    {
+        return Err(anyhow!("Selected Wayland display scale is invalid"));
+    }
+
+    if ![x, y, width, height, right, bottom]
+        .iter()
+        .all(|value| value.is_finite())
+        || x < 0.0
+        || y < 0.0
+        || width <= 0.0
+        || height <= 0.0
+        || right > logical_size.width()
+        || bottom > logical_size.height()
+    {
+        return Err(anyhow!(
+            "Selected Wayland screenshot area exceeds the selected display"
+        ));
+    }
+
+    let scale_x = f64::from(image_width) / logical_size.width();
+    let scale_y = f64::from(image_height) / logical_size.height();
+    let x = (x * scale_x).ceil() as u32;
+    let y = (y * scale_y).ceil() as u32;
+    let right = (right * scale_x).floor() as u32;
+    let bottom = (bottom * scale_y).floor() as u32;
+
+    if right <= x || bottom <= y {
+        return Err(anyhow!("Selected Wayland screenshot area is empty"));
+    }
+
+    Ok(Some((x, y, right - x, bottom - y)))
+}
+
+#[cfg(not(target_os = "linux"))]
 pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
     #[cfg(target_os = "macos")]
     {
@@ -958,7 +1359,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 display
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
             }
             ScreenCaptureTarget::Window { id } => {
                 let window = scap_targets::Window::from_id(&id)
@@ -966,7 +1367,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 window
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
             }
             ScreenCaptureTarget::Area { screen, .. } => {
                 let display = scap_targets::Display::from_id(&screen)
@@ -974,10 +1375,19 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 display
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
             }
             ScreenCaptureTarget::CameraOnly => {
                 return Err(anyhow!("Camera-only not supported for screenshots"));
+            }
+        };
+
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                let fallback_image = gdi_or_error(&target, error)?;
+                return crop_area_if_needed(fallback_image, &target, false)
+                    .map(|image| finalize_screenshot(image, &target));
             }
         };
 
@@ -1078,6 +1488,7 @@ fn finalize_screenshot(image: RgbImage, target: &ScreenCaptureTarget) -> Dynamic
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn crop_area_if_needed(
     image: RgbImage,
     target: &ScreenCaptureTarget,
@@ -1087,6 +1498,9 @@ fn crop_area_if_needed(
         if skip_crop {
             return Ok(image);
         }
+
+        #[cfg(target_os = "linux")]
+        let _ = screen;
 
         #[cfg(target_os = "macos")]
         let scale = {
@@ -1103,6 +1517,9 @@ fn crop_area_if_needed(
             let logical_width = display.logical_size().map(|s| s.width()).unwrap_or(1.0);
             physical_width / logical_width
         };
+
+        #[cfg(target_os = "linux")]
+        let scale = 1.0;
 
         let x = (bounds.position().x() * scale) as u32;
         let y = (bounds.position().y() * scale) as u32;
@@ -1128,7 +1545,7 @@ fn crop_area_if_needed(
     Ok(image)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
         frame.format(),
@@ -1171,4 +1588,574 @@ fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result
 
     RgbImage::from_raw(width as u32, height as u32, img_buffer)
         .ok_or_else(|| anyhow!("Failed to create image buffer"))
+}
+
+#[cfg(target_os = "linux")]
+async fn capture_screenshot_x11(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    let target = target.clone();
+    tokio::task::spawn_blocking(move || capture_screenshot_x11_blocking(&target))
+        .await
+        .context("Linux screenshot task failed")?
+}
+
+#[cfg(target_os = "linux")]
+fn capture_screenshot_x11_blocking(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    let (display_name, x, y, width, height) = linux_capture_geometry(target)?;
+    let config = X11InputConfig {
+        display_name,
+        window_id: match target {
+            ScreenCaptureTarget::Window { id } => {
+                Some(id.to_string().parse().context("Invalid X11 window ID")?)
+            }
+            _ => None,
+        },
+        x,
+        y,
+        width,
+        height,
+        fps: 1,
+        show_cursor: false,
+    };
+    let mut grabber = X11Grabber::new(&config)?;
+    let frame = grabber.grab()?;
+    convert_ffmpeg_frame_to_image(&frame)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_capture_geometry(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<(String, i32, i32, u32, u32)> {
+    let display_name = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+    match target {
+        ScreenCaptureTarget::Display { id } => {
+            let display =
+                scap_targets::Display::from_id(id).ok_or_else(|| anyhow!("Display not found"))?;
+            let position = display
+                .raw_handle()
+                .physical_position()
+                .ok_or_else(|| anyhow!("Display position unavailable"))?;
+            let size = display
+                .physical_size()
+                .ok_or_else(|| anyhow!("Display size unavailable"))?;
+            let (x, y, width, height) = x11_capture_rect(
+                position.x(),
+                position.y(),
+                size.width(),
+                size.height(),
+                None,
+            )?;
+            Ok((display_name, x, y, width, height))
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let window =
+                scap_targets::Window::from_id(id).ok_or_else(|| anyhow!("Window not found"))?;
+            let bounds = window
+                .raw_handle()
+                .physical_bounds()
+                .ok_or_else(|| anyhow!("Window bounds unavailable"))?;
+            Ok((
+                display_name,
+                0,
+                0,
+                bounds.size().width() as u32,
+                bounds.size().height() as u32,
+            ))
+        }
+        ScreenCaptureTarget::Area { screen, bounds } => {
+            let display = scap_targets::Display::from_id(screen)
+                .ok_or_else(|| anyhow!("Display not found"))?;
+            let position = display
+                .raw_handle()
+                .physical_position()
+                .ok_or_else(|| anyhow!("Display position unavailable"))?;
+            let size = display
+                .physical_size()
+                .ok_or_else(|| anyhow!("Display size unavailable"))?;
+            let crop = (
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+            );
+            let (x, y, width, height) = x11_capture_rect(
+                position.x(),
+                position.y(),
+                size.width(),
+                size.height(),
+                Some(crop),
+            )?;
+            Ok((display_name, x, y, width, height))
+        }
+        ScreenCaptureTarget::CameraOnly => {
+            Err(anyhow!("Camera-only not supported for screenshots"))
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod wayland_screenshot_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    fn area_target(x: f64, y: f64, width: f64, height: f64) -> ScreenCaptureTarget {
+        ScreenCaptureTarget::Area {
+            screen: "0".parse().expect("valid display id"),
+            bounds: LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height)),
+        }
+    }
+
+    #[test]
+    fn only_local_file_screenshot_uris_are_accepted() {
+        assert!(is_local_wayland_screenshot_uri("file", None));
+        assert!(is_local_wayland_screenshot_uri("file", Some("localhost")));
+        assert!(!is_local_wayland_screenshot_uri("https", None));
+        assert!(!is_local_wayland_screenshot_uri("https", Some("localhost")));
+        assert!(!is_local_wayland_screenshot_uri("file", Some("remote")));
+    }
+
+    #[test]
+    fn valid_wayland_display_dimensions_must_be_exact_positive_pixels() {
+        assert_eq!(
+            checked_wayland_display_size(1920.0, 1080.0).expect("valid display"),
+            (1920, 1080)
+        );
+
+        for (width, height) in [
+            (0.0, 1080.0),
+            (1920.0, -1.0),
+            (1920.5, 1080.0),
+            (f64::NAN, 1080.0),
+            (1920.0, f64::INFINITY),
+            (f64::from(u32::MAX) + 1.0, 1080.0),
+        ] {
+            assert!(checked_wayland_display_size(width, height).is_err());
+        }
+    }
+
+    #[test]
+    fn screenshot_must_match_the_selected_display_exactly() {
+        assert!(wayland_screenshot_matches_display(1920, 1080, 1920, 1080));
+        assert!(!wayland_screenshot_matches_display(3840, 1080, 1920, 1080));
+        assert!(!wayland_screenshot_matches_display(1920, 2160, 1920, 1080));
+        assert!(!wayland_screenshot_matches_display(1280, 720, 1920, 1080));
+    }
+
+    #[test]
+    fn selected_wayland_area_is_cropped_exactly() {
+        let target = area_target(100.0, 120.0, 640.0, 360.0);
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1920.0, 1080.0))
+                .expect("valid crop"),
+            Some((100, 120, 640, 360))
+        );
+    }
+
+    #[test]
+    fn scaled_wayland_area_uses_physical_screenshot_pixels() {
+        let target = area_target(100.0, 120.0, 400.0, 200.0);
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(960.0, 540.0),)
+                .unwrap(),
+            Some((200, 240, 800, 400))
+        );
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1280.0, 720.0),)
+                .unwrap(),
+            Some((150, 180, 600, 300))
+        );
+    }
+
+    #[test]
+    fn scaled_wayland_area_rejects_bounds_outside_logical_display() {
+        let target = area_target(950.0, 0.0, 20.0, 10.0);
+        assert!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(960.0, 540.0),)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fractional_wayland_areas_never_include_pixels_outside_selection() {
+        let target = area_target(10.25, 20.25, 30.75, 40.75);
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1920.0, 1080.0))
+                .expect("valid crop"),
+            Some((11, 21, 30, 40))
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_or_non_finite_wayland_areas_are_rejected() {
+        for (x, y, width, height) in [
+            (-1.0, 0.0, 10.0, 10.0),
+            (0.0, -1.0, 10.0, 10.0),
+            (1915.0, 0.0, 10.0, 10.0),
+            (0.0, 1075.0, 10.0, 10.0),
+            (0.0, 0.0, 0.0, 10.0),
+            (0.0, 0.0, 10.0, -1.0),
+            (f64::NAN, 0.0, 10.0, 10.0),
+            (0.0, 0.0, f64::INFINITY, 10.0),
+            (f64::MAX, 0.0, f64::MAX, 10.0),
+        ] {
+            let target = area_target(x, y, width, height);
+            assert!(
+                checked_wayland_screenshot_crop(
+                    &target,
+                    1920,
+                    1080,
+                    LogicalSize::new(1920.0, 1080.0)
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn too_small_fractional_wayland_areas_are_rejected() {
+        let target = area_target(10.25, 20.25, 0.25, 0.25);
+        assert!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1920.0, 1080.0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn wayland_window_screenshots_are_rejected_before_portal_capture() {
+        let target = ScreenCaptureTarget::Window {
+            id: "0".parse().expect("valid window id"),
+        };
+        assert!(wayland_screenshot_display_id(&target).is_err());
+    }
+
+    #[test]
+    fn wayland_camera_only_screenshots_are_rejected_before_portal_capture() {
+        assert!(wayland_screenshot_display_id(&ScreenCaptureTarget::CameraOnly).is_err());
+    }
+}
+
+#[cfg(test)]
+mod screenshot_pixel_tests {
+    use super::*;
+
+    fn paint(len: usize, seed: u32) -> Vec<u8> {
+        let mut state = seed;
+        let mut out = vec![0u8; len];
+        for byte in &mut out {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            *byte = (state >> 16) as u8;
+        }
+        out
+    }
+
+    fn assert_bytes_eq(got: &[u8], expected: &[u8], label: &str) {
+        assert_eq!(got.len(), expected.len(), "{label} length");
+        let mismatch = got
+            .iter()
+            .zip(expected.iter())
+            .position(|(got_byte, expected_byte)| got_byte != expected_byte);
+        if let Some(index) = mismatch {
+            panic!(
+                "{label} mismatch at {index}: got {:02x} expected {:02x}",
+                got[index], expected[index]
+            );
+        }
+    }
+
+    fn reference_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+
+        for y in 0..height {
+            let src_start = y.checked_mul(bytes_per_row)?;
+            let src_end = src_start.checked_add(row_bytes)?;
+            let dst_start = y.checked_mul(width_stride)?;
+            let dst_end = dst_start.checked_add(width_stride)?;
+            let src_row = data.get(src_start..src_end)?;
+            let dst_row = rgb.get_mut(dst_start..dst_end)?;
+
+            for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
+                let (r, b) = match order {
+                    ChannelOrder::Rgba => (src[0], src[2]),
+                    ChannelOrder::Bgra => (src[2], src[0]),
+                };
+                dst[0] = r;
+                dst[1] = src[1];
+                dst[2] = b;
+            }
+        }
+
+        Some(rgb)
+    }
+
+    fn scalar_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            reorder_rgb_row_scalar(src_row, dst_row, order);
+        }
+        Some(rgb)
+    }
+
+    fn rgb_cases() -> Vec<(usize, usize, usize)> {
+        let mut cases = Vec::new();
+        let widths = [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 63, 64, 65, 191, 1920, 1921,
+        ];
+        let heights = [0, 1, 2, 3, 5, 7];
+        let pads = [0usize, 1, 7, 32];
+        for width in widths {
+            for height in heights {
+                for pad in pads {
+                    cases.push((width, height, pad));
+                }
+            }
+        }
+        cases.push((1920, 1080, 0));
+        cases.push((1920, 1080, 64));
+        cases.push((1919, 17, 3));
+        cases.push((1, 1080, 0));
+        cases
+    }
+
+    fn assert_rgb_path_matches_original(
+        path: &str,
+        packed: Option<Vec<u8>>,
+        expected: &Option<Vec<u8>>,
+        label: &str,
+    ) {
+        match (packed.as_deref(), expected.as_deref()) {
+            (Some(got), Some(expected)) => {
+                assert_bytes_eq(got, expected, &format!("{path} {label}"));
+            }
+            (None, None) => {}
+            _ => panic!(
+                "{path} {label} presence got {} expected {}",
+                packed.is_some(),
+                expected.is_some()
+            ),
+        }
+    }
+
+    #[test]
+    fn rgb_dispatch_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(19).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = rgb_from_rgba(&data, width, height, stride, order)
+                    .map(|image| image.into_raw());
+                assert_rgb_path_matches_original("dispatch", got, &expected, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_scalar_fallback_matches_original_for_both_channel_orders() {
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(23).wrapping_add(pad as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = scalar_rgb(&data, width, height, stride, order);
+                assert_rgb_path_matches_original("scalar", got, &expected, &label);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn ssse3_rgb(
+        data: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        order: ChannelOrder,
+    ) -> Option<Vec<u8>> {
+        let row_bytes = width.checked_mul(4)?;
+        if bytes_per_row < row_bytes {
+            return None;
+        }
+        let required_len = height.checked_mul(bytes_per_row)?;
+        if data.len() < required_len {
+            return None;
+        }
+        let width_stride = width.checked_mul(3)?;
+        let rgb_len = height.checked_mul(width_stride)?;
+        let mut rgb = vec![0u8; rgb_len];
+        for y in 0..height {
+            let (src_row, dst_row) =
+                rgb_row_pair(data, &mut rgb, y, bytes_per_row, row_bytes, width_stride)?;
+            unsafe {
+                reorder_rgb_row_ssse3(src_row, dst_row, order);
+            }
+        }
+        Some(rgb)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn rgb_ssse3_matches_original_including_scalar_tail() {
+        if !std::is_x86_feature_detected!("ssse3") {
+            eprintln!("ssse3 unavailable, skipping shuffled rgb path");
+            return;
+        }
+        for (width, height, pad) in rgb_cases() {
+            let stride = width * 4 + pad;
+            let data = paint(
+                height * stride + 8,
+                (width as u32).wrapping_mul(29).wrapping_add(height as u32),
+            );
+            for order in [ChannelOrder::Rgba, ChannelOrder::Bgra] {
+                let label = format!("{width}x{height} stride {stride} {order:?}");
+                let expected = reference_rgb(&data, width, height, stride, order);
+                let got = ssse3_rgb(&data, width, height, stride, order);
+                assert_rgb_path_matches_original("ssse3", got, &expected, &label);
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_packing_rejects_undersized_input() {
+        assert!(rgb_from_rgba(&[0, 1, 2, 3], 2, 1, 4, ChannelOrder::Rgba).is_none());
+        assert!(rgb_from_rgba(&[0, 1, 2, 3], 1, 2, 4, ChannelOrder::Bgra).is_none());
+        assert!(rgb_from_rgba(&[0, 1, 2, 3, 4, 5, 6], 1, 1, 8, ChannelOrder::Rgba).is_none());
+        let image = rgb_from_rgba(&[10, 20, 30, 40, 1, 2, 3, 4], 1, 1, 8, ChannelOrder::Bgra)
+            .expect("padded row");
+        assert_eq!(image.as_raw(), &[30, 20, 10]);
+    }
+
+    fn rgb_image(width: u32, height: u32, seed: u32) -> RgbImage {
+        let buf = paint((width as usize) * (height as usize) * 3, seed);
+        RgbImage::from_raw(width, height, buf).expect("rgb image")
+    }
+
+    fn reference_round(image: &RgbImage, radius: f32) -> RgbaImage {
+        if radius <= 0.0 {
+            return image::buffer::ConvertBuffer::convert(image);
+        }
+
+        let width = image.width();
+        let height = image.height();
+        let fw = width as f32;
+        let fh = height as f32;
+        let mut rgba = RgbaImage::new(width, height);
+        for (x, y, rgb_pixel) in image.enumerate_pixels() {
+            let alpha = rounded_corner_alpha(x as f32 + 0.5, y as f32 + 0.5, fw, fh, radius);
+            rgba.put_pixel(
+                x,
+                y,
+                image::Rgba([rgb_pixel[0], rgb_pixel[1], rgb_pixel[2], alpha]),
+            );
+        }
+        rgba
+    }
+
+    fn assert_corners(width: u32, height: u32, radius: f32) {
+        let image = rgb_image(width, height, width.wrapping_mul(17).wrapping_add(height));
+        let expected = reference_round(&image, radius);
+        let got = round_rgb_corners(image, radius);
+        assert_bytes_eq(
+            got.as_raw(),
+            expected.as_raw(),
+            &format!("corners {width}x{height} radius {radius}"),
+        );
+    }
+
+    #[test]
+    fn rounded_corners_match_original_for_varied_sizes() {
+        let sizes = [
+            (0, 0),
+            (0, 4),
+            (4, 0),
+            (1, 1),
+            (1, 2),
+            (2, 1),
+            (2, 2),
+            (3, 3),
+            (3, 5),
+            (5, 3),
+            (7, 9),
+            (8, 8),
+            (15, 17),
+            (16, 9),
+            (31, 20),
+            (64, 63),
+            (100, 50),
+            (127, 13),
+            (320, 180),
+        ];
+        let base_radii = [-1.0, 0.0, 0.25, 0.5, 1.0, 1.5, 2.2, 8.0, 10.5, 12.0];
+        for (width, height) in sizes {
+            for radius in base_radii {
+                assert_corners(width, height, radius);
+            }
+            let min_dim = width.min(height) as f32;
+            let max_dim = width.max(height) as f32;
+            assert_corners(width, height, min_dim / 2.0);
+            assert_corners(width, height, min_dim / 2.0 + 0.5);
+            assert_corners(width, height, max_dim + 10.0);
+        }
+        assert_corners(1920, 1080, 0.0);
+        assert_corners(1920, 1080, 12.0);
+        assert_corners(1919, 17, 6.5);
+    }
+
+    #[test]
+    fn rounded_corners_match_original_for_non_finite_radius() {
+        for (width, height) in [(1, 1), (2, 3), (8, 5), (17, 9)] {
+            assert_corners(width, height, f32::INFINITY);
+            assert_corners(width, height, f32::NAN);
+            assert_corners(width, height, f32::MIN_POSITIVE);
+        }
+    }
+
+    #[test]
+    fn non_window_screenshot_keeps_opaque_alpha() {
+        let image = rgb_image(13, 9, 99);
+        let expected: RgbaImage = image::buffer::ConvertBuffer::convert(&image);
+        let got = apply_window_rounded_corners(image, &ScreenCaptureTarget::CameraOnly);
+        assert_bytes_eq(got.as_raw(), expected.as_raw(), "camera only");
+    }
 }

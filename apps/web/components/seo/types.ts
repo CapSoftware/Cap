@@ -39,8 +39,14 @@ export interface SeoPageContent {
 	};
 	cta: {
 		title: string;
+		subtitle?: string;
 		buttonText: string;
+		buttonHref?: string;
+		buttonTarget?: string;
+		buttonIcon?: JSX.Element;
 		secondaryButtonText?: string;
+		secondaryButtonHref?: string;
+		secondaryButtonTarget?: string;
 	};
 	comparisonTitle?: string;
 	comparisonDescription?: string;

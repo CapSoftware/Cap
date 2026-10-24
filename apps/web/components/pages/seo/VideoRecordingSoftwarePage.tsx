@@ -1,6 +1,5 @@
-"use client";
-
 import { Clapperboard, Zap } from "lucide-react";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -37,7 +36,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		{
 			title: "Open Source and Auditable",
 			description:
-				"Cap is fully open-source on GitHub and MIT-licensed. Inspect every line of code, verify how your recordings are handled, and contribute features back to the community. No black boxes, no vendor lock-in. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
+				"Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Inspect every line of code, verify how your recordings are handled, and contribute features back to the community. No black boxes, no vendor lock-in. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
 		},
 		{
 			title: "Separate Screen and Webcam Tracks",
@@ -88,7 +87,10 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		rows: [
 			[
 				"Price",
-				{ text: "Free / $9.99/mo", status: "positive" },
+				{
+					text: `Free / $${PRICING.pro.annualPerMonth}/mo`,
+					status: "positive",
+				},
 				{ text: "Free / $18/mo", status: "warning" },
 				{ text: "$299.99 one-time", status: "negative" },
 				{ text: "Free", status: "positive" },
@@ -152,8 +154,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 	comparison: [
 		{
 			title: "Cap vs Loom",
-			description:
-				"Cap starts at $9.99/month versus Loom's $18/month, and Cap's Studio Mode is completely free with no watermarks. Cap records at up to 4K, is open-source, and supports custom S3 storage — quality and flexibility that Loom's free and paid plans don't match. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Cap starts at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month, and Cap's Studio Mode is completely free with no watermarks. Cap records at up to 4K, is open-source, and supports custom S3 storage — quality and flexibility that Loom's free and paid plans don't match. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 		{
 			title: "Cap vs Camtasia",
@@ -223,8 +224,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		},
 		{
 			question: "Is Cap video recording software free?",
-			answer:
-				"Yes. Cap's Studio Mode is completely free for personal use with no time limits, no watermarks, and no hidden fees. Instant Mode is free for recordings up to 5 minutes. Cap Pro at $9.99/month removes Instant Mode limits and adds team features — but the core video recording software is free to use forever.",
+			answer: `Yes. Cap's Studio Mode is completely free for personal use with no time limits, no watermarks, and no hidden fees. Instant Mode is free for recordings up to 5 minutes. Cap Pro at $${PRICING.pro.annualPerMonth}/month removes Instant Mode limits and adds team features — but the core video recording software is free to use forever.`,
 		},
 		{
 			question: "Does Cap video recording software work on Mac and Windows?",
@@ -249,14 +249,16 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		{
 			question: "Is Cap open-source video recording software?",
 			answer:
-				"Yes. Cap is fully open-source and MIT-licensed. The complete codebase — desktop app, web app, and media processing pipeline — is publicly available on GitHub. You can audit every line of code, fork the project, and contribute back to the community. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
+				"Yes. Cap is open source, with most code under AGPLv3 and specified Rust crates under MIT. The complete codebase — desktop app, web app, and media processing pipeline — is publicly available on GitHub. You can audit every line of code, fork the project, and contribute back to the community. <a href='/open-source-screen-recorder'>Learn more about Cap as open-source software</a>.",
 		},
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap video recording software demo showing HD screen capture, webcam overlay, and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title:
+				"Cap video recording software demo showing HD screen capture, webcam overlay, and instant sharing",
+		},
 	},
 
 	cta: {
