@@ -36,6 +36,7 @@ use serde_json::Value;
 
 use crate::{
     editor_color::GradeTarget,
+    editor_filler,
     editor_sidebar::{SliderKey, collapsible, dashed_divider},
     editor_window::EditorWindow,
     store,
@@ -2891,6 +2892,55 @@ impl EditorWindow {
         ui::Field::section(&theme, "Captions")
             .badge("Beta")
             .child(transcription)
+            .child(
+                ui::Field::section(&theme, "Filler Words").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child("Remove English hesitation words such as ‘um’, ‘uh’ and ‘erm’. Captions are generated locally when needed. Review or adjust cuts on the timeline; Undo restores them."),
+                        )
+                        .child(
+                            ui::Button::plain(
+                                &theme,
+                                "caption-remove-fillers",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Md,
+                            )
+                            .label("Remove Filler Words")
+                            .full_width()
+                            .disabled(
+                                !self.project_ready()
+                                    || generating
+                                    || any_deleting
+                                    || !has_audio
+                                    || self.sidebar.caption_language != "en"
+                                    || (!editor_filler::has_word_timings(&self.project)
+                                        && !model_downloaded),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.remove_filler_words_clicked(window, cx);
+                            })),
+                        )
+                        .children((self.sidebar.caption_language != "en").then(|| {
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child("Select English above to use filler removal.")
+                        }))
+                        .children(self.sidebar.filler_removal_status.as_ref().map(|status| {
+                            let (message, color) = match status {
+                                Ok(message) => (message.clone(), Hsla::from(theme.gray_11)),
+                                Err(message) => (message.clone(), error_color),
+                            };
+                            div().text_size(px(12.)).text_color(color).child(message)
+                        })),
+                ),
+            )
             .child(style.mt(px(8.)))
             .into_any_element()
     }
@@ -3169,6 +3219,95 @@ impl EditorWindow {
     /// tokio blocking pool, then apply the result through one `edit_project`
     /// write so a regenerate is a single undo entry.
     fn generate_captions_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_caption_generation(false, window, cx);
+    }
+
+    pub(crate) fn remove_filler_words_clicked(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_ready()
+            || self.sidebar.caption_language != "en"
+            || transcription::ui_snapshot(&self.project_path).generating
+        {
+            return;
+        }
+        self.sidebar.filler_removal_status = None;
+        self.start_caption_generation(true, window, cx);
+    }
+
+    fn apply_filler_removal(
+        &mut self,
+        segments: Vec<CaptionSegment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(summary) = self.summary() else {
+            return;
+        };
+        let recording_durations = summary.clip_display_durations.clone();
+        let recording_duration = summary.recording_duration;
+        let mut edited = self.project.clone();
+        let captions_enabled = edited
+            .captions
+            .as_ref()
+            .is_some_and(|captions| captions.settings.enabled);
+        transcription::apply_caption_result(
+            &mut edited,
+            segments,
+            &recording_durations,
+            recording_duration,
+        );
+        if let Some(captions) = edited.captions.as_mut() {
+            captions.settings.enabled = captions_enabled;
+        }
+        match editor_filler::remove_filler_words(&mut edited, &recording_durations) {
+            Ok(summary) => {
+                if serde_json::to_value(&edited).ok() != serde_json::to_value(&self.project).ok() {
+                    self.stop_playback(cx);
+                    self.selection = None;
+                    self.canvas_selection = None;
+                    self.edit_project("remove-filler-words", window, cx, move |project| {
+                        *project = edited;
+                        true
+                    });
+                }
+                let mut message = if summary.removed_words == 0 {
+                    "No removable filler words found.".to_string()
+                } else {
+                    format!(
+                        "Removed {} filler {} ({:.1}s).",
+                        summary.removed_words,
+                        if summary.removed_words == 1 {
+                            "word"
+                        } else {
+                            "words"
+                        },
+                        summary.removed_seconds
+                    )
+                };
+                if summary.skipped_words > 0 {
+                    message.push_str(&format!(
+                        " Skipped {} near transitions or held frames.",
+                        summary.skipped_words
+                    ));
+                }
+                self.sidebar.filler_removal_status = Some(Ok(message));
+            }
+            Err(error) => {
+                self.sidebar.filler_removal_status = Some(Err(error));
+            }
+        }
+        cx.notify();
+    }
+
+    fn start_caption_generation(
+        &mut self,
+        remove_fillers: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(summary) = self.summary() else {
             return;
         };
@@ -3177,6 +3316,22 @@ impl EditorWindow {
         let project_path = self.project_path.clone();
         let model = self.selected_caption_model().name;
         let language = self.sidebar.caption_language;
+        let existing =
+            (remove_fillers && editor_filler::has_word_timings(&self.project)).then(|| {
+                self.project
+                    .captions
+                    .as_ref()
+                    .expect("word timings were checked")
+                    .segments
+                    .clone()
+            });
+        let before = match serde_json::to_value(&self.project) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!("could not snapshot project before transcription: {error}");
+                return;
+            }
+        };
 
         if !transcription::begin_generation(&project_path) {
             return;
@@ -3187,7 +3342,11 @@ impl EditorWindow {
             let task_path = project_path.clone();
             let task = gpui_tokio::Tokio::spawn(cx, async move {
                 tokio::task::spawn_blocking(move || {
-                    transcription::transcribe_blocking(&task_path, model, language)
+                    if remove_fillers {
+                        transcription::prepare_filler_captions_blocking(&task_path, model, language, existing)
+                    } else {
+                        transcription::transcribe_blocking(&task_path, model, language)
+                    }
                 })
                 .await
                 .map_err(|error| format!("Transcription task panicked: {error}"))?
@@ -3201,6 +3360,15 @@ impl EditorWindow {
                 Ok(segments) => {
                     transcription::finish_generation(&project_path, None);
                     let _ = this.update_in(cx, |this, window, cx| {
+                        if remove_fillers {
+                            if !this.project_ready() || serde_json::to_value(&this.project).ok().as_ref() != Some(&before) {
+                                this.sidebar.filler_removal_status = Some(Err("The project changed while captions were being generated. Try filler removal again.".into()));
+                                cx.notify();
+                                return;
+                            }
+                            this.apply_filler_removal(segments, window, cx);
+                            return;
+                        }
                         this.apply_generated_captions(
                             segments,
                             &recording_durations,
