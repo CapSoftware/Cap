@@ -1566,6 +1566,7 @@ pub fn transcription_hints() -> Vec<String> {
 /// the bearer token `protectedHeaders()` sends, and `plan.upgraded`.
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
+    pub user_id: Option<String>,
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
@@ -1592,6 +1593,11 @@ impl AuthSnapshot {
 /// over `secret.token`, and `plan.upgraded` is the Pro gate.
 pub fn auth_snapshot() -> AuthSnapshot {
     let auth = store_section("auth");
+    let user_id = auth
+        .get("user_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
     let token = auth
         .get("secret")
         .and_then(Value::as_object)
@@ -1632,6 +1638,7 @@ pub fn auth_snapshot() -> AuthSnapshot {
         })
         .unwrap_or_default();
     AuthSnapshot {
+        user_id,
         token,
         plan_upgraded,
         plan_manual,

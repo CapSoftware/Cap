@@ -3577,6 +3577,10 @@ impl MainWindow {
                     },
                 )),
             )
+            .when_some(
+                self.render_upload_health_indicator(cx),
+                |this, indicator| this.child(indicator),
+            )
             // Keep drag handlers off the header root: starting native dragging
             // on a button's mouse-down consumes its later click.
             .child(div().id("drag-region").flex_1().min_w_0().h_full().when(
@@ -3651,6 +3655,76 @@ impl MainWindow {
         let actions = actions.h_full();
 
         actions
+    }
+
+    fn render_upload_health_indicator(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use crate::network_health::{UploadHealthTone, status, upload_health_summary};
+
+        let theme = self.theme;
+        let keyboard_nav = self.keyboard_nav;
+        let summary = upload_health_summary(&status())?;
+        let disabled = summary.disabled;
+        let label = summary.label;
+        let tooltip_text = summary.tooltip;
+        let (border_color, bg_color, text_color, dot_color) = match summary.tone {
+            UploadHealthTone::Healthy => (theme.gray_5, theme.gray_2, theme.gray_11, rgb(0x22c55e)),
+            UploadHealthTone::Warning => {
+                (theme.amber_6, theme.amber_3, theme.amber_11, theme.amber_11)
+            }
+            UploadHealthTone::Danger => (theme.red_4, theme.red_3, theme.red_11, theme.red_9),
+            UploadHealthTone::Neutral => (theme.gray_5, theme.gray_2, theme.gray_11, theme.gray_9),
+        };
+        let tone = summary.tone;
+
+        Some(
+            div()
+                .id("upload-health-indicator")
+                .group("upload-health-indicator")
+                .when(cfg!(target_os = "windows"), |this| this.occlude())
+                .when(!disabled && keyboard_nav, ui::keyboard_nav::stop)
+                .role(gpui::Role::Button)
+                .aria_label(label.clone())
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .h(px(20.))
+                .max_w(px(124.))
+                .px(px(6.))
+                .flex_shrink_0()
+                .rounded_full()
+                .border_1()
+                .border_color(border_color)
+                .bg(bg_color)
+                .text_color(text_color)
+                .text_size(px(10.))
+                .line_height(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .when(!disabled, |this| {
+                    this.cursor_pointer().hover(move |style| match tone {
+                        UploadHealthTone::Healthy | UploadHealthTone::Neutral => {
+                            style.bg(theme.gray_3).text_color(theme.gray_12)
+                        }
+                        UploadHealthTone::Warning => style.border_color(theme.amber_11),
+                        UploadHealthTone::Danger => style.border_color(theme.red_9),
+                    })
+                })
+                .tooltip(move |_, cx| ui::Tooltip::new(&theme, tooltip_text.clone()).view(cx))
+                .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                .child(
+                    div()
+                        .size(px(6.))
+                        .rounded_full()
+                        .flex_shrink_0()
+                        .bg(dot_color),
+                )
+                .child(div().truncate().child(label))
+                .when(!disabled, |this| {
+                    this.on_click(cx.listener(|_, _, _window, cx| {
+                        crate::network_health::run_upload_health_check(cx);
+                    }))
+                })
+                .into_any_element(),
+        )
     }
 
     fn idle_error(&self, cx: &gpui::App) -> Option<String> {

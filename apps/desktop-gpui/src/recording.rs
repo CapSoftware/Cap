@@ -2316,10 +2316,14 @@ async fn start_attempt_with_upload(
     // The instant output cap is plan-gated at start time, not at settings
     // time (`recording.rs:1634-1639`): free stays at the free cap even if a
     // stale store value says otherwise.
-    let instant_max_resolution = if crate::store::auth_snapshot().is_upgraded() {
+    let configured_max_resolution = if crate::store::auth_snapshot().is_upgraded() {
         settings.instant_mode_max_resolution
     } else {
         cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+    };
+    let instant_max_resolution = match crate::network_health::recommended_capture_width() {
+        Some(measured_cap) => configured_max_resolution.min(measured_cap),
+        None => configured_max_resolution,
     };
 
     #[cfg(target_os = "macos")]

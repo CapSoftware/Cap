@@ -1990,6 +1990,7 @@ impl SettingsWindow {
             tracing::error!("failed to clear the cached user profile");
         }
         self.user_profile = None;
+        crate::network_health::run_upload_health_check(cx);
         if let Some(image) = self.profile_image.take() {
             let _ = window.drop_image(image);
         }
@@ -3190,13 +3191,34 @@ impl SettingsWindow {
 
     fn render_instant_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let effective = self.effective_instant_resolution();
+        let configured = self.effective_instant_resolution();
+        let network_cap = crate::network_health::recommended_capture_width()
+            .filter(|cap| *cap < configured);
+        let active_resolution = network_cap.unwrap_or(configured);
         let summary = INSTANT_RESOLUTION_TIERS
             .iter()
-            .find(|(value, _, _)| *value == effective)
+            .find(|(value, _, _)| *value == active_resolution)
             .map(|(_, _, summary)| *summary)
             .unwrap_or_default();
-        let description = if self.has_cap_pro {
+        let configured_label = INSTANT_RESOLUTION_TIERS
+            .iter()
+            .find(|(value, _, _)| *value == configured)
+            .map(|(_, label, _)| *label)
+            .unwrap_or("1080p");
+        let active_label = INSTANT_RESOLUTION_TIERS
+            .iter()
+            .find(|(value, _, _)| *value == active_resolution)
+            .map(|(_, label, _)| *label)
+            .unwrap_or("720p");
+        let description = if network_cap.is_some() {
+            let speed_note = crate::network_health::status()
+                .upload_mbps
+                .map(crate::network_health::format_upload_mbps)
+                .unwrap_or_else(|| "slow upload".to_string());
+            format!(
+                "Temporarily capped at {active_label} ({speed_note}) so live uploads keep up. Configured maximum: {configured_label}."
+            )
+        } else if self.has_cap_pro {
             summary.to_string()
         } else {
             "720p on the free plan. Cap Pro records up to 4K.".to_string()
@@ -3205,7 +3227,7 @@ impl SettingsWindow {
         let options = INSTANT_RESOLUTION_TIERS
             .iter()
             .map(|(value, label, _)| {
-                let mut option = ui::SegmentOption::new(*label, *value == effective);
+                let mut option = ui::SegmentOption::new(*label, *value == active_resolution);
                 if self.instant_resolution_locked(*value) {
                     option.icon = Some("icons/lock.svg".into());
                 }
@@ -3230,6 +3252,47 @@ impl SettingsWindow {
             );
 
         let mut rows = vec![resolution.into_any_element()];
+        if network_cap.is_some() {
+            let speed_text = crate::network_health::status()
+                .upload_mbps
+                .map(crate::network_health::format_upload_mbps)
+                .unwrap_or_else(|| "slow connection".to_string());
+            rows.push(
+                div()
+                    .id("settings-instant-quality-cap-banner")
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .p(px(12.))
+                    .border_t_1()
+                    .border_color(theme.amber_6)
+                    .bg(Hsla::from(theme.amber_3).opacity(0.25))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.amber_11))
+                    .child(format!(
+                        "Instant recordings are temporarily capped at {active_label} ({speed_text}) instead of {configured_label} to prevent upload stalls."
+                    ))
+                    .child(
+                        div()
+                            .id("settings-instant-quality-retest")
+                            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                            .role(gpui::Role::Button)
+                            .aria_label("Re-test upload health")
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(theme.amber_6)
+                            .cursor_pointer()
+                            .child("Re-test")
+                            .on_click(cx.listener(|_, _, _window, cx| {
+                                crate::network_health::run_upload_health_check(cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        }
         if let Some(InstantQualityNotice::SaveFailed) = self.instant_quality_notice {
             rows.push(
                 div()
@@ -4290,6 +4353,7 @@ impl SettingsWindow {
                 let input = this.server_url_input.clone();
                 input.update(cx, |input, cx| input.set_text(origin.clone(), cx));
                 this.write("serverUrl", Value::String(origin), cx);
+                crate::network_health::run_upload_health_check(cx);
             })
             .ok();
         })

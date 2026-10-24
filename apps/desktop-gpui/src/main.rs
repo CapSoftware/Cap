@@ -49,6 +49,7 @@ mod main_window;
 mod media_access;
 mod menus;
 mod mode_select_window;
+mod network_health;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
@@ -438,6 +439,7 @@ fn main() {
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
         app_windows::schedule_launch_render_warmup(cx);
+        network_health::schedule_startup_check(cx);
         upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
