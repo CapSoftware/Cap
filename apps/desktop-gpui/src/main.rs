@@ -9,7 +9,6 @@ mod assets;
 mod auth;
 #[cfg(target_os = "macos")]
 mod camera_bench;
-mod crash_capture;
 #[cfg(target_os = "macos")]
 mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
@@ -17,6 +16,7 @@ mod camera_blur_portable;
 mod camera_loading;
 mod camera_window;
 mod controls_window;
+mod crash_capture;
 mod deeplink;
 mod dev_restore;
 mod devices;
@@ -597,8 +597,7 @@ fn main() {
             if let Err(error) = platform::install_main_window_frame_policy(&native) {
                 tracing::warn!(%error, "could not install Main window frame policy");
             }
-            if let Err(error) =
-                platform::install_session_end_handler(&native, end_windows_session)
+            if let Err(error) = platform::install_session_end_handler(&native, end_windows_session)
             {
                 tracing::warn!(%error, "could not install the Windows session end handler");
             }

@@ -209,12 +209,7 @@ pub fn collect(dir: &Path, prefix: &str) -> LogBundle {
         .collect();
     // Crash records and captured stderr: what a process wrote as it died,
     // which the daily log's non-blocking writer cannot guarantee.
-    for suffix in [
-        "crashes-previous",
-        "crashes",
-        "stderr-previous",
-        "stderr",
-    ] {
+    for suffix in ["crashes-previous", "crashes", "stderr-previous", "stderr"] {
         let name = format!("{prefix}.{suffix}");
         let path = dir.join(&name);
         if std::fs::symlink_metadata(&path)

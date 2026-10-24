@@ -43,7 +43,11 @@ pub fn install(logs_dir: &Path) {
     if std::fs::metadata(&crash_path).is_ok_and(|metadata| metadata.len() > MAX_CRASH_FILE_BYTES) {
         let _ = std::fs::rename(&crash_path, logs_dir.join(format!("{CRASH_FILE}-previous")));
     }
-    match OpenOptions::new().create(true).append(true).open(&crash_path) {
+    match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&crash_path)
+    {
         Ok(file) => {
             let _ = CRASH_LOG.set(file);
         }
@@ -141,7 +145,14 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let location = info
             .location()
-            .map(|location| format!("{}:{}:{}", location.file(), location.line(), location.column()))
+            .map(|location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            })
             .unwrap_or_else(|| "<unknown>".into());
         let message = info
             .payload()
@@ -209,7 +220,9 @@ mod native {
         for (index, signal) in SIGNALS.into_iter().enumerate() {
             unsafe {
                 let mut action: libc::sigaction = std::mem::zeroed();
-                action.sa_sigaction = handler as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) as usize;
+                action.sa_sigaction = handler
+                    as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void)
+                    as usize;
                 action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
                 libc::sigemptyset(&mut action.sa_mask);
                 let previous = (&raw mut PREVIOUS[index]).cast::<libc::sigaction>();
@@ -323,7 +336,11 @@ mod native {
             let mut digits = [0u8; 16];
             for (index, digit) in digits.iter_mut().enumerate() {
                 let nibble = ((value >> ((15 - index) * 4)) & 0xF) as u8;
-                *digit = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+                *digit = if nibble < 10 {
+                    b'0' + nibble
+                } else {
+                    b'a' + nibble - 10
+                };
             }
             self.push(&digits);
         }
@@ -363,8 +380,9 @@ mod native {
                 AddVectoredExceptionHandler, EXCEPTION_POINTERS, SetUnhandledExceptionFilter,
             },
             LibraryLoader::{
-                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                GetModuleFileNameA, GetModuleHandleExA,
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameA,
+                GetModuleHandleExA,
             },
         },
     };
@@ -425,7 +443,12 @@ mod native {
         push(prefix, &mut line, &mut len);
         let record = unsafe { pointers.as_ref().and_then(|p| p.ExceptionRecord.as_ref()) };
         let (code, address) = record
-            .map(|record| (record.ExceptionCode as u32 as u64, record.ExceptionAddress as usize))
+            .map(|record| {
+                (
+                    record.ExceptionCode as u32 as u64,
+                    record.ExceptionAddress as usize,
+                )
+            })
             .unwrap_or((0, 0));
         push(&hex(code, 8)[..8], &mut line, &mut len);
         push(b" at 0x", &mut line, &mut len);
@@ -434,7 +457,8 @@ mod native {
         let found = address != 0
             && unsafe {
                 GetModuleHandleExA(
-                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                        | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                     address as *const u8,
                     &mut module,
                 )
@@ -442,7 +466,8 @@ mod native {
         if found {
             let mut name = [0u8; 260];
             let name_len =
-                unsafe { GetModuleFileNameA(module, name.as_mut_ptr(), name.len() as u32) } as usize;
+                unsafe { GetModuleFileNameA(module, name.as_mut_ptr(), name.len() as u32) }
+                    as usize;
             let base = name[..name_len]
                 .iter()
                 .rposition(|byte| *byte == b'\\')
@@ -450,14 +475,24 @@ mod native {
             push(b" in ", &mut line, &mut len);
             push(&name[base..name_len], &mut line, &mut len);
             push(b"+0x", &mut line, &mut len);
-            push(&hex((address - module as usize) as u64, 8)[..8], &mut line, &mut len);
+            push(
+                &hex((address - module as usize) as u64, 8)[..8],
+                &mut line,
+                &mut len,
+            );
         }
         push(b"\r\n", &mut line, &mut len);
         let handle = CRASH_HANDLE.load(Ordering::Acquire);
         if !handle.is_null() {
             let mut written = 0u32;
             unsafe {
-                WriteFile(handle, line.as_ptr(), len as u32, &mut written, std::ptr::null_mut())
+                WriteFile(
+                    handle,
+                    line.as_ptr(),
+                    len as u32,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
             };
         }
     }
@@ -466,7 +501,11 @@ mod native {
         let mut digits = [b'0'; 16];
         for index in 0..16 {
             let nibble = ((value >> ((15 - index) * 4)) & 0xF) as u8;
-            digits[index] = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+            digits[index] = if nibble < 10 {
+                b'0' + nibble
+            } else {
+                b'a' + nibble - 10
+            };
         }
         let mut out = [0u8; 16];
         out[..width].copy_from_slice(&digits[16 - width..]);
@@ -541,9 +580,17 @@ mod process_tests {
         );
         assert!(!died.success);
         #[cfg(unix)]
-        assert!(died.crashes.contains("SIGSEGV") || died.crashes.contains("SIGBUS"), "{}", died.crashes);
+        assert!(
+            died.crashes.contains("SIGSEGV") || died.crashes.contains("SIGBUS"),
+            "{}",
+            died.crashes
+        );
         #[cfg(windows)]
-        assert!(died.crashes.contains("unhandled exception 0xc0000005"), "{}", died.crashes);
+        assert!(
+            died.crashes.contains("unhandled exception 0xc0000005"),
+            "{}",
+            died.crashes
+        );
     }
 
     /// Rust's own overflow report must survive: the handler chains to it.
@@ -558,10 +605,22 @@ mod process_tests {
         );
         assert!(!died.success);
         #[cfg(unix)]
-        assert!(died.crashes.contains("native crash: signal"), "{}", died.crashes);
+        assert!(
+            died.crashes.contains("native crash: signal"),
+            "{}",
+            died.crashes
+        );
         #[cfg(windows)]
-        assert!(died.crashes.contains("stack overflow 0xc00000fd"), "{}", died.crashes);
-        assert!(died.stderr.contains("overflowed its stack"), "{}", died.stderr);
+        assert!(
+            died.crashes.contains("stack overflow 0xc00000fd"),
+            "{}",
+            died.crashes
+        );
+        assert!(
+            died.stderr.contains("overflowed its stack"),
+            "{}",
+            died.stderr
+        );
     }
 
     #[test]
@@ -574,7 +633,15 @@ mod process_tests {
             "panic",
         );
         assert!(!died.success);
-        assert!(died.crashes.contains("crash capture test panic"), "{}", died.crashes);
-        assert!(died.crashes.contains("crash_capture.rs"), "{}", died.crashes);
+        assert!(
+            died.crashes.contains("crash capture test panic"),
+            "{}",
+            died.crashes
+        );
+        assert!(
+            died.crashes.contains("crash_capture.rs"),
+            "{}",
+            died.crashes
+        );
     }
 }
