@@ -703,6 +703,7 @@ async function processVideoOnMediaServer(
 					attemptId,
 					state,
 					jobId,
+					worker,
 				}),
 			worker === "importer",
 		);

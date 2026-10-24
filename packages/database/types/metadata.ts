@@ -14,6 +14,7 @@ export interface VideoMetadata {
 			videoId?: string;
 			state: "accepted" | "rejected" | "uncertain";
 			jobId?: string;
+			worker?: "importer" | "media" | null;
 		};
 	};
 	loomImportUpload?: {

@@ -151,7 +151,16 @@ export function createLoomImporter(
 					phase: job.phase,
 					progress: job.progress,
 					ageSeconds: Math.round((Date.now() - job.createdAt) / 1000),
-				})),
+				}))
+				.concat(
+					queue.map((entry) => ({
+						jobId: entry.jobId,
+						videoId: entry.request.videoId,
+						phase: "queued" as Job["phase"],
+						progress: 0,
+						ageSeconds: 0,
+					})),
+				),
 		});
 	});
 
