@@ -1287,15 +1287,20 @@ describe("durable desktop recording source commit", () => {
 		).toBe(false);
 	});
 
-	it("still reads Drive receipts back after writing them", async () => {
+	it("writes Drive receipts without reading them back", async () => {
 		const storage = storageFixture("googleDrive");
 		seedSegments(storage);
 		await commitDesktopRecordingSource(recording(), generation);
 		expect(
-			storage.bucket.getObject.mock.calls.some(([key]) =>
+			storage.bucket.putObject.mock.calls.some(([key]) =>
 				key.endsWith("/receipt.json"),
 			),
 		).toBe(true);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
 	});
 });
 
@@ -1427,7 +1432,7 @@ describe("large desktop recording snapshots", () => {
 
 	it.each([
 		["s3", 256],
-		["googleDrive", 16],
+		["googleDrive", 64],
 	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
 		async (provider, page) => {
@@ -1872,11 +1877,11 @@ describe("source commit page size", () => {
 	);
 
 	it.each([
-		["a custom S3-compatible bucket", "s3", true],
-		["Google Drive", "googleDrive", false],
+		["a custom S3-compatible bucket", "s3", true, 16],
+		["Google Drive", "googleDrive", false, 64],
 	] as const)(
-		"keeps 16-entry checkpoints for %s",
-		async (_, provider, customBucket) => {
+		"uses %s's checkpoint page size",
+		async (_, provider, customBucket, pageSize) => {
 			pagedFixture(provider, customBucket);
 			mocks.pageSize = undefined;
 			let checkpoint = snapshotCheckpoint();
@@ -1890,7 +1895,9 @@ describe("source commit page size", () => {
 				if ("source" in result) break;
 				checkpoint = result.checkpoint;
 			}
-			expect(checkpoints).toBe(2 + 3 * Math.ceil((segmentCount + 3) / 16));
+			expect(checkpoints).toBe(
+				2 + 3 * Math.ceil((segmentCount + 3) / pageSize),
+			);
 		},
 	);
 
@@ -1953,7 +1960,7 @@ describe("source commit page size", () => {
 	it.each([
 		["Cap's AWS bucket", "s3", false, 256],
 		["a custom S3-compatible bucket", "s3", true, 8],
-		["Google Drive", "googleDrive", false, 8],
+		["Google Drive", "googleDrive", false, 32],
 	] as const)(
 		"bounds parallel storage requests for %s",
 		async (_, provider, customBucket, expected) => {

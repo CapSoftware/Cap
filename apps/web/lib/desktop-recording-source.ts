@@ -10,6 +10,7 @@ import {
 	type DesktopRecordingSourceCheckpoint,
 	desktopRecordingSourceCheckpointSchema,
 	SOURCE_COMMIT_AWS_PAGE_SIZE,
+	SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
 	SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 	SOURCE_COMMIT_PAGE_SIZE,
@@ -267,17 +268,24 @@ const SOURCE_COMMIT_STEP_TIMEOUT_MS = 180_000;
 const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
 const SOURCE_COMMIT_CONCURRENCY = 8;
 const SOURCE_COMMIT_AWS_CONCURRENCY = 256;
+// About 100 Drive requests a second, half of Drive's 12,000-a-minute per-user quota; driveFetch backs off on rate limits.
+const SOURCE_COMMIT_GOOGLE_DRIVE_CONCURRENCY = 32;
 
 function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
-	return bucket.provider === "s3" && Option.isNone(customBucket)
-		? {
-				concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
-				pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
-			}
-		: {
-				concurrency: SOURCE_COMMIT_CONCURRENCY,
-				pageSize: SOURCE_COMMIT_PAGE_SIZE,
-			};
+	if (bucket.provider === "s3" && Option.isNone(customBucket))
+		return {
+			concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
+			pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
+		};
+	if (bucket.provider === "googleDrive")
+		return {
+			concurrency: SOURCE_COMMIT_GOOGLE_DRIVE_CONCURRENCY,
+			pageSize: SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE,
+		};
+	return {
+		concurrency: SOURCE_COMMIT_CONCURRENCY,
+		pageSize: SOURCE_COMMIT_PAGE_SIZE,
+	};
 }
 
 function invalidSource(message: string): never {
@@ -791,9 +799,7 @@ async function saveObjectReceipt(context: SourceContext, object: SourceObject) {
 	const key = `${objectDirectory(object.key)}/receipt.json`;
 	const content = JSON.stringify(object);
 	// A receipt only lets a retry find this copy, and a retry re-checks the receipt and the copy
-	// before reusing it, so an S3 receipt skips the readback that inventory pages need.
-	if (context.bucket.provider !== "s3")
-		return writeSourceText(context, key, content).then(() => object);
+	// before reusing it, so a receipt skips the readback that inventory pages need.
 	assertContextKey(context, key);
 	await context.run(
 		context.bucket.putObject(key, content, { contentType: "application/json" }),
