@@ -101,6 +101,7 @@ export async function redriveLoomImport(
 			bucketId: row.bucketId,
 			loomVideoId: row.loomVideoId,
 			reuseExistingRawUpload: true,
+			importPriority: "bulk",
 		});
 	} catch (error) {
 		const message =

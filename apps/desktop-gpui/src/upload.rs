@@ -20,6 +20,8 @@ pub(crate) mod instant_cleanup;
 mod multipart_tests;
 pub(crate) mod queue;
 #[cfg(test)]
+mod real_app_tests;
+#[cfg(test)]
 mod verify_tests;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
@@ -2788,6 +2790,58 @@ mod tests {
             file_size: 16,
             is_init,
             media_type,
+        }
+    }
+
+    /// The finished segment manifest this app uploads, checked against the
+    /// files the web server's own parser is tested with
+    /// (`apps/web/__tests__/unit/desktop-segments-manifest-contract.test.ts`),
+    /// so neither side can change the format without the other noticing. Run
+    /// with `CAP_UPDATE_CONTRACT_FIXTURES=1` to rewrite the files after an
+    /// intended change.
+    #[test]
+    fn finished_segment_manifests_match_the_server_contract_fixtures() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web/__tests__/fixtures/desktop-segments");
+        for (name, audio) in [("with-audio", 2), ("video-only", 0)] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+            for (index, duration) in [(1, 2.0), (2, 2.0), (3, 1.25)] {
+                manifest.record(&segment_event(
+                    index,
+                    duration,
+                    false,
+                    SegmentMediaType::Video,
+                ));
+            }
+            if audio > 0 {
+                manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Audio));
+                for index in 1..=audio {
+                    manifest.record(&segment_event(index, 3.0, false, SegmentMediaType::Audio));
+                }
+            }
+            manifest.is_complete = true;
+            let uploaded = serde_json::to_value(&manifest).unwrap();
+            let path = fixtures.join(format!("finished-manifest-{name}.json"));
+            if std::env::var_os("CAP_UPDATE_CONTRACT_FIXTURES").is_some() {
+                std::fs::create_dir_all(&fixtures).unwrap();
+                let mut json = Vec::new();
+                let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+                let mut serializer = serde_json::Serializer::with_formatter(&mut json, formatter);
+                serde::Serialize::serialize(&uploaded, &mut serializer).unwrap();
+                json.push(b'\n');
+                std::fs::write(&path, json).unwrap();
+            }
+            let fixture: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),
+            )
+            .unwrap();
+            assert_eq!(
+                fixture,
+                uploaded,
+                "{} no longer matches what the app uploads",
+                path.display()
+            );
         }
     }
 

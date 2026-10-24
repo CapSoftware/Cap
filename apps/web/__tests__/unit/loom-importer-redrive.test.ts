@@ -142,6 +142,7 @@ describe("redriveLoomImport", () => {
 			bucketId: "bucket",
 			loomVideoId: "a".repeat(32),
 			reuseExistingRawUpload: true,
+			importPriority: "bulk",
 		});
 	});
 

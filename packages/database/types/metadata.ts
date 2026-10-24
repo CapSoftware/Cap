@@ -9,6 +9,7 @@ export interface VideoMetadata {
 	loomImportRun?: {
 		runId: string;
 		dispatch: "pending" | "accepted" | "rejected" | "uncertain";
+		importPriority?: "customer" | "bulk";
 		mediaDispatch?: {
 			attemptId: string;
 			videoId?: string;

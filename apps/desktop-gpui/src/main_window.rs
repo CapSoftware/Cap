@@ -1715,6 +1715,11 @@ impl MainWindow {
                 this.incomplete_recording = incomplete.into_iter().next();
                 if this.incomplete_recording.is_none() {
                     this.recovery_error = None;
+                } else if std::env::var("CAP_GPUI_AUTO_RECOVER").is_ok_and(|value| value == "1") {
+                    // The crash harness presses Recover, since unprivileged
+                    // synthetic clicks are dropped (as for every
+                    // `CAP_GPUI_AUTO_*` hook).
+                    this.process_incomplete_recording(true, window, cx);
                 }
                 cx.notify();
                 window.refresh();

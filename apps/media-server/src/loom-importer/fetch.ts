@@ -5,21 +5,24 @@ export class LoomSourceRejectedError extends Error {}
 export class Semaphore {
 	private available: number;
 	private readonly waiters: Array<() => void> = [];
+	private readonly priorityWaiters: Array<() => void> = [];
 
 	constructor(size: number) {
 		this.available = Math.max(1, size);
 	}
 
-	async run<T>(work: () => Promise<T>): Promise<T> {
+	async run<T>(work: () => Promise<T>, priority = false): Promise<T> {
 		if (this.available > 0) {
 			this.available--;
 		} else {
-			await new Promise<void>((resolve) => this.waiters.push(resolve));
+			await new Promise<void>((resolve) =>
+				(priority ? this.priorityWaiters : this.waiters).push(resolve),
+			);
 		}
 		try {
 			return await work();
 		} finally {
-			const next = this.waiters.shift();
+			const next = this.priorityWaiters.shift() ?? this.waiters.shift();
 			if (next) next();
 			else this.available++;
 		}

@@ -204,6 +204,7 @@ async function recoverMediaCandidate(
 				bucketId: candidate.bucketId,
 				loomVideoId: candidate.loomVideoId,
 				reuseExistingRawUpload: true,
+				importPriority: receipt?.importPriority,
 			});
 		} else {
 			await start(processVideoWorkflow, [
