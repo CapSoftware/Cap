@@ -152,7 +152,6 @@ function moofTicks(
 	return ticks;
 }
 
-// Walks top-level boxes with ranged reads, so media data is skipped instead of downloaded.
 export async function readFragmentDuration(
 	read: ReadRange,
 	size: number,

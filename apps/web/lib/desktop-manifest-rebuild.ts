@@ -340,7 +340,6 @@ export async function rebuildMissingManifest(
 ): Promise<ManifestRebuildResult> {
 	const inspected = await inspectMissingManifestRecording(videoId);
 	if (inspected.status === "incomplete" && !dryRun) {
-		// Recording why it was refused keeps it out of the next candidate batch.
 		await db()
 			.update(videoUploads)
 			.set({

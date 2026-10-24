@@ -89,7 +89,6 @@ export function moof({
 		u32(1),
 		...(tfhdDefaultDuration === undefined ? [] : [u32(tfhdDefaultDuration)]),
 	);
-	// Each sample carries a duration (when present) and a size, like FFmpeg's fragments.
 	const trunFlags = 0x01 | 0x200 | (durations ? 0x100 : 0);
 	const samples = Array.from({ length: count }, (_, index) =>
 		durations ? concat([u32(durations[index] ?? 0), u32(100)]) : u32(100),
