@@ -140,6 +140,9 @@ async function deliverTerminalWebhook(job: Job, attempts: number) {
 	);
 }
 
+const PROGRESS_WEBHOOK_INTERVAL_MS = 15_000;
+const lastProgressWebhook = new Map<string, { at: number; phase: string }>();
+
 function progressUpdate(
 	jobId: string,
 	phase: Job["phase"],
@@ -147,7 +150,21 @@ function progressUpdate(
 	message: string,
 ) {
 	const job = updateJob(jobId, { phase, progress, message });
-	if (job) void sendWebhook(job);
+	if (!job) return;
+	const now = Date.now();
+	const last = lastProgressWebhook.get(jobId);
+	if (
+		last &&
+		last.phase === phase &&
+		now - last.at < PROGRESS_WEBHOOK_INTERVAL_MS
+	)
+		return;
+	lastProgressWebhook.set(jobId, { at: now, phase });
+	void sendWebhook(job);
+}
+
+function forgetProgressWebhooks(jobId: string) {
+	lastProgressWebhook.delete(jobId);
 }
 
 interface PreparedSource {
@@ -429,6 +446,7 @@ export async function runLoomImport(
 		if (failed)
 			await deliverTerminalWebhook(failed, settings.terminalWebhookAttempts);
 	} finally {
+		forgetProgressWebhooks(job.jobId);
 		if (workDir)
 			await rm(workDir, { recursive: true, force: true }).catch(() => {});
 	}
