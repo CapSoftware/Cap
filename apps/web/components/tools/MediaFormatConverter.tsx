@@ -492,7 +492,7 @@ export const MediaFormatConverter = ({
 			const videoDuration = videoElement.duration;
 			const fps = gifFps;
 			const frameCount = Math.min(Math.floor(videoDuration * fps), gifFps * 15);
-			const frameDelay = 1000 / fps;
+			const frameDelay = (videoDuration * 1000) / frameCount;
 
 			const canvas = document.createElement("canvas");
 			canvas.width = targetWidth;
