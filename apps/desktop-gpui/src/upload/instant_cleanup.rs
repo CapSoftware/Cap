@@ -163,33 +163,36 @@ fn retry_delay(attempts: u32) -> i64 {
         .min(RETRY_MAX_SECS)
 }
 
-fn read_journal(path: &Path) -> Journal {
+/// A missing, oversized or unparsable journal reads as empty and is replaced
+/// by the next write. A journal that exists but cannot be read right now is an
+/// error, so no caller mistakes it for one without entries.
+fn read_journal_checked(path: &Path) -> Result<Journal, String> {
     let bytes = match std::fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Journal::default(),
-        Err(error) => {
-            tracing::warn!(%error, "Instant cleanup journal is unreadable");
-            return Journal::default();
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Journal::default());
         }
+        Err(error) => return Err(error.to_string()),
         Ok(metadata) if !metadata.is_file() || metadata.len() > MAX_JOURNAL_BYTES => {
             tracing::warn!("Instant cleanup journal is not a usable file");
-            return Journal::default();
+            return Ok(Journal::default());
         }
-        Ok(_) => match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                tracing::warn!(%error, "Instant cleanup journal is unreadable");
-                return Journal::default();
-            }
-        },
+        Ok(_) => std::fs::read(path).map_err(|error| error.to_string())?,
     };
-    match serde_json::from_slice::<Journal>(&bytes) {
+    Ok(match serde_json::from_slice::<Journal>(&bytes) {
         Ok(journal) if journal.version == 1 => journal,
         Ok(_) => Journal::default(),
         Err(error) => {
             tracing::warn!(%error, "Instant cleanup journal could not be parsed");
             Journal::default()
         }
-    }
+    })
+}
+
+fn read_journal(path: &Path) -> Journal {
+    read_journal_checked(path).unwrap_or_else(|error| {
+        tracing::warn!(%error, "Instant cleanup journal is unreadable");
+        Journal::default()
+    })
 }
 
 fn write_journal(path: &Path, journal: &Journal) -> Result<(), String> {
@@ -221,7 +224,7 @@ fn update_journal(path: &Path, change: impl FnOnce(&mut Vec<Entry>)) -> Result<(
     let _guard = JOURNAL_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let mut journal = read_journal(path);
+    let mut journal = read_journal_checked(path)?;
     journal.version = 1;
     change(&mut journal.entries);
     if journal.entries.len() > MAX_ENTRIES {
@@ -265,7 +268,13 @@ fn forget_at(path: &Path, video_id: &str) -> bool {
     let _guard = JOURNAL_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let mut journal = read_journal(path);
+    let mut journal = match read_journal_checked(path) {
+        Ok(journal) => journal,
+        Err(error) => {
+            tracing::warn!(%error, video_id, "Instant cleanup could not read the journal to clear a verified video");
+            return false;
+        }
+    };
     if !journal
         .entries
         .iter()
@@ -410,6 +419,13 @@ fn upload_meta_video_id(meta: &RecordingMeta) -> Option<&str> {
     }
 }
 
+fn meta_claims(meta: &RecordingMeta, video_id: &str) -> bool {
+    meta.sharing
+        .as_ref()
+        .is_some_and(|share| share.id == video_id)
+        || upload_meta_video_id(meta) == Some(video_id)
+}
+
 /// True when the folder holds recorded media, or when part of it cannot be
 /// read: media that cannot be checked counts as present. Only a missing folder
 /// counts as empty.
@@ -454,10 +470,13 @@ fn project_needs_video(project: &Path, meta: Option<&RecordingMeta>, interrupted
 /// True when a local recording that must not lose its server copy points at
 /// this video: anything past `InProgress`, an unreadable project that claims
 /// the id, or (for interrupted starts) a project that already holds media.
-/// An interrupted start whose own folder sits on storage that cannot be read
-/// right now (an unmounted drive) is kept too: its media may still be there.
-/// A missing folder on readable storage is not protected, because capture
-/// creates the folder only once it starts.
+/// An interrupted start is kept unless its own folder can be read and checked:
+/// a folder on storage that cannot be read right now (an unmounted drive) may
+/// still hold media, and a missing folder cannot be told apart from one moved
+/// elsewhere with its media, even though capture usually creates it moments
+/// after the server video. The folder name is only reserved before capture
+/// starts, so a later recording can reuse it; a folder that belongs to another
+/// video counts as missing.
 fn locally_protected(
     recording_dirs: &[PathBuf],
     video_id: &str,
@@ -465,21 +484,18 @@ fn locally_protected(
     start_project: Option<&Path>,
 ) -> bool {
     if interrupted && let Some(project) = start_project {
-        if !project
-            .parent()
-            .is_some_and(|parent| std::fs::read_dir(parent).is_ok())
-        {
-            return true;
-        }
         match project.try_exists() {
             Ok(true) => {
                 let meta = RecordingMeta::load_for_project(project).ok();
-                if project_needs_video(project, meta.as_ref(), interrupted) {
+                if meta
+                    .as_ref()
+                    .is_some_and(|meta| !meta_claims(meta, video_id))
+                    || project_needs_video(project, meta.as_ref(), interrupted)
+                {
                     return true;
                 }
             }
-            Ok(false) => {}
-            Err(_) => return true,
+            Ok(false) | Err(_) => return true,
         }
     }
     for directory in recording_dirs {
@@ -493,12 +509,9 @@ fn locally_protected(
                 Ok(Some(state)) if state.video_id() == video_id
             );
             let meta = RecordingMeta::load_for_project(&project).ok();
-            let meta_matches = meta.as_ref().is_some_and(|meta| {
-                meta.sharing
-                    .as_ref()
-                    .is_some_and(|share| share.id == video_id)
-                    || upload_meta_video_id(meta) == Some(video_id)
-            });
+            let meta_matches = meta
+                .as_ref()
+                .is_some_and(|meta| meta_claims(meta, video_id));
             if (state_matches || meta_matches)
                 && project_needs_video(&project, meta.as_ref(), interrupted)
             {
@@ -1047,6 +1060,28 @@ mod tests {
         assert!(fixture.entries().is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_journal_is_never_treated_as_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        let journal = fixture.journal();
+        fixture.seed(vec![entry("uploaded", "earlier", Stage::Starting, 100)]);
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::read(&journal).is_ok();
+        let forgotten = forget_at(&journal, "uploaded");
+        let still_there = still_journaled(&journal, "uploaded");
+        let written = update_journal(&journal, |entries| entries.clear());
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if readable {
+            return;
+        }
+        assert!(!forgotten);
+        assert!(!still_there);
+        assert!(written.is_err());
+        assert_eq!(fixture.entries().len(), 1);
+    }
+
     #[test]
     fn forgetting_a_verified_video_clears_only_that_entry() {
         let fixture = Fixture::new();
@@ -1228,18 +1263,25 @@ mod tests {
             Some(&project),
         ));
         let deleted = recordings.join("deleted.cap");
-        assert!(!locally_protected(
+        assert!(locally_protected(
             std::slice::from_ref(&recordings),
             "video",
             true,
             Some(&deleted),
         ));
-        let failed = write_project(&recordings, "failed.cap", "other", in_progress());
+        let failed = write_project(&recordings, "failed.cap", "video", in_progress());
         assert!(!locally_protected(
             std::slice::from_ref(&recordings),
             "video",
             true,
             Some(&failed),
+        ));
+        let reused = write_project(&recordings, "reused.cap", "next-video", in_progress());
+        assert!(locally_protected(
+            std::slice::from_ref(&recordings),
+            "video",
+            true,
+            Some(&reused),
         ));
         std::fs::write(failed.join("content/display/segment_001.m4s"), b"media").unwrap();
         assert!(locally_protected(
