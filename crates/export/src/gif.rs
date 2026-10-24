@@ -3,7 +3,7 @@ use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tracing::trace;
 
 use crate::{ExportError, ExporterBase, prepare_new_output};
@@ -130,9 +130,15 @@ impl GifExportSettings {
                     return Err(ExportError::Other("Export cancelled".to_string()));
                 }
 
-                if let Err(e) =
-                    gif_encoder.add_frame(&frame.data, frame.padded_bytes_per_row as usize)
-                {
+                let add_result = match Arc::try_unwrap(frame.data) {
+                    Ok(data) => {
+                        gif_encoder.add_frame_owned(data, frame.padded_bytes_per_row as usize)
+                    }
+                    Err(shared) => {
+                        gif_encoder.add_frame(&shared, frame.padded_bytes_per_row as usize)
+                    }
+                };
+                if let Err(e) = add_result {
                     return Err(ExportError::Other(format!(
                         "Failed to add frame to GIF: {e}"
                     )));
@@ -180,6 +186,7 @@ impl GifExportSettings {
             self.resolution_base,
             &base.recordings,
             base.sample_windows.clone(),
+            true,
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 
