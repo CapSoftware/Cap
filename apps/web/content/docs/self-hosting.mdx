@@ -151,6 +151,17 @@ AI_MODEL=llama3.3
 AI_API_KEY=your-key          # If the endpoint requires one
 ```
 
+When `openai-compatible` is in the chain, Cap sends transcripts in smaller
+sections so each request fits a 4k-token context window, which is Ollama's
+default on machines with less than 24 GB of VRAM. Ollama's OpenAI-compatible
+endpoint ignores per-request context settings and silently cuts longer
+prompts from the start. For better summaries of long recordings, raise the
+context on the Ollama server:
+
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve
+```
+
 Each provider has sensible default models. You can override them per role for
 the provider selected by `AI_PROVIDER`:
 

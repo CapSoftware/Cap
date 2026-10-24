@@ -13,7 +13,7 @@ import { generateText } from "ai";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
-import { isAiConfigured } from "@/lib/ai/provider";
+import { getAiProviderChain, isAiConfigured } from "@/lib/ai/provider";
 import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
 import { setGeneratedAiContent } from "@/lib/ai-content-metadata";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
@@ -57,7 +57,15 @@ const getAffectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
-const MAX_CHARS_PER_CHUNK = 24000;
+const TRANSCRIPT_CHUNK_TOKENS = 6000;
+// Ollama serves a 4k-token context on machines under 24 GB of VRAM and its
+// /v1 endpoint ignores num_ctx, so a longer prompt is cut from the front
+// (losing the instructions) with no error. Leave room for the ~800-token
+// instructions and the JSON reply inside that 4k window.
+const OPENAI_COMPATIBLE_TRANSCRIPT_CHUNK_TOKENS = 1800;
+// The single-chunk prompt prefixes every segment with "[m:ss] ", which
+// tokenizes to about six tokens; word-level transcripts have thousands.
+const SEGMENT_TIMESTAMP_TOKENS = 6;
 const LEGACY_AI_TITLE_FALLBACK = "Generated Title";
 const LEGACY_AI_SUMMARY_FALLBACK =
 	"The AI was unable to generate a proper summary for this content.";
@@ -251,7 +259,10 @@ async function generateWithAi(
 ): Promise<AiResult> {
 	"use step";
 
-	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
+	const chunks = chunkTranscriptWithTimestamps(
+		transcript.segments,
+		getTranscriptChunkTokenBudget(),
+	);
 
 	const videoDuration = getVideoDuration(transcript.segments);
 	const languageInstruction = getAiLanguageInstruction(language);
@@ -462,16 +473,38 @@ function parseVttWithTimestamps(vttContent: string): VttSegment[] {
 	return segments;
 }
 
-function chunkTranscriptWithTimestamps(
+export function getTranscriptChunkTokenBudget(): number {
+	const chain = getAiProviderChain("generation");
+	return chain.some((selection) => selection.provider === "openai-compatible")
+		? OPENAI_COMPATIBLE_TRANSCRIPT_CHUNK_TOKENS
+		: TRANSCRIPT_CHUNK_TOKENS;
+}
+
+// Conservative without a tokenizer: ~4 ASCII characters per token, and one
+// token per non-ASCII character so CJK and other scripts don't overflow.
+export function estimateTokens(text: string): number {
+	let ascii = 0;
+	let other = 0;
+	for (const character of text) {
+		if (character.charCodeAt(0) < 128) ascii += 1;
+		else other += 1;
+	}
+	return Math.ceil(ascii / 4) + other;
+}
+
+export function chunkTranscriptWithTimestamps(
 	segments: VttSegment[],
+	maxTokensPerChunk: number,
 ): { text: string; startTime: number; endTime: number }[] {
 	const chunks: { text: string; startTime: number; endTime: number }[] = [];
 	let currentChunk: VttSegment[] = [];
-	let currentLength = 0;
+	let currentTokens = 0;
 
 	for (const segment of segments) {
+		const segmentTokens =
+			estimateTokens(segment.text) + SEGMENT_TIMESTAMP_TOKENS;
 		if (
-			currentLength + segment.text.length > MAX_CHARS_PER_CHUNK &&
+			currentTokens + segmentTokens > maxTokensPerChunk &&
 			currentChunk.length > 0
 		) {
 			chunks.push({
@@ -480,10 +513,10 @@ function chunkTranscriptWithTimestamps(
 				endTime: currentChunk[currentChunk.length - 1]?.start ?? 0,
 			});
 			currentChunk = [];
-			currentLength = 0;
+			currentTokens = 0;
 		}
 		currentChunk.push(segment);
-		currentLength += segment.text.length + 1;
+		currentTokens += segmentTokens;
 	}
 
 	if (currentChunk.length > 0) {
