@@ -1,0 +1,75 @@
+name: Windows export crash repro
+
+# Runs the camera blur and captions export cases one at a time on Windows with
+# Windows Error Reporting writing full dumps, then prints each crash's stack.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "Space-separated test names in cap-verify's export test"
+        type: string
+        default: "camera_blur_export captions_export camera_blur_and_captions_export"
+
+jobs:
+  repro:
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+
+      - name: Build
+        shell: bash
+        run: cargo test --profile ci-verify -p cap-verify --test export --no-run
+
+      - name: Crash dumps
+        shell: pwsh
+        run: |
+          $dumps = Join-Path $env:RUNNER_TEMP dumps
+          New-Item -ItemType Directory -Force $dumps | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+          New-Item -Force $key | Out-Null
+          Set-ItemProperty $key DumpFolder $dumps
+          Set-ItemProperty $key DumpType 2 -Type DWord
+          Set-ItemProperty $key DumpCount 10 -Type DWord
+          Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' DontShowUI 1 -Type DWord
+
+      - name: Run cases
+        shell: bash
+        env:
+          RUST_BACKTRACE: "1"
+          RUST_LOG: info
+        run: |
+          for test in ${{ inputs.tests }}; do
+            echo "::group::$test"
+            cargo test --profile ci-verify -p cap-verify --test export "$test" -- --exact --nocapture 2>&1 | tail -80
+            echo "exit=${PIPESTATUS[0]}"
+            echo "::endgroup::"
+          done
+
+      - name: Stacks
+        if: always()
+        shell: pwsh
+        run: |
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cdb) { Write-Output "cdb not found"; exit 0 }
+          $symbols = "srv*$env:RUNNER_TEMP\symcache*https://msdl.microsoft.com/download/symbols;$env:GITHUB_WORKSPACE\target\ci-verify\deps"
+          Get-ChildItem (Join-Path $env:RUNNER_TEMP dumps) -Filter *.dmp | ForEach-Object {
+            Write-Output "::group::$($_.Name)"
+            & $cdb.FullName -z $_.FullName -y $symbols -c ".ecxr; kn 60; !analyze -v; q" 2>&1 | Select-Object -Last 220
+            Write-Output "::endgroup::"
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-export-dumps
+          path: ${{ runner.temp }}/dumps
+          if-no-files-found: ignore
+          retention-days: 3

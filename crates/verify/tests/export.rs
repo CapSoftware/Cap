@@ -1497,8 +1497,11 @@ fn recorded_epoch_audio_head() {
 /// The project shape of a 0.6.1 Windows export that ended the process right
 /// after it started: two segments with a camera, background blur on the camera
 /// (CPU segmentation where DirectML is unavailable) and captions on.
-fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
+fn camera_blur(config: &mut ProjectConfiguration) {
     config.camera.background_blur.mode = cap_project::BackgroundBlurMode::Light;
+}
+
+fn captions(config: &mut ProjectConfiguration) {
     let segments: Vec<cap_project::CaptionTrackSegment> = (0..12)
         .map(|i| {
             serde_json::from_value(serde_json::json!({
@@ -1534,15 +1537,17 @@ fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
         .caption_segments = segments;
 }
 
-/// Exports must finish, not end the process, with camera blur and captions.
-#[test]
-fn camera_blur_and_captions_export() {
+/// The project shape of a 0.6.1 Windows export that ended the process right
+/// after it started: two segments with a camera, background blur on the camera
+/// (CPU segmentation where DirectML is unavailable) and captions on. The
+/// export must finish, not end the process.
+fn export_must_finish(name: &str, edit: fn(&mut ProjectConfiguration), decoders: &[Decoder]) {
     let project = common::project(&catalog::multi_segment(report::tier()));
     let mut config = project.config();
-    camera_blur_and_captions(&mut config);
+    edit(&mut config);
     let rt = common::runtime();
-    let dir = common::scratch_dir("export/multi-segment/camera-blur-captions");
-    for decoder in Decoder::all() {
+    let dir = common::scratch_dir(&format!("export/multi-segment/{name}"));
+    for &decoder in decoders {
         let run = ExportRun {
             custom_bpp: None,
             fps: 30,
@@ -1551,6 +1556,7 @@ fn camera_blur_and_captions_export() {
             decoder,
         };
         let path = dir.path().join(format!("{}.mp4", decoder.label()));
+        eprintln!("exporting {name} with the {} decoder", decoder.label());
         let output = rt
             .block_on(common::export(&project, config.clone(), &run, &path))
             .unwrap_or_else(|error| panic!("{} export failed: {error}", decoder.label()));
@@ -1562,4 +1568,26 @@ fn camera_blur_and_captions_export() {
             frames.len()
         );
     }
+}
+
+#[test]
+fn camera_blur_and_captions_export() {
+    export_must_finish(
+        "camera-blur-captions",
+        |config| {
+            camera_blur(config);
+            captions(config);
+        },
+        &Decoder::all(),
+    );
+}
+
+#[test]
+fn camera_blur_export() {
+    export_must_finish("camera-blur", camera_blur, &Decoder::all());
+}
+
+#[test]
+fn captions_export() {
+    export_must_finish("captions", captions, &Decoder::all());
 }
