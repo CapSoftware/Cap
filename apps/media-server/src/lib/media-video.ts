@@ -3013,83 +3013,139 @@ export function multipartUploadConcurrencyFromEnv(
 	return Number.isFinite(value) && value > 0 ? Math.min(value, 16) : 1;
 }
 
-async function uploadFileMultipart(
+async function uploadMultipartParts(
 	filePath: string,
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
 	abortSignal?: AbortSignal,
-): Promise<StorageUploadReceipt> {
+): Promise<UploadedPart[]> {
 	const fileHandle = file(filePath);
 	const contentLength = fileHandle.size;
 	const partSize = Math.floor(target.partSize);
 	const parts: UploadedPart[] = [];
 
-	try {
-		abortSignal?.throwIfAborted();
-		if (contentLength <= 0) {
-			throw new Error("Multipart upload requires a non-empty file");
-		}
+	abortSignal?.throwIfAborted();
+	if (contentLength <= 0) {
+		throw new Error("Multipart upload requires a non-empty file");
+	}
 
-		if (partSize < MULTIPART_MIN_PART_SIZE_BYTES) {
-			throw new Error("Multipart upload part size is too small");
-		}
+	if (partSize < MULTIPART_MIN_PART_SIZE_BYTES) {
+		throw new Error("Multipart upload part size is too small");
+	}
 
-		const partCount = Math.ceil(contentLength / partSize);
-		if (partCount > MULTIPART_MAX_PARTS) {
-			throw new Error(
-				`Multipart upload would require too many parts: ${partCount}/${MULTIPART_MAX_PARTS}`,
-			);
-		}
-
-		const failed = new AbortController();
-		const signal = abortSignal
-			? AbortSignal.any([abortSignal, failed.signal])
-			: failed.signal;
-		let nextPart = 1;
-		const worker = async () => {
-			while (nextPart <= partCount) {
-				const partNumber = nextPart++;
-				const start = (partNumber - 1) * partSize;
-				const end = Math.min(start + partSize, contentLength);
-				const partLength = end - start;
-				const url = await getMultipartPartUrl(
-					target,
-					partNumber,
-					partLength,
-					signal,
-				);
-				const etag = await uploadMultipartPart(
-					url,
-					fileHandle.slice(start, end),
-					partLength,
-					partNumber,
-					signal,
-				);
-				parts.push({ partNumber, etag, size: partLength });
-			}
-		};
-		const workers = Array.from(
-			{ length: Math.min(multipartUploadConcurrencyFromEnv(), partCount) },
-			() => worker(),
+	const partCount = Math.ceil(contentLength / partSize);
+	if (partCount > MULTIPART_MAX_PARTS) {
+		throw new Error(
+			`Multipart upload would require too many parts: ${partCount}/${MULTIPART_MAX_PARTS}`,
 		);
-		try {
-			await Promise.all(workers);
-		} catch (error) {
-			failed.abort();
-			await Promise.allSettled(workers);
-			throw error;
-		}
-		parts.sort((a, b) => a.partNumber - b.partNumber);
+	}
 
-		return await completeMultipartUpload(target, parts, abortSignal);
-	} catch (error) {
-		await abortMultipartUpload(target).catch((abortError) => {
-			console.warn(
-				"Multipart upload abort failed:",
-				abortError instanceof Error ? abortError.message : abortError,
+	const failed = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, failed.signal])
+		: failed.signal;
+	let nextPart = 1;
+	const worker = async () => {
+		while (nextPart <= partCount) {
+			const partNumber = nextPart++;
+			const start = (partNumber - 1) * partSize;
+			const end = Math.min(start + partSize, contentLength);
+			const partLength = end - start;
+			const url = await getMultipartPartUrl(
+				target,
+				partNumber,
+				partLength,
+				signal,
 			);
-		});
+			const etag = await uploadMultipartPart(
+				url,
+				fileHandle.slice(start, end),
+				partLength,
+				partNumber,
+				signal,
+			);
+			parts.push({ partNumber, etag, size: partLength });
+		}
+	};
+	const workers = Array.from(
+		{ length: Math.min(multipartUploadConcurrencyFromEnv(), partCount) },
+		() => worker(),
+	);
+	try {
+		await Promise.all(workers);
+	} catch (error) {
+		failed.abort();
+		await Promise.allSettled(workers);
 		throw error;
 	}
+	return parts.sort((a, b) => a.partNumber - b.partNumber);
+}
+
+async function abortMultipartUploadQuietly(
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+) {
+	await abortMultipartUpload(target).catch((abortError) => {
+		console.warn(
+			"Multipart upload abort failed:",
+			abortError instanceof Error ? abortError.message : abortError,
+		);
+	});
+}
+
+async function uploadFileMultipart(
+	filePath: string,
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+	abortSignal?: AbortSignal,
+): Promise<StorageUploadReceipt> {
+	try {
+		const parts = await uploadMultipartParts(filePath, target, abortSignal);
+		return await completeMultipartUpload(target, parts, abortSignal);
+	} catch (error) {
+		await abortMultipartUploadQuietly(target);
+		throw error;
+	}
+}
+
+export interface PendingStorageUpload {
+	// Publishes the upload; for multipart targets this is the only step that creates the object.
+	finish(): Promise<StorageUploadReceipt>;
+	// Stops early work and waits for it to settle, leaving the target to the caller's abort.
+	cancel(): Promise<void>;
+}
+
+// Multipart parts are invisible until the upload is completed, so they can be sent while the caller
+// is still checking the file; single PUT targets only upload once finish() is called.
+export function beginStorageUpload(
+	filePath: string,
+	target: StorageUploadTarget,
+	contentType: string,
+	abortSignal?: AbortSignal,
+): PendingStorageUpload {
+	if (target.type !== "multipart")
+		return {
+			finish: () =>
+				uploadFileToStorage(filePath, target, contentType, abortSignal),
+			cancel: async () => {},
+		};
+	const early = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, early.signal])
+		: early.signal;
+	const parts = uploadMultipartParts(filePath, target, signal);
+	parts.catch(() => {});
+	return {
+		finish: async () => {
+			try {
+				return await completeMultipartUpload(target, await parts, abortSignal);
+			} catch (error) {
+				await abortMultipartUploadQuietly(target);
+				throw error;
+			}
+		},
+		cancel: async () => {
+			early.abort();
+			await parts.catch(() => {});
+		},
+	};
 }
 
 export async function abortStorageUploadTarget(

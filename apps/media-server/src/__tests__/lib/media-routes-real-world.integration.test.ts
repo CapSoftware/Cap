@@ -853,7 +853,50 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
-	test("refuses a local output changed between full decode and byte binding", async () => {
+	test("stops the output hash before cleanup when the decode check fails first", async () => {
+		let hashAborted = false;
+		let hashSettled = false;
+		const hashing = spyOn(
+			recordingVerification,
+			"hashRecordingFile",
+		).mockImplementation(
+			(_path, signal) =>
+				new Promise<string>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => {
+						hashAborted = true;
+						setTimeout(() => {
+							hashSettled = true;
+							reject(new Error("Hash stopped"));
+						}, 50);
+					});
+				}),
+		);
+		const verifying = spyOn(
+			recordingVerification,
+			"verifyRemuxedRecording",
+		).mockRejectedValue(new Error("Recording decoder failed to start"));
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest(
+					"/video/mux-segments",
+					fencedMuxRequest("hash-after-failed-decode"),
+				),
+			);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(hashAborted).toBe(true);
+			expect(hashSettled).toBe(true);
+		} finally {
+			hashing.mockRestore();
+			verifying.mockRestore();
+			if (jobId) deleteJob(jobId);
+		}
+	}, 30_000);
+
+	// Hashing now overlaps the decode check, so whichever check reads the changed bytes first refuses it.
+	test("refuses a local output changed while it is decoded and hashed", async () => {
 		const originalHash = recordingVerification.hashRecordingFile;
 		const hashing = spyOn(
 			recordingVerification,
@@ -877,8 +920,8 @@ describe("media routes real-world integration tests", () => {
 			jobId = ((await response.json()) as { jobId: string }).jobId;
 			const job = await waitForTerminalJob(jobId);
 			expect(job.phase).toBe("error");
-			expect(job.error).toContain(
-				"Local recording changed during verification",
+			expect(job.error).toMatch(
+				/Local recording changed during verification|does not preserve the source/,
 			);
 			expect(job.errorCode).toBe("output-invalid");
 			expect(job.recordingVerification).toBeUndefined();
@@ -918,6 +961,31 @@ describe("media routes real-world integration tests", () => {
 					expect(job.recordingVerification?.sourceProof?.sourcePreserved).toBe(
 						true,
 					);
+			} finally {
+				deleteJob(jobId);
+			}
+		},
+		30_000,
+	);
+
+	test.each(["corrupt", "corrupt-audio"] as const)(
+		"never completes a multipart output whose source fails verification (%s)",
+		async (fault) => {
+			sourceFault = fault;
+			const body = multipartMuxRequest(`multipart-unverified-${fault}`);
+			const response = await app.fetch(
+				mediaPostRequest("/video/mux-segments", body),
+			);
+			expect(response.status).toBe(200);
+			const { jobId } = (await response.json()) as { jobId: string };
+			try {
+				const job = await waitForTerminalJob(jobId);
+				expect(job.phase).toBe("error");
+				expect(job.recordingVerification).toBeUndefined();
+				const actions = multipartCallbacks.map(({ action }) => action);
+				// Parts may already be uploaded while the check runs, but the object is never created.
+				expect(actions).not.toContain("complete");
+				expect(actions.at(-1)).toBe("abort");
 			} finally {
 				deleteJob(jobId);
 			}
@@ -1560,6 +1628,34 @@ describe("media routes real-world integration tests", () => {
 			expect(permanentFixtureFailures).toBe(3);
 			expect(slowFixtureCancellations).toBe(1);
 			expect(uploadedArtifacts.has("/uploads/failed-segment-output.mp4")).toBe(
+				false,
+			);
+		} finally {
+			deleteJob(data.jobId);
+		}
+	}, 90000);
+
+	test("cancels the other init download when one fails, before the job reports failure", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", {
+				videoId: "failed-init-mux-video",
+				userId: "failed-init-mux-user",
+				outputPresignedUrl: uploadUrl("failed-init-output.mp4"),
+				videoInitUrl: `${baseUrl}/fixtures/slow-segment.m4s`,
+				videoSegmentUrls: [fixtureUrl("test-no-audio.mp4")],
+				audioInitUrl: `${baseUrl}/fixtures/permanent-unavailable.m4s`,
+				audioSegmentUrls: [fixtureUrl("test-no-audio.mp4")],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(data.jobId);
+		try {
+			expect(job.phase).toBe("error");
+			expect(job.error).toContain("503");
+			expect(slowFixtureCancellations).toBe(1);
+			expect(uploadedArtifacts.has("/uploads/failed-init-output.mp4")).toBe(
 				false,
 			);
 		} finally {

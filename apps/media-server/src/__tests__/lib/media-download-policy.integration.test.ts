@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,16 +171,39 @@ describe("localized media resources", () => {
 				kind === "hls" ? "manifest.m3u8" : "manifest.mpd",
 				target.url,
 			).toString();
-			const operation =
+			const operation = () =>
 				materialize === materializeHlsPlaylist
 					? materializeHlsPlaylist(url, directory)
 					: materialize(url, directory);
-			await expect(operation).rejects.toThrow("404");
-			const completedFiles = await readdir(directory);
-			const requests = target.requests.length;
-			await new Promise((resolve) => setTimeout(resolve, 30));
-			expect(await readdir(directory)).toEqual(completedFiles);
-			expect(target.requests.length).toBe(requests);
+			const originalFetch = globalThis.fetch;
+			const slowSignals: AbortSignal[] = [];
+			let requestsStarted = 0;
+			const fetcher = spyOn(globalThis, "fetch").mockImplementation(
+				Object.assign(
+					(input: RequestInfo | URL, init?: RequestInit) => {
+						requestsStarted++;
+						const path = new URL(
+							input instanceof Request ? input.url : String(input),
+						).pathname;
+						if ((path === "/slow.m4s" || path === "/seg-2.m4s") && init?.signal)
+							slowSignals.push(init.signal);
+						return originalFetch(input, init);
+					},
+					{ preconnect: originalFetch.preconnect },
+				),
+			);
+			try {
+				await expect(operation()).rejects.toThrow("404");
+				expect(slowSignals).toHaveLength(1);
+				expect(slowSignals[0].aborted).toBe(true);
+				const completedFiles = await readdir(directory);
+				const requests = requestsStarted;
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				expect(await readdir(directory)).toEqual(completedFiles);
+				expect(requestsStarted).toBe(requests);
+			} finally {
+				fetcher.mockRestore();
+			}
 		},
 		2000,
 	);

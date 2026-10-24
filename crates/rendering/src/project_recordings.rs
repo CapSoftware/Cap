@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     ffi::CString,
     path::{Path, PathBuf},
     ptr,
@@ -321,25 +320,10 @@ impl ProjectRecordingsMeta {
                 .segments
                 .iter()
                 .map(|s| {
-                    let has_start_times = RefCell::new(None);
-
-                    let ensure_start_time = |time: Option<f64>| {
-                        let Some(has_start_times) = *has_start_times.borrow_mut() else {
-                            *has_start_times.borrow_mut() = Some(time.is_some());
-                            return Ok(time.unwrap_or_default());
-                        };
-
-                        Ok(if has_start_times {
-                            if let Some(time) = time {
-                                time
-                            } else {
-                                return Err("Missing start time".to_string());
-                            }
-                        } else if time.is_some() {
-                            return Err("Start time mismatch".to_string());
-                        } else {
-                            0.0
-                        })
+                    let ensure_start_time = |time: Option<f64>| match (s.display.start_time, time) {
+                        (Some(_), None) => Err("Missing start time".to_string()),
+                        (None, Some(_)) => Err("Start time mismatch".to_string()),
+                        (_, time) => Ok(time.unwrap_or_default()),
                     };
 
                     let load_video = |meta: &VideoMeta| {
@@ -354,7 +338,10 @@ impl ProjectRecordingsMeta {
                         })
                     };
 
-                    let system_audio = match Option::map(s.system_audio.as_ref(), load_audio)
+                    if s.system_audio.is_some() && s.usable_system_audio().is_none() {
+                        tracing::warn!("System audio start time does not match display, treating as no audio");
+                    }
+                    let system_audio = match Option::map(s.usable_system_audio(), load_audio)
                         .transpose()
                     {
                         Ok(audio) => audio,
@@ -694,6 +681,76 @@ mod ordinary_media_access_tests {
             Err(error) => error,
         };
         assert!(error.contains("requested source failed"));
+    }
+
+    #[test]
+    fn optional_system_audio_timestamps_do_not_reject_video_tracks() {
+        let directory = tempfile::tempdir().unwrap();
+        write_test_video(
+            &directory.path().join("display.mp4"),
+            ffmpeg::codec::Id::H264,
+        );
+        write_test_audio(&directory.path().join("audio.wav"));
+
+        for (display_start, audio_start, matching) in [
+            (None, Some(0.5), false),
+            (Some(0.25), None, false),
+            (None, None, true),
+            (Some(0.25), Some(0.5), true),
+        ] {
+            for audio_path in ["missing.wav", "audio.wav"] {
+                let raw = serde_json::json!({
+                    "pretty_name": "Mixed timestamp recording",
+                    "segments": [{
+                        "display": {"path": "display.mp4", "start_time": display_start},
+                        "camera": {"path": "display.mp4", "start_time": display_start},
+                        "mic": {"path": "audio.wav", "start_time": display_start},
+                        "system_audio": {"path": audio_path, "start_time": audio_start}
+                    }]
+                });
+                std::fs::write(
+                    directory.path().join("recording-meta.json"),
+                    serde_json::to_vec(&raw).unwrap(),
+                )
+                .unwrap();
+                let meta = cap_project::RecordingMeta::load_for_project(directory.path()).unwrap();
+                let recordings =
+                    ProjectRecordingsMeta::new(&meta.project_path, meta.studio_meta().unwrap())
+                        .unwrap();
+                let segment = &recordings.segments[0];
+                let expected_start = display_start.unwrap_or_default();
+                assert_eq!(segment.display.start_time, expected_start);
+                assert_eq!(segment.camera.unwrap().start_time, expected_start);
+                assert_eq!(segment.mic.unwrap().start_time, expected_start);
+                assert_eq!(
+                    segment.system_audio.map(|audio| audio.start_time),
+                    (matching && audio_path == "audio.wav")
+                        .then_some(audio_start.unwrap_or_default())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inconsistent_camera_timestamps_still_return_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        write_test_video(
+            &directory.path().join("display.mp4"),
+            ffmpeg::codec::Id::H264,
+        );
+
+        for (display_start, camera_start) in [(None, Some(0.5)), (Some(0.25), None)] {
+            let meta: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+                "segments": [{
+                    "display": {"path": "display.mp4", "start_time": display_start},
+                    "camera": {"path": "display.mp4", "start_time": camera_start}
+                }]
+            }))
+            .unwrap();
+            let error =
+                ProjectRecordingsMeta::new(&directory.path().to_path_buf(), &meta).unwrap_err();
+            assert!(error.starts_with("segment 0 / camera / "), "{error}");
+        }
     }
 
     #[test]

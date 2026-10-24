@@ -710,7 +710,12 @@ overlap_dropped_frames: number;
 startup_overlap_drops: number }
 export type AudioInputLevelChange = number
 export type AudioLibraryTrack = { id: string; name: string; category: string }
-export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
+export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null;
+/**
+ * Milliseconds the unmuted microphone delivered sustained bit-exact silence,
+ * e.g. while a VoIP call held the input on macOS.
+ */
+digital_silence_ms?: number | null }
 /**
  * A timeline-positioned audio clip (background music or imported audio).
  *
