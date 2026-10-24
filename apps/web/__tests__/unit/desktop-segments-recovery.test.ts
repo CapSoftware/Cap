@@ -25,7 +25,8 @@ vi.mock("drizzle-orm", () => ({
 	and: (...args: unknown[]) => args,
 	or: (...args: unknown[]) => ({ or: args }),
 	notLike: (left: unknown, right: unknown) => ({ notLike: [left, right] }),
-	asc: (value: unknown) => value,
+	asc: (value: unknown) => ({ asc: value }),
+	desc: (value: unknown) => ({ desc: value }),
 	eq: (left: unknown, right: unknown) => ({ eq: [left, right] }),
 	inArray: (left: unknown, right: unknown) => ({ in: [left, right] }),
 	isNull: (value: unknown) => ({ null: value }),
@@ -190,7 +191,10 @@ describe("durable recovery scheduling", () => {
 	it("does not create a durable job for an unfinished legacy upload", async () => {
 		const now = new Date("2026-09-09T20:00:00Z");
 		const legacy = selectChain([{ videoId, ownerId: userId }]);
-		mocks.db.mockReturnValueOnce(legacy).mockReturnValue(selectChain([video]));
+		mocks.db
+			.mockReturnValueOnce(legacy)
+			.mockReturnValueOnce(legacy)
+			.mockReturnValue(selectChain([video]));
 		mocks.get.mockReturnValue(
 			Effect.succeed(
 				Option.some(JSON.stringify({ ...manifest, is_complete: false })),
@@ -210,7 +214,10 @@ describe("durable recovery scheduling", () => {
 			{ videoId, ownerId: userId },
 			{ videoId: "second", ownerId: userId },
 		]);
-		mocks.db.mockReturnValueOnce(legacy).mockReturnValue(selectChain([video]));
+		mocks.db
+			.mockReturnValueOnce(legacy)
+			.mockReturnValueOnce(legacy)
+			.mockReturnValue(selectChain([video]));
 		mocks.get.mockReturnValueOnce(
 			Effect.fail(new Error("storage unavailable")),
 		);
@@ -252,7 +259,10 @@ describe("durable recovery scheduling", () => {
 
 	it("adopts stranded legacy processing rows without assuming their inventory is complete", async () => {
 		const chain = selectChain([{ videoId, ownerId: userId }]);
-		mocks.db.mockReturnValueOnce(chain).mockReturnValue(selectChain([video]));
+		mocks.db
+			.mockReturnValueOnce(chain)
+			.mockReturnValueOnce(chain)
+			.mockReturnValue(selectChain([video]));
 		mocks.queue.mockRejectedValue(new SourceCommitPendingError());
 		const result = await recoverStaleDesktopSegments();
 		expect(result.statuses).toEqual({ "source-committing": 1 });
@@ -292,7 +302,10 @@ describe("durable recovery scheduling", () => {
 				ownerId: userId,
 			})),
 		);
-		mocks.db.mockReturnValueOnce(legacy).mockReturnValue(selectChain([video]));
+		mocks.db
+			.mockReturnValueOnce(legacy)
+			.mockReturnValueOnce(legacy)
+			.mockReturnValue(selectChain([video]));
 		const result = await recoverStaleDesktopSegments();
 		expect(mocks.recoverable).toHaveBeenCalledWith(
 			expect.objectContaining({ limit: 15 }),
@@ -302,5 +315,151 @@ describe("durable recovery scheduling", () => {
 		expect(
 			result.results.filter((entry) => entry.videoId.startsWith("legacy-")),
 		).toHaveLength(5);
+	});
+});
+
+describe("legacy recovery order", () => {
+	it("checks the newest eligible legacy rows alongside the oldest without repeating one", async () => {
+		const newest = selectChain([
+			{ videoId: "newest", ownerId: userId },
+			{ videoId: "both", ownerId: userId },
+		]);
+		const oldest = selectChain([
+			{ videoId: "oldest", ownerId: userId },
+			{ videoId: "both", ownerId: userId },
+		]);
+		mocks.db
+			.mockReturnValueOnce(newest)
+			.mockReturnValueOnce(oldest)
+			.mockReturnValue(selectChain([video]));
+		mocks.get.mockReturnValue(Effect.succeed(Option.none()));
+		const result = await recoverStaleDesktopSegments();
+		expect(result.results.map((entry) => entry.videoId)).toEqual([
+			"newest",
+			"both",
+			"oldest",
+		]);
+		expect(result.statuses).toEqual({ "missing-manifest": 3 });
+		expect(newest.orderBy).toHaveBeenCalledWith(
+			{ desc: "upload.updatedAt" },
+			{ desc: "upload.videoId" },
+		);
+		expect(newest.limit).toHaveBeenCalledWith(10);
+		expect(oldest.orderBy).toHaveBeenCalledWith(
+			{ asc: "upload.updatedAt" },
+			{ asc: "upload.videoId" },
+		);
+		expect(oldest.limit).toHaveBeenCalledWith(20);
+	});
+
+	it("reaches a stuck recording behind a week of empty caps soon after it qualifies, and still checks every row before it ages out", async () => {
+		const minute = 60_000;
+		const start = new Date("2026-10-01T00:00:00Z").getTime();
+		type Row = { videoId: string; startedAt: number };
+		const rows: Row[] = [];
+		for (
+			let at = start - 8 * 24 * 60 * minute;
+			at < start + 24 * 60 * minute;
+			at += 15 * minute
+		) {
+			rows.push({ videoId: `empty-${at}`, startedAt: at });
+		}
+		const stuck = { videoId: "stuck", startedAt: start + 3 * 60 * minute };
+		rows.push(stuck);
+		const queued = new Set<string>();
+		let now = start;
+		const eligible = () =>
+			rows.filter(
+				(row) =>
+					!queued.has(row.videoId) &&
+					row.startedAt <= now - 60 * minute &&
+					row.startedAt >= now - 7 * 24 * 60 * minute,
+			);
+		mocks.db.mockImplementation(() => {
+			const state: { joined: boolean; order?: unknown; where?: unknown } = {
+				joined: false,
+			};
+			const chain = {
+				select: () => chain,
+				from: () => chain,
+				innerJoin: () => {
+					state.joined = true;
+					return chain;
+				},
+				leftJoin: () => chain,
+				where: (where: unknown) => {
+					state.where = where;
+					return chain;
+				},
+				orderBy: (order: unknown) => {
+					state.order = order;
+					return chain;
+				},
+				limit: async (limit: number) => {
+					if (!state.joined) {
+						const id = (state.where as Array<{ eq?: [string, string] }>).find(
+							(part) => part?.eq?.[0] === "video.id",
+						)?.eq?.[1];
+						return [{ ...video, id }];
+					}
+					const descending = "desc" in (state.order as object);
+					return eligible()
+						.sort((a, b) =>
+							descending
+								? b.startedAt - a.startedAt ||
+									b.videoId.localeCompare(a.videoId)
+								: a.startedAt - b.startedAt ||
+									a.videoId.localeCompare(b.videoId),
+						)
+						.slice(0, limit)
+						.map((row) => ({ videoId: row.videoId, ownerId: userId }));
+				},
+			};
+			return chain;
+		});
+		mocks.get.mockImplementation((key: string) =>
+			Effect.succeed(
+				key.includes("/stuck/")
+					? Option.some(JSON.stringify(manifest))
+					: Option.none(),
+			),
+		);
+		mocks.queue.mockImplementation(async ({ videoId: id }) => {
+			queued.add(id);
+			return "queued";
+		});
+
+		const checkedAt = new Map<string, number>();
+		for (; now <= start + 24 * 60 * minute; now += 15 * minute) {
+			const result = await recoverStaleDesktopSegments({ now: new Date(now) });
+			for (const entry of result.results) {
+				if (!checkedAt.has(entry.videoId)) checkedAt.set(entry.videoId, now);
+			}
+		}
+
+		const stuckQualified = stuck.startedAt + 60 * minute;
+		expect(queued.has("stuck")).toBe(true);
+		expect(
+			(checkedAt.get("stuck") ?? Number.POSITIVE_INFINITY) - stuckQualified,
+		).toBeLessThanOrEqual(15 * minute);
+		const end = start + 24 * 60 * minute;
+		const agedOut = rows.filter(
+			(row) =>
+				row.startedAt >= start - 7 * 24 * 60 * minute &&
+				row.startedAt < end - 7 * 24 * 60 * minute,
+		);
+		expect(agedOut.length).toBeGreaterThan(0);
+		for (const row of agedOut) expect(checkedAt.has(row.videoId)).toBe(true);
+		const arrived = rows.filter(
+			(row) =>
+				row.startedAt + 60 * minute >= start &&
+				row.startedAt + 60 * minute <= end - 15 * minute,
+		);
+		for (const row of arrived) {
+			expect(
+				(checkedAt.get(row.videoId) ?? Number.POSITIVE_INFINITY) -
+					(row.startedAt + 60 * minute),
+			).toBeLessThanOrEqual(15 * minute);
+		}
 	});
 });
