@@ -1038,6 +1038,25 @@ const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
     ),
 ];
 
+const CANCEL_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: "Show Cap",
+            hint: "Back to the recorder",
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/eye-off.svg",
+            label: "Stay hidden",
+            hint: "Unless Cap was open",
+        },
+    ),
+];
+
 fn shortcut_label(action: &str) -> &'static str {
     match action {
         "screenshotArea" => "Screenshot an area",
@@ -1544,6 +1563,30 @@ impl SettingsWindow {
             ),
         );
 
+        let cancel = vec![
+            self.render_outcome_panel(
+                "outcome-cancel",
+                "When you cancel",
+                "Esc or closing the picker",
+                &CANCEL_OUTCOMES
+                    .iter()
+                    .map(|(keep_hidden, option)| {
+                        (
+                            *option,
+                            *keep_hidden == self.settings.keep_main_hidden_on_cancel,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((keep_hidden, _)) = CANCEL_OUTCOMES.get(index) {
+                        this.settings.keep_main_hidden_on_cancel = *keep_hidden;
+                        this.write_bool("keepMainHiddenOnCancel", *keep_hidden, cx);
+                    }
+                },
+                cx,
+            ),
+        ];
+
         let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
@@ -1559,7 +1602,7 @@ impl SettingsWindow {
                 .into_any_element()
         };
 
-        vec![
+        let mut sections = vec![
             self.section(
                 "Screenshots",
                 Some("Shortcuts work from any app. Click one to change it."),
@@ -1574,6 +1617,21 @@ impl SettingsWindow {
                 vec![card("shortcuts-recording", recording, cx)],
             )
             .into_any_element(),
+        ];
+        // Linux has no main-window visibility probe, so a cancel there always
+        // counts the window as having been open and the choice would do nothing.
+        if !cfg!(target_os = "linux") {
+            sections.push(
+                self.section(
+                    "Cancelling",
+                    Some("For screenshots and recordings started from a shortcut or the tray."),
+                    None,
+                    vec![card("shortcuts-cancel", cancel, cx)],
+                )
+                .into_any_element(),
+            );
+        }
+        sections.push(
             self.section(
                 "While recording",
                 None,
@@ -1581,7 +1639,8 @@ impl SettingsWindow {
                 vec![card("shortcuts-while-recording", while_recording, cx)],
             )
             .into_any_element(),
-        ]
+        );
+        sections
     }
 
     fn render_outcome_panel(
