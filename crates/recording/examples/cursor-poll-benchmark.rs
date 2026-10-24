@@ -11,7 +11,7 @@ use scap_targets::Display;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-fn process_cpu() -> Duration {
+fn process_cpu() -> Option<Duration> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     // SAFETY: getrusage fills the struct it is given.
     let usage = unsafe {
@@ -21,12 +21,12 @@ fn process_cpu() -> Duration {
     let time = |tv: libc::timeval| {
         Duration::from_secs(tv.tv_sec as u64) + Duration::from_micros(tv.tv_usec as u64)
     };
-    time(usage.ru_utime) + time(usage.ru_stime)
+    Some(time(usage.ru_utime) + time(usage.ru_stime))
 }
 
 #[cfg(not(unix))]
-fn process_cpu() -> Duration {
-    Duration::ZERO
+fn process_cpu() -> Option<Duration> {
+    None
 }
 
 fn main() -> anyhow::Result<()> {
@@ -69,7 +69,9 @@ fn main() -> anyhow::Result<()> {
     std::thread::sleep(Duration::from_secs(seconds));
     actor.stop();
     let wall = started.elapsed();
-    let cpu = process_cpu() - started_cpu;
+    let cpu = process_cpu()
+        .zip(started_cpu)
+        .map(|(now, started)| (now - started).as_secs_f64());
     let response = futures::executor::block_on(actor.rx.clone())
         .map_err(|_| anyhow::anyhow!("The cursor recorder exited without a response"))?;
 
@@ -84,8 +86,8 @@ fn main() -> anyhow::Result<()> {
         serde_json::json!({
             "keyboard": keyboard,
             "wallSecs": wall.as_secs_f64(),
-            "cpuMs": cpu.as_secs_f64() * 1000.0,
-            "cpuPercent": cpu.as_secs_f64() / wall.as_secs_f64() * 100.0,
+            "cpuMs": cpu.map(|cpu| cpu * 1000.0),
+            "cpuPercent": cpu.map(|cpu| cpu / wall.as_secs_f64() * 100.0),
             "moves": response.moves.len(),
             "clicks": response.clicks.len(),
             "keys": keys,
