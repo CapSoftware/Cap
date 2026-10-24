@@ -1,81 +1,63 @@
-import { createElement, type ReactNode } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import ChartArea from "@/app/(org)/dashboard/analytics/components/ChartArea";
-
-vi.mock("recharts", () => ({
-	AreaChart: ({ data }: { data: Array<{ label: string; views: number }> }) =>
-		createElement(
-			"div",
-			null,
-			data.map((point) =>
-				createElement(
-					"span",
-					{ key: point.label },
-					`${point.label}: ${point.views}`,
-				),
-			),
-		),
-	Area: () => null,
-	CartesianGrid: () => null,
-	XAxis: () => null,
-	YAxis: () => null,
-}));
-
-vi.mock("@/components/ui/chart", () => ({
-	ChartContainer: ({ children }: { children: ReactNode }) => children,
-	ChartTooltip: () => null,
-	ChartTooltipContent: () => null,
-}));
-
-const renderChart = (buckets: string[]) =>
-	renderToStaticMarkup(
-		createElement(ChartArea, {
-			selectedMetrics: ["views"],
-			data: buckets.map((bucket, index) => ({
-				bucket,
-				views: index + 1,
-				caps: 0,
-				comments: 0,
-				reactions: 0,
-			})),
-		}),
-	);
+import {
+	formatBucketTick,
+	formatBucketTitle,
+	formatRelative,
+} from "@/app/(org)/dashboard/analytics/components/format";
 
 describe.each(["America/Los_Angeles", "Asia/Kolkata", "UTC"])(
 	"analytics chart dates in %s",
 	(timeZone) => {
 		beforeEach(() => vi.stubEnv("TZ", timeZone));
 		afterEach(() => vi.unstubAllEnvs());
+
 		it.each([
-			["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"],
-			["2026-03-08T00:00:00Z", "2026-03-09T00:00:00Z"],
-			["2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z"],
-		])("labels UTC daily buckets on their actual date: %s", (...buckets) => {
-			const chart = renderChart(buckets);
-			for (const [index, bucket] of buckets.entries()) {
-				const label = new Date(bucket).toLocaleDateString([], {
-					month: "short",
+			"2026-01-01T00:00:00Z",
+			"2026-03-08T00:00:00Z",
+			"2026-11-01T00:00:00Z",
+		])("labels UTC daily buckets on their actual date: %s", (bucket) => {
+			const expected = new Date(bucket).toLocaleDateString([], {
+				day: "numeric",
+				month: "short",
+				timeZone: "UTC",
+			});
+			expect(formatBucketTick(bucket, "day", 7)).toBe(expected);
+			expect(formatBucketTitle(bucket, "day")).toContain(
+				new Date(bucket).toLocaleDateString([], {
 					day: "numeric",
 					timeZone: "UTC",
-				});
-				expect(chart).toContain(`${label}: ${index + 1}`);
-			}
+				}),
+			);
 		});
 
 		it("keeps hourly labels in the viewer's local time", () => {
-			const buckets = ["2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"];
-			const chart = renderChart(buckets);
-			for (const [index, bucket] of buckets.entries()) {
-				const label = new Date(bucket).toLocaleTimeString([], {
-					hour: "numeric",
-				});
-				expect(chart).toContain(`${label}: ${index + 1}`);
-			}
-		});
-
-		it("shows the empty state when there are no buckets", () => {
-			expect(renderChart([])).toContain("No analytics data yet.");
+			const bucket = "2026-01-01T01:00:00Z";
+			expect(formatBucketTick(bucket, "hour", 1)).toBe(
+				new Date(bucket).toLocaleTimeString([], { hour: "numeric" }),
+			);
 		});
 	},
 );
+
+describe("formatRelative", () => {
+	const now = Date.UTC(2026, 9, 24, 15, 30);
+
+	it("describes daily buckets against the UTC day", () => {
+		expect(formatRelative("2026-10-24T00:00:00Z", "day", now)).toBe("Today");
+		expect(formatRelative("2026-10-23T00:00:00Z", "day", now)).toBe(
+			"Yesterday",
+		);
+		expect(formatRelative("2026-10-13T00:00:00Z", "day", now)).toBe(
+			"11 days ago",
+		);
+	});
+
+	it("describes hourly buckets in hours", () => {
+		expect(formatRelative("2026-10-24T15:00:00Z", "hour", now)).toBe(
+			"This hour",
+		);
+		expect(formatRelative("2026-10-24T12:00:00Z", "hour", now)).toBe(
+			"3 hours ago",
+		);
+	});
+});
