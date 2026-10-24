@@ -1,5 +1,3 @@
-import { Agent as HttpAgent } from "node:http";
-import { Agent as HttpsAgent } from "node:https";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import { db } from "@cap/database";
 import { decrypt, encrypt } from "@cap/database/crypto";
@@ -12,9 +10,9 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import {
-	isBlockedS3Endpoint,
-	publicOnlyLookup,
-	shouldBlockPrivateS3Endpoints,
+	blockedS3EndpointMessage,
+	isDisallowedS3Endpoint,
+	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
 import {
 	getAccessibleOrganization,
@@ -65,15 +63,9 @@ const getS3ErrorMetadata = (error: unknown) => {
 };
 
 const blockedEndpointResponse = {
-	error:
-		"Invalid endpoint. Please provide a public S3-compatible endpoint URL.",
+	error: blockedS3EndpointMessage,
 	details: "The provided endpoint is not allowed.",
 };
-
-const isDisallowedEndpoint = async (endpoint: string) =>
-	Boolean(endpoint) &&
-	shouldBlockPrivateS3Endpoints() &&
-	(await isBlockedS3Endpoint(endpoint));
 
 app.post(
 	"/",
@@ -92,7 +84,7 @@ app.post(
 		const user = c.get("user");
 		const data = c.req.valid("json");
 
-		if (await isDisallowedEndpoint(data.endpoint)) {
+		if (await isDisallowedS3Endpoint(data.endpoint)) {
 			return c.json(blockedEndpointResponse, { status: 400 });
 		}
 
@@ -249,8 +241,7 @@ app.post(
 		const TIMEOUT_MS = 5000; // 5 second timeout
 		const data = c.req.valid("json");
 
-		const blockPrivateAddresses = shouldBlockPrivateS3Endpoints();
-		if (await isDisallowedEndpoint(data.endpoint)) {
+		if (await isDisallowedS3Endpoint(data.endpoint)) {
 			return c.json(
 				{ ...blockedEndpointResponse, metadata: undefined },
 				{ status: 400 },
@@ -270,13 +261,10 @@ app.post(
 					accessKeyId: data.accessKeyId,
 					secretAccessKey: data.secretAccessKey,
 				},
-				requestHandler: blockPrivateAddresses
-					? {
-							abortSignal: controller.signal,
-							httpAgent: new HttpAgent({ lookup: publicOnlyLookup }),
-							httpsAgent: new HttpsAgent({ lookup: publicOnlyLookup }),
-						}
-					: { abortSignal: controller.signal },
+				requestHandler: {
+					abortSignal: controller.signal,
+					...publicOnlyS3Agents(),
+				},
 			});
 
 			try {

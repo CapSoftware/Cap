@@ -1,5 +1,7 @@
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { lookup } from "node:dns/promises";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { buildEnv, NODE_ENV } from "@cap/env";
 
@@ -114,3 +116,19 @@ export const publicOnlyLookup: LookupFunction = (
 		callback(null, address, family);
 	});
 };
+
+export const blockedS3EndpointMessage =
+	"Invalid endpoint. Please provide a public S3-compatible endpoint URL.";
+
+export const isDisallowedS3Endpoint = async (endpoint: string) =>
+	Boolean(endpoint) &&
+	shouldBlockPrivateS3Endpoints() &&
+	(await isBlockedS3Endpoint(endpoint));
+
+export const publicOnlyS3Agents = () =>
+	shouldBlockPrivateS3Endpoints()
+		? {
+				httpAgent: new HttpAgent({ lookup: publicOnlyLookup }),
+				httpsAgent: new HttpsAgent({ lookup: publicOnlyLookup }),
+			}
+		: undefined;
