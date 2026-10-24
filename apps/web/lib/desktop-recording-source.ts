@@ -788,10 +788,15 @@ function objectDirectory(key: string) {
 }
 
 async function saveObjectReceipt(context: SourceContext, object: SourceObject) {
-	await writeSourceText(
-		context,
-		`${objectDirectory(object.key)}/receipt.json`,
-		JSON.stringify(object),
+	const key = `${objectDirectory(object.key)}/receipt.json`;
+	const content = JSON.stringify(object);
+	// A receipt only lets a retry find this copy, and a retry re-checks the receipt and the copy
+	// before reusing it, so an S3 receipt skips the readback that inventory pages need.
+	if (context.bucket.provider !== "s3")
+		return writeSourceText(context, key, content).then(() => object);
+	assertContextKey(context, key);
+	await context.run(
+		context.bucket.putObject(key, content, { contentType: "application/json" }),
 	);
 	return object;
 }
@@ -800,8 +805,9 @@ async function reusableCopy(
 	context: SourceContext,
 	original: OriginalObject,
 	position: number,
+	checkFirst = true,
 ) {
-	await checkOriginal(context, original);
+	if (checkFirst) await checkOriginal(context, original);
 	let continuationToken: string | undefined;
 	for (let page = 0; page < 4; page++) {
 		const listing = await context.run(
@@ -870,30 +876,38 @@ async function copySmallObject(
 	position: number,
 	prepared = false,
 ) {
+	// Every reuse and every new copy ends in checkCopy, which re-checks the original, so the
+	// original is checked up front only when a copy fails and its error needs classifying.
 	if (prepared && original.index > 0) {
 		const existing = await reusableCopy(
 			{ ...context, prefix: preparedSourcePrefix(context.video, original) },
 			original,
 			original.index,
+			false,
 		).catch(() => null);
 		if (existing) return existing;
 	}
-	const existing = await reusableCopy(context, original, position);
+	const existing = await reusableCopy(context, original, position, false);
 	if (existing) return existing;
 	const key = newCopyKey(context, original, position);
-	await context.run(
-		context.bucket.copyObject(
-			`${context.bucket.bucketName}/${original.originalKey}`,
-			key,
-			{
-				CopySourceIfMatch: original.originalIdentity,
-				IfNoneMatch: "*",
-				MetadataDirective: "REPLACE",
-				Metadata: copyMetadata(original),
-				ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
-			},
-		),
-	);
+	try {
+		await context.run(
+			context.bucket.copyObject(
+				`${context.bucket.bucketName}/${original.originalKey}`,
+				key,
+				{
+					CopySourceIfMatch: original.originalIdentity,
+					IfNoneMatch: "*",
+					MetadataDirective: "REPLACE",
+					Metadata: copyMetadata(original),
+					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
+				},
+			),
+		);
+	} catch (error) {
+		await checkOriginal(context, original);
+		throw error;
+	}
 	return saveObjectReceipt(context, await checkCopy(context, original, key));
 }
 
