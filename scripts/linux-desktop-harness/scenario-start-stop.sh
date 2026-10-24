@@ -52,8 +52,9 @@ wait_log() {
 }
 
 attempt() {
-  local n=$1 started_before finished_before control=none began=$SECONDS
+  local n=$1 started_before finished_before restored_before control=none began=$SECONDS
   started_before=$(count "recording started")
+  restored_before=$(count "recording UI restored")
   finished_before=$(count "recording finished")
   # GNOME asks before granting the shortcut: a person presses Add.
   if [[ -n "${APPROVE_SHORTCUT_AFTER:-}" ]]; then
@@ -88,6 +89,15 @@ attempt() {
     fi
   else
     result "attempt${n}_started" no
+    # A person whose recording never starts presses Stop: Cap must come back.
+    if [[ $control == tray || $control == shortcut ]]; then
+      [[ $(count "recording UI restored") -gt $restored_before ]] || use_control "$control"
+      if wait_log "recording UI restored" 20 "$restored_before"; then
+        result "attempt${n}_recovered" yes
+      else
+        result "attempt${n}_recovered" no
+      fi
+    fi
   fi
 }
 

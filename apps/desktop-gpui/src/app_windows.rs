@@ -3562,6 +3562,7 @@ fn begin_retained_capture_restore(cx: &mut App) {
             if !clean_capture_generation_matches(generation, cx) { return; }
             match result {
                 Ok(()) => {
+                    tracing::info!("recording UI restored after a clean capture");
                     crate::hotkeys::complete_clean_capture_stop(generation, cx);
                     let _restored = cx.global_mut::<AppWindows>().clean_capture.take();
                     update_camera_presentation(true, cx);
@@ -3629,6 +3630,7 @@ fn restore_clean_capture_ui(cx: &mut App) -> bool {
         tracing::warn!(%error, "could not restore the main window");
     }
     update_camera_presentation(true, cx);
+    tracing::info!("recording UI restored after a clean capture");
     true
 }
 
