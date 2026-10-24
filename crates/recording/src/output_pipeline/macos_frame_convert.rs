@@ -54,6 +54,11 @@ impl FramePool {
     }
 
     pub(crate) fn get_frame(&mut self) -> &mut ffmpeg::frame::Video {
+        if let Some(frame) = self.frame.as_mut()
+            && unsafe { ffmpeg::ffi::av_frame_make_writable(frame.as_mut_ptr()) } < 0
+        {
+            self.frame = None;
+        }
         if self.frame.is_none() {
             self.frame = Some(ffmpeg::frame::Video::new(
                 self.pixel_format,
@@ -64,6 +69,7 @@ impl FramePool {
         self.frame.as_mut().expect("frame initialized above")
     }
 
+    #[allow(dead_code)]
     pub(crate) fn take_frame(&mut self) -> ffmpeg::frame::Video {
         self.frame.take().unwrap_or_else(|| {
             ffmpeg::frame::Video::new(self.pixel_format, self.width, self.height)
@@ -247,5 +253,31 @@ mod tests {
         copy_plane_data(&plane(8, 8), &mut dest, usize::MAX / 2, 8, 9, 16);
         copy_plane_data(&plane(8, 8), &mut dest, usize::MAX / 2, 8, 8, 8);
         copy_plane_data(&plane(8, 8), &mut dest, usize::MAX / 2, 4, 8, 8);
+    }
+
+    #[test]
+    fn frame_pool_reuses_backing_buffer_and_detaches_when_shared() {
+        ffmpeg::init().unwrap();
+        let mut pool = super::FramePool::new(ffmpeg::format::Pixel::BGRA, 64, 64);
+
+        let ptr1 = {
+            let f = pool.get_frame();
+            f.data_mut(0).fill(0x42);
+            f.data(0).as_ptr()
+        };
+        let ptr2 = pool.get_frame().data(0).as_ptr();
+        assert_eq!(ptr1, ptr2);
+
+        let mut retained = ffmpeg::frame::Video::empty();
+        {
+            let f = pool.get_frame();
+            assert_eq!(
+                unsafe { ffmpeg::ffi::av_frame_ref(retained.as_mut_ptr(), f.as_ptr()) },
+                0
+            );
+        }
+        let next = pool.get_frame();
+        next.data_mut(0).fill(0x99);
+        assert!(retained.data(0)[..64].iter().all(|&b| b == 0x42));
     }
 }
