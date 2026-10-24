@@ -3030,22 +3030,39 @@ async function muxSegmentsAsync(
 			audioSegmentUrls.length > 0
 				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
 				: null;
-		await Promise.all([
+		// Both init segments download together; a failure cancels the other and waits for it, so nothing
+		// keeps writing into the work directory after the job has failed.
+		const initAbort = new AbortController();
+		const initSignal = AbortSignal.any([
+			abortController.signal,
+			initAbort.signal,
+		]);
+		const initDownloads = [
 			downloadUrlToFile(
 				videoInitUrl,
 				join(videoDir, "init.mp4"),
-				abortController.signal,
+				initSignal,
 				sources?.get(videoInitUrl),
 			),
-			audioInput
-				? downloadUrlToFile(
-						audioInput.initUrl,
-						join(audioDir, "init.mp4"),
-						abortController.signal,
-						sources?.get(audioInput.initUrl),
-					)
-				: undefined,
-		]);
+			...(audioInput
+				? [
+						downloadUrlToFile(
+							audioInput.initUrl,
+							join(audioDir, "init.mp4"),
+							initSignal,
+							sources?.get(audioInput.initUrl),
+						),
+					]
+				: []),
+		];
+		let initFailure: { error: unknown } | undefined;
+		for (const download of initDownloads)
+			download.catch((error: unknown) => {
+				initFailure ??= { error };
+				initAbort.abort();
+			});
+		await Promise.allSettled(initDownloads);
+		if (initFailure) throw initFailure.error;
 		updateJob(jobId, { phase: "downloading", progress: 5 });
 		sendCurrentJobWebhook(jobId);
 

@@ -1572,6 +1572,34 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 90000);
 
+	test("cancels the other init download when one fails, before the job reports failure", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", {
+				videoId: "failed-init-mux-video",
+				userId: "failed-init-mux-user",
+				outputPresignedUrl: uploadUrl("failed-init-output.mp4"),
+				videoInitUrl: `${baseUrl}/fixtures/slow-segment.m4s`,
+				videoSegmentUrls: [fixtureUrl("test-no-audio.mp4")],
+				audioInitUrl: `${baseUrl}/fixtures/permanent-unavailable.m4s`,
+				audioSegmentUrls: [fixtureUrl("test-no-audio.mp4")],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(data.jobId);
+		try {
+			expect(job.phase).toBe("error");
+			expect(job.error).toContain("503");
+			expect(slowFixtureCancellations).toBe(1);
+			expect(uploadedArtifacts.has("/uploads/failed-init-output.mp4")).toBe(
+				false,
+			);
+		} finally {
+			deleteJob(data.jobId);
+		}
+	}, 90000);
+
 	test("edits and uploads a real video job through the async route", async () => {
 		const response = await app.fetch(
 			mediaPostRequest("/video/edit", {
