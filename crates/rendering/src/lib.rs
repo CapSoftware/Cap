@@ -95,6 +95,24 @@ pub fn prewarm_fonts() {
     drop(layers::new_font_system());
 }
 
+/// The first `AVAssetReader` a process starts takes 80-90 ms in
+/// `startReading` on an M4; every later one, on any file, takes a few ms.
+/// Opening a decoder on `path` and dropping it pays that once, ahead of the
+/// first editor's first frame.
+#[cfg(target_os = "macos")]
+pub fn prewarm_video_decoder(
+    path: &std::path::Path,
+    tokio_handle: tokio::runtime::Handle,
+) -> Result<(), String> {
+    cap_video_decode::AVAssetReaderDecoder::new_with_keyframe_index(
+        path.to_path_buf(),
+        tokio_handle,
+        0.0,
+        None,
+    )
+    .map(drop)
+}
+
 /// Renders one small RGBA frame and one NV12 frame through the full frame
 /// pipeline with `layers`, then discards them. A fresh process waits on the
 /// driver finishing each pipeline the first time it draws (the first preview

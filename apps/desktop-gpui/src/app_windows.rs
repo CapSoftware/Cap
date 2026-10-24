@@ -4937,9 +4937,9 @@ const LAUNCH_RENDER_WARMUP_DELAY: std::time::Duration = std::time::Duration::fro
 /// The first editor open in a process paid for the system font scan, the
 /// shared device and the renderer's first pipeline compiles and draw before
 /// its first frame: 0.7-1.2 s, against ~0.2 s for every later open. This warms
-/// them a few seconds after launch, off the main thread. The layers are
-/// dropped again; only the driver's compiled pipelines, the device and the
-/// font database stay.
+/// them a few seconds after launch, off the main thread, along with the video
+/// decoder's first start. The layers and the decoder are dropped again; only
+/// the driver's compiled pipelines, the device and the font database stay.
 pub(crate) fn schedule_launch_render_warmup(cx: &App) {
     gpui_tokio::Tokio::spawn(cx, async {
         tokio::time::sleep(LAUNCH_RENDER_WARMUP_DELAY).await;
@@ -4951,10 +4951,43 @@ pub(crate) fn schedule_launch_render_warmup(cx: &App) {
             return;
         }
         let fonts_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let renderer_ms = warm_renderer().await;
-        tracing::info!(fonts_ms, ?renderer_ms, "launch render warmup finished");
+        let (renderer_ms, decoder_ms) = tokio::join!(warm_renderer(), warm_video_decoder());
+        tracing::info!(
+            fonts_ms,
+            ?renderer_ms,
+            ?decoder_ms,
+            "launch render warmup finished"
+        );
     })
     .detach();
+}
+
+/// Any H.264 file warms the decode pipeline; the newest studio recording is
+/// the one the next editor most likely opens.
+#[cfg(target_os = "macos")]
+async fn warm_video_decoder() -> Option<f64> {
+    if gpu_work_requested() {
+        return None;
+    }
+    let started = std::time::Instant::now();
+    let tokio_handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let path = crate::library::recent_media()
+            .into_iter()
+            .filter(|item| item.kind == crate::library::MediaKind::Studio)
+            .find_map(|item| crate::recording::studio_display_path(&item.bundle))?;
+        cap_rendering::prewarm_video_decoder(&path, tokio_handle)
+            .inspect_err(|error| tracing::warn!(%error, "launch decoder warmup failed"))
+            .ok()
+    })
+    .await
+    .ok()??;
+    Some(started.elapsed().as_secs_f64() * 1000.0)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn warm_video_decoder() -> Option<f64> {
+    None
 }
 
 #[cfg(target_os = "macos")]
