@@ -89,6 +89,7 @@ export const importRequestSchema = z.object({
 	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
+	importPriority: z.enum(["customer", "bulk"]).optional(),
 });
 
 export type ImportRequest = z.infer<typeof importRequestSchema>;
@@ -221,6 +222,7 @@ async function prepareSource(
 		requestTimeoutMs: settings.segmentTimeoutMs,
 		jobSemaphore,
 		globalSemaphore: settings.globalSemaphore,
+		priority: request.importPriority === "customer",
 		maxBytes,
 		onProgress: (progress) => {
 			if (

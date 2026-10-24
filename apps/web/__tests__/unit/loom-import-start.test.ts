@@ -188,6 +188,18 @@ describe("Loom workflow startup receipts", () => {
 		);
 	});
 
+	it("keeps an operator import's bulk lane on its startup receipt", async () => {
+		await startLoomImportWorkflow({ ...payload, importPriority: "bulk" });
+		expect(
+			mocks.set.mock.calls.map(([value]) =>
+				JSON.parse(value.metadata.values.at(-1)),
+			),
+		).toEqual([
+			{ runId: "run-1", dispatch: "pending", importPriority: "bulk" },
+			{ runId: "run-1", dispatch: "accepted", importPriority: "bulk" },
+		]);
+	});
+
 	it("does not overwrite a newer import startup receipt", async () => {
 		mocks.where
 			.mockResolvedValueOnce([{ affectedRows: 1 }])

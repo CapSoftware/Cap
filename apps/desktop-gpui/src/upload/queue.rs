@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 static STATE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-const STATE_FILE: &str = "instant-upload.json";
+pub(super) const STATE_FILE: &str = "instant-upload.json";
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
@@ -55,6 +55,18 @@ pub(crate) struct UploadState {
 }
 
 impl UploadState {
+    pub(crate) fn video_id(&self) -> &str {
+        &self.video_id
+    }
+
+    pub(crate) fn server_url(&self) -> &str {
+        &self.server_url
+    }
+
+    pub(crate) fn owner_id(&self) -> Option<&str> {
+        self.owner_id.as_deref()
+    }
+
     pub(super) fn request_context(&self) -> Result<auth::UploadRequestContext, String> {
         auth::UploadRequestContext::for_upload(&self.server_url, self.owner_id.as_deref())
             .map_err(|error| error.to_string())
@@ -272,6 +284,16 @@ pub(super) fn record_cancelled(project: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps the local recording after its upload verifies, whatever the
+/// delete-after-upload setting says.
+pub(crate) fn record_preserve_local(project: &Path) -> Result<(), String> {
+    if let Some(mut state) = read_state(project)? {
+        state.preserve_local = true;
+        write_state(project, &state)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn record_failure(project: &Path, error: &str) -> Result<(), String> {
     if let Some(mut state) = read_state(project)? {
         state.fail(error.to_string(), now());
@@ -372,6 +394,7 @@ trait UploadBackend: Send + Sync + 'static {
         verification: &UploadVerification,
     ) -> Result<(), String>;
     fn delete_after_upload(&self) -> bool;
+    fn forget_start_cleanup(&self, video_id: &str) -> bool;
     fn notify_failure(&self);
 }
 
@@ -526,6 +549,10 @@ impl UploadBackend for LiveBackend {
 
     fn delete_after_upload(&self) -> bool {
         crate::store::GeneralSettings::load().delete_instant_recordings_after_upload
+    }
+
+    fn forget_start_cleanup(&self, video_id: &str) -> bool {
+        super::instant_cleanup::forget_verified(video_id)
     }
 
     fn notify_failure(&self) {
@@ -831,9 +858,12 @@ impl<B: UploadBackend> Manager<B> {
             Some(&upload.cancel),
         )
         .map_err(|error| error.to_string())?;
+        let cleanup_cleared = self.backend.forget_start_cleanup(&state.video_id);
         if !state.preserve_local && self.backend.delete_after_upload() {
             check_segment_cancelled(&upload.cancel)?;
-            if let Err(error) = std::fs::remove_dir_all(project) {
+            if !cleanup_cleared {
+                tracing::warn!(path = %project.display(), "Verified upload kept locally because its cleanup entry could not be cleared");
+            } else if let Err(error) = std::fs::remove_dir_all(project) {
                 tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
             }
         }
@@ -1353,6 +1383,7 @@ mod tests {
         stall_confirmation: AtomicBool,
         reupload_required: AtomicBool,
         delete: AtomicBool,
+        keep_cleanup_entry: AtomicBool,
         transfers: AtomicUsize,
         confirmations: AtomicUsize,
         failure_notifications: AtomicUsize,
@@ -1442,6 +1473,10 @@ mod tests {
         }
         fn delete_after_upload(&self) -> bool {
             self.delete.load(Ordering::Acquire)
+        }
+
+        fn forget_start_cleanup(&self, _video_id: &str) -> bool {
+            !self.keep_cleanup_entry.load(Ordering::Acquire)
         }
 
         fn notify_failure(&self) {
@@ -1870,6 +1905,23 @@ mod tests {
                 fixture.assert_retained();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn verified_upload_stays_local_when_its_cleanup_entry_cannot_be_cleared() {
+        let fixture = Fixture::new();
+        let backend = FakeBackend::default();
+        backend.verified.store(true, Ordering::Release);
+        backend.delete.store(true, Ordering::Release);
+        backend.keep_cleanup_entry.store(true, Ordering::Release);
+        let manager = Arc::new(Manager::new(backend, Duration::from_secs(1)));
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(fixture.state().phase, UploadPhase::Verified);
+        assert!(fixture.project().join("content/output.mp4").is_file());
     }
 
     #[tokio::test]
