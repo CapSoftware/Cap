@@ -206,7 +206,6 @@ pub struct ExportUi {
     pub rendered: u32,
     pub total_frames: u32,
     pub output_path: Option<PathBuf>,
-    copying_file: bool,
     copied_file: Option<PathBuf>,
     pub error: Option<String>,
     pub cancel: Arc<AtomicBool>,
@@ -298,7 +297,6 @@ impl ExportUi {
             rendered: 0,
             total_frames: 0,
             output_path: None,
-            copying_file: false,
             copied_file: None,
             error: None,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -840,7 +838,6 @@ impl EditorWindow {
         ui.total_frames = 0;
         ui.output_path = None;
         ui.copied_file = None;
-        ui.copying_file = false;
         cx.notify();
 
         ui.export_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -1029,40 +1026,38 @@ impl EditorWindow {
         }));
     }
 
-    fn duplicate_output(&mut self, cx: &mut Context<Self>) {
-        let Some(ui) = self.export.as_mut() else {
+    /// Runs in the `Copying` phase so closing the panel, starting another
+    /// export and installing an update all wait for the copy to finish.
+    fn duplicate_output(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ui) = self
+            .export
+            .as_mut()
+            .filter(|ui| ui.phase == ExportPhase::Done)
+        else {
             return;
         };
-        if ui.copying_file {
-            return;
-        }
         let Some(source) = ui.output_path.clone() else {
             return;
         };
-        ui.copying_file = true;
+        ui.phase = ExportPhase::Copying;
         ui.copied_file = None;
         ui.error = None;
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            let path = source.clone();
+        cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { library::duplicate_file(&path) })
+                .spawn(async move { library::duplicate_file(&source) })
                 .await;
-            this.update(cx, |this, cx| {
-                let Some(ui) = this
-                    .export
-                    .as_mut()
-                    .filter(|ui| ui.output_path.as_ref() == Some(&source))
-                else {
-                    return;
-                };
-                ui.copying_file = false;
-                match result {
-                    Ok(path) => ui.copied_file = Some(path),
-                    Err(error) => ui.error = Some(error),
+            this.update_in(cx, |this, window, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.phase = ExportPhase::Done;
+                    match result {
+                        Ok(path) => ui.copied_file = Some(path),
+                        Err(error) => ui.error = Some(error),
+                    }
                 }
                 cx.notify();
+                this.finish_requested_export_close(window, cx);
             })
             .ok();
         })
@@ -2715,9 +2710,8 @@ impl EditorWindow {
                             )
                             .icon("icons/copy.svg")
                             .label("Copy File")
-                            .disabled(ui.copying_file)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.duplicate_output(cx);
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.duplicate_output(window, cx);
                             })),
                         )
                     },
