@@ -110,7 +110,9 @@ export async function prepareLoomMultipartUploads({
 	const created: Array<{ key: string; uploadId: string }> = [];
 	const create = async (key: string) => {
 		const { UploadId: uploadId } = await bucket.multipart
-			.create(key, { ContentType: "video/mp4" })
+			.create(key, {
+				ContentType: key.endsWith(".webm") ? "video/webm" : "video/mp4",
+			})
 			.pipe(runWorkflowPromise);
 		if (!uploadId)
 			throw new Error("Storage did not return a multipart upload id");
