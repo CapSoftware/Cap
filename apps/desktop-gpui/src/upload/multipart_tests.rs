@@ -203,13 +203,19 @@ async fn failed_part_is_retried_after_the_rest_and_upload_completes() {
     assert_eq!(started.len(), 12);
     assert_eq!(&started[10..], [3, 6]);
     assert_eq!(
-        progress
-            .into_inner()
-            .unwrap()
-            .into_iter()
-            .map(|(started, _)| started)
-            .collect::<Vec<_>>(),
-        [1, 2, 4, 5, 7, 8, 9, 10, 11, 12]
+        progress.into_inner().unwrap(),
+        [
+            (1, 0.1),
+            (2, 0.2),
+            (4, 0.3),
+            (5, 0.4),
+            (7, 0.5),
+            (8, 0.6),
+            (9, 0.7),
+            (10, 0.8),
+            (11, 0.9),
+            (12, 0.99),
+        ]
     );
     let retried = transport.started.lock().unwrap();
     assert_eq!(retried[10].2, retried[2].2);
