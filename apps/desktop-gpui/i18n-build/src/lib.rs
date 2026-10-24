@@ -5,6 +5,15 @@ use toml::{Table, Value};
 
 pub const STRICT_ENV: &str = "CAP_I18N_STRICT";
 
+pub static PSEUDO: LocaleSpec = LocaleSpec {
+    code: "pseudo",
+    ident: "Pseudo",
+    endonym: "Pseudo",
+    plural: ONE_IS_ONE,
+};
+
+const PSEUDO_PADDING: &str = "ļöŕéṁ îþšûṁ ðöļöŕ šîţ åṁéţ ";
+
 const MESSAGE_FIELDS: [&str; 8] = [
     "text", "one", "few", "many", "other", "context", "max_px", "size",
 ];
@@ -194,13 +203,14 @@ pub fn build(locales: impl AsRef<Path>) {
     println!("cargo:rerun-if-changed={}", locales.display());
     println!("cargo:rerun-if-env-changed={STRICT_ENV}");
     let strict = std::env::var(STRICT_ENV).is_ok_and(|value| value == "1");
+    let pseudo = std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
 
     let catalogs = read_catalogs(&locales).unwrap_or_else(|errors| fail(&errors));
     let borrowed: Vec<(&str, &str)> = catalogs
         .iter()
         .map(|(code, text)| (code.as_str(), text.as_str()))
         .collect();
-    let output = generate(&borrowed, strict).unwrap_or_else(|errors| fail(&errors));
+    let output = generate_with(&borrowed, strict, pseudo).unwrap_or_else(|errors| fail(&errors));
     for warning in &output.warnings {
         for line in warning.lines() {
             println!("cargo:warning={line}");
@@ -379,6 +389,69 @@ impl Template {
     }
 }
 
+fn accent(c: char) -> char {
+    const UPPER: [char; 26] = [
+        'Å', 'Ɓ', 'Ç', 'Ð', 'É', 'Ƒ', 'Ĝ', 'Ĥ', 'Î', 'Ĵ', 'Ķ', 'Ļ', 'Ṁ', 'Ñ', 'Ö', 'Þ', 'Ǫ', 'Ŕ',
+        'Š', 'Ţ', 'Û', 'Ṽ', 'Ŵ', 'Ẋ', 'Ý', 'Ž',
+    ];
+    const LOWER: [char; 26] = [
+        'å', 'ƀ', 'ç', 'ð', 'é', 'ƒ', 'ĝ', 'ĥ', 'î', 'ĵ', 'ķ', 'ļ', 'ṁ', 'ñ', 'ö', 'þ', 'ǫ', 'ŕ',
+        'š', 'ţ', 'û', 'ṽ', 'ŵ', 'ẋ', 'ý', 'ž',
+    ];
+    match c {
+        'A'..='Z' => UPPER[c as usize - 'A' as usize],
+        'a'..='z' => LOWER[c as usize - 'a' as usize],
+        c => c,
+    }
+}
+
+fn pseudo_template(template: &Template) -> Template {
+    let mut text = String::from("⟦");
+    let mut pieces = Vec::new();
+    let mut letters = 0;
+    for piece in &template.pieces {
+        match piece {
+            Piece::Text(value) => {
+                letters += value.chars().filter(|c| c.is_alphanumeric()).count();
+                text.extend(value.chars().map(accent));
+            }
+            Piece::Arg(name) => {
+                pieces.push(Piece::Text(std::mem::take(&mut text)));
+                pieces.push(Piece::Arg(name.clone()));
+            }
+        }
+    }
+    text.extend(
+        PSEUDO_PADDING
+            .chars()
+            .cycle()
+            .take((letters * 2).div_ceil(5)),
+    );
+    text.push('⟧');
+    pieces.push(Piece::Text(text));
+    pieces.retain(|piece| !matches!(piece, Piece::Text(value) if value.is_empty()));
+    let source = pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Text(value) => value.replace('{', "{{").replace('}', "}}"),
+            Piece::Arg(name) => format!("{{{name}}}"),
+        })
+        .collect();
+    Template { source, pieces }
+}
+
+fn pseudo_forms(forms: &Forms) -> Forms {
+    match forms {
+        Forms::Text(template) => Forms::Text(pseudo_template(template)),
+        Forms::Plural(forms) => Forms::Plural(
+            forms
+                .iter()
+                .map(|(category, template)| (*category, pseudo_template(template)))
+                .collect(),
+        ),
+    }
+}
+
 fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|first| first.is_ascii_lowercase())
@@ -406,10 +479,17 @@ enum Raw {
     Plural(BTreeMap<Category, String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fit {
+    max_px: f64,
+    size: f64,
+}
+
 #[derive(Clone, Debug)]
 struct Entry {
     raw: Raw,
     context: Option<String>,
+    fit: Option<Fit>,
 }
 
 #[derive(Clone, Debug)]
@@ -420,6 +500,7 @@ enum Forms {
 
 struct Message {
     context: Option<String>,
+    fit: Option<Fit>,
     english: Forms,
     translations: Vec<Option<Forms>>,
 }
@@ -464,6 +545,7 @@ fn flatten(
                     Entry {
                         raw: Raw::Text(text.clone()),
                         context: None,
+                        fit: None,
                     },
                 );
             }
@@ -488,12 +570,15 @@ fn flatten(
 fn parse_message_table(table: &Table, source: bool) -> Result<Entry, String> {
     let mut text = None;
     let mut context = None;
+    let mut max_px = None;
+    let mut size = None;
     let mut forms = BTreeMap::new();
     for (field, value) in table.iter() {
         match field.as_str() {
             "text" if source => text = Some(expect_string(field, value)?),
             "context" if source => context = Some(expect_string(field, value)?),
-            "max_px" | "size" if source => expect_positive_number(field, value)?,
+            "max_px" if source => max_px = Some(expect_positive_number(field, value)?),
+            "size" if source => size = Some(expect_positive_number(field, value)?),
             name => match Category::from_name(name) {
                 Some(category) => {
                     forms.insert(category, expect_string(field, value)?);
@@ -518,7 +603,21 @@ fn parse_message_table(table: &Table, source: bool) -> Result<Entry, String> {
         (Some(_), false) => return Err("has both `text` and plural forms".to_string()),
         (None, true) => return Err("has neither `text` nor plural forms".to_string()),
     };
-    Ok(Entry { raw, context })
+    let fit = match (max_px, size) {
+        (Some(max_px), Some(size)) => Some(Fit { max_px, size }),
+        (None, None) => None,
+        _ => {
+            return Err(
+                "`max_px` and `size` go together: the width budget and the font size it is \
+                 measured at"
+                    .to_string(),
+            );
+        }
+    };
+    if fit.is_some() && !matches!(raw, Raw::Text(_)) {
+        return Err("`max_px` is only measured on plain strings".to_string());
+    }
+    Ok(Entry { raw, context, fit })
 }
 
 fn expect_string(field: &str, value: &Value) -> Result<String, String> {
@@ -528,10 +627,10 @@ fn expect_string(field: &str, value: &Value) -> Result<String, String> {
     }
 }
 
-fn expect_positive_number(field: &str, value: &Value) -> Result<(), String> {
+fn expect_positive_number(field: &str, value: &Value) -> Result<f64, String> {
     match value {
-        Value::Integer(number) if *number > 0 => Ok(()),
-        Value::Float(number) if *number > 0.0 => Ok(()),
+        Value::Integer(number) if *number > 0 => Ok(*number as f64),
+        Value::Float(number) if *number > 0.0 => Ok(*number),
         _ => Err(format!("`{field}` must be a positive number")),
     }
 }
@@ -660,6 +759,16 @@ fn translated_forms(spec: &LocaleSpec, english: &Forms, raw: &Raw) -> Result<For
 }
 
 pub fn generate(catalogs: &[(&str, &str)], strict: bool) -> Result<Output, Vec<String>> {
+    generate_with(catalogs, strict, false)
+}
+
+/// `pseudo` appends a generated [`PSEUDO`] locale, which debug builds offer in
+/// the language picker to show untranslated and overflowing text.
+pub fn generate_with(
+    catalogs: &[(&str, &str)],
+    strict: bool,
+    pseudo: bool,
+) -> Result<Output, Vec<String>> {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -686,7 +795,7 @@ pub fn generate(catalogs: &[(&str, &str)], strict: bool) -> Result<Output, Vec<S
         return Err(errors);
     }
 
-    let locales: Vec<&LocaleSpec> = found.iter().map(|(spec, _)| *spec).collect();
+    let mut locales: Vec<&LocaleSpec> = found.iter().map(|(spec, _)| *spec).collect();
     let catalogs: Vec<BTreeMap<String, Entry>> = found
         .iter()
         .enumerate()
@@ -701,6 +810,7 @@ pub fn generate(catalogs: &[(&str, &str)], strict: bool) -> Result<Output, Vec<S
                     key.clone(),
                     Message {
                         context: entry.context.clone(),
+                        fit: entry.fit,
                         english,
                         translations: vec![None; locales.len()],
                     },
@@ -754,6 +864,13 @@ pub fn generate(catalogs: &[(&str, &str)], strict: bool) -> Result<Output, Vec<S
 
     if !errors.is_empty() {
         return Err(errors);
+    }
+    if pseudo {
+        locales.push(&PSEUDO);
+        for message in messages.values_mut() {
+            let forms = pseudo_forms(&message.english);
+            message.translations.push(Some(forms));
+        }
     }
     Ok(Output {
         code: emit(&locales, &messages),
@@ -870,6 +987,7 @@ fn emit(locales: &[&LocaleSpec], messages: &BTreeMap<String, Message>) -> String
         code.open("fn text(id: usize) -> &'static str {");
         code.line("TEXT[index()][id]");
         code.close("}");
+        emit_fits(&mut code, locales, &texts);
     }
 
     let mut plural_users = BTreeSet::new();
@@ -936,6 +1054,53 @@ fn emit(locales: &[&LocaleSpec], messages: &BTreeMap<String, Message>) -> String
     emit_node(&mut code, &root, 1, &context);
     code.close("}");
     code.out
+}
+
+fn emit_fits(code: &mut Code, locales: &[&LocaleSpec], texts: &[(&str, &Message)]) {
+    let fits: Vec<(&str, Fit, Vec<String>)> = texts
+        .iter()
+        .filter_map(|(key, message)| {
+            let fit = message.fit?;
+            let text = (0..locales.len())
+                .map(|position| {
+                    message.translations[position]
+                        .as_ref()
+                        .and_then(plain_text)
+                        .or_else(|| plain_text(&message.english))
+                        .map(Template::plain)
+                        .unwrap_or_default()
+                })
+                .collect();
+            Some((*key, fit, text))
+        })
+        .collect();
+    if fits.is_empty() {
+        return;
+    }
+    code.line("");
+    code.line("#[cfg(test)]");
+    code.open("pub struct Fit {");
+    code.line("pub key: &'static str,");
+    code.line("pub max_px: f32,");
+    code.line("pub size: f32,");
+    code.line("pub text: [&'static str; LOCALE_COUNT],");
+    code.close("}");
+    code.line("");
+    code.line("#[cfg(test)]");
+    code.open(format!("pub const FITS: [Fit; {}] = [", fits.len()));
+    for (key, fit, text) in &fits {
+        code.open("Fit {");
+        code.line(format!("key: {key:?},"));
+        code.line(format!("max_px: {:?},", fit.max_px as f32));
+        code.line(format!("size: {:?},", fit.size as f32));
+        code.open("text: [");
+        for value in text {
+            code.line(format!("{value:?},"));
+        }
+        code.close("],");
+        code.close("},");
+    }
+    code.close("];");
 }
 
 fn emit_locales(code: &mut Code, locales: &[&LocaleSpec]) {
@@ -1415,7 +1580,10 @@ mod tests {
                 "[a.b]\ntext = \"x\"\nlabel = \"y\"\n",
                 "sits beside message fields",
             ),
-            ("[a]\nb = { text = \"x\", max_px = 0 }\n", "positive number"),
+            (
+                "[a]\nb = { text = \"x\", max_px = 0, size = 13 }\n",
+                "positive number",
+            ),
             ("[a]\nb = 3\n", "expected a string or a table"),
             ("[a]\nb = \"   \"\n", "value is empty"),
             ("[a\n", "en.toml"),
@@ -1462,6 +1630,82 @@ mod tests {
         assert!(output.code.contains("\"fr\" => Some(Locale::Fr),"));
         assert!(output.code.contains("Locale::Fr => \"Français\","));
         assert!(!output.code.contains("Ja ="));
+    }
+
+    #[test]
+    fn pseudo_locale_accents_pads_and_keeps_placeholders() {
+        let en = "[a]\nsave = \"Save\"\nversion = \"Cap v{version}\"\nclips = { one = \"One clip\", other = \"{count} clips\" }\n";
+        let output = generate_with(&[("en", en)], false, true).unwrap();
+        assert!(output.code.contains("Pseudo = 1,"), "{}", output.code);
+        assert!(
+            output.code.contains("\"pseudo\" => Some(Locale::Pseudo),"),
+            "{}",
+            output.code
+        );
+        assert!(output.code.contains("\"⟦Šåṽéļö⟧\","), "{}", output.code);
+        assert!(
+            output
+                .code
+                .contains("1 => format!(\"⟦Çåþ ṽ{version}ļö⟧\"),"),
+            "{}",
+            output.code
+        );
+        assert!(
+            output
+                .code
+                .contains("super::super::Plural::One => String::from(\"⟦Öñé çļîþļöŕ⟧\"),"),
+            "{}",
+            output.code
+        );
+        assert!(
+            output
+                .code
+                .contains("fn plural_pseudo(n: usize) -> Plural {")
+        );
+
+        let without = generate(&[("en", en)], false).unwrap();
+        assert!(!without.code.contains("Pseudo"));
+    }
+
+    #[test]
+    fn pseudo_text_keeps_literal_braces() {
+        let output = generate_with(&[("en", "[a]\nb = \"Use {{x}}\"\n")], false, true).unwrap();
+        assert!(output.code.contains("\"⟦Ûšé {ẋ}ļö⟧\","), "{}", output.code);
+    }
+
+    #[test]
+    fn width_budgets_list_every_locale() {
+        let en = "[a]\ntitle = { text = \"Title\", max_px = 120, size = 13 }\nplain = \"Plain\"\n";
+        let fr = "[a]\ntitle = \"Titre\"\n";
+        let output = run(&[("en", en), ("fr", fr)]).unwrap();
+        assert!(
+            output.code.contains("pub const FITS: [Fit; 1] = ["),
+            "{}",
+            output.code
+        );
+        assert!(output.code.contains("key: \"a.title\","));
+        assert!(output.code.contains("max_px: 120.0,"));
+        assert!(output.code.contains("size: 13.0,"));
+        assert!(
+            output.code.contains("\"Title\",\n            \"Titre\","),
+            "{}",
+            output.code
+        );
+
+        let output = run(&[("en", "[a]\nplain = \"Plain\"\n")]).unwrap();
+        assert!(!output.code.contains("FITS"));
+
+        for (catalog, expected) in [
+            ("[a]\nb = { text = \"x\", max_px = 10 }\n", "go together"),
+            ("[a]\nb = { text = \"x\", size = 13 }\n", "go together"),
+            (
+                "[a]\nb = { one = \"x\", other = \"{count}\", max_px = 10, size = 13 }\n",
+                "only measured on plain strings",
+            ),
+        ] {
+            let message = errors(&[("en", catalog)]);
+            assert!(message.contains(expected), "{catalog:?}: {message}");
+        }
     }
 
     #[test]

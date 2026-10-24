@@ -105,6 +105,15 @@ mod i18n {
     }
 
     #[test]
+    fn width_budgets_carry_the_text_of_every_locale() {
+        assert_eq!(FITS.len(), 1);
+        let fit = &FITS[0];
+        assert_eq!(fit.key, "common.meta.title");
+        assert_eq!((fit.max_px, fit.size), (120.0, 13.0));
+        assert_eq!(fit.text, ["Title", "Title", "Titre"]);
+    }
+
+    #[test]
     fn generated_rules_match_the_build_rules() {
         let samples = (0..2_100).chain([999_999, 1_000_000, 1_000_001, 2_000_000, 7_000_000]);
         for n in samples {

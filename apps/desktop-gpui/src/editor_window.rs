@@ -66,6 +66,7 @@ use gpui::{
     div, point, prelude::FluentBuilder, px, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
@@ -11578,6 +11579,7 @@ impl Render for EditorWindow {
                 .flex()
                 .flex_col()
                 .font_family(crate::theme::UI_FONT)
+                .locale_font()
                 .bg(self.root_bg())
                 .text_color(Hsla::from(theme.gray_12))
                 .track_focus(&self.focus)
@@ -11605,6 +11607,7 @@ impl Render for EditorWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)

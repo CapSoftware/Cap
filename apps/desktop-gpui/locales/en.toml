@@ -34,6 +34,7 @@ title = "View"
 [menu.window]
 close_window = "Close Window"
 minimize = "Minimize"
+title = "Window"
 zoom = "Zoom"
 
 [menu.help]
@@ -67,19 +68,27 @@ screenshot = { text = "Screenshot", context = "Recording mode name." }
 studio = { text = "Studio", context = "Recording mode name." }
 
 [settings.nav]
-automations = "Automations"
-changelog = "Changelog"
-cli = "CLI"
-experimental = "Experimental"
-feedback = "Feedback"
-general = "General"
-integrations = "Integrations"
-license = "Plan & license"
-quality = "Recording quality"
-recordings = "Recordings"
-screenshots = "Screenshots"
-shortcuts = "Shortcuts"
-transcription = "Transcription"
+# The sidebar is 227px; the label gets what the 10px padding, 6px item padding,
+# 16px icon and 8px gap leave.
+automations = { text = "Automations", max_px = 171, size = 13 }
+changelog = { text = "Changelog", max_px = 171, size = 13 }
+cli = { text = "CLI", max_px = 171, size = 13 }
+experimental = { text = "Experimental", max_px = 171, size = 13 }
+feedback = { text = "Feedback", max_px = 171, size = 13 }
+general = { text = "General", max_px = 171, size = 13 }
+integrations = { text = "Integrations", max_px = 171, size = 13 }
+license = { text = "Plan & license", max_px = 171, size = 13 }
+quality = { text = "Recording quality", max_px = 171, size = 13 }
+recordings = { text = "Recordings", max_px = 171, size = 13 }
+screenshots = { text = "Screenshots", max_px = 171, size = 13 }
+shortcuts = { text = "Shortcuts", max_px = 171, size = 13 }
+transcription = { text = "Transcription", max_px = 171, size = 13 }
+
+[settings.general.language]
+description = "Choose the language Cap is shown in."
+label = "App language"
+system_default = { text = "System default ({language})", context = "{language} is the system language, written in that language, for example Deutsch." }
+title = "Language"
 
 [settings.general.appearance]
 description = "Match Cap to your system theme or pick a fixed look."
@@ -104,10 +113,10 @@ title = "Recording"
 [settings.general.recording.countdown]
 description = "Wait before the recording starts."
 label = "Countdown"
-off = "Off"
-seconds_10 = "10 seconds"
-seconds_3 = "3 seconds"
-seconds_5 = "5 seconds"
+off = { text = "Off", max_px = 180, size = 12 }
+seconds_10 = { text = "10 seconds", max_px = 180, size = 12 }
+seconds_3 = { text = "3 seconds", max_px = 180, size = 12 }
+seconds_5 = { text = "5 seconds", max_px = 180, size = 12 }
 
 [settings.general.recording.confirm_without_mic]
 description = "Require confirmation when no microphone is selected or the selected microphone is unavailable."
@@ -156,11 +165,11 @@ label = "Draw the MacBook notch on screen recordings"
 [settings.general.recording.max_fps]
 description = "Maximum framerate for screen capture."
 description_high = { text = "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems.", context = "Shown instead of the short description when more than 60 FPS is selected." }
-fps_120 = "120 FPS"
-fps_24 = "24 FPS"
-fps_25 = "25 FPS"
-fps_30 = "30 FPS"
-fps_60 = "60 FPS (Recommended)"
+fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
+fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
+fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
+fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
+fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
 label = "Max capture framerate"
 
 [settings.general.storage]
