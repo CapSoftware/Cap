@@ -42,29 +42,19 @@ jobs:
           Set-ItemProperty $key DumpCount 10 -Type DWord
           Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' DontShowUI 1 -Type DWord
 
-      - name: Run cases
-        shell: bash
+      - name: Run cases under cdb
+        shell: pwsh
         env:
           RUST_BACKTRACE: "1"
-          RUST_LOG: info
         run: |
-          for test in ${{ inputs.tests || 'camera_blur_export captions_export camera_blur_and_captions_export' }}; do
-            echo "::group::$test"
-            cargo test --profile ci-verify -p cap-verify --test export "$test" -- --exact --nocapture 2>&1 | tail -80
-            echo "exit=${PIPESTATUS[0]}"
-            echo "::endgroup::"
-          done
-
-      - name: Stacks
-        if: always()
-        shell: pwsh
-        run: |
-          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $cdb) { Write-Output "cdb not found"; exit 0 }
-          $symbols = "srv*$env:RUNNER_TEMP\symcache*https://msdl.microsoft.com/download/symbols;$env:GITHUB_WORKSPACE\target\ci-verify\deps"
-          Get-ChildItem (Join-Path $env:RUNNER_TEMP dumps) -Filter *.dmp | ForEach-Object {
-            Write-Output "::group::$($_.Name)"
-            & $cdb.FullName -z $_.FullName -y $symbols -c ".ecxr; kn 60; !analyze -v; q" 2>&1 | Select-Object -Last 220
+          $cdb = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+          if (-not (Test-Path $cdb)) { winget install --id Microsoft.WindowsSDK.10.0.26100 --silent --accept-source-agreements --accept-package-agreements | Out-Null }
+          $exe = Get-ChildItem target\ci-verify\deps\export-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $symbols = "srv*$env:RUNNER_TEMP\symcache*https://msdl.microsoft.com/download/symbols;$($exe.DirectoryName)"
+          $tests = "${{ inputs.tests || 'camera_blur_ffmpeg_once_export camera_blur_twice_default_export camera_blur_twice_ffmpeg_export captions_export' }}".Split(' ')
+          foreach ($test in $tests) {
+            Write-Output "::group::$test"
+            & $cdb -g -G -lines -y $symbols -c "sxd av; sxd -c `"`" eh; g; .echo CRASH; .ecxr; kn 80; ~*kn 25; q" $exe.FullName $test --exact --nocapture --test-threads=1 2>&1 | Select-Object -Last 400
             Write-Output "::endgroup::"
           }
 

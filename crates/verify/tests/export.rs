@@ -1494,6 +1494,10 @@ fn recorded_epoch_audio_head() {
     common::assert_passed(failures);
 }
 
+fn path_index(dir: &tempfile::TempDir) -> usize {
+    std::fs::read_dir(dir.path()).map_or(0, |entries| entries.count())
+}
+
 /// The project shape of a 0.6.1 Windows export that ended the process right
 /// after it started: two segments with a camera, background blur on the camera
 /// (CPU segmentation where DirectML is unavailable) and captions on.
@@ -1537,6 +1541,10 @@ fn captions(config: &mut ProjectConfiguration) {
         .caption_segments = segments;
 }
 
+fn path_index(dir: &tempfile::TempDir) -> usize {
+    std::fs::read_dir(dir.path()).map_or(0, |entries| entries.count())
+}
+
 /// The project shape of a 0.6.1 Windows export that ended the process right
 /// after it started: two segments with a camera, background blur on the camera
 /// (CPU segmentation where DirectML is unavailable) and captions on. The
@@ -1555,7 +1563,9 @@ fn export_must_finish(name: &str, edit: fn(&mut ProjectConfiguration), decoders:
             format: Format::Mp4,
             decoder,
         };
-        let path = dir.path().join(format!("{}.mp4", decoder.label()));
+        let path = dir
+            .path()
+            .join(format!("{}-{}.mp4", decoder.label(), path_index(&dir)));
         eprintln!("exporting {name} with the {} decoder", decoder.label());
         let output = rt
             .block_on(common::export(&project, config.clone(), &run, &path))
@@ -1585,6 +1595,29 @@ fn camera_blur_and_captions_export() {
 #[test]
 fn camera_blur_export() {
     export_must_finish("camera-blur", camera_blur, &Decoder::all());
+}
+
+#[test]
+fn camera_blur_ffmpeg_once_export() {
+    export_must_finish("camera-blur-ffmpeg-once", camera_blur, &[Decoder::Ffmpeg]);
+}
+
+#[test]
+fn camera_blur_twice_default_export() {
+    export_must_finish(
+        "camera-blur-twice-default",
+        camera_blur,
+        &[Decoder::Default, Decoder::Default],
+    );
+}
+
+#[test]
+fn camera_blur_twice_ffmpeg_export() {
+    export_must_finish(
+        "camera-blur-twice-ffmpeg",
+        camera_blur,
+        &[Decoder::Ffmpeg, Decoder::Ffmpeg],
+    );
 }
 
 #[test]
