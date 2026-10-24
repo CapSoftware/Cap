@@ -66,6 +66,7 @@ use gpui::{
     div, point, prelude::FluentBuilder, px, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
@@ -9065,7 +9066,7 @@ impl EditorWindow {
     fn render_presets_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.presets_menu.as_ref()?;
         let theme = self.theme;
-        let store = menu.store.clone();
+        let store = &menu.store;
         let submenu = menu.submenu;
 
         let mut rows: Vec<gpui::AnyElement> = vec![self.render_preset_row(
@@ -11578,6 +11579,7 @@ impl Render for EditorWindow {
                 .flex()
                 .flex_col()
                 .font_family(crate::theme::UI_FONT)
+                .locale_font()
                 .bg(self.root_bg())
                 .text_color(Hsla::from(theme.gray_12))
                 .track_focus(&self.focus)
@@ -11605,6 +11607,7 @@ impl Render for EditorWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
@@ -12215,6 +12218,67 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    #[ignore = "manual preset menu repaint benchmark"]
+    fn benchmark_presets_menu_repaint(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("benchmark".into(), window, cx);
+            editor.presets_menu = None;
+        });
+        let config = crate::presets::preset_config(&ProjectConfiguration::default());
+        for count in [5, 50] {
+            let store = crate::presets::PresetsStore {
+                presets: (0..count)
+                    .map(|index| crate::presets::PresetEntry {
+                        name: format!("Preset {index}"),
+                        config: config.clone(),
+                    })
+                    .collect(),
+                default: Some(count - 1),
+            };
+            editor.update_in(cx, |editor, _, _| {
+                editor.presets_menu = Some(PresetsMenu {
+                    origin: point(px(0.), px(0.)),
+                    store: store.clone(),
+                    submenu: None,
+                    scroll: gpui::ScrollHandle::new(),
+                });
+            });
+            let mut samples = Vec::new();
+            for _ in 0..32 {
+                cx.draw(
+                    point(px(0.), px(0.)),
+                    gpui::size(px(800.), px(600.)),
+                    |_, cx| {
+                        editor.update(cx, |editor, cx| {
+                            let started = std::time::Instant::now();
+                            for _ in 0..10 {
+                                drop(std::hint::black_box(editor.render_presets_menu(cx)));
+                            }
+                            samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+                        });
+                        div()
+                    },
+                );
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.presets_menu.as_ref().unwrap().store, store);
+            });
+            println!(
+                "presets={count} config_bytes={} samples=31 repaints_per_sample=10 median_us={:.3}",
+                serde_json::to_vec(&config).unwrap().len(),
+                samples[samples.len() / 2]
+            );
+        }
+    }
 
     #[test]
     fn auto_zoom_loads_clicks_without_losing_take_indices() {

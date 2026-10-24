@@ -1,0 +1,230 @@
+[common]
+add = "Add"
+cancel = "Cancel"
+ok = "OK"
+reset = "Reset"
+reset_to_default = "Reset to Default"
+save = "Save"
+
+[menu.app]
+about = "About Cap"
+hide = "Hide Cap"
+hide_others = "Hide Others"
+quit = "Quit Cap"
+services = "Services"
+settings = "Settings…"
+
+[menu.file]
+close_window = "Close Window"
+title = "File"
+
+[menu.edit]
+copy = "Copy"
+cut = "Cut"
+paste = "Paste"
+redo = "Redo"
+select_all = "Select All"
+title = "Edit"
+undo = "Undo"
+
+[menu.view]
+enter_full_screen = "Enter Full Screen"
+title = "View"
+
+[menu.window]
+close_window = "Close Window"
+minimize = "Minimize"
+title = "Window"
+zoom = "Zoom"
+
+[menu.help]
+title = "Help"
+
+[tray]
+import_media = "Import Media..."
+no_recent_items = "No recent items"
+open_main_window = "Open Main Window"
+previous = { text = "Previous", context = "Submenu listing the most recent recordings and screenshots." }
+quit = "Quit Cap"
+record_area = "Record Area"
+record_display = "Record Display"
+record_window = "Record Window"
+request_permissions = "Request Permissions"
+screenshot_area = "Screenshot Area"
+screenshot_display = "Screenshot Display"
+screenshot_window = "Screenshot Window"
+select_mode = "Select Mode"
+settings = "Settings"
+take_screenshot = "Take a Screenshot"
+tooltip_recording = { text = "Cap - Stop Recording", context = "Windows tray tooltip while a recording runs; clicking the icon stops it." }
+upload_logs = "Upload Logs"
+version = { text = "Cap v{version}", context = "Disabled row showing the app version, for example Cap v0.6.1." }
+view_all_recordings = "View all recordings"
+view_all_screenshots = "View all screenshots"
+
+[tray.mode]
+instant = { text = "Instant", context = "Recording mode name." }
+screenshot = { text = "Screenshot", context = "Recording mode name." }
+studio = { text = "Studio", context = "Recording mode name." }
+
+[settings.nav]
+# The sidebar is 227px; the label gets what the 10px padding, 6px item padding,
+# 16px icon and 8px gap leave.
+automations = { text = "Automations", max_px = 171, size = 13 }
+changelog = { text = "Changelog", max_px = 171, size = 13 }
+cli = { text = "CLI", max_px = 171, size = 13 }
+experimental = { text = "Experimental", max_px = 171, size = 13 }
+feedback = { text = "Feedback", max_px = 171, size = 13 }
+general = { text = "General", max_px = 171, size = 13 }
+integrations = { text = "Integrations", max_px = 171, size = 13 }
+license = { text = "Plan & license", max_px = 171, size = 13 }
+quality = { text = "Recording quality", max_px = 171, size = 13 }
+recordings = { text = "Recordings", max_px = 171, size = 13 }
+screenshots = { text = "Screenshots", max_px = 171, size = 13 }
+shortcuts = { text = "Shortcuts", max_px = 171, size = 13 }
+transcription = { text = "Transcription", max_px = 171, size = 13 }
+
+[settings.general.language]
+description = "Choose the language Cap is shown in."
+label = "App language"
+system_default = { text = "System default ({language})", context = "{language} is the system language, written in that language, for example Deutsch." }
+title = "Language"
+
+[settings.general.appearance]
+description = "Match Cap to your system theme or pick a fixed look."
+title = "Appearance"
+
+[settings.general.app]
+description = "Choose how Cap shows up on your system."
+title = "App"
+
+[settings.general.app.dock_icon]
+description = "Keep Cap in the dock even when no windows are open."
+label = "Always show dock icon"
+
+[settings.general.app.notifications]
+description = "Show notifications for clipboard copies, saved files, and more. You may need to allow Cap in your system's notification settings."
+label = "System notifications"
+
+[settings.general.recording]
+description = "Behaviour while you record and after you stop."
+title = "Recording"
+
+[settings.general.recording.countdown]
+description = "Wait before the recording starts."
+label = "Countdown"
+off = { text = "Off", max_px = 180, size = 12 }
+seconds_10 = { text = "10 seconds", max_px = 180, size = 12 }
+seconds_3 = { text = "3 seconds", max_px = 180, size = 12 }
+seconds_5 = { text = "5 seconds", max_px = 180, size = 12 }
+
+[settings.general.recording.confirm_without_mic]
+description = "Require confirmation when no microphone is selected or the selected microphone is unavailable."
+label = "Confirm before recording without a microphone"
+
+[settings.general.recording.studio_sound]
+description = "Clean up microphone audio automatically. You can still turn it off for any recording in the editor."
+label = { text = "Studio Sound on new recordings", context = "Studio Sound is the name of Cap's microphone clean-up feature." }
+
+[settings.general.recording.main_window_start]
+description = "What happens to the main window once a recording begins."
+label = "Main window when recording starts"
+
+[settings.general.recording.post_deletion]
+description = "Whether the recording window should reopen."
+label = "After deleting a recording"
+
+[settings.general.recording.delete_after_upload]
+description = "Cap removes the local file once it has uploaded successfully."
+label = "Delete Instant recordings after upload"
+
+[settings.general.recording.crash_recovery]
+description = "Record in fragments that can be recovered after a crash or power loss. Slightly larger files during capture."
+label = "Crash-recoverable recording"
+
+[settings.general.recording.custom_cursor]
+description = "Capture cursor state separately so you can adjust size and smoothing in the editor."
+label = "Custom cursor capture (Studio)"
+
+[settings.general.recording.auto_zoom]
+description = "Automatically add zoom segments around mouse clicks in Studio recordings."
+label = "Auto zoom on clicks"
+
+[settings.general.recording.default_zoom]
+description = "Zoom level for newly created and auto-generated zoom segments."
+label = "Default zoom amount"
+
+[settings.general.recording.capture_keyboard]
+description = "Record key presses so you can add keyboard overlays in the editor."
+label = "Capture keyboard presses"
+
+[settings.general.recording.notch_overlay]
+description = "Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
+label = "Draw the MacBook notch on screen recordings"
+
+[settings.general.recording.max_fps]
+description = "Maximum framerate for screen capture."
+description_high = { text = "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems.", context = "Shown instead of the short description when more than 60 FPS is selected." }
+fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
+fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
+fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
+fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
+fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
+label = "Max capture framerate"
+
+[settings.general.storage]
+choose_folder = "Choose Folder"
+default_location = { text = "Default (Application Support)", context = "Shown in place of a folder path when recordings use the default location." }
+description = "Where Cap saves your recordings."
+title = "Storage"
+
+[settings.general.project_name]
+available_placeholders = "Available placeholders"
+description = "Template used for new recordings and exported files."
+title = "Default project name"
+
+[settings.general.project_name.placeholders]
+date_time = "Date & time"
+date_values = "the recording's date"
+mode_values = { text = "\"studio\", \"instant\", or \"screenshot\"", context = "The quoted words are inserted into file names exactly as written; keep them in English." }
+random = "Random"
+random_values = { text = "10 filename-safe hexadecimal characters; use {{random:N}} for 1–32.", context = "{{random:N}} is template syntax typed by the user; keep it exactly as written." }
+recording_mode = "Recording mode"
+recording_mode_values = { text = "\"Studio\", \"Instant\", or \"Screenshot\"", context = "The quoted words are inserted into file names exactly as written; keep them in English." }
+target = "Target"
+target_kind_values = { text = "\"Display\", \"Window\", or \"Area\"", context = "The quoted words are inserted into file names exactly as written; keep them in English." }
+target_name_values = "Monitor name or window title."
+time_values = "the recording's time"
+
+[settings.general.excluded_windows]
+description = "Hide windows from recordings."
+empty = "No windows are currently excluded."
+missing_body = { text = "Camera, settings, or recording windows can appear as black boxes in screen recordings. Missing: {names}.", context = "{names} is a comma-separated list of Cap window titles." }
+missing_title = "Recommended Cap windows are not excluded"
+restore = "Restore"
+title = "Excluded windows"
+
+[settings.general.updates]
+description = "Choose which Cap builds you receive."
+nightly_description = "The newest builds, updated automatically in the background when you're not recording or exporting. May be unstable."
+nightly_switch_back = "Switching back to Stable will return you to the latest stable version, which may be older than your current build."
+stable_description = "Versioned releases (recommended)"
+title = "Updates"
+
+[settings.general.updates.channel]
+description = "Which release channel Cap updates from."
+label = "Update channel"
+
+[settings.general.self_host]
+confirm_change = { text = "Are you sure you want to change the server URL to '{origin}'? You will need to sign in again.", context = "{origin} is a URL such as https://cap.example.com." }
+description = "Only change this if you are running your own instance of Cap Web."
+server_url = "Cap Server URL"
+title = "Self-host"
+update = "Update"
+
+[settings.general.privacy]
+title = "Privacy"
+
+[settings.general.privacy.telemetry]
+description = "Cap uses anonymous telemetry to improve reliability and fix bugs. We never collect recording contents, window titles, file paths, or personal information."
+label = "Share anonymous telemetry"

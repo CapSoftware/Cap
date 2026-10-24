@@ -10,7 +10,7 @@ STATE_FILE="$PWD/target/dev-restore.json"
 BIN="$PWD/target/debug/cap-gpui"
 BUILD=cargo
 
-WATCH_PATHS=(src kernels/src kernels/Cargo.toml assets Cargo.toml ../desktop/src-tauri/sounds)
+WATCH_PATHS=(src kernels/src kernels/Cargo.toml i18n-build/src i18n-build/Cargo.toml locales assets Cargo.toml ../desktop/src-tauri/sounds)
 [ -d resources ] && WATCH_PATHS+=(resources)
 for crate in camera scap-targets recording timestamp utils project rendering editor export; do
 	[ -d "../../crates/$crate/src" ] && WATCH_PATHS+=("../../crates/$crate/src")

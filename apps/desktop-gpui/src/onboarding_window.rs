@@ -7,6 +7,7 @@ use gpui::{
     linear_gradient, prelude::FluentBuilder, px, relative, rgb, rgba, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     main_window::Mode,
     onboarding_audio::OnboardingAudio,
@@ -2751,6 +2752,7 @@ impl Render for OnboardingWindow {
             .rounded(px(16.))
             .bg(theme.shell_bg())
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.body_text());
         if self.welcome {

@@ -37,6 +37,7 @@ use scap_targets::{
     bounds::{LogicalBounds, LogicalPosition, LogicalSize},
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     app_windows,
     editor_canvas::{
@@ -94,6 +95,25 @@ fn overlay_viewport_size(viewport: (f32, f32), previous: (f32, f32)) -> (f32, f3
     } else {
         previous
     }
+}
+
+pub(crate) fn capture_scale_factor(window: &Window) -> f32 {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if HasWindowHandle::window_handle(window).is_ok_and(|handle| {
+            matches!(
+                handle.as_raw(),
+                RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)
+            )
+        }) {
+            // X11 capture bounds are physical pixels, even when scap calls them logical.
+            return window.scale_factor();
+        }
+    }
+    let _ = window;
+    1.
 }
 
 fn recording_devices_available(cx: &App) -> bool {
@@ -241,8 +261,8 @@ pub struct HoveredWindow {
     pub id: WindowId,
     pub app_name: String,
     pub display_id: DisplayId,
-    /// Bounds relative to the display's top-left, in logical points -- exactly
-    /// what the overlay window's own coordinate space is. Carried as our own
+    /// Bounds relative to the display's top-left in capture coordinates;
+    /// X11 overlays convert these physical pixels to logical points. Carried as our own
     /// rect rather than `LogicalBounds` so the poll can compare frames for
     /// equality (`scap_targets`' bounds are not `PartialEq`).
     pub bounds: AreaRect,
@@ -512,6 +532,15 @@ impl AreaRect {
         })
     }
 
+    fn scaled(self, scale: f32) -> Self {
+        Self {
+            x: self.x * scale,
+            y: self.y * scale,
+            width: self.width * scale,
+            height: self.height * scale,
+        }
+    }
+
     fn to_bounds(self) -> LogicalBounds {
         LogicalBounds::new(
             LogicalPosition::new(self.x as f64, self.y as f64),
@@ -616,6 +645,7 @@ pub struct OverlayWindow {
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
     display_size: (f32, f32),
+    capture_scale: f32,
     controls_work_area: AreaRect,
     /// Physical pixels, for the `1920x1080 · 60FPS` line.
     physical_size: Option<(u32, u32)>,
@@ -722,9 +752,15 @@ impl OverlayWindow {
         )
         .detach();
 
+        let capture_scale = capture_scale_factor(window);
         let logical = display
             .logical_size()
-            .map(|size| (size.width() as f32, size.height() as f32))
+            .map(|size| {
+                (
+                    size.width() as f32 / capture_scale,
+                    size.height() as f32 / capture_scale,
+                )
+            })
             .unwrap_or((1920., 1080.));
 
         let controls_work_area = display
@@ -732,8 +768,8 @@ impl OverlayWindow {
             .logical_bounds()
             .zip(app_windows::display_work_area(Some(display), cx))
             .map(|(bounds, available)| AreaRect {
-                x: f32::from(available.origin.x) - bounds.position().x() as f32,
-                y: f32::from(available.origin.y) - bounds.position().y() as f32,
+                x: f32::from(available.origin.x) - bounds.position().x() as f32 / capture_scale,
+                y: f32::from(available.origin.y) - bounds.position().y() as f32 / capture_scale,
                 width: f32::from(available.size.width),
                 height: f32::from(available.size.height),
             })
@@ -753,6 +789,7 @@ impl OverlayWindow {
                 .name()
                 .unwrap_or_else(|| format!("Display {}", display.id())),
             display_size: logical,
+            capture_scale,
             controls_work_area,
             physical_size: display
                 .physical_size()
@@ -816,7 +853,7 @@ impl OverlayWindow {
         if self.recording_area {
             return self.crop.map(|crop| ScreenCaptureTarget::Area {
                 screen: self.display_id.clone(),
-                bounds: crop.to_bounds(),
+                bounds: crop.scaled(self.capture_scale).to_bounds(),
             });
         }
         let select = self.select.read(cx);
@@ -835,7 +872,7 @@ impl OverlayWindow {
             TargetType::Area => self.crop.filter(|crop| crop.is_valid_for(min)).map(|crop| {
                 ScreenCaptureTarget::Area {
                     screen: self.display_id.clone(),
-                    bounds: crop.to_bounds(),
+                    bounds: crop.scaled(self.capture_scale).to_bounds(),
                 }
             }),
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
@@ -1040,6 +1077,7 @@ impl Render for OverlayWindow {
             .size_full()
             .relative()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
@@ -1499,7 +1537,7 @@ impl OverlayWindow {
         let Some(active) = active else {
             return div().size_full().into_any_element();
         };
-        let bounds = active.bounds;
+        let bounds = active.bounds.scaled(1. / self.capture_scale);
         let width = bounds.width;
         let height = bounds.height;
 
@@ -1551,12 +1589,10 @@ impl OverlayWindow {
                                     .font_weight(FontWeight::BOLD)
                                     .child(SharedString::from(active.app_name.clone())),
                             )
-                            .child(
-                                div()
-                                    .mb(px(8.))
-                                    .text_size(px(12.))
-                                    .child(format!("{}x{}", width as u32, height as u32)),
-                            ),
+                            .child(div().mb(px(8.)).text_size(px(12.)).child(format!(
+                                "{}x{}",
+                                active.bounds.width as u32, active.bounds.height as u32
+                            ))),
                     )
                     .child(self.render_controls_cluster(self.target(cx), false, cx)),
             )
@@ -2789,6 +2825,24 @@ mod tests {
         assert_eq!(bounds.position().y(), 64.);
         assert_eq!(bounds.size().width(), 800.);
         assert_eq!(bounds.size().height(), 600.);
+    }
+
+    #[test]
+    fn scaled_overlay_selections_preserve_the_physical_capture_region() {
+        let capture = rect(300., 240., 900., 600.);
+        for (scale, expected) in [
+            (1., rect(300., 240., 900., 600.)),
+            (1.5, rect(200., 160., 600., 400.)),
+            (2., rect(150., 120., 450., 300.)),
+        ] {
+            let overlay = capture.scaled(1. / scale);
+            assert_eq!(overlay, expected);
+            let bounds = overlay.scaled(scale).to_bounds();
+            assert_eq!(bounds.position().x(), 300.);
+            assert_eq!(bounds.position().y(), 240.);
+            assert_eq!(bounds.size().width(), 900.);
+            assert_eq!(bounds.size().height(), 600.);
+        }
     }
 
     #[test]

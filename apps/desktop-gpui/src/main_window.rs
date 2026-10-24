@@ -14,6 +14,7 @@ use gpui::{
 };
 use std::{cell::Cell, rc::Rc};
 
+use crate::theme::LocaleFont as _;
 use crate::{
     MAIN_WINDOW_WIDTH, app_windows, devices,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
@@ -2785,6 +2786,7 @@ impl Render for MainWindow {
                 this.border_1().border_color(color)
             })
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`). The shipping app renders
             // *everything* Medium unless a `font-*` class says otherwise, so
             // Medium -- not Regular -- is the inherited default at every root.
