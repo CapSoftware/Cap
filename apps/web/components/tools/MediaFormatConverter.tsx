@@ -2,7 +2,6 @@
 
 import { Button } from "@cap/ui";
 import * as MediaParser from "@remotion/media-parser";
-import type { WebCodecsController } from "@remotion/webcodecs";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -396,16 +395,13 @@ export const MediaFormatConverter = ({
 
 	const extractAudioFromVideo = async (inputFile: File): Promise<void> => {
 		try {
-			const parser = await import("@remotion/media-parser");
 			const webcodecs = await import("@remotion/webcodecs");
 
 			const _handleProgress = (progressEvent: { progress: number }) => {
 				setProgress(Math.min(Math.round(progressEvent.progress * 100), 99));
 			};
 
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
+			const controller = webcodecs.webcodecsController();
 			parserControllerRef.current = controller;
 
 			const result = await webcodecs.convertMedia({
@@ -416,7 +412,7 @@ export const MediaFormatConverter = ({
 						setProgress(Math.min(Math.round(overallProgress * 100), 99));
 					}
 				},
-				controller: controller as unknown as WebCodecsController,
+				controller,
 			});
 
 			const blob = await result.save();
@@ -613,9 +609,7 @@ export const MediaFormatConverter = ({
 				}
 			};
 
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
+			const controller = webcodecs.webcodecsController();
 			parserControllerRef.current = controller;
 
 			console.log(`Starting conversion with Remotion: ${conversionPath}`);
@@ -659,7 +653,7 @@ export const MediaFormatConverter = ({
 				container: outputContainer as any,
 				videoCodec: videoCodec as any,
 				onProgress,
-				controller: controller as unknown as WebCodecsController,
+				controller,
 				expectedDurationInSeconds: metadata.durationInSeconds || undefined,
 			});
 

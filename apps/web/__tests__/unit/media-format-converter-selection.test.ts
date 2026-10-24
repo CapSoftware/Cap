@@ -18,11 +18,15 @@ vi.mock("next/navigation", () => ({
 	useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock("@/app/utils/analytics", () => ({ trackEvent: vi.fn() }));
-vi.mock("@remotion/media-parser", () => ({
+vi.mock("@remotion/media-parser", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@remotion/media-parser")>()),
 	mediaParserController: () => ({ abort: vi.fn() }),
 	parseMedia: () => Promise.resolve({ durationInSeconds: 1 }),
 }));
-vi.mock("@remotion/webcodecs", () => ({ convertMedia: vi.fn() }));
+vi.mock("@remotion/webcodecs", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@remotion/webcodecs")>()),
+	convertMedia: vi.fn(),
+}));
 
 describe("media converter file selection", () => {
 	let container: HTMLDivElement;
