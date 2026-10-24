@@ -3381,38 +3381,36 @@ async function muxSegmentsAsync(
 		await withJobHeartbeat(jobId, async () => {
 			const assets = await previewAssets;
 			abortController.signal.throwIfAborted();
-			if (thumbnailPresignedUrl && assets?.thumbnail) {
-				try {
-					await uploadToS3(
-						assets.thumbnail,
-						thumbnailPresignedUrl,
-						"image/jpeg",
-						abortController.signal,
-					);
-				} catch (thumbErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						`[mux-segments] Thumbnail generation failed for ${videoId}:`,
-						thumbErr,
-					);
-				}
-			}
-			if (previewGifPresignedUrl && assets?.previewGif) {
-				try {
-					await uploadFileToS3(
-						assets.previewGif.path,
-						previewGifPresignedUrl,
-						"image/gif",
-						abortController.signal,
-					);
-				} catch (previewErr) {
-					abortController.signal.throwIfAborted();
-					console.warn(
-						"[mux-segments] Preview GIF generation failed:",
-						previewErr,
-					);
-				}
-			}
+			await Promise.all([
+				thumbnailPresignedUrl && assets?.thumbnail
+					? uploadToS3(
+							assets.thumbnail,
+							thumbnailPresignedUrl,
+							"image/jpeg",
+							abortController.signal,
+						).catch((thumbErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								`[mux-segments] Thumbnail generation failed for ${videoId}:`,
+								thumbErr,
+							);
+						})
+					: undefined,
+				previewGifPresignedUrl && assets?.previewGif
+					? uploadFileToS3(
+							assets.previewGif.path,
+							previewGifPresignedUrl,
+							"image/gif",
+							abortController.signal,
+						).catch((previewErr) => {
+							abortController.signal.throwIfAborted();
+							console.warn(
+								"[mux-segments] Preview GIF generation failed:",
+								previewErr,
+							);
+						})
+					: undefined,
+			]);
 		});
 
 		abortController.signal.throwIfAborted();

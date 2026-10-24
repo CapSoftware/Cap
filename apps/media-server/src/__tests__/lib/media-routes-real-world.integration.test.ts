@@ -43,6 +43,7 @@ let tempDir = "";
 
 const uploadedArtifacts = new Map<string, Uint8Array>();
 const uploadFailures = new Map<string, number>();
+const uploadGates = new Map<string, Promise<void>>();
 const uploadRequests: string[] = [];
 const fixtureReads: string[] = [];
 const webhookPhases: JobProgress["phase"][] = [];
@@ -442,6 +443,7 @@ beforeAll(async () => {
 
 			if (request.method === "PUT" && url.pathname.startsWith("/uploads/")) {
 				uploadRequests.push(url.pathname);
+				await uploadGates.get(url.pathname);
 				const failureStatus = uploadFailures.get(url.pathname);
 				if (failureStatus) {
 					return new Response("Storage unavailable", { status: failureStatus });
@@ -490,6 +492,7 @@ beforeEach(() => {
 	});
 	uploadedArtifacts.clear();
 	uploadFailures.clear();
+	uploadGates.clear();
 	uploadRequests.length = 0;
 	fixtureReads.length = 0;
 	webhookPhases.length = 0;
@@ -712,6 +715,54 @@ describe("media routes real-world integration tests", () => {
 			).toBeGreaterThan(0);
 			expect(
 				uploadedBytes("/uploads/mux-previews.gif").byteLength,
+			).toBeGreaterThan(0);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("uploads the thumbnail and preview GIF together and keeps one when the other fails", async () => {
+		let gifStarted: () => void = () => {};
+		const gifRequested = new Promise<void>((resolve) => {
+			gifStarted = resolve;
+		});
+		uploadGates.set(
+			"/uploads/mux-previews-together.jpg",
+			Promise.race([
+				gifRequested,
+				new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+			]),
+		);
+		uploadGates.set(
+			"/uploads/mux-previews-together.gif",
+			Promise.resolve().then(gifStarted),
+		);
+		uploadFailures.set("/uploads/mux-previews-together.jpg", 503);
+		const body = {
+			...fencedMuxRequest("mux-previews-together"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews-together.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews-together.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const started = Date.now();
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("complete");
+			expect(uploadRequests[0]).toBe("/uploads/mux-previews-together.mp4");
+			expect(new Set(uploadRequests.slice(1, 3))).toEqual(
+				new Set([
+					"/uploads/mux-previews-together.jpg",
+					"/uploads/mux-previews-together.gif",
+				]),
+			);
+			// The thumbnail is held until the GIF upload starts, so a sequential upload would wait out the 5 s gate.
+			expect(Date.now() - started).toBeLessThan(4_500);
+			expect(
+				uploadedBytes("/uploads/mux-previews-together.gif").byteLength,
 			).toBeGreaterThan(0);
 		} finally {
 			deleteJob(jobId);
