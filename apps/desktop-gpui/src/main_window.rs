@@ -56,10 +56,20 @@ fn remembered_camera(id: &recording::DeviceOrModelID, cameras: &[CameraOption]) 
                 recording::DeviceOrModelID::ModelID(model) => Some(model.clone()),
                 recording::DeviceOrModelID::DeviceID(_) => None,
             },
-            label: tr::main::device::fallback_camera().to_string(),
+            label: String::new(),
             best_format: None,
             formats: Vec::new(),
         })
+}
+
+/// A remembered camera that isn't connected has no device name, so its row
+/// reads the fallback through the active locale on every render.
+pub(crate) fn camera_label(label: &str) -> String {
+    if label.is_empty() {
+        tr::main::device::fallback_camera().to_string()
+    } else {
+        label.to_string()
+    }
 }
 
 fn remembered_microphone(name: &str, microphones: &[MicrophoneOption]) -> MicrophoneOption {
@@ -4032,7 +4042,7 @@ impl MainWindow {
                 .text_size(px(12.))
                 .text_color(theme.gray_11)
                 .child(match self.device_format_target.as_ref().unwrap() {
-                    DeviceFormatTarget::Camera(camera) => camera.label.clone(),
+                    DeviceFormatTarget::Camera(camera) => camera_label(&camera.label),
                     DeviceFormatTarget::Microphone(name) => name.clone(),
                 })
                 .into_any_element(),
@@ -6618,7 +6628,7 @@ impl MainWindow {
                         "icons/camera.svg",
                         self.camera
                             .as_ref()
-                            .map(|camera| camera.label.clone())
+                            .map(|camera| camera_label(&camera.label))
                             .unwrap_or_else(|| tr::main::device::no_camera().into()),
                         if self.camera.is_some()
                             && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
@@ -6997,6 +7007,12 @@ mod remembered_device_tests {
         let restored = remembered_camera(&missing, &cameras);
         assert_eq!(restored.device_id, "remembered");
         assert_ne!(restored, cameras[0]);
+        assert_eq!(restored.label, "");
+        assert_eq!(
+            camera_label(&restored.label),
+            tr::main::device::fallback_camera()
+        );
+        assert_eq!(camera_label(&cameras[0].label), cameras[0].label);
 
         let microphones = [MicrophoneOption {
             name: "Unrequested microphone".into(),
