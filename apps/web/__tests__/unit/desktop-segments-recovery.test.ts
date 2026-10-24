@@ -319,62 +319,75 @@ describe("durable recovery scheduling", () => {
 });
 
 describe("legacy recovery order", () => {
-	it("checks the newest eligible legacy rows alongside the oldest without repeating one", async () => {
-		const newest = selectChain([
-			{ videoId: "newest", ownerId: userId },
-			{ videoId: "both", ownerId: userId },
-		]);
+	it("keeps every oldest-first slot and checks the newest eligible rows on top", async () => {
 		const oldest = selectChain([
 			{ videoId: "oldest", ownerId: userId },
 			{ videoId: "both", ownerId: userId },
 		]);
+		const newest = selectChain([
+			{ videoId: "newest", ownerId: userId },
+			{ videoId: "both", ownerId: userId },
+		]);
 		mocks.db
-			.mockReturnValueOnce(newest)
 			.mockReturnValueOnce(oldest)
+			.mockReturnValueOnce(newest)
 			.mockReturnValue(selectChain([video]));
 		mocks.get.mockReturnValue(Effect.succeed(Option.none()));
 		const result = await recoverStaleDesktopSegments();
 		expect(result.results.map((entry) => entry.videoId)).toEqual([
-			"newest",
-			"both",
 			"oldest",
+			"both",
+			"newest",
 		]);
 		expect(result.statuses).toEqual({ "missing-manifest": 3 });
-		expect(newest.orderBy).toHaveBeenCalledWith(
-			{ desc: "upload.updatedAt" },
-			{ desc: "upload.videoId" },
-		);
-		expect(newest.limit).toHaveBeenCalledWith(10);
 		expect(oldest.orderBy).toHaveBeenCalledWith(
 			{ asc: "upload.updatedAt" },
 			{ asc: "upload.videoId" },
 		);
 		expect(oldest.limit).toHaveBeenCalledWith(20);
+		expect(newest.orderBy).toHaveBeenCalledWith(
+			{ desc: "upload.updatedAt" },
+			{ desc: "upload.videoId" },
+		);
+		expect(newest.limit).toHaveBeenCalledWith(5);
 	});
 
-	it("reaches a stuck recording behind a week of empty caps soon after it qualifies, and still checks every row before it ages out", async () => {
-		const minute = 60_000;
-		const start = new Date("2026-10-01T00:00:00Z").getTime();
-		type Row = { videoId: string; startedAt: number };
-		const rows: Row[] = [];
-		for (
-			let at = start - 8 * 24 * 60 * minute;
-			at < start + 24 * 60 * minute;
-			at += 15 * minute
-		) {
-			rows.push({ videoId: `empty-${at}`, startedAt: at });
-		}
-		const stuck = { videoId: "stuck", startedAt: start + 3 * 60 * minute };
-		rows.push(stuck);
+	type Row = { videoId: string; startedAt: number };
+	const minute = 60_000;
+	const day = 24 * 60 * minute;
+
+	/// Runs the cron every 15 minutes over `rows`, which never change, the way
+	/// an empty cap's upload row never does. Rows whose manifest is finished
+	/// are queued once checked and then leave the legacy pass.
+	async function simulate({
+		rows,
+		finished,
+		from,
+		to,
+		durableJobs,
+	}: {
+		rows: Row[];
+		finished: Set<string>;
+		from: number;
+		to: number;
+		durableJobs: number;
+	}) {
 		const queued = new Set<string>();
-		let now = start;
+		let now = from;
 		const eligible = () =>
 			rows.filter(
 				(row) =>
 					!queued.has(row.videoId) &&
 					row.startedAt <= now - 60 * minute &&
-					row.startedAt >= now - 7 * 24 * 60 * minute,
+					row.startedAt >= now - 7 * day,
 			);
+		mocks.recoverable.mockImplementation(async ({ limit }) =>
+			Array.from({ length: Math.min(limit, durableJobs) }, (_, index) => ({
+				videoId: `durable-${index}`,
+				ownerId: userId,
+				verification: null,
+			})),
+		);
 		mocks.db.mockImplementation(() => {
 			const state: { joined: boolean; order?: unknown; where?: unknown } = {
 				joined: false,
@@ -417,49 +430,84 @@ describe("legacy recovery order", () => {
 			};
 			return chain;
 		});
-		mocks.get.mockImplementation((key: string) =>
-			Effect.succeed(
-				key.includes("/stuck/")
+		mocks.get.mockImplementation((key: string) => {
+			const id = key.split("/")[1] ?? "";
+			return Effect.succeed(
+				finished.has(id)
 					? Option.some(JSON.stringify(manifest))
 					: Option.none(),
-			),
-		);
+			);
+		});
 		mocks.queue.mockImplementation(async ({ videoId: id }) => {
-			queued.add(id);
+			if (!id.startsWith("durable-")) queued.add(id);
 			return "queued";
 		});
-
 		const checkedAt = new Map<string, number>();
-		for (; now <= start + 24 * 60 * minute; now += 15 * minute) {
+		for (; now <= to; now += 15 * minute) {
 			const result = await recoverStaleDesktopSegments({ now: new Date(now) });
 			for (const entry of result.results) {
 				if (!checkedAt.has(entry.videoId)) checkedAt.set(entry.videoId, now);
 			}
 		}
+		return { queued, checkedAt };
+	}
 
-		const stuckQualified = stuck.startedAt + 60 * minute;
+	function emptyCaps(from: number, to: number) {
+		const rows: Row[] = [];
+		for (let at = from; at < to; at += 15 * minute) {
+			rows.push({ videoId: `empty-${at}`, startedAt: at });
+		}
+		return rows;
+	}
+
+	it("reaches a stuck recording behind a week of empty caps soon after it qualifies, and still checks every row before it ages out", async () => {
+		const start = new Date("2026-10-01T00:00:00Z").getTime();
+		const end = start + day;
+		const rows = emptyCaps(start - 8 * day, end);
+		const stuck = { videoId: "stuck", startedAt: start + 3 * 60 * minute };
+		rows.push(stuck);
+		const { queued, checkedAt } = await simulate({
+			rows,
+			finished: new Set(["stuck"]),
+			from: start,
+			to: end,
+			durableJobs: 0,
+		});
 		expect(queued.has("stuck")).toBe(true);
 		expect(
-			(checkedAt.get("stuck") ?? Number.POSITIVE_INFINITY) - stuckQualified,
+			(checkedAt.get("stuck") ?? Number.POSITIVE_INFINITY) -
+				(stuck.startedAt + 60 * minute),
 		).toBeLessThanOrEqual(15 * minute);
-		const end = start + 24 * 60 * minute;
 		const agedOut = rows.filter(
 			(row) =>
-				row.startedAt >= start - 7 * 24 * 60 * minute &&
-				row.startedAt < end - 7 * 24 * 60 * minute,
+				row.startedAt >= start - 7 * day && row.startedAt < end - 7 * day,
 		);
 		expect(agedOut.length).toBeGreaterThan(0);
 		for (const row of agedOut) expect(checkedAt.has(row.videoId)).toBe(true);
-		const arrived = rows.filter(
-			(row) =>
-				row.startedAt + 60 * minute >= start &&
-				row.startedAt + 60 * minute <= end - 15 * minute,
-		);
-		for (const row of arrived) {
+		for (const row of rows) {
+			const qualified = row.startedAt + 60 * minute;
+			if (qualified < start || qualified > end - 15 * minute) continue;
 			expect(
-				(checkedAt.get(row.videoId) ?? Number.POSITIVE_INFINITY) -
-					(row.startedAt + 60 * minute),
+				(checkedAt.get(row.videoId) ?? Number.POSITIVE_INFINITY) - qualified,
 			).toBeLessThanOrEqual(15 * minute);
 		}
+	});
+
+	it("still reaches a finished recording in a burst while durable retries fill their budget", async () => {
+		const start = new Date("2026-10-01T00:00:00Z").getTime();
+		const burstAt = start - 2 * day;
+		const rows = emptyCaps(start - 8 * day, start + 6 * day);
+		for (let index = 0; index < 4; index++) {
+			rows.push({ videoId: `burst-empty-${index}`, startedAt: burstAt });
+		}
+		rows.push({ videoId: "burst-finished", startedAt: burstAt });
+		const { queued } = await simulate({
+			rows,
+			finished: new Set(["burst-finished"]),
+			from: start,
+			to: start + 6 * day,
+			durableJobs: 100,
+		});
+		expect(queued.has("burst-finished")).toBe(true);
 	});
 });
