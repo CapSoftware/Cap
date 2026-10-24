@@ -253,7 +253,12 @@ export const MediaFormatConverter = ({
 
 	const validateAndSetFile = (selectedFile: File) => {
 		setError(null);
+		setFile(null);
+		if (outputUrl) {
+			URL.revokeObjectURL(outputUrl);
+		}
 		setOutputUrl(null);
+		recordedChunksRef.current = [];
 
 		const expectedMimeType = getMimeType(currentSourceFormat);
 
