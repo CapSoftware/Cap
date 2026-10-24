@@ -359,7 +359,7 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
     recording_items_in(dirs).collect()
 }
 
-fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
+fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> + use<> {
     let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -390,6 +390,11 @@ pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
     recording_items_in(&known_recordings_dirs())
         .take(limit)
         .collect()
+}
+
+/// Every recording, newest first, loading each meta only when it is reached.
+pub fn recordings_newest_first() -> impl Iterator<Item = RecordingItem> {
+    recording_items_in(&known_recordings_dirs())
 }
 
 pub fn find_incomplete_recordings_in(
