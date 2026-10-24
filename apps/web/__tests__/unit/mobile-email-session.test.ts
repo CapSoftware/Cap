@@ -5,6 +5,7 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { Context, Layer as EffectLayer } from "effect";
 import {
 	afterAll,
+	afterEach,
 	beforeAll,
 	beforeEach,
 	describe,
@@ -18,6 +19,10 @@ type TokenRow = { identifier: string; token: string; expires: Date };
 const mocks = vi.hoisted(() => ({
 	isRateLimited: vi.fn<(ruleId: string, opts?: unknown) => Promise<boolean>>(),
 	sendEmail: vi.fn<(input: { react: { code: string } }) => Promise<void>>(),
+	emailStatus: { configured: true } as
+		| { configured: true }
+		| { configured: false; reason: string },
+	isCap: undefined as string | undefined,
 	tokenRow: null as TokenRow | null,
 	selectBarrier: null as null | { size: number; waiting: (() => void)[] },
 	apiKeys: [] as string[],
@@ -30,7 +35,22 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/rate-limit")>()),
 	isRateLimited: mocks.isRateLimited,
 }));
-vi.mock("@cap/database/emails/config", () => ({ sendEmail: mocks.sendEmail }));
+vi.mock("@cap/database/emails/config", () => ({
+	sendEmail: mocks.sendEmail,
+	getEmailDeliveryStatus: () => mocks.emailStatus,
+}));
+vi.mock("@cap/env", async (importOriginal) => {
+	const original = await importOriginal<typeof import("@cap/env")>();
+	return {
+		...original,
+		buildEnv: {
+			...original.buildEnv,
+			get NEXT_PUBLIC_IS_CAP() {
+				return mocks.isCap;
+			},
+		},
+	};
+});
 vi.mock("@cap/database/emails/otp-email", () => ({
 	OTPEmail: (props: { code: string; email: string }) => props,
 }));
@@ -206,12 +226,15 @@ describe("mobile email sessions", () => {
 	beforeEach(() => {
 		mocks.isRateLimited.mockReset().mockResolvedValue(false);
 		mocks.sendEmail.mockReset().mockResolvedValue(undefined);
+		mocks.emailStatus = { configured: true };
+		mocks.isCap = undefined;
 		mocks.tokenRow = null;
 		mocks.selectBarrier = null;
 		mocks.apiKeys = [];
 	});
 
 	afterAll(() => mocks.dispose());
+	afterEach(() => vi.unstubAllEnvs());
 
 	const post = (path: string, body: unknown) =>
 		POST(
@@ -231,6 +254,46 @@ describe("mobile email sessions", () => {
 	};
 
 	const wrongCode = (code: string) => (code === "123456" ? "654321" : "123456");
+
+	it.each([undefined, "", "false"])(
+		"logs a usable self-host code with NEXT_PUBLIC_IS_CAP=%j and email disabled",
+		async (isCap) => {
+			mocks.isCap = isCap;
+			mocks.emailStatus = {
+				configured: false,
+				reason: "Email is not configured",
+			};
+			vi.stubEnv("NODE_ENV", "production");
+			const log = vi.spyOn(console, "log").mockImplementation(() => {});
+			const response = await post("request", { email: "person@example.com" });
+			expect(response.status).toBe(200);
+			expect(mocks.sendEmail).not.toHaveBeenCalled();
+			const codeLine = log.mock.calls.find(([line]) =>
+				/^Code: \d{6}$/.test(line),
+			);
+			expect(codeLine).toBeDefined();
+			const code = String(codeLine?.[0]).slice("Code: ".length);
+			expect(
+				(await post("verify", { email: "person@example.com", code })).status,
+			).toBe(200);
+		},
+	);
+
+	it("fails on Cap Cloud without printing a code when email is disabled", async () => {
+		mocks.emailStatus = {
+			configured: false,
+			reason: "Email is not configured",
+		};
+		mocks.isCap = "true";
+		vi.stubEnv("NODE_ENV", "production");
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const response = await post("request", { email: "person@example.com" });
+		expect(response.status).toBe(500);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+		expect(
+			log.mock.calls.some(([line]) => /^Code: \d{6}$/.test(String(line))),
+		).toBe(false);
+	});
 
 	it("sends a code and signs in with it", async () => {
 		const code = await requestCode(" Person@Example.com ");
