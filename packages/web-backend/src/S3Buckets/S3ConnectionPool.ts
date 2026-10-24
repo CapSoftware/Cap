@@ -20,22 +20,27 @@ function boundIdleConnections<T extends HttpAgent>(agent: T) {
 	return agent;
 }
 
-export const s3ConnectionPool = Effect.acquireRelease(
-	Effect.sync(() => {
-		const options = {
-			keepAlive: true,
-			maxSockets: 50,
-			maxTotalSockets: 128,
-			maxFreeSockets: 8,
-		};
-		return {
-			httpAgent: boundIdleConnections(new HttpAgent(options)),
-			httpsAgent: boundIdleConnections(new HttpsAgent(options)),
-		};
-	}),
-	(pool) =>
+const makeS3ConnectionPool = (maxFreeSockets: number, maxSockets = 50) =>
+	Effect.acquireRelease(
 		Effect.sync(() => {
-			pool.httpAgent.destroy();
-			pool.httpsAgent.destroy();
+			const options = {
+				keepAlive: true,
+				maxSockets,
+				maxTotalSockets: Math.max(128, maxSockets * 2),
+				maxFreeSockets,
+			};
+			return {
+				httpAgent: boundIdleConnections(new HttpAgent(options)),
+				httpsAgent: boundIdleConnections(new HttpsAgent(options)),
+			};
 		}),
-);
+		(pool) =>
+			Effect.sync(() => {
+				pool.httpAgent.destroy();
+				pool.httpsAgent.destroy();
+			}),
+	);
+
+export const s3ConnectionPool = makeS3ConnectionPool(8);
+// Desktop source commits copy 128 objects at once in Cap's own bucket.
+export const defaultBucketS3ConnectionPool = makeS3ConnectionPool(32, 128);
