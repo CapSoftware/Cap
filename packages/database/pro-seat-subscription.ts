@@ -1,11 +1,7 @@
-import type { db } from "@cap/database";
-import {
-	organizationMembers,
-	organizations,
-	users,
-} from "@cap/database/schema";
 import type { User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
+import type { db } from "./index.ts";
+import { organizationMembers, organizations, users } from "./schema.ts";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof db>["transaction"]>[0]
@@ -30,7 +26,8 @@ export async function releaseProSeatSubscription(
 				eq(organizationMembers.userId, userId),
 				eq(organizationMembers.hasProSeat, true),
 			),
-		);
+		)
+		.for("update");
 	const paidSeat = remainingSeats.find((seat) => seat.stripeSubscriptionId);
 	if (!paidSeat && remainingSeats.length > 0) return;
 

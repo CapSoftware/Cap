@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -60,7 +61,8 @@ export async function POST(request: NextRequest) {
 						eq(organizationMembers.userId, user.id),
 					),
 				)
-				.limit(1);
+				.limit(1)
+				.for("update");
 
 			if (membership) {
 				const organizationSpaces = await tx
@@ -100,20 +102,7 @@ export async function POST(request: NextRequest) {
 					userUpdate.defaultOrgId = remainingMembership?.organizationId ?? null;
 				}
 				if (membership.hasProSeat) {
-					const [otherProSeat] = await tx
-						.select({ id: organizationMembers.id })
-						.from(organizationMembers)
-						.where(
-							and(
-								eq(organizationMembers.userId, user.id),
-								eq(organizationMembers.hasProSeat, true),
-							),
-						)
-						.limit(1);
-
-					if (!otherProSeat) {
-						userUpdate.thirdPartyStripeSubscriptionId = null;
-					}
+					await releaseProSeatSubscription(tx, user.id);
 				}
 
 				if (Object.keys(userUpdate).length > 0) {

@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -16,7 +17,6 @@ import {
 	canRemoveOrganizationMember,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
-import { releaseProSeatSubscription } from "@/lib/pro-seat-subscription";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 export async function removeOrganizationMember(

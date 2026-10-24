@@ -1,3 +1,4 @@
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { CurrentUser, Organisation, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
@@ -162,9 +163,13 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.from(Db.spaces)
 							.where(Dz.eq(Db.spaces.organizationId, id));
 						const memberRows = await tx
-							.select({ userId: Db.organizationMembers.userId })
+							.select({
+								userId: Db.organizationMembers.userId,
+								hasProSeat: Db.organizationMembers.hasProSeat,
+							})
 							.from(Db.organizationMembers)
-							.where(Dz.eq(Db.organizationMembers.organizationId, id));
+							.where(Dz.eq(Db.organizationMembers.organizationId, id))
+							.for("update");
 						const integrationRows = await tx
 							.select({ id: Db.storageIntegrations.id })
 							.from(Db.storageIntegrations)
@@ -264,6 +269,12 @@ export class Organisations extends Effect.Service<Organisations>()(
 						await tx
 							.delete(Db.organizations)
 							.where(Dz.eq(Db.organizations.id, id));
+
+						for (const member of memberRows) {
+							if (member.hasProSeat) {
+								await releaseProSeatSubscription(tx, member.userId);
+							}
+						}
 
 						for (const affectedUserId of affectedUserIds) {
 							const [otherOrg] = await tx
