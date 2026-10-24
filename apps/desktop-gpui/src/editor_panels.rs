@@ -1686,6 +1686,30 @@ pub fn camera3d_pose_seek_time(segment: &Camera3DSegment, end: bool, fps: u32) -
     camera3d_frame_before(segment.end, fps).max(start_frame)
 }
 
+/// "The playhead is on this pose" is a frame's tolerance, which is as close
+/// as a seek can land.
+fn camera3d_pose_on(playhead: f64, time: f64, fps: u32) -> bool {
+    (playhead - time).abs() < 1. / f64::from(fps.max(1))
+}
+
+/// Every `(shot, end)` pose the playhead is on: what the 3D panel's pose cards
+/// mark, so a scrub can tell when the sidebar has to redraw.
+pub(crate) fn camera3d_poses_at(
+    segments: &[Camera3DSegment],
+    playhead: f64,
+    fps: u32,
+) -> Vec<(usize, bool)> {
+    let mut poses = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
+        for end in [false, true] {
+            if camera3d_pose_on(playhead, camera3d_pose_seek_time(segment, end, fps), fps) {
+                poses.push((index, end));
+            }
+        }
+    }
+    poses
+}
+
 /// How many shots the Auto scene picker offers.
 pub const AUTO_CAMERA3D_MAX_SHOTS: usize = 6;
 
@@ -6941,9 +6965,7 @@ impl EditorWindow {
         let fps = crate::editor_window::EDITOR_PREVIEW_FPS;
         let start_time = camera3d_pose_seek_time(segment, false, fps);
         let end_time = camera3d_pose_seek_time(segment, true, fps);
-        // "The playhead is on this pose" is a frame's tolerance, which is as
-        // close as a seek can land.
-        let on = |time: f64| (self.playhead_time() - time).abs() < 1. / f64::from(fps.max(1));
+        let on = |time: f64| camera3d_pose_on(self.playhead_time(), time, fps);
 
         div()
             .flex()
@@ -8886,6 +8908,22 @@ mod tests {
             camera3d_pose_seek_time(&sliver, true, 30),
             camera3d_pose_seek_time(&sliver, false, 30)
         );
+    }
+
+    #[test]
+    fn a_paused_scrub_sees_the_poses_the_playhead_lands_on() {
+        // A paused scrub redraws the sidebar only when this list changes, and
+        // the pose cards mark exactly these poses.
+        let fps = 60;
+        let shots = [camera3d(1., 2.5), camera3d(4.02, 6.)];
+        assert_eq!(camera3d_poses_at(&shots, 1., fps), [(0, false)]);
+        assert_eq!(camera3d_poses_at(&shots, 149. / 60., fps), [(0, true)]);
+        assert_eq!(camera3d_poses_at(&shots, 242. / 60., fps), [(1, false)]);
+        assert_eq!(camera3d_poses_at(&shots, 359. / 60., fps), [(1, true)]);
+        for playhead in [0., 1.75, 3., 5., 7.] {
+            assert!(camera3d_poses_at(&shots, playhead, fps).is_empty());
+        }
+        assert!(camera3d_poses_at(&[], 1., fps).is_empty());
     }
 
     #[test]

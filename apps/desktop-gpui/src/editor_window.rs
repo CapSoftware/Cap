@@ -3213,11 +3213,53 @@ impl EditorWindow {
     /// (`PlaybackHandle::seek`), so a scrub during playback holds the last
     /// picture for one decode instead of paying a warmup per tick.
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
+        if self.apply_seek(time) {
+            cx.notify();
+        }
+    }
+
+    /// One pointer move of a ruler scrub. While paused, the playhead is read
+    /// by the timeline, the transport clock and what the window itself renders
+    /// (the canvas overlay, the clip popover), so this invalidates those the
+    /// way [`Self::invalidate_hover_chrome`] does instead of rebuilding the
+    /// header, toolbar and sidebar on every move. The one sidebar reader is
+    /// the 3D panel's "on the playhead" pose marker, which is only redrawn
+    /// when it changes. Playing and handoff seeks keep the full invalidation.
+    fn scrub_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
+        let poses = self.camera3d_poses_at_playhead();
+        if !self.apply_seek(time) {
+            return;
+        }
+        if self.playing || self.ordinary_handoff_frame.is_some() {
+            cx.notify();
+            return;
+        }
+        self.invalidate_hover_chrome(cx);
+        if self.camera3d_poses_at_playhead() != poses {
+            self.sidebar_view.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    fn camera3d_poses_at_playhead(&self) -> Vec<(usize, bool)> {
+        crate::editor_panels::camera3d_poses_at(
+            self.project
+                .timeline
+                .as_ref()
+                .map(|timeline| timeline.camera3d_segments.as_slice())
+                .unwrap_or(&[]),
+            self.playhead_time(),
+            EDITOR_PREVIEW_FPS,
+        )
+    }
+
+    /// `seek_to_time` minus the invalidation. False when the seek went to the
+    /// preparing transport, which redraws through its own events.
+    fn apply_seek(&mut self, time: f64) -> bool {
         // Moving the playhead by hand ends any shot audition.
         self.play_until = None;
         if self.preparing_transport_active() {
             self.preparing_command(Some(time), None);
-            return;
+            return false;
         }
         let Some(transport) = &self.transport else {
             if let Some(target) = self
@@ -3227,7 +3269,7 @@ impl EditorWindow {
             {
                 self.preparing_command(Some(target), None);
             }
-            return;
+            return false;
         };
         let time = time.clamp(0.0, self.total_duration());
         // `Math.round(newTime * FPS)` -- "round to nearest frame to prevent
@@ -3259,7 +3301,7 @@ impl EditorWindow {
         self.playhead = time;
         self.view.playhead = time;
         self.view.playing = self.playing;
-        cx.notify();
+        true
     }
 
     /// The prev button (`Player.tsx:370-381`): stop, playhead to 0, and the
@@ -3892,7 +3934,7 @@ impl EditorWindow {
         )
     }
 
-    fn timeline_mouse_down(
+    pub(crate) fn timeline_mouse_down(
         &mut self,
         event: &MouseDownEvent,
         ruler: bool,
@@ -3915,7 +3957,7 @@ impl EditorWindow {
         cx.notify();
     }
 
-    fn timeline_mouse_move(
+    pub(crate) fn timeline_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
         window: &mut Window,
@@ -3936,7 +3978,7 @@ impl EditorWindow {
         // supersedes is simply overwritten, and the preview renderer cancels
         // in-flight work when it sees a newer instruction
         // (`editor_instance.rs:563-575`).
-        self.seek_to_time(time, cx);
+        self.scrub_to_time(time, cx);
     }
 
     /// The **timeline's own** mouseup, the one the source registers on
@@ -3964,7 +4006,7 @@ impl EditorWindow {
     /// dispose())`) and to end a ruler scrub. It runs after the timeline's own
     /// handler -- gpui bubbles child to parent -- so a press released *outside*
     /// the timeline is dropped rather than seeking.
-    fn window_mouse_up(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn window_mouse_up(&mut self, cx: &mut Context<Self>) {
         if self.scrub.take().is_some() {
             cx.notify();
         }
