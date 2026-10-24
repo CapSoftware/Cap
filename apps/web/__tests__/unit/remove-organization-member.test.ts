@@ -28,16 +28,30 @@ const tables = {
 	},
 };
 
+const lockRows = vi.fn();
+
+type SelectQuery = Promise<unknown[]> & {
+	from(): SelectQuery;
+	innerJoin(): SelectQuery;
+	where(): SelectQuery;
+	limit(): SelectQuery;
+	for(mode: string): SelectQuery;
+};
+
 function selectQuery() {
-	const query = {
-		from: (table: unknown) =>
-			table === tables.spaces
-				? { where: async () => mocks.selectResults.shift() ?? [] }
-				: query,
-		innerJoin: () => query,
-		where: () => query,
-		limit: async () => mocks.selectResults.shift() ?? [],
-	};
+	const query: SelectQuery = Object.assign(
+		Promise.resolve(mocks.selectResults.shift() ?? []),
+		{
+			from: () => query,
+			innerJoin: () => query,
+			where: () => query,
+			limit: () => query,
+			for: (mode: string) => {
+				lockRows(mode);
+				return query;
+			},
+		},
+	);
 	return query;
 }
 
@@ -72,7 +86,7 @@ vi.mock("@/actions/organization/authorization", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 async function removeSeat(
-	remainingSeat: { stripeSubscriptionId: string | null } | null,
+	remainingSeats: { stripeSubscriptionId: string | null }[],
 ) {
 	mocks.selectResults = [
 		[
@@ -85,7 +99,7 @@ async function removeSeat(
 			},
 		],
 		[],
-		remainingSeat ? [remainingSeat] : [],
+		remainingSeats,
 	];
 	const { removeOrganizationMember } = await import(
 		"@/actions/organization/remove-member"
@@ -105,15 +119,16 @@ describe("removeOrganizationMember", () => {
 	});
 
 	it("revokes Pro access when the removed seat was the user's last seat", async () => {
-		await removeSeat(null);
+		await removeSeat([]);
 
+		expect(lockRows).toHaveBeenCalledWith("update");
 		expect(userIsPro({ stripeSubscriptionStatus: null, ...mocks.user })).toBe(
 			false,
 		);
 	});
 
 	it("keeps Pro access through another organization's seat", async () => {
-		await removeSeat({ stripeSubscriptionId: "sub_other" });
+		await removeSeat([{ stripeSubscriptionId: "sub_other" }]);
 
 		expect(mocks.user.thirdPartyStripeSubscriptionId).toBe("sub_other");
 		expect(userIsPro({ stripeSubscriptionStatus: null, ...mocks.user })).toBe(
@@ -122,10 +137,19 @@ describe("removeOrganizationMember", () => {
 	});
 
 	it("keeps Pro access when another seat is sponsored by a manager", async () => {
-		await removeSeat({ stripeSubscriptionId: null });
+		await removeSeat([{ stripeSubscriptionId: null }]);
 
 		expect(userIsPro({ stripeSubscriptionStatus: null, ...mocks.user })).toBe(
 			true,
 		);
+	});
+
+	it("prefers a remaining seat the organization owner pays for", async () => {
+		await removeSeat([
+			{ stripeSubscriptionId: null },
+			{ stripeSubscriptionId: "sub_other" },
+		]);
+
+		expect(mocks.user.thirdPartyStripeSubscriptionId).toBe("sub_other");
 	});
 });
