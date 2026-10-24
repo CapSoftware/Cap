@@ -21,6 +21,13 @@ const QUOTES = PICKS.map((name) =>
 	testimonials.find((item) => item.name === name),
 ).filter((item): item is (typeof testimonials)[number] => Boolean(item));
 
+const ACCENTS = [
+	MODE_THEME.instant.accent,
+	MODE_THEME.studio.accent,
+	MODE_THEME.screenshot.accent,
+	MODE_THEME.share.accent,
+];
+
 export const Testimonials = ({ eyebrow = true }: { eyebrow?: boolean }) => (
 	<section className="px-5 py-20 lg:py-28">
 		<div className="mx-auto max-w-[1200px]">
@@ -41,42 +48,51 @@ export const Testimonials = ({ eyebrow = true }: { eyebrow?: boolean }) => (
 				</p>
 			</div>
 
-			<div className="mt-14 gap-4 sm:columns-2 lg:columns-3">
-				{QUOTES.map((quote) => (
-					<a
-						key={quote.name}
-						href={quote.url}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="mb-4 block break-inside-avoid rounded-[14px] bg-white p-6 shadow-[0_0_0_1px_rgba(17,17,17,0.05)] transition-shadow duration-200 hover:shadow-[0_0_0_1px_rgba(17,17,17,0.12),0_14px_30px_-18px_rgba(17,17,17,0.35)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]"
-					>
-						<p
-							className={`${BODY_TEXT} whitespace-pre-line text-[15.5px] leading-[1.55] text-[rgba(17,17,17,0.82)]`}
-						>
-							{quote.content}
-						</p>
-						<span className="mt-5 flex items-center gap-3">
-							<Image
-								src={quote.image}
-								alt=""
-								width={36}
-								height={36}
-								className="size-9 rounded-full object-cover"
-							/>
-							<span className="min-w-0">
-								<span className="block truncate text-[14px] font-medium text-[#111111]">
-									{quote.name}
+			<ul className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				{QUOTES.map((quote, i) => {
+					const accent = ACCENTS[i % ACCENTS.length];
+					return (
+						<li key={quote.name} className="flex">
+							<a
+								href={quote.url}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex w-full flex-col rounded-[16px] bg-white p-6 shadow-[0_0_0_1px_rgba(17,17,17,0.05)] transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[0_0_0_1px_rgba(17,17,17,0.1),0_18px_36px_-20px_rgba(17,17,17,0.35)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]"
+							>
+								<p
+									className={`${BODY_TEXT} whitespace-pre-line text-[15.5px] leading-[1.55] text-[rgba(17,17,17,0.82)]`}
+								>
+									{quote.content}
+								</p>
+								<span className="mt-auto flex items-center gap-3 pt-6">
+									<span
+										className="inline-flex shrink-0 rounded-full p-[2px]"
+										style={{ background: accent }}
+									>
+										<Image
+											src={quote.image}
+											alt=""
+											width={36}
+											height={36}
+											className="size-9 rounded-full object-cover ring-2 ring-white"
+										/>
+									</span>
+									<span className="min-w-0">
+										<span className="block truncate text-[14px] font-medium text-[#111111]">
+											{quote.name}
+										</span>
+										<span className="block truncate text-[13px] text-[rgba(17,17,17,0.5)]">
+											{quote.handle}
+										</span>
+									</span>
 								</span>
-								<span className="block truncate text-[13px] text-[rgba(17,17,17,0.5)]">
-									{quote.handle}
-								</span>
-							</span>
-						</span>
-					</a>
-				))}
-			</div>
+							</a>
+						</li>
+					);
+				})}
+			</ul>
 
-			<div className="mt-6 flex justify-center">
+			<div className="mt-10 flex justify-center">
 				<Link href="/testimonials" className={classNames(BTN_SECONDARY)}>
 					Read more testimonials
 				</Link>
