@@ -1366,6 +1366,10 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    /// Audio scrub: a slice request is in flight, and the newest position
+    /// asked for meanwhile (played once it lands).
+    scrub_audio_busy: bool,
+    scrub_audio_next: Option<f64>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2069,6 +2073,8 @@ impl EditorWindow {
             total: 0.0,
             transport: None,
             scrub: None,
+            scrub_audio_busy: false,
+            scrub_audio_next: None,
             stats: None,
             play_mark: None,
             timeline: TimelineModel::default(),
@@ -3909,6 +3915,7 @@ impl EditorWindow {
             // `applyScrub()` runs immediately on mousedown.
             self.scrub = Some(Scrub::Ruler);
             self.seek_to_time(time, cx);
+            self.scrub_audio_at(time, cx);
         } else {
             self.scrub = Some(Scrub::Press { time });
         }
@@ -3937,6 +3944,44 @@ impl EditorWindow {
         // in-flight work when it sees a newer instruction
         // (`editor_instance.rs:563-575`).
         self.seek_to_time(time, cx);
+        self.scrub_audio_at(time, cx);
+    }
+
+    /// Audio scrub: while the ruler is dragged with playback stopped, play a
+    /// short slice of the mix under the playhead. One request at a time; the
+    /// newest position waits and plays next, spaced by about a slice so they
+    /// run back to back.
+    fn scrub_audio_at(&mut self, time: f64, cx: &mut Context<Self>) {
+        if self.playing {
+            return;
+        }
+        if self.scrub_audio_busy {
+            self.scrub_audio_next = Some(time);
+            return;
+        }
+        let Some(instance) = self.instance.clone() else {
+            return;
+        };
+        self.scrub_audio_busy = true;
+        let slice = gpui_tokio::Tokio::spawn(cx, async move {
+            let samples = instance
+                .audio_snippet(time, crate::scrub_audio::SNIPPET_SECS)
+                .await;
+            crate::scrub_audio::play(samples);
+        });
+        cx.spawn(async move |this, cx| {
+            let _ = slice.await;
+            cx.background_executor()
+                .timer(Duration::from_millis(60))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.scrub_audio_busy = false;
+                if let Some(next) = this.scrub_audio_next.take() {
+                    this.scrub_audio_at(next, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// The **timeline's own** mouseup, the one the source registers on
