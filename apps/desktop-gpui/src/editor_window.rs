@@ -2276,8 +2276,7 @@ impl EditorWindow {
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
     fn rebuild_timeline(&mut self) {
-        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
-        self.text_menu = None;
+        self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
@@ -2293,6 +2292,13 @@ impl EditorWindow {
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
+    }
+
+    /// The transient popovers a project change closes, shared by the full
+    /// rebuild and the frame-only path so the two cannot drift.
+    fn dismiss_transient_menus(&mut self) {
+        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
+        self.text_menu = None;
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -2419,12 +2425,36 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_changed_inner(true, window, cx);
+    }
+
+    /// [`Self::project_changed`] for edits that only write `background.frame`.
+    ///
+    /// [`crate::editor_timeline::TimelineModel::build`] never reads the frame
+    /// or the background (the style track draws a segment's name and enabled
+    /// flag only), so a frame edit can skip the rebuild. The frame text fields
+    /// call this once per keystroke; any edit that touches a field the timeline
+    /// model reads must go through [`Self::project_changed`] instead.
+    fn project_changed_without_timeline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_changed_inner(false, window, cx);
+    }
+
+    fn project_changed_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.project_ready() {
             return;
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
-        self.rebuild_timeline();
+        if rebuild_timeline {
+            self.rebuild_timeline();
+        } else {
+            self.dismiss_transient_menus();
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();
