@@ -16,6 +16,7 @@ import {
 	canRemoveOrganizationMember,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { releaseProSeatSubscription } from "@/lib/pro-seat-subscription";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 export async function removeOrganizationMember(
@@ -30,46 +31,48 @@ export async function removeOrganizationMember(
 		organizationId,
 	);
 
-	const [member] = await db()
-		.select({
-			id: organizationMembers.id,
-			userId: organizationMembers.userId,
-			role: organizationMembers.role,
-			email: users.email,
-		})
-		.from(organizationMembers)
-		.innerJoin(users, eq(organizationMembers.userId, users.id))
-		.where(
-			and(
-				eq(organizationMembers.id, memberId),
-				eq(organizationMembers.organizationId, organizationId),
-			),
-		)
-		.limit(1);
-
-	if (!member) {
-		throw new Error("Member not found");
-	}
-
-	const targetRole = getEffectiveOrganizationRole({
-		userId: member.userId,
-		ownerId: actor.ownerId,
-		memberRole: member.role,
-	});
-
-	if (
-		!canRemoveOrganizationMember({
-			actorRole: actor.role,
-			actorUserId: user.id,
-			targetUserId: member.userId,
-			ownerId: actor.ownerId,
-			targetRole,
-		})
-	) {
-		throw new Error("You do not have permission to remove this member");
-	}
-
 	await db().transaction(async (tx) => {
+		const [member] = await tx
+			.select({
+				id: organizationMembers.id,
+				userId: organizationMembers.userId,
+				role: organizationMembers.role,
+				hasProSeat: organizationMembers.hasProSeat,
+				email: users.email,
+			})
+			.from(organizationMembers)
+			.innerJoin(users, eq(organizationMembers.userId, users.id))
+			.where(
+				and(
+					eq(organizationMembers.id, memberId),
+					eq(organizationMembers.organizationId, organizationId),
+				),
+			)
+			.limit(1)
+			.for("update");
+
+		if (!member) {
+			throw new Error("Member not found");
+		}
+
+		const targetRole = getEffectiveOrganizationRole({
+			userId: member.userId,
+			ownerId: actor.ownerId,
+			memberRole: member.role,
+		});
+
+		if (
+			!canRemoveOrganizationMember({
+				actorRole: actor.role,
+				actorUserId: user.id,
+				targetUserId: member.userId,
+				ownerId: actor.ownerId,
+				targetRole,
+			})
+		) {
+			throw new Error("You do not have permission to remove this member");
+		}
+
 		const organizationSpaces = await tx
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -106,6 +109,10 @@ export async function removeOrganizationMember(
 			);
 
 		if (result.affectedRows === 0) throw new Error("Member not found");
+
+		if (member.hasProSeat) {
+			await releaseProSeatSubscription(tx, member.userId);
+		}
 	});
 
 	revalidatePath("/dashboard/settings/organization");
