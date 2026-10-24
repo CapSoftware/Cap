@@ -151,30 +151,34 @@ export async function reassignLoomImport({
 		};
 
 	const transcriptKey = getEditTranscriptObjectKey(fromUserId, videoId);
-	let copiedObjects = 0;
-	for (let index = 0; index < source.objects.length; index += 4) {
-		await Promise.all(
-			source.objects.slice(index, index + 4).map(async (object) => {
-				const destinationKey = object.key.replace(
-					source.prefix,
-					destination.prefix,
-				);
-				if (object.key === transcriptKey) {
-					const stored = Option.getOrNull(
-						await runPromise(source.bucket.getObject(object.key)),
+	const written: string[] = [];
+	try {
+		for (let index = 0; index < source.objects.length; index += 4) {
+			await Promise.all(
+				source.objects.slice(index, index + 4).map(async (object) => {
+					const destinationKey = object.key.replace(
+						source.prefix,
+						destination.prefix,
 					);
-					const transcript =
-						stored && decryptEditTranscriptObject(stored, fromUserId, videoId);
-					if (!transcript)
-						throw new Error(`Could not read the transcript for ${videoId}`);
-					await runPromise(
-						source.bucket.putObject(
-							destinationKey,
-							encryptEditTranscriptObject(transcript, toUserId, videoId),
-							{ contentType: "application/octet-stream" },
-						),
-					);
-				} else {
+					written.push(destinationKey);
+					if (object.key === transcriptKey) {
+						const stored = Option.getOrNull(
+							await runPromise(source.bucket.getObject(object.key)),
+						);
+						const transcript =
+							stored &&
+							decryptEditTranscriptObject(stored, fromUserId, videoId);
+						if (!transcript)
+							throw new Error(`Could not read the transcript for ${videoId}`);
+						await runPromise(
+							source.bucket.putObject(
+								destinationKey,
+								encryptEditTranscriptObject(transcript, toUserId, videoId),
+								{ contentType: "application/octet-stream" },
+							),
+						);
+						return;
+					}
 					await runPromise(
 						source.bucket.copyObjectForRecording(
 							`${source.bucket.bucketName}/${object.key}`,
@@ -186,11 +190,16 @@ export async function reassignLoomImport({
 					);
 					if (head.ContentLength !== object.size)
 						throw new Error(`Copied object size mismatch for ${object.key}`);
-				}
-				copiedObjects++;
-			}),
-		);
+				}),
+			);
+		}
+	} catch (error) {
+		await runPromise(
+			source.bucket.deleteObjects(written.map((key) => ({ Key: key }))),
+		).catch(() => undefined);
+		throw error;
 	}
+	const copiedObjects = written.length;
 
 	const updated = await db().transaction(async (tx) => {
 		const result = await tx

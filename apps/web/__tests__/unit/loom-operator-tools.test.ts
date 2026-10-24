@@ -358,7 +358,12 @@ describe("reassignLoomImport", () => {
 		mocks.headSize = 1;
 		await expect(reassignLoomImport(input)).rejects.toThrow("size mismatch");
 		expect(mocks.updates).toEqual([]);
-		expect(mocks.removed).toEqual([]);
+		expect(mocks.removed).toEqual([
+			[
+				`${ids.to}/${ids.video}/result.mp4`,
+				`${ids.to}/${ids.video}/screenshot/screen-capture.jpg`,
+			],
+		]);
 	});
 
 	it("keeps the original files when the owner changed during the move", async () => {
