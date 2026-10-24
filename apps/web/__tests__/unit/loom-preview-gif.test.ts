@@ -36,14 +36,14 @@ import {
 } from "@/lib/loom-preview-gif";
 
 const now = new Date("2026-10-24T12:00:00Z");
-const video = {
+const video: Record<string, unknown> = {
 	id: "videoaaaaaaaaaa",
 	ownerId: "owneraaaaaaaaaa",
 	duration: Option.some(42),
-} as never;
+};
 const run = (overrides: Record<string, unknown> = {}) =>
 	startLoomPreviewGif({
-		video,
+		video: video as never,
 		getVideoUrl: async (key, expiresIn) =>
 			`https://storage.example.com/${key}?get=${expiresIn}`,
 		getPreviewPutUrl: async (key, expiresIn) =>
