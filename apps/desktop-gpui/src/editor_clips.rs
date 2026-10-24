@@ -742,6 +742,7 @@ impl EditorWindow {
     pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
+            .h_full()
             .flex_none()
             .flex()
             .min_h_0()
@@ -751,6 +752,7 @@ impl EditorWindow {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .h_full()
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
