@@ -2849,6 +2849,9 @@ async function downloadUrlToFile(
 	throw lastError ?? new Error("Download failed");
 }
 
+// Storage that struggles with this many small concurrent reads can lower it through the env.
+const SEGMENT_DOWNLOAD_CONCURRENCY = 64;
+
 export function segmentDownloadConcurrencyFromEnv(
 	env: Record<string, string | undefined> = process.env,
 ): number {
@@ -2856,7 +2859,9 @@ export function segmentDownloadConcurrencyFromEnv(
 		env.MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY ?? "",
 		10,
 	);
-	return Number.isFinite(value) && value > 0 ? Math.min(value, 64) : 10;
+	return Number.isFinite(value) && value > 0
+		? Math.min(value, SEGMENT_DOWNLOAD_CONCURRENCY)
+		: SEGMENT_DOWNLOAD_CONCURRENCY;
 }
 
 interface SegmentTrackDownload {

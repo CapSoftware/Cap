@@ -42,7 +42,7 @@ afterAll(async () => {
 
 describe("segment download pool", () => {
 	test("reads its concurrency from the environment with a safe default and cap", () => {
-		expect(segmentDownloadConcurrencyFromEnv({})).toBe(10);
+		expect(segmentDownloadConcurrencyFromEnv({})).toBe(64);
 		expect(
 			segmentDownloadConcurrencyFromEnv({
 				MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY: "48",
@@ -57,7 +57,7 @@ describe("segment download pool", () => {
 			segmentDownloadConcurrencyFromEnv({
 				MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY: "nope",
 			}),
-		).toBe(10);
+		).toBe(64);
 	});
 
 	test("downloads video and audio segments from one bounded pool", async () => {
