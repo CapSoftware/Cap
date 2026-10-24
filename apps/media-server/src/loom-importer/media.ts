@@ -63,6 +63,7 @@ interface ProbeStream {
 	avg_frame_rate?: string;
 	r_frame_rate?: string;
 	nb_read_packets?: string;
+	duration?: string;
 	channels?: number;
 	sample_rate?: string;
 }
@@ -121,16 +122,16 @@ export function resolveFps(
 	stream: ProbeStream,
 	duration: number,
 ): number | null {
-	const average = parseRate(stream.avg_frame_rate);
-	if (average > 0 && average <= 240) return Math.round(average * 100) / 100;
+	const round = (value: number) => Math.round(value * 100) / 100;
 	const packets = Number(stream.nb_read_packets);
 	if (packets > 0 && duration > 0) {
 		const measured = packets / duration;
-		if (measured > 0 && measured <= 240)
-			return Math.round(measured * 100) / 100;
+		if (measured > 0 && measured <= 240) return round(measured);
 	}
-	const nominal = parseRate(stream.r_frame_rate);
-	if (nominal > 0 && nominal <= 240) return Math.round(nominal * 100) / 100;
+	for (const rate of [stream.avg_frame_rate, stream.r_frame_rate]) {
+		const value = parseRate(rate);
+		if (value > 0 && value <= 240) return round(value);
+	}
 	return null;
 }
 
@@ -146,7 +147,7 @@ export async function probeOutput(
 				"error",
 				"-count_packets",
 				"-show_entries",
-				"format=duration,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,nb_read_packets,channels,sample_rate",
+				"format=duration,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,nb_read_packets,duration,channels,sample_rate",
 				"-of",
 				"json",
 				path,
@@ -163,7 +164,7 @@ export async function probeOutput(
 		throw new Error("Imported Loom video has no readable video stream");
 	if (!Number.isFinite(duration) || duration <= 0)
 		throw new Error("Imported Loom video has no readable duration");
-	const fps = resolveFps(video, duration);
+	const fps = resolveFps(video, Number(video.duration) || duration);
 	if (!fps) throw new Error("Imported Loom video has no readable frame rate");
 	const fileSize = (await stat(path)).size;
 	return {

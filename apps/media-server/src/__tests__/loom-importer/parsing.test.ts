@@ -171,7 +171,7 @@ describe("media decisions", () => {
 		expect(chooseContainer(codecs)).toBe(expected);
 	});
 
-	test("uses the measured packet rate when the average rate is missing", () => {
+	test("prefers the measured packet rate over container rates", () => {
 		expect(
 			resolveFps(
 				{
@@ -182,11 +182,24 @@ describe("media decisions", () => {
 				20,
 			),
 		).toBe(30);
+		expect(
+			resolveFps(
+				{
+					avg_frame_rate: "120/1",
+					r_frame_rate: "120/1",
+					nb_read_packets: "7749",
+				},
+				258.304,
+			),
+		).toBe(30);
 	});
 
-	test("rejects implausible nominal rates", () => {
+	test("falls back to plausible container rates", () => {
 		expect(resolveFps({ r_frame_rate: "1000/1" }, 0)).toBeNull();
 		expect(resolveFps({ avg_frame_rate: "30000/1001" }, 10)).toBe(29.97);
+		expect(resolveFps({ avg_frame_rate: "0/0", r_frame_rate: "25/1" }, 0)).toBe(
+			25,
+		);
 	});
 
 	test("maps only the first video and audio stream", () => {
