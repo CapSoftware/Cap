@@ -2847,40 +2847,63 @@ async function downloadUrlToFile(
 	throw lastError ?? new Error("Download failed");
 }
 
-async function downloadSegmentsBatchTracked(
-	urls: string[],
-	dir: string,
+export function segmentDownloadConcurrencyFromEnv(
+	env: Record<string, string | undefined> = process.env,
+): number {
+	const value = Number.parseInt(
+		env.MEDIA_SERVER_SEGMENT_DOWNLOAD_CONCURRENCY ?? "",
+		10,
+	);
+	return Number.isFinite(value) && value > 0 ? Math.min(value, 64) : 10;
+}
+
+interface SegmentTrackDownload {
+	urls: string[];
+	dir: string;
+}
+
+// Recordings are thousands of small segments, so latency per request dominates; video and audio
+// share one pool so neither track waits for the other to finish.
+export async function downloadSegmentTracks(
+	tracks: SegmentTrackDownload[],
 	jobId: string,
 	progressBase: number,
 	progressRange: number,
 	abortSignal?: AbortSignal,
 	sources?: Map<string, MuxSourceObject>,
-): Promise<string[]> {
+): Promise<string[][]> {
 	const { join } = await import("node:path");
 	let completed = 0;
 	let fatalError: Error | undefined;
-	const total = urls.length;
-	const indexWidth = Math.max(3, String(total).length);
-	const outputPaths = new Array<string>(total);
-	const pending = [...urls.entries()];
+	const outputPaths = tracks.map(
+		(track) => new Array<string>(track.urls.length),
+	);
+	const pending = tracks.flatMap((track, trackIndex) => {
+		const indexWidth = Math.max(3, String(track.urls.length).length);
+		return track.urls.map((url, i) => ({
+			trackIndex,
+			i,
+			url,
+			outputPath: join(
+				track.dir,
+				`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
+			),
+		}));
+	});
+	const total = pending.length;
 	let pendingIndex = 0;
 	const batchAbortController = new AbortController();
 	const batchSignal = abortSignal
 		? AbortSignal.any([abortSignal, batchAbortController.signal])
 		: batchAbortController.signal;
-	const CONCURRENCY = 10;
 
 	async function worker() {
 		while (pendingIndex < pending.length && !fatalError) {
 			const entry = pending[pendingIndex++];
 			if (!entry) break;
-			const [i, url] = entry;
+			const { trackIndex, i, url, outputPath } = entry;
 			try {
-				const outputPath = join(
-					dir,
-					`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
-				);
-				outputPaths[i] = outputPath;
+				outputPaths[trackIndex][i] = outputPath;
 				await downloadUrlToFile(
 					url,
 					outputPath,
@@ -2893,7 +2916,7 @@ async function downloadSegmentsBatchTracked(
 					pendingIndex = pending.length;
 					batchAbortController.abort();
 					console.error(
-						`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
+						`[mux-segments] Failed to download segment ${i + 1}/${tracks[trackIndex].urls.length}:`,
 						err instanceof Error ? err.message : err,
 					);
 				}
@@ -2911,7 +2934,10 @@ async function downloadSegmentsBatchTracked(
 	}
 
 	await Promise.all(
-		Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
+		Array.from(
+			{ length: Math.min(segmentDownloadConcurrencyFromEnv(), total) },
+			() => worker(),
+		),
 	);
 	if (fatalError) throw fatalError;
 	return outputPaths;
@@ -3000,49 +3026,62 @@ async function muxSegmentsAsync(
 		await mkdir(videoDir, { recursive: true });
 		await mkdir(audioDir, { recursive: true });
 
-		await downloadUrlToFile(
-			videoInitUrl,
-			join(videoDir, "init.mp4"),
-			abortController.signal,
-			sources?.get(videoInitUrl),
-		);
-		updateJob(jobId, { phase: "downloading", progress: 5 });
-		sendCurrentJobWebhook(jobId);
-
-		const videoSegmentFiles = await downloadSegmentsBatchTracked(
-			videoSegmentUrls,
-			videoDir,
-			jobId,
-			5,
-			45,
-			abortController.signal,
-			sources,
-		);
-
 		const audioInput =
 			audioInitUrl !== null &&
 			audioSegmentUrls !== null &&
 			audioSegmentUrls.length > 0
 				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
 				: null;
-		let audioSegmentFiles: string[] = [];
-		if (audioInput) {
-			await downloadUrlToFile(
-				audioInput.initUrl,
-				join(audioDir, "init.mp4"),
-				abortController.signal,
-				sources?.get(audioInput.initUrl),
-			);
-			audioSegmentFiles = await downloadSegmentsBatchTracked(
-				audioInput.segmentUrls,
-				audioDir,
+		// Both init segments download together; a failure cancels the other and waits for it, so nothing
+		// keeps writing into the work directory after the job has failed.
+		const initAbort = new AbortController();
+		const initSignal = AbortSignal.any([
+			abortController.signal,
+			initAbort.signal,
+		]);
+		const initDownloads = [
+			downloadUrlToFile(
+				videoInitUrl,
+				join(videoDir, "init.mp4"),
+				initSignal,
+				sources?.get(videoInitUrl),
+			),
+			...(audioInput
+				? [
+						downloadUrlToFile(
+							audioInput.initUrl,
+							join(audioDir, "init.mp4"),
+							initSignal,
+							sources?.get(audioInput.initUrl),
+						),
+					]
+				: []),
+		];
+		let initFailure: { error: unknown } | undefined;
+		for (const download of initDownloads)
+			download.catch((error: unknown) => {
+				initFailure ??= { error };
+				initAbort.abort();
+			});
+		await Promise.allSettled(initDownloads);
+		if (initFailure) throw initFailure.error;
+		updateJob(jobId, { phase: "downloading", progress: 5 });
+		sendCurrentJobWebhook(jobId);
+
+		const [videoSegmentFiles, audioSegmentFiles = []] =
+			await downloadSegmentTracks(
+				[
+					{ urls: videoSegmentUrls, dir: videoDir },
+					...(audioInput
+						? [{ urls: audioInput.segmentUrls, dir: audioDir }]
+						: []),
+				],
 				jobId,
-				50,
-				10,
+				5,
+				55,
 				abortController.signal,
 				sources,
 			);
-		}
 
 		updateJob(jobId, {
 			phase: "processing",
