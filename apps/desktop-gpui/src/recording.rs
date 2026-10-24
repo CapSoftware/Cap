@@ -1411,7 +1411,7 @@ pub(crate) fn ensure_finalization_storage(project_path: &std::path::Path) -> any
 }
 
 pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Result<PathBuf> {
-    use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner};
+    use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner, UploadMeta};
 
     let mut meta = RecordingMeta::load_for_project(project_path)
         .map_err(|error| anyhow!("loading recording metadata: {error}"))?;
@@ -1450,6 +1450,9 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
                 .map(|decoder| decoder.rate())
         })
         .transpose()?;
+    if matches!(meta.upload, Some(UploadMeta::SegmentUpload { .. })) {
+        seal_recovered_instant_tracks(project_path);
+    }
     meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
         fps: fps.round() as u32,
         sample_rate,
@@ -1457,6 +1460,46 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
     save_instant_metadata(&meta)?;
     write_bundle_thumbnail(project_path, &output);
     Ok(project_path.to_path_buf())
+}
+
+/// Seals the tracks of a recovered Instant recording so the upload queue can
+/// send what the crash left: the crash leaves each manifest unfinished, and the
+/// upload resume only accepts finished ones. Recovery stands if sealing fails;
+/// the recording is saved locally either way, and its upload then fails as it
+/// did before sealing existed.
+///
+/// Recovery can rescue a final fragment the manifest never listed, so the
+/// recovered `output.mp4` may hold more than the sealed tracks. Whenever
+/// sealing sets any media aside, or fails, the local recording is kept after
+/// its upload verifies, so it is never the only complete copy that gets
+/// deleted.
+pub(crate) fn seal_recovered_instant_tracks(project_path: &std::path::Path) {
+    use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
+    let mut omitted = false;
+    for (track, media_type) in [
+        ("display", SegmentMediaType::Video),
+        ("audio", SegmentMediaType::Audio),
+    ] {
+        let directory = project_path.join("content").join(track);
+        if !directory.join("manifest.json").exists() {
+            continue;
+        }
+        match cap_recording::upload_resume::seal_interrupted_track(&directory, media_type) {
+            Ok(segments) => tracing::info!(track, segments, "Sealed a recovered Instant track"),
+            Err(error) => {
+                omitted = true;
+                tracing::warn!(track, %error, "Could not seal a recovered Instant track")
+            }
+        }
+        omitted |= std::fs::read_dir(&directory).map_or(true, |entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".unsealed"))
+        });
+    }
+    if omitted && let Err(error) = crate::upload::queue::record_preserve_local(project_path) {
+        tracing::warn!(%error, "Could not keep a recovered recording after its upload");
+    }
 }
 
 /// The first segment's display track, which is what
@@ -2809,6 +2852,117 @@ mod tests {
     use std::sync::{Arc, Barrier};
     #[cfg(target_os = "linux")]
     use std::time::Duration;
+
+    fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    /// A real Instant recording copied mid-capture, which is what a crash
+    /// leaves, then recovered: Recover saves it locally and seals its track,
+    /// so the upload resume accepts every segment the crash saved.
+    #[test]
+    fn recovering_a_crashed_instant_recording_seals_it_for_upload() {
+        use cap_enc_ffmpeg::segmented_stream::{
+            SegmentMediaType, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+        };
+        use cap_project::{
+            InstantRecordingMeta, RecordingMeta, RecordingMetaInner, S3UploadMeta, UploadMeta,
+            VideoUploadInfo,
+        };
+        ffmpeg::init().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        let display = live.path().join("display");
+        let info = cap_media_info::VideoInfo {
+            pixel_format: cap_media_info::Pixel::NV12,
+            width: 64,
+            height: 64,
+            time_base: ffmpeg::Rational(1, 1_000_000),
+            frame_rate: ffmpeg::Rational(30, 1),
+        };
+        let mut encoder = SegmentedVideoEncoder::init(
+            display.clone(),
+            info,
+            SegmentedVideoEncoderConfig {
+                segment_duration: std::time::Duration::from_secs(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..300u64 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 64, 64);
+            for plane in 0..frame.planes() {
+                frame.data_mut(plane).fill((index % 200) as u8);
+            }
+            encoder
+                .queue_frame(
+                    frame,
+                    std::time::Duration::from_nanos(index * 1_000_000_000 / 30),
+                )
+                .unwrap();
+        }
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("crashed.cap");
+        copy_tree(&display, &project.join("content/display"));
+        encoder.finish().unwrap();
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(project.join("content/display/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["is_complete"], Value::Bool(false));
+        let finished = manifest["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|segment| segment["is_complete"] == Value::Bool(true))
+            .count();
+        assert!(finished >= 1, "the crash saved no finished segment");
+        assert!(
+            cap_recording::upload_resume::collect_segment_events(&project, false).is_err(),
+            "a crashed recording must not be resumable before Recover"
+        );
+        let video = VideoUploadInfo {
+            id: "crashedvideo01".into(),
+            link: "https://cap.test/s/crashedvideo01".into(),
+            config: S3UploadMeta {
+                id: "crashedvideo01".into(),
+            },
+        };
+        RecordingMeta {
+            platform: None,
+            project_path: project.clone(),
+            pretty_name: "Crashed".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Instant(InstantRecordingMeta::InProgress {
+                recording: true,
+            }),
+            upload: Some(UploadMeta::SegmentUpload {
+                video_id: video.id.clone(),
+                pre_created_video: video,
+                recording_dir: project.clone(),
+            }),
+        }
+        .save_for_project()
+        .unwrap();
+
+        recover_instant_recording(&project).unwrap();
+        assert!(project.join("content/output.mp4").is_file());
+        let events = cap_recording::upload_resume::collect_segment_events(&project, false).unwrap();
+        let segments = events
+            .iter()
+            .filter(|event| !event.is_init && event.media_type == SegmentMediaType::Video)
+            .count();
+        assert_eq!(segments, finished);
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
