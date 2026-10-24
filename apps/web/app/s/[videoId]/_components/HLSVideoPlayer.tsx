@@ -382,12 +382,13 @@ export function HLSVideoPlayer({
 				...(isLiveSegments
 					? {
 							liveSyncDurationCount: 3,
+							// Safari's ManagedMediaSource freezes after a seek in segment
+							// playlists, so they use MediaSource wherever that exists.
+							preferManagedMediaSource: false,
 							// Early playback watches from the start while the playlist
-							// grows, so it must never jump ahead to the live edge. Safari's
-							// ManagedMediaSource freezes after a seek in these playlists,
-							// so it uses MediaSource wherever that exists.
+							// grows, so it must never jump ahead to the live edge.
 							...(isEarlyPlayback
-								? { startPosition: 0, preferManagedMediaSource: false }
+								? { startPosition: 0 }
 								: { liveMaxLatencyDurationCount: 6 }),
 							manifestLoadingRetryDelay: 2000,
 							manifestLoadingMaxRetry: 30,
