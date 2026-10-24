@@ -127,7 +127,7 @@ it.each([
 			duration,
 		);
 		vi.spyOn(HTMLMediaElement.prototype, "src", "set").mockImplementation(
-			function () {
+			function (this: HTMLMediaElement) {
 				queueMicrotask(() => this.dispatchEvent(new Event("loadedmetadata")));
 			},
 		);
@@ -135,7 +135,7 @@ it.each([
 			HTMLMediaElement.prototype,
 			"currentTime",
 			"set",
-		).mockImplementation(function () {
+		).mockImplementation(function (this: HTMLMediaElement) {
 			queueMicrotask(() => this.dispatchEvent(new Event("seeked")));
 		});
 		vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
