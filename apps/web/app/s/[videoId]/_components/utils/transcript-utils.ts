@@ -124,13 +124,16 @@ export const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
-		if (!line?.trim()) continue;
+		if (!line?.trim()) {
+			currentEntry = {};
+			continue;
+		}
 
 		const trimmedLine = line.trim();
 
 		if (trimmedLine === "WEBVTT") continue;
 
-		if (/^\d+$/.test(trimmedLine)) {
+		if (!currentEntry.timestamp && /^\d+$/.test(trimmedLine)) {
 			currentId = parseInt(trimmedLine, 10);
 			continue;
 		}

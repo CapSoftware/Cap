@@ -12,7 +12,13 @@
 //! file the shipping app uses, one key at a time, through
 //! [`crate::store::set_store_setting`].
 
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
@@ -370,6 +376,15 @@ struct RecordingRow {
     thumbnail_stale: bool,
 }
 
+impl RecordingRow {
+    fn pending_thumbnail(&self) -> Option<&Path> {
+        self.item
+            .thumbnail
+            .as_deref()
+            .filter(|_| self.thumbnail_stale)
+    }
+}
+
 /// Everything the page owns. The Solid route keeps this in a `createQuery` plus
 /// three signals; the lifetimes are the same, they just live on the window here.
 struct Recordings {
@@ -384,9 +399,12 @@ struct Recordings {
     search: String,
     /// `visibleCount`, reset to `PAGE_SIZE` by a tab or search change.
     visible_count: usize,
-    /// The scan + thumbnail decode task. Dropping it cancels, so a refresh that
-    /// arrives mid-scan replaces the old one rather than racing it.
+    /// The scan task. Dropping it cancels, so a refresh that arrives mid-scan
+    /// replaces the old one rather than racing it.
     scan: Option<gpui::Task<()>>,
+    /// The thumbnail decode for the rows on screen, replaced whenever more of
+    /// them come into view.
+    decode: Option<gpui::Task<()>>,
     /// The 2s poll, armed only while something in the list is still being
     /// written (`refetchInterval`).
     tick: Option<gpui::Task<()>>,
@@ -401,6 +419,7 @@ impl Recordings {
             search: String::new(),
             visible_count: RECORDINGS_PAGE_SIZE,
             scan: None,
+            decode: None,
             tick: None,
         }
     }
@@ -410,14 +429,26 @@ impl Recordings {
         self.search.trim()
     }
 
-    /// `filteredRecordings()`: the tab, then the case-insensitive substring.
-    fn filtered(&self) -> Vec<&RecordingRow> {
+    /// `visibleRecordings()` over `filteredRecordings()`: the tab, then the
+    /// case-insensitive substring.
+    fn visible_rows(&self) -> VisibleRows {
         let query = self.trimmed_search().to_lowercase();
-        self.items
-            .iter()
-            .flatten()
-            .filter(|row| matches_recording_filters(&row.item, self.tab, &query))
-            .collect()
+        visible_rows(
+            self.items
+                .iter()
+                .flatten()
+                .map(|row| matches_recording_filters(&row.item, self.tab, &query)),
+            !query.is_empty(),
+            self.visible_count,
+        )
+    }
+
+    fn pending_thumbnails(&self) -> Vec<(usize, PathBuf)> {
+        pending_thumbnail_decodes(
+            self.items.as_deref().unwrap_or_default(),
+            &self.visible_rows().indices,
+            RecordingRow::pending_thumbnail,
+        )
     }
 }
 
@@ -436,12 +467,22 @@ struct ScreenshotRow {
     thumbnail: Option<Arc<RenderImage>>,
 }
 
+impl ScreenshotRow {
+    fn pending_thumbnail(&self) -> Option<&Path> {
+        self.item
+            .thumbnail
+            .as_deref()
+            .filter(|_| self.thumbnail.is_none())
+    }
+}
+
 struct Screenshots {
     items: Option<Vec<ScreenshotRow>>,
     search_input: Entity<ui::TextInputState>,
     search: String,
     visible_count: usize,
     scan: Option<gpui::Task<()>>,
+    decode: Option<gpui::Task<()>>,
 }
 
 impl Screenshots {
@@ -452,6 +493,7 @@ impl Screenshots {
             search: String::new(),
             visible_count: RECORDINGS_PAGE_SIZE,
             scan: None,
+            decode: None,
         }
     }
 
@@ -459,14 +501,62 @@ impl Screenshots {
         self.search.trim()
     }
 
-    fn filtered(&self) -> Vec<&ScreenshotRow> {
+    fn visible_rows(&self) -> VisibleRows {
         let query = self.trimmed_search().to_lowercase();
-        self.items
-            .iter()
-            .flatten()
-            .filter(|row| query.is_empty() || row.item.pretty_name.to_lowercase().contains(&query))
-            .collect()
+        visible_rows(
+            self.items.iter().flatten().map(|row| {
+                query.is_empty() || row.item.pretty_name.to_lowercase().contains(&query)
+            }),
+            !query.is_empty(),
+            self.visible_count,
+        )
     }
+
+    fn pending_thumbnails(&self) -> Vec<(usize, PathBuf)> {
+        pending_thumbnail_decodes(
+            self.items.as_deref().unwrap_or_default(),
+            &self.visible_rows().indices,
+            ScreenshotRow::pending_thumbnail,
+        )
+    }
+}
+
+/// The rows a list paints, as indices into the unfiltered scan, so the list and
+/// its thumbnail decode agree on what is on screen.
+struct VisibleRows {
+    indices: Vec<usize>,
+    /// `filteredRecordings().length`, which the empty state and "Load more"
+    /// read.
+    matching: usize,
+}
+
+fn visible_rows(
+    matches: impl IntoIterator<Item = bool>,
+    has_search: bool,
+    visible_count: usize,
+) -> VisibleRows {
+    let mut indices: Vec<usize> = matches
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, matched)| matched.then_some(index))
+        .collect();
+    let matching = indices.len();
+    indices.truncate(visible_recordings_len(matching, has_search, visible_count));
+    VisibleRows { indices, matching }
+}
+
+/// The `(row, thumbnail)` decode jobs for the visible rows only. A library can
+/// hold thousands of items while the page paints twenty; rows further down are
+/// queued when "Load more", a tab, or a search brings them on screen.
+fn pending_thumbnail_decodes<R>(
+    rows: &[R],
+    visible: &[usize],
+    pending: impl Fn(&R) -> Option<&Path>,
+) -> Vec<(usize, PathBuf)> {
+    visible
+        .iter()
+        .filter_map(|&index| pending(rows.get(index)?).map(|path| (index, path.to_path_buf())))
+        .collect()
 }
 
 /// `visibleRecordings()`: an active search shows every match, unpaginated.
@@ -486,6 +576,13 @@ fn has_more_recordings(total: usize, has_search: bool, visible_count: usize) -> 
 /// `setVisibleCount(count => Math.min(count + PAGE_SIZE, filtered.length))`.
 fn load_more_count(visible_count: usize, total: usize) -> usize {
     (visible_count + RECORDINGS_PAGE_SIZE).min(total)
+}
+
+fn search_may_have_changed(event: &ui::TextInputEvent) -> bool {
+    matches!(
+        event,
+        ui::TextInputEvent::Changed | ui::TextInputEvent::Cancelled
+    )
 }
 
 /// `emptyMessage()`.
@@ -721,12 +818,26 @@ impl SettingsWindow {
             cx.subscribe(&server_url_input, |this, input, event, cx| {
                 this.on_field_event(Field::ServerUrl, input, event, cx)
             }),
-            cx.subscribe(&recordings_search, |this, input, event, cx| {
-                this.on_field_event(Field::RecordingsSearch, input, event, cx)
-            }),
-            cx.subscribe(&screenshots_search, |this, input, event, cx| {
-                this.on_field_event(Field::ScreenshotsSearch, input, event, cx)
-            }),
+            cx.subscribe_in(
+                &recordings_search,
+                window,
+                |this, input, event, window, cx| {
+                    this.on_field_event(Field::RecordingsSearch, input.clone(), event, cx);
+                    if search_may_have_changed(event) {
+                        this.decode_visible_recordings(window, cx);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &screenshots_search,
+                window,
+                |this, input, event, window, cx| {
+                    this.on_field_event(Field::ScreenshotsSearch, input.clone(), event, cx);
+                    if search_may_have_changed(event) {
+                        this.decode_visible_screenshots(window, cx);
+                    }
+                },
+            ),
         ];
 
         let sign_in = SignIn::global(cx);
@@ -877,22 +988,27 @@ impl SettingsWindow {
         }
         if self.page == Page::Recordings {
             self.screenshots.scan = None;
+            self.screenshots.decode = None;
             self.refresh_recordings(window, cx);
             return;
         }
         if self.page == Page::Screenshots {
             self.recordings.scan = None;
+            self.recordings.decode = None;
             self.recordings.tick = None;
             self.refresh_screenshots(window, cx);
             return;
         }
         self.recordings.scan = None;
+        self.recordings.decode = None;
         self.recordings.tick = None;
         self.screenshots.scan = None;
+        self.screenshots.decode = None;
     }
 
     /// The `recordings` query: scan the library on the background executor,
-    /// then decode the thumbnails there through [`library::spawn_decode_pool`].
+    /// then decode the visible rows' thumbnails there through
+    /// [`library::spawn_decode_pool`].
     ///
     /// Same two-stage shape as the main window's Recents (`refresh_recents`):
     /// the list lands first so the rows can paint with their grey placeholder,
@@ -912,17 +1028,39 @@ impl SettingsWindow {
                 .await;
             tracing::info!(count = items.len(), "scanned the recordings library");
 
-            let Ok(thumbnails) = this.update_in(cx, |this, window, cx| {
-                this.set_recordings(items, window, cx)
-            }) else {
-                return;
-            };
+            this.update_in(cx, |this, window, cx| {
+                this.set_recordings(items, window, cx);
+                let pending = this.recordings.pending_thumbnails();
+                this.decode_recording_thumbnails(pending, window, cx);
+            })
+            .ok();
+        }));
+    }
 
-            let (_decodes, results) = library::spawn_decode_pool(
-                cx.background_executor(),
-                thumbnails,
-                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
-            );
+    /// After "Load more", a tab, or a search: decode whatever just came on
+    /// screen. With nothing new the running batch, and the poll it arms when it
+    /// finishes, are left alone.
+    fn decode_visible_recordings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = self.recordings.pending_thumbnails();
+        if !pending.is_empty() {
+            self.decode_recording_thumbnails(pending, window, cx);
+        }
+    }
+
+    /// Replaces the running batch rather than adding a second pool: its
+    /// unfinished rows are still pending, so `pending` re-queues the ones that
+    /// are still on screen.
+    fn decode_recording_thumbnails(
+        &mut self,
+        pending: Vec<(usize, PathBuf)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.recordings.decode = Some(cx.spawn_in(window, async move |this, cx| {
+            let (_decodes, results) =
+                library::spawn_decode_pool(cx.background_executor(), pending, |(index, path)| {
+                    library::decode_thumbnail(&path).map(|image| (index, path, image))
+                });
             while let Ok(first) = results.recv_async().await {
                 let mut batch = vec![first];
                 batch.extend(results.try_iter());
@@ -963,8 +1101,8 @@ impl SettingsWindow {
         }));
     }
 
-    /// Install a scan result, and hand back the thumbnails that still have to
-    /// be decoded.
+    /// Install a scan result. A row whose thumbnail still has to be decoded is
+    /// left `thumbnail_stale` until it is on screen.
     ///
     /// `reconcile: "path"` on the query is doing real work here: the 2s poll
     /// re-runs the whole scan, and a row that is still in the library must keep
@@ -978,7 +1116,7 @@ impl SettingsWindow {
         items: Vec<RecordingItem>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(usize, PathBuf)> {
+    ) {
         let mut cached: std::collections::HashMap<_, _> = self
             .recordings
             .items
@@ -988,11 +1126,9 @@ impl SettingsWindow {
             .map(|row| (row.item.path.clone(), row))
             .collect();
 
-        let mut pending = Vec::new();
         let rows: Vec<RecordingRow> = items
             .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
+            .map(|item| {
                 let previous = cached.remove(&item.path);
                 let changed = previous.as_ref().is_none_or(|row| {
                     row.item.thumbnail != item.thumbnail
@@ -1001,9 +1137,6 @@ impl SettingsWindow {
                         || row.thumbnail.is_none()
                 });
                 let thumbnail = previous.and_then(|row| row.thumbnail);
-                if changed && let Some(path) = item.thumbnail.clone() {
-                    pending.push((index, path));
-                }
                 RecordingRow {
                     item,
                     thumbnail,
@@ -1024,7 +1157,6 @@ impl SettingsWindow {
         // recording is being written into the library, and an inactive gpui
         // window does not repaint from a background-driven model update.
         window.refresh();
-        pending
     }
 
     /// `refetchInterval: data.some(hasActiveRecording) ? 2000 : false` -- armed
@@ -1100,17 +1232,33 @@ impl SettingsWindow {
                 .await;
             tracing::info!(count = items.len(), "scanned the screenshots library");
 
-            let Ok(thumbnails) = this.update_in(cx, |this, window, cx| {
-                this.set_screenshots(items, window, cx)
-            }) else {
-                return;
-            };
+            this.update_in(cx, |this, window, cx| {
+                this.set_screenshots(items, window, cx);
+                let pending = this.screenshots.pending_thumbnails();
+                this.decode_screenshot_thumbnails(pending, window, cx);
+            })
+            .ok();
+        }));
+    }
 
-            let (_decodes, results) = library::spawn_decode_pool(
-                cx.background_executor(),
-                thumbnails,
-                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
-            );
+    fn decode_visible_screenshots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = self.screenshots.pending_thumbnails();
+        if !pending.is_empty() {
+            self.decode_screenshot_thumbnails(pending, window, cx);
+        }
+    }
+
+    fn decode_screenshot_thumbnails(
+        &mut self,
+        pending: Vec<(usize, PathBuf)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.screenshots.decode = Some(cx.spawn_in(window, async move |this, cx| {
+            let (_decodes, results) =
+                library::spawn_decode_pool(cx.background_executor(), pending, |(index, path)| {
+                    library::decode_thumbnail(&path).map(|image| (index, path, image))
+                });
             while let Ok(first) = results.recv_async().await {
                 let mut batch = vec![first];
                 batch.extend(results.try_iter());
@@ -1148,7 +1296,7 @@ impl SettingsWindow {
         items: Vec<ScreenshotItem>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(usize, PathBuf)> {
+    ) {
         let mut cached: std::collections::HashMap<PathBuf, Arc<RenderImage>> = self
             .screenshots
             .items
@@ -1158,17 +1306,10 @@ impl SettingsWindow {
             .filter_map(|row| row.thumbnail.map(|image| (row.item.path, image)))
             .collect();
 
-        let mut pending = Vec::new();
         let rows: Vec<ScreenshotRow> = items
             .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
+            .map(|item| {
                 let thumbnail = cached.remove(&item.path);
-                if thumbnail.is_none()
-                    && let Some(path) = item.thumbnail.clone()
-                {
-                    pending.push((index, path));
-                }
                 ScreenshotRow { item, thumbnail }
             })
             .collect();
@@ -1180,7 +1321,6 @@ impl SettingsWindow {
         self.screenshots.items = Some(rows);
         cx.notify();
         window.refresh();
-        pending
     }
 
     fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -2273,14 +2413,17 @@ impl SettingsWindow {
 
     fn render_screenshots_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let rows = self.screenshots.filtered();
-        let total = rows.len();
+        let rows = self.screenshots.items.as_deref().unwrap_or_default();
+        let VisibleRows {
+            indices,
+            matching: total,
+        } = self.screenshots.visible_rows();
         let has_search = !self.screenshots.trimmed_search().is_empty();
-        let visible = visible_recordings_len(total, has_search, self.screenshots.visible_count);
+        let visible = indices.len();
         let more = has_more_recordings(total, has_search, self.screenshots.visible_count);
 
         let mut items = Vec::with_capacity(visible);
-        for (index, row) in rows.iter().take(visible).enumerate() {
+        for (index, row) in indices.into_iter().map(|row| &rows[row]).enumerate() {
             items.push(
                 self.render_screenshot_row(index, row, index + 1 == visible, cx)
                     .into_any_element(),
@@ -2319,10 +2462,11 @@ impl SettingsWindow {
                             "Load more",
                             false,
                             cx,
-                            |this, _window, cx| {
-                                let total = this.screenshots.filtered().len();
+                            |this, window, cx| {
+                                let total = this.screenshots.visible_rows().matching;
                                 this.screenshots.visible_count =
                                     load_more_count(this.screenshots.visible_count, total);
+                                this.decode_visible_screenshots(window, cx);
                                 cx.notify();
                             },
                         )),
@@ -2392,13 +2536,14 @@ impl SettingsWindow {
                 {
                     let png = png.clone();
                     move |_this, _window, cx| {
-                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png, cx) {
-                            tracing::warn!("copying screenshot failed: {error}");
-                            cx.spawn(async move |_, _| {
+                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                        cx.spawn(async move |_, _| {
+                            if let Err(error) = copied.await {
+                                tracing::warn!("copying screenshot failed: {error}");
                                 crate::platform::alert_dialog("Could not copy screenshot", &error);
-                            })
-                            .detach();
-                        }
+                            }
+                        })
+                        .detach();
                     }
                 },
             ))
@@ -2520,11 +2665,12 @@ impl SettingsWindow {
                     }))
                     // `text-xs text-gray-12`
                     .child(div().text_size(px(12.)).child(tab.label()))
-                    .on_click(cx.listener(move |this, _, _window, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.recordings.tab = tab;
                         // `createEffect(() => { activeTab(); ...
                         //  setVisibleCount(PAGE_SIZE) })`
                         this.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                        this.decode_visible_recordings(window, cx);
                         cx.notify();
                     }))
             }));
@@ -2562,16 +2708,19 @@ impl SettingsWindow {
     /// border-gray-3`, with the "Load more" footer under it.
     fn render_recordings_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let rows = self.recordings.filtered();
-        let total = rows.len();
+        let rows = self.recordings.items.as_deref().unwrap_or_default();
+        let VisibleRows {
+            indices,
+            matching: total,
+        } = self.recordings.visible_rows();
         let has_search = !self.recordings.trimmed_search().is_empty();
-        let visible = visible_recordings_len(total, has_search, self.recordings.visible_count);
+        let visible = indices.len();
         let more = has_more_recordings(total, has_search, self.recordings.visible_count);
 
         // Built up front rather than in a `.children(map(..))`: the closure
         // would have to hold `cx` across every row, which it cannot.
         let mut items = Vec::with_capacity(visible);
-        for (index, row) in rows.iter().take(visible).enumerate() {
+        for (index, row) in indices.into_iter().map(|row| &rows[row]).enumerate() {
             // `not-last:border-b` counts the *rendered* rows, so the border
             // stops at the last visible one rather than the last matching one.
             items.push(
@@ -2613,10 +2762,11 @@ impl SettingsWindow {
                             "Load more",
                             false,
                             cx,
-                            |this, _window, cx| {
-                                let total = this.recordings.filtered().len();
+                            |this, window, cx| {
+                                let total = this.recordings.visible_rows().matching;
                                 this.recordings.visible_count =
                                     load_more_count(this.recordings.visible_count, total);
+                                this.decode_visible_recordings(window, cx);
                                 cx.notify();
                             },
                         )),
@@ -4917,6 +5067,100 @@ mod tests {
         // An active search is never paginated.
         assert_eq!(visible_recordings_len(53, true, 20), 53);
         assert!(!has_more_recordings(53, true, 20));
+    }
+
+    #[test]
+    fn visible_rows_follow_the_filter_and_the_page() {
+        let all = visible_rows([true; 53], false, 20);
+        assert_eq!(all.indices, (0..20).collect::<Vec<_>>());
+        assert_eq!(all.matching, 53);
+
+        let more = visible_rows([true; 53], false, load_more_count(20, 53));
+        assert_eq!(more.indices, (0..40).collect::<Vec<_>>());
+        let last = visible_rows([true; 53], false, load_more_count(40, 53));
+        assert_eq!(last.indices, (0..53).collect::<Vec<_>>());
+
+        // A tab or a search matches a subset, and the indices still address the
+        // unfiltered rows.
+        let every_third: Vec<bool> = (0..90).map(|index| index % 3 == 0).collect();
+        let paged = visible_rows(every_third.iter().copied(), false, 20);
+        assert_eq!(paged.indices, (0..60).step_by(3).collect::<Vec<_>>());
+        assert_eq!(paged.matching, 30);
+        let searched = visible_rows(every_third.iter().copied(), true, 20);
+        assert_eq!(searched.indices, (0..90).step_by(3).collect::<Vec<_>>());
+        assert_eq!(searched.matching, 30);
+
+        let none = visible_rows([false; 5], true, 20);
+        assert!(none.indices.is_empty());
+        assert_eq!(none.matching, 0);
+    }
+
+    fn recording_row(index: usize, decoded: bool) -> RecordingRow {
+        let mut item = recording(&format!("Recording {index}"), RecordingMode::Studio);
+        item.thumbnail = Some(item.path.join("screenshots/display.jpg"));
+        RecordingRow {
+            item,
+            thumbnail: None,
+            thumbnail_stale: !decoded,
+        }
+    }
+
+    #[test]
+    fn only_visible_rows_are_queued_for_a_thumbnail_decode() {
+        let rows: Vec<RecordingRow> = (0..500).map(|index| recording_row(index, false)).collect();
+        let every_row: Vec<usize> = (0..rows.len()).collect();
+        let before = pending_thumbnail_decodes(&rows, &every_row, RecordingRow::pending_thumbnail);
+        let visible = visible_rows(rows.iter().map(|_| true), false, RECORDINGS_PAGE_SIZE);
+        let after =
+            pending_thumbnail_decodes(&rows, &visible.indices, RecordingRow::pending_thumbnail);
+        println!(
+            "decode jobs for a 500-row scan: every row {}, visible rows {}",
+            before.len(),
+            after.len()
+        );
+        assert_eq!(before.len(), 500);
+        assert_eq!(
+            after,
+            (0..20)
+                .map(|index| (index, rows[index].item.thumbnail.clone().unwrap()))
+                .collect::<Vec<_>>()
+        );
+
+        let mut rows = rows;
+        for row in &mut rows[..20] {
+            row.thumbnail_stale = false;
+        }
+        let more = visible_rows(
+            rows.iter().map(|_| true),
+            false,
+            load_more_count(RECORDINGS_PAGE_SIZE, 500),
+        );
+        let next: Vec<usize> =
+            pending_thumbnail_decodes(&rows, &more.indices, RecordingRow::pending_thumbnail)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect();
+        assert_eq!(next, (20..40).collect::<Vec<_>>());
+
+        // A search reaches past the first page in its own order.
+        let query = "recording 49";
+        let searched = visible_rows(
+            rows.iter()
+                .map(|row| matches_recording_filters(&row.item, RecordingsTab::All, query)),
+            true,
+            RECORDINGS_PAGE_SIZE,
+        );
+        let found: Vec<usize> =
+            pending_thumbnail_decodes(&rows, &searched.indices, RecordingRow::pending_thumbnail)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect();
+        assert_eq!(found, [49].into_iter().chain(490..500).collect::<Vec<_>>());
+
+        rows[30].item.thumbnail = None;
+        assert!(
+            pending_thumbnail_decodes(&rows, &[30], RecordingRow::pending_thumbnail).is_empty()
+        );
     }
 
     /// `emptyMessage()`.

@@ -43,6 +43,7 @@ mod feeds;
 mod hotkeys;
 mod import;
 mod installer;
+mod jpeg_thumbnail;
 mod library;
 mod main_window;
 mod media_access;

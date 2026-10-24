@@ -72,9 +72,11 @@ pub struct RecentItem {
 /// `media_sort_time_millis` (`lib.rs:3966-3972`): the filesystem `created()`
 /// time of the path, falling back to `modified()`, then to the epoch.
 fn media_sort_time_millis(path: &Path) -> f64 {
-    let Ok(metadata) = path.metadata() else {
-        return 0.0;
-    };
+    path.metadata()
+        .map_or(0.0, |metadata| metadata_sort_time_millis(&metadata))
+}
+
+fn metadata_sort_time_millis(metadata: &std::fs::Metadata) -> f64 {
     metadata
         .created()
         .or_else(|_| metadata.modified())
@@ -637,42 +639,59 @@ pub struct ScreenshotItem {
 /// `list_screenshots` (`lib.rs:4055-4091`): `*.cap` directories only, and the
 /// sort key is the PNG's timestamp rather than the directory's.
 pub fn list_screenshots_in(dir: &Path) -> Vec<ScreenshotItem> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
+    screenshot_items_in(dir).collect()
+}
 
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let bundle = entry.path();
-        if !bundle.is_dir() || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") {
-            continue;
+fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
+    let mut bundles = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let bundle = entry.path();
+            if bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") || !bundle.is_dir() {
+                continue;
+            }
+            if let Some((png, sort_time_millis)) = screenshot_png(&bundle) {
+                bundles.push((bundle, png, sort_time_millis));
+            }
         }
-        let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
-            continue;
-        };
-        let Some(png) = std::fs::read_dir(&bundle).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))
-        }) else {
-            continue;
-        };
-
-        out.push(ScreenshotItem {
-            path: png.clone(),
-            pretty_name: meta.pretty_name,
-            sort_time_millis: media_sort_time_millis(&png),
-            thumbnail: Some(png),
-            bundle,
-        });
     }
-    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-    out
+    bundles.sort_by(|(_, _, a), (_, _, b)| b.total_cmp(a));
+    bundles
+        .into_iter()
+        .filter_map(|(bundle, png, sort_time_millis)| {
+            let meta = RecordingMeta::load_for_project(&bundle).ok()?;
+            Some(ScreenshotItem {
+                path: png.clone(),
+                pretty_name: meta.pretty_name,
+                sort_time_millis,
+                thumbnail: Some(png),
+                bundle,
+            })
+        })
+}
+
+fn screenshot_png(bundle: &Path) -> Option<(PathBuf, f64)> {
+    let original = bundle.join("original.png");
+    if let Ok(metadata) = original.metadata() {
+        return Some((original, metadata_sort_time_millis(&metadata)));
+    }
+    let png = std::fs::read_dir(bundle)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))?;
+    let sort_time_millis = media_sort_time_millis(&png);
+    Some((png, sort_time_millis))
 }
 
 pub fn list_screenshots() -> Vec<ScreenshotItem> {
     list_screenshots_in(&screenshots_dir())
+}
+
+pub fn list_screenshots_limited(limit: usize) -> Vec<ScreenshotItem> {
+    screenshot_items_in(&screenshots_dir())
+        .take(limit)
+        .collect()
 }
 
 /// Delete the `.cap` bundle that owns `path` (the PNG or the directory).
@@ -715,16 +734,20 @@ pub fn delete_screenshot(path: &Path) -> Result<(), String> {
 }
 
 fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
-    out.extend(list_screenshots_in(dir).into_iter().map(|item| RecentItem {
-        kind: MediaKind::Screenshot,
-        bundle: item.bundle,
-        pretty_name: item.pretty_name,
-        clip_count: 1,
-        sort_time_millis: item.sort_time_millis,
-        thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
-        thumbnail: item.thumbnail,
-        sharing: None,
-    }));
+    out.extend(
+        screenshot_items_in(dir)
+            .take(RECENT_MEDIA_LIMIT)
+            .map(|item| RecentItem {
+                kind: MediaKind::Screenshot,
+                bundle: item.bundle,
+                pretty_name: item.pretty_name,
+                clip_count: 1,
+                sort_time_millis: item.sort_time_millis,
+                thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
+                thumbnail: item.thumbnail,
+                sharing: None,
+            }),
+    );
 }
 
 fn newest_first(items: &mut [RecentItem]) {
@@ -742,13 +765,8 @@ pub fn recent_media_in(recording_dirs: &[PathBuf], screenshots_dir: &Path) -> Ve
     let mut recordings = Vec::new();
     scan_recordings(recording_dirs, &mut recordings);
 
-    let mut screenshots = Vec::new();
-    scan_screenshots(screenshots_dir, &mut screenshots);
-    newest_first(&mut screenshots);
-    screenshots.truncate(RECENT_MEDIA_LIMIT);
-
     let mut merged = recordings;
-    merged.extend(screenshots);
+    scan_screenshots(screenshots_dir, &mut merged);
     newest_first(&mut merged);
     merged.truncate(RECENT_MEDIA_LIMIT);
     merged
@@ -1025,6 +1043,11 @@ impl CacheSlot {
     }
 }
 
+#[cfg(test)]
+pub fn thumbnail_cache_file(source: &Path) -> Option<PathBuf> {
+    CacheSlot::for_source(source).map(|slot| slot.file())
+}
+
 /// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
 /// same swap gpui's own asset loader does after decoding).
 pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
@@ -1059,32 +1082,50 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     // Sniff rather than trust the extension: `list_screenshots` finds the
     // preview by extension scan, and a bundle could hold a mislabelled file.
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .max(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .min(1.0);
-    let target_width = ((width as f32 * scale).round() as u32).max(1);
-    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
+        crate::jpeg_thumbnail::decode_jpeg_thumbnail(&bytes, |width, height| {
+            let (_, target_width, target_height) = crate::jpeg_thumbnail::cover_target(
+                width,
+                height,
+                THUMBNAIL_WIDTH,
+                THUMBNAIL_HEIGHT,
+            );
+            (target_width, target_height)
+        })
+        .or_else(|| {
+            let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+            let dimensions = (decoded.width(), decoded.height());
+            Some((decoded, dimensions.0, dimensions.1))
+        })?
+    } else {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width(), decoded.height());
+        (decoded, dimensions.0, dimensions.1)
+    };
+    let (width, height) = (width.max(1), height.max(1));
+    let (_, target_width, target_height) =
+        crate::jpeg_thumbnail::cover_target(width, height, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     // Box sampling for the big ratios (one pass over a multi-megapixel
     // source, and at 8x down every output pixel averages a whole block);
     // Triangle when the sizes are close, where box would alias and costs
     // nothing to avoid.
-    let rgba = if scale <= 0.5 {
-        decoded
+    let rgba = match crate::jpeg_thumbnail::thumbnail_resize(
+        decoded.width(),
+        decoded.height(),
+        target_width,
+        target_height,
+    ) {
+        crate::jpeg_thumbnail::ThumbnailResize::Box => decoded
             .thumbnail_exact(target_width, target_height)
-            .into_rgba8()
-    } else if scale < 1.0 {
-        decoded
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Triangle => decoded
             .resize_exact(
                 target_width,
                 target_height,
                 image::imageops::FilterType::Triangle,
             )
-            .into_rgba8()
-    } else {
-        decoded.into_rgba8()
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Identity => decoded.into_rgba8(),
     };
 
     if let Some(cache) = &cache {
@@ -1678,6 +1719,129 @@ mod tests {
         assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_screenshots_match_the_full_listing_and_parse_lazily() {
+        fn eager_listing(dir: &Path) -> Vec<ScreenshotItem> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let bundle = entry.path();
+                if !bundle.is_dir()
+                    || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap")
+                {
+                    continue;
+                }
+                let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
+                    continue;
+                };
+                let Some(png) = std::fs::read_dir(&bundle)
+                    .unwrap()
+                    .flatten()
+                    .find_map(|entry| {
+                        let path = entry.path();
+                        (path.extension().and_then(|ext| ext.to_str()) == Some("png"))
+                            .then_some(path)
+                    })
+                else {
+                    continue;
+                };
+                out.push(ScreenshotItem {
+                    path: png.clone(),
+                    pretty_name: meta.pretty_name,
+                    sort_time_millis: media_sort_time_millis(&png),
+                    thumbnail: Some(png),
+                    bundle,
+                });
+            }
+            out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+            out
+        }
+
+        fn write_shot(dir: &Path, name: &str) -> PathBuf {
+            write_bundle(
+                dir,
+                name,
+                &format!(r#"{{"pretty_name":"{name}","sharing":null,"fps":0}}"#),
+            )
+        }
+
+        let root = temp_dir("bounded-screenshots");
+        let legacy = write_shot(&root, "legacy");
+        std::fs::write(legacy.join("shot.png"), b"png").unwrap();
+        write_shot(&root, "no-png");
+        let not_a_bundle = root.join("not-a-bundle");
+        std::fs::create_dir_all(&not_a_bundle).unwrap();
+        std::fs::write(not_a_bundle.join("original.png"), b"png").unwrap();
+        std::fs::write(root.join("loose.cap"), b"").unwrap();
+        for i in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(6));
+            let bundle = write_shot(&root, &format!("shot-{:02}", (i * 7) % 30));
+            std::fs::write(bundle.join("original.png"), b"png").unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let tie_a = write_shot(&root, "tie-a");
+        std::fs::write(tie_a.join("original.png"), b"png").unwrap();
+        let tie_b = write_shot(&root, "tie-b");
+        std::fs::hard_link(tie_a.join("original.png"), tie_b.join("original.png")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let corrupt = write_bundle(&root, "corrupt", "{ not json ");
+        std::fs::write(corrupt.join("original.png"), b"png").unwrap();
+
+        let full = list_screenshots_in(&root);
+        assert_eq!(full, eager_listing(&root));
+        assert_eq!(full.len(), 33);
+        assert!(full.iter().all(|item| item.bundle != corrupt));
+        let legacy_item = full.iter().find(|item| item.bundle == legacy).unwrap();
+        assert_eq!(legacy_item.path, legacy.join("shot.png"));
+
+        let read_dir_order: Vec<PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        let read_dir_position = |bundle: &Path| {
+            read_dir_order
+                .iter()
+                .position(|path| path == bundle)
+                .unwrap()
+        };
+        let tie_time = |bundle: &Path| {
+            full.iter()
+                .find(|item| item.bundle == bundle)
+                .unwrap()
+                .sort_time_millis
+        };
+        assert_eq!(tie_time(&tie_a), tie_time(&tie_b));
+        assert!(
+            full.windows(2).all(|pair| {
+                pair[0].sort_time_millis > pair[1].sort_time_millis
+                    || (pair[0].sort_time_millis == pair[1].sort_time_millis
+                        && read_dir_position(&pair[0].bundle) < read_dir_position(&pair[1].bundle))
+            }),
+            "newest first, equal timestamps keep directory order"
+        );
+
+        for limit in [0, 1, 9, 20, 100] {
+            assert_eq!(
+                screenshot_items_in(&root).take(limit).collect::<Vec<_>>(),
+                full[..limit.min(full.len())],
+                "limit {limit}"
+            );
+        }
+
+        let mut lazy = screenshot_items_in(&root);
+        let head: Vec<_> = lazy.by_ref().take(RECENT_MEDIA_LIMIT).collect();
+        assert_eq!(head, full[..RECENT_MEDIA_LIMIT]);
+        for item in &full[RECENT_MEDIA_LIMIT..] {
+            std::fs::remove_file(item.bundle.join("recording-meta.json")).unwrap();
+        }
+        assert!(
+            lazy.next().is_none(),
+            "metas past the consumed prefix are read on demand"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

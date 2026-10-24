@@ -16,6 +16,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \
 	&& bun test src/__tests__/lib/audio-levels.integration.test.ts \
 	&& bun test src/__tests__/lib/drive-resumable-upload.test.ts src/__tests__/lib/storage-upload.test.ts src/__tests__/lib/container-memory.test.ts src/__tests__/lib/parallel-download.test.ts \
+	&& bun test src/__tests__/lib/loom-import-limit.test.ts \
 	&& bun test src/__tests__/lib/media-size.test.ts src/__tests__/lib/media-probe.integration.test.ts \
 	&& bun test src/__tests__/lib/media-audio.integration.test.ts \
 	&& bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts \
@@ -24,6 +25,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/video.test.ts \
 	&& bun test src/__tests__/lib/lifecycle.test.ts src/__tests__/lib/temp-files.test.ts \
 	&& bun test src/__tests__/routes/lifecycle.test.ts \
+	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
 	&& bun test src/__tests__/lib/media-video.integration.test.ts
 
