@@ -367,14 +367,21 @@ fn upload_meta_video_id(meta: &RecordingMeta) -> Option<&str> {
     }
 }
 
+/// True when the folder holds recorded media, or when part of it cannot be
+/// read: media that cannot be checked counts as present. Only a missing folder
+/// counts as empty.
 fn has_recorded_media(directory: &Path, depth: usize) -> bool {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return false;
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => return error.kind() != std::io::ErrorKind::NotFound,
     };
-    entries.flatten().any(|entry| {
+    entries.into_iter().any(|entry| {
+        let Ok(entry) = entry else {
+            return true;
+        };
         let path = entry.path();
         let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            return false;
+            return true;
         };
         if metadata.is_dir() {
             return depth > 0 && has_recorded_media(&path, depth - 1);
@@ -1043,6 +1050,26 @@ mod tests {
             None,
         ));
         assert!(!locally_protected(&[recordings], "video", false, None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_that_cannot_be_read_protects_an_interrupted_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new();
+        let recordings = fixture.recordings();
+        let project = write_project(&recordings, "locked.cap", "video", in_progress());
+        let display = project.join("content/display");
+        std::fs::set_permissions(&display, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::read_dir(&display).is_ok();
+        let protected = locally_protected(std::slice::from_ref(&recordings), "video", true, None);
+        let normal = locally_protected(&[recordings], "video", false, None);
+        std::fs::set_permissions(&display, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return;
+        }
+        assert!(protected);
+        assert!(!normal);
     }
 
     #[test]
