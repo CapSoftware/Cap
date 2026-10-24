@@ -58,17 +58,20 @@ describe("Loom preview GIF", () => {
 	});
 
 	test("renders a GIF from the finished video and uploads it", async () => {
-		await renderPreviewGif({
-			videoUrl: `http://127.0.0.1:${server.port}/result.mp4`,
-			previewGifPresignedUrl: `http://127.0.0.1:${server.port}/upload/preview.gif`,
-			duration: 6,
-		});
+		await renderPreviewGif(
+			{
+				videoUrl: `http://127.0.0.1:${server.port}/result.mp4`,
+				previewGifPresignedUrl: `http://127.0.0.1:${server.port}/upload/preview.gif`,
+				duration: 6,
+			},
+			AbortSignal.timeout(60_000),
+		);
 		expect(uploads).toHaveLength(1);
 		expect(uploads[0]?.type).toBe("image/gif");
 		expect(uploads[0]?.bytes).toBeGreaterThan(1000);
 	});
 
-	test("requires the secret and an HTTPS source", async () => {
+	test("requires the secret and an HTTP source", async () => {
 		const { app } = createLoomImporter(
 			loadImporterSettings({ LOOM_IMPORTER_WORK_DIR: root }),
 		);
@@ -82,7 +85,7 @@ describe("Loom preview GIF", () => {
 				body: JSON.stringify(body),
 			});
 		const body = {
-			videoUrl: "http://127.0.0.1/result.mp4",
+			videoUrl: "file:///etc/passwd",
 			previewGifPresignedUrl: "https://storage.example.com/p.gif",
 			duration: 6,
 		};

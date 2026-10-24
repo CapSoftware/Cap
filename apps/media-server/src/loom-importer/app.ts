@@ -59,6 +59,7 @@ export function loadImporterSettings(
 }
 
 const JOB_LIFETIME_MS = 4 * 60 * 60 * 1000;
+const PREVIEW_TIMEOUT_MS = 120_000;
 const JOB_HEARTBEAT_MS = 60_000;
 
 interface QueuedImport {
@@ -81,6 +82,7 @@ export function createLoomImporter(
 	const running = new Map<string, AbortController>();
 	let draining = false;
 	const previewSemaphore = new Semaphore(config.maxPreviewJobs);
+	const previews = new Set<AbortController>();
 
 	const startJob = ({ jobId, request }: QueuedImport) =>
 		createJob(
@@ -204,8 +206,18 @@ export function createLoomImporter(
 		);
 		if (!parsed.success)
 			return c.json({ error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+		if (previews.size >= config.maxPreviewJobs * 2)
+			return c.json(
+				{ error: "Preview queue is full", code: "SERVER_BUSY" },
+				503,
+			);
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), PREVIEW_TIMEOUT_MS);
+		previews.add(controller);
 		try {
-			await previewSemaphore.run(() => renderPreviewGif(parsed.data));
+			await previewSemaphore.run(() =>
+				renderPreviewGif(parsed.data, controller.signal),
+			);
 			return c.json({ ok: true });
 		} catch (error) {
 			console.warn("[loom-importer] Preview GIF failed", error);
@@ -213,6 +225,9 @@ export function createLoomImporter(
 				{ error: "Preview GIF failed", code: "PREVIEW_FAILED" },
 				502,
 			);
+		} finally {
+			clearTimeout(timeout);
+			previews.delete(controller);
 		}
 	});
 
@@ -246,13 +261,17 @@ export function createLoomImporter(
 	const drain = async (timeoutMs: number) => {
 		draining = true;
 		const deadline = Date.now() + timeoutMs;
-		while ((queue.length > 0 || running.size > 0) && Date.now() < deadline)
+		while (
+			(queue.length > 0 || running.size > 0 || previews.size > 0) &&
+			Date.now() < deadline
+		)
 			await new Promise((resolve) => setTimeout(resolve, 500));
+		for (const controller of previews) controller.abort();
 		await Promise.all(
 			queue.splice(0).map((entry) => cancelJob(startJob(entry))),
 		);
 		for (const controller of running.values()) controller.abort();
-		while (running.size > 0)
+		while (running.size > 0 || previews.size > 0)
 			await new Promise((resolve) => setTimeout(resolve, 250));
 	};
 

@@ -1,21 +1,25 @@
 import { z } from "zod";
 import { generatePreviewGif, uploadFileToS3 } from "../lib/media-video";
 
-const PREVIEW_TIMEOUT_MS = 120_000;
-
 export const previewRequestSchema = z.object({
 	videoUrl: z
 		.string()
 		.url()
-		.refine((value) => value.startsWith("https://"), "videoUrl must use HTTPS"),
+		.refine(
+			(value) => value.startsWith("https://") || value.startsWith("http://"),
+			"videoUrl must be an HTTP URL",
+		),
 	previewGifPresignedUrl: z.string().url(),
 	duration: z.number().positive().max(86_400),
 });
 
 export type PreviewRequest = z.infer<typeof previewRequestSchema>;
 
-export async function renderPreviewGif(request: PreviewRequest) {
-	const signal = AbortSignal.timeout(PREVIEW_TIMEOUT_MS);
+export async function renderPreviewGif(
+	request: PreviewRequest,
+	signal: AbortSignal,
+) {
+	signal.throwIfAborted();
 	const rendered = await generatePreviewGif(
 		request.videoUrl,
 		request.duration,
