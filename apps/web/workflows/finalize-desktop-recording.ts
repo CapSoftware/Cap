@@ -437,18 +437,43 @@ async function buildDesktopSegmentsOutput({
 	const env = serverEnv();
 	const webhookBaseUrl = env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL;
 	const webhookSecret = env.MEDIA_SERVER_WEBHOOK_SECRET;
-	const outputVerificationUrl = await bucket
-		.getInternalSignedObjectUrl(outputKey, {
-			expiresIn: PRESIGNED_EXPIRES_SECONDS,
-		})
-		.pipe(runWorkflowPromise);
-	const outputPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			outputKey,
-			{ ContentType: "video/mp4" },
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
+	// Each Google Drive target is a resumable session costing two Drive round trips, so create them together.
+	const [
+		outputVerificationUrl,
+		outputPresignedUrl,
+		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
+	] = await Promise.all([
+		bucket
+			.getInternalSignedObjectUrl(outputKey, {
+				expiresIn: PRESIGNED_EXPIRES_SECONDS,
+			})
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				outputKey,
+				{ ContentType: "video/mp4" },
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				`${candidateDirectory}/screenshot.jpg`,
+				{ ContentType: "image/jpeg" },
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+		bucket
+			.getInternalPresignedPutUrl(
+				`${candidateDirectory}/preview.gif`,
+				{
+					ContentType: "image/gif",
+					CacheControl: "public, max-age=31536000, immutable",
+				},
+				{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
+			)
+			.pipe(runWorkflowPromise),
+	]);
 	let outputUpload: DesktopSegmentsOutputUpload = {
 		type: "put",
 		url: outputPresignedUrl,
@@ -487,23 +512,6 @@ async function buildDesktopSegmentsOutput({
 			webhookSecret,
 		};
 	}
-	const thumbnailPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			`${candidateDirectory}/screenshot.jpg`,
-			{ ContentType: "image/jpeg" },
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
-	const previewGifPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(
-			`${candidateDirectory}/preview.gif`,
-			{
-				ContentType: "image/gif",
-				CacheControl: "public, max-age=31536000, immutable",
-			},
-			{ expiresIn: PRESIGNED_EXPIRES_SECONDS },
-		)
-		.pipe(runWorkflowPromise);
 	return {
 		outputKey,
 		outputVerificationUrl,
