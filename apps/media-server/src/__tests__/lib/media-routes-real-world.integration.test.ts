@@ -858,6 +858,48 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
+	test("stops the output hash before cleanup when the decode check fails first", async () => {
+		let hashAborted = false;
+		let hashSettled = false;
+		const hashing = spyOn(
+			recordingVerification,
+			"hashRecordingFile",
+		).mockImplementation(
+			(_path, signal) =>
+				new Promise<string>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => {
+						hashAborted = true;
+						setTimeout(() => {
+							hashSettled = true;
+							reject(new Error("Hash stopped"));
+						}, 50);
+					});
+				}),
+		);
+		const verifying = spyOn(
+			recordingVerification,
+			"verifyRemuxedRecording",
+		).mockRejectedValue(new Error("Recording decoder failed to start"));
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest(
+					"/video/mux-segments",
+					fencedMuxRequest("hash-after-failed-decode"),
+				),
+			);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(hashAborted).toBe(true);
+			expect(hashSettled).toBe(true);
+		} finally {
+			hashing.mockRestore();
+			verifying.mockRestore();
+			if (jobId) deleteJob(jobId);
+		}
+	}, 30_000);
+
 	// Hashing now overlaps the decode check, so whichever check reads the changed bytes first refuses it.
 	test("refuses a local output changed while it is decoded and hashed", async () => {
 		const originalHash = recordingVerification.hashRecordingFile;

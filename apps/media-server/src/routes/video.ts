@@ -2967,6 +2967,9 @@ async function muxSegmentsAsync(
 	updateJob(jobId, { abortController });
 	let outputUploadStarted = false;
 	let pendingOutputUpload: PendingStorageUpload | undefined;
+	let pendingOutputHash:
+		| { promise: Promise<string>; abort: AbortController }
+		| undefined;
 	let processingTimeout: ReturnType<typeof setTimeout> | undefined;
 	let errorCode: RecordingErrorCode = "processing-unavailable";
 	const sources = context.sourceObjects
@@ -3127,8 +3130,13 @@ async function muxSegmentsAsync(
 			"video/mp4",
 			abortController.signal,
 		);
-		const outputHash = hashRecordingFile(resultPath, abortController.signal);
+		const hashAbort = new AbortController();
+		const outputHash = hashRecordingFile(
+			resultPath,
+			AbortSignal.any([abortController.signal, hashAbort.signal]),
+		);
 		outputHash.catch(() => {});
+		pendingOutputHash = { promise: outputHash, abort: hashAbort };
 		updateJob(jobId, {
 			progress: 70,
 			message: "Checking the processed recording...",
@@ -3409,6 +3417,9 @@ async function muxSegmentsAsync(
 			error: logReason(error, MUX_FAILURE_LOG_LENGTH),
 			resources: getSystemResources(),
 		});
+		// Stop a hash still reading the output before the work directory is removed.
+		pendingOutputHash?.abort.abort();
+		await pendingOutputHash?.promise.catch(() => {});
 		if (!outputUploadStarted) {
 			// Parts still in flight could land after the abort, so let them settle first.
 			await pendingOutputUpload?.cancel();
