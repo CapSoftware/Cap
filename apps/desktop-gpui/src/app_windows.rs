@@ -89,11 +89,13 @@ fn platform_display_for_capture(
     cx: &App,
 ) -> Option<std::rc::Rc<dyn gpui::PlatformDisplay>> {
     #[cfg(target_os = "linux")]
-    if let Some(uuid) = target.raw_handle().wayland_uuid() {
-        return cx
+    if let Some(uuid) = target.raw_handle().wayland_uuid()
+        && let Some(display) = cx
             .displays()
             .into_iter()
-            .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid));
+            .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid))
+    {
+        return Some(display);
     }
     #[cfg(target_os = "windows")]
     if let Ok(id) = target.id().to_string().parse::<u64>()
@@ -101,17 +103,45 @@ fn platform_display_for_capture(
     {
         return Some(display);
     }
-    let bounds = capture_display_bounds(target)?;
-    let mut matching = cx
-        .displays()
-        .into_iter()
-        .filter(|display| display.bounds().contains(&bounds.center()));
-    let display = matching.next()?;
+    let displays = cx.displays();
+    // A named output that matched nothing is not matched by position either.
     #[cfg(target_os = "linux")]
-    if uses_wayland() && matching.next().is_some() {
-        return None;
+    let named = target.raw_handle().wayland_uuid().is_some();
+    #[cfg(not(target_os = "linux"))]
+    let named = false;
+    let bounds = capture_display_bounds(target).filter(|_| !named);
+    let mut matching = displays
+        .iter()
+        .filter(|display| bounds.is_some_and(|bounds| display.bounds().contains(&bounds.center())));
+    let found = matching.next().cloned();
+    #[cfg(target_os = "linux")]
+    let found = found.filter(|_| !(uses_wayland() && matching.next().is_some()));
+    #[cfg(target_os = "linux")]
+    if found.is_none() && uses_wayland() {
+        // One output on each side cannot be the wrong one, whatever its name
+        // or position (a compositor may report neither the same way to both).
+        if displays.len() == 1 && scap_targets::Display::list().len() == 1 {
+            return displays.into_iter().next();
+        }
+        tracing::warn!(
+            uuid = ?target.raw_handle().wayland_uuid(),
+            ?bounds,
+            candidates = ?displays
+                .iter()
+                .map(|display| {
+                    (
+                        display
+                            .uuid()
+                            .map(|uuid| uuid.to_string())
+                            .unwrap_or_else(|error| error.to_string()),
+                        display.bounds(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            "no Wayland output matches the capture display"
+        );
     }
-    Some(display)
+    found
 }
 
 fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
