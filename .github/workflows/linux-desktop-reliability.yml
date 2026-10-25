@@ -19,6 +19,10 @@ on:
       - ".github/workflows/linux-desktop-reliability.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
