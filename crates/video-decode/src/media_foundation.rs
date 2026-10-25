@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -15,21 +16,26 @@ use windows::{
             },
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
-                D3D11_BIND_UNORDERED_ACCESS, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ,
+                D3D11_BIND_UNORDERED_ACCESS, D3D11_BOX, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 D3D11_DECODER_PROFILE_H264_VLD_NOFGT, D3D11_DECODER_PROFILE_HEVC_VLD_MAIN,
-                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION,
-                D3D11_SHADER_RESOURCE_VIEW_DESC1, D3D11_SHADER_RESOURCE_VIEW_DESC1_0,
-                D3D11_TEX2D_SRV1, D3D11_TEX2D_UAV, D3D11_TEXTURE2D_DESC,
-                D3D11_UAV_DIMENSION_TEXTURE2D, D3D11_UNORDERED_ACCESS_VIEW_DESC,
-                D3D11_UNORDERED_ACCESS_VIEW_DESC_0, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-                D3D11_VIDEO_DECODER_DESC, D3D11CreateDevice, ID3D11Buffer, ID3D11ComputeShader,
-                ID3D11Device, ID3D11Device3, ID3D11DeviceContext, ID3D11DeviceContext1,
-                ID3D11ShaderResourceView, ID3D11ShaderResourceView1, ID3D11Texture2D,
-                ID3D11UnorderedAccessView, ID3D11VideoDevice,
+                D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+                D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC1,
+                D3D11_SHADER_RESOURCE_VIEW_DESC1_0, D3D11_TEX2D_SRV1, D3D11_TEX2D_UAV,
+                D3D11_TEXTURE2D_DESC, D3D11_UAV_DIMENSION_TEXTURE2D,
+                D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_UNORDERED_ACCESS_VIEW_DESC_0,
+                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_DECODER_DESC,
+                D3D11CreateDevice, ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11Device3,
+                ID3D11DeviceContext, ID3D11DeviceContext1, ID3D11ShaderResourceView,
+                ID3D11ShaderResourceView1, ID3D11Texture2D, ID3D11UnorderedAccessView,
+                ID3D11VideoDevice,
             },
-            Dxgi::Common::{
-                DXGI_FORMAT_NV12, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_SAMPLE_DESC,
+            Dxgi::{
+                Common::{
+                    DXGI_FORMAT_NV12, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM,
+                    DXGI_SAMPLE_DESC,
+                },
+                DXGI_ERROR_WAS_STILL_DRAWING,
             },
         },
         Media::MediaFoundation::{
@@ -161,9 +167,18 @@ pub struct NV12Sample {
 
 #[derive(Clone)]
 pub struct NV12Data {
-    pub data: Arc<Vec<u8>>,
+    pub data: Arc<MappedNV12>,
     pub y_stride: u32,
     pub uv_stride: u32,
+    /// Identifies this fill of a reused staging texture, so storage-identity
+    /// comparisons do not mistake a recycled allocation for the same frame.
+    pub storage_epoch: u64,
+}
+
+impl NV12Data {
+    pub fn as_slice(&self) -> &[u8] {
+        self.data.as_slice()
+    }
 }
 #[derive(Clone)]
 pub struct FrameTexture {
@@ -583,7 +598,297 @@ fn create_uav(
     }
 }
 
-// Samples whose copy to a staging texture can be in flight while an earlier one is read back.
+const MAX_IDLE_STAGING_BYTES: usize = 32 * 1024 * 1024;
+// Idle readback textures are process-wide: per-decoder caps would multiply the
+// staging footprint in projects with many segment and transition decoders.
+const MAX_GLOBAL_IDLE_STAGING_BYTES: usize = 128 * 1024 * 1024;
+const MIN_STAGING_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_STAGING_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_GLOBAL_LIVE_STAGING_BYTES: usize = 512 * 1024 * 1024;
+static ACTIVE_MF_DECODERS: AtomicUsize = AtomicUsize::new(0);
+static NEXT_READBACK_EPOCH: AtomicU64 = AtomicU64::new(1);
+static GLOBAL_IDLE_STAGING_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+pub fn staging_cache_budget() -> usize {
+    let decoders = ACTIVE_MF_DECODERS.load(Ordering::Relaxed).max(1);
+    (MAX_GLOBAL_LIVE_STAGING_BYTES / decoders)
+        .clamp(MIN_STAGING_CACHE_BYTES, MAX_STAGING_CACHE_BYTES)
+}
+
+struct StagingDecoderGuard;
+
+impl StagingDecoderGuard {
+    fn new() -> Self {
+        ACTIVE_MF_DECODERS.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for StagingDecoderGuard {
+    fn drop(&mut self) {
+        let _ = ACTIVE_MF_DECODERS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |decoders| {
+            Some(decoders.saturating_sub(1))
+        });
+    }
+}
+
+fn reserve_global_staging(bytes: usize) -> bool {
+    let mut current = GLOBAL_IDLE_STAGING_BYTES.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = current.checked_add(bytes) else {
+            return false;
+        };
+        if next > MAX_GLOBAL_IDLE_STAGING_BYTES {
+            return false;
+        }
+        match GLOBAL_IDLE_STAGING_BYTES.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+#[derive(Default)]
+struct FreeStagingTextures {
+    textures: Vec<ID3D11Texture2D>,
+    bytes: usize,
+}
+
+struct StagingTexturePool {
+    free: std::sync::Mutex<FreeStagingTextures>,
+    device: ID3D11Device,
+    width: u32,
+    height: u32,
+    frame_bytes: usize,
+}
+
+unsafe impl Send for StagingTexturePool {}
+unsafe impl Sync for StagingTexturePool {}
+
+impl StagingTexturePool {
+    fn new(device: ID3D11Device, width: u32, height: u32) -> Self {
+        Self {
+            free: std::sync::Mutex::new(FreeStagingTextures::default()),
+            device,
+            width,
+            height,
+            frame_bytes: (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(3)
+                / 2,
+        }
+    }
+
+    fn acquire(&self) -> Result<(ID3D11Texture2D, bool), String> {
+        let mut free = self
+            .free
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(texture) = free.textures.pop() {
+            free.bytes = free.bytes.saturating_sub(self.frame_bytes);
+            let _ = GLOBAL_IDLE_STAGING_BYTES.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |bytes| Some(bytes.saturating_sub(self.frame_bytes)),
+            );
+            return Ok((texture, true));
+        }
+        drop(free);
+
+        let texture = unsafe { create_staging_texture(&self.device, self.width, self.height)? };
+        Ok((texture, false))
+    }
+
+    fn recycle(&self, texture: ID3D11Texture2D) {
+        let mut free = self
+            .free
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if free.bytes.saturating_add(self.frame_bytes) > MAX_IDLE_STAGING_BYTES
+            || !reserve_global_staging(self.frame_bytes)
+        {
+            return;
+        }
+
+        free.textures.push(texture);
+        free.bytes = free.bytes.saturating_add(self.frame_bytes);
+    }
+}
+
+impl Drop for StagingTexturePool {
+    fn drop(&mut self) {
+        let free = self
+            .free
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if free.bytes > 0 {
+            let _ = GLOBAL_IDLE_STAGING_BYTES.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |bytes| Some(bytes.saturating_sub(free.bytes)),
+            );
+        }
+    }
+}
+
+/// A decoded NV12 frame left mapped in its staging texture. The mapping stays
+/// valid until the last clone is dropped, so plane access involves no copy.
+pub struct MappedNV12 {
+    texture: Option<ID3D11Texture2D>,
+    context: ID3D11DeviceContext,
+    _device: ID3D11Device,
+    pool: Arc<StagingTexturePool>,
+    _init_guard: Arc<MFInitGuard>,
+    ptr: *mut u8,
+    len: usize,
+}
+
+// SAFETY: the mapped bytes are immutable while shared, and Unmap only runs
+// when the last reference is dropped.
+unsafe impl Send for MappedNV12 {}
+unsafe impl Sync for MappedNV12 {}
+
+impl MappedNV12 {
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Drop for MappedNV12 {
+    fn drop(&mut self) {
+        if let Some(texture) = self.texture.take() {
+            unsafe {
+                self.context.Unmap(&texture, 0);
+            }
+            self.pool.recycle(texture);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NV12ReadbackStats {
+    pub frames: u64,
+    pub bytes: u64,
+    pub map_immediate: u64,
+    pub map_waited: u64,
+    pub map_blocked: u64,
+    pub map_wait: Duration,
+    pub pool_hits: u64,
+    pub pool_misses: u64,
+}
+
+impl NV12ReadbackStats {
+    fn record_frame(&mut self, bytes: usize, map_wait: Duration, attempts: u32, blocked: bool) {
+        self.frames += 1;
+        self.bytes = self.bytes.saturating_add(bytes as u64);
+        self.map_wait += map_wait;
+        if attempts == 0 {
+            self.map_immediate += 1;
+        } else {
+            self.map_waited += 1;
+        }
+        if blocked {
+            self.map_blocked += 1;
+        }
+
+        if self.frames % 240 == 0 {
+            tracing::debug!(
+                frames = self.frames,
+                readback_mb = self.bytes as f64 / (1024.0 * 1024.0),
+                map_immediate = self.map_immediate,
+                map_waited = self.map_waited,
+                map_blocked = self.map_blocked,
+                map_wait_us = self.map_wait.as_secs_f64() * 1_000_000.0 / self.frames as f64,
+                pool_hits = self.pool_hits,
+                pool_misses = self.pool_misses,
+                "MediaFoundation NV12 readback"
+            );
+        }
+    }
+}
+
+unsafe fn map_nv12_staging(
+    context: &ID3D11DeviceContext,
+    device: &ID3D11Device,
+    staging: ID3D11Texture2D,
+    height: u32,
+    pool: &Arc<StagingTexturePool>,
+    stats: &mut NV12ReadbackStats,
+    init_guard: Arc<MFInitGuard>,
+) -> Result<NV12Data, String> {
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    let map_start = Instant::now();
+    let mut attempts = 0u32;
+    let mut blocked = false;
+
+    match unsafe {
+        context.Map(
+            &staging,
+            0,
+            D3D11_MAP_READ,
+            D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+            Some(&mut mapped),
+        )
+    } {
+        Ok(()) => {}
+        Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING => {
+            attempts = 1;
+            // The copy is still in flight and this thread has no other work to
+            // overlap, so spinning would only add to the wait. Block in Map.
+            if let Err(error) =
+                unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }
+            {
+                pool.recycle(staging);
+                return Err(format!("Map staging texture failed: {error:?}"));
+            }
+            blocked = true;
+        }
+        Err(error) => {
+            pool.recycle(staging);
+            return Err(format!("Map staging texture failed: {error:?}"));
+        }
+    }
+    let map_wait = map_start.elapsed();
+
+    let y_stride = mapped.RowPitch;
+    let uv_height = height.div_ceil(2);
+    let len = (y_stride as usize)
+        .saturating_mul(height as usize)
+        .saturating_add((y_stride as usize).saturating_mul(uv_height as usize));
+    let storage_epoch = NEXT_READBACK_EPOCH.fetch_add(1, Ordering::Relaxed);
+
+    stats.record_frame(len, map_wait, attempts, blocked);
+
+    Ok(NV12Data {
+        data: Arc::new(MappedNV12 {
+            texture: Some(staging),
+            context: context.clone(),
+            _device: device.clone(),
+            pool: Arc::clone(pool),
+            _init_guard: init_guard,
+            ptr: mapped.pData as *mut u8,
+            len,
+        }),
+        y_stride,
+        uv_stride: y_stride,
+        storage_epoch,
+    })
+}
+
+// Samples whose copy to a staging texture can be in flight while an earlier one is mapped.
 const READBACK_DEPTH: usize = 2;
 
 pub struct MediaFoundationDecoder {
@@ -595,15 +900,18 @@ pub struct MediaFoundationDecoder {
     height: u32,
     frame_rate_num: u32,
     frame_rate_den: u32,
-    readback_free: Vec<ID3D11Texture2D>,
     readback_queue: VecDeque<(i64, ID3D11Texture2D)>,
+    staging_pool: Arc<StagingTexturePool>,
+    readback_stats: NV12ReadbackStats,
     // How the stream stopped, reported once the queued readbacks are drained.
     readback_end: Option<Result<(), String>>,
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
+    _staging_guard: StagingDecoderGuard,
     // COM can unload the decoder DLL, so release every COM field before its apartment shuts down.
-    _init_guard: MFInitGuard,
+    _init_guard: Arc<MFInitGuard>,
+    _com_guard: ComInitGuard,
 }
 
 struct MFInitGuard {
@@ -612,11 +920,28 @@ struct MFInitGuard {
 
 impl Drop for MFInitGuard {
     fn drop(&mut self) {
-        unsafe {
-            if self.media_foundation_started {
+        if self.media_foundation_started {
+            unsafe {
                 let _ = MFShutdown();
             }
-            CoUninitialize();
+        }
+    }
+}
+
+// COM apartments belong to the thread that initialized them, so that lifetime
+// stays with the decoder on its creating thread instead of following mapped
+// frames onto a render thread.
+struct ComInitGuard {
+    initialized: bool,
+    init_thread: std::thread::ThreadId,
+}
+
+impl Drop for ComInitGuard {
+    fn drop(&mut self) {
+        if self.initialized && std::thread::current().id() == self.init_thread {
+            unsafe {
+                CoUninitialize();
+            }
         }
     }
 }
@@ -632,14 +957,18 @@ impl MediaFoundationDecoder {
                 .ok()
                 .map_err(|e| format!("Failed to initialize COM: {e:?}"))?;
         }
-        let mut guard = MFInitGuard {
+        let com_guard = ComInitGuard {
+            initialized: true,
+            init_thread: std::thread::current().id(),
+        };
+        let mut init_guard = MFInitGuard {
             media_foundation_started: false,
         };
         unsafe {
             MFStartup(MF_API_VERSION, MFSTARTUP_NOSOCKET)
                 .map_err(|e| format!("Failed to start Media Foundation: {e:?}"))?;
         }
-        guard.media_foundation_started = true;
+        init_guard.media_foundation_started = true;
 
         let (d3d11_device, d3d11_context) = unsafe { create_d3d11_device()? };
         let device_manager = unsafe { create_dxgi_device_manager(&d3d11_device)? };
@@ -656,10 +985,11 @@ impl MediaFoundationDecoder {
             .clone();
 
         let plane_converter = Nv12PlaneConverter::new(&d3d11_device, &d3d11_context)?;
-
-        let readback_free = (0..READBACK_DEPTH)
-            .map(|_| unsafe { create_staging_texture(&d3d11_device, width, height) })
-            .collect::<Result<Vec<_>, _>>()?;
+        let staging_pool = Arc::new(StagingTexturePool::new(d3d11_device.clone(), width, height));
+        for _ in 0..READBACK_DEPTH {
+            let texture = unsafe { create_staging_texture(&d3d11_device, width, height)? };
+            staging_pool.recycle(texture);
+        }
 
         if width > capabilities.max_width || height > capabilities.max_height {
             warn!(
@@ -688,13 +1018,16 @@ impl MediaFoundationDecoder {
             height,
             frame_rate_num,
             frame_rate_den,
-            readback_free,
             readback_queue: VecDeque::new(),
+            staging_pool,
+            readback_stats: NV12ReadbackStats::default(),
             readback_end: None,
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
-            _init_guard: guard,
+            _staging_guard: StagingDecoderGuard::new(),
+            _init_guard: Arc::new(init_guard),
+            _com_guard: com_guard,
         })
     }
 
@@ -718,14 +1051,32 @@ impl MediaFoundationDecoder {
         &self.capabilities
     }
 
+    pub fn readback_stats(&self) -> NV12ReadbackStats {
+        self.readback_stats
+    }
+
     /// Reads the next sample back to the CPU. The copy of the sample after it is queued
-    /// first, so the GPU decodes and copies that one while this one is copied out.
+    /// first, so the GPU decodes and copies that one while this one is mapped.
     pub fn read_nv12(&mut self) -> Result<Option<NV12Sample>, String> {
-        while self.readback_end.is_none()
-            && let Some(staging) = self.readback_free.pop()
-        {
+        let mut enqueued = false;
+        while self.readback_end.is_none() && self.readback_queue.len() < READBACK_DEPTH {
+            let (staging, reused) = self.staging_pool.acquire()?;
+            if reused {
+                self.readback_stats.pool_hits += 1;
+            } else {
+                self.readback_stats.pool_misses += 1;
+            }
+
             match unsafe { self.read_decoder_surface() } {
                 Ok(Some(surface)) => {
+                    let source_box = D3D11_BOX {
+                        left: 0,
+                        top: 0,
+                        front: 0,
+                        right: self.width,
+                        bottom: self.height,
+                        back: 1,
+                    };
                     unsafe {
                         self.d3d11_context.CopySubresourceRegion(
                             &staging,
@@ -735,15 +1086,21 @@ impl MediaFoundationDecoder {
                             0,
                             &surface.texture,
                             surface.subresource,
-                            None,
+                            Some(&source_box),
                         );
                     }
                     self.readback_queue.push_back((surface.pts, staging));
+                    enqueued = true;
                 }
                 end => {
-                    self.readback_free.push(staging);
+                    self.staging_pool.recycle(staging);
                     self.readback_end = Some(end.map(|_| ()));
                 }
+            }
+        }
+        if enqueued {
+            unsafe {
+                self.d3d11_context.Flush();
             }
         }
 
@@ -754,38 +1111,22 @@ impl MediaFoundationDecoder {
                 .expect("the queue only runs dry once the stream has stopped")
                 .map(|()| None);
         };
-        let data = unsafe { self.map_staging(&staging) };
-        self.readback_free.push(staging);
+        let data = unsafe { self.map_staging(staging) };
         Ok(Some(NV12Sample { pts, data: data? }))
     }
 
-    unsafe fn map_staging(&self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    unsafe fn map_staging(&mut self, staging: ID3D11Texture2D) -> Result<NV12Data, String> {
         unsafe {
-            self.d3d11_context
-                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                .map_err(|e| format!("Map staging texture failed: {e:?}"))?;
+            map_nv12_staging(
+                &self.d3d11_context,
+                &self.d3d11_device,
+                staging,
+                self.height,
+                &self.staging_pool,
+                &mut self.readback_stats,
+                Arc::clone(&self._init_guard),
+            )
         }
-
-        let y_stride = mapped.RowPitch;
-        let y_height = self.height;
-        let uv_height = self.height / 2;
-
-        let y_size = (y_stride * y_height) as usize;
-        let uv_size = (y_stride * uv_height) as usize;
-        let total_size = y_size + uv_size;
-
-        let mut data = vec![0u8; total_size];
-        unsafe {
-            std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), total_size);
-            self.d3d11_context.Unmap(staging, 0);
-        }
-
-        Ok(NV12Data {
-            data: Arc::new(data),
-            y_stride,
-            uv_stride: y_stride,
-        })
     }
 
     pub fn read_sample(&mut self) -> Result<Option<MFDecodedFrame>, String> {
@@ -932,8 +1273,9 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("Seek failed: {e:?}"))?;
         }
 
-        self.readback_free
-            .extend(self.readback_queue.drain(..).map(|(_, staging)| staging));
+        for (_, staging) in self.readback_queue.drain(..) {
+            self.staging_pool.recycle(staging);
+        }
         self.readback_end = None;
         Ok(())
     }
@@ -1204,8 +1546,8 @@ mod tests {
         // end-of-stream flag, so both readers stop at whichever comes first.
         let mut expected = Vec::new();
         let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
-        let staging = decoder.readback_free[0].clone();
         let expected_end = loop {
+            let (staging, _) = decoder.staging_pool.acquire().unwrap();
             match unsafe { decoder.read_decoder_surface() } {
                 Ok(Some(surface)) => unsafe {
                     decoder.d3d11_context.CopySubresourceRegion(
@@ -1218,9 +1560,13 @@ mod tests {
                         surface.subresource,
                         None,
                     );
-                    expected.push((surface.pts, decoder.map_staging(&staging).unwrap().data));
+                    let data = decoder.map_staging(staging).unwrap();
+                    expected.push((surface.pts, data.as_slice().to_vec()));
                 },
-                end => break end.is_err(),
+                end => {
+                    decoder.staging_pool.recycle(staging);
+                    break end.is_err();
+                }
             }
         };
         drop(decoder);
@@ -1229,7 +1575,7 @@ mod tests {
         let mut read = Vec::new();
         let end = loop {
             match decoder.read_nv12() {
-                Ok(Some(sample)) => read.push((sample.pts, sample.data.data)),
+                Ok(Some(sample)) => read.push((sample.pts, sample.data.as_slice().to_vec())),
                 end => break end.is_err(),
             }
         };
@@ -1237,15 +1583,286 @@ mod tests {
         assert!(read == expected);
         assert_eq!(end, expected_end);
 
+        let stats = decoder.readback_stats();
+        assert_eq!(stats.frames, read.len() as u64);
+        assert!(stats.pool_hits + stats.pool_misses >= stats.frames);
+
         let first = |decoder: &mut MediaFoundationDecoder| {
             let sample = decoder.read_nv12().unwrap().unwrap();
-            (sample.pts, sample.data.data)
+            (sample.pts, sample.data.as_slice().to_vec())
         };
         decoder.seek(0).unwrap();
         assert!(first(&mut decoder) == expected[0]);
         decoder.read_nv12().unwrap();
         decoder.seek(0).unwrap();
         assert!(first(&mut decoder) == expected[0]);
+    }
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn mapped_frame_outlives_decoder() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let frame = decoder.read_nv12().unwrap().unwrap();
+        drop(decoder);
+
+        std::thread::spawn(move || {
+            std::hint::black_box(frame.data.as_slice()[0]);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn staging_pool_reuses_recycled_textures() {
+        let (device, _) = unsafe { create_d3d11_device().unwrap() };
+        let pool = StagingTexturePool::new(device, 64, 64);
+
+        let (first, first_hit) = pool.acquire().unwrap();
+        assert!(!first_hit);
+        pool.recycle(first);
+
+        let (second, second_hit) = pool.acquire().unwrap();
+        assert!(second_hit);
+        pool.recycle(second);
+    }
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn aligned_decoder_surface_copies_only_the_visible_rows() {
+        use windows::Win32::Graphics::Direct3D11::{D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE};
+
+        const WIDTH: u32 = 1920;
+        const HEIGHT: u32 = 1080;
+        const SURFACE_HEIGHT: u32 = 1088;
+
+        let (device, context) = unsafe { create_d3d11_device().unwrap() };
+        let source = unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: WIDTH,
+                Height: SURFACE_HEIGHT,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: (D3D11_CPU_ACCESS_READ.0 | D3D11_CPU_ACCESS_WRITE.0) as u32,
+                MiscFlags: 0,
+            };
+            let mut texture = None;
+            device
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .unwrap();
+            texture.unwrap()
+        };
+        let staging = unsafe { create_staging_texture(&device, WIDTH, HEIGHT).unwrap() };
+
+        unsafe {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context
+                .Map(&source, 0, D3D11_MAP_WRITE, 0, Some(&mut mapped))
+                .unwrap();
+            let pitch = mapped.RowPitch as usize;
+            let y_len = pitch * SURFACE_HEIGHT as usize;
+            let uv_len = pitch * SURFACE_HEIGHT.div_ceil(2) as usize;
+            let bytes = std::slice::from_raw_parts_mut(mapped.pData as *mut u8, y_len + uv_len);
+            for row in 0..SURFACE_HEIGHT as usize {
+                let value = if row < HEIGHT as usize {
+                    row as u8
+                } else {
+                    0xEE
+                };
+                bytes[row * pitch..(row + 1) * pitch].fill(value);
+            }
+            for row in 0..SURFACE_HEIGHT.div_ceil(2) as usize {
+                let value = if row < HEIGHT.div_ceil(2) as usize {
+                    0x80 | (row as u8 & 0x7F)
+                } else {
+                    0xDD
+                };
+                let start = y_len + row * pitch;
+                bytes[start..start + pitch].fill(value);
+            }
+            context.Unmap(&source, 0);
+
+            let source_box = D3D11_BOX {
+                left: 0,
+                top: 0,
+                front: 0,
+                right: WIDTH,
+                bottom: HEIGHT,
+                back: 1,
+            };
+            context.CopySubresourceRegion(&staging, 0, 0, 0, 0, &source, 0, Some(&source_box));
+            context.Flush();
+
+            context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .unwrap();
+            let staging_pitch = mapped.RowPitch as usize;
+            let staging_y_len = staging_pitch * HEIGHT as usize;
+            let staging_uv_len = staging_pitch * HEIGHT.div_ceil(2) as usize;
+            let visible = std::slice::from_raw_parts(
+                mapped.pData as *const u8,
+                staging_y_len + staging_uv_len,
+            );
+            for row in 0..HEIGHT as usize {
+                assert!(
+                    visible[row * staging_pitch..row * staging_pitch + WIDTH as usize]
+                        .iter()
+                        .all(|&byte| byte == row as u8),
+                    "luma row {row} was not copied from the visible region"
+                );
+            }
+            for row in 0..HEIGHT.div_ceil(2) as usize {
+                let start = staging_y_len + row * staging_pitch;
+                assert!(
+                    visible[start..start + WIDTH as usize]
+                        .iter()
+                        .all(|&byte| byte == 0x80 | (row as u8 & 0x7F)),
+                    "chroma row {row} was not copied from the visible region"
+                );
+            }
+            context.Unmap(&staging, 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "performance probe: baseline blocking Map plus a fresh buffer per frame"]
+    fn nv12_4k_readback_baseline() {
+        const WIDTH: u32 = 3840;
+        const HEIGHT: u32 = 2160;
+        const ITERS: u32 = 60;
+
+        let (device, context) = unsafe { create_d3d11_device().unwrap() };
+        let source = create_internal_texture(&device, WIDTH, HEIGHT, DXGI_FORMAT_NV12, 0).unwrap();
+        let staging = [
+            unsafe { create_staging_texture(&device, WIDTH, HEIGHT).unwrap() },
+            unsafe { create_staging_texture(&device, WIDTH, HEIGHT).unwrap() },
+        ];
+
+        unsafe {
+            context.CopySubresourceRegion(&staging[0], 0, 0, 0, 0, &source.texture, 0, None);
+            context.Flush();
+        }
+
+        let wall_start = Instant::now();
+        let mut map_wait = Duration::ZERO;
+        let mut copy_time = Duration::ZERO;
+        let mut bytes = 0usize;
+        for iteration in 0..ITERS {
+            let current = (iteration % 2) as usize;
+            let next = ((iteration + 1) % 2) as usize;
+            unsafe {
+                context.CopySubresourceRegion(&staging[next], 0, 0, 0, 0, &source.texture, 0, None);
+                context.Flush();
+
+                let map_start = Instant::now();
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                context
+                    .Map(&staging[current], 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    .unwrap();
+                map_wait += map_start.elapsed();
+
+                let y_stride = mapped.RowPitch as usize;
+                let total_size =
+                    y_stride * HEIGHT as usize + y_stride * HEIGHT.div_ceil(2) as usize;
+                let copy_start = Instant::now();
+                let mut data = vec![0u8; total_size];
+                std::ptr::copy_nonoverlapping(
+                    mapped.pData as *const u8,
+                    data.as_mut_ptr(),
+                    total_size,
+                );
+                context.Unmap(&staging[current], 0);
+                copy_time += copy_start.elapsed();
+                bytes += total_size;
+                std::hint::black_box(data.len());
+            }
+        }
+        let wall = wall_start.elapsed();
+
+        let frames = ITERS as f64;
+        let readback_mib = bytes as f64 / (1024.0 * 1024.0);
+        println!(
+            "4K NV12 MF readback baseline (blocking map, fresh Vec): {:.2} ms/frame wall ({:.1} MiB/s), map {:.2} ms, alloc+copy {:.2} ms",
+            wall.as_secs_f64() * 1000.0 / frames,
+            readback_mib / wall.as_secs_f64(),
+            map_wait.as_secs_f64() * 1000.0 / frames,
+            copy_time.as_secs_f64() * 1000.0 / frames,
+        );
+    }
+
+    #[test]
+    #[ignore = "performance probe: requires a Windows D3D11 device"]
+    fn nv12_4k_readback_benchmark() {
+        const WIDTH: u32 = 3840;
+        const HEIGHT: u32 = 2160;
+        const ITERS: u32 = 60;
+
+        let (device, context) = unsafe { create_d3d11_device().unwrap() };
+        let source = create_internal_texture(&device, WIDTH, HEIGHT, DXGI_FORMAT_NV12, 0).unwrap();
+        let staging_pool = Arc::new(StagingTexturePool::new(device.clone(), WIDTH, HEIGHT));
+        let mut stats = NV12ReadbackStats::default();
+
+        let (mut staging, _) = staging_pool.acquire().unwrap();
+        unsafe {
+            context.CopySubresourceRegion(&staging, 0, 0, 0, 0, &source.texture, 0, None);
+            context.Flush();
+        }
+
+        let guard = Arc::new(MFInitGuard {
+            media_foundation_started: false,
+        });
+
+        let wall_start = Instant::now();
+        for _ in 0..ITERS {
+            let (next, reused) = staging_pool.acquire().unwrap();
+            if reused {
+                stats.pool_hits += 1;
+            } else {
+                stats.pool_misses += 1;
+            }
+            unsafe {
+                context.CopySubresourceRegion(&next, 0, 0, 0, 0, &source.texture, 0, None);
+                context.Flush();
+                let data = map_nv12_staging(
+                    &context,
+                    &device,
+                    staging,
+                    HEIGHT,
+                    &staging_pool,
+                    &mut stats,
+                    Arc::clone(&guard),
+                )
+                .unwrap();
+                std::hint::black_box(data.as_slice().len());
+            }
+            staging = next;
+        }
+        let wall = wall_start.elapsed();
+
+        let frames = stats.frames as f64;
+        let readback_mib = stats.bytes as f64 / (1024.0 * 1024.0);
+        println!(
+            "4K NV12 MF readback (2-deep, zero-copy): {:.2} ms/frame wall ({:.1} MiB/s), map {:.2} ms, immediate {}/{}, blocked {}, staging hits {}",
+            wall.as_secs_f64() * 1000.0 / frames,
+            readback_mib / wall.as_secs_f64(),
+            stats.map_wait.as_secs_f64() * 1000.0 / frames,
+            stats.map_immediate,
+            stats.frames,
+            stats.map_blocked,
+            stats.pool_hits,
+        );
+        assert_eq!(stats.frames, ITERS as u64);
+        assert!(stats.pool_hits + stats.pool_misses >= stats.frames);
+        assert!(stats.pool_hits > 0);
     }
 
     fn normalized(path: &str) -> String {

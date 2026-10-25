@@ -148,10 +148,13 @@ pub struct DecodedFrame {
     matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
+    storage_epoch: u64,
     #[cfg(target_os = "macos")]
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+    #[cfg(target_os = "windows")]
+    mapped_nv12: Option<Arc<cap_video_decode::MappedNV12>>,
     #[cfg(target_os = "linux")]
     cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
@@ -238,11 +241,20 @@ pub(crate) struct DecodedFrameStorageIdentity {
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
+    storage_epoch: u64,
 }
 
 impl DecodedFrameStorageIdentity {
     pub(crate) fn matches(&self, other: &Self) -> bool {
-        self.data.ptr_eq(&other.data)
+        // Mapped staging textures are recycled, so a frame built from the same
+        // `data` slot can hold different pixels; the readback epoch identifies
+        // the actual sample and must win when either side has one.
+        let same_storage = if self.storage_epoch != 0 || other.storage_epoch != 0 {
+            self.storage_epoch == other.storage_epoch
+        } else {
+            self.data.ptr_eq(&other.data)
+        };
+        same_storage
             && self.width == other.width
             && self.height == other.height
             && self.format == other.format
@@ -254,7 +266,7 @@ impl DecodedFrameStorageIdentity {
 impl fmt::Debug for DecodedFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DecodedFrame")
-            .field("data_len", &self.data.len())
+            .field("data_len", &self.byte_len())
             .field("width", &self.width)
             .field("height", &self.height)
             .field("format", &self.format)
@@ -274,10 +286,13 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -292,10 +307,13 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -317,6 +335,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: frame.y_pitch as u32,
             uv_stride: frame.uv_pitch as u32,
+            storage_epoch: 0,
             cuda_nv12: Some(frame),
         }
     }
@@ -335,10 +354,13 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -359,13 +381,46 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn new_nv12_with_mapped(
+        mapped: Arc<cap_video_decode::MappedNV12>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
+            y_stride,
+            uv_stride,
+            storage_epoch: 0,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
+            d3d11_texture_backing: None,
+            mapped_nv12: Some(mapped),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn with_storage_epoch(mut self, storage_epoch: u64) -> Self {
+        self.storage_epoch = storage_epoch;
+        self
     }
 
     #[cfg(target_os = "macos")]
@@ -384,6 +439,7 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            storage_epoch: 0,
             image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
         }
     }
@@ -403,10 +459,13 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -427,10 +486,13 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -446,9 +508,11 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new(texture))),
+            mapped_nv12: None,
         }
     }
 
@@ -467,12 +531,14 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_handle(
                 texture,
                 shared_handle,
             ))),
+            mapped_nv12: None,
         }
     }
 
@@ -503,7 +569,14 @@ impl DecodedFrame {
             .and_then(|b| b.uv_handle())
     }
 
+    /// Mapped Media Foundation frames return their mapped NV12 buffer; other
+    /// frames return their contiguous CPU bytes.
     pub fn data(&self) -> &[u8] {
+        #[cfg(target_os = "windows")]
+        if let Some(mapped) = &self.mapped_nv12 {
+            return mapped.as_slice();
+        }
+
         #[cfg(target_os = "macos")]
         if self.data.is_empty()
             && let Some(backing) = &self.image_buf_backing
@@ -544,6 +617,11 @@ impl DecodedFrame {
     }
 
     pub fn byte_len(&self) -> usize {
+        #[cfg(target_os = "windows")]
+        if let Some(mapped) = &self.mapped_nv12 {
+            return mapped.len();
+        }
+
         if !self.data.is_empty() {
             return self.data.len();
         }
@@ -568,6 +646,7 @@ impl DecodedFrame {
             format: self.format,
             y_stride: self.y_stride,
             uv_stride: self.uv_stride,
+            storage_epoch: self.storage_epoch,
         }
     }
 
@@ -1929,6 +2008,24 @@ mod tests {
                 .storage_identity()
                 .matches(&distinct.storage_identity())
         );
+    }
+
+    #[test]
+    fn staging_epoch_distinguishes_recycled_slots() {
+        let data = Arc::new(vec![0; 8]);
+        let identity = |storage_epoch| DecodedFrameStorageIdentity {
+            data: Arc::downgrade(&data),
+            width: 2,
+            height: 2,
+            format: PixelFormat::Nv12,
+            y_stride: 2,
+            uv_stride: 2,
+            storage_epoch,
+        };
+
+        assert!(identity(7).matches(&identity(7)));
+        assert!(!identity(7).matches(&identity(8)));
+        assert!(!identity(7).matches(&identity(0)));
     }
 
     #[cfg(target_os = "macos")]
