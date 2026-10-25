@@ -3062,8 +3062,9 @@ mod system_audio_tests {
 #[cfg(test)]
 mod pipewire_frame_tests {
     use super::{
-        CaptureFramePool, FrameScaler, LinuxCaptureSource, VideoInfo, prefers_wayland_environment,
-        prepare_pipewire_frame, wayland_area_matches_display, wayland_video_info,
+        CAPTURE_FRAME_POOL_CAPACITY, CaptureFramePool, FrameScaler, LinuxCaptureSource, VideoInfo,
+        prefers_wayland_environment, prepare_pipewire_frame, wayland_area_matches_display,
+        wayland_video_info,
     };
 
     #[test]
@@ -3174,6 +3175,56 @@ mod pipewire_frame_tests {
         let reformatted = pool.acquire(ffmpeg::format::Pixel::RGBZ, 8, 2);
         assert_eq!(reformatted.format(), ffmpeg::format::Pixel::RGBZ);
         assert_ne!(reformatted.data(0).as_ptr(), resized_ptr);
+    }
+
+    #[test]
+    fn capture_frame_pool_keeps_held_frames_when_capacity_is_busy() {
+        let format = ffmpeg::format::Pixel::BGRZ;
+        let mut pool = CaptureFramePool::new();
+        let mut held = Vec::new();
+        let mut pointers = Vec::new();
+
+        for index in 0..CAPTURE_FRAME_POOL_CAPACITY {
+            let marker = (index + 1) as u8;
+            let mut frame = pool.acquire(format, 4, 2);
+            let pointer = frame.data(0).as_ptr();
+            frame.data_mut(0).fill(marker);
+            let frame = pool.share(frame);
+            assert_eq!(frame.data(0).as_ptr(), pointer);
+            assert!(frame.data(0).iter().all(|byte| *byte == marker));
+            pointers.push(pointer);
+            held.push(frame);
+        }
+
+        let mut overflow = pool.acquire(format, 4, 2);
+        let overflow_ptr = overflow.data(0).as_ptr();
+        assert!(!pointers.contains(&overflow_ptr));
+        overflow.data_mut(0).fill(9);
+        let overflow = pool.share(overflow);
+        assert_eq!(overflow.data(0).as_ptr(), overflow_ptr);
+        assert!(overflow.data(0).iter().all(|byte| *byte == 9));
+        assert_eq!(pool.frames.len(), CAPTURE_FRAME_POOL_CAPACITY);
+        assert!(
+            pool.frames
+                .iter()
+                .all(|frame| pointers.contains(&frame.data(0).as_ptr()))
+        );
+
+        for (index, frame) in held.iter().enumerate() {
+            let marker = (index + 1) as u8;
+            assert_eq!(frame.data(0).as_ptr(), pointers[index]);
+            assert!(frame.data(0).iter().all(|byte| *byte == marker));
+        }
+
+        let dropped_ptr = pointers.remove(0);
+        drop(held.remove(0));
+        let reused = pool.acquire(format, 4, 2);
+        assert_eq!(reused.data(0).as_ptr(), dropped_ptr);
+        assert_eq!(pool.frames.len(), CAPTURE_FRAME_POOL_CAPACITY - 1);
+        for (frame, pointer) in held.iter().zip(&pointers) {
+            assert_eq!(frame.data(0).as_ptr(), *pointer);
+        }
+        let _overflow = overflow;
     }
 
     #[test]
