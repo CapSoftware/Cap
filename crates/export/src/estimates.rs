@@ -244,6 +244,11 @@ pub async fn estimate_export(
     if sample_medias.len() != editor.segment_medias.len() {
         return Err("Recording sources changed during export estimation".into());
     }
+    if crate::reads_recordings_forward(&project) {
+        for sample in &sample_medias {
+            sample.decoders.prefer_sequential_access();
+        }
+    }
     let setup_seconds = setup_started.elapsed().as_secs_f64();
     let plan = sample_plan(settings);
     let windows = sample_windows(

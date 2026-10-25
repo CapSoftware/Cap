@@ -859,7 +859,12 @@ impl FfmpegDecoder {
                         })
                     };
 
-                    let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                    let cache_min =
+                        if sequential_access.preferred && !sequential_access.moved_backwards {
+                            requested_frame
+                        } else {
+                            requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2)
+                        };
                     let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
                     // The reader has already passed this uncached frame: it fell
@@ -975,7 +980,11 @@ impl FfmpegDecoder {
                             // candidate instead of discarding it; a frame below
                             // the cache window can never exceed the request, so
                             // nothing else in this iteration applies to it.
-                            if current_frame <= requested_frame {
+                            if current_frame <= requested_frame
+                                && hold_candidate
+                                    .as_ref()
+                                    .is_none_or(|(number, _)| current_frame >= *number)
+                            {
                                 hold_candidate = Some((current_frame, cache_frame));
                             }
                             continue;
@@ -1442,7 +1451,14 @@ impl FfmpegDecoder {
                     })
                 };
 
-                let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                let cache_min = if !is_hw
+                    && sequential_access.preferred
+                    && !sequential_access.moved_backwards
+                {
+                    requested_frame
+                } else {
+                    requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2)
+                };
                 let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
                 // The reader has already passed this uncached frame: it fell
@@ -1556,7 +1572,11 @@ impl FfmpegDecoder {
                         // candidate instead of discarding it; a frame below
                         // the cache window can never exceed the request, so
                         // nothing else in this iteration applies to it.
-                        if current_frame <= requested_frame {
+                        if current_frame <= requested_frame
+                            && hold_candidate
+                                .as_ref()
+                                .is_none_or(|(number, _)| current_frame >= *number)
+                        {
                             hold_candidate = Some((current_frame, cache_frame));
                         }
                         continue;

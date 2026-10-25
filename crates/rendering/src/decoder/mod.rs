@@ -2391,6 +2391,10 @@ mod managed_worker_tests {
     }
 
     fn encode_gapped_segments(directory: &std::path::Path) -> Vec<PathBuf> {
+        encode_gapped_segments_with_fps(directory, 30)
+    }
+
+    fn encode_gapped_segments_with_fps(directory: &std::path::Path, fps: u32) -> Vec<PathBuf> {
         ::ffmpeg::init().unwrap();
         let mut encoder = SegmentedVideoEncoder::init(
             directory.to_path_buf(),
@@ -2399,7 +2403,7 @@ mod managed_worker_tests {
                 width: 160,
                 height: 120,
                 time_base: Rational(1, 1_000_000),
-                frame_rate: Rational(30, 1),
+                frame_rate: Rational(fps as i32, 1),
             },
             SegmentedVideoEncoderConfig {
                 segment_duration: Duration::from_secs(1),
@@ -2409,7 +2413,8 @@ mod managed_worker_tests {
         )
         .unwrap();
         let mut noise = 123456789_u32;
-        for index in (0..90_u64).chain(180..300) {
+        let fps = u64::from(fps);
+        for index in (0..3 * fps).chain(6 * fps..10 * fps) {
             let mut frame = ::ffmpeg::frame::Video::new(::ffmpeg::format::Pixel::NV12, 160, 120);
             for byte in frame.data_mut(0) {
                 noise ^= noise << 13;
@@ -2419,7 +2424,7 @@ mod managed_worker_tests {
             }
             frame.data_mut(1).fill(128);
             encoder
-                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / fps))
                 .unwrap();
         }
         encoder.finish().unwrap();
@@ -2595,8 +2600,30 @@ mod managed_worker_tests {
 
     #[tokio::test]
     async fn sequential_export_matches_source_through_vfr_holds_and_backward_requests() {
+        let times = (0..570)
+            .map(|frame| frame as f32 / 60.0)
+            .chain([0.0, 3.75, 2.7, 7.75, 1.25, 8.5, 10.5]);
+        compare_sequential_export_with_source(30, times).await;
+    }
+
+    #[tokio::test]
+    async fn sequential_export_downsamples_with_sparse_jumps_and_eof_holds() {
+        let times = (0..12)
+            .chain(72..84)
+            .chain(108..120)
+            .chain(192..204)
+            .chain(264..276)
+            .map(|frame| frame as f32 / 30.0)
+            .chain([9.9, 9.9, 10.5, 10.5, 0.0, 3.75, 2.7, 7.75, 1.25, 8.5]);
+        compare_sequential_export_with_source(60, times).await;
+    }
+
+    async fn compare_sequential_export_with_source(
+        source_fps: u32,
+        times: impl IntoIterator<Item = f32>,
+    ) {
         let directory = tempfile::tempdir().unwrap();
-        encode_gapped_segments(directory.path());
+        encode_gapped_segments_with_fps(directory.path(), source_fps);
         // Decode once in source order, without the asynchronous request/cache
         // layer under test. Every encoded frame has distinct xorshift noise.
         let mut source =
@@ -2623,20 +2650,20 @@ mod managed_worker_tests {
                         pixels.extend_from_slice(&row[..width]);
                     }
                 }
-                (pts_to_frame(frame.pts().unwrap(), time_base, 30), pixels)
+                (
+                    pts_to_frame(frame.pts().unwrap(), time_base, source_fps),
+                    pixels,
+                )
             })
             .collect();
-        assert_eq!(oracle.len(), 210);
+        assert_eq!(oracle.len(), 7 * source_fps as usize);
         let (ordinary, ordinary_join) =
-            ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
+            ordinary_worker_with_fps(directory.path().to_path_buf(), 0.25, false, source_fps).await;
         let (sequential, sequential_join) =
-            ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
+            ordinary_worker_with_fps(directory.path().to_path_buf(), 0.25, false, source_fps).await;
         sequential.prefer_sequential_access();
-        let times = (0..570)
-            .map(|frame| frame as f32 / 60.0)
-            .chain([0.0, 3.75, 2.7, 7.75, 1.25, 8.5, 10.5]);
         for time in times {
-            let request = request_frame(time + 0.25, 30);
+            let request = request_frame(time + 0.25, source_fps);
             let expected = oracle.range(..=request).next_back().unwrap().1;
             let baseline = ordinary.get_frame_initial(time).await.unwrap();
             let actual = sequential.get_frame_initial(time).await.unwrap();
