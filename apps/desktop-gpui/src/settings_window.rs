@@ -5347,6 +5347,7 @@ mod tests {
 #[cfg(test)]
 mod recording_action_tests;
 
-pub(crate) mod render_bench;
+#[cfg(test)]
+mod render_bench;
 
 mod recordings_list;

@@ -12,8 +12,6 @@ impl SettingsWindow {
     /// The header is a `<Section>` with an Import button; below it a filter bar
     /// (three tab pills and the search field) and the bordered list, which is
     /// replaced wholesale by "No recordings found" when the library is empty.
-    /// Rows are mounted through a viewport list, so only the visible ones are
-    /// built on each repaint.
     pub(super) fn render_recordings(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let visible = self.recordings.visible_rows();
         let has_search = !self.recordings.trimmed_search().is_empty();
