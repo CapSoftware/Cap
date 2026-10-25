@@ -989,8 +989,8 @@ mod mac {
     use objc2_foundation::{MainThreadMarker, NSData, NSRunLoop, NSString, NSTimer};
 
     use super::mac_mode_picker::{
-        append_mode_picker, clear_hover, clear_hover_unless, hover_from_pointer, install_key_hook,
-        stop_flash,
+        append_mode_picker, clear_hover, clear_hover_unless, fit_to_menu_width, hover_from_pointer,
+        install_key_hook, stop_flash,
     };
     use super::{
         Accelerator, Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem,
@@ -1076,8 +1076,9 @@ mod mac {
             }
 
             #[unsafe(method(menuWillOpen:))]
-            fn menu_will_open(&self, _menu: &NSMenu) {
+            fn menu_will_open(&self, menu: &NSMenu) {
                 MENU_OPEN.with(|o| o.set(true));
+                fit_to_menu_width(menu.size().width);
                 clear_hover();
                 hover_from_pointer();
                 start_option_tracking();

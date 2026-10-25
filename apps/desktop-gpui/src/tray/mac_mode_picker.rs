@@ -14,11 +14,11 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAccessibility, NSAccessibilityElement, NSAccessibilityRadioButtonRole,
-    NSAccessibilityRadioGroupRole, NSAppearanceCustomization, NSBitmapImageRep, NSColor, NSEvent,
-    NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName, NSFontManager,
-    NSFontTraitMask, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSImageScaling,
-    NSImageView, NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions,
-    NSView, NSWindow,
+    NSAccessibilityRadioGroupRole, NSAppearanceCustomization, NSAutoresizingMaskOptions,
+    NSBitmapImageRep, NSColor, NSEvent, NSEventTrackingRunLoopMode, NSEventType, NSFont,
+    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightSemibold,
+    NSForegroundColorAttributeName, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem,
+    NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
@@ -212,6 +212,7 @@ impl ModePickerView {
         // Initialise first; everything below touches the live view.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
 
+        this.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         this.setWantsLayer(true);
         let root = this.layer().expect("layer-backed view");
         let make_layer = |radius: f64| -> Retained<CALayer> {
@@ -510,6 +511,14 @@ impl ModePickerView {
         }
     }
 
+    fn fit_to_width(&self, width: f64) {
+        let frame = self.frame();
+        if width > frame.size.width + 1.0 {
+            self.setFrameSize(NSSize::new(width, frame.size.height));
+            self.refresh();
+        }
+    }
+
     fn clear_focus(&self) {
         if self.ivars().focused.replace(None).is_some() {
             self.refresh();
@@ -559,6 +568,14 @@ pub(super) fn clear_hover() {
     PICKER.with(|p| {
         if let Some((_, view)) = p.borrow().as_ref() {
             view.clear_focus();
+        }
+    });
+}
+
+pub(super) fn fit_to_menu_width(width: f64) {
+    PICKER.with(|p| {
+        if let Some((_, view)) = p.borrow().as_ref() {
+            view.fit_to_width(width);
         }
     });
 }

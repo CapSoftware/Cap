@@ -82,7 +82,12 @@ impl UpdateRow {
         };
         Self {
             title,
-            enabled: !matches!(status, UpdateStatus::Checking),
+            enabled: !matches!(
+                status,
+                UpdateStatus::Checking
+                    | UpdateStatus::Downloading { .. }
+                    | UpdateStatus::Installing { .. }
+            ),
             badge: update_menu_badge(status),
         }
     }
@@ -1274,10 +1279,10 @@ mod tests {
     }
 
     /// The row is the second item of the App menu (`menu_bar_...` pins that
-    /// order); it greys out for the duration of a check so a second click
-    /// cannot fire another one.
+    /// order); it greys out while a check or download is running so a second
+    /// click cannot fire another one.
     #[test]
-    fn the_update_row_greys_out_while_checking() {
+    fn the_update_row_greys_out_while_busy() {
         fn row(status: &updates::UpdateStatus) -> (String, bool) {
             let menus = build_menus(status);
             match &menus[0].items[1] {
@@ -1293,6 +1298,19 @@ mod tests {
         assert_eq!(
             row(&updates::UpdateStatus::Checking),
             ("Checking for Update…".to_string(), true)
+        );
+        assert_eq!(
+            row(&updates::UpdateStatus::Downloading {
+                version: semver::Version::parse("0.4.0").unwrap(),
+                fraction: Some(0.42),
+            }),
+            ("Downloading update…".to_string(), true)
+        );
+        assert_eq!(
+            row(&updates::UpdateStatus::Installing {
+                version: semver::Version::parse("0.4.0").unwrap(),
+            }),
+            ("Downloading update…".to_string(), true)
         );
     }
 
@@ -1313,7 +1331,8 @@ mod tests {
         let cold = UpdateRow::of(&downloading(None));
         let warm = UpdateRow::of(&downloading(Some(0.42)));
         assert_eq!(cold.title, "Downloading update…");
-        assert!(cold.enabled);
+        assert!(!cold.enabled);
+        assert!(!warm.enabled);
         assert_eq!(warm.title, cold.title);
 
         let ready = UpdateRow::of(&UpdateStatus::Ready {
@@ -1331,6 +1350,7 @@ mod tests {
             version: version.clone(),
         });
         assert_eq!(installing.title, cold.title);
+        assert!(!installing.enabled);
     }
 
     #[cfg(target_os = "macos")]
