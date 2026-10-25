@@ -231,7 +231,7 @@ pub async fn create_dir(path: String, _recursive: bool) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(data))]
 pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write model file: {e}"))
 }
@@ -1352,7 +1352,7 @@ fn process_with_parakeet(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub async fn transcribe_audio(
     app: AppHandle,
     video_path: String,
