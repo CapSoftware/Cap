@@ -22,9 +22,9 @@ Each run (`run-desktop.sh <desktop> <package> <out-dir> [KEY=VALUE...]`):
    (`atspi-press.py`, the dialog's Add button) or click the tray item from a
    long-lived host connection (`sni-click.py`), approve the screen share, record
    for a few seconds, stop with the same control. On GNOME, `LAUNCH=terminal
-   TRAY_CLICK=menu GNOME_UNSAFE=1` takes the tray fallback through the
-   AppIndicator extension's menu (`panel-menu.py`), which is what a single click
-   on the icon opens;
+   TRAY_CLICK=pointer GNOME_UNSAFE=1` takes the tray fallback by clicking the
+   icon in the top bar and the entry of the menu it opens (`panel-locate.py`,
+   `mutter-pointer.py`);
 4. writes `result.txt`, which `check-results.sh` turns into pass or fail.
 
 `SCENARIO=settings-close` instead opens Cap's settings and closes it with the

@@ -80,13 +80,13 @@ jobs:
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
             "$RUNNER_TEMP/out/gnome" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
 
-      - name: GNOME 50 tray fallback (no app id, AppIndicator menu)
+      - name: GNOME 50 tray fallback (no app id, AppIndicator icon and menu)
         env:
           DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
           DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
-            "$RUNNER_TEMP/out/gnome-tray" LAUNCH=terminal TRAY_CLICK=menu GNOME_UNSAFE=1
+            "$RUNNER_TEMP/out/gnome-tray" LAUNCH=terminal TRAY_CLICK=pointer GNOME_UNSAFE=1
 
       - name: GNOME 50 settings window closes from its own button
         env:

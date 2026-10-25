@@ -7,6 +7,7 @@ app. Needs GNOME_UNSAFE=1 for window lookups.
 
 Usage: mutter-pointer.py, then one command per line on stdin:
   click <window title regex> <x fraction> <y fraction> [dx dy]
+  click-at <x> <y>
 Each command prints one line. Stays up until stdin closes.
 """
 import json
@@ -63,22 +64,28 @@ def main() -> int:
 
     for line in sys.stdin:
         parts = line.split()
-        if not parts or parts[0] != "click":
+        if not parts:
             continue
-        rect = window_rect(bus, parts[1])
-        if not rect:
-            print(f"no window matching {parts[1]}", flush=True)
+        if parts[0] == "click-at" and len(parts) == 3:
+            x, y = float(parts[1]), float(parts[2])
+        elif parts[0] == "click" and len(parts) >= 4:
+            rect = window_rect(bus, parts[1])
+            if not rect:
+                print(f"no window matching {parts[1]}", flush=True)
+                continue
+            dx, dy = (float(parts[4]), float(parts[5])) if len(parts) >= 6 else (0.0, 0.0)
+            x = rect[0] + rect[2] * float(parts[2]) + dx
+            y = rect[1] + rect[3] * float(parts[3]) + dy
+        else:
+            print(f"unknown command {line.strip()}", flush=True)
             continue
-        dx, dy = (float(parts[4]), float(parts[5])) if len(parts) >= 6 else (0.0, 0.0)
-        x = rect[0] + rect[2] * float(parts[2]) + dx
-        y = rect[1] + rect[3] * float(parts[3]) + dy
         time.sleep(0.3)
         remote("NotifyPointerMotionAbsolute", GLib.Variant("(sdd)", (stream, x, y)))
         time.sleep(0.3)
         remote("NotifyPointerButton", GLib.Variant("(ib)", (BTN_LEFT, True)))
         time.sleep(0.08)
         remote("NotifyPointerButton", GLib.Variant("(ib)", (BTN_LEFT, False)))
-        print(f"clicked {parts[1]} at {x:.0f},{y:.0f}", flush=True)
+        print(f"clicked at {x:.0f},{y:.0f}", flush=True)
     remote("Stop")
     return 0
 

@@ -6,7 +6,7 @@
 #
 # Env: HARNESS_OUT, LAUNCH (dock|terminal), RECORD_MODE (studio|instant),
 #      PRESS_AFTER (seconds; with no tray item by then, press the shortcut),
-#      TRAY_CLICK (host|menu).
+#      TRAY_CLICK (host|pointer).
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -34,15 +34,32 @@ tray_items() {
     RegisteredStatusNotifierItems 2>/dev/null | grep -o "'[^']*'" | wc -l
 }
 
+point() {
+  if [[ -z "$1" ]]; then
+    echo "nothing to click" >>"$out/actions.log"
+    return
+  fi
+  echo "click-at $1" >&"${POINTER[1]}"
+  local line
+  read -r -t 10 line <&"${POINTER[0]}"
+  echo "$line" >>"$out/actions.log"
+}
+
 # Use the Stop control the way a person would.
 use_control() {
   case "$1" in
     tray)
-      # TRAY_CLICK=menu goes through GNOME's AppIndicator extension: the
-      # menu a single click on the icon opens, and its entry. Otherwise the
-      # harness activates the item itself.
-      if [[ ${TRAY_CLICK:-host} == menu ]]; then
-        python3 "$here/panel-menu.py" "recording" >>"$out/actions.log" 2>&1
+      # TRAY_CLICK=pointer clicks the icon in GNOME's top bar and then the
+      # entry of the menu it opens, with the pointer. Otherwise the harness
+      # activates the item itself.
+      if [[ ${TRAY_CLICK:-host} == pointer ]]; then
+        point "$(python3 "$here/panel-locate.py" icon)"
+        local entry=""
+        for _ in $(seq 20); do
+          sleep 0.25
+          entry=$(python3 "$here/panel-locate.py" entry recording) && break
+        done
+        point "$entry"
       else
         echo click >&"${TRAY_HOST[1]}"
       fi
@@ -119,6 +136,12 @@ attempt() {
 
 # One tray host connection for the whole run, like a panel.
 coproc TRAY_HOST { python3 -u "$here/sni-click.py" "$out"; }
+if [[ ${TRAY_CLICK:-host} == pointer ]]; then
+  # The pointer must exist before Cap starts (see mutter-pointer.py).
+  coproc POINTER { python3 -u "$here/mutter-pointer.py" 2>>"$out/actions.log"; }
+  read -r -t 10 ready <&"${POINTER[0]}"
+  echo "$ready" >>"$out/actions.log"
+fi
 pid=$("$here/launch-cap.sh" cap CAP_GPUI_AUTO_RECORD="$mode:${AUTO_STOP_SECS:-900}" CAP_GPUI_AUTO_OVERLAY=display)
 attempt 1
 
