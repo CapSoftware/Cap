@@ -80,7 +80,7 @@ const data: VideoData = [
 		foldersData: [],
 		sharedOrganizations: [],
 		ownerName: "Test user",
-		source: null,
+		source: { type: "local" },
 		isScreenshot: false,
 		hasPassword: false,
 		hasActiveUpload: false,
