@@ -3241,8 +3241,6 @@ impl EditorWindow {
         }
     }
 
-    /// Shift+Mod+C on a selected scene: remember its look (layout, framing
-    /// and transitions) without its timing.
     fn copy_scene_settings(&mut self) -> bool {
         let Some(selection) = self.selection.as_ref() else {
             return false;
@@ -3265,8 +3263,6 @@ impl EditorWindow {
         true
     }
 
-    /// Shift+Mod+V: give every selected scene the copied look, keeping each
-    /// scene where it is on the timeline.
     fn paste_scene_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(copied) = self.copied_scene.clone() else {
             return false;
