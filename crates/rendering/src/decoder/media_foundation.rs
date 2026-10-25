@@ -192,19 +192,21 @@ impl MFDecoder {
                         )
                     },
                     |data| {
-                        DecodedFrame::new_nv12_with_arc(
+                        DecodedFrame::new_nv12_with_mapped(
                             data.data,
                             video_width,
                             video_height,
                             data.y_stride,
                             data.uv_stride,
                         )
+                        .with_storage_epoch(data.storage_epoch)
                         .with_matrix(matrix)
                     },
                 ));
             };
 
             loop {
+                requests.set_cache_budget(cap_video_decode::staging_cache_budget());
                 loop {
                     let message = match requests.next_step() {
                         Step::Wait => rx.recv().ok(),
@@ -321,6 +323,7 @@ struct FrameRequests<T, R> {
     seeked_to: Option<u32>,
     readahead_frames: u32,
     latest_request: Option<u32>,
+    max_cache_bytes: usize,
 }
 
 impl<T: Clone, R> FrameRequests<T, R> {
@@ -332,6 +335,16 @@ impl<T: Clone, R> FrameRequests<T, R> {
             seeked_to: None,
             readahead_frames,
             latest_request: None,
+            max_cache_bytes: MAX_FRAME_CACHE_BYTES,
+        }
+    }
+
+    fn set_cache_budget(&mut self, max_cache_bytes: usize) {
+        self.max_cache_bytes = max_cache_bytes.max(1);
+        while !self.cache.is_empty() && self.cache_bytes > self.max_cache_bytes {
+            if let Some((_, (_, bytes))) = self.cache.pop_first() {
+                self.cache_bytes = self.cache_bytes.saturating_sub(bytes);
+            }
         }
     }
 
@@ -395,7 +408,7 @@ impl<T: Clone, R> FrameRequests<T, R> {
             return false;
         };
         let full = self.cache.last_key_value().is_some_and(|(_, (_, bytes))| {
-            self.cache.len() >= FRAME_CACHE_SIZE || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES
+            self.cache.len() >= FRAME_CACHE_SIZE || self.cache_bytes + bytes > self.max_cache_bytes
         });
         let evicts_shown = full && self.cache.range(..=latest).nth(1).is_none();
         position < latest.saturating_add(self.readahead_frames) && !evicts_shown
@@ -427,7 +440,7 @@ impl<T: Clone, R> FrameRequests<T, R> {
         }
         while !self.cache.is_empty()
             && (self.cache.len() >= FRAME_CACHE_SIZE
-                || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES)
+                || self.cache_bytes + bytes > self.max_cache_bytes)
         {
             if let Some((_, (_, evicted))) = self.cache.pop_first() {
                 self.cache_bytes -= evicted;
@@ -460,6 +473,20 @@ impl<T: Clone, R> FrameRequests<T, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shrinking_the_cache_budget_evicts_oldest_frames() {
+        let mut requests = FrameRequests::<usize, usize>::new(8);
+        let mut stream = FakeStream::new(0..20, 1);
+        stream.bytes = 10;
+        requests.request(0, 0);
+        stream.run(&mut requests);
+        assert!(requests.cache_bytes > 25);
+
+        requests.set_cache_budget(25);
+        assert!(requests.cache_bytes <= 25);
+        assert!(requests.cache.len() <= 3);
+    }
 
     #[test]
     fn sample_times_round_to_their_frame() {

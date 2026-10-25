@@ -79,7 +79,12 @@ impl CameraLayer {
         let bind_group_1 =
             Some(composite_pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
 
-        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines(device, yuv_pipelines);
+        let yuv_converter = YuvToRgbaConverter::new_with_shared_pipelines_and_outputs(
+            device,
+            yuv_pipelines,
+            [frame_texture_0.clone(), frame_texture_1.clone()],
+            [frame_texture_view_0.clone(), frame_texture_view_1.clone()],
+        );
 
         Self {
             frame_textures: [frame_texture_0, frame_texture_1],
@@ -137,6 +142,7 @@ impl CameraLayer {
 
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
+            self.yuv_converter.set_output_index(next_texture);
 
             self.resize_frame_texture(device, next_texture, frame_size.x, frame_size.y);
 
@@ -198,12 +204,6 @@ impl CameraLayer {
                                         .is_ok()
                                         && self.yuv_converter.output_texture().is_some()
                                     {
-                                        self.copy_from_yuv_output(
-                                            device,
-                                            queue,
-                                            next_texture,
-                                            frame_size,
-                                        );
                                         self.last_recording_time = Some(recording_time);
                                         self.last_frame_storage = Some(frame_storage);
                                         self.current_texture = next_texture;
@@ -240,25 +240,22 @@ impl CameraLayer {
                     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let iosurface_converted = false;
 
-                    if iosurface_converted && self.yuv_converter.output_texture().is_some() {
-                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
-                    } else if let (Some(y_data), Some(uv_data)) =
-                        (camera_frame.y_plane(), camera_frame.uv_plane())
-                        && self
-                            .yuv_converter
-                            .convert_nv12(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                frame_size.x,
-                                frame_size.y,
-                                camera_frame.y_stride(),
-                                camera_frame.uv_stride(),
-                            )
-                            .is_ok()
+                    if !iosurface_converted
+                        && let (Some(y_data), Some(uv_data)) =
+                            (camera_frame.y_plane(), camera_frame.uv_plane())
+                        && let Err(error) = self.yuv_converter.convert_nv12(
+                            device,
+                            queue,
+                            y_data,
+                            uv_data,
+                            frame_size.x,
+                            frame_size.y,
+                            camera_frame.y_stride(),
+                            camera_frame.uv_stride(),
+                        )
                     {
-                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
+                        tracing::warn!(%error, "NV12 camera conversion failed");
+                        return;
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -275,22 +272,19 @@ impl CameraLayer {
                         camera_frame.y_plane(),
                         camera_frame.u_plane(),
                         camera_frame.v_plane(),
-                    ) && self
-                        .yuv_converter
-                        .convert_yuv420p(
-                            device,
-                            queue,
-                            y_data,
-                            u_data,
-                            v_data,
-                            frame_size.x,
-                            frame_size.y,
-                            camera_frame.y_stride(),
-                            camera_frame.uv_stride(),
-                        )
-                        .is_ok()
-                    {
-                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
+                    ) && let Err(error) = self.yuv_converter.convert_yuv420p(
+                        device,
+                        queue,
+                        y_data,
+                        u_data,
+                        v_data,
+                        frame_size.x,
+                        frame_size.y,
+                        camera_frame.y_stride(),
+                        camera_frame.uv_stride(),
+                    ) {
+                        tracing::warn!(%error, "YUV420P camera conversion failed");
+                        return;
                     }
                 }
             }
@@ -300,71 +294,6 @@ impl CameraLayer {
             self.current_texture = next_texture;
         } else {
             self.last_recording_time = Some(recording_time);
-        }
-    }
-
-    fn copy_from_yuv_output(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        next_texture: usize,
-        frame_size: XY<u32>,
-    ) {
-        if let Some(output_texture) = self.yuv_converter.output_texture() {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Camera YUV Copy Encoder"),
-            });
-
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: output_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.frame_textures[next_texture],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: frame_size.x,
-                    height: frame_size.y,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            let _submission_index = queue.submit(std::iter::once(encoder.finish()));
-        }
-    }
-
-    fn copy_from_yuv_output_to_encoder(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        next_texture: usize,
-        frame_size: XY<u32>,
-    ) {
-        if let Some(output_texture) = self.yuv_converter.output_texture() {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: output_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.frame_textures[next_texture],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: frame_size.x,
-                    height: frame_size.y,
-                    depth_or_array_layers: 1,
-                },
-            );
         }
     }
 
@@ -406,6 +335,7 @@ impl CameraLayer {
 
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
+            self.yuv_converter.set_output_index(next_texture);
 
             self.resize_frame_texture(device, next_texture, frame_size.x, frame_size.y);
 
@@ -467,8 +397,8 @@ impl CameraLayer {
                             return;
                         }
 
-                        // Submitted on its own ahead of `encoder`, so queue order
-                        // still has the conversion land before the copy below.
+                        // Submitted ahead of `encoder`, so queue order still puts the
+                        // conversion before the render pass.
                         #[cfg(target_os = "linux")]
                         let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
                             self.yuv_converter
@@ -481,26 +411,23 @@ impl CameraLayer {
                         #[cfg(not(target_os = "linux"))]
                         let iosurface_converted = false;
 
-                        if iosurface_converted && self.yuv_converter.output_texture().is_some() {
-                            self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
-                        } else if let (Some(y_data), Some(uv_data)) =
-                            (camera_frame.y_plane(), camera_frame.uv_plane())
-                            && self
-                                .yuv_converter
-                                .convert_nv12_to_encoder(
-                                    device,
-                                    queue,
-                                    encoder,
-                                    y_data,
-                                    uv_data,
-                                    frame_size.x,
-                                    frame_size.y,
-                                    camera_frame.y_stride(),
-                                    camera_frame.uv_stride(),
-                                )
-                                .is_ok()
+                        if !iosurface_converted
+                            && let (Some(y_data), Some(uv_data)) =
+                                (camera_frame.y_plane(), camera_frame.uv_plane())
+                            && let Err(error) = self.yuv_converter.convert_nv12_to_encoder(
+                                device,
+                                queue,
+                                encoder,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                camera_frame.y_stride(),
+                                camera_frame.uv_stride(),
+                            )
                         {
-                            self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
+                            tracing::warn!(%error, "NV12 camera conversion failed");
+                            return;
                         }
                     }
                 }
@@ -518,23 +445,20 @@ impl CameraLayer {
                         camera_frame.y_plane(),
                         camera_frame.u_plane(),
                         camera_frame.v_plane(),
-                    ) && self
-                        .yuv_converter
-                        .convert_yuv420p_to_encoder(
-                            device,
-                            queue,
-                            encoder,
-                            y_data,
-                            u_data,
-                            v_data,
-                            frame_size.x,
-                            frame_size.y,
-                            camera_frame.y_stride(),
-                            camera_frame.uv_stride(),
-                        )
-                        .is_ok()
-                    {
-                        self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
+                    ) && let Err(error) = self.yuv_converter.convert_yuv420p_to_encoder(
+                        device,
+                        queue,
+                        encoder,
+                        y_data,
+                        u_data,
+                        v_data,
+                        frame_size.x,
+                        frame_size.y,
+                        camera_frame.y_stride(),
+                        camera_frame.uv_stride(),
+                    ) {
+                        tracing::warn!(%error, "YUV420P camera conversion failed");
+                        return;
                     }
                 }
             }
@@ -606,6 +530,8 @@ impl CameraLayer {
         self.blur_active = true;
     }
 
+    /// YUV conversion writes directly into the frame texture, so there is no
+    /// separate copy step.
     pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -649,6 +575,11 @@ impl CameraLayer {
             &self.uniforms_buffer,
             &self.frame_texture_views[index],
         ));
+        self.yuv_converter.set_external_output(
+            index,
+            self.frame_textures[index].clone(),
+            self.frame_texture_views[index].clone(),
+        );
         true
     }
 
@@ -1049,5 +980,131 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn gpu_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = crate::create_wgpu_instance_sync();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    fn read_rgba(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        let stride = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("camera NV12 readback"),
+            size: u64::from(stride * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap();
+            });
+        device.poll(wgpu::PollType::Wait).unwrap();
+        receiver.recv().unwrap().unwrap();
+        let pixels = buffer
+            .slice(..)
+            .get_mapped_range()
+            .chunks(stride as usize)
+            .flat_map(|row| row[..width as usize * 4].iter().copied())
+            .collect();
+        buffer.unmap();
+        pixels
+    }
+
+    #[test]
+    fn nv12_prepare_writes_the_camera_texture_directly() {
+        let Some((device, queue)) = gpu_device() else {
+            eprintln!("no GPU adapter available, skipping camera NV12 direct-output test");
+            return;
+        };
+
+        let width = 4u32;
+        let height = 4u32;
+        let mut data = vec![235u8; (width * height) as usize];
+        data.extend(std::iter::repeat_n(
+            128u8,
+            (width * height.div_ceil(2)) as usize,
+        ));
+        let frame = DecodedFrame::new_nv12(data, width, height, width, width);
+
+        let mut layer = CameraLayer::new(&device);
+        layer.prepare(
+            &device,
+            &queue,
+            Some(CompositeVideoFrameUniforms::default()),
+            Some((XY::new(width, height), &frame, 0.0)),
+        );
+        device.poll(wgpu::PollType::Wait).unwrap();
+
+        let rgba = read_rgba(&device, &queue, &layer.frame_textures[1], width, height);
+        assert!(
+            rgba[0..4].iter().all(|channel| *channel >= 254),
+            "expected direct white NV12 output, got {rgba:?}"
+        );
+    }
+
+    #[test]
+    fn nv12_prepare_with_encoder_writes_the_camera_texture_directly() {
+        let Some((device, queue)) = gpu_device() else {
+            eprintln!("no GPU adapter available, skipping camera NV12 encoder test");
+            return;
+        };
+
+        let width = 4u32;
+        let height = 4u32;
+        let mut data = vec![235u8; (width * height) as usize];
+        data.extend(std::iter::repeat_n(
+            128u8,
+            (width * height.div_ceil(2)) as usize,
+        ));
+        let frame = DecodedFrame::new_nv12(data, width, height, width, width);
+
+        let mut layer = CameraLayer::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        layer.prepare_with_encoder(
+            &device,
+            &queue,
+            Some(CompositeVideoFrameUniforms::default()),
+            Some((XY::new(width, height), &frame, 0.0)),
+            &mut encoder,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        device.poll(wgpu::PollType::Wait).unwrap();
+
+        let rgba = read_rgba(&device, &queue, &layer.frame_textures[1], width, height);
+        assert!(
+            rgba[0..4].iter().all(|channel| *channel >= 254),
+            "expected direct white NV12 output, got {rgba:?}"
+        );
     }
 }

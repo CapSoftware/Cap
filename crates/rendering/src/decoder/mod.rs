@@ -148,10 +148,17 @@ pub struct DecodedFrame {
     matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
+    // Borrowed decoded planes: the cache owns the AVFrame instead of copying
+    // its planes into `data`. The empty `data` Arc stays as the per-frame
+    // storage identity that layers use to skip redundant uploads.
+    ffmpeg_backing: Option<Arc<::ffmpeg::frame::Video>>,
+    storage_epoch: u64,
     #[cfg(target_os = "macos")]
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+    #[cfg(target_os = "windows")]
+    mapped_nv12: Option<Arc<cap_video_decode::MappedNV12>>,
     #[cfg(target_os = "linux")]
     cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
@@ -232,29 +239,38 @@ impl SendableImageBuf {
 
 #[derive(Clone)]
 pub(crate) struct DecodedFrameStorageIdentity {
-    data: Weak<Vec<u8>>,
+    // Pooled frames reuse allocations, so their epoch is the identity and no
+    // Weak may pin the buffer against reuse.
+    data: Option<Weak<Vec<u8>>>,
     width: u32,
     height: u32,
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
+    storage_epoch: u64,
 }
 
 impl DecodedFrameStorageIdentity {
     pub(crate) fn matches(&self, other: &Self) -> bool {
-        self.data.ptr_eq(&other.data)
+        let same_storage = match (&self.data, &other.data) {
+            (Some(data), Some(other_data)) => data.ptr_eq(other_data),
+            (None, None) => true,
+            _ => false,
+        };
+        same_storage
             && self.width == other.width
             && self.height == other.height
             && self.format == other.format
             && self.y_stride == other.y_stride
             && self.uv_stride == other.uv_stride
+            && self.storage_epoch == other.storage_epoch
     }
 }
 
 impl fmt::Debug for DecodedFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DecodedFrame")
-            .field("data_len", &self.data.len())
+            .field("data_len", &self.byte_len())
             .field("width", &self.width)
             .field("height", &self.height)
             .field("format", &self.format)
@@ -274,10 +290,14 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -292,10 +312,14 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -317,6 +341,8 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: frame.y_pitch as u32,
             uv_stride: frame.uv_pitch as u32,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             cuda_nv12: Some(frame),
         }
     }
@@ -335,10 +361,14 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -359,13 +389,104 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
+    }
+
+    fn with_ffmpeg_backing(
+        frame: Arc<::ffmpeg::frame::Video>,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format,
+            matrix: YuvMatrix::Bt601,
+            y_stride,
+            uv_stride,
+            ffmpeg_backing: Some(frame),
+            storage_epoch: 0,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
+        }
+    }
+
+    pub(crate) fn new_nv12_with_ffmpeg_frame(
+        frame: Arc<::ffmpeg::frame::Video>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self::with_ffmpeg_backing(frame, width, height, PixelFormat::Nv12, y_stride, uv_stride)
+    }
+
+    pub(crate) fn new_yuv420p_with_ffmpeg_frame(
+        frame: Arc<::ffmpeg::frame::Video>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self::with_ffmpeg_backing(
+            frame,
+            width,
+            height,
+            PixelFormat::Yuv420p,
+            y_stride,
+            uv_stride,
+        )
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn new_nv12_with_mapped(
+        mapped: Arc<cap_video_decode::MappedNV12>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
+            y_stride,
+            uv_stride,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
+            d3d11_texture_backing: None,
+            mapped_nv12: Some(mapped),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn with_storage_epoch(mut self, storage_epoch: u64) -> Self {
+        self.storage_epoch = storage_epoch;
+        self
     }
 
     #[cfg(target_os = "macos")]
@@ -384,6 +505,8 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
         }
     }
@@ -403,10 +526,14 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -427,10 +554,14 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "windows")]
+            mapped_nv12: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -446,9 +577,12 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new(texture))),
+            mapped_nv12: None,
         }
     }
 
@@ -467,12 +601,15 @@ impl DecodedFrame {
             matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
+            ffmpeg_backing: None,
+            storage_epoch: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_handle(
                 texture,
                 shared_handle,
             ))),
+            mapped_nv12: None,
         }
     }
 
@@ -503,7 +640,18 @@ impl DecodedFrame {
             .and_then(|b| b.uv_handle())
     }
 
+    /// Returns the frame's contiguous CPU bytes when it has them.
+    ///
+    /// Borrowed FFmpeg YUV frames expose their planes through [`Self::y_plane`],
+    /// [`Self::uv_plane`], [`Self::u_plane`] and [`Self::v_plane`] instead and
+    /// return an empty slice here. Mapped Media Foundation frames return their
+    /// mapped NV12 buffer.
     pub fn data(&self) -> &[u8] {
+        #[cfg(target_os = "windows")]
+        if let Some(mapped) = &self.mapped_nv12 {
+            return mapped.as_slice();
+        }
+
         #[cfg(target_os = "macos")]
         if self.data.is_empty()
             && let Some(backing) = &self.image_buf_backing
@@ -512,6 +660,12 @@ impl DecodedFrame {
         }
 
         &self.data
+    }
+
+    /// The contiguous CPU payload, or `None` when the frame is plane-backed.
+    pub fn contiguous_data(&self) -> Option<&[u8]> {
+        let data = self.data();
+        (!data.is_empty()).then_some(data)
     }
 
     #[cfg(target_os = "macos")]
@@ -544,6 +698,11 @@ impl DecodedFrame {
     }
 
     pub fn byte_len(&self) -> usize {
+        #[cfg(target_os = "windows")]
+        if let Some(mapped) = &self.mapped_nv12 {
+            return mapped.len();
+        }
+
         if !self.data.is_empty() {
             return self.data.len();
         }
@@ -562,16 +721,27 @@ impl DecodedFrame {
 
     pub(crate) fn storage_identity(&self) -> DecodedFrameStorageIdentity {
         DecodedFrameStorageIdentity {
-            data: Arc::downgrade(&self.data),
+            data: (self.storage_epoch == 0).then(|| Arc::downgrade(&self.data)),
             width: self.width,
             height: self.height,
             format: self.format,
             y_stride: self.y_stride,
             uv_stride: self.uv_stride,
+            storage_epoch: self.storage_epoch,
         }
     }
 
+    fn ffmpeg_plane(&self, index: usize, stride: u32, height: u32) -> Option<&[u8]> {
+        let frame = self.ffmpeg_backing.as_ref()?;
+        let size = (stride as usize).checked_mul(height as usize)?;
+        frame.data(index).get(..size)
+    }
+
     pub fn y_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return self.ffmpeg_plane(0, self.y_stride, self.height);
+        }
+
         match self.format {
             PixelFormat::Nv12 | PixelFormat::Yuv420p => {
                 let y_size = self
@@ -585,6 +755,13 @@ impl DecodedFrame {
     }
 
     pub fn uv_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return match self.format {
+                PixelFormat::Nv12 => self.ffmpeg_plane(1, self.uv_stride, self.height.div_ceil(2)),
+                _ => None,
+            };
+        }
+
         match self.format {
             PixelFormat::Nv12 => {
                 let y_size = self
@@ -598,6 +775,15 @@ impl DecodedFrame {
     }
 
     pub fn u_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return match self.format {
+                PixelFormat::Yuv420p => {
+                    self.ffmpeg_plane(1, self.uv_stride, self.height.div_ceil(2))
+                }
+                _ => None,
+            };
+        }
+
         match self.format {
             PixelFormat::Yuv420p => {
                 let y_size = self
@@ -616,6 +802,15 @@ impl DecodedFrame {
     }
 
     pub fn v_plane(&self) -> Option<&[u8]> {
+        if self.ffmpeg_backing.is_some() {
+            return match self.format {
+                PixelFormat::Yuv420p => {
+                    self.ffmpeg_plane(2, self.uv_stride, self.height.div_ceil(2))
+                }
+                _ => None,
+            };
+        }
+
         match self.format {
             PixelFormat::Yuv420p => {
                 let y_size = self

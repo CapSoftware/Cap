@@ -26,6 +26,10 @@ fn odd_yuv_frames_preserve_every_chroma_row() {
             assert_eq!(decoded.byte_len(), expected_bytes);
             assert_eq!(raw_bytes, expected_bytes);
             assert_eq!(cached.estimated_bytes(), expected_bytes);
+            assert!(
+                decoded.data().is_empty(),
+                "{format:?} {width}x{height} should borrow its planes"
+            );
             assert_eq!(decoded.y_plane().unwrap(), expected[0]);
             for (plane, data) in match format {
                 format::Pixel::YUV420P => vec![
@@ -230,4 +234,54 @@ fn odd_yuv_gpu_conversion_matches_even_frame_edges() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "performance probe: compares the 4K NV12 plane copy against borrowing"]
+fn nv12_4k_plane_copy_benchmark() {
+    const WIDTH: u32 = 3840;
+    const HEIGHT: u32 = 2160;
+    const ITERS: u32 = 60;
+
+    let mut source = frame::Video::new(format::Pixel::NV12, WIDTH, HEIGHT);
+    for plane in 0..source.planes() {
+        for (index, byte) in source.data_mut(plane).iter_mut().enumerate() {
+            *byte = (index * 37 + plane * 59) as u8;
+        }
+    }
+
+    let y_stride = source.stride(0) as u32;
+    let uv_stride = source.stride(1) as u32;
+    let bytes = yuv_plane_bytes(PixelFormat::Nv12, y_stride, uv_stride, HEIGHT)
+        .saturating_mul(ITERS as usize);
+
+    let copy_start = std::time::Instant::now();
+    for _ in 0..ITERS {
+        let copied = extract_yuv_planes(&source).unwrap();
+        std::hint::black_box(copied.0.len());
+    }
+    let copy = copy_start.elapsed();
+
+    let borrow_start = std::time::Instant::now();
+    for _ in 0..ITERS {
+        let y = source
+            .data(0)
+            .get(..(y_stride as usize * HEIGHT as usize))
+            .unwrap();
+        let uv = source
+            .data(1)
+            .get(..(uv_stride as usize * HEIGHT.div_ceil(2) as usize))
+            .unwrap();
+        std::hint::black_box(y.len() + uv.len());
+    }
+    let borrow = borrow_start.elapsed();
+
+    let mib = bytes as f64 / (1024.0 * 1024.0);
+    println!(
+        "4K NV12 plane copy: {:.2} ms/frame, {:.1} MiB/s; borrowed: {:.3} ms/frame, {:.1} MiB/s",
+        copy.as_secs_f64() * 1000.0 / ITERS as f64,
+        mib / copy.as_secs_f64(),
+        borrow.as_secs_f64() * 1000.0 / ITERS as f64,
+        mib / borrow.as_secs_f64(),
+    );
 }

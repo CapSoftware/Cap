@@ -8,7 +8,12 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    time::Instant,
 };
 use tokio::sync::oneshot;
 use tracing::info;
@@ -38,16 +43,54 @@ struct ProcessedFrame {
     matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
+    ffmpeg_backing: Option<Arc<frame::Video>>,
     #[cfg(target_os = "linux")]
     cuda: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
 
 impl ProcessedFrame {
+    fn estimated_bytes(&self) -> usize {
+        if !self.data.is_empty() {
+            return self.data.len();
+        }
+
+        let y_bytes = (self.y_stride as usize).saturating_mul(self.height as usize);
+        let uv_bytes = (self.uv_stride as usize).saturating_mul(self.height.div_ceil(2) as usize);
+
+        match self.format {
+            PixelFormat::Rgba => (self.width as usize)
+                .saturating_mul(self.height as usize)
+                .saturating_mul(4),
+            PixelFormat::Nv12 => y_bytes.saturating_add(uv_bytes),
+            PixelFormat::Yuv420p => y_bytes.saturating_add(uv_bytes.saturating_mul(2)),
+        }
+    }
+
     fn to_decoded_frame(&self) -> DecodedFrame {
         #[cfg(target_os = "linux")]
         if let Some(cuda) = &self.cuda {
             return DecodedFrame::new_nv12_cuda(Arc::clone(cuda), Arc::clone(&self.data))
                 .with_matrix(self.matrix);
+        }
+        if let Some(backing) = &self.ffmpeg_backing {
+            let frame = match self.format {
+                PixelFormat::Nv12 => DecodedFrame::new_nv12_with_ffmpeg_frame(
+                    Arc::clone(backing),
+                    self.width,
+                    self.height,
+                    self.y_stride,
+                    self.uv_stride,
+                ),
+                PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_ffmpeg_frame(
+                    Arc::clone(backing),
+                    self.width,
+                    self.height,
+                    self.y_stride,
+                    self.uv_stride,
+                ),
+                PixelFormat::Rgba => unreachable!("RGBA frames are copied out of FFmpeg"),
+            };
+            return frame.with_matrix(self.matrix);
         }
         let frame = match self.format {
             PixelFormat::Rgba => {
@@ -88,6 +131,68 @@ const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 /// Cache weight of a frame still on the GPU (it pins an NVDEC surface).
 #[cfg(target_os = "linux")]
 const CUDA_FRAME_CACHE_WEIGHT: usize = 16 * 1024 * 1024;
+
+static BORROWED_FRAMES: AtomicU64 = AtomicU64::new(0);
+static BORROWED_BYTES: AtomicU64 = AtomicU64::new(0);
+static COPIED_FRAMES: AtomicU64 = AtomicU64::new(0);
+static COPIED_BYTES: AtomicU64 = AtomicU64::new(0);
+static COPIED_NANOS: AtomicU64 = AtomicU64::new(0);
+
+fn record_borrowed_frame(bytes: usize) {
+    let frames = BORROWED_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+    let total = BORROWED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
+    if frames % 240 == 0 {
+        let copied = COPIED_BYTES.load(Ordering::Relaxed);
+        tracing::debug!(
+            frames,
+            borrowed_mb = total as f64 / (1024.0 * 1024.0),
+            copied_mb = copied as f64 / (1024.0 * 1024.0),
+            "FFmpeg decoder kept decoded planes borrowed"
+        );
+    }
+}
+
+fn record_copied_frame(bytes: usize, copy_nanos: u64) {
+    let frames = COPIED_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+    let total = COPIED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
+    let nanos = COPIED_NANOS.fetch_add(copy_nanos, Ordering::Relaxed) + copy_nanos;
+    if frames % 240 == 0 {
+        tracing::debug!(
+            frames,
+            copied_mb = total as f64 / (1024.0 * 1024.0),
+            copy_ms_per_frame = nanos as f64 / frames as f64 / 1_000_000.0,
+            "FFmpeg decoder copied decoded planes"
+        );
+    }
+}
+
+fn borrowable_yuv_layout(frame: &frame::Video) -> Option<(PixelFormat, u32, u32)> {
+    match frame.format() {
+        format::Pixel::NV12 => Some((
+            PixelFormat::Nv12,
+            frame.stride(0) as u32,
+            frame.stride(1) as u32,
+        )),
+        // Consumers index U and V with one stride; borrow only when FFmpeg
+        // gives both planes the same linesize.
+        format::Pixel::YUV420P if frame.stride(1) == frame.stride(2) => Some((
+            PixelFormat::Yuv420p,
+            frame.stride(0) as u32,
+            frame.stride(1) as u32,
+        )),
+        _ => None,
+    }
+}
+
+fn yuv_plane_bytes(format: PixelFormat, y_stride: u32, uv_stride: u32, height: u32) -> usize {
+    let y_bytes = (y_stride as usize).saturating_mul(height as usize);
+    let uv_bytes = (uv_stride as usize).saturating_mul(height.div_ceil(2) as usize);
+    match format {
+        PixelFormat::Nv12 => y_bytes.saturating_add(uv_bytes),
+        PixelFormat::Yuv420p => y_bytes.saturating_add(uv_bytes.saturating_mul(2)),
+        PixelFormat::Rgba => 0,
+    }
+}
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
@@ -173,24 +278,53 @@ impl CachedFrame {
                             matrix: YuvMatrix::from_color_space(frame.color_space()),
                             y_stride: cuda.y_pitch as u32,
                             uv_stride: cuda.uv_pitch as u32,
+                            ffmpeg_backing: None,
                             cuda: Some(Arc::new(cuda)),
                         }
                     };
                     *self = Self::Processed(data.clone());
                     return data;
                 }
+                let width = frame.width();
+                let height = frame.height();
+                let matrix = YuvMatrix::from_color_space(frame.color_space());
+
+                if let Some((pixel_format, y_stride, uv_stride)) = borrowable_yuv_layout(frame) {
+                    let bytes = yuv_plane_bytes(pixel_format, y_stride, uv_stride, height);
+                    let backing = std::mem::replace(frame, frame::Video::empty());
+                    let data = ProcessedFrame {
+                        data: Arc::new(Vec::new()),
+                        number: *number,
+                        width,
+                        height,
+                        format: pixel_format,
+                        matrix,
+                        y_stride,
+                        uv_stride,
+                        ffmpeg_backing: Some(Arc::new(backing)),
+                        #[cfg(target_os = "linux")]
+                        cuda: None,
+                    };
+                    record_borrowed_frame(bytes);
+                    *self = Self::Processed(data.clone());
+                    return data;
+                }
+
+                let copy_start = Instant::now();
                 let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
                     extract_yuv_planes(frame)
                 {
+                    record_copied_frame(yuv_data.len(), copy_start.elapsed().as_nanos() as u64);
                     ProcessedFrame {
                         data: Arc::new(yuv_data),
                         number: *number,
-                        width: frame.width(),
-                        height: frame.height(),
+                        width,
+                        height,
                         format: pixel_format,
-                        matrix: YuvMatrix::from_color_space(frame.color_space()),
+                        matrix,
                         y_stride,
                         uv_stride,
+                        ffmpeg_backing: None,
                         #[cfg(target_os = "linux")]
                         cuda: None,
                     }
@@ -199,12 +333,13 @@ impl CachedFrame {
                     ProcessedFrame {
                         data: Arc::new(frame_buffer),
                         number: *number,
-                        width: frame.width(),
-                        height: frame.height(),
+                        width,
+                        height,
                         format: PixelFormat::Rgba,
-                        matrix: YuvMatrix::from_color_space(frame.color_space()),
-                        y_stride: frame.width() * 4,
+                        matrix,
+                        y_stride: width * 4,
                         uv_stride: 0,
+                        ffmpeg_backing: None,
                         #[cfg(target_os = "linux")]
                         cuda: None,
                     }
@@ -291,7 +426,7 @@ impl CachedFrame {
                         .saturating_mul(4),
                 }
             }
-            Self::Processed(frame) => frame.data.len(),
+            Self::Processed(frame) => frame.estimated_bytes(),
             #[cfg(target_os = "windows")]
             Self::Gpu { frame, .. } => (frame.width() as usize)
                 .saturating_mul(frame.height() as usize)
@@ -1713,6 +1848,7 @@ mod cache_tests {
             matrix: YuvMatrix::Bt601,
             y_stride: 2,
             uv_stride: 2,
+            ffmpeg_backing: None,
             #[cfg(target_os = "linux")]
             cuda: None,
         })
