@@ -72,7 +72,7 @@ filter-syscalls = false"
     echo "== $layout"
     PIPEWIRE_DEBUG=${PIPEWIRE_DEBUG:-1} "$run" /work/$layout.AppImage >/tmp/$layout.log 2>&1
     status=$?
-    grep -v "rtkit\|=====\|Uncompress\|is now installed" /tmp/$layout.log | tail -${SHOW_LINES:-6}
+    grep -v "rtkit\|=====\|Uncompress\|is now installed" /tmp/$layout.log | tail -${SHOW_LINES:-40}
     echo "exit $layout=$status"
   done
 ' 2>&1 | tee "$out/appimage-pipewire.log"
@@ -83,6 +83,15 @@ for layout in shipped fixed; do
     result "${layout}_connects" yes
   else
     result "${layout}_connects" no
+  fi
+  # What a program Cap starts (a file manager through xdg-open) inherits:
+  # any bundle library directory other than the libva fallback leaks Cap's
+  # libraries into it, which is why folders did not open on NixOS in 0.6.1.
+  libraries=$(sed -n "/^== $layout\$/,/^exit $layout=/p" "$out/appimage-pipewire.log" | sed -n 's/^LD_LIBRARY_PATH=//p')
+  if tr ':' '\n' <<<"$libraries" | grep '/appimage-run/' | grep -qv '/usr/lib/cap/libva$'; then
+    result "${layout}_children_get_bundle_libraries" yes
+  else
+    result "${layout}_children_get_bundle_libraries" no
   fi
 done
 cat "$out/result.txt"

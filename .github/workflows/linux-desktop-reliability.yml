@@ -267,6 +267,10 @@ jobs:
           # failure, or the check proves nothing.
           grep -qx "shipped_connects=no" "$result"
           grep -qx "fixed_connects=yes" "$result"
+          # Programs Cap starts (xdg-open, file managers) no longer inherit
+          # the bundle's libraries.
+          grep -qx "shipped_children_get_bundle_libraries=yes" "$result"
+          grep -qx "fixed_children_get_bundle_libraries=no" "$result""
 
       - name: Upload logs
         if: always()
