@@ -13,14 +13,16 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSBitmapImageRep, NSColor, NSEvent,
+    NSAccessibility, NSAccessibilityElement, NSAccessibilityRadioButtonRole,
+    NSAccessibilityRadioGroupRole, NSAppearanceCustomization, NSBitmapImageRep, NSColor, NSEvent,
     NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName, NSFontManager,
     NSFontTraitMask, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSImageScaling,
     NSImageView, NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions,
-    NSView,
+    NSView, NSWindow,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSTimer,
+    MainThreadMarker, NSArray, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString,
+    NSTimer,
 };
 use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
 
@@ -34,9 +36,7 @@ const PICKER_MODES: [(Mode, TrayItem); 3] = [
     (Mode::Screenshot, TrayItem::ModeScreenshot),
 ];
 
-const FLASH_INTERVAL: f64 = 0.06;
-/// Temporarily disabled while the picker keeps the menu open and updates the
-/// capture rows in place.
+const FLASH_INTERVAL: f64 = 0.08;
 const FLASH_ON_PICK: bool = true;
 
 const PICKER_TITLE: &str = "Recording Mode";
@@ -46,8 +46,8 @@ const PILL_W: f64 = 38.0;
 const PILL_H: f64 = 29.0;
 const PILL_GAP: f64 = 4.0;
 const CAPSULE_PAD: f64 = 3.0;
-const RIGHT_INSET: f64 = 10.0;
-const TITLE_INSET: f64 = 10.0;
+const RIGHT_INSET: f64 = 12.0;
+const TITLE_INSET: f64 = 16.0;
 const LINE_GAP: f64 = 2.0;
 const SYMBOL_SIZE: f64 = 17.0;
 const PILL_RADIUS: f64 = 14.0;
@@ -58,7 +58,42 @@ thread_local! {
     static PICKER: RefCell<Option<(Retained<NSMenuItem>, Retained<ModePickerView>)>> =
         const { RefCell::new(None) };
     static FLASH_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
-    static FLASH_STEP: Cell<u8> = const { Cell::new(0) };
+}
+
+struct PillA11yIvars {
+    index: usize,
+}
+
+define_class!(
+    // SAFETY: NSAccessibilityElement has no subclassing requirements; ivars hold a plain index.
+    #[unsafe(super(NSAccessibilityElement))]
+    #[name = "CapModePillAccessibilityElement"]
+    #[ivars = PillA11yIvars]
+    struct PillAccessibilityElement;
+
+    impl PillAccessibilityElement {
+        #[unsafe(method(accessibilityPerformPress))]
+        fn accessibility_perform_press(&self) -> bool {
+            let index = self.ivars().index;
+            PICKER.with(|p| {
+                if let Some((_, view)) = p.borrow().as_ref() {
+                    view.choose(index);
+                }
+            });
+            true
+        }
+    }
+);
+
+impl PillAccessibilityElement {
+    fn new(index: usize, label: &str) -> Retained<Self> {
+        let this = <Self as objc2::AnyThread>::alloc().set_ivars(PillA11yIvars { index });
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        this.setAccessibilityRole(Some(unsafe { NSAccessibilityRadioButtonRole }));
+        this.setAccessibilityLabel(Some(&NSString::from_str(label)));
+        this.setAccessibilityEnabled(true);
+        this
+    }
 }
 
 struct PickerIvars {
@@ -70,10 +105,18 @@ struct PickerIvars {
     capsule: RefCell<Option<Retained<CALayer>>>,
     pills: RefCell<Vec<Retained<CALayer>>>,
     icons: RefCell<Vec<Retained<NSImageView>>>,
+    tracking: RefCell<Option<Retained<NSTrackingArea>>>,
+    accessibility_children: RefCell<Vec<Retained<PillAccessibilityElement>>>,
+}
+
+impl Drop for PickerIvars {
+    fn drop(&mut self) {
+        tracing::debug!("mode picker view deallocated");
+    }
 }
 
 define_class!(
-    // SAFETY: NSView has no extra subclassing requirements; ivars have no Drop side effects.
+    // SAFETY: NSView has no extra subclassing requirements; the ivars only log on drop.
     #[unsafe(super(NSView))]
     #[name = "CapModePickerView"]
     #[thread_kind = MainThreadOnly]
@@ -84,6 +127,18 @@ define_class!(
         #[unsafe(method(acceptsFirstMouse:))]
         fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
             true
+        }
+
+        #[unsafe(method(viewWillMoveToWindow:))]
+        fn view_will_move_to_window(&self, new_window: Option<&NSWindow>) {
+            unsafe {
+                let _: () = msg_send![super(self), viewWillMoveToWindow: new_window];
+            }
+            if new_window.is_none()
+                && let Some(area) = self.ivars().tracking.borrow_mut().take()
+            {
+                self.removeTrackingArea(&area);
+            }
         }
 
         #[unsafe(method(viewDidMoveToWindow))]
@@ -141,6 +196,7 @@ define_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             self.draw_text();
         }
+
     }
 );
 
@@ -154,6 +210,8 @@ impl ModePickerView {
             capsule: RefCell::new(None),
             pills: RefCell::new(Vec::new()),
             icons: RefCell::new(Vec::new()),
+            tracking: RefCell::new(None),
+            accessibility_children: RefCell::new(Vec::new()),
         });
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PICKER_W, PICKER_H));
         // Initialise first; everything below touches the live view.
@@ -210,6 +268,24 @@ impl ModePickerView {
             )
         };
         this.addTrackingArea(&area);
+        *this.ivars().tracking.borrow_mut() = Some(area);
+
+        this.setAccessibilityRole(Some(unsafe { NSAccessibilityRadioGroupRole }));
+        this.setAccessibilityLabel(Some(&NSString::from_str(PICKER_TITLE)));
+        let children: Vec<Retained<AnyObject>> = PICKER_MODES
+            .iter()
+            .enumerate()
+            .map(|(index, (mode, _))| {
+                let child = PillAccessibilityElement::new(index, mode_name(*mode));
+                unsafe { Retained::cast_unchecked::<AnyObject>(child) }
+            })
+            .collect();
+        let children_array = NSArray::from_retained_slice(&children);
+        unsafe { this.setAccessibilityChildren(Some(&children_array)) };
+        *this.ivars().accessibility_children.borrow_mut() = children
+            .into_iter()
+            .map(|child| unsafe { Retained::cast_unchecked::<PillAccessibilityElement>(child) })
+            .collect();
 
         this.sync();
         this
@@ -263,16 +339,14 @@ impl ModePickerView {
 
     /// The only place state becomes layer properties.
     fn sync(&self) {
+        let appearance = self.effectiveAppearance();
+        let block = RcBlock::new(|| self.apply_visuals());
+        appearance.performAsCurrentDrawingAppearance(&block);
+    }
+
+    fn apply_visuals(&self) {
         let selected = self.ivars().selected.get();
         let focused = self.ivars().focused.get();
-
-        // CGColors don't follow appearance, so resolve the dynamic colours under this
-        // view's appearance. (Deprecated, but it has no block-free replacement.)
-        #[allow(deprecated)]
-        unsafe {
-            NSAppearance::setCurrentAppearance(Some(&self.effectiveAppearance()))
-        };
-
         let label = NSColor::labelColor();
         CATransaction::begin();
         CATransaction::setDisableActions(true);
@@ -287,6 +361,19 @@ impl ModePickerView {
         let white = NSColor::whiteColor();
         let flash = self.ivars().flash.get();
         let icons = self.ivars().icons.borrow();
+        for (i, child) in self
+            .ivars()
+            .accessibility_children
+            .borrow()
+            .iter()
+            .enumerate()
+        {
+            child.setAccessibilitySelected(i == selected);
+            if let Some(window) = self.window() {
+                let rect = self.convertRect_toView(self.pill_rect(i), None);
+                child.setAccessibilityFrame(window.convertRectToScreen(rect));
+            }
+        }
         for (i, pill) in self.ivars().pills.borrow().iter().enumerate() {
             let is_sel = i == selected;
             let is_hover = focused == Some(i) && !is_sel;
@@ -369,8 +456,8 @@ impl ModePickerView {
 
     // -- actions -----------------------------------------------------------
 
-    /// Selects pill `i`, flashes it twice like a clicked AppKit menu item, then
-    /// closes the menu.
+    /// Selects pill `i`, gives it one AppKit-style highlight pulse, then closes
+    /// the menu.
     fn choose(&self, i: usize) {
         if FLASH_TIMER.with(|timer| timer.borrow().is_some()) {
             return;
@@ -388,16 +475,23 @@ impl ModePickerView {
         }
         self.ivars().flash.set(true);
         self.refresh();
-        let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
-            flash_step();
-        });
+        let block = RcBlock::new(|_timer: NonNull<NSTimer>| Self::finish_flash());
         let timer =
-            unsafe { NSTimer::timerWithTimeInterval_repeats_block(FLASH_INTERVAL, true, &block) };
-        let run_loop = NSRunLoop::currentRunLoop();
-        unsafe {
-            run_loop.addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
-        }
+            unsafe { NSTimer::timerWithTimeInterval_repeats_block(FLASH_INTERVAL, false, &block) };
+        unsafe { NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSEventTrackingRunLoopMode) };
         FLASH_TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
+    }
+
+    fn finish_flash() {
+        stop_flash();
+        PICKER.with(|p| {
+            if let Some((item, view)) = p.borrow().as_ref() {
+                view.set_flash(false);
+                if let Some(menu) = unsafe { item.menu() } {
+                    menu.cancelTracking();
+                }
+            }
+        });
     }
 
     fn set_flash(&self, flash: bool) {
@@ -433,38 +527,17 @@ impl ModePickerView {
     }
 }
 
-fn flash_step() {
-    let step = FLASH_STEP.with(|step| {
-        let next = step.get().wrapping_add(1);
-        step.set(next);
-        next
-    });
-    if step >= 3 {
-        stop_flash();
-        PICKER.with(|p| {
-            if let Some((item, view)) = p.borrow().as_ref() {
-                view.set_flash(false);
-                if let Some(menu) = unsafe { item.menu() } {
-                    menu.cancelTracking();
-                }
-            }
-        });
-        return;
-    }
-    PICKER.with(|p| {
-        if let Some((_, view)) = p.borrow().as_ref() {
-            view.set_flash(step.is_multiple_of(2));
-        }
-    });
-}
-
 pub(super) fn stop_flash() {
     FLASH_TIMER.with(|slot| {
         if let Some(timer) = slot.borrow_mut().take() {
             timer.invalidate();
         }
     });
-    FLASH_STEP.with(|step| step.set(0));
+    PICKER.with(|p| {
+        if let Some((_, view)) = p.borrow().as_ref() {
+            view.set_flash(false);
+        }
+    });
 }
 
 /// Appends the mode picker row to `menu` and registers one action per pill, so a click
@@ -523,6 +596,11 @@ fn handle_key(event: &NSEvent) -> bool {
 /// Wraps `NSPopupMenuWindow -_handleKeyEvent:`. Private API: it does nothing if the
 /// method is missing or has another shape, and it may break on any macOS update.
 pub(super) fn install_key_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(install_key_hook_once);
+}
+
+fn install_key_hook_once() {
     let sel = sel!(_handleKeyEvent:);
     let Some(cls) = AnyClass::get(c"NSPopupMenuWindow") else {
         return;
@@ -545,7 +623,9 @@ pub(super) fn install_key_hook() {
 
     let block = RcBlock::new(move |this: *mut AnyObject, event: *mut NSEvent| -> Bool {
         let ev = unsafe { &*event };
-        if ev.r#type() == NSEventType::KeyDown && handle_key(ev) {
+        let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_key(ev)))
+            .unwrap_or(false);
+        if ev.r#type() == NSEventType::KeyDown && handled {
             return Bool::YES;
         }
         let orig: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut NSEvent) -> Bool =
