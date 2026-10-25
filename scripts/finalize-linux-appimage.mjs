@@ -177,7 +177,8 @@ export async function fallbackLibvaDirectory(
 	await mkdir(root, { recursive: true });
 	for (const { url, sha256 } of fallbackLibvaPackages) {
 		const response = await download(url);
-		if (!response.ok) throw new Error(`Downloading ${url} failed: ${response.status}`);
+		if (!response.ok)
+			throw new Error(`Downloading ${url} failed: ${response.status}`);
 		const bytes = Buffer.from(await response.arrayBuffer());
 		const digest = createHash("sha256").update(bytes).digest("hex");
 		if (digest !== sha256) {
@@ -201,7 +202,10 @@ export async function isolateBundledLibva(appDir, { replacement } = {}) {
 	for (const entry of await readdir(libraries, { withFileTypes: true })) {
 		if (!libvaPattern.test(entry.name) || entry.isDirectory()) continue;
 		await mkdir(fallback, { recursive: true });
-		await rename(path.join(libraries, entry.name), path.join(fallback, entry.name));
+		await rename(
+			path.join(libraries, entry.name),
+			path.join(fallback, entry.name),
+		);
 		moved.push(entry.name);
 	}
 	if (replacement) {

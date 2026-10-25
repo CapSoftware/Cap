@@ -871,7 +871,10 @@ test("webview-free finalization hands the pruned AppDir to the output plugin", a
 	const newLibva = path.join(path.dirname(image), "libva-2.23");
 	await mkdir(newLibva);
 	await writeFile(path.join(newLibva, "libva.so.2.2300.0"), "libva 2.23");
-	await writeFile(path.join(newLibva, "libva-drm.so.2.2300.0"), "libva-drm 2.23");
+	await writeFile(
+		path.join(newLibva, "libva-drm.so.2.2300.0"),
+		"libva-drm 2.23",
+	);
 	await symlink("libva.so.2.2300.0", path.join(newLibva, "libva.so.2"));
 	await symlink("libva-drm.so.2.2300.0", path.join(newLibva, "libva-drm.so.2"));
 	const excluded = await finalizeLinuxAppImage(image, {
@@ -942,8 +945,7 @@ test("the GPUI AppRun starts Cap directly without the generic launcher's library
 	// This machine either has libva, so nothing is added, or it does not, so
 	// only the bundled libva directory is.
 	assert.ok(
-		libraries === "unset" ||
-			libraries === path.join(real, "usr/lib/cap/libva"),
+		libraries === "unset" || libraries === path.join(real, "usr/lib/cap/libva"),
 		libraries,
 	);
 });
@@ -961,7 +963,10 @@ test("the bundled libva moves out of RUNPATH's reach, symlinks and all", async (
 		await writeFile(path.join(libraries, name), name);
 	}
 	await symlink("libva.so.2.2100.0", path.join(libraries, "libva.so.2"));
-	await symlink("libva-drm.so.2.2100.0", path.join(libraries, "libva-drm.so.2"));
+	await symlink(
+		"libva-drm.so.2.2100.0",
+		path.join(libraries, "libva-drm.so.2"),
+	);
 	assert.deepEqual(await isolateBundledLibva(root), [
 		"libva-drm.so.2",
 		"libva-drm.so.2.2100.0",
@@ -992,7 +997,10 @@ test("the bundled libva is replaced by the fallback directory's", async (t) => {
 	await writeFile(path.join(replacement, "libva-drm.so.2.2300.0"), "new drm");
 	await writeFile(path.join(replacement, "README"), "not a library");
 	await symlink("libva.so.2.2300.0", path.join(replacement, "libva.so.2"));
-	await symlink("libva-drm.so.2.2300.0", path.join(replacement, "libva-drm.so.2"));
+	await symlink(
+		"libva-drm.so.2.2300.0",
+		path.join(replacement, "libva-drm.so.2"),
+	);
 	await isolateBundledLibva(root, { replacement });
 	const fallback = path.join(libraries, "cap/libva");
 	assert.deepEqual((await readdir(fallback)).sort(), [
@@ -1001,8 +1009,14 @@ test("the bundled libva is replaced by the fallback directory's", async (t) => {
 		"libva.so.2",
 		"libva.so.2.2300.0",
 	]);
-	assert.equal(await readlink(path.join(fallback, "libva.so.2")), "libva.so.2.2300.0");
-	assert.equal(await readFile(path.join(fallback, "libva.so.2"), "utf8"), "new");
+	assert.equal(
+		await readlink(path.join(fallback, "libva.so.2")),
+		"libva.so.2.2300.0",
+	);
+	assert.equal(
+		await readFile(path.join(fallback, "libva.so.2"), "utf8"),
+		"new",
+	);
 
 	const incomplete = path.join(root, "incomplete");
 	await mkdir(incomplete);
