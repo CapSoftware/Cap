@@ -8,8 +8,26 @@ export const SceneMediaProvider = SceneMediaContext.Provider;
 
 export const useSceneMedia = () => useContext(SceneMediaContext);
 
+/**
+ * An 8 second 960x600 talking-head loop cut from a real Cap camera track:
+ * AV1 (~100 KB) where supported, H.264 (~160 KB) otherwise, no audio.
+ */
+export const PRESENTER = {
+	av1: "/videos/landing/presenter.webm",
+	mp4: "/videos/landing/presenter.mp4",
+	poster: "/videos/landing/presenter-poster.webp",
+	avatar: "/videos/landing/presenter-avatar.webp",
+} as const;
+
+export const PresenterSources = () => (
+	<>
+		<source src={PRESENTER.av1} type='video/webm; codecs="av01.0.05M.08"' />
+		<source src={PRESENTER.mp4} type="video/mp4" />
+	</>
+);
+
 export const VIDEO_POSTERS = {
-	webcam: "/videos/home-two/webcam-poster.jpg",
+	webcam: PRESENTER.poster,
 	screen: "/illustrations/homepage-animation-poster.jpg",
 } as const;
 
