@@ -6002,6 +6002,14 @@ impl EditorWindow {
             self.seek_to_time(drag.press_time, cx);
         }
 
+        // A roll edits the clips through `edit_live`, which leaves source-timed
+        // captions where they were; re-project them before the undo step closes.
+        if drag.moved && matches!(drag.kind, DragKind::ClipRoll { .. }) {
+            self.synchronize_caption_track(false);
+            self.rebuild_timeline();
+            self.publish_project();
+        }
+
         if drag.moved && drag.track == TrackKind::Caption {
             crate::transcription::write_caption_edit_to_source(
                 &mut self.project,

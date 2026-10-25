@@ -2971,6 +2971,52 @@ mod tests {
     }
 
     #[test]
+    fn rolling_a_cut_re_projects_source_timed_captions() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 40.0 }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        let caption = |id: &str, start: f32| cap_project::CaptionSegment {
+            id: id.into(),
+            start,
+            end: start + 1.0,
+            text: id.into(),
+            words: Vec::new(),
+        };
+        project.captions = Some(cap_project::CaptionsData {
+            segments: vec![caption("revealed", 11.0), caption("trimmed", 20.5)],
+            source_timed: true,
+            ..Default::default()
+        });
+        let durations = [60.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        let shown = |project: &ProjectConfiguration| -> Vec<(String, f64)> {
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| (segment.text.clone(), segment.start))
+                .collect()
+        };
+        assert_eq!(shown(&project), vec![("trimmed".to_string(), 10.5)]);
+
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(apply_clip_roll(timeline, 0, 10.0, 20.0, 2.0));
+        cap_project::synchronize_captions(&mut project, &durations);
+        let after = shown(&project);
+        assert_eq!(after.len(), 1, "{after:?}");
+        assert_eq!(after[0].0, "revealed");
+        assert!((after[0].1 - 11.0).abs() < 1e-3, "{after:?}");
+    }
+
+    #[test]
     fn roll_bounds_stop_at_source_edges_and_minimum_lengths() {
         let project = two_clips();
         let timeline = project.timeline.as_ref().unwrap();
