@@ -37,10 +37,8 @@ const SCREEN = { w: 800, h: 478 } as const;
 const SCREEN_LEFT = (CANVAS.w - SCREEN.w) / 2;
 const SCREEN_TOP = 26;
 
-/** Height of the Windows taskbar along the bottom of the desktop. */
 const TASKBAR = 40;
 
-/** How far the desktop's usable area stops short of the bottom edge. */
 const useFloor = () => (useIsWindowsDemo() ? TASKBAR : 0);
 
 const Taskbar = () => (
@@ -144,11 +142,11 @@ const formatClock = (ms: number) => {
 
 const CHUNK_MS = 2000;
 const CHUNKS = 10;
+const CHUNK_SLOTS = Array.from({ length: CHUNKS }, (_, i) => ({
+	id: `chunk-${i}`,
+	index: i,
+}));
 
-/**
- * The share link, live while you are still talking: its video length keeps
- * pace with the recorder's timer, two seconds at a time.
- */
 const LiveLink = ({
 	elapsed,
 	playing,
@@ -174,13 +172,12 @@ const LiveLink = ({
 				</span>
 			</div>
 			<div className="flex gap-[3px] px-3 pt-2.5">
-				{Array.from({ length: CHUNKS }, (_, i) => {
-					const done = i < landed;
-					const sending = i === landed;
+				{CHUNK_SLOTS.map(({ id, index }) => {
+					const done = index < landed;
+					const sending = index === landed;
 					return (
 						<span
-							// biome-ignore lint/suspicious/noArrayIndexKey: fixed row of chunk slots
-							key={i}
+							key={id}
 							className="h-1.5 flex-1 rounded-full transition-colors duration-300"
 							style={{
 								background: done ? "#3B82F6" : sending ? "#BFDBFE" : "#EEF1F5",
@@ -201,7 +198,6 @@ const LiveLink = ({
 
 const RECORD_SCALE = 0.78;
 
-// Record: the recorder counts up and the share link fills in alongside it.
 const RecordView = ({ t, playing }: { t: number; playing: boolean }) => {
 	const elapsed = 8000 + t;
 	const cursor = {
@@ -252,7 +248,6 @@ const RecordView = ({ t, playing }: { t: number; playing: boolean }) => {
 	);
 };
 
-/** "Link copied", as a macOS banner (top right) or a Windows toast. */
 const Notification = ({ k }: { k: number }) => {
 	const windows = useIsWindowsDemo();
 	if (windows) {
@@ -404,7 +399,6 @@ const ChatWindow = ({
 	);
 };
 
-// Stop: click stop, the link lands on the clipboard, paste it into chat.
 const ShareView = ({ t, playing }: { t: number; playing: boolean }) => {
 	const toolbarX = SCREEN.w / 2 - 110;
 	const floor = useFloor();

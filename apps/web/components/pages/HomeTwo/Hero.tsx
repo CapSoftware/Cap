@@ -35,22 +35,20 @@ const PhoneStage = () => {
 				className="rounded-[22px] p-2.5"
 				style={meshStyle(MODE_THEME.instant)}
 			>
-				<Fit w={PHONE_STAGE.w} h={PHONE_STAGE.h} className="mx-auto" eager>
+				<Fit w={PHONE_STAGE.w} h={PHONE_STAGE.h} className="mx-auto">
 					<div
 						className="relative overflow-hidden rounded-[14px] bg-black"
 						style={{ width: PHONE_STAGE.w, height: PHONE_STAGE.h }}
 					>
-						{/* A 960px copy (40 KB): the stage is scaled to phone width, so the
-						    1920px variant next/image picked on dense screens was wasted. */}
-						{/* biome-ignore lint/performance/noImgElement: pre-sized static asset */}
-						<img
+						{/* The stage is scaled down to phone width, so a pre-sized 960px
+						    copy beats the 1920px variant next/image picks on dense screens. */}
+						<Image
 							src="/backgrounds/landing/sf-960.webp"
 							alt=""
-							width={960}
-							height={540}
-							decoding="async"
+							fill
+							unoptimized
 							draggable={false}
-							className="absolute inset-0 size-full object-cover"
+							className="object-cover"
 						/>
 						<MenuBar recording={false} onSwitchOs={noop} />
 						<div className="absolute z-20" style={{ left: 48, top: 30 }}>

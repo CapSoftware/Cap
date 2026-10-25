@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, Server } from "lucide-react";
+import Image from "next/image";
 import type { ReactNode } from "react";
 import { CapLogoMark } from "../demo/capIcons";
 import { copyOf, STORAGE_COPY } from "./copy";
@@ -59,13 +60,15 @@ const DESTINATIONS: Destination[] = [
 		path: "My Drive / Cap",
 		note: "A folder your team already uses",
 		icon: (
-			// biome-ignore lint/performance/noImgElement: tiny static svg
-			<img src="/logos/google-drive.svg" alt="" className="size-7" />
+			<Image
+				src="/logos/google-drive.svg"
+				alt=""
+				width={28}
+				height={28}
+				className="size-7"
+			/>
 		),
-		tab: (
-			// biome-ignore lint/performance/noImgElement: tiny static svg
-			<img src="/logos/google-drive.svg" alt="" />
-		),
+		tab: <Image src="/logos/google-drive.svg" alt="" width={16} height={16} />,
 		lead: copyOf(STORAGE_COPY, "drive").lead,
 		body: copyOf(STORAGE_COPY, "drive").body,
 	},
@@ -86,7 +89,6 @@ const FILE = { x: 96, y: 96, w: 312, h: 236 };
 const DEST = { x: 632, y: 132, w: 312, h: 164 };
 const ACCENT = TONES.storage.accent;
 
-/** A soft dot grid, so the stage reads as a canvas rather than empty space. */
 const DOTS = {
 	backgroundImage:
 		"radial-gradient(circle at 1px 1px, rgba(17,17,17,0.09) 1px, transparent 0)",

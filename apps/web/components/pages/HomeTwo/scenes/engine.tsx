@@ -360,7 +360,6 @@ export const Scaled = ({
 	style,
 	inert: isInert,
 	grow,
-	eager,
 	children,
 }: {
 	w: number;
@@ -369,11 +368,6 @@ export const Scaled = ({
 	style?: React.CSSProperties;
 	inert?: boolean;
 	grow?: boolean;
-	/**
-	 * Above the fold: size and reveal the content with a tiny inline script
-	 * as the HTML parses, instead of waiting for hydration to measure it.
-	 */
-	eager?: boolean;
 	children: ReactNode;
 }) => {
 	const boxRef = useRef<HTMLDivElement | null>(null);
@@ -391,17 +385,13 @@ export const Scaled = ({
 	}, [w, grow]);
 
 	const s = scale ?? 1;
-	const box = (
+	return (
 		<div
 			ref={boxRef}
 			aria-hidden="true"
 			inert={isInert}
-			data-fit-w={eager ? w : undefined}
-			data-fit-grow={eager && grow ? "" : undefined}
-			suppressHydrationWarning={eager}
 			className={classNames(
-				"relative w-full select-none",
-				!eager && "transition-opacity duration-500",
+				"relative w-full select-none transition-opacity duration-500",
 				scale === null ? "opacity-0" : "opacity-100",
 				isInert && "pointer-events-none",
 				className,
@@ -413,7 +403,6 @@ export const Scaled = ({
 			}}
 		>
 			<div
-				suppressHydrationWarning={eager}
 				className="absolute left-0 top-0"
 				style={{
 					width: w,
@@ -426,20 +415,7 @@ export const Scaled = ({
 			</div>
 		</div>
 	);
-	if (!eager) return box;
-	return (
-		<>
-			{box}
-			<script
-				// biome-ignore lint/security/noDangerouslySetInnerHtml: static sizing snippet, no user input
-				dangerouslySetInnerHTML={{ __html: EAGER_FIT_SCRIPT }}
-			/>
-		</>
-	);
 };
-
-/** Runs right after its box is parsed: same maths as the layout effect. */
-const EAGER_FIT_SCRIPT = `(function(s){var b=s&&s.previousElementSibling;if(!b)return;var w=+b.getAttribute("data-fit-w");var c=b.clientWidth;var k=b.hasAttribute("data-fit-grow")?c/w:Math.min(1,c/w);var i=b.firstElementChild;if(i)i.style.transform="scale("+k+")";b.style.opacity="1";})(document.currentScript)`;
 
 export const Fit = ({
 	w,
@@ -447,7 +423,6 @@ export const Fit = ({
 	className,
 	still,
 	grow,
-	eager,
 	children,
 }: {
 	w: number;
@@ -455,7 +430,6 @@ export const Fit = ({
 	className?: string;
 	still?: boolean;
 	grow?: boolean;
-	eager?: boolean;
 	children: ReactNode;
 }) => (
 	<SceneMediaProvider value={{ still: Boolean(still) }}>
@@ -464,7 +438,6 @@ export const Fit = ({
 			h={h}
 			inert
 			grow={grow}
-			eager={eager}
 			className={classNames(htGeist.variable, className)}
 			style={{
 				fontFamily:

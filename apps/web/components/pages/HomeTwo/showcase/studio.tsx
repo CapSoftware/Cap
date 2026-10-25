@@ -33,7 +33,6 @@ import {
 	Webcam,
 } from "./subjects";
 
-/** The exported video, centred on the stage above the tabs. */
 const FRAME = { w: 744, h: 465 } as const;
 const FRAME_LEFT = (CANVAS.w - FRAME.w) / 2;
 const FRAME_TOP = 36;
@@ -59,7 +58,6 @@ const Frame = ({
 	</div>
 );
 
-/** Where the recording sits inside the frame for a given padding (px). */
 const fitRecording = (pad: number) => {
 	const scale = Math.min(
 		(FRAME.w - pad * 2) / INVOICE.w,
@@ -117,7 +115,6 @@ const Recording = ({
 	);
 };
 
-/** Maps a point on the invoice page to frame coordinates. */
 const toFrame = (pad: number, x: number, y: number) => {
 	const box = fitRecording(pad);
 	return { x: box.left + x * box.scale, y: box.top + y * box.scale };
@@ -336,7 +333,6 @@ const ScenesView = ({
 	);
 };
 
-/** Little diagrams of each layout for the picker. */
 const LayoutGlyph = ({ kind }: { kind: number }) => (
 	<svg aria-hidden="true" viewBox="0 0 24 18" className="h-[15px] w-5">
 		<rect
@@ -399,7 +395,6 @@ const LayoutGlyph = ({ kind }: { kind: number }) => (
 	</svg>
 );
 
-// Short phrases, like the editor splits them, so a caption never wraps.
 const LINES = [
 	"So this is the new invoice flow.",
 	"Pick the client,",
@@ -423,8 +418,6 @@ const timeline = (() => {
 })();
 const CAPTIONS_END = (timeline.at(-1)?.at(-1)?.start ?? 0) + 1600;
 
-// Captions in the editor's default style: bold white on a near-black box,
-// bottom centre, each word bouncing in as it is spoken.
 const CaptionsView = ({ t, playing }: { t: number; playing: boolean }) => {
 	const lineIndex = Math.max(
 		0,
@@ -483,14 +476,16 @@ const Mosaic = ({ w, h }: { w: number; h: number }) => {
 	const tones = ["#C9CDD4", "#E3E6EA", "#AEB3BC", "#D6D9DE", "#9CA2AC"];
 	return (
 		<div className="absolute inset-0 flex flex-wrap">
-			{Array.from({ length: rows * cols }, (_, n) => (
+			{Array.from({ length: rows * cols }, (_, n) => ({
+				id: `cell-${n}`,
+				tone: tones[(((n * 2654435761) >>> 0) % 97) % tones.length],
+			})).map((cell) => (
 				<span
-					// biome-ignore lint/suspicious/noArrayIndexKey: static grid
-					key={n}
+					key={cell.id}
 					style={{
 						width: size,
 						height: size,
-						background: tones[(((n * 2654435761) >>> 0) % 97) % tones.length],
+						background: cell.tone,
 					}}
 				/>
 			))}
@@ -506,7 +501,6 @@ const BlurView = ({ t }: { t: number; playing: boolean }) => {
 	const modeIndex = t < 3200 ? 0 : t < 5200 ? 1 : 2;
 	const mode = MASK_MODES[modeIndex] ?? "Blur";
 	const blurAmount = seg(t, 1400, 1900) * 7;
-	// Mask rect in frame coordinates.
 	const x = box.left + (email.x - 6) * box.scale;
 	const y = box.top + (email.y - 6) * box.scale;
 	const fullW = (email.w + 12) * box.scale;
