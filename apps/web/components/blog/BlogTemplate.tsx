@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@cap/ui/button";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useId } from "react";

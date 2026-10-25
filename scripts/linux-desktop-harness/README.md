@@ -31,7 +31,12 @@ Each run (`run-desktop.sh <desktop> <package> <out-dir> [KEY=VALUE...]`):
 another app copied with Ctrl+V and copies it back out with Ctrl+A, Ctrl+C,
 pressed through the compositor's virtual keyboard (`wtype`).
 `SCENARIO=reopen` launches Cap from a terminal and again from the app grid,
-which must hand over to the running instance. `SCENARIO=settings-close` instead opens Cap's settings and closes it with the
+which must hand over to the running instance. `SCENARIO=raise` (with
+`GNOME_UNSAFE=1`) focuses Cap's settings, then has GNOME Shell launch Cap the
+way the app grid does; the activation token the relaunch hands over must bring
+onboarding, or the main window with `RAISE_WINDOW=main`, to the front.
+`MUTTER_DEBUG=focus,startup` writes mutter's reasoning to
+`compositor.debug.log`. `SCENARIO=settings-close` instead opens Cap's settings and closes it with the
 window's own close button (GNOME draws no title bar for it). Clicks go through
 `mutter-pointer.py`, one virtual pointer that exists before Cap starts: gpui
 binds the seat's pointer once, so a pointer created per click never reaches it.

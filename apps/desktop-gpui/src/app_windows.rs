@@ -2873,7 +2873,13 @@ fn append_own_excluded_window_ids(
             continue;
         }
         let Some(number) = window.number else {
-            tracing::warn!(title, "excluded Cap window has no native window id");
+            // Wayland gives clients no window ids, so every Cap window lands
+            // here on every Linux Wayland recording.
+            if cfg!(target_os = "linux") {
+                tracing::debug!(title, "excluded Cap window has no native window id");
+            } else {
+                tracing::warn!(title, "excluded Cap window has no native window id");
+            }
             continue;
         };
         let Ok(id) = number.to_string().parse::<scap_targets::WindowId>() else {
@@ -3958,7 +3964,7 @@ pub fn open_camera_window(cx: &mut App) {
         })
         .or_else(scap_targets::Display::get_containing_cursor)
         .unwrap_or_else(scap_targets::Display::primary);
-    let (x, y) = camera_window::opening_position(&display);
+    let (x, y) = camera_window::opening_position(&display, (width, height));
     let display_id = gpui_display_id(Some(&display), cx);
 
     let inline = camera_preview_is_inline(cx);

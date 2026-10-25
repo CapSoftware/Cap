@@ -36,6 +36,7 @@ gsettings set org.gnome.desktop.interface toolkit-accessibility true
 systemctl --user reset-failed gnome-headless.service >/dev/null 2>&1 || true
 systemd-run --user --unit=gnome-headless --collect \
   -p StandardOutput=file:"$out/compositor.log" -p StandardError=inherit \
+  ${MUTTER_DEBUG:+-p Environment=MUTTER_DEBUG=$MUTTER_DEBUG -p StandardError=file:"$out/compositor.debug.log"} \
   gnome-shell --headless --wayland --no-x11 --virtual-monitor 1920x1080 ${GNOME_UNSAFE:+--unsafe-mode}
 
 for _ in $(seq 600); do

@@ -195,6 +195,51 @@ describe("media processing workflows", () => {
 		expect(mocks.remove).toHaveBeenCalledWith(payload.rawFileKey);
 	});
 
+	it("marks deferred Loom originals so the worker accepts their decoder glitches", async () => {
+		const loomVideo = {
+			...video,
+			metadata: {
+				loomDeferredProcessing: {
+					status: "started",
+					rawFileKey: payload.rawFileKey,
+				},
+			},
+		};
+		mocks.rows = [
+			[loomVideo],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[loomVideo],
+			[pending],
+			[],
+			[metadata],
+			[loomVideo],
+			[],
+		];
+		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+			success: true,
+		});
+		const body = JSON.parse(String(mocks.fetch.mock.calls[0]?.[1]?.body));
+		expect(body.importedOriginal).toBe(true);
+	});
+
+	it("checks ordinary uploads strictly", async () => {
+		mocks.rows = [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+			[pending],
+			[],
+			[metadata],
+			[video],
+			[],
+		];
+		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+			success: true,
+		});
+		const body = JSON.parse(String(mocks.fetch.mock.calls[0]?.[1]?.body));
+		expect(body.importedOriginal).toBeUndefined();
+	});
+
 	it("keeps uploaded source data when processing fails", async () => {
 		mocks.rows = [
 			[video],

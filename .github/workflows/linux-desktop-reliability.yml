@@ -142,7 +142,21 @@ jobs:
           DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
-            "$RUNNER_TEMP/out/gnome-tray" LAUNCH=terminal TRAY_CLICK=pointer GNOME_UNSAFE=1
+            "$RUNNER_TEMP/out/gnome-tray" LAUNCH=terminal TRAY_CLICK=pointer GNOME_UNSAFE=1 \
+            CAP_GPUI_PORTAL_APP_ID=0
+
+      # A terminal launch has no launcher unit for the portals to name Cap
+      # after; Cap registers its own app id so GlobalShortcuts still works.
+      - name: GNOME 50 shortcut from a terminal launch
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-terminal" LAUNCH=terminal APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-terminal/result.txt"
+          grep -qx attempt1_control=shortcut "$RUNNER_TEMP/out/gnome-terminal/result.txt"
+          grep -qx app_id_required=0 "$RUNNER_TEMP/out/gnome-terminal/result.txt"
 
       - name: GNOME 50 settings window closes from its own button
         env:
@@ -166,10 +180,23 @@ jobs:
           cat "$RUNNER_TEMP/out/gnome-reopen/result.txt"
           grep -qx reopen_forwarded=yes "$RUNNER_TEMP/out/gnome-reopen/result.txt"
 
+      - name: GNOME 50 relaunch brings Cap to the front over its settings
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: raise
+        run: |
+          for window in main onboarding; do
+            sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+              "$RUNNER_TEMP/out/gnome-raise-$window" GNOME_UNSAFE=1 RAISE_WINDOW=$window
+            cat "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
+            grep -qx main_raised=yes "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
+          done
+
       - name: Check results
         run: |
           bash scripts/linux-desktop-harness/check-results.sh \
-            "$RUNNER_TEMP/out/gnome" "$RUNNER_TEMP/out/gnome-tray"
+            "$RUNNER_TEMP/out/gnome" "$RUNNER_TEMP/out/gnome-tray" "$RUNNER_TEMP/out/gnome-terminal"
 
       - name: Package the build for the Hyprland job
         run: |
@@ -222,6 +249,16 @@ jobs:
             bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
             "$RUNNER_TEMP/out/hyprland" LAUNCH=dock
 
+      # A GPU without a Vulkan driver renders through wgpu's GL backend, whose
+      # surfaces have no Mailbox present mode. Hiding the Vulkan drivers puts
+      # Cap there; showing its hidden windows again must not panic.
+      - name: Hyprland on OpenGL (no Vulkan driver)
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-gl" LAUNCH=dock VK_ICD_FILENAMES=/nonexistent.json
+          grep -q 'Selected GPU adapter: .*(Gl)' "$RUNNER_TEMP/out/hyprland-gl/cap.log"
+
       - name: Hyprland clipboard (Ctrl+V into and Ctrl+C out of a text field)
         env:
           SCENARIO: clipboard
@@ -234,7 +271,9 @@ jobs:
           done
 
       - name: Check results
-        run: bash scripts/linux-desktop-harness/check-results.sh "$RUNNER_TEMP/out/hyprland"
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh \
+            "$RUNNER_TEMP/out/hyprland" "$RUNNER_TEMP/out/hyprland-gl"
 
       - name: Upload logs
         if: always()

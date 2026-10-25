@@ -4786,7 +4786,7 @@ impl MainWindow {
                 } else if !studio && let Some(url) = &sharing {
                     cx.open_url(url);
                 } else if !studio {
-                    library::open_recording_folder(&path, mode);
+                    library::open_recording_folder(&path, mode, cx);
                 }
             }),
             actions,
@@ -4863,7 +4863,7 @@ impl MainWindow {
         row = row.child(self.library_action(
             ("lib-rec-folder", index),
             "icons/folder.svg",
-            move |_, _, _| library::open_recording_folder(&folder, mode),
+            move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
             ("lib-rec-delete", index),
@@ -4945,7 +4945,7 @@ impl MainWindow {
             .child(
                 self.library_action(("lib-ss-open", index), "icons/folder.svg", {
                     let bundle = bundle.clone();
-                    move |_, _, _| library::reveal_in_folder(&bundle)
+                    move |_, _, cx| library::reveal_path(&bundle, cx)
                 }),
             )
             .child(self.library_action(

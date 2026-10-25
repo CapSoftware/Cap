@@ -39,6 +39,9 @@ use x11rb::rust_connection::RustConnection;
 #[cfg(test)]
 mod x11_tests;
 
+#[cfg(test)]
+mod system_audio_channel_tests;
+
 #[derive(Debug)]
 pub struct X11Capture;
 
@@ -1778,7 +1781,12 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
-        let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
+        let setup = crate::sources::Microphone::setup_with_channels(
+            config.feed_lock,
+            tx,
+            ctx,
+            X11Capture::audio_info().channels,
+        );
         async move {
             let inner = setup
                 .await

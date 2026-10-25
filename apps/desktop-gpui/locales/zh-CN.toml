@@ -99,7 +99,10 @@ system_default = "跟随系统（{language}）"
 title = "语言"
 
 [settings.general.appearance]
+dark = "深色"
 description = "让 Cap 跟随系统主题，或选择固定外观。"
+light = "浅色"
+system = "跟随系统"
 title = "外观"
 
 [settings.general.app]

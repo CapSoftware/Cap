@@ -495,3 +495,61 @@ fn caption_overrides_preserve_nonfinite_float_bits() {
         );
     }
 }
+
+#[test]
+fn mapping_bounds_preserve_shared_edges_overlaps_duplicates_and_fallbacks() {
+    let sequential: Vec<_> = (0..64)
+        .map(|index| (index as f64, index as f64 + 1.0))
+        .collect();
+    let overlapping: Vec<_> = (0..64)
+        .map(|index| (index as f64 * 0.5, index as f64 * 0.5 + 2.0))
+        .collect();
+    let duplicated: Vec<_> = sequential.iter().flat_map(|range| [*range; 2]).collect();
+    let mut nested = sequential.clone();
+    nested[0].1 = 100.0;
+    let mut reversed = sequential.clone();
+    reversed.reverse();
+    for with_words in [false, true] {
+        let captions: Vec<_> = [
+            -1.0,
+            -0.0,
+            0.0,
+            f32::from_bits(1.0_f32.to_bits() - 1),
+            1.0,
+            f32::from_bits(1.0_f32.to_bits() + 1),
+            30.0,
+            63.0,
+            64.0,
+            100.0,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, start)| CaptionSegment {
+            id: format!("edge-{index}"),
+            start: if with_words { -100.0 } else { start },
+            end: if with_words { -99.0 } else { start + 2.5 },
+            text: "parent".into(),
+            words: if with_words {
+                vec![
+                    CaptionWord {
+                        text: "later".into(),
+                        start: start + 2.0,
+                        end: start + 2.5,
+                    },
+                    CaptionWord {
+                        text: "earlier".into(),
+                        start,
+                        end: start + 0.5,
+                    },
+                ]
+            } else {
+                Vec::new()
+            },
+        })
+        .collect();
+        for ranges in [&sequential, &overlapping, &duplicated, &nested, &reversed] {
+            assert_projection_matches(&captions, &timeline(ranges), &[100.0]);
+        }
+        assert_projection_matches(&[], &timeline(&sequential), &[100.0]);
+    }
+}

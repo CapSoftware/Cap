@@ -3532,7 +3532,7 @@ impl SettingsWindow {
                             ui::ButtonSize::Md,
                         )
                         .label("Show File")
-                        .on_click(move |_, _, _| crate::library::reveal_in_folder(&path)),
+                        .on_click(move |_, _, cx| crate::library::reveal_path(&path, cx)),
                     );
                 }
                 buttons = buttons.child(
