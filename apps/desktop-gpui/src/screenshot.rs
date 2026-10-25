@@ -18,7 +18,13 @@ use anyhow::{Context as _, anyhow};
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::App;
 
-use crate::app_windows;
+use crate::{app_windows, screenshot_editor::LoadedSource};
+
+pub struct CapturedScreenshot {
+    pub png: PathBuf,
+    pub source: Option<LoadedSource>,
+    pub behaviour: crate::store::PostScreenshotBehaviour,
+}
 
 pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
     if matches!(target, ScreenCaptureTarget::CameraOnly) {
@@ -28,7 +34,10 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
         return;
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");
-
+    let behaviour = crate::store::GeneralSettings::load().post_screenshot_behaviour;
+    if behaviour.opens_editor() {
+        app_windows::prewarm_shared_wgpu_device(cx);
+    }
     let settle = app_windows::prepare_for_screenshot_capture(cx);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -38,15 +47,16 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
             // the compositor needs a beat to actually drop them from screen.
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
-        capture_and_write(target).await
+        capture_and_write(target, behaviour.opens_editor()).await
     });
 
     cx.spawn(async move |cx| {
         let captured = match task.await {
-            Ok(png) => {
-                tracing::info!(path = %png.display(), "screenshot captured");
-                Some(png)
-            }
+            Ok((png, source)) => Some(CapturedScreenshot {
+                png,
+                source,
+                behaviour,
+            }),
             Err(error) => {
                 tracing::error!("screenshot capture failed: {error:#}");
                 None
@@ -57,16 +67,12 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
     .detach();
 }
 
-/// Capture, then write the `.cap` bundle. Returns the PNG path, which is what
-/// the Tauri command returns (`NewScreenshotAdded.path` is the PNG, not the
-/// bundle).
-async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBuf> {
-    let image = cap_recording::screenshot::capture_screenshot(target.clone())
-        .await
-        .context("capturing the screenshot")?;
-
-    crate::app_sounds::AppSound::Notification.play();
-
+fn create_capture_project(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<(
+    cap_project::RecordingMeta,
+    cap_project::ProjectConfiguration,
+)> {
     let base = crate::library::screenshots_dir();
     std::fs::create_dir_all(&base)
         .with_context(|| format!("creating screenshots dir {}", base.display()))?;
@@ -93,7 +99,7 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
     let meta = cap_project::RecordingMeta {
         platform: Some(cap_project::Platform::default()),
         project_path: bundle.clone(),
-        pretty_name,
+        pretty_name: pretty_name.clone(),
         sharing: None,
         inner: cap_project::RecordingMetaInner::Studio(Box::new(
             cap_project::StudioRecordingMeta::SingleSegment {
@@ -113,7 +119,7 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
         upload: None,
     };
     meta.save_for_project()
-        .map_err(|e| anyhow!("saving screenshot meta: {e}"))?;
+        .map_err(|error| anyhow!("saving screenshot meta: {error}"))?;
 
     let mut config = cap_project::ProjectConfiguration::default();
     config.background.source = cap_project::BackgroundSource::Color {
@@ -123,17 +129,52 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
     config.background.shadow = 0.0;
     config
         .write(&bundle)
-        .map_err(|e| anyhow!("saving screenshot project config: {e}"))?;
+        .map_err(|error| anyhow!("saving screenshot project config: {error}"))?;
 
-    let png = bundle.join("original.png");
-    write_png(png.clone(), image).await?;
-    Ok(png)
+    Ok((meta, config))
+}
+
+async fn capture_and_write(
+    target: ScreenCaptureTarget,
+    retain_rgba: bool,
+) -> anyhow::Result<(PathBuf, Option<LoadedSource>)> {
+    let image = cap_recording::screenshot::capture_screenshot(target.clone())
+        .await
+        .context("capturing the screenshot")?;
+    crate::app_sounds::AppSound::Notification.play();
+    let (meta, config) = create_capture_project(&target)?;
+    let png = meta.project_path.join("original.png");
+    let width = image.width();
+    let height = image.height();
+    let rgba = write_png(png.clone(), image, retain_rgba).await?;
+    tracing::info!(path = %png.display(), "screenshot captured");
+    let source = if let Some(rgba) = rgba {
+        let cap_project::RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
+            return Err(anyhow!("screenshot metadata is not a studio project"));
+        };
+        Some(LoadedSource {
+            rgba: std::sync::Arc::new(rgba),
+            width,
+            height,
+            pretty_name: meta.pretty_name.clone(),
+            config,
+            studio_meta: (**studio_meta).clone(),
+            meta,
+        })
+    } else {
+        None
+    };
+    Ok((png, source))
 }
 
 /// The Tauri encode settings (`recording.rs:2987-3016`): RGB stays RGB, a
 /// capture past 8MP trades compression for speed, adaptive filtering either
 /// way. Blocking work, so off the runtime workers.
-async fn write_png(path: PathBuf, image: image::DynamicImage) -> anyhow::Result<()> {
+async fn write_png(
+    path: PathBuf,
+    image: image::DynamicImage,
+    retain_rgba: bool,
+) -> anyhow::Result<Option<Vec<u8>>> {
     tokio::task::spawn_blocking(move || {
         let width = image.width();
         let height = image.height();
@@ -146,6 +187,7 @@ async fn write_png(path: PathBuf, image: image::DynamicImage) -> anyhow::Result<
         } else {
             image::codecs::png::CompressionType::Default
         };
+        let rgba = retain_rgba.then(|| image.to_rgba8().into_raw());
         let data = image.into_bytes();
 
         let file =
@@ -159,8 +201,95 @@ async fn write_png(path: PathBuf, image: image::DynamicImage) -> anyhow::Result<
             compression,
             image::codecs::png::FilterType::Adaptive,
         )
-        .context("encoding the screenshot PNG")
+        .context("encoding the screenshot PNG")?;
+        Ok(rgba)
     })
     .await
     .context("the PNG encode task died")?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn retained_capture_pixels_match_saved_rgb_and_alpha() {
+        let directory = tempfile::tempdir().unwrap();
+        let images = [
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(4, 2, |x, y| {
+                image::Rgb([x as u8 * 40, y as u8 * 80, 173])
+            })),
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(4, 2, |x, y| {
+                image::Rgba([x as u8 * 40, y as u8 * 80, 173, x as u8 * 70])
+            })),
+        ];
+        for (index, image) in images.into_iter().enumerate() {
+            let path = directory.path().join(format!("{index}.png"));
+            let expected = image.to_rgba8().into_raw();
+            let retained = write_png(path.clone(), image, true).await.unwrap().unwrap();
+            let saved = image::open(path).unwrap().to_rgba8().into_raw();
+            assert_eq!(retained, expected);
+            assert_eq!(saved, retained);
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_capture_pixels_can_still_be_saved() {
+        let directory = tempfile::tempdir().unwrap();
+        for (width, height) in [(16_385, 2), (4, 16_385)] {
+            let path = directory.path().join("original.png");
+            let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                width,
+                height,
+                image::Rgba([13, 71, 129, 255]),
+            ));
+            let retained = write_png(path.clone(), image, true).await.unwrap().unwrap();
+            let saved = image::open(&path).unwrap().to_rgba8();
+            assert_eq!(saved.dimensions(), (width, height));
+            assert_eq!(saved.as_raw(), &retained);
+            assert!(matches!(
+                crate::screenshot_editor::load_source(directory.path()),
+                Err(message) if message == format!("Image dimensions exceed maximum: {width}x{height}")
+            ));
+            assert!(path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_and_save_only_encode_without_retaining_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        for (index, image) in [
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                4,
+                2,
+                image::Rgb([13, 71, 129]),
+            )),
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                4,
+                2,
+                image::Rgba([13, 71, 129, 83]),
+            )),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = directory.path().join(format!("{index}.png"));
+            let expected = image.to_rgba8();
+            assert!(
+                write_png(path.clone(), image, false)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(image::open(path).unwrap().to_rgba8(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_capture_save_does_not_deliver_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(4, 2));
+        let result = write_png(directory.path().to_path_buf(), image, true).await;
+        assert!(result.is_err());
+    }
 }

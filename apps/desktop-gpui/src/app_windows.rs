@@ -6775,8 +6775,13 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
 /// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
-    let Some(png) = captured else {
+pub fn screenshot_finished(captured: Option<crate::screenshot::CapturedScreenshot>, cx: &mut App) {
+    let Some(crate::screenshot::CapturedScreenshot {
+        png,
+        source,
+        behaviour,
+    }) = captured
+    else {
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
             show_main_window(cx);
@@ -6794,7 +6799,6 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
     main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 
-    let behaviour = crate::store::GeneralSettings::load().post_screenshot_behaviour;
     if behaviour.copies() {
         let copied = platform::copy_image_to_clipboard(png.clone(), cx);
         cx.spawn(async move |_| {
@@ -6810,7 +6814,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         // recording hands off to the video editor; `screenshot_editor_closed`
         // brings the main window back.
         cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
-        open_screenshot_editor(png, cx);
+        open_screenshot_editor_with_source(png, source, cx);
         return;
     }
 
@@ -6832,6 +6836,14 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
 /// Must be reached through `cx.defer` from anything inside an entity update:
 /// opening a window paints it synchronously and would double-lease the caller.
 pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
+    open_screenshot_editor_with_source(path, None, cx);
+}
+
+fn open_screenshot_editor_with_source(
+    path: PathBuf,
+    source: Option<screenshot_editor::LoadedSource>,
+    cx: &mut App,
+) {
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
         return;
@@ -6935,7 +6947,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
     // only showed up once Cap was clicked.
     cx.defer(move |cx| bring_screenshot_editor_forward(handle, cx));
     prewarm_shared_wgpu_device(cx);
-    screenshot_editor::load_screenshot_project(key, handle, cx);
+    screenshot_editor::load_screenshot_project(key, handle, source, cx);
 }
 
 fn bring_screenshot_editor_forward(handle: WindowHandle<ScreenshotEditorWindow>, cx: &mut App) {
