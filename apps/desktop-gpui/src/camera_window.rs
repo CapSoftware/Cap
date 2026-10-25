@@ -57,6 +57,8 @@ use gpui::{
 };
 use serde_json::Value;
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     camera_loading,
     feeds::Feeds,
@@ -388,6 +390,10 @@ mod frame {
         pub mirrored: bool,
     }
 
+    // Handed from the conversion thread to the main thread once written; the
+    // buffer is only read after that, and CF refcounts are atomic.
+    unsafe impl Send for Converted {}
+
     /// Converts camera frames (typically `420v`) into BGRA IOSurface-backed
     /// pixel buffers that gpui paints directly via `paint_surface_fitted`.
     ///
@@ -410,8 +416,10 @@ mod frame {
     /// neither touches the recorded camera track.
     ///
     /// The fixed rings keep a buffer alive while gpui's scene still references
-    /// the previous one; four slots at camera rates leaves ~100ms before a
-    /// slot is overwritten.
+    /// the previous one. Conversion runs on the `camera-preview-convert`
+    /// thread, so besides the painted frame and the previous scene's, one
+    /// converted frame can wait for the main thread, one can sit with the blur
+    /// worker, and one is being written: six slots cover all of them.
     pub struct FrameConverter {
         session: arc::R<vt::PixelTransferSession>,
         /// `None` when unmirrored, or when the rotation session could not be
@@ -426,10 +434,10 @@ mod frame {
         generation: u64,
     }
 
-    // Only touched from the main thread; the CF objects have atomic refcounts.
+    // Owned by the conversion thread; the CF objects have atomic refcounts.
     unsafe impl Send for FrameConverter {}
 
-    const RING_SIZE: usize = 4;
+    const RING_SIZE: usize = 6;
 
     fn bgra_buffers(
         count: usize,
@@ -514,21 +522,26 @@ mod frame {
         /// The frame as a BGRA IOSurface-backed pixel buffer, downscaled to
         /// fit `max_dims` when given and horizontally flipped when
         /// `mirrored`. Recreates the rings when the camera's frame size, the
-        /// target size or the mirror toggle changes.
+        /// target size or the mirror toggle changes, or when `force_rebuild`
+        /// asks for a fresh rotation session (keeping the generation count
+        /// rising so no earlier ring can alias a new one).
         pub fn convert(
             this: &mut Option<Self>,
             frame: &cap_recording::NativeCameraFrame,
             max_dims: Option<(usize, usize)>,
             mirrored: bool,
+            force_rebuild: bool,
         ) -> Option<Converted> {
             let src = frame.sample_buf.image_buf()?;
             let src_dims = (src.width(), src.height());
             let dst_dims = max_dims.map_or(src_dims, |max| fit_within(src_dims, max));
-            if this.as_ref().is_none_or(|converter| {
-                converter.src_dims != src_dims
-                    || converter.dst_dims != dst_dims
-                    || converter.mirrored != mirrored
-            }) {
+            if force_rebuild
+                || this.as_ref().is_none_or(|converter| {
+                    converter.src_dims != src_dims
+                        || converter.dst_dims != dst_dims
+                        || converter.mirrored != mirrored
+                })
+            {
                 let generation = this.as_ref().map_or(0, |c| c.generation + 1);
                 *this = Self::new(src_dims, dst_dims, mirrored, generation);
             }
@@ -724,22 +737,51 @@ fn awaiting_camera_access(cx: &gpui::App) -> bool {
 fn camera_issue(error: &str) -> (&'static str, &'static str) {
     if error.contains("access is unavailable") {
         return (
-            "Camera access needed",
-            "Click to allow Cap to use your camera in System Settings.",
+            tr::camera::issue::access_title(),
+            tr::camera::issue::access_message(),
         );
     }
     let message = if error.contains("DeviceNotFound") {
-        "This camera is no longer available. Check that it is connected and allowed by system permissions."
+        tr::camera::issue::not_found()
     } else if error.contains("CameraTimeout") {
-        "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app."
+        tr::camera::issue::timeout()
     } else if error.contains("StartCapturing") {
-        "The system could not start this camera. It may be unavailable or in use by another app."
+        tr::camera::issue::start_failed()
     } else if error.contains("InvalidFormat") {
-        "This camera did not report a usable capture format."
+        tr::camera::issue::invalid_format()
     } else {
-        "The selected camera could not be started. Choose another camera or reconnect this one."
+        tr::camera::issue::generic()
     };
-    ("Camera unavailable", message)
+    (tr::camera::issue::unavailable_title(), message)
+}
+
+/// Which preview effect failed. Kept instead of its text so the overlay reads
+/// the current language when it renders.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectIssue {
+    Mirror,
+    Blur,
+    Both,
+}
+
+impl EffectIssue {
+    fn text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Mirror => (
+                tr::camera::effects::mirror_title(),
+                tr::camera::effects::mirror_message(),
+            ),
+            Self::Blur => (
+                tr::camera::effects::blur_title(),
+                tr::camera::effects::blur_message(),
+            ),
+            Self::Both => (
+                tr::camera::effects::both_title(),
+                tr::camera::effects::both_message(),
+            ),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -751,15 +793,12 @@ struct PreviewEffectFailures {
 
 #[cfg(target_os = "macos")]
 impl PreviewEffectFailures {
-    fn issue(self) -> Option<(&'static str, &'static str)> {
+    fn issue(self) -> Option<EffectIssue> {
         match (self.mirror, self.blur) {
             (false, false) => None,
-            (true, false) => Some(("Mirror unavailable", "Your camera preview is not mirrored.")),
-            (false, true) => Some(("Background blur unavailable", "Your camera is unblurred.")),
-            (true, true) => Some((
-                "Camera effects unavailable",
-                "Your camera is unblurred and not mirrored.",
-            )),
+            (true, false) => Some(EffectIssue::Mirror),
+            (false, true) => Some(EffectIssue::Blur),
+            (true, true) => Some(EffectIssue::Both),
         }
     }
 
@@ -787,6 +826,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("not mirrored")
         );
@@ -797,6 +837,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("unblurred")
         );
@@ -807,6 +848,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("unblurred and not mirrored")
         );
@@ -1001,6 +1043,7 @@ struct CameraPreviewView {
     reveal_started: Option<Instant>,
     loading_started: Option<Instant>,
     loading_fade_started: Option<Instant>,
+    loading_redraw: camera_loading::LoadingRedraw,
     retained_invalidated: bool,
     selection_revision: u64,
     frame_revision: Option<u64>,
@@ -1013,7 +1056,7 @@ struct CameraPreviewView {
     /// ~20Hz whenever a microphone is selected, and each of those would
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
-    effect_issue: Option<(&'static str, &'static str)>,
+    effect_issue: Option<EffectIssue>,
     awaiting_access: bool,
     _feeds_subscription: Subscription,
     _access_subscription: Subscription,
@@ -1107,6 +1150,7 @@ impl CameraPreviewView {
             reveal_started: None,
             loading_started: None,
             loading_fade_started: None,
+            loading_redraw: camera_loading::LoadingRedraw::default(),
             retained_invalidated: false,
             selection_revision: 0,
             frame_revision: None,
@@ -1327,7 +1371,12 @@ impl Render for CameraPreviewView {
 
         if let Some((started, opacity, animate)) = loading {
             container = container.child(camera_loading::camera_loading(
-                started, radius, opacity, animate, !has_issue,
+                started,
+                radius,
+                opacity,
+                animate,
+                !has_issue,
+                self.loading_redraw.clone(),
             ));
         }
 
@@ -1343,11 +1392,13 @@ impl Render for CameraPreviewView {
             .camera_error
             .as_deref()
             .map(camera_issue)
-            .or(self.effect_issue)
-            .or(awaiting_access.then_some((
-                "Waiting for camera access",
-                "Choose Allow in the macOS prompt.",
-            )))
+            .or(self.effect_issue.map(EffectIssue::text))
+            .or(awaiting_access.then(|| {
+                (
+                    tr::camera::waiting_title(),
+                    tr::common::choose_allow_prompt(),
+                )
+            }))
         {
             let metrics = overlay_metrics(self.size);
             container = container.child(
@@ -1435,6 +1486,64 @@ impl Render for CameraToolbarView {
     }
 }
 
+#[cfg(target_os = "macos")]
+struct ConvertJob {
+    frame: cap_recording::NativeCameraFrame,
+    settings: ConvertSettings,
+}
+
+/// What a frame was converted for. A result whose settings no longer match
+/// the window's (another camera selected, blur or mirroring toggled while it
+/// converted) is dropped; the next frame arrives within a frame interval.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, PartialEq)]
+struct ConvertSettings {
+    epoch: u64,
+    blur_mode: Option<cap_camera_effects::BlurMode>,
+    mirrored: bool,
+    rebuilds: u64,
+}
+
+/// The `camera-preview-convert` thread. The VideoToolbox transfer (and the
+/// mirror pass) blocks until the hardware finishes, ~4-5 ms per frame, which
+/// stalled every main-thread frame while it ran on the main thread.
+#[cfg(target_os = "macos")]
+struct ConvertBridge {
+    tx: flume::Sender<ConvertJob>,
+    _pump: gpui::Task<()>,
+}
+
+#[cfg(target_os = "macos")]
+fn run_preview_conversion(
+    jobs: flume::Receiver<ConvertJob>,
+    converted: flume::Sender<(Option<frame::Converted>, ConvertSettings)>,
+) {
+    let mut converter = None;
+    let mut rebuilds = None;
+    while let Ok(mut job) = jobs.recv() {
+        // Latest wins: a frame that queued behind a slow conversion is stale.
+        while let Ok(newer) = jobs.try_recv() {
+            job = newer;
+        }
+        let settings = job.settings;
+        let force_rebuild = rebuilds.is_some_and(|rebuilds| rebuilds != settings.rebuilds);
+        rebuilds = Some(settings.rebuilds);
+        let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
+        let result = frame::FrameConverter::convert(
+            &mut converter,
+            &job.frame,
+            max_dims,
+            settings.mirrored,
+            force_rebuild,
+        );
+        // Blocks while the main thread still holds the previous result, so the
+        // ring never gets more than one frame ahead of what it painted.
+        if converted.send((result, settings)).is_err() {
+            return;
+        }
+    }
+}
+
 /// Channels to and from the `camera-blur` worker thread, plus the foreground
 /// pump that paints its outputs. Dropping this closes the job channel, which
 /// ends the thread and releases the ONNX/GPU resources -- the
@@ -1460,7 +1569,16 @@ pub struct CameraWindow {
     resizing: Option<ResizeDrag>,
     hovered_handle: Option<ResizeCorner>,
     #[cfg(target_os = "macos")]
-    converter: Option<frame::FrameConverter>,
+    convert: Option<ConvertBridge>,
+    /// Bumped when the mirror toggle changes, so the conversion thread
+    /// rebuilds its rings and retries a rotation session that failed before.
+    #[cfg(target_os = "macos")]
+    convert_rebuilds: u64,
+    /// Inline conversion when the thread could not be spawned.
+    #[cfg(target_os = "macos")]
+    fallback_converter: Option<frame::FrameConverter>,
+    #[cfg(target_os = "macos")]
+    fallback_rebuilds: Option<u64>,
     #[cfg(target_os = "macos")]
     blur: Option<BlurBridge>,
     #[cfg(target_os = "macos")]
@@ -1677,7 +1795,13 @@ impl CameraWindow {
             resizing: None,
             hovered_handle: None,
             #[cfg(target_os = "macos")]
-            converter: None,
+            convert: None,
+            #[cfg(target_os = "macos")]
+            convert_rebuilds: 0,
+            #[cfg(target_os = "macos")]
+            fallback_converter: None,
+            #[cfg(target_os = "macos")]
+            fallback_rebuilds: None,
             #[cfg(target_os = "macos")]
             blur: None,
             #[cfg(target_os = "macos")]
@@ -1761,76 +1885,37 @@ impl CameraWindow {
             let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
                 return;
             };
-            use core_foundation::base::TCFType as _;
-            use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
-
             let failures_before = self.effect_failures;
             if self.state.background_blur != BlurMode::Off && camera_blur::is_low_spec_preview() {
                 self.effect_failures.blur = true;
             }
-            let blur_mode = self.active_blur_mode();
-            let max_dims = blur_mode.is_some().then_some(camera_blur::BLUR_MAX_DIMS);
-            if let Some(converted) = frame::FrameConverter::convert(
-                &mut self.converter,
-                &frame,
-                max_dims,
-                self.state.mirrored,
-            ) {
-                self.effect_failures.mirror = self.state.mirrored && !converted.mirrored;
-                let first_frame = self.frame_dims.is_none();
-                let dims = converted.dims;
-                let dims_changed = self.frame_dims != Some(dims);
-                self.frame_dims = Some(dims);
-
-                let mut paint_raw = blur_mode.is_none();
-                if let Some(mode) = blur_mode {
-                    let job = camera_blur::BlurJob {
-                        buffer: camera_blur::SendPixelBuf(converted.buffer.clone()),
-                        width: dims.0 as u32,
-                        height: dims.1 as u32,
-                        ring_generation: converted.generation,
-                        mode,
-                    };
-                    match self.ensure_blur_bridge(epoch, window, cx).tx.try_send(job) {
-                        Ok(()) => {}
-                        // Worker busy: drop this frame and keep the last
-                        // painted one -- the bounded(1) latest-wins shape of
-                        // the Tauri preview's `camera_tx` (`camera.rs:424`).
-                        Err(flume::TrySendError::Full(_)) => {}
-                        Err(flume::TrySendError::Disconnected(_)) => {
-                            // The worker could not come up (no device, no
-                            // ONNX runtime, low-level failure). Same degrade
-                            // as `ensure_blur_processor` returning false:
-                            // raw frames, latched until the mode changes.
-                            tracing::warn!(
-                                "camera blur worker unavailable; preview continues unblurred"
-                            );
-                            self.blur = None;
-                            self.effect_failures.blur = true;
-                            paint_raw = true;
-                        }
-                    }
-                }
-
-                if paint_raw {
-                    let raw =
-                        converted.buffer.as_ref() as *const cidre::cv::PixelBuf as CVPixelBufferRef;
-                    let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
-                    self.preview
-                        .update(cx, |preview, cx| preview.set_frame(buffer, dims, cx));
-                }
-                if dims_changed {
-                    self.apply_window_size(window, cx);
-                    cx.notify();
-                }
-                if first_frame && !window.is_window_active() {
-                    window.refresh();
-                }
-            } else if self.frame_dims.is_none() && self.frames_in_window == 0 {
-                tracing::warn!("camera frame could not be converted for preview");
-            }
             if failures_before != self.effect_failures {
                 self.sync_effect_feedback(cx);
+            }
+            let job = ConvertJob {
+                frame,
+                settings: self.convert_settings(epoch),
+            };
+            match self.ensure_convert_bridge(window, cx).tx.try_send(job) {
+                // A full queue means the thread is mid-conversion; it picks up
+                // the next frame.
+                Ok(()) | Err(flume::TrySendError::Full(_)) => {}
+                Err(flume::TrySendError::Disconnected(job)) => {
+                    let settings = job.settings;
+                    let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
+                    let force_rebuild = self
+                        .fallback_rebuilds
+                        .is_some_and(|rebuilds| rebuilds != settings.rebuilds);
+                    self.fallback_rebuilds = Some(settings.rebuilds);
+                    let converted = frame::FrameConverter::convert(
+                        &mut self.fallback_converter,
+                        &job.frame,
+                        max_dims,
+                        settings.mirrored,
+                        force_rebuild,
+                    );
+                    self.converted_arrived(converted, settings, window, cx);
+                }
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -1897,6 +1982,128 @@ impl CameraWindow {
             BlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
             BlurMode::Remove => Some(cap_camera_effects::BlurMode::Remove),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn convert_settings(&self, epoch: u64) -> ConvertSettings {
+        ConvertSettings {
+            epoch,
+            blur_mode: self.active_blur_mode(),
+            mirrored: self.state.mirrored,
+            rebuilds: self.convert_rebuilds,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn converted_arrived(
+        &mut self,
+        converted: Option<frame::Converted>,
+        settings: ConvertSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
+            return;
+        };
+        if settings != self.convert_settings(epoch) {
+            return;
+        }
+        let blur_mode = settings.blur_mode;
+        use core_foundation::base::TCFType as _;
+        use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+
+        let failures_before = self.effect_failures;
+        if let Some(converted) = converted {
+            self.effect_failures.mirror = self.state.mirrored && !converted.mirrored;
+            let first_frame = self.frame_dims.is_none();
+            let dims = converted.dims;
+            let dims_changed = self.frame_dims != Some(dims);
+            self.frame_dims = Some(dims);
+
+            let mut paint_raw = blur_mode.is_none();
+            if let Some(mode) = blur_mode {
+                let job = camera_blur::BlurJob {
+                    buffer: camera_blur::SendPixelBuf(converted.buffer.clone()),
+                    width: dims.0 as u32,
+                    height: dims.1 as u32,
+                    ring_generation: converted.generation,
+                    mode,
+                };
+                match self.ensure_blur_bridge(epoch, window, cx).tx.try_send(job) {
+                    Ok(()) => {}
+                    // Worker busy: drop this frame and keep the last
+                    // painted one -- the bounded(1) latest-wins shape of
+                    // the Tauri preview's `camera_tx` (`camera.rs:424`).
+                    Err(flume::TrySendError::Full(_)) => {}
+                    Err(flume::TrySendError::Disconnected(_)) => {
+                        // The worker could not come up (no device, no
+                        // ONNX runtime, low-level failure). Same degrade
+                        // as `ensure_blur_processor` returning false:
+                        // raw frames, latched until the mode changes.
+                        tracing::warn!(
+                            "camera blur worker unavailable; preview continues unblurred"
+                        );
+                        self.blur = None;
+                        self.effect_failures.blur = true;
+                        paint_raw = true;
+                    }
+                }
+            }
+
+            if paint_raw {
+                let raw =
+                    converted.buffer.as_ref() as *const cidre::cv::PixelBuf as CVPixelBufferRef;
+                let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+                self.preview
+                    .update(cx, |preview, cx| preview.set_frame(buffer, dims, cx));
+            }
+            if dims_changed {
+                self.apply_window_size(window, cx);
+                cx.notify();
+            }
+            if first_frame && !window.is_window_active() {
+                window.refresh();
+            }
+        } else if self.frame_dims.is_none() && self.frames_in_window == 0 {
+            tracing::warn!("camera frame could not be converted for preview");
+        }
+        if failures_before != self.effect_failures {
+            self.sync_effect_feedback(cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_convert_bridge(&mut self, window: &Window, cx: &mut Context<Self>) -> &ConvertBridge {
+        if self.convert.is_none() {
+            let (job_tx, job_rx) = flume::bounded::<ConvertJob>(1);
+            let (out_tx, out_rx) = flume::bounded(1);
+            if let Err(error) = std::thread::Builder::new()
+                .name("camera-preview-convert".into())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
+                .spawn(move || run_preview_conversion(job_rx, out_tx))
+            {
+                // job_rx is gone; the caller's try_send sees Disconnected and
+                // converts inline.
+                tracing::warn!("camera preview conversion thread failed to spawn: {error}");
+            }
+            let pump = cx.spawn_in(window, async move |this, cx| {
+                while let Ok((converted, settings)) = out_rx.recv_async().await {
+                    if this
+                        .update_in(cx, |this: &mut CameraWindow, window, cx| {
+                            this.converted_arrived(converted, settings, window, cx)
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            self.convert = Some(ConvertBridge {
+                tx: job_tx,
+                _pump: pump,
+            });
+        }
+        self.convert.as_ref().expect("just ensured")
     }
 
     #[cfg(target_os = "macos")]
@@ -2027,7 +2234,7 @@ impl CameraWindow {
         {
             self.effect_failures.reset_changed(before, self.state);
             if before.mirrored != self.state.mirrored {
-                self.converter = None;
+                self.convert_rebuilds += 1;
             }
             self.sync_effect_feedback(cx);
             if self.state.background_blur == BlurMode::Off {
@@ -2590,6 +2797,7 @@ impl Render for CameraWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and
@@ -2742,20 +2950,106 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
 /// Tauri default slot -- bottom-right of the preferred monitor measured with
 /// `DEFAULT_WINDOW_SIZE = 230.0 * 2.0` (`windows.rs:2160, 2340-2344`; the
 /// constant, not the actual window size, is what the shipping app subtracts).
-pub fn opening_position(preferred: &scap_targets::Display) -> (f32, f32) {
-    if let Some((x, y)) = saved_position(preferred) {
-        tracing::info!(x, y, "camera window restored to its saved position");
+/// Clamp against the actual size before the camera can deliver its first frame.
+pub fn opening_position(preferred: &scap_targets::Display, window_size: (f32, f32)) -> (f32, f32) {
+    let saved = saved_position(preferred);
+    let bounds = saved
+        .and_then(|(x, y)| display_for_point(x, y))
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .or_else(|| preferred.raw_handle().logical_bounds());
+    opening_position_in_bounds(saved, bounds, window_size)
+}
+
+fn opening_position_in_bounds(
+    saved: Option<(f64, f64)>,
+    bounds: Option<scap_targets::bounds::LogicalBounds>,
+    window_size: (f32, f32),
+) -> (f32, f32) {
+    let Some(bounds) = bounds else {
+        let (x, y) = saved.unwrap_or((100., 100.));
         return (x as f32, y as f32);
-    }
+    };
     const TAURI_DEFAULT_WINDOW_SIZE: f64 = 230.0 * 2.0;
-    match preferred.raw_handle().logical_bounds() {
-        Some(bounds) => (
-            (bounds.position().x() + bounds.size().width() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-            (bounds.position().y() + bounds.size().height() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-        ),
-        None => (100., 100.),
+    let (dx, dy) = (bounds.position().x(), bounds.position().y());
+    let (dw, dh) = (bounds.size().width(), bounds.size().height());
+    let (x, y) = saved.unwrap_or((
+        dx + dw - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+        dy + dh - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+    ));
+    (
+        x.clamp(dx, dx + (dw - f64::from(window_size.0)).max(0.)) as f32,
+        y.clamp(dy, dy + (dh - f64::from(window_size.1)).max(0.)) as f32,
+    )
+}
+
+#[cfg(test)]
+mod opening_position_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    fn display(x: f64, y: f64, width: f64, height: f64) -> Option<LogicalBounds> {
+        Some(LogicalBounds::new(
+            LogicalPosition::new(x, y),
+            LogicalSize::new(width, height),
+        ))
+    }
+
+    #[test]
+    fn restored_wide_preview_fits_after_display_resolution_changes() {
+        let state = CameraWindowState {
+            size: 600.,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        let dimensions = window_size(&state, Some(16. / 9.));
+        let (x, y) = opening_position_in_bounds(
+            Some((1800., 1000.)),
+            display(0., 0., 1920., 1080.),
+            dimensions,
+        );
+        assert!((x + dimensions.0 - 1920.).abs() < 0.001);
+        assert_eq!(y + dimensions.1, 1080.);
+    }
+
+    #[test]
+    fn fresh_large_preview_fits_on_a_display_with_negative_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-1280., -800., 1280., 800.), (600., 656.)),
+            (-600., -656.),
+        );
+    }
+
+    #[test]
+    fn oversized_preview_is_anchored_to_the_display_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-640., 200., 640., 480.), (1066., 656.)),
+            (-640., 200.),
+        );
+    }
+
+    #[test]
+    fn valid_saved_position_and_default_slot_are_preserved() {
+        let bounds = display(1920., 0., 1920., 1080.);
+        assert_eq!(
+            opening_position_in_bounds(Some((2000., 400.)), bounds, (230., 286.)),
+            (2000., 400.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(None, bounds, (230., 286.)),
+            (3280., 520.),
+        );
+    }
+
+    #[test]
+    fn missing_display_geometry_preserves_the_existing_fallback() {
+        assert_eq!(
+            opening_position_in_bounds(None, None, (600., 656.)),
+            (100., 100.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(Some((300., 400.)), None, (600., 656.)),
+            (300., 400.),
+        );
     }
 }
 

@@ -1,5 +1,5 @@
 import type { User, Video } from "@cap/web-domain";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	DesktopRecordingAttempt,
@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
 	put: vi.fn(),
 	databaseRows: vi.fn(),
 	reserveBudget: vi.fn(),
+	storage: vi.fn(),
+	multipartCreate: vi.fn(),
 }));
 vi.mock("@/lib/media-processing-budget", () => ({
 	reserveMediaProcessingBudget: mocks.reserveBudget,
@@ -97,20 +99,13 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 	const { Effect } = await import("effect");
 	return {
 		Storage: {
-			getAccessForVideo: () =>
-				Effect.succeed([
-					{
-						provider: "test",
-						getInternalSignedObjectUrl: (key: string) =>
-							Effect.succeed(`https://storage.test/${key}`),
-						getInternalPresignedPutUrl: mocks.put,
-					},
-				]),
+			getAccessForVideo: () => Effect.sync(mocks.storage),
 		},
 	};
 });
 
 import {
+	commitAndStartDesktopRecordingAttempt,
 	commitDesktopRecordingAttempt,
 	finalizeDesktopRecordingWorkflow,
 	pollDesktopRecordingAttempt,
@@ -150,6 +145,19 @@ const fixture: DesktopRecordingAttempt = {
 };
 let current: DesktopRecordingJob | null;
 
+function storageAccess(provider: string, customBucket = false) {
+	return [
+		{
+			provider,
+			getInternalSignedObjectUrl: (key: string) =>
+				Effect.succeed(`https://storage.test/${key}`),
+			getInternalPresignedPutUrl: mocks.put,
+			multipart: { create: mocks.multipartCreate },
+		},
+		customBucket ? Option.some({ id: "bucket" }) : Option.none(),
+	];
+}
+
 function withCurrent(update: Partial<DesktopRecordingJob>) {
 	if (!current) throw new Error("Fixture job disappeared");
 	current = { ...current, ...update };
@@ -157,6 +165,10 @@ function withCurrent(update: Partial<DesktopRecordingJob>) {
 
 beforeEach(() => {
 	mocks.reserveBudget.mockResolvedValue(100_000_000);
+	mocks.storage.mockImplementation(() => storageAccess("test"));
+	mocks.multipartCreate.mockImplementation(() =>
+		Effect.succeed({ UploadId: "upload" }),
+	);
 	mocks.databaseRows.mockResolvedValue([
 		{ id: "video", ownerId: "user", source: { type: "desktopSegments" } },
 	]);
@@ -313,6 +325,30 @@ describe("durable post-publication transcription enqueue", () => {
 			}),
 		).toEqual({ success: true });
 		expect(mocks.transcribe).toHaveBeenCalledTimes(2);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.claim).not.toHaveBeenCalled();
+	});
+
+	it("finishes after repeated transcription queue failures", async () => {
+		withCurrent({ state: "verified" });
+		mocks.transcribe.mockResolvedValue({
+			success: false,
+			message: "Queue unavailable",
+		});
+		mocks.sleep.mockImplementation(async () => {
+			if (mocks.transcribe.mock.calls.length >= 12) {
+				throw new Error("Transcription retry limit exceeded");
+			}
+		});
+
+		await expect(
+			finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).resolves.toEqual({ success: true });
+		expect(mocks.transcribe).toHaveBeenCalledTimes(12);
 		expect(mocks.fetch).not.toHaveBeenCalled();
 		expect(mocks.claim).not.toHaveBeenCalled();
 	});
@@ -537,11 +573,13 @@ describe("bounded source commitment steps", () => {
 	});
 
 	it.each([
-		[0, 32],
-		[-1, 32],
-		[1_000, 15],
-		[14_999, 2],
-		[15_000, 1],
+		[0, 128],
+		[-1, 128],
+		[1_000, 45],
+		[14_999, 4],
+		[15_000, 3],
+		[44_999, 2],
+		[45_000, 1],
 		[180_000, 1],
 	])("yields after bounded work with %i ms pages", async (duration, pages) => {
 		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
@@ -555,11 +593,149 @@ describe("bounded source commitment steps", () => {
 		expect(mocks.persist).not.toHaveBeenCalled();
 	});
 
+	it("logs the timing of every commit page without storage keys", async () => {
+		let clock = 0;
+		const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+		mocks.commitSource.mockImplementation(
+			async (_video, checkpoint, _verification, onProgress) => {
+				clock += 5;
+				await onProgress();
+				clock += 100;
+				if (checkpoint.revision === 1) return { source };
+				return {
+					checkpoint: {
+						...checkpoint,
+						phase: "copy",
+						revision: checkpoint.revision + 1,
+					},
+				};
+			},
+		);
+		mocks.heartbeat.mockImplementation(async () => {
+			clock += 7;
+			return true;
+		});
+		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
+			clock += 20;
+			withCurrent({ output: checkpoint });
+			return true;
+		});
+		mocks.persist.mockImplementation(async (_attempt, savedSource) => {
+			clock += 30;
+			withCurrent({ source: savedSource, state: "processing" });
+			return true;
+		});
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		try {
+			expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+			const events = info.mock.calls
+				.map(([line]) => JSON.parse(String(line)))
+				.filter((event) => event.event === "desktop_source_commit_advance");
+			expect(events).toEqual([
+				{
+					event: "desktop_source_commit_advance",
+					videoId: "video",
+					attemptId: "attempt",
+					phase: "plan",
+					next: "copy",
+					outcome: "progress",
+					loadMs: 0,
+					heartbeatMs: 7,
+					advanceMs: 112,
+					persistMs: 20,
+				},
+				{
+					event: "desktop_source_commit_advance",
+					videoId: "video",
+					attemptId: "attempt",
+					phase: "copy",
+					next: "committed",
+					outcome: "ready",
+					loadMs: 0,
+					heartbeatMs: 7,
+					advanceMs: 112,
+					persistMs: 30,
+				},
+			]);
+			expect(JSON.stringify(events)).not.toContain(source.inventoryKey);
+		} finally {
+			info.mockRestore();
+			now.mockRestore();
+		}
+	});
+
+	it("dispatches in the same step when the commit finishes inside its batch budget", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockResolvedValue({ source });
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		expect(mocks.persist).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("returns the accepted job without committing or dispatching again when the combined step is retried", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockResolvedValue({ source });
+		mocks.attach.mockImplementation(
+			async ({ remoteJobId }: { remoteJobId: string }) => {
+				withCurrent({ remoteJobId });
+				return true;
+			},
+		);
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({
+			committed: "ready",
+			dispatched: true,
+			started: "remote-job",
+		});
+		expect(mocks.commitSource).toHaveBeenCalledOnce();
+		expect(mocks.persist).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.sourceUrls).toHaveBeenCalledOnce();
+	});
+
+	it("leaves dispatch to its own step after a slow commit", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockImplementation(async () => {
+			vi.setSystemTime(Date.now() + 45_000);
+			return { source };
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({ committed: "ready" });
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("does not dispatch while the source commit is still in progress", async () => {
+		withCurrent({ source: null });
+		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
+			vi.setSystemTime(Date.now() + 45_000);
+			return advanceCheckpoint(_video, checkpoint);
+		});
+		await expect(
+			commitAndStartDesktopRecordingAttempt(fixture),
+		).resolves.toEqual({ committed: "progress" });
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
 	it("includes checkpoint persistence latency in the batch budget", async () => {
 		mocks.commitSource.mockImplementation(advanceCheckpoint);
 		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
 			withCurrent({ output: checkpoint });
-			vi.setSystemTime(Date.now() + 15_000);
+			vi.setSystemTime(Date.now() + 45_000);
 			return true;
 		});
 		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
@@ -867,6 +1043,57 @@ describe("source commitment and media request compatibility", () => {
 		);
 	});
 
+	function withSourceBytes(size: number) {
+		mocks.sourceUrls.mockResolvedValue({
+			videoInitUrl: "https://source.test/init.mp4",
+			videoSegmentUrls: ["https://source.test/segment.m4s"],
+			sourceObjects: [
+				{
+					url: "https://source.test/segment.m4s",
+					objectIdentity: '"segment"',
+					size,
+				},
+			],
+		});
+	}
+
+	it("uploads a small Cap storage output with one PUT instead of multipart", async () => {
+		mocks.storage.mockImplementation(() => storageAccess("s3"));
+		withSourceBytes(64 * 1024 * 1024);
+		await startDesktopRecordingJob(fixture);
+		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
+		expect(body.outputUpload).toEqual({
+			type: "put",
+			url: "https://storage.test/user/video/.recording/outputs/generation/attempt.mp4",
+			ifNoneMatch: "*",
+		});
+		expect(mocks.multipartCreate).not.toHaveBeenCalled();
+	});
+
+	it("keeps multipart output uploads for recordings larger than one part", async () => {
+		mocks.storage.mockImplementation(() => storageAccess("s3"));
+		withSourceBytes(64 * 1024 * 1024 + 1);
+		await startDesktopRecordingJob(fixture);
+		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
+		expect(body.outputUpload).toMatchObject({
+			type: "multipart",
+			uploadId: "upload",
+			partSize: 64 * 1024 * 1024,
+			signPartUrl:
+				"https://cap.test/api/webhooks/media-server/multipart/sign-part",
+		});
+		expect(mocks.multipartCreate).toHaveBeenCalledOnce();
+	});
+
+	it("keeps multipart output uploads for small recordings in a custom bucket", async () => {
+		mocks.storage.mockImplementation(() => storageAccess("s3", true));
+		withSourceBytes(1024);
+		await startDesktopRecordingJob(fixture);
+		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
+		expect(body.outputUpload).toMatchObject({ type: "multipart" });
+		expect(mocks.multipartCreate).toHaveBeenCalledOnce();
+	});
+
 	it("reuses a recorded remote job after a step replay instead of submitting another mux", async () => {
 		withCurrent({ remoteJobId: "existing-worker" });
 		expect(await startDesktopRecordingJob(fixture)).toBe("existing-worker");
@@ -1089,6 +1316,40 @@ describe("workflow retry lifetime", () => {
 		expect(mocks.sleep.mock.calls.some(([delay]) => delay === 15_000)).toBe(
 			true,
 		);
+	});
+
+	it.each([
+		["uses the generation it was started with", "generation", 0],
+		["looks the job up when started without a generation", undefined, 1],
+	])("%s", async (_name, generation, lookups) => {
+		withCurrent({
+			state: "queued",
+			leaseExpiresAt: null,
+			attemptId: null,
+			attemptCount: 0,
+		});
+		mocks.env.mockReturnValue({ WEB_URL: "https://self-hosted.test" });
+		const result = await finalizeDesktopRecordingWorkflow({
+			videoId,
+			userId,
+			generation,
+		});
+		expect(result).toEqual({
+			success: false,
+			reason: "media-server-unconfigured",
+		});
+		expect(mocks.ensure).toHaveBeenCalledTimes(lookups);
+		expect(mocks.defer).toHaveBeenCalledOnce();
+	});
+
+	it("reports a missing media server from the dispatch step without dispatching", async () => {
+		mocks.env.mockReturnValue({ WEB_URL: "https://self-hosted.test" });
+		await expect(startDesktopRecordingJob(fixture)).resolves.toEqual({
+			status: "media-server-unconfigured",
+		});
+		expect(mocks.defer).toHaveBeenCalledOnce();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.sourceUrls).not.toHaveBeenCalled();
 	});
 
 	it("preserves the self-hosted playback fallback without issuing a verified cleanup receipt", async () => {

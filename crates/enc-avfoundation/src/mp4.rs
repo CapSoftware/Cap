@@ -30,6 +30,7 @@ pub struct MP4Encoder {
     expected_width: usize,
     expected_height: usize,
     dimension_mismatch_count: u64,
+    resizer: Option<FrameResizer>,
     last_frame_timestamp: Option<Duration>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
@@ -432,6 +433,7 @@ impl MP4Encoder {
             expected_width: video_config.width as usize,
             expected_height: video_config.height as usize,
             dimension_mismatch_count: 0,
+            resizer: None,
             config: video_config,
             audio_input,
             audio_resampler,
@@ -459,7 +461,7 @@ impl MP4Encoder {
 
     pub fn queue_video_frame(
         &mut self,
-        frame: arc::R<cm::SampleBuf>,
+        mut frame: arc::R<cm::SampleBuf>,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
         if self.writer_failed {
@@ -482,20 +484,39 @@ impl MP4Encoder {
             let frame_width = image_buf.width();
             let frame_height = image_buf.height();
             if frame_width != self.expected_width || frame_height != self.expected_height {
+                // A camera can renegotiate its format mid-recording (a USB
+                // webcam after a stall, another app opening it). The writer
+                // only takes its configured size, so scale to it rather than
+                // drop every frame for the rest of the recording.
                 self.dimension_mismatch_count += 1;
+                let scaled = self.scale_to_expected(&frame);
                 if self.dimension_mismatch_count <= 5
                     || self.dimension_mismatch_count.is_multiple_of(100)
                 {
-                    warn!(
-                        expected_width = self.expected_width,
-                        expected_height = self.expected_height,
-                        frame_width,
-                        frame_height,
-                        mismatch_count = self.dimension_mismatch_count,
-                        "Frame dimension mismatch, dropping frame to protect writer"
-                    );
+                    if scaled.is_some() {
+                        warn!(
+                            expected_width = self.expected_width,
+                            expected_height = self.expected_height,
+                            frame_width,
+                            frame_height,
+                            mismatch_count = self.dimension_mismatch_count,
+                            "Frame dimension changed mid-recording, scaling to the writer's size"
+                        );
+                    } else {
+                        warn!(
+                            expected_width = self.expected_width,
+                            expected_height = self.expected_height,
+                            frame_width,
+                            frame_height,
+                            mismatch_count = self.dimension_mismatch_count,
+                            "Frame dimension mismatch, dropping frame to protect writer"
+                        );
+                    }
                 }
-                return Ok(());
+                match scaled {
+                    Some(scaled) => frame = scaled,
+                    None => return Ok(()),
+                }
             }
         }
 
@@ -4275,6 +4296,57 @@ mod tests {
 
         let _ = std::fs::remove_file(&output);
     }
+
+    /// A USB camera renegotiated from 1280x720 to 1920x1080 mid-recording in
+    /// a 0.6.1 log; every later frame was dropped and the camera track froze
+    /// for the rest of the recording. They must be scaled and kept instead.
+    #[test]
+    fn camera_frames_that_change_size_mid_recording_are_kept() {
+        for format in [cidre::cv::PixelFormat::_2VUY, cidre::cv::PixelFormat::_420V] {
+            let output = test_output_path("camera_size_change");
+            let config = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::UYVY422, 1280, 720, 30);
+            let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+            let before = create_pixel_buffer_pool_with_format(1280, 720, format);
+            let after = create_pixel_buffer_pool_with_format(1920, 1080, format);
+
+            let mut appended = 0;
+            for index in 0..90i64 {
+                let pool = if index < 30 { &before } else { &after };
+                let frame = create_test_video_frame(pool, index * 33_333, 33_333);
+                if queue_video_frame_with_retry(
+                    &mut encoder,
+                    frame,
+                    Duration::from_micros(index as u64 * 33_333),
+                )
+                .unwrap()
+                {
+                    appended += 1;
+                }
+            }
+            encoder
+                .finish(Some(Duration::from_micros(90 * 33_333)))
+                .unwrap();
+
+            let mut input = ffmpeg::format::input(&output).unwrap();
+            let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+            let index = stream.index();
+            let decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                .unwrap()
+                .decoder()
+                .video()
+                .unwrap();
+            let (width, height) = (decoder.width(), decoder.height());
+            let packets = input
+                .packets()
+                .filter(|(stream, _)| stream.index() == index)
+                .count();
+            let _ = std::fs::remove_file(&output);
+
+            assert_eq!(appended, 90, "{format:?}: every frame is accepted");
+            assert_eq!((width, height), (1280, 720), "{format:?}");
+            assert!(packets >= 88, "{format:?}: {packets} of 90 frames written");
+        }
+    }
 }
 
 trait SampleBufExt {
@@ -4347,6 +4419,85 @@ impl SampleBufExt for cm::SampleBuf {
                 )
             })
         }
+    }
+}
+
+impl MP4Encoder {
+    fn scale_to_expected(&mut self, frame: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+        let source = frame.image_buf()?;
+        let format = source.pixel_format();
+        if self
+            .resizer
+            .as_ref()
+            .is_none_or(|resizer| resizer.format != format)
+        {
+            self.resizer = FrameResizer::new(self.expected_width, self.expected_height, format);
+            if self.resizer.is_none() {
+                warn!(?format, "Could not create a scaler for resized frames");
+            }
+        }
+        self.resizer.as_ref()?.scale(frame)
+    }
+}
+
+/// Scales frames whose size no longer matches the writer's into buffers of
+/// the writer's size and the source's pixel format, letterboxed when the
+/// aspect ratio changed too.
+struct FrameResizer {
+    session: arc::R<vt::PixelTransferSession>,
+    pool: arc::R<cv::PixelBufPool>,
+    format: cv::PixelFormat,
+}
+
+// Owned by one encoder and only used through `&mut MP4Encoder`, so never from
+// two threads at once; the session and pool are plain CoreFoundation objects
+// that may move between threads (the screen capture path's scaler does too).
+unsafe impl Send for FrameResizer {}
+
+impl FrameResizer {
+    fn new(width: usize, height: usize, format: cv::PixelFormat) -> Option<Self> {
+        let mut session = vt::PixelTransferSession::new().ok()?;
+        session.set_scaling_letter_box().ok()?;
+        session.set_realtime(true).ok()?;
+
+        let min_count = cf::Number::from_usize(4);
+        let pool_keys: [&cf::Type; 1] =
+            [cv::pixel_buffer_pool::keys::minimum_buffer_count().as_ref()];
+        let pool_values: [&cf::Type; 1] = [min_count.as_ref()];
+        let pool_attrs = cf::Dictionary::with_keys_values(&pool_keys, &pool_values)?;
+        let width = cf::Number::from_usize(width);
+        let height = cf::Number::from_usize(height);
+        let io_surface = cf::Dictionary::new();
+        let buffer_keys: [&cf::Type; 4] = [
+            cv::pixel_buffer::keys::pixel_format().as_ref(),
+            cv::pixel_buffer::keys::width().as_ref(),
+            cv::pixel_buffer::keys::height().as_ref(),
+            cv::pixel_buffer::keys::io_surf_props().as_ref(),
+        ];
+        let buffer_values: [&cf::Type; 4] = [
+            format.to_cf_number().as_ref(),
+            width.as_ref(),
+            height.as_ref(),
+            io_surface.as_ref(),
+        ];
+        let buffer_attrs = cf::Dictionary::with_keys_values(&buffer_keys, &buffer_values)?;
+        let pool =
+            cv::PixelBufPool::new(Some(pool_attrs.as_ref()), Some(buffer_attrs.as_ref())).ok()?;
+        Some(Self {
+            session,
+            pool,
+            format,
+        })
+    }
+
+    fn scale(&self, frame: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+        let source = frame.image_buf()?;
+        let scaled = self.pool.pixel_buf().ok()?;
+        self.session.transfer(source, &scaled).ok()?;
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&scaled).ok()?;
+        let timing = frame.timing_info(0).ok()?;
+        cm::SampleBuf::with_image_buf(&scaled, true, None, std::ptr::null(), &format_desc, &timing)
+            .ok()
     }
 }
 

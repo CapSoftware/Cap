@@ -338,6 +338,7 @@ mod tests {
             start_time: Some(0.0),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         };
         for extension in ["m4a", "ogg"] {
             let relative = PathBuf::from(format!("segment-0/audio-input.{extension}"));

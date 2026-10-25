@@ -14,6 +14,7 @@ import {
 import type { Organisation, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 interface ShareCapParams {
 	capId: Video.VideoId;
@@ -69,6 +70,21 @@ export async function shareCap({
 				),
 			);
 
+		const currentSpaceVideos = await db()
+			.select()
+			.from(spaceVideos)
+			.where(eq(spaceVideos.videoId, capId));
+		const existingSpaceIds = new Set(currentSpaceVideos.map((s) => s.spaceId));
+
+		for (const space of spacesData) {
+			if (space.privacy === "Public" || existingSpaceIds.has(space.id))
+				continue;
+			const access = await getSpaceAccess(user.id, space.id);
+			if (!access || (!access.canManage && !access.spaceRole)) {
+				return { success: false, error: "Unauthorized" };
+			}
+		}
+
 		const organizationIds = directOrgIds;
 
 		const currentSharedOrganizations = await db()
@@ -76,68 +92,61 @@ export async function shareCap({
 			.from(sharedVideos)
 			.where(eq(sharedVideos.videoId, capId));
 
-		for (const sharedOrganization of currentSharedOrganizations) {
-			if (!organizationIds.includes(sharedOrganization.organizationId)) {
-				await db()
-					.delete(sharedVideos)
-					.where(
-						and(
-							eq(sharedVideos.videoId, capId),
-							eq(
-								sharedVideos.organizationId,
-								sharedOrganization.organizationId,
-							),
-						),
-					);
-			}
+		const orgIdsToRemove = currentSharedOrganizations
+			.filter((s) => !organizationIds.includes(s.organizationId))
+			.map((s) => s.organizationId);
+		if (orgIdsToRemove.length > 0) {
+			await db()
+				.delete(sharedVideos)
+				.where(
+					and(
+						eq(sharedVideos.videoId, capId),
+						inArray(sharedVideos.organizationId, orgIdsToRemove),
+					),
+				);
 		}
 
-		for (const organizationId of organizationIds) {
-			const existingShare = currentSharedOrganizations.find(
-				(share) => share.organizationId === organizationId,
-			);
-			if (!existingShare) {
-				await db().insert(sharedVideos).values({
-					id: nanoId(),
-					videoId: capId,
-					organizationId: organizationId,
-					sharedByUserId: user.id,
-				});
-			}
+		const existingOrgIds = new Set(
+			currentSharedOrganizations.map((s) => s.organizationId),
+		);
+		const newOrgEntries = organizationIds
+			.filter((id) => !existingOrgIds.has(id))
+			.map((organizationId) => ({
+				id: nanoId(),
+				videoId: capId,
+				organizationId,
+				sharedByUserId: user.id,
+			}));
+		if (newOrgEntries.length > 0) {
+			await db().insert(sharedVideos).values(newOrgEntries);
 		}
 
 		const spacesIds = spacesData.map((space) => space.id);
 
-		const currentSpaceVideos = await db()
-			.select()
-			.from(spaceVideos)
-			.where(eq(spaceVideos.videoId, capId));
-
-		for (const spaceVideo of currentSpaceVideos) {
-			if (!spacesIds.includes(spaceVideo.spaceId)) {
-				await db()
-					.delete(spaceVideos)
-					.where(
-						and(
-							eq(spaceVideos.videoId, capId),
-							eq(spaceVideos.spaceId, spaceVideo.spaceId),
-						),
-					);
-			}
+		const spaceIdsToRemove = currentSpaceVideos
+			.filter((s) => !spacesIds.includes(s.spaceId))
+			.map((s) => s.spaceId);
+		if (spaceIdsToRemove.length > 0) {
+			await db()
+				.delete(spaceVideos)
+				.where(
+					and(
+						eq(spaceVideos.videoId, capId),
+						inArray(spaceVideos.spaceId, spaceIdsToRemove),
+					),
+				);
 		}
 
-		for (const spaceId of spacesIds) {
-			const existingSpaceShare = currentSpaceVideos.find(
-				(share) => share.spaceId === spaceId,
-			);
-			if (!existingSpaceShare) {
-				await db().insert(spaceVideos).values({
-					id: nanoId(),
-					videoId: capId,
-					spaceId: spaceId,
-					addedById: user.id,
-				});
-			}
+		const newSpaceEntries = spacesIds
+			.filter((id) => !existingSpaceIds.has(id))
+			.map((spaceId) => ({
+				id: nanoId(),
+				videoId: capId,
+				spaceId,
+				addedById: user.id,
+			}));
+		if (newSpaceEntries.length > 0) {
+			await db().insert(spaceVideos).values(newSpaceEntries);
 		}
 
 		// Update public status if provided
