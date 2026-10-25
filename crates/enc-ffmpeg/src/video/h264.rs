@@ -764,17 +764,9 @@ fn open_video_encoder_inner(
         .map(|v| v.get())
         .unwrap_or(1);
 
-    #[allow(unused_mut)]
-    let mut hw_upload = HwUpload::default();
-    #[cfg(target_os = "linux")]
-    if vaapi {
-        let frames = super::vaapi::VaapiFrames::new(output_width, output_height)
-            .map_err(H264EncoderError::Vaapi)?;
-        debug!(node = %frames.node().display(), "VA-API surfaces for H264");
-        hw_upload.vaapi = Some(frames);
-    }
-
-    let encoder = {
+    let open = |hw_upload: &HwUpload,
+                encoder_options: Dictionary<'static>|
+     -> Result<encoder::Video, ffmpeg::Error> {
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().video()?;
@@ -817,7 +809,22 @@ fn open_video_encoder_inner(
             encoder.set_max_bit_rate(bitrate * 3 / 2);
         }
 
-        encoder.open_as_with(codec, encoder_options)?
+        encoder.open_as_with(codec, encoder_options)
+    };
+
+    #[cfg(target_os = "linux")]
+    let (encoder, hw_upload) = if vaapi {
+        open_on_a_vaapi_node(output_width, output_height, |hw_upload| {
+            open(hw_upload, clone_options(&encoder_options))
+        })?
+    } else {
+        let hw_upload = HwUpload::default();
+        (open(&hw_upload, encoder_options)?, hw_upload)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (encoder, hw_upload) = {
+        let hw_upload = HwUpload::default();
+        (open(&hw_upload, encoder_options)?, hw_upload)
     };
 
     let converted_frame_pool = if converter.is_some() {
@@ -842,6 +849,41 @@ fn open_video_encoder_inner(
         input_height: input_config.height,
         hw_upload,
     })
+}
+
+/// Opens the encoder on the first render node whose VA-API driver both makes
+/// NV12 surfaces and encodes H264: a GPU can do the first and not the second.
+#[cfg(target_os = "linux")]
+fn open_on_a_vaapi_node(
+    width: u32,
+    height: u32,
+    mut open: impl FnMut(&HwUpload) -> Result<encoder::Video, ffmpeg::Error>,
+) -> Result<(encoder::Video, HwUpload), H264EncoderError> {
+    let mut errors = Vec::new();
+    for node in super::vaapi::render_nodes() {
+        let frames = match super::vaapi::VaapiFrames::open(&node, width, height) {
+            Ok(frames) => frames,
+            Err(error) => {
+                errors.push(format!("{}: {error}", node.display()));
+                continue;
+            }
+        };
+        let hw_upload = HwUpload {
+            vaapi: Some(frames),
+        };
+        match open(&hw_upload) {
+            Ok(encoder) => {
+                debug!(node = %node.display(), "H264 encodes through VA-API");
+                return Ok((encoder, hw_upload));
+            }
+            Err(error) => errors.push(format!("{}: {error}", node.display())),
+        }
+    }
+    Err(H264EncoderError::Vaapi(if errors.is_empty() {
+        "no render node with a VA-API driver".to_string()
+    } else {
+        errors.join("; ")
+    }))
 }
 
 pub struct H264Encoder {
@@ -1912,6 +1954,24 @@ mod self_test_tests {
         .find(|(candidate, _)| candidate.name() == "h264_vaapi")
         .expect("available VA-API encoder is configured")
         .1;
+        // Only hardware that opens an H264 encoder is tested (a render node
+        // can be inaccessible, render-only, or lack its VA-API driver), but
+        // one that opens must keep the gray.
+        if open_video_encoder_inner(
+            codec,
+            clone_options(&options),
+            &config,
+            640,
+            360,
+            0.3,
+            true,
+            None,
+            false,
+        )
+        .is_err()
+        {
+            return;
+        }
 
         cached_hardware_self_test(codec, &options, &config, 640, 360, 0.3, None)
             .expect("a VA-API GPU preserves neutral gray through upload, encode and decode");

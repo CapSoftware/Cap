@@ -16,7 +16,6 @@ pub(crate) struct VaapiFrames {
     device: *mut ffi::AVBufferRef,
     frames: *mut ffi::AVBufferRef,
     surface: frame::Video,
-    node: PathBuf,
 }
 
 // The buffers are reference counted by FFmpeg and only touched from the
@@ -24,23 +23,7 @@ pub(crate) struct VaapiFrames {
 unsafe impl Send for VaapiFrames {}
 
 impl VaapiFrames {
-    /// A surface pool on the first render node VA-API opens.
-    pub(crate) fn new(width: u32, height: u32) -> Result<Self, String> {
-        let nodes = render_nodes();
-        if nodes.is_empty() {
-            return Err("no render node with a VA-API capable driver".to_string());
-        }
-        let mut errors = Vec::new();
-        for node in nodes {
-            match Self::open(&node, width, height) {
-                Ok(frames) => return Ok(frames),
-                Err(error) => errors.push(format!("{}: {error}", node.display())),
-            }
-        }
-        Err(errors.join("; "))
-    }
-
-    fn open(node: &Path, width: u32, height: u32) -> Result<Self, String> {
+    pub(crate) fn open(node: &Path, width: u32, height: u32) -> Result<Self, String> {
         let path = CString::new(node.as_os_str().as_encoded_bytes())
             .map_err(|_| "render node path has a NUL byte".to_string())?;
         let mut device = ptr::null_mut();
@@ -84,24 +67,15 @@ impl VaapiFrames {
             device,
             frames,
             surface: frame::Video::empty(),
-            node: node.to_path_buf(),
         })
     }
 
-    pub(crate) fn node(&self) -> &Path {
-        &self.node
-    }
-
-    /// Gives the encoder its own reference to the surface pool.
-    ///
     /// # Safety
     /// `encoder` must be an unopened codec context.
     pub(crate) unsafe fn attach(&self, encoder: *mut ffi::AVCodecContext) {
         unsafe { (*encoder).hw_frames_ctx = ffi::av_buffer_ref(self.frames) };
     }
 
-    /// Copies a software NV12 frame into a VA surface, keeping its pts and
-    /// colour properties.
     pub(crate) fn upload(&mut self, source: &frame::Video) -> Result<&frame::Video, ffmpeg::Error> {
         unsafe {
             let surface = self.surface.as_mut_ptr();
