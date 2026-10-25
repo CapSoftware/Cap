@@ -206,7 +206,6 @@ impl MFDecoder {
             };
 
             loop {
-                requests.set_cache_budget(cap_video_decode::staging_cache_budget());
                 loop {
                     let message = match requests.next_step() {
                         Step::Wait => rx.recv().ok(),
@@ -323,7 +322,6 @@ struct FrameRequests<T, R> {
     seeked_to: Option<u32>,
     readahead_frames: u32,
     latest_request: Option<u32>,
-    max_cache_bytes: usize,
 }
 
 impl<T: Clone, R> FrameRequests<T, R> {
@@ -335,18 +333,6 @@ impl<T: Clone, R> FrameRequests<T, R> {
             seeked_to: None,
             readahead_frames,
             latest_request: None,
-            max_cache_bytes: MAX_FRAME_CACHE_BYTES,
-        }
-    }
-
-    fn set_cache_budget(&mut self, max_cache_bytes: usize) {
-        self.max_cache_bytes = max_cache_bytes.max(1);
-        // Keep the newest frame even when it alone exceeds the budget: it is
-        // the sample a waiting request is about to be answered with.
-        while self.cache.len() > 1 && self.cache_bytes > self.max_cache_bytes {
-            if let Some((_, (_, bytes))) = self.cache.pop_first() {
-                self.cache_bytes = self.cache_bytes.saturating_sub(bytes);
-            }
         }
     }
 
@@ -410,7 +396,7 @@ impl<T: Clone, R> FrameRequests<T, R> {
             return false;
         };
         let full = self.cache.last_key_value().is_some_and(|(_, (_, bytes))| {
-            self.cache.len() >= FRAME_CACHE_SIZE || self.cache_bytes + bytes > self.max_cache_bytes
+            self.cache.len() >= FRAME_CACHE_SIZE || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES
         });
         let evicts_shown = full && self.cache.range(..=latest).nth(1).is_none();
         position < latest.saturating_add(self.readahead_frames) && !evicts_shown
@@ -442,7 +428,7 @@ impl<T: Clone, R> FrameRequests<T, R> {
         }
         while !self.cache.is_empty()
             && (self.cache.len() >= FRAME_CACHE_SIZE
-                || self.cache_bytes + bytes > self.max_cache_bytes)
+                || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES)
         {
             if let Some((_, (_, evicted))) = self.cache.pop_first() {
                 self.cache_bytes -= evicted;
@@ -475,37 +461,6 @@ impl<T: Clone, R> FrameRequests<T, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shrinking_the_cache_budget_evicts_oldest_frames() {
-        let mut requests = FrameRequests::<usize, usize>::new(8);
-        let mut stream = FakeStream::new(0..20, 1);
-        stream.bytes = 10;
-        requests.request(0, 0);
-        stream.run(&mut requests);
-        assert!(requests.cache_bytes > 25);
-
-        requests.set_cache_budget(25);
-        assert!(requests.cache_bytes <= 25);
-        assert!(requests.cache.len() <= 3);
-    }
-
-    #[test]
-    fn shrinking_the_budget_between_steps_keeps_the_requested_sample() {
-        let mut requests = FrameRequests::<usize, usize>::new(0);
-        let mut stream = FakeStream::new(0..8, 1);
-        stream.bytes = 100;
-        requests.request(5, 0);
-
-        assert!(stream.step(&mut requests).is_some());
-        assert!(stream.step(&mut requests).is_some());
-        assert_eq!(requests.newest(), Some(5));
-
-        requests.set_cache_budget(25);
-
-        assert_eq!(requests.newest(), Some(5));
-        assert_eq!(stream.run(&mut requests), [(0, Some(5))]);
-    }
 
     #[test]
     fn sample_times_round_to_their_frame() {

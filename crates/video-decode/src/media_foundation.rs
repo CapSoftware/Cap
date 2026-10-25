@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 #[cfg(target_os = "windows")]
@@ -11,9 +11,7 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HMODULE},
         Graphics::{
-            Direct3D::{
-                D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL, D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
-            },
+            Direct3D::{D3D_FEATURE_LEVEL, D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob},
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
                 D3D11_BIND_UNORDERED_ACCESS, D3D11_BOX, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_READ,
@@ -602,35 +600,8 @@ const MAX_IDLE_STAGING_BYTES: usize = 32 * 1024 * 1024;
 // Idle readback textures are process-wide: per-decoder caps would multiply the
 // staging footprint in projects with many segment and transition decoders.
 const MAX_GLOBAL_IDLE_STAGING_BYTES: usize = 128 * 1024 * 1024;
-const MIN_STAGING_CACHE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_STAGING_CACHE_BYTES: usize = 128 * 1024 * 1024;
-const MAX_GLOBAL_LIVE_STAGING_BYTES: usize = 512 * 1024 * 1024;
-static ACTIVE_MF_DECODERS: AtomicUsize = AtomicUsize::new(0);
 static NEXT_READBACK_EPOCH: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_IDLE_STAGING_BYTES: AtomicUsize = AtomicUsize::new(0);
-
-pub fn staging_cache_budget() -> usize {
-    let decoders = ACTIVE_MF_DECODERS.load(Ordering::Relaxed).max(1);
-    (MAX_GLOBAL_LIVE_STAGING_BYTES / decoders)
-        .clamp(MIN_STAGING_CACHE_BYTES, MAX_STAGING_CACHE_BYTES)
-}
-
-struct StagingDecoderGuard;
-
-impl StagingDecoderGuard {
-    fn new() -> Self {
-        ACTIVE_MF_DECODERS.fetch_add(1, Ordering::Relaxed);
-        Self
-    }
-}
-
-impl Drop for StagingDecoderGuard {
-    fn drop(&mut self) {
-        let _ = ACTIVE_MF_DECODERS.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |decoders| {
-            Some(decoders.saturating_sub(1))
-        });
-    }
-}
 
 fn reserve_global_staging(bytes: usize) -> bool {
     let mut current = GLOBAL_IDLE_STAGING_BYTES.load(Ordering::Relaxed);
@@ -736,10 +707,45 @@ impl Drop for StagingTexturePool {
     }
 }
 
+struct ReclaimTexture {
+    texture: Option<ID3D11Texture2D>,
+    context: ID3D11DeviceContext,
+}
+
+// SAFETY: the decoder's immediate context has multithread protection enabled,
+// and the texture is only touched again after the decoder drains it.
+unsafe impl Send for ReclaimTexture {}
+
+impl ReclaimTexture {
+    fn new(texture: ID3D11Texture2D, context: ID3D11DeviceContext) -> Self {
+        Self {
+            texture: Some(texture),
+            context,
+        }
+    }
+
+    fn take(&mut self) -> Option<ID3D11Texture2D> {
+        self.texture.take()
+    }
+}
+
+impl Drop for ReclaimTexture {
+    fn drop(&mut self) {
+        // The decoder can drop its receiver with reclaims still queued, so
+        // unmap here on the decoder's thread before releasing the context.
+        if let Some(texture) = self.texture.take() {
+            unsafe {
+                self.context.Unmap(&texture, 0);
+            }
+        }
+    }
+}
+
 /// A decoded NV12 frame left mapped in its staging texture. The mapping stays
 /// valid until the last clone is dropped, so plane access involves no copy.
 pub struct MappedNV12 {
     texture: Option<ID3D11Texture2D>,
+    reclaim: mpsc::Sender<ReclaimTexture>,
     context: ID3D11DeviceContext,
     _device: ID3D11Device,
     pool: Arc<StagingTexturePool>,
@@ -748,8 +754,8 @@ pub struct MappedNV12 {
     len: usize,
 }
 
-// SAFETY: the mapped bytes are immutable while shared, and Unmap only runs
-// when the last reference is dropped.
+// SAFETY: the mapped bytes are immutable while shared, and the last reference
+// hands the texture back to the decoder's thread before it is reused.
 unsafe impl Send for MappedNV12 {}
 unsafe impl Sync for MappedNV12 {}
 
@@ -769,11 +775,22 @@ impl MappedNV12 {
 
 impl Drop for MappedNV12 {
     fn drop(&mut self) {
-        if let Some(texture) = self.texture.take() {
-            unsafe {
-                self.context.Unmap(&texture, 0);
+        let Some(texture) = self.texture.take() else {
+            return;
+        };
+
+        if let Err(mut error) = self
+            .reclaim
+            .send(ReclaimTexture::new(texture, self.context.clone()))
+        {
+            // The decoder has shut down, so there is no thread that can still
+            // hold the device lock; unmap before releasing the texture.
+            if let Some(texture) = error.0.take() {
+                unsafe {
+                    self.context.Unmap(&texture, 0);
+                }
+                self.pool.recycle(texture);
             }
-            self.pool.recycle(texture);
         }
     }
 }
@@ -822,10 +839,10 @@ impl NV12ReadbackStats {
 
 unsafe fn map_nv12_staging(
     context: &ID3D11DeviceContext,
-    device: &ID3D11Device,
     staging: ID3D11Texture2D,
     height: u32,
     pool: &Arc<StagingTexturePool>,
+    reclaim: &mpsc::Sender<ReclaimTexture>,
     stats: &mut NV12ReadbackStats,
     init_guard: Arc<MFInitGuard>,
 ) -> Result<NV12Data, String> {
@@ -875,8 +892,9 @@ unsafe fn map_nv12_staging(
     Ok(NV12Data {
         data: Arc::new(MappedNV12 {
             texture: Some(staging),
+            reclaim: reclaim.clone(),
             context: context.clone(),
-            _device: device.clone(),
+            _device: pool.device.clone(),
             pool: Arc::clone(pool),
             _init_guard: init_guard,
             ptr: mapped.pData as *mut u8,
@@ -902,13 +920,14 @@ pub struct MediaFoundationDecoder {
     frame_rate_den: u32,
     readback_queue: VecDeque<(i64, ID3D11Texture2D)>,
     staging_pool: Arc<StagingTexturePool>,
+    reclaim_tx: mpsc::Sender<ReclaimTexture>,
+    reclaim_rx: mpsc::Receiver<ReclaimTexture>,
     readback_stats: NV12ReadbackStats,
     // How the stream stopped, reported once the queued readbacks are drained.
     readback_end: Option<Result<(), String>>,
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
-    _staging_guard: StagingDecoderGuard,
     // COM can unload the decoder DLL, so release every COM field before its apartment shuts down.
     _init_guard: Arc<MFInitGuard>,
     _com_guard: ComInitGuard,
@@ -952,6 +971,22 @@ impl MediaFoundationDecoder {
     }
 
     unsafe fn new_inner(path: &Path) -> Result<Self, String> {
+        unsafe { Self::new_inner_with_device(path, || create_d3d11_device()) }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_plain_warp(path: impl AsRef<Path>) -> Result<Self, String> {
+        unsafe {
+            Self::new_inner_with_device(path.as_ref(), || {
+                create_warp_device(false).map_err(|e| format!("plain WARP: {e}"))
+            })
+        }
+    }
+
+    unsafe fn new_inner_with_device(
+        path: &Path,
+        create_device: impl FnOnce() -> Result<(ID3D11Device, ID3D11DeviceContext), String>,
+    ) -> Result<Self, String> {
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED)
                 .ok()
@@ -970,7 +1005,7 @@ impl MediaFoundationDecoder {
         }
         init_guard.media_foundation_started = true;
 
-        let (d3d11_device, d3d11_context) = unsafe { create_d3d11_device()? };
+        let (d3d11_device, d3d11_context) = create_device()?;
         let device_manager = unsafe { create_dxgi_device_manager(&d3d11_device)? };
 
         let source_reader = unsafe { create_source_reader(path, &device_manager)? };
@@ -986,6 +1021,7 @@ impl MediaFoundationDecoder {
 
         let plane_converter = Nv12PlaneConverter::new(&d3d11_device, &d3d11_context)?;
         let staging_pool = Arc::new(StagingTexturePool::new(d3d11_device.clone(), width, height));
+        let (reclaim_tx, reclaim_rx) = mpsc::channel();
         for _ in 0..READBACK_DEPTH {
             let texture = unsafe { create_staging_texture(&d3d11_device, width, height)? };
             staging_pool.recycle(texture);
@@ -1020,12 +1056,13 @@ impl MediaFoundationDecoder {
             frame_rate_den,
             readback_queue: VecDeque::new(),
             staging_pool,
+            reclaim_tx,
+            reclaim_rx,
             readback_stats: NV12ReadbackStats::default(),
             readback_end: None,
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
-            _staging_guard: StagingDecoderGuard::new(),
             _init_guard: Arc::new(init_guard),
             _com_guard: com_guard,
         })
@@ -1058,6 +1095,7 @@ impl MediaFoundationDecoder {
     /// Reads the next sample back to the CPU. The copy of the sample after it is queued
     /// first, so the GPU decodes and copies that one while this one is mapped.
     pub fn read_nv12(&mut self) -> Result<Option<NV12Sample>, String> {
+        self.drain_reclaimed();
         let mut enqueued = false;
         while self.readback_end.is_none() && self.readback_queue.len() < READBACK_DEPTH {
             let (staging, reused) = self.staging_pool.acquire()?;
@@ -1119,13 +1157,25 @@ impl MediaFoundationDecoder {
         unsafe {
             map_nv12_staging(
                 &self.d3d11_context,
-                &self.d3d11_device,
                 staging,
                 self.height,
                 &self.staging_pool,
+                &self.reclaim_tx,
                 &mut self.readback_stats,
                 Arc::clone(&self._init_guard),
             )
+        }
+    }
+
+    fn drain_reclaimed(&mut self) {
+        while let Ok(mut reclaim) = self.reclaim_rx.try_recv() {
+            let Some(texture) = reclaim.take() else {
+                continue;
+            };
+            unsafe {
+                self.d3d11_context.Unmap(&texture, 0);
+            }
+            self.staging_pool.recycle(texture);
         }
     }
 
@@ -1273,11 +1323,18 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("Seek failed: {e:?}"))?;
         }
 
+        self.drain_reclaimed();
         for (_, staging) in self.readback_queue.drain(..) {
             self.staging_pool.recycle(staging);
         }
         self.readback_end = None;
         Ok(())
+    }
+}
+
+impl Drop for MediaFoundationDecoder {
+    fn drop(&mut self) {
+        self.drain_reclaimed();
     }
 }
 
@@ -1348,10 +1405,36 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
         warn!("No physical hardware DXGI adapter available, falling back to WARP");
     }
 
+    match unsafe { create_warp_device(true) } {
+        Ok(device) => {
+            warn!("Using WARP software rasterizer for D3D11 - hardware GPU unavailable");
+            Ok(device)
+        }
+        Err(error) => Err(format!("{last_error}; {error}")),
+    }
+}
+
+unsafe fn create_warp_device(
+    video_support: bool,
+) -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+
+    let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    if video_support {
+        flags |= D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    }
+
+    let feature_levels = [
+        windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_1,
+        windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0,
+        windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_10_1,
+        windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_10_0,
+    ];
+
     let mut device: Option<ID3D11Device> = None;
     let mut context: Option<ID3D11DeviceContext> = None;
 
-    let result = unsafe {
+    unsafe {
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_WARP,
@@ -1363,30 +1446,22 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
             None,
             Some(&mut context),
         )
+    }
+    .map_err(|error| format!("D3D11CreateDevice (WARP) failed: {error:?}"))?;
+
+    let (device, context) = match (device, context) {
+        (Some(device), Some(context)) => (device, context),
+        _ => return Err("D3D11CreateDevice (WARP) returned a null device/context".to_string()),
     };
 
-    match result {
-        Ok(()) => {
-            if let (Some(device), Some(context)) = (device, context) {
-                warn!("Using WARP software rasterizer for D3D11 - hardware GPU unavailable");
-
-                let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread = device
-                    .cast()
-                    .map_err(|e| format!("Failed to get ID3D11Multithread: {e:?}"))?;
-                unsafe {
-                    let _ = multithread.SetMultithreadProtected(true);
-                }
-
-                return Ok((device, context));
-            }
-            Err(format!(
-                "{last_error}; D3D11CreateDevice (WARP) returned null device/context"
-            ))
-        }
-        Err(e) => Err(format!(
-            "{last_error}; D3D11CreateDevice (WARP) failed: {e:?}"
-        )),
+    let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread = device
+        .cast()
+        .map_err(|e| format!("Failed to get ID3D11Multithread: {e:?}"))?;
+    unsafe {
+        let _ = multithread.SetMultithreadProtected(true);
     }
+
+    Ok((device, context))
 }
 
 unsafe fn create_dxgi_device_manager(
@@ -1522,34 +1597,195 @@ unsafe impl Send for MediaFoundationDecoder {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::TryRecvError;
+    use std::sync::{Mutex, MutexGuard};
+
+    const FIXTURE_1080P: &str = "h264-1080p.mp4";
+    static MF_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serial_mf_test() -> MutexGuard<'static, ()> {
+        MF_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    fn skip_or_fail(required: bool, reason: &str) {
+        if required {
+            panic!("{reason}");
+        }
+        eprintln!("MediaFoundation test skipped: {reason}");
+    }
+
+    fn skip_or_fail_d3d11(reason: &str) {
+        skip_or_fail(
+            std::env::var_os("CAP_REQUIRE_D3D11_TESTS").is_some(),
+            reason,
+        );
+    }
+
+    fn skip_or_fail_mf(reason: &str) {
+        skip_or_fail(std::env::var_os("CAP_REQUIRE_MF_TESTS").is_some(), reason);
+    }
+
+    fn test_device() -> Option<(ID3D11Device, ID3D11DeviceContext)> {
+        if std::env::var_os("CAP_FORCE_WARP_TESTS").is_none()
+            && let Ok(device) = unsafe { create_d3d11_device() }
+        {
+            return Some(device);
+        }
+
+        // Hosted Windows runners expose no video-capable adapter. The staging
+        // tests only need a D3D11 context, so fall back to plain WARP.
+        match unsafe { create_warp_device(false) } {
+            Ok(device) => Some(device),
+            Err(error) => {
+                skip_or_fail_d3d11(&format!("no D3D11 test device available: {error}"));
+                None
+            }
+        }
+    }
+
+    fn test_decoder(path: &Path) -> Option<MediaFoundationDecoder> {
+        let result = if std::env::var_os("CAP_FORCE_WARP_TESTS").is_some() {
+            MediaFoundationDecoder::new_plain_warp(path)
+        } else {
+            MediaFoundationDecoder::new(path)
+        };
+        match result {
+            Ok(decoder) => Some(decoder),
+            Err(error) => {
+                skip_or_fail_mf(&format!(
+                    "no Media Foundation H.264 decoder available: {error}"
+                ));
+                None
+            }
+        }
+    }
+
+    fn create_cpu_readwrite_staging(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+    ) -> ID3D11Texture2D {
+        use windows::Win32::Graphics::Direct3D11::D3D11_CPU_ACCESS_WRITE;
+
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: (D3D11_CPU_ACCESS_READ.0 | D3D11_CPU_ACCESS_WRITE.0) as u32,
+            MiscFlags: 0,
+        };
+        unsafe {
+            let mut texture = None;
+            device
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .unwrap();
+            texture.unwrap()
+        }
+    }
+
+    unsafe fn blocking_map_copy(
+        context: &ID3D11DeviceContext,
+        staging: &ID3D11Texture2D,
+        height: u32,
+    ) -> Vec<u8> {
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            context
+                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .unwrap();
+            let y_stride = mapped.RowPitch as usize;
+            let len = y_stride * height as usize + y_stride * (height / 2) as usize;
+            let data = std::slice::from_raw_parts(mapped.pData as *const u8, len).to_vec();
+            context.Unmap(staging, 0);
+            data
+        }
+    }
+
+    fn recycle_reclaimed(
+        context: &ID3D11DeviceContext,
+        pool: &StagingTexturePool,
+        rx: &mpsc::Receiver<ReclaimTexture>,
+    ) {
+        while let Ok(mut reclaim) = rx.try_recv() {
+            let Some(texture) = reclaim.take() else {
+                continue;
+            };
+            unsafe {
+                context.Unmap(&texture, 0);
+            }
+            pool.recycle(texture);
+        }
+    }
 
     #[test]
-    #[ignore = "requires a Windows D3D11 device"]
     fn repeatedly_releases_decoder_objects_before_com_shutdown() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
-        for _ in 0..20 {
-            let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let _mf = serial_mf_test();
+        if std::env::var_os("CAP_FORCE_WARP_TESTS").is_some() {
+            eprintln!(
+                "MediaFoundation lifecycle test skipped: WARP removes devices after repeated re-creation"
+            );
+            return;
+        }
+        let path = fixture("h264-decoder-lifecycle.mp4");
+        let decoders = 20;
+        for _ in 0..decoders {
+            let Some(mut decoder) = test_decoder(&path) else {
+                return;
+            };
             for _ in 0..5 {
                 assert!(decoder.read_sample().unwrap().is_some());
             }
             drop(decoder);
         }
+        println!("MediaFoundation lifecycle: {decoders} decoders created and released");
     }
 
     #[test]
-    #[ignore = "requires a Windows D3D11 device"]
     fn pipelined_readback_returns_every_sample_in_order() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        let _mf = serial_mf_test();
+        let path = fixture(FIXTURE_1080P);
         // This file, like the reference recording, ends with a stream error rather than an
         // end-of-stream flag, so both readers stop at whichever comes first.
         let mut expected = Vec::new();
-        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let Some(mut decoder) = test_decoder(&path) else {
+            return;
+        };
+        let video_width = decoder.width;
+        let video_height = decoder.height;
+        let mut surface_height = 0;
         let expected_end = loop {
             let (staging, _) = decoder.staging_pool.acquire().unwrap();
             match unsafe { decoder.read_decoder_surface() } {
                 Ok(Some(surface)) => unsafe {
+                    let mut desc = D3D11_TEXTURE2D_DESC::default();
+                    surface.texture.GetDesc(&mut desc);
+                    surface_height = desc.Height;
+                    // Keep the copy box identical to read_nv12 so this comparison
+                    // isolates the CPU readback path from the surface clipping.
+                    let source_box = D3D11_BOX {
+                        left: 0,
+                        top: 0,
+                        front: 0,
+                        right: video_width,
+                        bottom: video_height,
+                        back: 1,
+                    };
                     decoder.d3d11_context.CopySubresourceRegion(
                         &staging,
                         0,
@@ -1558,10 +1794,11 @@ mod tests {
                         0,
                         &surface.texture,
                         surface.subresource,
-                        None,
+                        Some(&source_box),
                     );
-                    let data = decoder.map_staging(staging).unwrap();
-                    expected.push((surface.pts, data.as_slice().to_vec()));
+                    let data = blocking_map_copy(&decoder.d3d11_context, &staging, video_height);
+                    expected.push((surface.pts, data));
+                    decoder.staging_pool.recycle(staging);
                 },
                 end => {
                     decoder.staging_pool.recycle(staging);
@@ -1571,7 +1808,9 @@ mod tests {
         };
         drop(decoder);
 
-        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let Some(mut decoder) = test_decoder(&path) else {
+            return;
+        };
         let mut read = Vec::new();
         let end = loop {
             match decoder.read_nv12() {
@@ -1579,6 +1818,11 @@ mod tests {
                 end => break end.is_err(),
             }
         };
+        assert_eq!((video_width, video_height), (1920, 1080));
+        assert_eq!(
+            surface_height, 1088,
+            "the decoder surface must stay macroblock-aligned for this test"
+        );
         assert!(expected.len() > READBACK_DEPTH);
         assert!(read == expected);
         assert_eq!(end, expected_end);
@@ -1586,6 +1830,13 @@ mod tests {
         let stats = decoder.readback_stats();
         assert_eq!(stats.frames, read.len() as u64);
         assert!(stats.pool_hits + stats.pool_misses >= stats.frames);
+        println!(
+            "MediaFoundation readback parity: {} frames, {}x{}, {}-row decoder surface",
+            read.len(),
+            video_width,
+            video_height,
+            surface_height
+        );
 
         let first = |decoder: &mut MediaFoundationDecoder| {
             let sample = decoder.read_nv12().unwrap().unwrap();
@@ -1599,25 +1850,173 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a Windows D3D11 device"]
-    fn mapped_frame_outlives_decoder() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
-        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
-        let frame = decoder.read_nv12().unwrap().unwrap();
-        drop(decoder);
+    fn software_decoded_1080p_frame_matches_blocking_readback() {
+        use windows::Win32::Graphics::Direct3D11::D3D11_MAP_WRITE;
 
-        std::thread::spawn(move || {
-            std::hint::black_box(frame.data.as_slice()[0]);
-        })
-        .join()
-        .unwrap();
+        const WIDTH: u32 = 1920;
+        const HEIGHT: u32 = 1080;
+        const SURFACE_HEIGHT: u32 = 1088;
+
+        let _mf = serial_mf_test();
+        let path = fixture(FIXTURE_1080P);
+        let mut decoder = crate::FFmpegDecoder::new(&path, None).unwrap();
+        let frame = decoder
+            .frames()
+            .next()
+            .expect("fixture has no frames")
+            .unwrap();
+        assert_eq!(frame.format(), ::ffmpeg::format::Pixel::YUV420P);
+
+        let Some((device, context)) = test_device() else {
+            return;
+        };
+        let source = create_cpu_readwrite_staging(&device, WIDTH, SURFACE_HEIGHT);
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            context
+                .Map(&source, 0, D3D11_MAP_WRITE, 0, Some(&mut mapped))
+                .unwrap();
+            let pitch = mapped.RowPitch as usize;
+            let total = pitch * (SURFACE_HEIGHT + SURFACE_HEIGHT.div_ceil(2)) as usize;
+            let bytes = std::slice::from_raw_parts_mut(mapped.pData as *mut u8, total);
+
+            for row in 0..SURFACE_HEIGHT as usize {
+                let destination = &mut bytes[row * pitch..row * pitch + WIDTH as usize];
+                if row < HEIGHT as usize {
+                    let stride = frame.stride(0);
+                    let source = &frame.data(0)[row * stride..row * stride + WIDTH as usize];
+                    destination.copy_from_slice(source);
+                } else {
+                    destination.fill(0xEE);
+                }
+            }
+
+            let uv_start = pitch * SURFACE_HEIGHT as usize;
+            for row in 0..SURFACE_HEIGHT.div_ceil(2) as usize {
+                let start = uv_start + row * pitch;
+                let destination = &mut bytes[start..start + WIDTH as usize];
+                if row < HEIGHT.div_ceil(2) as usize {
+                    let u_stride = frame.stride(1);
+                    let v_stride = frame.stride(2);
+                    let u = &frame.data(1)[row * u_stride..row * u_stride + WIDTH as usize / 2];
+                    let v = &frame.data(2)[row * v_stride..row * v_stride + WIDTH as usize / 2];
+                    for (x, (&u_byte, &v_byte)) in u.iter().zip(v).enumerate() {
+                        destination[2 * x] = u_byte;
+                        destination[2 * x + 1] = v_byte;
+                    }
+                } else {
+                    destination.fill(0xDD);
+                }
+            }
+            context.Unmap(&source, 0);
+            context.Flush();
+        }
+
+        let pool = Arc::new(StagingTexturePool::new(device.clone(), WIDTH, HEIGHT));
+        let (old_staging, _) = pool.acquire().unwrap();
+        let (new_staging, _) = pool.acquire().unwrap();
+        let source_box = D3D11_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: WIDTH,
+            bottom: HEIGHT,
+            back: 1,
+        };
+        unsafe {
+            for destination in [&old_staging, &new_staging] {
+                context.CopySubresourceRegion(
+                    destination,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &source,
+                    0,
+                    Some(&source_box),
+                );
+            }
+            context.Flush();
+        }
+
+        let old = unsafe { blocking_map_copy(&context, &old_staging, HEIGHT) };
+        pool.recycle(old_staging);
+
+        let (reclaim_tx, reclaim_rx) = mpsc::channel();
+        let mut stats = NV12ReadbackStats::default();
+        let guard = Arc::new(MFInitGuard {
+            media_foundation_started: false,
+        });
+        let new = unsafe {
+            map_nv12_staging(
+                &context,
+                new_staging,
+                HEIGHT,
+                &pool,
+                &reclaim_tx,
+                &mut stats,
+                guard,
+            )
+            .unwrap()
+        };
+        assert_eq!(new.as_slice(), old.as_slice());
+        assert_eq!(new.as_slice().len(), old.len());
+        println!(
+            "MediaFoundation software-decode parity: 1 frame, {WIDTH}x{HEIGHT}, {SURFACE_HEIGHT}-row source"
+        );
+        drop(new);
+        recycle_reclaimed(&context, &pool, &reclaim_rx);
     }
 
     #[test]
-    #[ignore = "requires a Windows D3D11 device"]
+    fn mapped_frame_outlives_decoder() {
+        let _mf = serial_mf_test();
+        let path = fixture(FIXTURE_1080P);
+        let Some(mut decoder) = test_decoder(&path) else {
+            return;
+        };
+        let frame = decoder.read_nv12().unwrap().unwrap();
+        drop(decoder);
+
+        let byte = std::thread::spawn(move || {
+            let byte = frame.data.as_slice()[0];
+            drop(frame);
+            byte
+        })
+        .join()
+        .unwrap();
+        std::hint::black_box(byte);
+        println!("MediaFoundation mapped frame outlived its decoder");
+    }
+
+    #[test]
+    fn dropped_mapped_frame_is_reclaimed_when_the_decoder_drains() {
+        let _mf = serial_mf_test();
+        let path = fixture(FIXTURE_1080P);
+        let Some(mut decoder) = test_decoder(&path) else {
+            return;
+        };
+        let frame = decoder.read_nv12().unwrap().unwrap();
+        let free_before = decoder.staging_pool.free.lock().unwrap().textures.len();
+        drop(frame);
+        let free_after_drop = decoder.staging_pool.free.lock().unwrap().textures.len();
+        assert_eq!(free_after_drop, free_before);
+
+        decoder.drain_reclaimed();
+        let free_after_drain = decoder.staging_pool.free.lock().unwrap().textures.len();
+        assert_eq!(free_after_drain, free_before + 1);
+        assert!(matches!(
+            decoder.reclaim_rx.try_recv(),
+            Err(TryRecvError::Empty)
+        ));
+        println!("MediaFoundation mapped frame reclaimed when the decoder drained it");
+    }
+
+    #[test]
     fn staging_pool_reuses_recycled_textures() {
-        let (device, _) = unsafe { create_d3d11_device().unwrap() };
+        let Some((device, _)) = test_device() else {
+            return;
+        };
         let pool = StagingTexturePool::new(device, 64, 64);
 
         let (first, first_hit) = pool.acquire().unwrap();
@@ -1627,40 +2026,21 @@ mod tests {
         let (second, second_hit) = pool.acquire().unwrap();
         assert!(second_hit);
         pool.recycle(second);
+        println!("MediaFoundation staging pool reused a recycled texture");
     }
 
     #[test]
-    #[ignore = "requires a Windows D3D11 device"]
     fn aligned_decoder_surface_copies_only_the_visible_rows() {
-        use windows::Win32::Graphics::Direct3D11::{D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE};
+        use windows::Win32::Graphics::Direct3D11::D3D11_MAP_WRITE;
 
         const WIDTH: u32 = 1920;
         const HEIGHT: u32 = 1080;
         const SURFACE_HEIGHT: u32 = 1088;
 
-        let (device, context) = unsafe { create_d3d11_device().unwrap() };
-        let source = unsafe {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: WIDTH,
-                Height: SURFACE_HEIGHT,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_NV12,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_STAGING,
-                BindFlags: 0,
-                CPUAccessFlags: (D3D11_CPU_ACCESS_READ.0 | D3D11_CPU_ACCESS_WRITE.0) as u32,
-                MiscFlags: 0,
-            };
-            let mut texture = None;
-            device
-                .CreateTexture2D(&desc, None, Some(&mut texture))
-                .unwrap();
-            texture.unwrap()
+        let Some((device, context)) = test_device() else {
+            return;
         };
+        let source = create_cpu_readwrite_staging(&device, WIDTH, SURFACE_HEIGHT);
         let staging = unsafe { create_staging_texture(&device, WIDTH, HEIGHT).unwrap() };
 
         unsafe {
@@ -1731,6 +2111,7 @@ mod tests {
             }
             context.Unmap(&staging, 0);
         }
+        println!("MediaFoundation 1088-row copy: only visible 1080 luma and chroma rows");
     }
 
     #[test]
@@ -1820,6 +2201,7 @@ mod tests {
         let guard = Arc::new(MFInitGuard {
             media_foundation_started: false,
         });
+        let (reclaim_tx, reclaim_rx) = mpsc::channel();
 
         let wall_start = Instant::now();
         for _ in 0..ITERS {
@@ -1834,16 +2216,17 @@ mod tests {
                 context.Flush();
                 let data = map_nv12_staging(
                     &context,
-                    &device,
                     staging,
                     HEIGHT,
                     &staging_pool,
+                    &reclaim_tx,
                     &mut stats,
                     Arc::clone(&guard),
                 )
                 .unwrap();
                 std::hint::black_box(data.as_slice().len());
             }
+            recycle_reclaimed(&context, &staging_pool, &reclaim_rx);
             staging = next;
         }
         let wall = wall_start.elapsed();
