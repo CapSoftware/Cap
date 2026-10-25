@@ -102,6 +102,7 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # move gpui's own pin.
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 jpeg-decoder = "0.3"
+rxing = { version = "0.9.2", default-features = false, features = ["decoders", "encoding_rs", "full_barcode_format_support"] }
 smallvec = "1"
 # The OS language list the UI language follows when set to System default.
 # Already in this lockfile through cosmic-text.
@@ -174,6 +175,7 @@ tauri-winres = "0.3.5"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = ["test-support"] }
+rxing = { version = "0.9.2", default-features = false, features = ["encoders"] }
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
@@ -191,6 +193,14 @@ libc = "0.2"
 clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
+notify-rust = "4.11"
+windows = { version = "0.61.3", features = [
+    "Foundation",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_System_WinRT",
+] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -216,6 +226,7 @@ raw-window-handle = "0.6"
 x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+notify-rust = "4.11"
 # Native window treatment (panel levels, Spaces) gpui does not expose. Same
 # versions gpui's own tree compiles, so no second objc2 universe gets built.
 objc2 = "0.5.2"

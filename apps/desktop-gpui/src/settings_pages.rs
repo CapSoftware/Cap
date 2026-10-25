@@ -932,7 +932,13 @@ impl SettingsWindow {
 // Shortcuts
 // ---------------------------------------------------------------------------
 
-const SCREENSHOT_SHORTCUTS: [&str; 3] = ["screenshotArea", "screenshotWindow", "screenshotDisplay"];
+const SCREENSHOT_SHORTCUTS: &[&str] = &[
+    "screenshotArea",
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    "ocrArea",
+    "screenshotWindow",
+    "screenshotDisplay",
+];
 
 const RECORDING_SHORTCUTS: [&str; 7] = [
     "startStudioRecording",
@@ -1041,6 +1047,7 @@ const INSTANT_OUTCOMES: [(bool, OutcomeOption); 2] = [
 fn shortcut_label(action: &str) -> &'static str {
     match action {
         "screenshotArea" => "Screenshot an area",
+        "ocrArea" => "Copy text from an area",
         "screenshotWindow" => "Screenshot a window",
         "screenshotDisplay" => "Screenshot the display",
         "startStudioRecording" => "Start Studio recording",
@@ -1094,6 +1101,7 @@ fn shortcut_effect(
     };
     match action {
         "screenshotArea" => format!("select an area and {screenshot}"),
+        "ocrArea" => "select an area and copy the text in it to your clipboard".into(),
         "screenshotWindow" => format!("capture the window under your pointer and {screenshot}"),
         "screenshotDisplay" => format!("capture the display under your pointer and {screenshot}"),
         "startStudioRecording" => {
@@ -8189,7 +8197,10 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 13);
+        assert_eq!(
+            shown.len(),
+            13 + usize::from(cfg!(any(target_os = "macos", target_os = "windows")))
+        );
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);

@@ -7,6 +7,7 @@ mod app_sounds;
 mod app_windows;
 mod assets;
 mod auth;
+mod barcode;
 mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
@@ -47,13 +48,14 @@ mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod library;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
-mod library;
 mod main_window;
 mod media_access;
 mod menus;
 mod mode_select_window;
+mod ocr;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;

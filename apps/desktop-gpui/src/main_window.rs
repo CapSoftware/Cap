@@ -2160,6 +2160,8 @@ impl MainWindow {
     /// `crate::open_target_picker(&app, RecordingTargetMode::*)` over there,
     /// which is the same "set the target mode, open the overlays" pair.
     pub fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        let select = crate::target_overlay::TargetSelect::global(cx);
+        select.update(cx, |select, cx| select.set_ocr_area(false, cx));
         if kind == TargetType::Window {
             self.selected_window = match auto_window_title() {
                 Some(title) => self
