@@ -222,6 +222,10 @@ export class CapRecorder {
 		const stopped = this.recordingStopped;
 		if (recorder.state !== "inactive") recorder.stop();
 		await stopped;
+		if (this.streams) {
+			releaseStreams(this.streams);
+			this.streams = null;
+		}
 		return this.uploadRecording();
 	}
 

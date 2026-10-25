@@ -117,6 +117,9 @@ jobs:
       - name: Test Chrome extension
         run: bun run --cwd apps/chrome-extension test
 
+      - name: Test recorder SDK
+        run: bun --no-install test packages/sdk-recorder
+
       - name: Test render farm orchestration
         run: |
           bun test apps/render-farm
