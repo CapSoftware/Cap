@@ -71,9 +71,12 @@ struct SysvMapping {
     removed: bool,
 }
 
-// SAFETY: the mapping is exclusively owned by this value and SysV attachments
-// are process-wide, so it may be used and dropped from any thread.
+// SAFETY: the mapping is exclusively owned until it is wrapped in an `Arc`
+// and published. Shared references only read pixels. `XShmGetImage` and the
+// tail wipe run only while this task holds the only `Arc`, and `Drop` runs
+// on the thread that releases the last `Arc`.
 unsafe impl Send for SysvMapping {}
+unsafe impl Sync for SysvMapping {}
 
 impl SysvMapping {
     fn new(size: usize) -> anyhow::Result<Self> {
@@ -146,17 +149,46 @@ impl Drop for SysvMapping {
     }
 }
 
-// `Drop` detaches from the server and waits for it to confirm before the
-// `mapping` field drops and unmaps locally.
+/// Reference to the SysV mapping that keeps the pixels alive after the
+/// segment is reused or the grabber is dropped.
+pub(crate) struct SharedMapping {
+    inner: Arc<SysvMapping>,
+}
+
+impl SharedMapping {
+    pub(crate) fn as_ptr(&self) -> *mut u8 {
+        self.inner.addr.as_ptr()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.inner.size
+    }
+
+    pub(crate) fn into_raw(self) -> *mut libc::c_void {
+        Arc::into_raw(self.inner).cast::<libc::c_void>().cast_mut()
+    }
+
+    /// # Safety
+    /// `ptr` must be the result of [`Self::into_raw`] and is consumed exactly once.
+    pub(crate) unsafe fn from_raw(ptr: *mut libc::c_void) -> Self {
+        Self {
+            inner: unsafe { Arc::from_raw(ptr.cast::<SysvMapping>().cast_const()) },
+        }
+    }
+}
+
+// `Drop` detaches from the server and waits for it to confirm before this
+// value releases its mapping reference. A published frame may still hold
+// another reference, so the local `shmdt` waits until that frame is dropped.
 pub(crate) struct ShmSegment {
     conn: Arc<RustConnection>,
     seg: shm::Seg,
-    mapping: SysvMapping,
+    mapping: Arc<SysvMapping>,
 }
 
 impl ShmSegment {
     pub(crate) fn new(conn: &Arc<RustConnection>, size: usize) -> anyhow::Result<Self> {
-        let mapping = SysvMapping::new(size)?;
+        let mapping = Arc::new(SysvMapping::new(size)?);
         let shmid =
             u32::try_from(mapping.shmid).map_err(|_| anyhow!("invalid shmid {}", mapping.shmid))?;
         let seg = conn.generate_id().context("allocate MIT-SHM segment id")?;
@@ -169,8 +201,40 @@ impl ShmSegment {
             seg,
             mapping,
         };
-        segment.mapping.mark_removed()?;
+        Arc::get_mut(&mut segment.mapping)
+            .context("shared memory mapping is already shared")?
+            .mark_removed()?;
         Ok(segment)
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.mapping.bytes()
+    }
+
+    /// `true` when no published frame still references this mapping.
+    pub(crate) fn is_exclusive(&mut self) -> bool {
+        Arc::get_mut(&mut self.mapping).is_some()
+    }
+
+    pub(crate) fn share_mapping(&self) -> SharedMapping {
+        SharedMapping {
+            inner: Arc::clone(&self.mapping),
+        }
+    }
+
+    pub(crate) fn zero_tail(&mut self, written: usize) {
+        debug_assert!(Arc::strong_count(&self.mapping) == 1);
+        let size = self.mapping.size;
+        if written >= size {
+            return;
+        }
+        // SAFETY: caller holds the only `Arc`, so the tail is not aliased.
+        // The X server writes the image at the front of the segment and leaves
+        // this tail untouched; zeroing it gives SIMD consumers the padding
+        // they are allowed to overread.
+        unsafe {
+            std::ptr::write_bytes(self.mapping.addr.as_ptr().add(written), 0, size - written);
+        }
     }
 
     pub(crate) fn len(&self) -> usize {

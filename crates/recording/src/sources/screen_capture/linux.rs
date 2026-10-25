@@ -1,6 +1,6 @@
 use super::cadence::FrameCadenceGate;
 use super::linux_dmabuf_import;
-use super::linux_shm::{self, ShmSegment};
+use super::linux_shm::{self, SharedMapping, ShmSegment};
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
 use crate::ffmpeg::FFmpegVideoFrame;
@@ -2498,11 +2498,188 @@ pub struct X11Grabber {
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+    force_shm_row_copy: bool,
 }
 
 enum GrabBackend {
-    Shm(ShmSegment),
+    Shm(ShmPool),
     GetImage,
+}
+
+/// In-flight SHM frames keep their mapping. Past this many outstanding
+/// frames, capture copies into an owned ffmpeg buffer instead of attaching
+/// another segment.
+#[doc(hidden)]
+pub const X11_SHM_PUBLISH_SLOTS: usize = 4;
+
+/// Matches `AV_INPUT_BUFFER_PADDING_SIZE`. Consumers such as swscale may
+/// overread a plane by this many bytes.
+const SHM_PLANE_PADDING: usize = 64;
+
+struct ShmPool {
+    conn: Arc<RustConnection>,
+    slots: Vec<ShmSegment>,
+    scratch: Option<ShmSegment>,
+    logged_copy_fallback: bool,
+}
+
+impl ShmPool {
+    fn new(conn: Arc<RustConnection>, segment: ShmSegment) -> Self {
+        Self {
+            conn,
+            slots: vec![segment],
+            scratch: None,
+            logged_copy_fallback: false,
+        }
+    }
+
+    fn segment_size(image_bytes: usize) -> anyhow::Result<usize> {
+        image_bytes
+            .checked_add(SHM_PLANE_PADDING)
+            .context("X11 shared-memory size overflowed")
+    }
+
+    fn read_frame(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        image_bytes: usize,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let required = Self::segment_size(image_bytes)?;
+        self.slots.retain(|slot| slot.len() == required);
+
+        if let Some(index) = self.slots.iter_mut().position(|slot| slot.is_exclusive()) {
+            return self
+                .publish_or_copy_slot(index, drawable, x, y, width, height, format, force_copy);
+        }
+
+        if !force_copy && self.slots.len() < X11_SHM_PUBLISH_SLOTS {
+            self.slots.push(
+                ShmSegment::new(&self.conn, required)
+                    .context("allocate X11 shared-memory frame")?,
+            );
+            let index = self.slots.len() - 1;
+            return self
+                .publish_or_copy_slot(index, drawable, x, y, width, height, format, force_copy);
+        }
+
+        self.copy_from_scratch(drawable, x, y, width, height, required, format, force_copy)
+    }
+
+    fn publish_or_copy_slot(
+        &mut self,
+        index: usize,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let segment = &mut self.slots[index];
+        let written = segment
+            .get_image(drawable, x, y, width, height)
+            .context("read X11 shared-memory image")?
+            .len();
+        segment.zero_tail(written);
+        let width_px = usize::from(width);
+        let height_px = usize::from(height);
+        if !force_copy
+            && let Some(linesize) = shm_plane_linesize(written, width_px, height_px, segment.len())
+            && let Ok(frame) =
+                publish_shm_frame(segment.share_mapping(), linesize, width, height, format)
+        {
+            return Ok(frame);
+        }
+
+        let mut frame = ffmpeg::frame::Video::new(format, u32::from(width), u32::from(height));
+        copy_image_rows(
+            &self.slots[index].bytes()[..written],
+            width_px,
+            height_px,
+            &mut frame,
+        )?;
+        Ok(frame)
+    }
+
+    fn copy_from_scratch(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        required: usize,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        if !force_copy && !self.logged_copy_fallback {
+            self.logged_copy_fallback = true;
+            tracing::debug!(
+                slots = self.slots.len(),
+                "X11 SHM frames are still referenced; copying this frame out of shared memory"
+            );
+        }
+        if self
+            .scratch
+            .as_ref()
+            .is_none_or(|segment| segment.len() != required)
+        {
+            self.scratch = Some(
+                ShmSegment::new(&self.conn, required)
+                    .context("allocate X11 shared-memory scratch")?,
+            );
+        }
+        let scratch = self
+            .scratch
+            .as_mut()
+            .context("X11 shared-memory scratch missing")?;
+        let written = scratch
+            .get_image(drawable, x, y, width, height)
+            .context("read X11 shared-memory image")?
+            .len();
+        scratch.zero_tail(written);
+        let mut frame = ffmpeg::frame::Video::new(format, u32::from(width), u32::from(height));
+        copy_image_rows(
+            &scratch.bytes()[..written],
+            usize::from(width),
+            usize::from(height),
+            &mut frame,
+        )?;
+        Ok(frame)
+    }
+
+    fn publish_idle(
+        &mut self,
+        width: u16,
+        height: u16,
+        image_bytes: usize,
+        format: ffmpeg::format::Pixel,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let required = Self::segment_size(image_bytes)?;
+        let Some(index) = self
+            .slots
+            .iter_mut()
+            .position(|slot| slot.len() == required && slot.is_exclusive())
+        else {
+            bail!("no idle X11 shared-memory segment to publish");
+        };
+        let segment = &self.slots[index];
+        let linesize = shm_plane_linesize(
+            image_bytes,
+            usize::from(width),
+            usize::from(height),
+            segment.len(),
+        )
+        .context("X11 shared-memory layout is not publishable")?;
+        publish_shm_frame(segment.share_mapping(), linesize, width, height, format)
+    }
 }
 
 struct X11WindowCapture {
@@ -2640,6 +2817,7 @@ impl X11Grabber {
             output,
             scaler: None,
             show_cursor,
+            force_shm_row_copy: false,
         };
         grabber.refresh_window_pixmap()?;
         grabber.backend = grabber.initial_backend(allow_shm);
@@ -2661,7 +2839,7 @@ impl X11Grabber {
         match self.create_shm_segment() {
             Ok(segment) => {
                 tracing::info!(bytes = segment.len(), "X11 capture using MIT-SHM");
-                GrabBackend::Shm(segment)
+                GrabBackend::Shm(ShmPool::new(Arc::clone(&self.conn), segment))
             }
             Err(error) => {
                 tracing::info!(error = %format!("{error:#}"), "X11 MIT-SHM unavailable, using GetImage");
@@ -2678,7 +2856,7 @@ impl X11Grabber {
             );
         }
         linux_shm::query_shm_support(&self.conn)?;
-        ShmSegment::new(&self.conn, self.shm_image_size()?)
+        ShmSegment::new(&self.conn, ShmPool::segment_size(self.shm_image_size()?)?)
     }
 
     fn shm_image_size(&self) -> anyhow::Result<usize> {
@@ -2701,6 +2879,32 @@ impl X11Grabber {
 
     pub fn uses_shm(&self) -> bool {
         matches!(self.backend, GrabBackend::Shm(_))
+    }
+
+    /// Benchmark hook: keep the pre-publish row copy after `XShmGetImage`.
+    #[doc(hidden)]
+    pub fn force_shm_row_copy(&mut self, force: bool) {
+        self.force_shm_row_copy = force;
+    }
+
+    /// Benchmark and test hook. Scales the grabbed frame before it is returned.
+    #[doc(hidden)]
+    pub fn set_output_size(&mut self, width: u32, height: u32) {
+        self.output.width = width;
+        self.output.height = height;
+    }
+
+    /// Wrap the idle SHM segment from the last grab without calling X again.
+    #[doc(hidden)]
+    pub fn publish_idle_shm_frame(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
+        let image_bytes = self.shm_image_size()?;
+        let width = self.width;
+        let height = self.height;
+        let format = self.source_pixel;
+        let GrabBackend::Shm(pool) = &mut self.backend else {
+            bail!("X11 MIT-SHM backend is not active");
+        };
+        pool.publish_idle(width, height, image_bytes, format)
     }
 
     fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
@@ -2784,25 +2988,27 @@ impl X11Grabber {
             }
             None => (self.root, self.x, self.y),
         };
-        let mut source = ffmpeg::frame::Video::new(
-            self.source_pixel,
-            u32::from(self.width),
-            u32::from(self.height),
-        );
-        if self.uses_shm() {
-            if let Err(shm_error) = self.read_shm_image(drawable, x, y, &mut source) {
-                // Only abandon MIT-SHM once GetImage succeeds on the same frame;
-                // if both fail the cause is the drawable/region, not SHM.
-                self.read_get_image(drawable, x, y, &mut source)?;
-                tracing::warn!(
-                    error = %format!("{shm_error:#}"),
-                    "X11 MIT-SHM capture failed, switching to GetImage"
-                );
-                self.backend = GrabBackend::GetImage;
+        let source = if self.uses_shm() {
+            match self.read_shm_frame(drawable, x, y) {
+                Ok(frame) => frame,
+                Err(shm_error) => {
+                    // Only abandon MIT-SHM once GetImage succeeds on the same frame;
+                    // if both fail the cause is the drawable/region, not SHM.
+                    let mut source = self.allocate_source_frame();
+                    self.read_get_image(drawable, x, y, &mut source)?;
+                    tracing::warn!(
+                        error = %format!("{shm_error:#}"),
+                        "X11 MIT-SHM capture failed, switching to GetImage"
+                    );
+                    self.backend = GrabBackend::GetImage;
+                    source
+                }
             }
         } else {
+            let mut source = self.allocate_source_frame();
             self.read_get_image(drawable, x, y, &mut source)?;
-        }
+            source
+        };
 
         let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
 
@@ -2815,23 +3021,38 @@ impl X11Grabber {
         Ok(frame)
     }
 
-    fn read_shm_image(
+    fn allocate_source_frame(&self) -> ffmpeg::frame::Video {
+        ffmpeg::frame::Video::new(
+            self.source_pixel,
+            u32::from(self.width),
+            u32::from(self.height),
+        )
+    }
+
+    fn read_shm_frame(
         &mut self,
         drawable: u32,
         x: i16,
         y: i16,
-        dst: &mut ffmpeg::frame::Video,
-    ) -> anyhow::Result<()> {
-        let required = self.shm_image_size()?;
-        let GrabBackend::Shm(segment) = &mut self.backend else {
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let image_bytes = self.shm_image_size()?;
+        let width = self.width;
+        let height = self.height;
+        let format = self.source_pixel;
+        let force_copy = self.force_shm_row_copy;
+        let GrabBackend::Shm(pool) = &mut self.backend else {
             bail!("X11 MIT-SHM backend is not active");
         };
-        if segment.len() != required {
-            *segment = ShmSegment::new(&self.conn, required)
-                .context("resize X11 shared-memory segment")?;
-        }
-        let data = segment.get_image(drawable, x, y, self.width, self.height)?;
-        copy_image_rows(data, usize::from(self.width), usize::from(self.height), dst)
+        pool.read_frame(
+            drawable,
+            x,
+            y,
+            width,
+            height,
+            image_bytes,
+            format,
+            force_copy,
+        )
     }
 
     fn read_get_image(
@@ -2931,6 +3152,101 @@ impl X11Grabber {
 
         Ok(())
     }
+}
+
+/// Linesize for a packed 32-bit SHM image, when the mapping has room for the
+/// plane plus SIMD overread padding. `None` means the caller must copy.
+fn shm_plane_linesize(
+    written: usize,
+    width: usize,
+    height: usize,
+    mapping_len: usize,
+) -> Option<i32> {
+    if height == 0 {
+        return None;
+    }
+    let row_bytes = width.checked_mul(4)?;
+    let stride = written / height;
+    if stride < row_bytes {
+        return None;
+    }
+    let plane = stride.checked_mul(height)?;
+    if plane > written || plane > mapping_len {
+        return None;
+    }
+    if mapping_len - plane < SHM_PLANE_PADDING {
+        return None;
+    }
+    i32::try_from(stride).ok()
+}
+
+fn publish_shm_frame(
+    mapping: SharedMapping,
+    linesize: i32,
+    width: u16,
+    height: u16,
+    format: ffmpeg::format::Pixel,
+) -> anyhow::Result<ffmpeg::frame::Video> {
+    let mut frame = ffmpeg::frame::Video::empty();
+    frame.set_format(format);
+    frame.set_width(u32::from(width));
+    frame.set_height(u32::from(height));
+
+    let data = mapping.as_ptr();
+    let size = mapping.len();
+    if data.is_null() || size == 0 {
+        bail!("X11 shared-memory mapping is empty");
+    }
+    let plane = usize::try_from(linesize)
+        .ok()
+        .and_then(|stride| stride.checked_mul(usize::from(height)))
+        .filter(|plane| *plane <= size)
+        .context("X11 shared-memory plane does not fit the mapping")?;
+    if plane == 0 {
+        bail!("X11 shared-memory plane is empty");
+    }
+
+    let opaque = mapping.into_raw();
+    // SAFETY: `data`/`size` describe the live SysV mapping owned by `opaque`.
+    // The callback drops that owner when the last AVBufferRef is released, which
+    // is after every consumer of this frame has finished. The buffer is writable
+    // so cursor compositing can update pixels before the frame is shared further.
+    let buffer = unsafe {
+        ffmpeg::ffi::av_buffer_create(data, size, Some(release_shared_mapping), opaque, 0)
+    };
+    if buffer.is_null() {
+        // SAFETY: `av_buffer_create` failed and did not take `opaque`.
+        drop(unsafe { SharedMapping::from_raw(opaque) });
+        bail!("failed to publish X11 shared-memory frame");
+    }
+    // SAFETY: `frame` came from `av_frame_alloc`. Plane 0 points into `buffer`,
+    // whose free callback keeps the mapping mapped for the frame's lifetime.
+    unsafe {
+        let raw = frame.as_mut_ptr();
+        (*raw).data[0] = data;
+        (*raw).linesize[0] = linesize;
+        (*raw).buf[0] = buffer;
+        (*raw).extended_data = std::ptr::addr_of_mut!((*raw).data).cast();
+    }
+    Ok(frame)
+}
+
+unsafe extern "C" fn release_shared_mapping(opaque: *mut libc::c_void, _data: *mut u8) {
+    if !opaque.is_null() {
+        // SAFETY: `opaque` is the `SharedMapping::into_raw` pointer stored on the
+        // AVBuffer and released exactly once.
+        drop(unsafe { SharedMapping::from_raw(opaque) });
+    }
+}
+
+#[doc(hidden)]
+pub fn copy_x11_image_rows(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    dst: &mut ffmpeg::frame::Video,
+) -> anyhow::Result<()> {
+    copy_image_rows(data, width, height, dst)
 }
 
 fn copy_image_rows(
@@ -3723,5 +4039,60 @@ mod pipewire_frame_tests {
         assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
         assert_eq!((prepared.width(), prepared.height()), (8, 6));
         assert!(scaler.is_some());
+    }
+}
+
+#[cfg(test)]
+mod shm_publish_tests {
+    use super::{SHM_PLANE_PADDING, shm_plane_linesize};
+
+    #[test]
+    fn packed_32bpp_frames_publish_with_their_native_stride() {
+        let stride = 1920 * 4;
+        let height = 1080;
+        let written = stride * height;
+        assert_eq!(
+            shm_plane_linesize(written, 1920, height, written + SHM_PLANE_PADDING),
+            Some(stride as i32)
+        );
+        let four_k = 3840 * 4;
+        let four_k_rows = 2160;
+        let four_k_bytes = four_k * four_k_rows;
+        assert_eq!(
+            shm_plane_linesize(
+                four_k_bytes,
+                3840,
+                four_k_rows,
+                four_k_bytes + SHM_PLANE_PADDING
+            ),
+            Some(four_k as i32)
+        );
+    }
+
+    #[test]
+    fn padded_and_short_rows_follow_the_mapping() {
+        let written = 8usize;
+        assert_eq!(
+            shm_plane_linesize(written, 1, 1, written + SHM_PLANE_PADDING),
+            Some(8)
+        );
+        let stride = 333 * 4;
+        let height = 211;
+        let plane = stride * height;
+        assert_eq!(
+            shm_plane_linesize(plane, 333, height, plane + SHM_PLANE_PADDING),
+            Some(stride as i32)
+        );
+        assert_eq!(shm_plane_linesize(plane, 333, height, plane + 63), None);
+        assert_eq!(shm_plane_linesize(plane - 1, 333, height, plane + 64), None);
+        assert_eq!(shm_plane_linesize(0, 16, 0, 64), None);
+    }
+
+    #[test]
+    fn padding_matches_ffmpeg_input_overread() {
+        assert_eq!(
+            SHM_PLANE_PADDING,
+            ffmpeg::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize
+        );
     }
 }
