@@ -146,6 +146,7 @@ jobs:
           __tests__/unit/speed-controller.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
+          __tests__/unit/timeline-paused-window.test.ts
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
           __tests__/unit/video-analytics-access.test.ts
