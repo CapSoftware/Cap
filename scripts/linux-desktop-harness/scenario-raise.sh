@@ -49,7 +49,7 @@ Name=Cap under test
 StartupNotify=true
 Exec=env CAP_GPUI_APP_DATA_DIR=$profile CAP_GPUI_RECORDINGS_DIR=$profile/recordings CAP_GPUI_LOG_DIR=$profile/logs LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} RUST_LOG=info sh -c 'exec "\$0" >"$out/second.log" 2>&1' ${CAP_BIN:-/usr/bin/Cap}
 DESKTOP
-shell "imports.gi.Gio.DesktopAppInfo.new_from_filename('$HOME/.local/share/applications/cap-under-test.desktop').launch([], global.create_app_launch_context(0, -1))" >>"$out/actions.log"
+shell "imports.gi.Gio.DesktopAppInfo.new_from_filename('$HOME/.local/share/applications/cap-under-test.desktop').launch([], global.create_app_launch_context(global.get_current_time(), -1))" >>"$out/actions.log"
 wait_log second "Requested the existing Cap GPUI controls" 20 && result reopen_forwarded yes || result reopen_forwarded no
 grep -q "forwarding the launcher's activation token" "$out/second.log" && result relaunch_had_token yes || result relaunch_had_token no
 sleep 3

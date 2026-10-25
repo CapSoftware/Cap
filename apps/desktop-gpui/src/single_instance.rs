@@ -977,6 +977,7 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
                 if linux_reopen_allowed(current.phase, current.mode(), current.instant_cleanup_safe()) {
                     crate::app_windows::show_main_window(cx);
                     if let Some(token) = token {
+                        tracing::info!("raising the main window with the relaunch's activation token");
                         let main = cx.global::<crate::app_windows::AppWindows>().main;
                         let _ = main.update(cx, |_, window, _| window.activate_window_with_token(token));
                     }
