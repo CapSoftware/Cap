@@ -2,7 +2,6 @@
 #![allow(non_snake_case)]
 
 use cap_mediafoundation_utils::*;
-use parking_lot::Mutex;
 use std::{
     ffi::OsString,
     fmt::Display,
@@ -11,9 +10,13 @@ use std::{
     os::windows::ffi::OsStringExt,
     slice::from_raw_parts,
     sync::{
-        OnceLock,
-        mpsc::{Receiver, Sender, channel},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{
+            Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError, channel, sync_channel,
+        },
     },
+    thread::{self, JoinHandle},
     time::Duration,
 };
 use windows::Win32::{
@@ -144,6 +147,8 @@ pub enum StartCapturingError {
     ConfigureSink(windows_core::Error),
     #[error("StartPreview: {0}")]
     StartPreview(windows_core::Error),
+    #[error("CallbackWorker: {0}")]
+    CallbackWorker(#[from] std::io::Error),
 }
 
 impl Device {
@@ -233,7 +238,7 @@ impl Device {
     pub fn start_capturing(
         &self,
         requested_format: &IMFMediaType,
-        callback: Box<dyn FnMut(CallbackData) + 'static>,
+        callback: Box<dyn FnMut(CallbackData) + Send + 'static>,
     ) -> Result<CaptureHandle, StartCapturingError> {
         let media_source = self
             .media_source()
@@ -252,9 +257,14 @@ impl Device {
                 .map_err(StartCapturingError::CreateEngine)?;
 
             let (event_tx, event_rx) = channel();
+            let (sample_tx, sample_rx) = sync_channel(CALLBACK_QUEUE_DEPTH);
+            let dropped = Arc::new(AtomicU64::new(0));
+            let callback_worker =
+                CallbackWorker::spawn(callback, sample_rx, Arc::new(AtomicBool::new(false)))?;
             let video_callback = VideoCallback {
                 event_tx,
-                sample_callback: Mutex::new(callback),
+                samples: sample_tx,
+                dropped,
             }
             .into_object();
 
@@ -375,7 +385,11 @@ impl Device {
             wait_for_event(&event_rx, CaptureEngineEventVariant::PreviewStarted)
                 .map_err(|v| StartCapturingError::StartPreview(v.into()))?;
 
-            Ok(CaptureHandle { engine, event_rx })
+            Ok(CaptureHandle {
+                engine: Some(engine),
+                event_rx,
+                callback_worker,
+            })
         }
     }
 }
@@ -408,8 +422,9 @@ fn retry_on_invalid_request<T>(
 }
 
 pub struct CaptureHandle {
+    engine: Option<IMFCaptureEngine>,
     event_rx: Receiver<CaptureEngineEvent>,
-    engine: IMFCaptureEngine,
+    callback_worker: CallbackWorker,
 }
 
 impl CaptureHandle {
@@ -417,8 +432,14 @@ impl CaptureHandle {
         &self.event_rx
     }
 
-    pub fn stop_capturing(self) -> windows_core::Result<()> {
-        unsafe { self.engine.StopPreview() }
+    pub fn stop_capturing(mut self) -> windows_core::Result<()> {
+        let result = if let Some(engine) = self.engine.take() {
+            unsafe { engine.StopPreview() }
+        } else {
+            Ok(())
+        };
+        drop(self.callback_worker);
+        result
     }
 }
 
@@ -570,10 +591,56 @@ pub struct CallbackData {
     pub perf_counter: i64,
 }
 
+unsafe impl Send for CallbackData {}
+
+const CALLBACK_QUEUE_DEPTH: usize = 4;
+
+struct CallbackWorker {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl CallbackWorker {
+    fn spawn(
+        mut callback: Box<dyn FnMut(CallbackData) + Send>,
+        samples: Receiver<CallbackData>,
+        stop: Arc<AtomicBool>,
+    ) -> std::io::Result<Self> {
+        let worker_stop = stop.clone();
+        let handle = thread::Builder::new()
+            .name("mf-camera-callback".to_string())
+            .spawn(move || {
+                cap_mediafoundation_utils::thread_init();
+                while !worker_stop.load(Ordering::Acquire) {
+                    match samples.recv_timeout(Duration::from_millis(100)) {
+                        Ok(sample) => callback(sample),
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })?;
+
+        Ok(Self {
+            stop,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for CallbackWorker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 #[implement(IMFCaptureEngineOnSampleCallback, IMFCaptureEngineOnEventCallback)]
 struct VideoCallback {
     event_tx: Sender<CaptureEngineEvent>,
-    sample_callback: Mutex<Box<dyn FnMut(CallbackData)>>,
+    samples: SyncSender<CallbackData>,
+    dropped: Arc<AtomicU64>,
 }
 
 impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
@@ -585,15 +652,20 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
             return Ok(());
         };
 
-        let mut callback = self.sample_callback.lock();
-
         let sample_time = unsafe { sample.GetSampleTime() }?;
 
-        (callback)(CallbackData {
+        let data = CallbackData {
             sample: sample.clone(),
             timestamp: Duration::from_micros(sample_time as u64 / 10),
             perf_counter,
-        });
+        };
+
+        if let Err(TrySendError::Full(_)) = self.samples.try_send(data) {
+            let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped == 1 || dropped.is_multiple_of(100) {
+                tracing::warn!(dropped, "Media Foundation camera callback queue full");
+            }
+        }
 
         Ok(())
     }

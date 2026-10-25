@@ -16,9 +16,13 @@ cidre = { workspace = true }
 cap-camera-avfoundation = { path = "../camera-avfoundation" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+] }
 windows-core = { workspace = true }
 cap-camera-windows = { path = "../camera-windows" }
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
 
 [dev-dependencies]
 inquire = "0.7.5"
