@@ -52,8 +52,6 @@ pub(crate) fn is_portrait_output(output: [u32; 2]) -> bool {
     width / height <= 0.7
 }
 
-/// The safe area as fractions of the frame `(x, y, w, h)`, or `None` when the
-/// output isn't portrait.
 pub(crate) fn safe_zone_rect(
     platform: SafeZonePlatform,
     output: [u32; 2],
@@ -71,8 +69,6 @@ pub(crate) fn safe_zone_rect(
 }
 
 impl EditorWindow {
-    /// The button only exists for portrait output; on any other aspect there
-    /// is nothing for it to draw.
     pub(super) fn render_safe_zone_button(
         &self,
         narrow: bool,
@@ -86,80 +82,94 @@ impl EditorWindow {
         let label = self
             .safe_zone
             .map_or("Safe zones", SafeZonePlatform::short_label);
-        Some(ui::EditorButton::plain(&theme, "safe-zones")
-            .text(&theme)
-            .left_icon("icons/smartphone.svg")
-            .when(!narrow, |button| button.label(label))
-            .tooltip(&theme, "Safe zones: Off / Reels / TikTok / Shorts")
-            .disabled(!self.project_ready())
-            .pressed(self.safe_zone.is_some())
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.safe_zone = SafeZonePlatform::next(this.safe_zone);
-                cx.notify();
-                window.refresh();
-            })))
+        Some(
+            ui::EditorButton::plain(&theme, "safe-zones")
+                .text(&theme)
+                .left_icon("icons/smartphone.svg")
+                .when(!narrow, |button| button.label(label))
+                .tooltip(&theme, "Safe zones: Off / Reels / TikTok / Shorts")
+                .disabled(!self.project_ready())
+                .pressed(self.safe_zone.is_some())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.safe_zone = SafeZonePlatform::next(this.safe_zone);
+                    cx.notify();
+                    window.refresh();
+                })),
+        )
     }
 
     pub(super) fn render_safe_zone_overlay(&self) -> Option<gpui::AnyElement> {
         let platform = self.safe_zone?;
         let output = self.frame_layout?.output_size;
         let (x, y, w, h) = safe_zone_rect(platform, output)?;
-        let player = self.player_frame_rect.get()?;
-        let (fw, fh) = (
-            f32::from(player.frame.size.width),
-            f32::from(player.frame.size.height),
-        );
-        let origin_x = player.frame.origin.x - player.container.origin.x;
-        let origin_y = player.frame.origin.y - player.container.origin.y;
+        let frame_size = (output[0] as f32, output[1] as f32);
         let theme = self.theme;
-        // Outside the safe area: the playhead's red, faint enough to keep
-        // the frame readable underneath.
         let shade = Hsla::from(theme.editor.playhead).opacity(0.22);
-        let band = |left: f32, top: f32, width: f32, height: f32| {
-            div()
-                .absolute()
-                .left(px(left))
-                .top(px(top))
-                .w(px(width.max(0.)))
-                .h(px(height.max(0.)))
-                .bg(shade)
-        };
-        let (zx, zy, zw, zh) = (x * fw, y * fh, w * fw, h * fh);
+        let border = Hsla::from(theme.editor.accent);
+        let label_bg = Hsla::from(theme.editor.card).opacity(0.85);
+        let label_fg = Hsla::from(theme.editor.text_1);
+        let label: SharedString = format!("{} safe zone", platform.label()).into();
         Some(
-            div()
-                .absolute()
-                .left(origin_x)
-                .top(origin_y)
-                .w(player.frame.size.width)
-                .h(player.frame.size.height)
-                .overflow_hidden()
-                .child(band(0., 0., fw, zy))
-                .child(band(0., zy + zh, fw, fh - zy - zh))
-                .child(band(0., zy, zx, zh))
-                .child(band(zx + zw, zy, fw - zx - zw, zh))
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(zx))
-                        .top(px(zy))
-                        .w(px(zw))
-                        .h(px(zh))
-                        .border_1()
-                        .border_color(Hsla::from(theme.editor.accent))
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(6.))
-                                .top(px(4.))
-                                .px(px(4.))
-                                .rounded(px(4.))
-                                .bg(Hsla::from(theme.editor.card).opacity(0.85))
-                                .text_size(px(10.))
-                                .text_color(Hsla::from(theme.editor.text_1))
-                                .child(format!("{} safe zone", platform.label())),
-                        ),
-                )
-                .into_any_element(),
+            gpui::canvas(
+                |bounds, _window, _cx| bounds,
+                move |_, bounds, window, cx| {
+                    let frame = super::preview_frame_bounds(bounds, frame_size);
+                    let (fx, fy) = (f32::from(frame.origin.x), f32::from(frame.origin.y));
+                    let (fw, fh) = (f32::from(frame.size.width), f32::from(frame.size.height));
+                    let (zx, zy, zw, zh) = (fx + x * fw, fy + y * fh, w * fw, h * fh);
+                    let rect = |left: f32, top: f32, width: f32, height: f32| gpui::Bounds {
+                        origin: gpui::point(px(left), px(top)),
+                        size: gpui::size(px(width.max(0.)), px(height.max(0.))),
+                    };
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: frame }), |window| {
+                        for band in [
+                            rect(fx, fy, fw, zy - fy),
+                            rect(fx, zy + zh, fw, fy + fh - zy - zh),
+                            rect(fx, zy, zx - fx, zh),
+                            rect(zx + zw, zy, fx + fw - zx - zw, zh),
+                        ] {
+                            window.paint_quad(gpui::fill(band, shade));
+                        }
+                        window.paint_quad(gpui::outline(
+                            rect(zx, zy, zw, zh),
+                            border,
+                            gpui::BorderStyle::Solid,
+                        ));
+                        let font_size = px(10.);
+                        let run = gpui::TextRun {
+                            len: label.len(),
+                            font: window.text_style().font(),
+                            color: label_fg,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        let line =
+                            window
+                                .text_system()
+                                .shape_line(label.clone(), font_size, &[run], None);
+                        let line_height = line.ascent + line.descent;
+                        let chip = rect(
+                            zx + 6.,
+                            zy + 4.,
+                            f32::from(line.width) + 8.,
+                            f32::from(line_height) + 2.,
+                        );
+                        window.paint_quad(gpui::fill(chip, label_bg).corner_radii(px(4.)));
+                        let _ = line.paint(
+                            gpui::point(chip.origin.x + px(4.), chip.origin.y + px(1.)),
+                            line_height,
+                            gpui::TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    });
+                },
+            )
+            .absolute()
+            .inset_0()
+            .into_any_element(),
         )
     }
 }

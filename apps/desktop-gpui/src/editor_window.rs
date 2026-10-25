@@ -285,6 +285,31 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     }
 }
 
+/// Where the preview draws a `frame_size` frame inside `bounds`: inset by
+/// [`STAGE_INSET`], letterboxed and centred. Overlays that must line up with
+/// the video use this on their own bounds in the same paint.
+pub(crate) fn preview_frame_bounds(
+    bounds: gpui::Bounds<Pixels>,
+    frame_size: (f32, f32),
+) -> gpui::Bounds<Pixels> {
+    let container_width: f32 = bounds.size.width.into();
+    let container_height: f32 = bounds.size.height.into();
+    let (width, height) = letterbox(
+        (
+            (container_width - STAGE_INSET * 2.).max(0.),
+            (container_height - STAGE_INSET * 2.).max(0.),
+        ),
+        frame_size,
+    );
+    gpui::Bounds {
+        origin: gpui::point(
+            bounds.origin.x + px((container_width - width) / 2.),
+            bounds.origin.y + px((container_height - height) / 2.),
+        ),
+        size: gpui::size(px(width), px(height)),
+    }
+}
+
 fn frame_seconds(frame: u32) -> f64 {
     frame as f64 / EDITOR_PREVIEW_FPS as f64
 }
@@ -676,22 +701,7 @@ impl Render for PreviewFrameView {
         gpui::canvas(
             |bounds, _window, _cx| bounds,
             move |_, bounds, window, _cx| {
-                let container_width: f32 = bounds.size.width.into();
-                let container_height: f32 = bounds.size.height.into();
-                let (width, height) = letterbox(
-                    (
-                        (container_width - STAGE_INSET * 2.).max(0.),
-                        (container_height - STAGE_INSET * 2.).max(0.),
-                    ),
-                    frame_size,
-                );
-                let fitted = gpui::Bounds {
-                    origin: gpui::point(
-                        bounds.origin.x + px((container_width - width) / 2.),
-                        bounds.origin.y + px((container_height - height) / 2.),
-                    ),
-                    size: gpui::size(px(width), px(height)),
-                };
+                let fitted = preview_frame_bounds(bounds, frame_size);
                 frame_rect.set(Some(crate::editor_canvas::PlayerFrame {
                     container: bounds,
                     frame: fitted,
@@ -13305,6 +13315,32 @@ mod tests {
             preview_resolution(crate::store::EditorPreviewQuality::Quarter),
             XY::new(480, 270)
         );
+    }
+
+    #[test]
+    fn preview_frame_bounds_centres_the_letterboxed_frame_in_the_given_bounds() {
+        let bounds = gpui::Bounds {
+            origin: gpui::point(px(100.), px(50.)),
+            size: gpui::size(px(1000.), px(600.)),
+        };
+        let frame = preview_frame_bounds(bounds, (1080., 1920.));
+        let (width, height) = letterbox(
+            (1000. - STAGE_INSET * 2., 600. - STAGE_INSET * 2.),
+            (1080., 1920.),
+        );
+        assert_eq!(frame.size, gpui::size(px(width), px(height)));
+        assert_eq!(f32::from(frame.origin.x), 100. + (1000. - width) / 2.);
+        assert_eq!(f32::from(frame.origin.y), 50. + (600. - height) / 2.);
+        // A resize moves the frame with the bounds it is given.
+        let wider = preview_frame_bounds(
+            gpui::Bounds {
+                size: gpui::size(px(1400.), px(600.)),
+                ..bounds
+            },
+            (1080., 1920.),
+        );
+        assert_eq!(wider.size, frame.size);
+        assert_eq!(f32::from(wider.origin.x), f32::from(frame.origin.x) + 200.);
     }
 
     #[test]
