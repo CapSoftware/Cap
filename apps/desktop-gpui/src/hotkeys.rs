@@ -49,9 +49,11 @@ pub enum HotkeyAction {
     ScreenshotDisplay,
     ScreenshotWindow,
     ScreenshotArea,
+    OcrArea,
+    ScrollingCaptureWindow,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 13] = [
+const ACTION_KEYS: [(&str, HotkeyAction); 15] = [
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
     ("stopRecording", HotkeyAction::StopRecording),
@@ -74,6 +76,11 @@ const ACTION_KEYS: [(&str, HotkeyAction); 13] = [
     ("screenshotDisplay", HotkeyAction::ScreenshotDisplay),
     ("screenshotWindow", HotkeyAction::ScreenshotWindow),
     ("screenshotArea", HotkeyAction::ScreenshotArea),
+    ("ocrArea", HotkeyAction::OcrArea),
+    (
+        "scrollingCaptureWindow",
+        HotkeyAction::ScrollingCaptureWindow,
+    ),
 ];
 
 impl HotkeyAction {
@@ -151,6 +158,8 @@ pub fn init(cx: &mut App) {
         #[cfg(target_os = "linux")]
         capture_stop: None,
     });
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    seed_default_hotkeys();
     register_from_store(cx);
 
     let (tx, rx) = flume::unbounded::<GlobalHotKeyEvent>();
@@ -181,6 +190,54 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn default_ocr_hotkey() -> store::Hotkey {
+    store::Hotkey {
+        code: "KeyT".into(),
+        meta: cfg!(target_os = "macos"),
+        ctrl: !cfg!(target_os = "macos"),
+        alt: false,
+        shift: true,
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn seed_ocr_hotkey(
+    hotkeys: &mut serde_json::Map<String, serde_json::Value>,
+    seeded: &mut Vec<String>,
+    binding: &store::Hotkey,
+) -> bool {
+    const ACTION: &str = "ocrArea";
+    if seeded.iter().any(|action| action == ACTION) {
+        return false;
+    }
+    if store::hotkey_from_value(hotkeys.get(ACTION).unwrap_or(&serde_json::Value::Null)).is_none()
+        && !hotkeys
+            .values()
+            .any(|value| store::hotkey_from_value(value).as_ref() == Some(binding))
+    {
+        hotkeys.insert(
+            ACTION.to_string(),
+            serde_json::to_value(binding).expect("hotkey serializes"),
+        );
+    }
+    seeded.push(ACTION.to_string());
+    true
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn seed_default_hotkeys() {
+    let Some((mut hotkeys, mut seeded)) = store::hotkeys_seed_state() else {
+        tracing::warn!("could not read the hotkeys store; skipping default hotkey seeding");
+        return;
+    };
+    if seed_ocr_hotkey(&mut hotkeys, &mut seeded, &default_ocr_hotkey())
+        && !store::set_hotkeys_seed_state(&hotkeys, &seeded)
+    {
+        tracing::warn!("saving seeded hotkeys failed");
+    }
 }
 
 /// Re-read the store and swap every OS registration -- the settings page's
@@ -726,6 +783,11 @@ fn register_from_store(cx: &mut App) {
             tracing::debug!(key, "hotkey action unknown to this build; skipped");
             continue;
         };
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        if action == HotkeyAction::OcrArea {
+            tracing::warn!("OCR text capture is not supported on this platform");
+            continue;
+        }
         let Some(binding) = store::hotkey_from_value(value) else {
             tracing::warn!(key, "unparseable hotkey binding in the store");
             continue;
@@ -871,6 +933,28 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
             // the grab happens when the drawn area is released.
             app_windows::set_recording_mode(Mode::Screenshot, cx);
             app_windows::arm_target_mode(TargetType::Area, cx);
+        }
+        HotkeyAction::OcrArea => {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            app_windows::arm_ocr_area(cx);
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            tracing::warn!("OCR text capture is not supported on this platform");
+        }
+        HotkeyAction::ScrollingCaptureWindow => {
+            #[cfg(target_os = "linux")]
+            tracing::warn!("scrolling capture is not supported on Linux");
+
+            #[cfg(any(windows, target_os = "macos"))]
+            match crate::devices::topmost_foreign_window_at_cursor() {
+                Some(window) => crate::scrolling_capture::capture_scrolling_window(
+                    ScreenCaptureTarget::Window { id: window.id() },
+                    cx,
+                ),
+                None => tracing::warn!("no window under the cursor for scrolling capture"),
+            }
+
+            #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+            tracing::warn!("scrolling capture is not supported on this platform");
         }
     }
 }
@@ -1110,6 +1194,37 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn ocr_hotkey_seeding_preserves_user_choices_and_avoids_conflicts() {
+        let binding = default_ocr_hotkey();
+        let mut hotkeys = serde_json::Map::new();
+        let mut seeded = Vec::new();
+        assert!(seed_ocr_hotkey(&mut hotkeys, &mut seeded, &binding));
+        assert_eq!(
+            store::hotkey_from_value(hotkeys.get("ocrArea").unwrap()),
+            Some(binding.clone())
+        );
+        assert_eq!(seeded, ["ocrArea"]);
+
+        hotkeys.clear();
+        assert!(!seed_ocr_hotkey(
+            &mut hotkeys,
+            &mut vec!["ocrArea".into()],
+            &binding
+        ));
+        assert!(hotkeys.is_empty());
+
+        let mut conflicting = serde_json::Map::new();
+        conflicting.insert(
+            "screenshotArea".into(),
+            serde_json::to_value(&binding).unwrap(),
+        );
+        let mut seeded = Vec::new();
+        assert!(seed_ocr_hotkey(&mut conflicting, &mut seeded, &binding));
+        assert!(!conflicting.contains_key("ocrArea"));
+        assert_eq!(seeded, ["ocrArea"]);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn temporary_stop_reuses_only_an_existing_stop_binding() {
@@ -1144,6 +1259,8 @@ mod tests {
             "screenshotDisplay",
             "screenshotWindow",
             "screenshotArea",
+            "ocrArea",
+            "scrollingCaptureWindow",
         ] {
             assert!(
                 HotkeyAction::from_store_key(key).is_some(),

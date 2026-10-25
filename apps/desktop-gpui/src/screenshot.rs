@@ -66,7 +66,13 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
         .context("capturing the screenshot")?;
 
     crate::app_sounds::AppSound::Notification.play();
+    write_screenshot_bundle(image, &target).await
+}
 
+pub async fn write_screenshot_bundle(
+    image: image::DynamicImage,
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<PathBuf> {
     let base = crate::library::screenshots_dir();
     std::fs::create_dir_all(&base)
         .with_context(|| format!("creating screenshots dir {}", base.display()))?;

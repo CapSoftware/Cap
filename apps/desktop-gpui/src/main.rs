@@ -47,13 +47,14 @@ mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod library;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
-mod library;
 mod main_window;
 mod media_access;
 mod menus;
 mod mode_select_window;
+mod ocr;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
@@ -74,6 +75,8 @@ mod screenshot_crop;
 mod screenshot_editor;
 mod screenshot_export;
 mod script_text;
+#[cfg(any(not(target_os = "linux"), test))]
+mod scrolling_capture;
 mod session;
 mod settings_pages;
 mod settings_window;

@@ -117,6 +117,18 @@ label = "Dockアイコンを常に表示"
 description = "クリップボードへのコピーやファイルの保存などを通知します。システムの通知設定でCapを許可する必要がある場合があります。"
 label = "システム通知"
 
+[settings.general.ocr]
+description = "OCR ホットキーを使って、画面上のどこからでもテキストをコピーできます。"
+title = "テキストキャプチャ（OCR）"
+
+[settings.general.ocr.keep_screenshot]
+description = "テキストのコピー時に選択した範囲をスクリーンショットとして保存します。オフの場合は何も保存されません。"
+label = "キャプチャした範囲のスクリーンショットを保存"
+
+[settings.general.ocr.show_notification]
+description = "コピーしたテキストのプレビューを含むシステム通知を表示します。"
+label = "テキストのコピー時に通知を表示"
+
 [settings.general.recording]
 description = "録画中と録画停止後の動作。"
 title = "録画"
@@ -586,3 +598,10 @@ click_or_press = "ここをクリックするか、次のキーを押す:"
 get_started = "はじめる"
 space_key = "スペース"
 tagline = "誰もが使えるオープンソースの画面共有アプリ。"
+
+[ocr.notification]
+copy_failed_title = "テキストをコピーできませんでした"
+no_text_found = "選択した領域にテキストが見つかりませんでした"
+screenshot_save_failed_body = "テキストはクリップボードにありますが、スクリーンショットは保存されませんでした。"
+screenshot_save_failed_title = "スクリーンショットを保存できませんでした"
+text_copied_title = "テキストをクリップボードにコピーしました"
