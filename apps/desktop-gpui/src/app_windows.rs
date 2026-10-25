@@ -1200,6 +1200,8 @@ pub fn open_settings(page: Page, cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // A real titlebar this time, transparent with the buttons moved
@@ -1379,6 +1381,8 @@ pub fn open_onboarding(cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             titlebar: None,
@@ -1530,6 +1534,8 @@ pub fn open_mode_select(cx: &mut App) -> bool {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // `traffic_lights_position` has no ModeSelect arm, so it takes the
@@ -1650,6 +1656,8 @@ pub fn open_teleprompter(cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // `decorations: true`, `titleBarStyle: "overlay"`, `hiddenTitle:
@@ -2479,6 +2487,8 @@ fn open_overlay(
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             // The origin is corrected right after opening -- gpui's own
             // window-origin math cannot express "cover this display" (see
             // `platform::set_window_frame_cg`). The size is honoured, and it is
@@ -2919,6 +2929,13 @@ pub fn restore_content_protection(cx: &mut App) {
     apply_content_protection(windows, |_| false, cx);
 }
 
+/// The Wayland app id and X11 class of every Cap window. It names the
+/// installed `Cap.desktop`, which is how GNOME, KDE and Hyprland attach a
+/// window to its launcher entry, icon and dock item; a window without it shows
+/// up as an unnamed "Unknown" app.
+#[cfg(target_os = "linux")]
+pub(crate) const APP_ID: &str = "Cap";
+
 #[cfg(target_os = "linux")]
 fn clean_capture_supported(
     mode: RecordingMode,
@@ -3335,6 +3352,11 @@ fn report_clean_capture_error(error: anyhow::Error, cx: &mut App) {
 #[cfg(target_os = "linux")]
 pub type CleanVisibility = futures_util::future::BoxFuture<'static, anyhow::Result<()>>;
 
+/// The gpui fork's error for a retained visibility request replaced by a newer
+/// one (`apps/desktop-gpui/patches/zed-linux.patch`).
+#[cfg(target_os = "linux")]
+const VISIBILITY_SUPERSEDED: &str = "Window visibility request superseded";
+
 #[cfg(target_os = "linux")]
 fn observe_visibility<F, E>(receipt: F, visible: bool, cx: &mut App)
 where
@@ -3356,6 +3378,11 @@ where
             .map_err(|error| error.to_string())
             .and_then(|result| result.map_err(|error| error.to_string()))
         {
+            // A newer show or hide replaced this one and reports for itself.
+            if error == VISIBILITY_SUPERSEDED {
+                tracing::debug!(visible, "retained window visibility request superseded");
+                return;
+            }
             tracing::error!(%error, "Could not restore retained window visibility");
         }
     })
@@ -3544,6 +3571,7 @@ fn begin_retained_capture_restore(cx: &mut App) {
             if !clean_capture_generation_matches(generation, cx) { return; }
             match result {
                 Ok(()) => {
+                    tracing::info!("recording UI restored after a clean capture");
                     crate::hotkeys::complete_clean_capture_stop(generation, cx);
                     let _restored = cx.global_mut::<AppWindows>().clean_capture.take();
                     update_camera_presentation(true, cx);
@@ -3611,6 +3639,7 @@ fn restore_clean_capture_ui(cx: &mut App) -> bool {
         tracing::warn!(%error, "could not restore the main window");
     }
     update_camera_presentation(true, cx);
+    tracing::info!("recording UI restored after a clean capture");
     true
 }
 
@@ -3918,7 +3947,7 @@ pub fn open_camera_window(cx: &mut App) {
                 ..Default::default()
             }),
             #[cfg(target_os = "linux")]
-            app_id: Some("Cap".into()),
+            app_id: Some(crate::app_windows::APP_ID.into()),
             #[cfg(target_os = "linux")]
             window_decorations: Some(gpui::WindowDecorations::Client),
             // Non-activating panel, same as the bar: the bubble is clickable
@@ -4777,6 +4806,8 @@ fn open_editor_window(
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // Native traffic lights, inset to (20, 32):
@@ -6555,6 +6586,8 @@ fn open_controls(
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             // No titlebar at all: with one, the panel still draws standard
@@ -6734,6 +6767,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
 
     let handle = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::APP_ID.into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
             titlebar: Some(gpui::TitlebarOptions {
