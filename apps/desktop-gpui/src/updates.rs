@@ -292,7 +292,7 @@ fn simulate_update(version: Version, cx: &mut App) {
         cx,
     );
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_secs(1)).await;
+        cx.background_executor().timer(Duration::from_secs(3)).await;
         cx.update(|cx| {
             tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
             set_status(
