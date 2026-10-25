@@ -1508,6 +1508,7 @@ mod mac {
                     && let Some(mode) = CURRENT_MODE.get()
                 {
                     apply(mode, held);
+                    refit_picker_to_menu();
                 }
             });
             let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(0.05, true, &block) };
@@ -1516,6 +1517,20 @@ mod mac {
                 run_loop.addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
             }
             *slot.borrow_mut() = Some(timer);
+        });
+    }
+
+    pub(super) fn refit_picker_to_menu() {
+        ROWS.with(|rows| {
+            let rows = rows.borrow();
+            let Some(row) = rows.first() else {
+                return;
+            };
+            let Some(menu) = (unsafe { row.item.menu() }) else {
+                return;
+            };
+            menu.update();
+            super::mac_mode_picker::fit_to_menu_width(menu.size().width);
         });
     }
 
