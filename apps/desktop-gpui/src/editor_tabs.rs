@@ -476,9 +476,10 @@ pub fn caption_position_center(position: &str) -> (f32, f32) {
 
 /// The manual caption centre: the stored one, else the preset's.
 pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
-    settings
-        .manual_position
-        .map_or_else(|| caption_position_center(&settings.position), |xy| (xy.x, xy.y))
+    settings.manual_position.map_or_else(
+        || caption_position_center(&settings.position),
+        |xy| (xy.x, xy.y),
+    )
 }
 
 /// Moves the manual caption centre, given as percentages of the frame.

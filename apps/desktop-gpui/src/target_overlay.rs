@@ -547,17 +547,33 @@ fn area_from_anchor_with_ratio(
     } else {
         width = height * ratio;
     }
-    let room_x = if dx >= 0. { display.0 - anchor.0 } else { anchor.0 };
-    let room_y = if dy >= 0. { display.1 - anchor.1 } else { anchor.1 };
-    let fit = [1., room_x / width.max(f32::EPSILON), room_y / height.max(f32::EPSILON)]
-        .into_iter()
-        .fold(f32::INFINITY, f32::min)
-        .max(0.);
+    let room_x = if dx >= 0. {
+        display.0 - anchor.0
+    } else {
+        anchor.0
+    };
+    let room_y = if dy >= 0. {
+        display.1 - anchor.1
+    } else {
+        anchor.1
+    };
+    let fit = [
+        1.,
+        room_x / width.max(f32::EPSILON),
+        room_y / height.max(f32::EPSILON),
+    ]
+    .into_iter()
+    .fold(f32::INFINITY, f32::min)
+    .max(0.);
     width *= fit;
     height *= fit;
     AreaRect {
         x: if dx >= 0. { anchor.0 } else { anchor.0 - width },
-        y: if dy >= 0. { anchor.1 } else { anchor.1 - height },
+        y: if dy >= 0. {
+            anchor.1
+        } else {
+            anchor.1 - height
+        },
         width,
         height,
     }
@@ -576,28 +592,52 @@ fn area_edge_resize_with_ratio(
     let horizontal = handle.east() || handle.west();
     let (center_x, center_y) = (start.x + start.width / 2., start.y + start.height / 2.);
     if horizontal {
-        let anchor = if handle.west() { start.right() } else { start.x };
+        let anchor = if handle.west() {
+            start.right()
+        } else {
+            start.x
+        };
         let mut width = (pointer.0 - anchor).abs();
-        let room_x = if handle.west() { anchor } else { display.0 - anchor };
+        let room_x = if handle.west() {
+            anchor
+        } else {
+            display.0 - anchor
+        };
         let room_y = 2. * center_y.min(display.1 - center_y);
         width = width.min(room_x).min(room_y * ratio).max(0.);
         let height = width / ratio;
         AreaRect {
-            x: if handle.west() { anchor - width } else { anchor },
+            x: if handle.west() {
+                anchor - width
+            } else {
+                anchor
+            },
             y: center_y - height / 2.,
             width,
             height,
         }
     } else {
-        let anchor = if handle.north() { start.bottom() } else { start.y };
+        let anchor = if handle.north() {
+            start.bottom()
+        } else {
+            start.y
+        };
         let mut height = (pointer.1 - anchor).abs();
-        let room_y = if handle.north() { anchor } else { display.1 - anchor };
+        let room_y = if handle.north() {
+            anchor
+        } else {
+            display.1 - anchor
+        };
         let room_x = 2. * center_x.min(display.0 - center_x);
         height = height.min(room_y).min(room_x / ratio).max(0.);
         let width = height * ratio;
         AreaRect {
             x: center_x - width / 2.,
-            y: if handle.north() { anchor - height } else { anchor },
+            y: if handle.north() {
+                anchor - height
+            } else {
+                anchor
+            },
             width,
             height,
         }
@@ -2743,8 +2783,16 @@ impl OverlayWindow {
             (AreaDrag::Resize { handle, start }, Some(ratio)) => (
                 if handle.east() != handle.west() && handle.north() != handle.south() {
                     let anchor = (
-                        if handle.west() { start.right() } else { start.x },
-                        if handle.north() { start.bottom() } else { start.y },
+                        if handle.west() {
+                            start.right()
+                        } else {
+                            start.x
+                        },
+                        if handle.north() {
+                            start.bottom()
+                        } else {
+                            start.y
+                        },
                     );
                     area_from_anchor_with_ratio(anchor, (x, y), ratio, self.display_size)
                 } else {
@@ -2883,7 +2931,10 @@ mod tests {
         let ratio = ratio_value((16, 9));
         for pointer in [(900., 300.), (100., 900.), (1500., 1000.), (120., 140.)] {
             let area = area_from_anchor_with_ratio((800., 500.), pointer, ratio, display);
-            assert!((ratio_of(area) - ratio).abs() < 0.001, "{pointer:?}: {area:?}");
+            assert!(
+                (ratio_of(area) - ratio).abs() < 0.001,
+                "{pointer:?}: {area:?}"
+            );
             assert!(inside(area, display), "{pointer:?}: {area:?}");
         }
         // The longer span wins: a wide drag sets the width.
@@ -2899,13 +2950,26 @@ mod tests {
     fn resizing_an_area_keeps_the_chosen_aspect_ratio() {
         let display = (1920., 1080.);
         let ratio = ratio_value((1, 1));
-        let start = AreaRect { x: 400., y: 300., width: 400., height: 400. };
+        let start = AreaRect {
+            x: 400.,
+            y: 300.,
+            width: 400.,
+            height: 400.,
+        };
         for handle in AreaHandle::ALL {
             for pointer in [(1000., 900.), (100., 50.), (650., 520.)] {
                 let area = if handle.east() != handle.west() && handle.north() != handle.south() {
                     let anchor = (
-                        if handle.west() { start.right() } else { start.x },
-                        if handle.north() { start.bottom() } else { start.y },
+                        if handle.west() {
+                            start.right()
+                        } else {
+                            start.x
+                        },
+                        if handle.north() {
+                            start.bottom()
+                        } else {
+                            start.y
+                        },
                     );
                     area_from_anchor_with_ratio(anchor, pointer, ratio, display)
                 } else {
@@ -2919,7 +2983,8 @@ mod tests {
             }
         }
         // An east edge drag keeps the west edge and the centre line.
-        let east = area_edge_resize_with_ratio(AreaHandle::East, start, (1000., 0.), ratio, display);
+        let east =
+            area_edge_resize_with_ratio(AreaHandle::East, start, (1000., 0.), ratio, display);
         assert_eq!((east.x, east.width), (400., 600.));
         assert_eq!(east.y + east.height / 2., 500.);
     }
@@ -2928,7 +2993,12 @@ mod tests {
     fn choosing_a_ratio_reshapes_the_area_around_its_centre() {
         let display = (1920., 1080.);
         let area = area_with_ratio(
-            AreaRect { x: 100., y: 300., width: 800., height: 200. },
+            AreaRect {
+                x: 100.,
+                y: 300.,
+                width: 800.,
+                height: 200.,
+            },
             ratio_value((16, 9)),
             display,
         );
