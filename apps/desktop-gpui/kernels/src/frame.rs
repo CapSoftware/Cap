@@ -85,8 +85,8 @@ unsafe fn swap_red_blue_avx2(pixels: &mut [u8]) {
 fn swap_red_blue_words(pixels: &mut [u8]) {
     let (words, _) = pixels.as_chunks_mut::<4>();
     for word in words {
-        let value = u32::from_ne_bytes(*word);
-        *word = ((value & 0x00FF_00FF).rotate_left(16) | (value & 0xFF00_FF00)).to_ne_bytes();
+        let value = u32::from_le_bytes(*word);
+        *word = ((value & 0x00FF_00FF).rotate_left(16) | (value & 0xFF00_FF00)).to_le_bytes();
     }
 }
 
