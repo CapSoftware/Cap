@@ -2857,6 +2857,16 @@ mod stub {
         cancel: &str,
         warning: bool,
     ) -> bool {
+        if !crate::linux_dialog::zenity_available()
+            && let Some(accepted) = crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: accept.to_string(),
+                cancel: Some(cancel.to_string()),
+            })
+        {
+            return accepted;
+        }
         let level = if warning {
             rfd::MessageLevel::Warning
         } else {
@@ -2875,6 +2885,17 @@ mod stub {
     }
 
     pub fn alert_dialog(title: &str, message: &str) {
+        if !crate::linux_dialog::zenity_available()
+            && crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: "OK".to_string(),
+                cancel: None,
+            })
+            .is_some()
+        {
+            return;
+        }
         let _ = rfd::MessageDialog::new()
             .set_title(title)
             .set_description(message)
