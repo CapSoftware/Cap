@@ -76,10 +76,7 @@ fn create_pool(
             height.as_type_ref(),
             io_surface.as_type_ref(),
         ],
-    )
-    .ok_or_else(|| {
-        ConvertError::HardwareUnavailable("VideoToolbox pixel buffer pool attributes".to_string())
-    })?;
+    );
 
     cv::PixelBufPool::new(None, Some(&**attrs))
         .map(PoolHandle)

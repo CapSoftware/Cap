@@ -96,6 +96,10 @@ pub struct WindowsCaptureHandle {
 }
 
 impl WindowsCaptureHandle {
+    pub fn dropped_samples(&self) -> u64 {
+        self.inner.dropped_samples()
+    }
+
     pub fn stop_capturing(self) -> Result<(), String> {
         self.inner.stop_capturing().map_err(|e| e.to_string())
     }
