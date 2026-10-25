@@ -591,6 +591,14 @@ fn main() {
             })
             .expect("failed to start device enumeration");
 
+        // Before the launch thumbnail sweep can reach ReplayKit, which would
+        // otherwise add the standard titlebar buttons next to the hand-drawn
+        // close light (`platform::lock_borderless_style`).
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &native_main {
+            platform::lock_borderless_style(native);
+        }
+
         // The native window material: `NSGlassEffectView` on macOS 26+,
         // `NSVisualEffectView` vibrancy below that -- what
         // `applyMacOSWindowMaterial("panel")` does in the Tauri app. Nothing
