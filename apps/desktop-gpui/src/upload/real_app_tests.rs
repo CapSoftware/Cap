@@ -8,7 +8,7 @@
 //!   cargo test --bin cap-gpui real_app -- --ignored --test-threads=1
 //! ```
 
-use super::verify_tests::{API_KEY, MockCap, OWNER};
+use super::verify_tests::{API_KEY, Fault, MockCap, OWNER, Route, rule};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -252,6 +252,23 @@ fn kill(app: App) {
     drop(app);
 }
 
+fn without_ansi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
 /// A normal Instant recording uploads, verifies, and leaves nothing for the
 /// cleanup journal.
 #[ignore]
@@ -459,4 +476,69 @@ async fn real_app_cancelled_start_deletes_its_video() {
         return;
     }
     panic!("no stop landed while the start was in flight");
+}
+
+/// The start cue tells the user they are recording. An Instant start first
+/// waits for the server to create its video, which takes seconds when earlier
+/// takes are still uploading. The cue must wait for capture too: it used to
+/// play and arm the start gate long before the pipeline existed, so the
+/// opening words of the take were never recorded.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_start_cue_waits_for_a_slow_server_video() {
+    let mock = MockCap::start(vec![rule(
+        Route::Api("video/create"),
+        Fault::Delay(Duration::from_secs(4)),
+    )])
+    .await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch("slow-create", &[("CAP_GPUI_AUTO_RECORD", "instant:6")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "a verified upload",
+        Duration::from_secs(180),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("slow-create");
+    let line = |needle: &str| {
+        log.lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in the app log:\n{log}"))
+    };
+    let building = line("starting recording");
+    assert!(
+        line("Recording start cue playing") > building,
+        "the start cue played before capture was being built"
+    );
+    // Capture that is already running when the cue ends holds its first frame
+    // behind the start gate. A cue that played first opened the gate before
+    // any capture existed, so nothing was ever held.
+    let first_frame = log
+        .lines()
+        .map(without_ansi)
+        .find(|line| {
+            line.contains("Start gate")
+                && (line.contains("video frame") || line.contains("frame on screen"))
+        })
+        .unwrap_or_else(|| panic!("no first video frame in the app log:\n{log}"));
+    let held = first_frame
+        .split("held_frames=")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|count| count.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no held_frames in {first_frame:?}"));
+    assert!(
+        held >= 1,
+        "capture was not running when the start cue ended: {first_frame}"
+    );
+    assert_eq!(mock.created().len(), 1);
 }
