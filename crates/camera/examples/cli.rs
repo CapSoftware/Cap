@@ -26,9 +26,7 @@ fn main() {
         .unwrap();
 
     let _handle = selected_camera
-        .start_capturing(selected_format.0, |frame| {
-            let _ = frame.native().bytes.len();
-        })
+        .start_capturing(selected_format.0, |_frame| {})
         .unwrap();
 
     std::thread::sleep(Duration::from_secs(5));
