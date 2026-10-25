@@ -500,6 +500,12 @@ impl ModePickerView {
         }
     }
 
+    fn clear_focus(&self) {
+        if self.ivars().focused.replace(None).is_some() {
+            self.refresh();
+        }
+    }
+
     /// Moves keyboard focus one pill. Returns false at either end, so the key falls
     /// through to the menu and moves to the neighbouring tray menu.
     fn move_focus(&self, delta: isize) -> bool {
@@ -525,6 +531,26 @@ impl ModePickerView {
             .unwrap_or(self.ivars().selected.get());
         self.choose(i);
     }
+}
+
+pub(super) fn clear_hover_unless(item: Option<&NSMenuItem>) {
+    PICKER.with(|p| {
+        let p = p.borrow();
+        let Some((picker, view)) = p.as_ref() else {
+            return;
+        };
+        if !item.is_some_and(|item| std::ptr::eq(item, &**picker)) {
+            view.clear_focus();
+        }
+    });
+}
+
+pub(super) fn clear_hover() {
+    PICKER.with(|p| {
+        if let Some((_, view)) = p.borrow().as_ref() {
+            view.clear_focus();
+        }
+    });
 }
 
 pub(super) fn stop_flash() {

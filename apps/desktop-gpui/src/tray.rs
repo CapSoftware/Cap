@@ -988,7 +988,9 @@ mod mac {
     };
     use objc2_foundation::{MainThreadMarker, NSData, NSRunLoop, NSString, NSTimer};
 
-    use super::mac_mode_picker::{append_mode_picker, install_key_hook, stop_flash};
+    use super::mac_mode_picker::{
+        append_mode_picker, clear_hover, clear_hover_unless, install_key_hook, stop_flash,
+    };
     use super::{
         Accelerator, Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem,
         current_menu_entries, handle_item, mode_icon, mode_submenu, row_symbol, scan_previous,
@@ -1067,15 +1069,22 @@ mod mac {
         unsafe impl NSObjectProtocol for TrayTarget {}
 
         unsafe impl NSMenuDelegate for TrayTarget {
+            #[unsafe(method(menu:willHighlightItem:))]
+            fn menu_will_highlight_item(&self, _menu: &NSMenu, item: Option<&NSMenuItem>) {
+                clear_hover_unless(item);
+            }
+
             #[unsafe(method(menuWillOpen:))]
             fn menu_will_open(&self, _menu: &NSMenu) {
                 MENU_OPEN.with(|o| o.set(true));
+                clear_hover();
                 start_option_tracking();
             }
 
             #[unsafe(method(menuDidClose:))]
             fn menu_did_close(&self, _menu: &NSMenu) {
                 MENU_OPEN.with(|o| o.set(false));
+                clear_hover();
                 stop_option_tracking();
                 stop_flash();
                 if REBUILD_PENDING.with(|p| p.replace(false)) {
