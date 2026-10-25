@@ -15,7 +15,7 @@ export const htSans = Instrument_Sans({
 export const htSerif = Source_Serif_4({
 	subsets: ["latin"],
 	weight: ["300", "400"],
-	style: ["normal"],
+	style: ["normal", "italic"],
 	display: "swap",
 	variable: "--font-ht-serif",
 });

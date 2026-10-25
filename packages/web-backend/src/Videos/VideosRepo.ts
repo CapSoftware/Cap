@@ -109,6 +109,10 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 						}
 					}
 					await Promise.all([
+						db
+							.delete(Db.sharedVideos)
+							.where(Dz.eq(Db.sharedVideos.videoId, id)),
+						db.delete(Db.spaceVideos).where(Dz.eq(Db.spaceVideos.videoId, id)),
 						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
 						db
@@ -130,9 +134,19 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
+						const {
+							createdAt: _createdAt,
+							updatedAt: _updatedAt,
+							id: _id,
+							...insertData
+						} = data as CreateVideoInput & {
+							createdAt?: unknown;
+							updatedAt?: unknown;
+							id?: unknown;
+						};
 						await db.insert(Db.videos).values([
 							{
-								...data,
+								...insertData,
 								id,
 								orgId: data.orgId,
 								bucket: Option.getOrNull(data.bucketId ?? Option.none()),

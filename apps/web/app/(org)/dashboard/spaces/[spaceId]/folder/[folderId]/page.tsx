@@ -94,6 +94,7 @@ const FolderPage = async (props: {
 		// actually belong to the routed space/org — getFolderById is unscoped,
 		// so a foreign folderId must not surface another collection's settings.
 		const folderBelongsToContext = currentFolder.spaceId === params.spaceId;
+		if (!folderBelongsToContext) notFound();
 		const canManageCollection =
 			folderBelongsToContext &&
 			(spaceOrOrg.variant === "space"

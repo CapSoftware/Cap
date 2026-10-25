@@ -836,6 +836,29 @@ footer a {
 	line-height: inherit;
 }
 
+/* Links inside a post's charts take the size of the text around them. */
+.prose .chart-figure a {
+	font-size: inherit !important;
+	line-height: inherit !important;
+	font-weight: inherit !important;
+}
+
+/* react-tweet embeds in a post: put back X's own sizes over the forced prose ones. */
+.prose .x-embed p {
+	font-size: var(--tweet-body-font-size) !important;
+	font-weight: var(--tweet-body-font-weight) !important;
+	line-height: var(--tweet-body-line-height) !important;
+	letter-spacing: normal !important;
+	color: inherit !important;
+}
+
+.prose .x-embed a {
+	font-size: inherit !important;
+	font-weight: inherit !important;
+	line-height: inherit !important;
+	letter-spacing: normal !important;
+}
+
 .new-card-style {
 	background: #ffffff;
 	border: 1px solid #e7eaf0;

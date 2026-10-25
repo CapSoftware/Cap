@@ -710,7 +710,12 @@ overlap_dropped_frames: number;
 startup_overlap_drops: number }
 export type AudioInputLevelChange = number
 export type AudioLibraryTrack = { id: string; name: string; category: string }
-export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
+export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null;
+/**
+ * Milliseconds the unmuted microphone delivered sustained bit-exact silence,
+ * e.g. while a VoIP call held the input on macOS.
+ */
+digital_silence_ms?: number | null }
 /**
  * A timeline-positioned audio clip (background music or imported audio).
  *
@@ -1126,7 +1131,7 @@ export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean;
 export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "other"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
-export type ImageSegment = { start: number; end: number; track: number; enabled: boolean; path: string; name: string; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean }
+export type ImageSegment = { start: number; end: number; track: number; enabled: boolean; path: string; name: string; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean; keyframes?: OverlayKeyframes }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
 export type ImportedAudioTrack = {
 /**
@@ -1181,6 +1186,11 @@ export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; micropho
 export type OnEscapePress = null
 export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
 export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
+/**
+ * Animation of a text or image overlay. Times are seconds from the
+ * segment start; values hold flat before the first and after the last key.
+ */
+export type OverlayKeyframes = { position?: MaskVectorKeyframe[]; size?: MaskVectorKeyframe[]; opacity?: MaskScalarKeyframe[] }
 export type OverlayTrack = { kind: OverlayTrackKind; track: number }
 export type OverlayTrackKind = "mask" | "image" | "text"
 export type Phase = "awaitingShortcut" | "starting" | "recording" | "pausing" | "paused" | "resuming" | "resumeFailed" | "restarting" | "stopping" | "restoring"
@@ -1352,7 +1362,7 @@ letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; 
  * Seconds the display card takes to morph aside (and back) at the
  * segment edges when `layout` is not `Overlay`.
  */
-layoutTransition?: number }
+layoutTransition?: number; keyframes?: OverlayKeyframes }
 export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; styleSegments: StyleSegment[]; imageSegments: ImageSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null; volume?: number | null; hideCursor?: boolean | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"

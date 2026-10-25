@@ -1,6 +1,9 @@
 use super::fragment_metadata::read_fragment_metadata;
 use crate::audio::aac::{AACEncoder, AACEncoderError};
-use crate::mux::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
+use crate::mux::segmented_stream::{
+    SegmentCompletedEvent, SegmentMediaType, SegmentSender, notify_segment,
+};
+use crate::mux::write_behind::{AUDIO_BUDGET_BYTES, MuxSink, MuxTarget};
 use cap_media_info::AudioInfo;
 use ffmpeg::{format, frame};
 use serde::Serialize;
@@ -47,6 +50,12 @@ fn sync_file(path: &Path) {
 pub struct DashAudioSegmentEncoder {
     base_path: PathBuf,
     encoder: AACEncoder,
+    mux: MuxSink<AudioSegmentMux>,
+    segment_tx: SegmentSender,
+}
+
+struct AudioSegmentMux {
+    base_path: PathBuf,
     output: format::context::Output,
     initial_padding: Duration,
 
@@ -56,8 +65,28 @@ pub struct DashAudioSegmentEncoder {
 
     frames_since_segment_scan: u32,
 
-    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    segment_tx: SegmentSender,
     init_notified: bool,
+}
+
+impl MuxTarget for AudioSegmentMux {
+    fn output(&self) -> &format::context::Output {
+        &self.output
+    }
+
+    fn output_mut(&mut self) -> &mut format::context::Output {
+        &mut self.output
+    }
+
+    fn packet_written(&mut self) {
+        self.try_notify_init_segment();
+
+        self.frames_since_segment_scan += 1;
+        if self.frames_since_segment_scan >= 10 {
+            self.frames_since_segment_scan = 0;
+            self.flush_pending_segments();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -197,33 +226,103 @@ impl DashAudioSegmentEncoder {
             "Initialized DASH audio segment encoder (init.mp4 + m4s segments)"
         );
 
-        let instance = Self {
-            base_path,
-            encoder,
+        let mux = AudioSegmentMux {
+            base_path: base_path.clone(),
             output,
             initial_padding,
             current_index: 1,
             completed_segments: Vec::new(),
             frames_since_segment_scan: 0,
-            segment_tx: None,
+            segment_tx: SegmentSender::default(),
             init_notified: false,
         };
+        let segment_tx = mux.segment_tx.clone();
 
-        instance.write_in_progress_manifest();
+        mux.write_in_progress_manifest();
 
-        Ok(instance)
+        Ok(Self {
+            base_path,
+            encoder,
+            mux: MuxSink::Direct(mux),
+            segment_tx,
+        })
+    }
+
+    /// Moves muxing, segment publication and manifest writes onto a
+    /// dedicated writer thread so a stalled output volume no longer blocks
+    /// the caller. Bytes on disk and their order are unchanged.
+    pub fn enable_write_behind(&mut self) -> std::io::Result<()> {
+        self.mux
+            .enable_write_behind("audio-segments", AUDIO_BUDGET_BYTES)
+    }
+
+    pub fn is_write_behind(&self) -> bool {
+        self.mux.is_write_behind()
     }
 
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
-        self.segment_tx = Some(tx);
-        self.try_notify_init_segment();
+        *self
+            .segment_tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        if !self.mux.is_write_behind() {
+            self.mux
+                .with_target(AudioSegmentMux::try_notify_init_segment);
+        }
     }
 
+    pub fn queue_frame(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+    ) -> Result<(), QueueFrameError> {
+        self.encoder
+            .send_frame_to(frame, timestamp, &mut self.mux)?;
+
+        self.mux.frame_queued();
+
+        Ok(())
+    }
+
+    pub fn finish(&mut self) -> Result<(), FinishError> {
+        let encoder = &mut self.encoder;
+        self.mux
+            .finish(
+                |mux| encoder.flush_to(mux),
+                |mux: &mut AudioSegmentMux, flush_result| {
+                    let flush_result = flush_result.inspect_err(|error| {
+                        tracing::warn!(%error, "Audio encoder flush failed");
+                    });
+                    mux.finish(flush_result)
+                },
+            )
+            .map_err(std::io::Error::from)?
+    }
+
+    pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
+        self.finish()
+    }
+
+    pub fn completed_segments(&self) -> Vec<AudioSegmentInfo> {
+        self.mux
+            .with_target_ref(|mux| mux.completed_segments.clone())
+    }
+
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
+    }
+
+    pub fn init_segment_path(&self) -> PathBuf {
+        self.base_path.join(INIT_SEGMENT_NAME)
+    }
+}
+
+impl AudioSegmentMux {
     fn try_notify_init_segment(&mut self) {
         if self.init_notified {
             return;
         }
-        let init_path = self.init_segment_path();
+        let init_path = self.base_path.join(INIT_SEGMENT_NAME);
         if let Ok(meta) = std::fs::metadata(&init_path)
             && meta.len() > 0
         {
@@ -240,30 +339,7 @@ impl DashAudioSegmentEncoder {
     }
 
     fn notify_segment(&self, event: SegmentCompletedEvent) {
-        if let Some(tx) = &self.segment_tx
-            && let Err(e) = tx.send(event)
-        {
-            tracing::warn!("Failed to send audio segment completed event: {e}");
-        }
-    }
-
-    pub fn queue_frame(
-        &mut self,
-        frame: frame::Audio,
-        timestamp: Duration,
-    ) -> Result<(), QueueFrameError> {
-        self.encoder
-            .send_frame(frame, timestamp, &mut self.output)?;
-
-        self.try_notify_init_segment();
-
-        self.frames_since_segment_scan += 1;
-        if self.frames_since_segment_scan >= 10 {
-            self.frames_since_segment_scan = 0;
-            self.flush_pending_segments();
-        }
-
-        Ok(())
+        notify_segment(&self.segment_tx, event);
     }
 
     fn flush_pending_segments(&mut self) {
@@ -367,10 +443,7 @@ impl DashAudioSegmentEncoder {
         }
     }
 
-    pub fn finish(&mut self) -> Result<(), FinishError> {
-        let flush_result = self.encoder.flush(&mut self.output).inspect_err(|error| {
-            tracing::warn!(%error, "Audio encoder flush failed");
-        });
+    fn finish(&mut self, flush_result: Result<(), ffmpeg::Error>) -> Result<(), FinishError> {
         let trailer_result = self.output.write_trailer().inspect_err(|error| {
             tracing::warn!(%error, "Audio trailer publication failed");
         });
@@ -392,10 +465,6 @@ impl DashAudioSegmentEncoder {
         self.finalize_manifest()?;
 
         Ok(())
-    }
-
-    pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
-        self.finish()
     }
 
     fn finalize_pending_tmp_files(&self) {
@@ -523,18 +592,6 @@ impl DashAudioSegmentEncoder {
         let manifest_path = self.base_path.join("manifest.json");
         atomic_write_json(&manifest_path, &manifest)
     }
-
-    pub fn completed_segments(&self) -> &[AudioSegmentInfo] {
-        &self.completed_segments
-    }
-
-    pub fn base_path(&self) -> &Path {
-        &self.base_path
-    }
-
-    pub fn init_segment_path(&self) -> PathBuf {
-        self.base_path.join(INIT_SEGMENT_NAME)
-    }
 }
 
 #[cfg(test)]
@@ -568,6 +625,62 @@ mod tests {
             chunk.copy_from_slice(&val.to_ne_bytes());
         }
         frame
+    }
+
+    fn record_audio_segments(base_path: &Path, write_behind: bool) -> Vec<(u32, u64, bool)> {
+        let mut encoder = DashAudioSegmentEncoder::init(
+            base_path.to_path_buf(),
+            test_audio_info(),
+            DashAudioSegmentEncoderConfig::default(),
+        )
+        .unwrap();
+        if write_behind {
+            encoder.enable_write_behind().unwrap();
+        }
+        let (tx, rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        for i in 0..500u64 {
+            encoder
+                .queue_frame(
+                    create_test_audio_frame(1024, i * 1024),
+                    Duration::from_secs_f64(i as f64 * 1024.0 / 48_000.0),
+                )
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+        drop(encoder);
+        rx.try_iter()
+            .map(|event| (event.index, event.file_size, event.is_init))
+            .collect()
+    }
+
+    #[test]
+    fn write_behind_publishes_the_same_audio_segments_as_inline_muxing() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let inline = temp.path().join("inline");
+        let behind = temp.path().join("behind");
+
+        let inline_events = record_audio_segments(&inline, false);
+        let behind_events = record_audio_segments(&behind, true);
+
+        assert!(inline_events.len() >= 3);
+        assert_eq!(inline_events, behind_events);
+        let files = |path: &Path| {
+            let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(path)
+                .unwrap()
+                .flatten()
+                .map(|entry| {
+                    (
+                        entry.file_name().to_string_lossy().into_owned(),
+                        std::fs::read(entry.path()).unwrap(),
+                    )
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        assert_eq!(files(&inline), files(&behind));
     }
 
     #[test]

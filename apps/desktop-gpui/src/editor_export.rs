@@ -373,6 +373,18 @@ impl ExportUi {
             .is_some_and(|bpp| (bpp - self.compression.bits_per_pixel()).abs() > 0.001)
     }
 
+    fn complete_share_export(&mut self, link: String, copy_link: impl FnOnce(String)) {
+        if self.close_requested || self.cancel.load(Ordering::Relaxed) {
+            self.phase = ExportPhase::Idle;
+            return;
+        }
+
+        self.phase = ExportPhase::Done;
+        self.share_link = Some(link.clone());
+        self.upload_progress = 1.0;
+        copy_link(link);
+    }
+
     fn clipboard_retry_path(&self) -> Option<&Path> {
         if self.phase == ExportPhase::Failed && self.destination == ExportDestination::Clipboard {
             self.output_path.as_deref()
@@ -931,7 +943,11 @@ impl EditorWindow {
             });
 
             loop {
+                let mut latest: Option<(u32, u32)> = None;
                 while let Ok((rendered, total)) = progress_rx.try_recv() {
+                    latest = Some((rendered, total));
+                }
+                if let Some((rendered, total)) = latest {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.rendered = rendered;
@@ -991,7 +1007,8 @@ impl EditorWindow {
                         cx.notify();
                     });
                 }
-                Err(_) => {
+                Err(error) => {
+                    tracing::error!(%error, "editor export task ended without a result");
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.phase = ExportPhase::Failed;
@@ -1172,7 +1189,11 @@ impl EditorWindow {
             });
 
             loop {
+                let mut latest: Option<(u32, u32)> = None;
                 while let Ok((rendered, total)) = progress_rx.try_recv() {
+                    latest = Some((rendered, total));
+                }
+                if let Some((rendered, total)) = latest {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.rendered = rendered;
@@ -1217,7 +1238,11 @@ impl EditorWindow {
                     });
 
                     loop {
+                        let mut latest: Option<f64> = None;
                         while let Ok(progress) = upload_rx.try_recv() {
+                            latest = Some(progress);
+                        }
+                        if let Some(progress) = latest {
                             let _ = this.update(cx, |this, cx| {
                                 if let Some(ui) = this.export.as_mut() {
                                     ui.upload_progress = progress as f32;
@@ -1243,15 +1268,14 @@ impl EditorWindow {
                                     this.sharing = meta.sharing;
                                 }
                                 if let Some(ui) = this.export.as_mut() {
-                                    ui.phase = ExportPhase::Done;
-                                    ui.share_link = Some(link.clone());
-                                    ui.upload_progress = 1.0;
+                                    ui.complete_share_export(link, |link| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            link,
+                                        ));
+                                        crate::app_sounds::play_notification();
+                                    });
                                 }
                                 cx.notify();
-                            });
-                            let _ = this.update(cx, |_, cx| {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
-                                crate::app_sounds::play_notification();
                             });
                         }
                         Ok(Ok(crate::upload::UploadResult::NotAuthenticated)) => {
@@ -1294,7 +1318,8 @@ impl EditorWindow {
                                 show_upload_failure(&this, cx, &error, true);
                             }
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            tracing::error!(%error, "share upload task ended without a result");
                             show_upload_failure(&this, cx, "Failed to upload recording", true);
                         }
                     }
@@ -1302,6 +1327,11 @@ impl EditorWindow {
                 Ok(Err(error)) => {
                     let cancelled = !is_resource_stop(&error)
                         && (error == "Export cancelled" || cancel.load(Ordering::Relaxed));
+                    if cancelled {
+                        tracing::info!(error, "share export cancelled");
+                    } else {
+                        tracing::error!(error, "share export failed");
+                    }
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             if cancelled {
@@ -1317,7 +1347,8 @@ impl EditorWindow {
                         platform::alert_dialog("Export failed", &error);
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    tracing::error!(%error, "share export task ended without a result");
                     show_upload_failure(&this, cx, "Export task failed", false);
                 }
             }
@@ -2808,6 +2839,7 @@ fn show_upload_failure(
     message: &str,
     dialog: bool,
 ) {
+    tracing::error!(error = message, "share upload failed");
     let message = message.to_string();
     let _ = this.update(cx, |this, cx| {
         if let Some(ui) = this.export.as_mut() {
@@ -3081,6 +3113,44 @@ mod tests {
             assert_eq!(ui.phase, ExportPhase::Idle);
             assert_eq!(ui.output_path, Some(output));
             assert!(ui.clipboard_retry_path().is_none());
+        }
+    }
+
+    #[test]
+    fn completed_share_export_copies_the_link_and_shows_success() {
+        let mut ui = clipboard_export();
+        ui.destination = ExportDestination::Link;
+        ui.phase = ExportPhase::Uploading;
+        ui.upload_progress = 0.9;
+        let link = "https://cap.link/finished".to_string();
+        let mut copied = None;
+
+        ui.complete_share_export(link.clone(), |link| copied = Some(link));
+
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(ui.share_link, Some(link.clone()));
+        assert_eq!(ui.upload_progress, 1.0);
+        assert_eq!(copied, Some(link));
+    }
+
+    #[test]
+    fn cancellation_or_close_ignores_a_completed_share_export() {
+        for closing in [false, true] {
+            let mut ui = clipboard_export();
+            ui.destination = ExportDestination::Link;
+            ui.phase = ExportPhase::Uploading;
+            ui.upload_progress = 0.9;
+            let completed_link = "https://cap.link/finished".to_string();
+            ui.close_requested = closing;
+            ui.cancel.store(!closing, Ordering::Relaxed);
+
+            ui.complete_share_export(completed_link, |_| {
+                panic!("cancelled share exports must not copy a link or notify")
+            });
+
+            assert_eq!(ui.phase, ExportPhase::Idle);
+            assert!(ui.share_link.is_none());
+            assert_eq!(ui.upload_progress, 0.9);
         }
     }
 

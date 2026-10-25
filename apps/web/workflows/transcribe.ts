@@ -17,12 +17,14 @@ import {
 	parseAiGenerationLanguage,
 	Video,
 } from "@cap/web-domain";
-import { AssemblyAI } from "assemblyai";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
 import { FatalError } from "workflow";
 import { start } from "workflow/api";
-import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
+import {
+	createAssemblyAIClient,
+	getAssemblyAITranscriptionOptions,
+} from "@/lib/assemblyai";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -782,9 +784,7 @@ async function transcribeWithAssemblyAI(
 	}
 
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
-	const client = new AssemblyAI({
-		apiKey: serverEnv().ASSEMBLY_API_KEY as string,
-	});
+	const client = createAssemblyAIClient();
 
 	const transcript = await client.transcripts.transcribe({
 		audio: audioBuffer,
@@ -835,9 +835,7 @@ async function transcribeEditTranscriptWithAssemblyAI(
 	}
 
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
-	const client = new AssemblyAI({
-		apiKey: serverEnv().ASSEMBLY_API_KEY as string,
-	});
+	const client = createAssemblyAIClient();
 	const transcript = await client.transcripts.transcribe({
 		audio: audioBuffer,
 		...getAssemblyAITranscriptionOptions("auto"),

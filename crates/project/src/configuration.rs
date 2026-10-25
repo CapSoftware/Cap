@@ -2,9 +2,10 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     fmt,
+    io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex, Weak},
 };
 
 use cap_cursor_info::CursorFamily;
@@ -12,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::DisplayNotch;
+
+#[cfg(test)]
+mod style_resolution_tests;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1271,6 +1275,17 @@ impl OverlayKeyframes {
         }
     }
 
+    /// Moves every key by `seconds`, for when the segment's start moves but
+    /// the animation should stay where it is in output time.
+    pub fn shift(&mut self, seconds: f64) {
+        for key in self.position.iter_mut().chain(&mut self.size) {
+            key.time += seconds;
+        }
+        for key in &mut self.opacity {
+            key.time += seconds;
+        }
+    }
+
     /// Removes every property's key at `time`.
     pub fn remove_at(&mut self, time: f64) {
         let keep = |t: f64| (t - time).abs() > OVERLAY_KEYFRAME_MATCH_SECS;
@@ -1418,7 +1433,9 @@ pub struct TextSegment {
     /// segment edges when `layout` is not `Overlay`.
     #[serde(default = "TextSegment::default_layout_transition")]
     pub layout_transition: f64,
-    #[serde(default)]
+    // `default` after `skip_serializing_if`: specta reads them in order, and
+    // this keeps the generated TypeScript field optional.
+    #[serde(skip_serializing_if = "OverlayKeyframes::is_empty", default)]
     pub keyframes: OverlayKeyframes,
 }
 
@@ -1929,7 +1946,9 @@ pub struct ImageSegment {
     pub flip_x: bool,
     pub flip_y: bool,
     pub lock_aspect: bool,
-    #[serde(default)]
+    // `default` after `skip_serializing_if`: specta reads them in order, and
+    // this keeps the generated TypeScript field optional.
+    #[serde(skip_serializing_if = "OverlayKeyframes::is_empty", default)]
     pub keyframes: OverlayKeyframes,
 }
 
@@ -2048,6 +2067,15 @@ where
     Ok(by_segment.into_values().collect())
 }
 
+fn deserialize_scene_segments<'de, D>(deserializer: D) -> Result<Vec<SceneSegment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut segments = Vec::<SceneSegment>::deserialize(deserializer)?;
+    segments.sort_by(|left, right| left.start.total_cmp(&right.start));
+    Ok(segments)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
@@ -2059,7 +2087,7 @@ pub struct TimelineConfiguration {
     )]
     pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scene_segments")]
     pub scene_segments: Vec<SceneSegment>,
     #[serde(default)]
     pub mask_segments: Vec<MaskSegment>,
@@ -2300,9 +2328,9 @@ impl TimelineConfiguration {
         }
 
         let mut segment_start = 0.0;
+        let mut incoming: Option<ClipTransition> = None;
 
         for (segment_index, segment) in self.segments.iter().enumerate() {
-            let incoming = self.effective_transition(segment_index);
             let incoming_duration = incoming.as_ref().map_or(0.0, |value| value.duration);
 
             if let Some(transition) = incoming {
@@ -2352,6 +2380,7 @@ impl TimelineConfiguration {
             }
 
             segment_start += segment.duration() - next_duration;
+            incoming = next_transition;
         }
 
         None
@@ -2959,6 +2988,68 @@ impl Default for ProjectConfiguration {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ProjectStyleCache {
+    cached: Mutex<Option<CachedStyle>>,
+}
+
+#[derive(Debug)]
+struct CachedStyle {
+    source: Weak<ProjectConfiguration>,
+    styles: [Option<usize>; 3],
+    project: Arc<ProjectConfiguration>,
+}
+
+impl CachedStyle {
+    fn matches(&self, source: &Weak<ProjectConfiguration>, styles: [Option<usize>; 3]) -> bool {
+        self.source.ptr_eq(source) && self.styles == styles
+    }
+}
+
+impl ProjectStyleCache {
+    pub fn resolve(
+        &self,
+        project: &Arc<ProjectConfiguration>,
+        time: f64,
+    ) -> Arc<ProjectConfiguration> {
+        let styles = project.style_indices_at(time);
+        if styles == [None; 3] {
+            return Arc::clone(project);
+        }
+
+        // A Weak keeps the allocation identity alive and makes Arc::make_mut
+        // detach before editing, even when the source has only one strong owner.
+        let source = Arc::downgrade(project);
+        {
+            let cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+        }
+
+        let resolved = Arc::new(project.style_at(time).into_owned());
+        let previous = {
+            let mut cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+            cached.replace(CachedStyle {
+                source,
+                styles,
+                project: Arc::clone(&resolved),
+            })
+        };
+        drop(previous);
+        resolved
+    }
+}
+
 impl ProjectConfiguration {
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let mut ordered = Vec::with_capacity(available.len());
@@ -3050,17 +3141,53 @@ impl ProjectConfiguration {
             .unwrap_or(&self.cursor)
     }
 
+    fn style_indices_at(&self, time: f64) -> [Option<usize>; 3] {
+        let mut selected: [Option<usize>; 3] = [None; 3];
+        let Some(timeline) = &self.timeline else {
+            return selected;
+        };
+        for (index, segment) in timeline.style_segments.iter().enumerate() {
+            if !segment.is_active_at(time) {
+                continue;
+            }
+            for (current, present) in selected.iter_mut().zip([
+                segment.overrides.background.is_some(),
+                segment.overrides.camera.is_some(),
+                segment.overrides.cursor.is_some(),
+            ]) {
+                if present
+                    && current.is_none_or(|previous| {
+                        let previous = &timeline.style_segments[previous];
+                        segment.track > previous.track
+                            || (segment.track == previous.track && segment.start >= previous.start)
+                    })
+                {
+                    *current = Some(index);
+                }
+            }
+        }
+        selected
+    }
+
     pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let Some(timeline) = &self.timeline else {
+            return Cow::Borrowed(self);
+        };
+        let [background, camera, cursor] = self.style_indices_at(time);
         let mut configuration = Cow::Borrowed(self);
-        if let Some(background) =
-            self.style_override_at(time, |overrides| overrides.background.as_ref())
+        if let Some(background) = background
+            .and_then(|index| timeline.style_segments[index].overrides.background.as_ref())
         {
             configuration.to_mut().background = background.clone();
         }
-        if let Some(camera) = self.style_override_at(time, |overrides| overrides.camera.as_ref()) {
+        if let Some(camera) =
+            camera.and_then(|index| timeline.style_segments[index].overrides.camera.as_ref())
+        {
             configuration.to_mut().camera = camera.clone();
         }
-        if let Some(cursor) = self.style_override_at(time, |overrides| overrides.cursor.as_ref()) {
+        if let Some(cursor) =
+            cursor.and_then(|index| timeline.style_segments[index].overrides.cursor.as_ref())
+        {
             configuration.to_mut().cursor = cursor.clone();
         }
         configuration
@@ -3209,17 +3336,16 @@ impl ProjectConfiguration {
 
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let temp_path =
-            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4()));
+        let temp_path = tempfile::TempPath::from_path(
+            project_path.join(format!(".project-config-{}.json.tmp", uuid::Uuid::new_v4())),
+        );
+        let config = serde_json::to_string_pretty(self)?;
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(config.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
 
-        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
-
-        if let Err(error) = std::fs::rename(&temp_path, &config_path) {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(error);
-        }
-
-        Ok(())
+        std::fs::rename(&temp_path, &config_path)
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
@@ -3554,8 +3680,7 @@ mod tests {
                 "path": "", "name": "Image", "center": { "x": 0.5, "y": 0.5 },
                 "size": { "x": 0.3, "y": 0.3 }, "opacity": 1.0,
                 "rotation": 0.0, "rounding": 0.0, "flipX": false,
-                "flipY": false, "lockAspect": true,
-                "keyframes": { "position": [], "size": [], "opacity": [] }
+                "flipY": false, "lockAspect": true
             })
         );
         assert_eq!(
@@ -4240,6 +4365,103 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn adjacent_transition_mapping_matches_independent_clip_offsets() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        let template = timeline.segments[0].clone();
+        timeline.segments = (0..8)
+            .map(|index| {
+                let timescale = [0.5, 1.0, 2.0][index % 3];
+                TimelineSegment {
+                    recording_clip: index as u32,
+                    start: index as f64 * 10.0,
+                    end: index as f64 * 10.0 + 4.0 * timescale,
+                    timescale,
+                    ..template.clone()
+                }
+            })
+            .collect();
+        timeline.transitions = [1.0, 0.5, 999.0, f64::NAN, 0.0, 1.0, f64::INFINITY, 1.5, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, duration)| ClipTransition {
+                segment_index: index as u32,
+                duration,
+                kind: if index % 2 == 0 {
+                    ClipTransitionType::CrossFade
+                } else {
+                    ClipTransitionType::FadeThroughBlack
+                },
+            })
+            .collect();
+        let offsets = crate::caption_timing::clip_timeline_offsets(&timeline);
+        for (index, segment) in timeline.segments.iter().enumerate() {
+            let start = offsets[index];
+            let incoming = timeline.effective_transition(index);
+            let next = timeline.effective_transition(index + 1);
+            let single_start = start + incoming.map_or(0.0, |transition| transition.duration);
+            let end =
+                start + segment.duration() - next.map_or(0.0, |transition| transition.duration);
+            for time in [single_start, (single_start + end) / 2.0, end.next_down()] {
+                let Some(TimelineFrameMapping::Single { source, output_end }) =
+                    timeline.get_frame_mapping(time)
+                else {
+                    panic!("expected single source at {time}");
+                };
+                assert_eq!(source.segment_index, index);
+                assert!(std::ptr::eq(source.segment, segment));
+                assert_eq!(
+                    source.source_time.to_bits(),
+                    (segment.start + (time - start) * segment.timescale).to_bits()
+                );
+                assert_eq!(output_end.to_bits(), end.to_bits());
+            }
+            if let Some(expected) = incoming {
+                for elapsed in [0.0, expected.duration / 2.0, expected.duration.next_down()] {
+                    let time = start + elapsed;
+                    if time >= start + expected.duration {
+                        continue;
+                    }
+                    let Some(TimelineFrameMapping::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                        duration,
+                        output_end,
+                    }) = timeline.get_frame_mapping(time)
+                    else {
+                        panic!("expected transition at {time}");
+                    };
+                    let previous = &timeline.segments[index - 1];
+                    let elapsed = time - start;
+                    assert_eq!(
+                        (outgoing.segment_index, incoming.segment_index),
+                        (index - 1, index)
+                    );
+                    assert!(std::ptr::eq(outgoing.segment, previous));
+                    assert!(std::ptr::eq(incoming.segment, segment));
+                    assert_eq!(
+                        outgoing.source_time.to_bits(),
+                        (previous.end - (expected.duration - elapsed) * previous.timescale)
+                            .to_bits()
+                    );
+                    assert_eq!(
+                        incoming.source_time.to_bits(),
+                        (segment.start + elapsed * segment.timescale).to_bits()
+                    );
+                    assert_eq!(kind, expected.kind);
+                    assert_eq!(duration.to_bits(), expected.duration.to_bits());
+                    assert_eq!(progress.to_bits(), (elapsed / duration).to_bits());
+                    assert_eq!(output_end.to_bits(), (start + duration).to_bits());
+                }
+            }
+        }
+        for time in [-1.0, timeline.duration(), f64::INFINITY, f64::NAN] {
+            assert!(timeline.get_frame_mapping(time).is_none());
+        }
     }
 
     #[test]
