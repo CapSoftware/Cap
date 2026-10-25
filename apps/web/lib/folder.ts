@@ -72,50 +72,52 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 	if (videoIds.length === 0) return {};
 	const db = yield* Database;
 
-	// Fetch space-level sharing
-	const spaceSharing = yield* db.use((db) =>
-		db
-			.select({
-				videoId: spaceVideos.videoId,
-				id: spaces.id,
-				name: spaces.name,
-				organizationId: spaces.organizationId,
-				iconUrl: spaces.iconUrl,
-				settings: spaces.settings,
-				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
-			})
-			.from(spaceVideos)
-			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-			.where(
-				sql`${spaceVideos.videoId} IN (${sql.join(
-					videoIds.map((id) => sql`${id}`),
-					sql`, `,
-				)})`,
+	const [spaceSharing, orgSharing] = yield* Effect.all(
+		[
+			db.use((db) =>
+				db
+					.select({
+						videoId: spaceVideos.videoId,
+						id: spaces.id,
+						name: spaces.name,
+						organizationId: spaces.organizationId,
+						iconUrl: spaces.iconUrl,
+						settings: spaces.settings,
+						hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+					})
+					.from(spaceVideos)
+					.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+					.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+					.where(
+						sql`${spaceVideos.videoId} IN (${sql.join(
+							videoIds.map((id) => sql`${id}`),
+							sql`, `,
+						)})`,
+					),
 			),
-	);
-
-	// Fetch organization-level sharing
-	const orgSharing = yield* db.use((db) =>
-		db
-			.select({
-				videoId: sharedVideos.videoId,
-				id: organizations.id,
-				name: organizations.name,
-				organizationId: organizations.id,
-				iconUrl: organizations.iconUrl,
-			})
-			.from(sharedVideos)
-			.innerJoin(
-				organizations,
-				eq(sharedVideos.organizationId, organizations.id),
-			)
-			.where(
-				sql`${sharedVideos.videoId} IN (${sql.join(
-					videoIds.map((id) => sql`${id}`),
-					sql`, `,
-				)})`,
+			db.use((db) =>
+				db
+					.select({
+						videoId: sharedVideos.videoId,
+						id: organizations.id,
+						name: organizations.name,
+						organizationId: organizations.id,
+						iconUrl: organizations.iconUrl,
+					})
+					.from(sharedVideos)
+					.innerJoin(
+						organizations,
+						eq(sharedVideos.organizationId, organizations.id),
+					)
+					.where(
+						sql`${sharedVideos.videoId} IN (${sql.join(
+							videoIds.map((id) => sql`${id}`),
+							sql`, `,
+						)})`,
+					),
 			),
+		],
+		{ concurrency: "unbounded" },
 	);
 
 	// Combine and group by videoId
@@ -261,22 +263,25 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.orderBy(desc(videos.effectiveCreatedAt)),
 	);
 
-	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap = yield* getSharedSpacesForVideos(videoIds);
 	const orgIds = Array.from(new Set(videoData.map((video) => video.orgId)));
-	const organizationSettingsRows =
-		orgIds.length > 0
-			? yield* db.use((db) =>
-					db
-						.select({
-							id: organizations.id,
-							settings: organizations.settings,
-						})
-						.from(organizations)
-						.where(inArray(organizations.id, orgIds)),
-				)
-			: [];
+	const [sharedSpacesMap, organizationSettingsRows] = yield* Effect.all(
+		[
+			getSharedSpacesForVideos(videoIds),
+			orgIds.length > 0
+				? db.use((db) =>
+						db
+							.select({
+								id: organizations.id,
+								settings: organizations.settings,
+							})
+							.from(organizations)
+							.where(inArray(organizations.id, orgIds)),
+					)
+				: Effect.succeed([]),
+		],
+		{ concurrency: "unbounded" },
+	);
 	const organizationSettingsById = Object.fromEntries(
 		organizationSettingsRows.map((organization) => [
 			organization.id,
@@ -338,6 +343,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 						  }
 						| undefined,
 					source: video.source,
+					duration: video.duration ?? undefined,
 					isScreenshot: video.isScreenshot,
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 	title:
 		"Self-Hosted Screen Recording — Own Your Data, No Vendor Lock-In | Cap",
 	description:
-		"Cap lets you self-host screen recordings on your own S3-compatible storage. Connect AWS S3, Cloudflare R2, or MinIO — recordings go directly to your infrastructure. Open source, MIT-licensed, free to use.",
+		"Cap lets you self-host screen recordings on your own S3-compatible storage. Connect AWS S3, Cloudflare R2, or MinIO — recordings go directly to your infrastructure. Open source with most code under AGPLv3, free to use.",
 	alternates: {
 		canonical: "https://cap.so/self-hosted-screen-recording",
 	},

@@ -668,14 +668,100 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
-/// so does the content unless it is still the placeholder a new segment is
-/// born with; the box is scaled with the font change about its **top** edge,
-/// exactly as the Size slider does.
-pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
-    let style = &preset.style;
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyle {
+    pub font_family: String,
+    pub font_size: f32,
+    pub font_weight: f32,
+    pub italic: bool,
+    pub uppercase: bool,
+    pub align: TextAlign,
+    pub letter_spacing: f32,
+    pub line_height: f32,
+    pub opacity: f32,
+    pub shadow: f32,
+    pub glow: f32,
+    pub stroke_width: f32,
+    pub stroke_color: String,
+    pub background_style: TextBackgroundStyle,
+    pub background_color: Option<String>,
+    pub color: String,
+    pub gradient_color: Option<String>,
+    pub animation_in: TextAnimation,
+    pub animation_out: TextAnimation,
+    pub animation_in_duration: f64,
+    pub animation_out_duration: f64,
+    pub fade_duration: f64,
+}
+
+impl TextStyle {
+    pub fn of(segment: &TextSegment) -> Self {
+        Self {
+            font_family: segment.font_family.clone(),
+            font_size: segment.font_size,
+            font_weight: segment.font_weight,
+            italic: segment.italic,
+            uppercase: segment.uppercase,
+            align: segment.align,
+            letter_spacing: segment.letter_spacing,
+            line_height: segment.line_height,
+            opacity: segment.opacity,
+            shadow: segment.shadow,
+            glow: segment.glow,
+            stroke_width: segment.stroke_width,
+            stroke_color: segment.stroke_color.clone(),
+            background_style: segment.background_style,
+            background_color: segment.background_color.clone(),
+            color: segment.color.clone(),
+            gradient_color: segment.gradient_color.clone(),
+            animation_in: segment.animation_in,
+            animation_out: segment.animation_out,
+            animation_in_duration: segment.animation_in_duration,
+            animation_out_duration: segment.animation_out_duration,
+            fade_duration: segment.fade_duration,
+        }
+    }
+
+    pub fn apply_to(&self, segment: &mut TextSegment) -> bool {
+        let previous_style = Self::of(segment);
+        let previous_center = segment.center;
+        let previous_size = segment.size;
+        if segment.font_size != self.font_size {
+            scale_text_box(segment, self.font_size);
+        }
+        segment.font_family = self.font_family.clone();
+        segment.font_size = self.font_size;
+        segment.font_weight = self.font_weight;
+        segment.italic = self.italic;
+        segment.uppercase = self.uppercase;
+        segment.align = self.align;
+        segment.letter_spacing = self.letter_spacing;
+        segment.line_height = self.line_height;
+        segment.opacity = self.opacity;
+        segment.shadow = self.shadow;
+        segment.glow = self.glow;
+        segment.stroke_width = self.stroke_width;
+        segment.stroke_color = self.stroke_color.clone();
+        segment.background_style = self.background_style;
+        segment.background_color = self.background_color.clone();
+        segment.color = self.color.clone();
+        segment.gradient_color = self.gradient_color.clone();
+        segment.animation_in = self.animation_in;
+        segment.animation_out = self.animation_out;
+        segment.animation_in_duration = self.animation_in_duration;
+        segment.animation_out_duration = self.animation_out_duration;
+        segment.fade_duration = self.fade_duration;
+        previous_style != *self
+            || previous_center != segment.center
+            || previous_size != segment.size
+    }
+}
+
+/// Grows or shrinks the text box with a font-size change, top edge fixed,
+/// like the Size slider; the canvas overlay re-hugs the glyph bounds later.
+fn scale_text_box(segment: &mut TextSegment, font_size: f32) {
     let box_scale = f64::from(
-        style.font_size
+        font_size
             / if segment.font_size == 0. {
                 48.
             } else {
@@ -686,6 +772,15 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
     segment.size.x = (segment.size.x * box_scale).min(1.);
     segment.size.y *= box_scale;
     segment.center.y = top_edge + segment.size.y / 2.;
+}
+
+/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
+/// so does the content unless it is still the placeholder a new segment is
+/// born with; the box is scaled with the font change about its **top** edge,
+/// exactly as the Size slider does.
+pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
+    let style = &preset.style;
+    scale_text_box(segment, style.font_size);
 
     segment.font_family = pick_font_family(style.font_stack, installed);
     segment.font_size = style.font_size;
@@ -1589,6 +1684,30 @@ pub fn camera3d_pose_seek_time(segment: &Camera3DSegment, end: bool, fps: u32) -
         return start_frame;
     }
     camera3d_frame_before(segment.end, fps).max(start_frame)
+}
+
+/// "The playhead is on this pose" is a frame's tolerance, which is as close
+/// as a seek can land.
+fn camera3d_pose_on(playhead: f64, time: f64, fps: u32) -> bool {
+    (playhead - time).abs() < 1. / f64::from(fps.max(1))
+}
+
+/// Every `(shot, end)` pose the playhead is on: what the 3D panel's pose cards
+/// mark, so a scrub can tell when the sidebar has to redraw.
+pub(crate) fn camera3d_poses_at(
+    segments: &[Camera3DSegment],
+    playhead: f64,
+    fps: u32,
+) -> Vec<(usize, bool)> {
+    let mut poses = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
+        for end in [false, true] {
+            if camera3d_pose_on(playhead, camera3d_pose_seek_time(segment, end, fps), fps) {
+                poses.push((index, end));
+            }
+        }
+    }
+    poses
 }
 
 /// How many shots the Auto scene picker offers.
@@ -2613,31 +2732,41 @@ impl EditorWindow {
     /// while it has focus. Runs from `render`, like `sync_hex_inputs`, because
     /// the focus test needs a `&Window`.
     pub(crate) fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for (key, input) in self.fields.clone() {
-            if input.read(cx).focus_handle().is_focused(window) {
+        // Every field ever created is checked on every render, so the value is
+        // written into one reused buffer and only copied out when it moved.
+        let mut value = String::new();
+        for (key, input) in &self.fields {
+            let state = input.read(cx);
+            if state.is_focused(window) {
                 continue;
             }
-            let Some(value) = self.field_value(key) else {
+            value.clear();
+            if self.write_field_value(*key, &mut value).is_none() {
                 continue;
-            };
-            if input.read(cx).text() != value {
-                input.update(cx, |input, cx| input.set_text(value, cx));
+            }
+            if state.text() != value {
+                let text = value.clone();
+                input.update(cx, |input, cx| input.set_text(text, cx));
             }
         }
     }
 
-    /// What a field should read when it is not being typed into.
-    fn field_value(&self, key: FieldKey) -> Option<String> {
+    /// What a field should read when it is not being typed into, appended to
+    /// `out`. `None` leaves the field alone.
+    fn write_field_value(&self, key: FieldKey, out: &mut String) -> Option<()> {
+        use std::fmt::Write as _;
+
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
         if let FieldKey::Crop(field) = key {
             let state = self.crop.as_ref()?;
-            return Some(ui::format_number(field.read(state.real())));
+            out.push_str(&ui::format_number(field.read(state.real())));
+            return Some(());
         }
         let timeline = self.project.timeline.as_ref()?;
-        Some(match key {
-            FieldKey::StyleName(index) => timeline.style_segments.get(index)?.name.clone(),
-            FieldKey::ImageName(index) => timeline.image_segments.get(index)?.name.clone(),
+        match key {
+            FieldKey::StyleName(index) => out.push_str(&timeline.style_segments.get(index)?.name),
+            FieldKey::ImageName(index) => out.push_str(&timeline.image_segments.get(index)?.name),
             FieldKey::StyleCrop(index, axis) => {
                 let background = timeline
                     .style_segments
@@ -2650,37 +2779,40 @@ impl EditorWindow {
                     position: XY::new(0, 0),
                     size: XY::new(width, height),
                 });
-                match axis {
+                let value = match axis {
                     0 => crop.position.x,
                     1 => crop.position.y,
                     2 => crop.size.x,
                     _ => crop.size.y,
-                }
-                .to_string()
+                };
+                let _ = write!(out, "{value}");
             }
-            FieldKey::TextContent(index) => timeline.text_segments.get(index)?.content.clone(),
-            FieldKey::CaptionText(index) => timeline.caption_segments.get(index)?.text.clone(),
-            FieldKey::AudioName(index) => timeline
-                .audio_segments
-                .get(index)?
-                .name
-                .clone()
-                .unwrap_or_default(),
+            FieldKey::TextContent(index) => {
+                out.push_str(&timeline.text_segments.get(index)?.content)
+            }
+            FieldKey::CaptionText(index) => {
+                out.push_str(&timeline.caption_segments.get(index)?.text)
+            }
+            FieldKey::AudioName(index) => {
+                if let Some(name) = &timeline.audio_segments.get(index)?.name {
+                    out.push_str(name);
+                }
+            }
             FieldKey::KeyboardText(index) => {
-                timeline.keyboard_segments.get(index)?.display_text.clone()
+                out.push_str(&timeline.keyboard_segments.get(index)?.display_text)
             }
             // `value={props.segment.start.toFixed(2)}` on all four.
             FieldKey::CaptionStart(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.start);
             }
             FieldKey::CaptionEnd(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.end);
             }
             FieldKey::KeyboardStart(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.start);
             }
             FieldKey::KeyboardEnd(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -2691,10 +2823,11 @@ impl EditorWindow {
                     .iter()
                     .find(|item| item.index as usize == clip)
                     .map_or(0., |item| kind.read(&item.offsets));
-                ui::format_number(f64::from((offset * 1000.).round()))
+                out.push_str(&ui::format_number(f64::from((offset * 1000.).round())));
             }
             _ => return None,
-        })
+        }
+        Some(())
     }
 
     /// A live keystroke in a segment field.
@@ -2897,12 +3030,7 @@ impl EditorWindow {
                 };
                 let start = matches!(key, FieldKey::CaptionStart(_));
                 self.edit_caption_segment("caption-timing", index, window, cx, move |segment| {
-                    if start {
-                        segment.start = value;
-                    } else {
-                        segment.end = value;
-                    }
-                    true
+                    commit_segment_timing(segment, start, &text, value)
                 });
             }
             FieldKey::KeyboardStart(index) | FieldKey::KeyboardEnd(index) => {
@@ -2914,12 +3042,7 @@ impl EditorWindow {
                 };
                 let start = matches!(key, FieldKey::KeyboardStart(_));
                 self.edit_keyboard_segment("keyboard-timing", index, window, cx, move |segment| {
-                    if start {
-                        segment.start = value;
-                    } else {
-                        segment.end = value;
-                    }
-                    true
+                    commit_segment_timing(segment, start, &text, value)
                 });
             }
             FieldKey::SyncOffset(clip, kind) => {
@@ -2973,6 +3096,31 @@ impl EditorWindow {
             true
         });
     }
+}
+
+/// `text` is the field's committed text: it shows times to two decimals, so
+/// tabbing through an untouched field commits a rounded copy of the stored
+/// time, which must not count as an edit.
+fn commit_segment_timing(
+    segment: &mut impl crate::editor_edits::TrackSegmentOps,
+    start: bool,
+    text: &str,
+    value: f64,
+) -> bool {
+    let current = if start {
+        segment.start()
+    } else {
+        segment.end()
+    };
+    if text.trim() == format!("{current:.2}") || current == value {
+        return false;
+    }
+    if start {
+        segment.set_start(value);
+    } else {
+        segment.set_end(value);
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -6831,9 +6979,7 @@ impl EditorWindow {
         let fps = crate::editor_window::EDITOR_PREVIEW_FPS;
         let start_time = camera3d_pose_seek_time(segment, false, fps);
         let end_time = camera3d_pose_seek_time(segment, true, fps);
-        // "The playhead is on this pose" is a frame's tolerance, which is as
-        // close as a seek can land.
-        let on = |time: f64| (self.playhead_time() - time).abs() < 1. / f64::from(fps.max(1));
+        let on = |time: f64| camera3d_pose_on(self.playhead_time(), time, fps);
 
         div()
             .flex()
@@ -7936,6 +8082,171 @@ impl EditorWindow {
 mod tests {
     use super::*;
 
+    #[test]
+    fn unchanged_timing_fields_preserve_redo() {
+        use crate::editor_edits::ProjectHistory;
+
+        for base in [2., 2.3456] {
+            for caption in [true, false] {
+                for start in [true, false] {
+                    for paused in [true, false] {
+                        let mut project: cap_project::ProjectConfiguration =
+                            serde_json::from_value(serde_json::json!({
+                                "timeline": {
+                                    "segments": [],
+                                    "zoomSegments": [],
+                                    "captionSegments": [{ "id": "caption", "start": base, "end": base + 4., "text": "hello" }],
+                                    "keyboardSegments": [{ "id": "keyboard", "start": base, "end": base + 4., "displayText": "A", "keys": [] }]
+                                }
+                            }))
+                            .unwrap();
+                        let initial = serde_json::to_value(&project).unwrap();
+                        let mut history = ProjectHistory::new(project.clone());
+                        let commit = |project: &mut cap_project::ProjectConfiguration,
+                                      text: &str| {
+                            let value = text.parse().unwrap();
+                            let timeline = project.timeline.as_mut().unwrap();
+                            if caption {
+                                commit_segment_timing(
+                                    &mut timeline.caption_segments[0],
+                                    start,
+                                    text,
+                                    value,
+                                )
+                            } else {
+                                commit_segment_timing(
+                                    &mut timeline.keyboard_segments[0],
+                                    start,
+                                    text,
+                                    value,
+                                )
+                            }
+                        };
+                        let before = if start { base } else { base + 4. };
+                        assert!(commit(&mut project, &format!("{:.2}", before + 1.)));
+                        history.record(&project);
+                        let edited = serde_json::to_value(&project).unwrap();
+                        project = history.undo().unwrap().clone();
+                        assert_eq!(serde_json::to_value(&project).unwrap(), initial);
+
+                        if paused {
+                            history.pause();
+                        }
+                        if commit(&mut project, &format!("{before:.2}")) {
+                            history.record(&project);
+                        }
+                        if paused {
+                            history.resume(&project);
+                        }
+                        let context = format!(
+                            "base={base}, caption={caption}, start={start}, paused={paused}"
+                        );
+                        assert_eq!(
+                            serde_json::to_value(&project).unwrap(),
+                            initial,
+                            "{context}"
+                        );
+                        assert!(history.can_redo(), "{context}");
+                        assert!(!history.can_undo(), "{context}");
+                        assert_eq!(
+                            serde_json::to_value(history.redo().unwrap()).unwrap(),
+                            edited
+                        );
+                        assert_eq!(
+                            serde_json::to_value(history.undo().unwrap()).unwrap(),
+                            initial
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pasting_a_text_style_keeps_content_timing_position_and_layout() {
+        let mut source = crate::editor_edits::default_text_segment(0., 2., 0);
+        source.content = "Hello".into();
+        source.font_family = "Georgia".into();
+        source.font_size = 96.;
+        source.font_weight = 400.;
+        source.italic = true;
+        source.uppercase = true;
+        source.letter_spacing = 3.;
+        source.color = "#ff0000".into();
+        source.background_color = Some("#00000080".into());
+        source.gradient_color = Some("#00ff00".into());
+        source.animation_in = TextAnimation::Pop;
+        source.animation_out = TextAnimation::Wipe;
+        source.animation_in_duration = 0.4;
+        source.animation_out_duration = 0.6;
+        source.center = XY::new(0.2, 0.2);
+        source.layout = TextLayout::Fullscreen;
+
+        let mut target = crate::editor_edits::default_text_segment(5., 8., 1);
+        target.content = "World".into();
+        target.center = XY::new(0.7, 0.8);
+        target.size = XY::new(0.2, 0.1);
+
+        assert!(TextStyle::of(&source).apply_to(&mut target));
+
+        assert_eq!(target.content, "World");
+        assert_eq!(target.start, 5.);
+        assert_eq!(target.end, 8.);
+        assert_eq!(target.track, 1);
+        assert_eq!(target.layout, TextLayout::Overlay);
+        assert_eq!(target.center.x, 0.7);
+        assert_eq!(target.font_family, "Georgia");
+        assert_eq!(target.font_size, 96.);
+        assert!(target.italic && target.uppercase);
+        assert_eq!(target.letter_spacing, 3.);
+        assert_eq!(target.color, "#ff0000");
+        assert_eq!(target.background_color.as_deref(), Some("#00000080"));
+        assert_eq!(target.gradient_color.as_deref(), Some("#00ff00"));
+        assert_eq!(target.animation_in, TextAnimation::Pop);
+        assert_eq!(target.animation_out, TextAnimation::Wipe);
+        assert_eq!(target.animation_in_duration, 0.4);
+        assert_eq!(target.animation_out_duration, 0.6);
+        assert_eq!(TextStyle::of(&target), TextStyle::of(&source));
+    }
+
+    #[test]
+    fn pasting_a_text_style_scales_the_box_from_its_top_edge() {
+        let mut source = crate::editor_edits::default_text_segment(0., 2., 0);
+        source.font_size = 96.;
+        let mut target = crate::editor_edits::default_text_segment(0., 2., 0);
+        target.font_size = 48.;
+        target.center = XY::new(0.5, 0.5);
+        target.size = XY::new(0.2, 0.1);
+
+        assert!(TextStyle::of(&source).apply_to(&mut target));
+
+        assert!((target.size.x - 0.4).abs() < 1e-9);
+        assert!((target.size.y - 0.2).abs() < 1e-9);
+        assert!((target.center.y - 0.55).abs() < 1e-9);
+        assert_eq!(target.center.x, 0.5);
+    }
+
+    #[test]
+    fn pasting_a_text_style_onto_its_own_source_changes_nothing() {
+        for (center, size) in [
+            (XY::new(0.3, 0.6), XY::new(0.25, 0.08)),
+            (XY::new(0.5, 0.9), XY::new(0.3, 0.4)),
+        ] {
+            let mut segment = crate::editor_edits::default_text_segment(0., 2., 0);
+            segment.color = "#ff0000".into();
+            segment.center = center;
+            segment.size = size;
+            let style = TextStyle::of(&segment);
+            let before = segment.clone();
+
+            assert!(!style.apply_to(&mut segment));
+
+            assert_eq!(TextStyle::of(&segment), style);
+            assert_eq!(segment.center, before.center);
+            assert_eq!(segment.size, before.size);
+        }
+    }
+
     fn camera3d(start: f64, end: f64) -> Camera3DSegment {
         Camera3DSegment {
             start,
@@ -8611,6 +8922,22 @@ mod tests {
             camera3d_pose_seek_time(&sliver, true, 30),
             camera3d_pose_seek_time(&sliver, false, 30)
         );
+    }
+
+    #[test]
+    fn a_paused_scrub_sees_the_poses_the_playhead_lands_on() {
+        // A paused scrub redraws the sidebar only when this list changes, and
+        // the pose cards mark exactly these poses.
+        let fps = 60;
+        let shots = [camera3d(1., 2.5), camera3d(4.02, 6.)];
+        assert_eq!(camera3d_poses_at(&shots, 1., fps), [(0, false)]);
+        assert_eq!(camera3d_poses_at(&shots, 149. / 60., fps), [(0, true)]);
+        assert_eq!(camera3d_poses_at(&shots, 242. / 60., fps), [(1, false)]);
+        assert_eq!(camera3d_poses_at(&shots, 359. / 60., fps), [(1, true)]);
+        for playhead in [0., 1.75, 3., 5., 7.] {
+            assert!(camera3d_poses_at(&shots, playhead, fps).is_empty());
+        }
+        assert!(camera3d_poses_at(&[], 1., fps).is_empty());
     }
 
     #[test]

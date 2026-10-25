@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog, DialogContent, DialogTitle } from "@cap/ui";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import {
 	MediaPlayer,
 	MediaPlayerControls,
@@ -70,7 +70,7 @@ export function CommentMiniPlayer({
 
 	// The host card can unmount the whole dialog (list re-order, tab switch);
 	// the interaction is over either way, so settle up like a close would.
-	useEffect(
+	useLayoutEffect(
 		() => () => {
 			const el = videoRef.current;
 			if (!el) return;
