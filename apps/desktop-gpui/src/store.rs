@@ -1004,6 +1004,8 @@ pub struct GeneralSettings {
     pub ui_language: Option<String>,
     pub hide_dock_icon: bool,
     pub enable_notifications: bool,
+    pub ocr_keep_screenshot: bool,
+    pub ocr_show_notification: bool,
     pub instant_mode_max_resolution: u32,
     pub disable_auto_open_links: bool,
     pub studio_recording_quality: StudioQuality,
@@ -1335,6 +1337,8 @@ impl GeneralSettings {
             ui_language: opt_string_at(general, crate::i18n::SETTING_KEY),
             hide_dock_icon: bool_at(general, "hideDockIcon", false),
             enable_notifications: bool_at(general, "enableNotifications", true),
+            ocr_keep_screenshot: bool_at(general, "ocrKeepScreenshot", false),
+            ocr_show_notification: bool_at(general, "ocrShowNotification", false),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
@@ -1515,6 +1519,41 @@ pub fn hotkeys_raw() -> Map<String, Value> {
 /// section (there is none today) alone.
 pub fn set_hotkeys_raw(map: &Map<String, Value>) -> bool {
     set_store_setting(HOTKEYS, "hotkeys", Value::Object(map.clone()))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn hotkeys_seed_state() -> Option<(Map<String, Value>, Vec<String>)> {
+    let store = cached_store(&tauri_store_path())?;
+    let section = store.get(HOTKEYS).and_then(Value::as_object);
+    let hotkeys = section
+        .and_then(|section| section.get("hotkeys"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let seeded = section
+        .and_then(|section| section.get("seeded"))
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((hotkeys, seeded))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn set_hotkeys_seed_state(hotkeys: &Map<String, Value>, seeded: &[String]) -> bool {
+    update_store_section(HOTKEYS, |section| {
+        section.insert("hotkeys".into(), Value::Object(hotkeys.clone()));
+        section.insert(
+            "seeded".into(),
+            Value::Array(seeded.iter().cloned().map(Value::String).collect()),
+        );
+        true
+    })
 }
 
 pub fn hotkey_from_value(value: &Value) -> Option<Hotkey> {

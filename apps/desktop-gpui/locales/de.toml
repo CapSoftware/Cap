@@ -114,6 +114,18 @@ label = "Dock-Symbol immer anzeigen"
 description = "Mitteilungen für Kopien in die Zwischenablage, gespeicherte Dateien und mehr anzeigen. Eventuell müssen Sie Cap in den Mitteilungseinstellungen Ihres Systems erlauben."
 label = "Systemmitteilungen"
 
+[settings.general.ocr]
+description = "Kopieren Sie mit dem OCR-Tastenkürzel Text von überall auf Ihrem Bildschirm."
+title = "Texterfassung (OCR)"
+
+[settings.general.ocr.keep_screenshot]
+description = "Speichern Sie den ausgewählten Bereich beim Kopieren von Text in Ihren Screenshots. Wenn die Option deaktiviert ist, wird nichts gespeichert."
+label = "Screenshot des erfassten Bereichs speichern"
+
+[settings.general.ocr.show_notification]
+description = "Zeigen Sie eine Systembenachrichtigung mit einer Vorschau des kopierten Textes an."
+label = "Benachrichtigung beim Kopieren von Text anzeigen"
+
 [settings.general.recording]
 description = "Verhalten während und nach der Aufnahme."
 title = "Aufnahme"
@@ -583,3 +595,10 @@ click_or_press = "Hier klicken oder drücken:"
 get_started = "Los geht’s"
 space_key = "Leertaste"
 tagline = "Die Open-Source-App zum Teilen des Bildschirms für alle."
+
+[ocr.notification]
+copy_failed_title = "Text konnte nicht kopiert werden"
+no_text_found = "Im ausgewählten Bereich wurde kein Text gefunden"
+screenshot_save_failed_body = "Der Text ist in der Zwischenablage, aber der Screenshot wurde nicht gespeichert."
+screenshot_save_failed_title = "Screenshot konnte nicht gespeichert werden"
+text_copied_title = "Text in die Zwischenablage kopiert"
