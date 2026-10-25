@@ -1537,7 +1537,16 @@ impl ScreenshotEditorWindow {
 
     fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
-            let Some(path) = crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS) else {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[("Image", &BACKGROUND_IMAGE_EXTENSIONS[..])],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let picked = crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS);
+            let Some(path) = picked else {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
@@ -2466,7 +2475,7 @@ impl ScreenshotEditorWindow {
             MenuKind::More => {
                 self.menu = None;
                 match index {
-                    0 => crate::library::reveal_in_folder(&self.bundle.join("original.png")),
+                    0 => crate::library::reveal_path(&self.bundle.join("original.png"), cx),
                     1 => self.delete_screenshot(window, cx),
                     _ => {}
                 }

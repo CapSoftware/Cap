@@ -49,6 +49,8 @@ mod installer;
 mod jpeg_thumbnail;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
+#[cfg(target_os = "linux")]
+mod linux_portal_id;
 mod library;
 mod main_window;
 mod media_access;
@@ -158,6 +160,12 @@ fn end_windows_session() {
     crash_capture::mark_clean_exit();
 }
 
+/// zbus warns whenever a portal request object is gone before its
+/// properties are cached, which every finished portal request is; at `warn`
+/// that filled each Linux log with lines that say nothing.
+const DEFAULT_LOG_FILTER: &str =
+    "warn,cap_gpui=info,wgpu_core=error,wgpu_hal=error,zbus::proxy=error";
+
 /// stdout, plus a rolling daily file the Feedback page can upload.
 ///
 /// Mirrors `src-tauri/src/main.rs`: `tracing_appender::rolling::daily` into
@@ -173,7 +181,7 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // matches nothing.
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "warn,cap_gpui=info,wgpu_core=error,wgpu_hal=error".into())
+            .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into())
     };
 
     let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
@@ -318,6 +326,12 @@ fn main() {
         }
     }
 
+    let runtime = app_runtime();
+    // Before gpui exists: its appearance read is a portal call, and the
+    // portals only take an app id before the first one.
+    #[cfg(target_os = "linux")]
+    runtime.block_on(linux_portal_id::register());
+
     let app = gpui_platform::application().with_assets(Assets);
     // `RunEvent::Reopen`: the dock icon clicked while the app runs. Must be
     // registered on the builder -- gpui exposes it nowhere else -- with the
@@ -329,7 +343,6 @@ fn main() {
             crate::deeplink::submit_deep_link(&url);
         }
     });
-    let runtime = app_runtime();
     let runtime_handle = runtime.handle().clone();
 
     app.run(move |cx: &mut App| {
@@ -577,6 +590,14 @@ fn main() {
                 platform::native_window(window)
             })
             .expect("failed to start device enumeration");
+
+        // Before the launch thumbnail sweep can reach ReplayKit, which would
+        // otherwise add the standard titlebar buttons next to the hand-drawn
+        // close light (`platform::lock_borderless_style`).
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &native_main {
+            platform::lock_borderless_style(native);
+        }
 
         // The native window material: `NSGlassEffectView` on macOS 26+,
         // `NSVisualEffectView` vibrancy below that -- what
@@ -850,6 +871,7 @@ mod runtime_tests {
 #[cfg(test)]
 mod logging_tests {
     use super::create_log_appender;
+    use tracing_subscriber::Layer as _;
     use std::{io::Write, path::PathBuf};
 
     struct LogDirectory(PathBuf);
@@ -871,6 +893,44 @@ mod logging_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn the_default_filter_drops_zbus_property_cache_warnings_only() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        #[derive(Clone, Default)]
+        struct Lines(Arc<Mutex<Vec<u8>>>);
+        impl Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
+            tracing::error!(target: "zbus::proxy", "a zbus error still shows");
+            tracing::warn!(target: "zbus::connection", "other zbus warnings still show");
+            tracing::info!(target: "cap_gpui::session", "recording started");
+        });
+        let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(logged.contains("a zbus error still shows"), "{logged}");
+        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(logged.contains("recording started"), "{logged}");
     }
 
     #[test]

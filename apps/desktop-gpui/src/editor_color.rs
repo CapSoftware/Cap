@@ -326,6 +326,25 @@ pub enum GradeSlider {
 }
 
 impl GradeSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Grain
+            | Self::Intensity
+            | Self::Exposure
+            | Self::Contrast
+            | Self::Saturation
+            | Self::Temperature
+            | Self::Tint
+            | Self::Fade
+            | Self::SplitTone
+            | Self::Vignette => false,
+        }
+    }
+
     /// The nine rows inside "Fine-tune colors", in order.
     pub const ADJUST: [GradeSlider; 9] = [
         Self::Intensity,
@@ -492,17 +511,23 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("grade", window, cx, move |project| {
-            let grade = Self::grade_mut(project, target);
-            if (slider.read(grade) - value).abs() < f32::EPSILON {
-                return false;
-            }
-            slider.write(grade, value);
-            if !slider.keeps_preset() {
-                grade.preset = PRESET_CUSTOM.to_string();
-            }
-            true
-        });
+        self.edit_project_with_rebuild(
+            slider.changes_timeline_model(),
+            "grade",
+            window,
+            cx,
+            move |project| {
+                let grade = Self::grade_mut(project, target);
+                if (slider.read(grade) - value).abs() < f32::EPSILON {
+                    return false;
+                }
+                slider.write(grade, value);
+                if !slider.keeps_preset() {
+                    grade.preset = PRESET_CUSTOM.to_string();
+                }
+                true
+            },
+        );
     }
 
     fn preset_image(index: usize) -> Option<Arc<RenderImage>> {

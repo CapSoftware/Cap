@@ -162,6 +162,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 futures-util = "0.3"
 dirs = "6"
+dunce = "1.0.5"
 # Caption transcription (`src/transcription.rs`): the exact engine pin the
 # Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
 # downloaded by either app loads identically in both.

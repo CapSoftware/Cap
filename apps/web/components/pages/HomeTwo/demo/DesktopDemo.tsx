@@ -1361,7 +1361,7 @@ export const DesktopDemo = ({
 												onClick={(event) => {
 													event.stopPropagation();
 													document
-														.getElementById("workflow")
+														.getElementById("instant")
 														?.scrollIntoView({ behavior: "smooth" });
 												}}
 												className="pointer-events-auto flex h-[56px] cursor-pointer items-center gap-2 rounded-full border border-white/40 bg-black/30 px-9 text-[20px] font-medium text-white backdrop-blur-md transition-colors duration-200 hover:bg-black/50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white/70"

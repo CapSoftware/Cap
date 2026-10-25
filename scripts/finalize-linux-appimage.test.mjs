@@ -20,8 +20,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+	directAppRunWrapper,
+	fallbackLibvaDirectory,
+	fallbackLibvaPackages,
 	finalizeLinuxAppImage,
 	findConflictingLibraries,
+	isolateBundledLibva,
 	preserveAppImageWorkingDirectory,
 	relativizeDirIcon,
 	removeWebviewRuntime,
@@ -852,14 +856,33 @@ test("webview-free finalization hands the pruned AppDir to the output plugin", a
 			stat(path.join(appDir, "usr/lib/libwebkit2gtk-4.1.so.0")),
 		);
 		await stat(path.join(appDir, "usr/lib/libssl.so.3"));
+		assert.equal(
+			await readFile(path.join(appDir, "AppRun"), "utf8"),
+			directAppRunWrapper,
+		);
+		await assert.rejects(stat(path.join(appDir, "usr/lib/libva.so.2")));
+		assert.equal(
+			await readFile(path.join(appDir, "usr/lib/cap/libva/libva.so.2"), "utf8"),
+			"libva 2.23",
+		);
 		await writeFile(options.env.OUTPUT, finalImage());
 		return {};
 	};
+	const newLibva = path.join(path.dirname(image), "libva-2.23");
+	await mkdir(newLibva);
+	await writeFile(path.join(newLibva, "libva.so.2.2300.0"), "libva 2.23");
+	await writeFile(
+		path.join(newLibva, "libva-drm.so.2.2300.0"),
+		"libva-drm 2.23",
+	);
+	await symlink("libva.so.2.2300.0", path.join(newLibva, "libva.so.2"));
+	await symlink("libva-drm.so.2.2300.0", path.join(newLibva, "libva-drm.so.2"));
 	const excluded = await finalizeLinuxAppImage(image, {
 		outputPlugin: plugin,
 		unsigned: true,
 		webview: false,
 		env: {
+			CAP_APPIMAGE_LIBVA_DIR: newLibva,
 			PATH: "/usr/bin",
 			TAURI_SIGNING_PRIVATE_KEY: "key",
 			TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "password",
@@ -871,4 +894,168 @@ test("webview-free finalization hands the pruned AppDir to the output plugin", a
 	assert.ok(excluded.includes("usr/lib/libwebkit2gtk-4.1.so.0"));
 	assert.ok(excluded.includes("usr/share/glib-2.0"));
 	assert.deepEqual(await readFile(image), finalImage());
+});
+
+async function directAppDir(root) {
+	const appDir = path.join(root, "Cap's AppDir");
+	await mkdir(path.join(appDir, "usr/bin"), { recursive: true });
+	await writeFile(
+		path.join(appDir, "usr/bin/Cap"),
+		`#!/bin/sh
+printf '%s\\0' "$PWD" "\${OWD-unset}" "\${LD_LIBRARY_PATH-unset}" "\${PATH%%:*}" "\${XDG_DATA_DIRS%%:*}" "\${PYTHONHOME-unset}" "$@"
+exit 23
+`,
+		{ mode: 0o755 },
+	);
+	await writeFile(path.join(appDir, "AppRun"), "generic launcher", {
+		mode: 0o755,
+	});
+	await preserveAppImageWorkingDirectory(appDir, { direct: true });
+	return appDir;
+}
+
+test("the GPUI AppRun starts Cap directly without the generic launcher's library path", async (t) => {
+	const { root } = await fixture(t);
+	const appDir = await directAppDir(root);
+	assert.equal(
+		await readFile(path.join(appDir, "AppRun"), "utf8"),
+		directAppRunWrapper,
+	);
+	await preserveAppImageWorkingDirectory(appDir, { direct: true });
+	const caller = path.join(root, "caller's directory");
+	await mkdir(caller);
+	const args = ["--cap-cli", "two words", "$(literal)"];
+	const env = { ...process.env, PATH: "/usr/bin:/bin" };
+	delete env.LD_LIBRARY_PATH;
+	delete env.PYTHONHOME;
+	const result = spawnSync(path.join(appDir, "AppRun"), args, {
+		cwd: caller,
+		env,
+	});
+	assert.equal(result.status, 23, result.stderr.toString());
+	const [cwd, owd, libraries, firstPath, firstData, pythonHome, ...rest] =
+		result.stdout.toString().split("\0");
+	const real = await realpath(appDir);
+	assert.equal(cwd, path.join(real, "usr"));
+	assert.equal(owd, await realpath(caller));
+	assert.equal(firstPath, path.join(real, "usr/bin"));
+	assert.equal(firstData, path.join(real, "usr/share"));
+	assert.equal(pythonHome, "unset");
+	assert.deepEqual(rest, [...args, ""]);
+	// This machine either has libva, so nothing is added, or it does not, so
+	// only the bundled libva directory is.
+	assert.ok(
+		libraries === "unset" || libraries === path.join(real, "usr/lib/cap/libva"),
+		libraries,
+	);
+});
+
+test("the bundled libva moves out of RUNPATH's reach, symlinks and all", async (t) => {
+	const { root } = await fixture(t);
+	const libraries = path.join(root, "usr/lib");
+	await mkdir(libraries, { recursive: true });
+	for (const name of [
+		"libva.so.2.2100.0",
+		"libva-drm.so.2.2100.0",
+		"libvarlink.so.0",
+		"libavutil.so.59",
+	]) {
+		await writeFile(path.join(libraries, name), name);
+	}
+	await symlink("libva.so.2.2100.0", path.join(libraries, "libva.so.2"));
+	await symlink(
+		"libva-drm.so.2.2100.0",
+		path.join(libraries, "libva-drm.so.2"),
+	);
+	assert.deepEqual(await isolateBundledLibva(root), [
+		"libva-drm.so.2",
+		"libva-drm.so.2.2100.0",
+		"libva.so.2",
+		"libva.so.2.2100.0",
+	]);
+	assert.deepEqual((await readdir(libraries)).sort(), [
+		"cap",
+		"libavutil.so.59",
+		"libvarlink.so.0",
+	]);
+	assert.equal(
+		await readFile(path.join(libraries, "cap/libva/libva.so.2"), "utf8"),
+		"libva.so.2.2100.0",
+	);
+	assert.deepEqual(await isolateBundledLibva(root), []);
+});
+
+test("the bundled libva is replaced by the fallback directory's", async (t) => {
+	const { root } = await fixture(t);
+	const libraries = path.join(root, "usr/lib");
+	const replacement = path.join(root, "new");
+	await mkdir(libraries, { recursive: true });
+	await mkdir(replacement);
+	await writeFile(path.join(libraries, "libva.so.2"), "old");
+	await writeFile(path.join(libraries, "libva-drm.so.2"), "old");
+	await writeFile(path.join(replacement, "libva.so.2.2300.0"), "new");
+	await writeFile(path.join(replacement, "libva-drm.so.2.2300.0"), "new drm");
+	await writeFile(path.join(replacement, "README"), "not a library");
+	await symlink("libva.so.2.2300.0", path.join(replacement, "libva.so.2"));
+	await symlink(
+		"libva-drm.so.2.2300.0",
+		path.join(replacement, "libva-drm.so.2"),
+	);
+	await isolateBundledLibva(root, { replacement });
+	const fallback = path.join(libraries, "cap/libva");
+	assert.deepEqual((await readdir(fallback)).sort(), [
+		"libva-drm.so.2",
+		"libva-drm.so.2.2300.0",
+		"libva.so.2",
+		"libva.so.2.2300.0",
+	]);
+	assert.equal(
+		await readlink(path.join(fallback, "libva.so.2")),
+		"libva.so.2.2300.0",
+	);
+	assert.equal(
+		await readFile(path.join(fallback, "libva.so.2"), "utf8"),
+		"new",
+	);
+
+	const incomplete = path.join(root, "incomplete");
+	await mkdir(incomplete);
+	await writeFile(path.join(incomplete, "libva.so.2"), "new");
+	await assert.rejects(
+		isolateBundledLibva(root, { replacement: incomplete }),
+		/has no libva-drm\.so\.2/,
+	);
+});
+
+test("the pinned fallback libva is checked before it is unpacked", async (t) => {
+	const { root } = await fixture(t);
+	const unpacked = [];
+	const run = async (command, args) => {
+		assert.equal(command, "dpkg-deb");
+		unpacked.push(path.basename(args[1]));
+	};
+	const bytes = new Map(
+		fallbackLibvaPackages.map(({ url }) => [url, Buffer.from(url)]),
+	);
+	const download = async (url) => ({
+		ok: true,
+		status: 200,
+		arrayBuffer: async () => bytes.get(url),
+	});
+	await assert.rejects(
+		fallbackLibvaDirectory(root, { env: {}, run, download }),
+		/has sha256 [0-9a-f]{64}, expected/,
+	);
+	assert.deepEqual(unpacked, []);
+	assert.equal(
+		await fallbackLibvaDirectory(root, {
+			env: { CAP_APPIMAGE_LIBVA_DIR: "/given" },
+			run,
+			download,
+		}),
+		"/given",
+	);
+	for (const { url } of fallbackLibvaPackages) {
+		assert.match(url, /libva(-drm)?2_2\.23\.0-1ubuntu1_amd64\.deb$/);
+	}
 });
