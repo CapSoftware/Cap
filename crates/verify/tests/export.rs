@@ -1493,3 +1493,72 @@ fn recorded_epoch_audio_head() {
     }
     common::assert_passed(failures);
 }
+
+fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
+    config.camera.background_blur.mode = cap_project::BackgroundBlurMode::Light;
+    let segments: Vec<cap_project::CaptionTrackSegment> = (0..12)
+        .map(|i| {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("caption-{i}"),
+                "start": f64::from(i) * 0.6,
+                "end": f64::from(i) * 0.6 + 0.5,
+                "text": format!("Caption number {i} on the timeline"),
+            }))
+            .unwrap()
+        })
+        .collect();
+    config.captions = Some(cap_project::CaptionsData {
+        segments: segments
+            .iter()
+            .map(|segment| cap_project::CaptionSegment {
+                id: segment.id.clone(),
+                start: segment.start as f32,
+                end: segment.end as f32,
+                text: segment.text.clone(),
+                words: Vec::new(),
+            })
+            .collect(),
+        settings: cap_project::CaptionSettings {
+            enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    config
+        .timeline
+        .as_mut()
+        .expect("verification projects have a timeline")
+        .caption_segments = segments;
+}
+
+/// Every export with camera background blur starts a segmentation session.
+/// Where ONNX Runtime has no DirectML, the second one in a process used to end
+/// it (a null call inside ort's DirectML registration), so a second export, or
+/// an export after the editor preview, crashed on Windows.
+#[test]
+fn camera_blur_exports_twice_in_one_process() {
+    let project = common::project(&catalog::multi_segment(report::tier()));
+    let mut config = project.config();
+    camera_blur_and_captions(&mut config);
+    let rt = common::runtime();
+    let dir = common::scratch_dir("export/multi-segment/camera-blur-twice");
+    for attempt in 0..2 {
+        let run = ExportRun {
+            custom_bpp: None,
+            fps: 30,
+            resolution: (1920, 1080),
+            format: Format::Mp4,
+            decoder: Decoder::Default,
+        };
+        let path = dir.path().join(format!("attempt-{attempt}.mp4"));
+        let output = rt
+            .block_on(common::export(&project, config.clone(), &run, &path))
+            .unwrap_or_else(|error| panic!("export {attempt} failed: {error}"));
+        let frames = common::read_output(&output, None);
+        assert!(
+            frames.len() > 30,
+            "export {attempt} wrote {} frames",
+            frames.len()
+        );
+    }
+}
