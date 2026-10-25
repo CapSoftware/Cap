@@ -518,7 +518,11 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				document.activeElement?.closest('[data-slot="media-player"]') !== null;
 
 			if (!isMediaFocused && !isPlayerFocused) return;
-			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			if (
+				(event.metaKey || event.ctrlKey || event.altKey) &&
+				!event.getModifierState("AltGraph")
+			)
+				return;
 
 			if (autoHide) onControlsShow();
 
@@ -764,7 +768,11 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const onKeyUp = React.useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
 			rootImplProps.onKeyUp?.(event);
-			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			if (
+				(event.metaKey || event.ctrlKey || event.altKey) &&
+				!event.getModifierState("AltGraph")
+			)
+				return;
 
 			const key = event.key.toLowerCase();
 			if (key === "arrowup" || key === "arrowdown" || key === "m") {
