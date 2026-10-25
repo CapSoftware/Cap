@@ -71,6 +71,15 @@ async function fetchFolders(
 		.where(and(eq(folders.spaceId, spaceId), isNull(folders.parentId)));
 }
 
+async function fetchOrganizationSettings(orgId: Organisation.OrganisationId) {
+	const [row] = await db()
+		.select({ settings: organizations.settings })
+		.from(organizations)
+		.where(eq(organizations.id, orgId))
+		.limit(1);
+	return row?.settings ?? null;
+}
+
 const fetchSpaceMembers = Effect.fn(function* (
 	spaceId: Space.SpaceIdOrOrganisationId,
 ) {
@@ -296,23 +305,6 @@ export default async function SharedCapsPage(props: {
 	if (spaceOrOrg.variant === "space") {
 		const { space } = spaceOrOrg;
 
-		// Fetch members in parallel
-		const [spaceMembersData, organizationMembersData, foldersData] =
-			await Promise.all([
-				fetchSpaceMembers(space.id).pipe(runPromise),
-				fetchOrganizationMembers(space.organizationId).pipe(runPromise),
-				fetchFolders(space.id, false),
-			]);
-		const resolvedSpace = await Effect.gen(function* () {
-			const imageUploads = yield* ImageUploads;
-			return {
-				...space,
-				iconUrl: space.iconUrl
-					? yield* imageUploads.resolveImageUrl(space.iconUrl)
-					: null,
-			};
-		}).pipe(runPromise);
-
 		async function fetchSpaceVideos(
 			spaceId: Space.SpaceIdOrOrganisationId,
 			page: number,
@@ -383,22 +375,32 @@ export default async function SharedCapsPage(props: {
 			};
 		}
 
-		// Fetch videos and count in parallel
-		const { videos: spaceVideoData, totalCount } = await fetchSpaceVideos(
-			space.id,
-			page,
-			limit,
-		);
+		const [
+			spaceMembersData,
+			organizationMembersData,
+			foldersData,
+			{ videos: spaceVideoData, totalCount },
+			organizationSettings,
+		] = await Promise.all([
+			fetchSpaceMembers(space.id).pipe(runPromise),
+			fetchOrganizationMembers(space.organizationId).pipe(runPromise),
+			fetchFolders(space.id, false),
+			fetchSpaceVideos(space.id, page, limit),
+			fetchOrganizationSettings(space.organizationId),
+		]);
+		const resolvedSpace = await Effect.gen(function* () {
+			const imageUploads = yield* ImageUploads;
+			return {
+				...space,
+				iconUrl: space.iconUrl
+					? yield* imageUploads.resolveImageUrl(space.iconUrl)
+					: null,
+			};
+		}).pipe(runPromise);
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			spaceVideoData.map((video) => Video.VideoId.make(video.id)),
 			{ userId: user.id, organizationId: space.organizationId },
 		);
-		const [organizationSettingsRow] = await db()
-			.select({ settings: organizations.settings })
-			.from(organizations)
-			.where(eq(organizations.id, space.organizationId))
-			.limit(1);
-		const organizationSettings = organizationSettingsRow?.settings ?? null;
 		const processedVideoData = spaceVideoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
 				video;
@@ -506,7 +508,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
-							isNull(videos.folderId),
+							isNull(sharedVideos.folderId),
 						),
 					),
 			]);
@@ -516,26 +518,21 @@ export default async function SharedCapsPage(props: {
 			};
 		}
 
-		// Fetch videos and count in parallel
-
-		const [organizationVideos, organizationMembersData, foldersData] =
-			await Promise.all([
-				fetchOrganizationVideos(organization.id, page, limit),
-				fetchOrganizationMembers(organization.id).pipe(runPromise),
-				fetchFolders(organization.id, true),
-			]);
-
-		const { videos: orgVideoData, totalCount } = organizationVideos;
+		const [
+			{ videos: orgVideoData, totalCount },
+			organizationMembersData,
+			foldersData,
+			organizationSettings,
+		] = await Promise.all([
+			fetchOrganizationVideos(organization.id, page, limit),
+			fetchOrganizationMembers(organization.id).pipe(runPromise),
+			fetchFolders(organization.id, true),
+			fetchOrganizationSettings(organization.id),
+		]);
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			orgVideoData.map((video) => Video.VideoId.make(video.id)),
 			{ userId: user.id, organizationId: organization.id },
 		);
-		const [organizationSettingsRow] = await db()
-			.select({ settings: organizations.settings })
-			.from(organizations)
-			.where(eq(organizations.id, organization.id))
-			.limit(1);
-		const organizationSettings = organizationSettingsRow?.settings ?? null;
 		const processedVideoData = orgVideoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
 				video;

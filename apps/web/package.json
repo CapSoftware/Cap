@@ -136,6 +136,7 @@
 		"react-rnd": "^10.4.1",
 		"react-scroll-parallax": "^3.4.5",
 		"react-tooltip": "^5.26.3",
+		"react-tweet": "^3.3.1",
 		"recharts": "^3.3.0",
 		"rehype-pretty-code": "^0.14.1",
 		"remark-gfm": "^4.0.1",
@@ -179,6 +180,6 @@
 		"vitest": "^3.2.0"
 	},
 	"engines": {
-		"node": ">=20"
+		"node": "24.x"
 	}
 }

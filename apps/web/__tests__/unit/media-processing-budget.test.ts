@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import {
 	getMediaProcessingReservation,
+	RECORDING_PROCESSING_ATTEMPTS,
 	reserveMediaProcessingBudget,
 } from "@/lib/media-processing-budget";
 
@@ -104,18 +105,22 @@ it("reuses an attempt reservation across dispatch retries and midnight", async (
 	]);
 });
 
-it("still bounds repeated processing of the same immutable source", async () => {
+it("allows every automatic attempt before bounding repeated processing of the same source", async () => {
 	const input = {
 		videoId: "video",
 		generation: "generation",
 		sourceBytes: 1024 ** 3,
 	};
-	for (let index = 0; index < 3; index++)
+	expect(RECORDING_PROCESSING_ATTEMPTS).toBe(5);
+	for (let index = 0; index < RECORDING_PROCESSING_ATTEMPTS; index++)
 		await reserveMediaProcessingBudget({
 			...input,
 			attemptId: `attempt-${index}`,
 		});
 	await expect(
-		reserveMediaProcessingBudget({ ...input, attemptId: "attempt-4" }),
+		reserveMediaProcessingBudget({
+			...input,
+			attemptId: `attempt-${RECORDING_PROCESSING_ATTEMPTS}`,
+		}),
 	).rejects.toThrow("recording transfer budget exhausted");
 });

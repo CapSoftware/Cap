@@ -15,14 +15,18 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+pub(crate) mod instant_cleanup;
 #[cfg(test)]
 mod multipart_tests;
 pub(crate) mod queue;
+#[cfg(test)]
+mod real_app_tests;
 #[cfg(test)]
 mod verify_tests;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
+const DRIVE_CHUNK_ALIGNMENT: u64 = 256 * 1024;
 const MAX_SEGMENT_UPLOADS: usize = 6;
 const SEGMENT_URL_PREFETCH: u32 = 20;
 const SEGMENT_UPLOAD_ATTEMPTS: u32 = 3;
@@ -225,6 +229,51 @@ impl SegmentUploadManifest {
 
     fn has_video_content(&self) -> bool {
         self.video_init_uploaded && !self.video_segments.is_empty()
+    }
+}
+
+// Only the share page's early playback reads this; the complete manifest stays
+// the source of truth for everything else.
+const RECORDED_LENGTH_SUBPATH: &str = "segments/recording.json";
+const RECORDED_LENGTH_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn recorded_length_json(manifest: &SegmentUploadManifest) -> Option<Vec<u8>> {
+    let duration: f64 = manifest
+        .video_segments
+        .iter()
+        .map(|segment| segment.duration)
+        .sum();
+    if manifest.video_segments.is_empty() || !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    serde_json::to_vec(&json!({
+        "version": 1,
+        "duration": duration,
+        "video_segments": manifest.video_segments.len(),
+        "audio_segments": manifest.audio_segments.len(),
+    }))
+    .ok()
+}
+
+async fn publish_recorded_length(video_id: String, bytes: Vec<u8>, cancel: Arc<AtomicBool>) {
+    match tokio::time::timeout(
+        RECORDED_LENGTH_TIMEOUT,
+        presigned_put_bytes_inner(&video_id, RECORDED_LENGTH_SUBPATH, bytes, Some(&cancel)),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::debug!(%error, "Recorded length upload failed"),
+        Err(_) => tracing::debug!("Recorded length upload timed out"),
+    }
+}
+
+async fn alongside<T>(main: impl Future<Output = T>, side: impl Future<Output = ()>) -> T {
+    let main = std::pin::pin!(main);
+    let side = std::pin::pin!(side);
+    match futures_util::future::select(main, side).await {
+        futures_util::future::Either::Left((output, _)) => output,
+        futures_util::future::Either::Right(((), main)) => main.await,
     }
 }
 
@@ -460,7 +509,7 @@ impl InstantUpload {
         result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
     }
 
-    pub async fn cancel(&mut self) -> Result<(), String> {
+    pub async fn cancel(&mut self, query: Option<&str>) -> Result<(), String> {
         self.abort_segments().await;
         if let Some(ownership) = &self.ownership {
             queue::record_cancelled(ownership.project_path())?;
@@ -468,7 +517,7 @@ impl InstantUpload {
         with_upload_context(
             self.request_context.clone(),
             self.reads.clone(),
-            delete_instant_video(&self.video.id),
+            delete_instant_video_with_query(&self.video.id, query),
         )
         .await
     }
@@ -490,11 +539,18 @@ impl InstantUpload {
     }
 }
 
-pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
-    let path = format!(
+pub(crate) async fn delete_instant_video_with_query(
+    video_id: &str,
+    query: Option<&str>,
+) -> Result<(), String> {
+    let mut path = format!(
         "/api/desktop/video/delete?videoId={}",
         urlencoding(video_id)
     );
+    if let Some(query) = query {
+        path.push('&');
+        path.push_str(query);
+    }
     let response = auth::authed_request(reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|error| format!("Failed to delete instant recording: {error}"))?;
@@ -2023,6 +2079,7 @@ async fn upload_file_parts(
     let mut parts = Vec::new();
     let mut failed = Vec::new();
     let mut offset = 0u64;
+    let mut uploaded_bytes = 0u64;
     let mut part_number = 1u32;
 
     while offset < file_size {
@@ -2040,7 +2097,11 @@ async fn upload_file_parts(
             bytes: chunk.into(),
         };
         match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => parts.push(part),
+            Ok(part) => {
+                uploaded_bytes += size as u64;
+                progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
+                parts.push(part);
+            }
             Err(error) => {
                 check_export_cancelled(cancel)?;
                 tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
@@ -2049,7 +2110,6 @@ async fn upload_file_parts(
         }
         offset += size as u64;
         part_number += 1;
-        progress((offset as f64 / file_size as f64).min(0.99));
     }
 
     for (chunk, first_error) in failed {
@@ -2057,7 +2117,11 @@ async fn upload_file_parts(
             return Err(AuthApiError::Other("Export cancelled".into()));
         }
         match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => parts.push(part),
+            Ok(part) => {
+                uploaded_bytes += chunk.bytes.len() as u64;
+                progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
+                parts.push(part);
+            }
             Err(_) => {
                 check_export_cancelled(cancel)?;
                 return Err(first_error);
@@ -2447,7 +2511,8 @@ fn read_chunk(path: &Path, offset: u64, size: usize) -> Result<Vec<u8>, AuthApiE
 }
 
 fn chunk_size_for(file_size: u64) -> u64 {
-    (file_size / 100).clamp(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE)
+    let size = (file_size / 100).clamp(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE);
+    size / DRIVE_CHUNK_ALIGNMENT * DRIVE_CHUNK_ALIGNMENT
 }
 
 fn md5_base64(bytes: &[u8]) -> String {
@@ -2736,6 +2801,112 @@ mod tests {
         }
     }
 
+    /// The finished segment manifest this app uploads, checked against the
+    /// files the web server's own parser is tested with
+    /// (`apps/web/__tests__/unit/desktop-segments-manifest-contract.test.ts`),
+    /// so neither side can change the format without the other noticing. Run
+    /// with `CAP_UPDATE_CONTRACT_FIXTURES=1` to rewrite the files after an
+    /// intended change.
+    #[test]
+    fn finished_segment_manifests_match_the_server_contract_fixtures() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web/__tests__/fixtures/desktop-segments");
+        for (name, audio) in [("with-audio", 2), ("video-only", 0)] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+            for (index, duration) in [(1, 2.0), (2, 2.0), (3, 1.25)] {
+                manifest.record(&segment_event(
+                    index,
+                    duration,
+                    false,
+                    SegmentMediaType::Video,
+                ));
+            }
+            if audio > 0 {
+                manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Audio));
+                for index in 1..=audio {
+                    manifest.record(&segment_event(index, 3.0, false, SegmentMediaType::Audio));
+                }
+            }
+            manifest.is_complete = true;
+            let uploaded = serde_json::to_value(&manifest).unwrap();
+            let path = fixtures.join(format!("finished-manifest-{name}.json"));
+            if std::env::var_os("CAP_UPDATE_CONTRACT_FIXTURES").is_some() {
+                std::fs::create_dir_all(&fixtures).unwrap();
+                let mut json = Vec::new();
+                let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+                let mut serializer = serde_json::Serializer::with_formatter(&mut json, formatter);
+                serde::Serialize::serialize(&uploaded, &mut serializer).unwrap();
+                json.push(b'\n');
+                std::fs::write(&path, json).unwrap();
+            }
+            let fixture: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),
+            )
+            .unwrap();
+            assert_eq!(
+                fixture,
+                uploaded,
+                "{} no longer matches what the app uploads",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_length_sums_the_complete_local_video_track() {
+        let mut manifest = SegmentUploadManifest::default();
+        manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+        manifest.record(&segment_event(2, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(3, 0.5, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Audio));
+
+        let value: Value =
+            serde_json::from_slice(&recorded_length_json(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            value,
+            json!({ "version": 1, "duration": 4.5, "video_segments": 3, "audio_segments": 1 })
+        );
+    }
+
+    #[test]
+    fn recorded_length_is_skipped_without_a_usable_video_length() {
+        assert!(recorded_length_json(&SegmentUploadManifest::default()).is_none());
+        for duration in [0.0, f64::NAN, f64::INFINITY] {
+            let mut manifest = SegmentUploadManifest::default();
+            manifest.record(&segment_event(1, duration, false, SegmentMediaType::Video));
+            assert!(recorded_length_json(&manifest).is_none(), "{duration}");
+        }
+    }
+
+    #[tokio::test]
+    async fn alongside_never_waits_for_its_side_task() {
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { 7 }, async move {
+            std::future::pending::<()>().await;
+            flag.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert_eq!(output, 7);
+        assert!(!side_ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn alongside_finishes_its_main_task_after_a_quick_side_task() {
+        let (sender, receiver) = tokio::sync::oneshot::channel::<u32>();
+        let side_ran = Arc::new(AtomicBool::new(false));
+        let flag = side_ran.clone();
+        let output = alongside(async { receiver.await.unwrap() }, async move {
+            flag.store(true, Ordering::SeqCst);
+            sender.send(9).unwrap();
+        })
+        .await;
+        assert_eq!(output, 9);
+        assert!(side_ran.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn segment_manifest_requires_init_and_orders_video_and_audio() {
         let mut manifest = SegmentUploadManifest::default();
@@ -2860,6 +3031,28 @@ mod tests {
         // wrong side of the clamp).
         assert_eq!(chunk_size_for(MAX_CHUNK_SIZE * 200), MAX_CHUNK_SIZE);
         assert_eq!(chunk_size_for(MIN_CHUNK_SIZE * 50), MIN_CHUNK_SIZE);
+    }
+
+    #[test]
+    fn chunk_sizes_satisfy_drive_resumable_alignment() {
+        for file_size in [
+            1,
+            MIN_CHUNK_SIZE * 100,
+            MIN_CHUNK_SIZE * 100 + 100,
+            600 * 1024 * 1024,
+            1024 * 1024 * 1024,
+            MAX_CHUNK_SIZE * 100 - 100,
+            MAX_CHUNK_SIZE * 100,
+            MAX_CHUNK_SIZE * 200,
+        ] {
+            let chunk_size = chunk_size_for(file_size);
+            assert!((MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size));
+            assert_eq!(
+                chunk_size % (256 * 1024),
+                0,
+                "Drive requires aligned intermediate chunks for a {file_size}-byte export"
+            );
+        }
     }
 
     #[test]

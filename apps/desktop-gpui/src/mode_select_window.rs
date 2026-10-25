@@ -9,11 +9,12 @@
 
 use gpui::{
     Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    Point, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, prelude::FluentBuilder, px, svg,
 };
 
-use crate::{main_window::Mode, theme::Theme};
+use crate::theme::LocaleFont as _;
+use crate::{main_window::Mode, theme::Theme, ui::keyboard_nav};
 
 /// `.inner_size(580.0, 340.0)` / `.min_inner_size(580.0, 340.0)` /
 /// `.resizable(false)` on the `ShowCapWindow::ModeSelect` arm in `windows.rs`,
@@ -45,6 +46,8 @@ pub struct ModeSelectWindow {
     /// cannot drift.
     mode: Mode,
     focus: FocusHandle,
+    keyboard_nav: bool,
+    _keyboard_nav: Subscription,
 }
 
 impl ModeSelectWindow {
@@ -67,6 +70,8 @@ impl ModeSelectWindow {
             theme: Theme::for_window(window, cx, false),
             mode,
             focus: cx.focus_handle(),
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav::install(window, cx, |_, _| false),
         }
     }
 
@@ -104,6 +109,11 @@ impl ModeSelectWindow {
 
         div()
             .id(SharedString::from(mode.panel_title()))
+            .when(self.keyboard_nav, keyboard_nav::stop)
+            .role(Role::Button)
+            .aria_label(mode.panel_title())
+            .aria_description(mode.card_description())
+            .aria_selected(selected)
             .relative()
             .flex()
             .flex_col()
@@ -236,10 +246,12 @@ impl ModeSelectWindow {
 impl Render for ModeSelectWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.keyboard_nav = keyboard_nav::active(window, cx);
         let theme = self.theme;
 
         let shell = div()
             .track_focus(&self.focus)
+            .child(keyboard_nav::pointer_watcher())
             // `flex flex-col relative justify-center items-center min-h-screen
             //  bg-gray-1`
             .size_full()
@@ -250,6 +262,7 @@ impl Render for ModeSelectWindow {
             .items_center()
             .bg(Hsla::from(theme.gray_1))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)

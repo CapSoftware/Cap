@@ -28,6 +28,10 @@ name = "thumbnail_fit"
 harness = false
 
 [[bench]]
+name = "thumbnail_capture"
+harness = false
+
+[[bench]]
 name = "png_encode"
 harness = false
 
@@ -37,4 +41,20 @@ harness = false
 
 [[bench]]
 name = "screenshot_alpha"
+harness = false
+
+[[bench]]
+name = "frame_unpad"
+harness = false
+
+[[bench]]
+name = "frame_copy_rows"
+harness = false
+
+[[bench]]
+name = "screenshot_mask"
+harness = false
+
+[[bench]]
+name = "screenshot_blur"
 harness = false

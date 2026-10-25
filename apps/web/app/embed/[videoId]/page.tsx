@@ -27,6 +27,11 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
+import {
+	getPendingLoomProcessing,
+	startDeferredLoomProcessing,
+} from "@/lib/loom-deferred-processing";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
@@ -53,6 +58,8 @@ export async function generateMetadata(
 						videoId,
 						name: video.name,
 						sourceType: video.source.type,
+						width: Option.getOrNull(video.width),
+						height: Option.getOrNull(video.height),
 						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 					}),
 					robots: "index, follow",
@@ -268,6 +275,25 @@ async function EmbedContent({
 	}
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
+	const deferredLoomRawFileKey = video.hasActiveUpload
+		? null
+		: getPendingLoomProcessing(currentMetadata, video.ownerId, video.id);
+	if (deferredLoomRawFileKey) {
+		const rawFileKey = deferredLoomRawFileKey;
+		after(() =>
+			startDeferredLoomProcessing({
+				videoId: video.id,
+				ownerId: video.ownerId,
+				bucketId: video.bucket,
+				rawFileKey,
+			}).catch((error) => {
+				console.error(
+					`[EmbedVideoPage] Error starting deferred processing for ${video.id}:`,
+					error,
+				);
+			}),
+		);
+	}
 	let initialAiData = null;
 
 	if (

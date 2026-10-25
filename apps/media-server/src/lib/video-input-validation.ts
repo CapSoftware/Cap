@@ -1,5 +1,9 @@
 import { spawn } from "bun";
-import { PROCESS_TIMEOUT_MS, withTimeout } from "./media-common";
+import {
+	decodeThreadsFromEnv,
+	PROCESS_TIMEOUT_MS,
+	withTimeout,
+} from "./media-common";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const MAX_DIAGNOSTIC_LENGTH = 8_192;
@@ -22,7 +26,7 @@ export async function validateVideoInput(
 				"-err_detect",
 				"explode+crccheck",
 				"-threads",
-				"2",
+				decodeThreadsFromEnv("MEDIA_SERVER_VALIDATE_DECODE_THREADS", 2),
 				"-i",
 				inputPath,
 				"-map",

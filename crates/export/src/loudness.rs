@@ -481,6 +481,9 @@ pub fn normalize_file_loudness(
     mux_audio_into(path, &audio, scratch.path(), cancel)?;
     check_cancel(cancel)?;
     verify_scratch(&scratch)?;
+    // tempfile creates the scratch owner-only (0600); the export keeps the
+    // permissions it was written with.
+    std::fs::set_permissions(scratch.path(), std::fs::metadata(path)?.permissions())?;
     scratch.persist(path).map_err(|error| error.error)?;
     Ok(Some(gain))
 }
@@ -603,9 +606,20 @@ mod tests {
         std::fs::remove_file(dir.path().join("quiet.wav")).unwrap();
         let bystander = path.with_extension("loudness.m4a");
         std::fs::write(&bystander, b"the user's own file").unwrap();
+        let before = std::fs::metadata(&path).unwrap().permissions();
         normalize_file_loudness(&path, SOCIAL_TARGET_LUFS, &AtomicBool::new(false))
             .unwrap()
             .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions(),
+            before,
+            "the export keeps its permissions"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(before.mode() & 0o777, 0o600, "fixture is not owner-only");
+        }
         assert_eq!(std::fs::read(&bystander).unwrap(), b"the user's own file");
         assert_eq!(entries(dir.path()), vec!["quiet.loudness.m4a", "quiet.m4a"]);
     }
@@ -774,7 +788,12 @@ mod tests {
         };
         ffmpeg::init().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let copy = dir.path().join("export.mp4");
+        let extension = Path::new(&original)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4")
+            .to_ascii_lowercase();
+        let copy = dir.path().join(format!("export.{extension}"));
         std::fs::copy(&original, &copy).unwrap();
         let before_video = video_timeline(&copy);
         let before_audio = decode_mono(&copy);

@@ -25,6 +25,11 @@ import {
 import { type Organisation, S3Bucket, Storage } from "@cap/web-domain";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	blockedS3EndpointMessage,
+	isDisallowedS3Endpoint,
+	publicOnlyS3Agents,
+} from "@/lib/s3-endpoint-policy";
 import { runPromise } from "@/lib/server";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -384,6 +389,9 @@ export async function saveOrganizationS3Config(input: S3ConfigInput) {
 	const { user } = await requireOrganizationStorageManagerPro(
 		input.organizationId,
 	);
+	if (await isDisallowedS3Endpoint(input.endpoint)) {
+		throw new Error(blockedS3EndpointMessage);
+	}
 	const credentials = await getS3InputCredentials(input);
 	const encryptedConfig = {
 		provider: input.provider,
@@ -426,6 +434,9 @@ export async function removeOrganizationS3Config(
 
 export async function testOrganizationS3Config(input: S3ConfigInput) {
 	await requireOrganizationStorageManagerPro(input.organizationId);
+	if (await isDisallowedS3Endpoint(input.endpoint)) {
+		throw new Error(blockedS3EndpointMessage);
+	}
 	const credentials = await getS3InputCredentials(input);
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -436,6 +447,7 @@ export async function testOrganizationS3Config(input: S3ConfigInput) {
 			accessKeyId: credentials.accessKeyId,
 			secretAccessKey: credentials.secretAccessKey,
 		},
+		requestHandler: publicOnlyS3Agents(),
 	});
 
 	try {

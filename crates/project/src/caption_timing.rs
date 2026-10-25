@@ -205,14 +205,10 @@ fn map_captions_to_edited_timeline(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<MappedCaption> {
-    let sanitized: Vec<CaptionSegment> = raw_segments
-        .iter()
-        .map(clamp_caption_segment_words)
-        .collect();
-
     if timeline.segments.is_empty() || recording_durations.is_empty() {
-        return sanitized
-            .into_iter()
+        return raw_segments
+            .iter()
+            .map(clamp_caption_segment_words)
             .map(|segment| MappedCaption {
                 id: segment.id,
                 start: f64::from(segment.start),
@@ -224,6 +220,12 @@ fn map_captions_to_edited_timeline(
     }
 
     let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mappings_ordered = mappings
+        .iter()
+        .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())
+        && mappings.windows(2).all(|pair| {
+            pair[0].source_start <= pair[1].source_start && pair[0].source_end <= pair[1].source_end
+        });
     let holds = timeline.hold_windows();
     let hold_adjusted = |start: f64, end: f64| {
         if holds.is_empty() {
@@ -238,16 +240,52 @@ fn map_captions_to_edited_timeline(
 
     let mut result = Vec::new();
 
-    for caption in &sanitized {
+    for caption in raw_segments {
         let mut mapped_caption_segments: Vec<MappedCaption> = Vec::new();
+        let word_bounds = if caption.words.is_empty() {
+            None
+        } else {
+            caption.words.iter().try_fold(
+                (f64::INFINITY, f64::NEG_INFINITY),
+                |(start, end), word| {
+                    let word_start = f64::from(word.start);
+                    let word_end = f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION));
+                    if word_start.is_nan() || word_end.is_nan() {
+                        None
+                    } else {
+                        Some((start.min(word_start), end.max(word_end)))
+                    }
+                },
+            )
+        };
 
-        for mapping in &mappings {
+        let bounds = if caption.words.is_empty() {
+            Some((f64::from(caption.start), f64::from(caption.end)))
+        } else {
+            word_bounds
+        };
+        let caption_mappings = match bounds {
+            Some((start, end)) if mappings_ordered && start.is_finite() && end.is_finite() => {
+                let first = mappings.partition_point(|mapping| mapping.source_end <= start);
+                let count = mappings[first..].partition_point(|mapping| mapping.source_start < end);
+                &mappings[first..first + count]
+            }
+            _ => &mappings,
+        };
+
+        for mapping in caption_mappings {
             if !caption.words.is_empty() {
+                if let Some((word_start, word_end)) = word_bounds
+                    && (word_end <= mapping.source_start || word_start >= mapping.source_end)
+                {
+                    continue;
+                }
+
                 let mut mapped_words = Vec::new();
                 for word in &caption.words {
                     let Some((start, end)) = map_time_range_within_mapping(
                         f64::from(word.start),
-                        f64::from(word.end),
+                        f64::from(word.end.min(word.start + MAX_CAPTION_WORD_DURATION)),
                         mapping,
                     ) else {
                         continue;
@@ -311,27 +349,11 @@ pub fn derive_caption_track_segments(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<CaptionTrackSegment> {
-    struct TrackOverrides {
-        fade_duration: Option<f32>,
-        linger_duration: Option<f32>,
-        position: Option<String>,
-        color: Option<String>,
-        background_color: Option<String>,
-        font_size: Option<u32>,
-    }
-
-    let mut overrides_by_source_id: HashMap<String, TrackOverrides> = HashMap::new();
+    let mut overrides_by_source_id = HashMap::new();
     for segment in &timeline.caption_segments {
         overrides_by_source_id
-            .entry(source_caption_id(&segment.id).to_string())
-            .or_insert_with(|| TrackOverrides {
-                fade_duration: segment.fade_duration_override,
-                linger_duration: segment.linger_duration_override,
-                position: segment.position_override.clone(),
-                color: segment.color_override.clone(),
-                background_color: segment.background_color_override.clone(),
-                font_size: segment.font_size_override,
-            });
+            .entry(source_caption_id(&segment.id))
+            .or_insert(segment);
     }
 
     let mut mapped =
@@ -343,17 +365,18 @@ pub fn derive_caption_track_segments(
         .map(|segment| {
             let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
             CaptionTrackSegment {
-                id: segment.id.clone(),
+                id: segment.id,
                 start: segment.start,
                 end: segment.end,
                 text: segment.text,
                 words: segment.words,
-                fade_duration_override: overrides.and_then(|o| o.fade_duration),
-                linger_duration_override: overrides.and_then(|o| o.linger_duration),
-                position_override: overrides.and_then(|o| o.position.clone()),
-                color_override: overrides.and_then(|o| o.color.clone()),
-                background_color_override: overrides.and_then(|o| o.background_color.clone()),
-                font_size_override: overrides.and_then(|o| o.font_size),
+                fade_duration_override: overrides.and_then(|o| o.fade_duration_override),
+                linger_duration_override: overrides.and_then(|o| o.linger_duration_override),
+                position_override: overrides.and_then(|o| o.position_override.clone()),
+                color_override: overrides.and_then(|o| o.color_override.clone()),
+                background_color_override: overrides
+                    .and_then(|o| o.background_color_override.clone()),
+                font_size_override: overrides.and_then(|o| o.font_size_override),
             }
         })
         .collect()
@@ -423,6 +446,9 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
     timeline.caption_segments =
         derive_caption_track_segments(&captions.segments, timeline, recording_durations);
 }
+
+#[cfg(test)]
+mod projection_tests;
 
 #[cfg(test)]
 mod tests {
@@ -566,6 +592,111 @@ mod tests {
         assert_eq!(
             project.timeline.as_ref().unwrap().caption_segments[0].end,
             1.0
+        );
+    }
+
+    #[test]
+    fn unsorted_words_outside_caption_bounds_keep_both_clip_projections() {
+        let timeline = project(true, 0.0, 0.5).timeline.unwrap();
+        let captions = [CaptionSegment {
+            id: "unsorted".into(),
+            start: 0.0,
+            end: 0.5,
+            text: "parent".into(),
+            words: vec![
+                CaptionWord {
+                    text: "late-first".into(),
+                    start: 4.0,
+                    end: 4.5,
+                },
+                CaptionWord {
+                    text: "second-clip".into(),
+                    start: 7.0,
+                    end: 7.5,
+                },
+                CaptionWord {
+                    text: "early-last".into(),
+                    start: 1.0,
+                    end: 1.5,
+                },
+            ],
+        }];
+
+        let track = derive_caption_track_segments(&captions, &timeline, &[10.0]);
+        assert_eq!(track.len(), 2);
+        assert_eq!(track[0].id, "unsorted::edl0");
+        assert_eq!(track[0].start, 4.0);
+        assert_eq!(track[0].end, 1.5);
+        assert_eq!(track[0].text, "late-first early-last");
+        assert_eq!(
+            track[0]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("late-first", 4.0, 4.5), ("early-last", 1.0, 1.5)]
+        );
+        assert_eq!(track[1].id, "unsorted::edl1");
+        assert_eq!(track[1].start, 6.0);
+        assert_eq!(track[1].end, 6.5);
+        assert_eq!(track[1].text, "second-clip");
+        assert_eq!(
+            track[1]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("second-clip", 6.0, 6.5)]
+        );
+    }
+
+    #[test]
+    fn nan_word_timestamp_keeps_the_existing_mapping_path() {
+        let timeline = project(true, 0.0, 0.5).timeline.unwrap();
+        let captions = [CaptionSegment {
+            id: "nan".into(),
+            start: 0.0,
+            end: 0.5,
+            text: "parent".into(),
+            words: vec![
+                CaptionWord {
+                    text: "nan-start".into(),
+                    start: f32::NAN,
+                    end: 1.0,
+                },
+                CaptionWord {
+                    text: "second-clip".into(),
+                    start: 7.0,
+                    end: 7.5,
+                },
+            ],
+        }];
+
+        let track = derive_caption_track_segments(&captions, &timeline, &[10.0]);
+        assert_eq!(track.len(), 2);
+        assert_eq!(track[0].id, "nan::edl0");
+        assert_eq!(track[0].start, 0.0);
+        assert_eq!(track[0].end, 1.0);
+        assert_eq!(track[0].text, "nan-start");
+        assert_eq!(
+            track[0]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("nan-start", 0.0, 1.0)]
+        );
+        assert_eq!(track[1].id, "nan::edl1");
+        assert_eq!(track[1].start, 6.0);
+        assert_eq!(track[1].end, 6.5);
+        assert_eq!(track[1].text, "second-clip");
+        assert_eq!(
+            track[1]
+                .words
+                .iter()
+                .map(|word| (word.text.as_str(), word.start, word.end))
+                .collect::<Vec<_>>(),
+            vec![("second-clip", 6.0, 6.5)]
         );
     }
 }
