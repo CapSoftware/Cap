@@ -279,6 +279,9 @@ struct CleanCaptureUi {
     retained_windows: Vec<(gpui::AnyWindowHandle, bool)>,
     restoring: bool,
     restoration_error: Option<String>,
+    /// A start that had no Stop control to hide behind: it runs with Cap's
+    /// controls visible once the windows this lease hid are back.
+    visible_fallback: Option<StartConfig>,
 }
 
 #[cfg(target_os = "linux")]
@@ -3216,7 +3219,12 @@ pub fn handle_owned_clean_capture_shortcut(
 }
 
 #[cfg(target_os = "linux")]
-pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut App) {
+pub fn clean_capture_stop_unavailable(
+    generation: u64,
+    error: String,
+    stop_was_ready: bool,
+    cx: &mut App,
+) {
     if !clean_capture_generation_matches(generation, cx) {
         return;
     }
@@ -3230,6 +3238,29 @@ pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut A
     }
     let session = RecordingSession::global(cx);
     if session.read(cx).phase == Phase::Idle {
+        if let Some(config) = visible_fallback_start(&error, stop_was_ready, cx) {
+            // Without a tray or a granted shortcut, nothing could stop a
+            // recording that hides Cap. Record with the controls on screen
+            // instead of not at all.
+            tracing::warn!(%error, "no recording Stop control is available; recording with Cap's controls visible");
+            let wayland = cx
+                .global::<AppWindows>()
+                .clean_capture
+                .as_ref()
+                .is_some_and(|lease| lease.wayland);
+            if wayland {
+                if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
+                    lease.visible_fallback = Some(config);
+                }
+                cancel_clean_capture(cx);
+            } else {
+                cancel_clean_capture(cx);
+                if cx.global::<AppWindows>().clean_capture.is_none() {
+                    begin_recording_after_preflight(config, cx);
+                }
+            }
+            return;
+        }
         cancel_clean_capture(cx);
         report_clean_capture_error(anyhow::Error::msg(error), cx);
     } else {
@@ -3238,6 +3269,32 @@ pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut A
             session.stop(cx);
         });
     }
+}
+
+/// The start a Stop control failure can still record, with visible controls:
+/// only before the control ever worked, when its registration was cleaned up,
+/// and not for a recording appended to an open editor.
+#[cfg(target_os = "linux")]
+fn visible_fallback_start(error: &str, stop_was_ready: bool, cx: &mut App) -> Option<StartConfig> {
+    if !visible_fallback_allowed(error, stop_was_ready)
+        || RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+    {
+        return None;
+    }
+    cx.global_mut::<AppWindows>()
+        .clean_capture
+        .as_mut()
+        .and_then(|lease| lease.config.take())
+}
+
+#[cfg(target_os = "linux")]
+fn visible_fallback_allowed(error: &str, stop_was_ready: bool) -> bool {
+    !stop_was_ready
+        && !error.contains("could not be cleaned up safely")
+        && !error.contains("cleanup is unconfirmed")
 }
 
 #[cfg(target_os = "linux")]
@@ -3308,6 +3365,7 @@ fn prepare_clean_capture(config: StartConfig, cx: &mut App) -> anyhow::Result<()
         wayland,
         restoring: false,
         restoration_error: None,
+        visible_fallback: None,
         retained_windows: if wayland {
             vec![(main.into(), main_was_visible)]
         } else {
@@ -3579,9 +3637,12 @@ fn begin_retained_capture_restore(cx: &mut App) {
                 Ok(()) => {
                     tracing::info!("recording UI restored after a clean capture");
                     crate::hotkeys::complete_clean_capture_stop(generation, cx);
-                    let _restored = cx.global_mut::<AppWindows>().clean_capture.take();
+                    let restored = cx.global_mut::<AppWindows>().clean_capture.take();
                     update_camera_presentation(true, cx);
                     RecordingSession::global(cx).update(cx, |_, cx| cx.notify());
+                    if let Some(config) = restored.and_then(|lease| lease.visible_fallback) {
+                        begin_recording_after_preflight(config, cx);
+                    }
                 }
                 Err(error) => {
                     if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
@@ -6940,6 +7001,33 @@ mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_start_without_any_stop_control_records_with_visible_controls() {
+        // No tray watcher and no granted shortcut, before either ever worked.
+        assert!(visible_fallback_allowed(
+            "Portal request failed: org.freedesktop.portal.Error.NotAllowed: An app id is required",
+            false,
+        ));
+        assert!(visible_fallback_allowed(
+            "The recording Stop worker ended",
+            false
+        ));
+        // A control that worked and then vanished keeps the existing stop.
+        assert!(!visible_fallback_allowed(
+            "The recording Stop tray is no longer available",
+            true
+        ));
+        // A registration that may still be live is not left behind.
+        assert!(!visible_fallback_allowed(
+            "The recording shortcut registration could not be cleaned up safely: timeout",
+            false,
+        ));
+        assert!(!visible_fallback_allowed(
+            "Recording Stop tray registration cleanup is unconfirmed: timeout",
+            false,
+        ));
+    }
     #[test]
     fn small_display_keeps_editor_and_minimum_size_inside_the_work_area() {
         let available = inset_work_area(Bounds {
@@ -7216,6 +7304,7 @@ mod tests {
             retained_windows: Vec::new(),
             restoring: false,
             restoration_error: None,
+            visible_fallback: None,
         }
     }
 

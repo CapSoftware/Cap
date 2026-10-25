@@ -27,6 +27,11 @@ Each run (`run-desktop.sh <desktop> <package> <out-dir> [KEY=VALUE...]`):
    `mutter-pointer.py`);
 4. writes `result.txt`, which `check-results.sh` turns into pass or fail.
 
+`GNOME_TRAY=0` runs GNOME in its plain session without the AppIndicator
+extension and without the harness's own tray host, as Fedora ships it. With
+`CAP_GPUI_PORTAL_APP_ID=0` and `LAUNCH=terminal` the portal grants no shortcut
+either, and the scenario expects Cap to record with its controls visible
+(`attempt1_control=visible`), stopping it through the controls' Stop action.
 `SCENARIO=reopen` launches Cap from a terminal and again from the app grid,
 which must hand over to the running instance. `SCENARIO=raise` (with
 `GNOME_UNSAFE=1`) focuses Cap's settings, then has GNOME Shell launch Cap the

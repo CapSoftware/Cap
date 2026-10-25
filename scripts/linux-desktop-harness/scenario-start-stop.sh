@@ -66,6 +66,9 @@ use_control() {
       ;;
     shortcut) python3 "$here/mutter-keys.py" Control_L+Shift_L+F9 >>"$out/actions.log" 2>&1 ;;
     approve) python3 "$here/atspi-press.py" "${2:-Add Keyboard Shortcuts}" "${3:-^Add$}" 20 >>"$out/actions.log" 2>&1 ;;
+    # No tray and no shortcut: Cap records with its controls on screen, and
+    # their Stop button runs the same action this deep link does.
+    visible) CAP_ARGS='cap-desktop://action?value=%22stop_recording%22' bash "$here/launch-cap.sh" cap-stop >/dev/null ;;
   esac
 }
 
@@ -96,6 +99,7 @@ attempt() {
       if grep "recording Stop control ready" "$log" | tail -1 | grep -q "tray icon"; then control=tray; else control=shortcut; fi
       break
     fi
+    if [[ $(count "recording with Cap's controls visible") -gt 0 ]]; then control=visible; break; fi
     if [[ $(tray_items) -gt 0 ]]; then control=tray; break; fi
     if [[ -n "${PRESS_AFTER:-}" && $((SECONDS - began)) -ge $PRESS_AFTER ]]; then control=shortcut; break; fi
   done
@@ -134,8 +138,11 @@ attempt() {
   fi
 }
 
-# One tray host connection for the whole run, like a panel.
-coproc TRAY_HOST { python3 -u "$here/sni-click.py" "$out"; }
+# One tray host connection for the whole run, like a panel (none without a
+# tray: GNOME_TRAY=0).
+if [[ ${GNOME_TRAY:-1} != 0 ]]; then
+  coproc TRAY_HOST { python3 -u "$here/sni-click.py" "$out"; }
+fi
 if [[ ${TRAY_CLICK:-host} == pointer ]]; then
   # The pointer must exist before Cap starts (see mutter-pointer.py).
   coproc POINTER { python3 -u "$here/mutter-pointer.py" 2>>"$out/actions.log"; }
