@@ -785,6 +785,7 @@ mod mac {
         let recent_item = NSMenuItem::new(main_thread);
         recent_item.setTitle(&NSString::from_str("Open Recent"));
         recent_item.setSubmenu(Some(&recent_menu));
+        recent_item.setAllowsAutomaticKeyEquivalentLocalization(true);
         file_menu.insertItem_atIndex(&recent_item, OPEN_RECENT_ROW);
 
         // NSDocumentController owns the recent items and the standard
