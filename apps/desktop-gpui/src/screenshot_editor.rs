@@ -4924,8 +4924,6 @@ mod tests {
             }
             let preview = decode_preview_image(&path).unwrap();
             let size = preview.size(0);
-            assert!(size.width <= gpui::DevicePixels::from(768));
-            assert!(size.height <= gpui::DevicePixels::from(768));
             assert_eq!(
                 size,
                 gpui::size(
@@ -4958,28 +4956,42 @@ mod tests {
     }
 
     #[test]
-    fn background_preview_preserves_png_alpha_and_the_existing_resize() {
+    fn background_preview_fallback_matches_the_existing_decode_and_resize() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("preview.png");
-        let original = image::RgbaImage::from_fn(1601, 7, |x, y| {
-            image::Rgba([(x % 256) as u8, (y * 20) as u8, 90, (x % 255) as u8])
-        });
-        original.save(&path).unwrap();
-        let scale = 768. / 1601.;
-        let mut expected = image::DynamicImage::ImageRgba8(original)
-            .thumbnail(768, (7. * scale) as u32)
-            .into_rgba8();
-        let size = expected.dimensions();
-        cap_gpui_kernels::frame::swap_red_blue(&mut expected);
-        let preview = decode_preview_image(&path).unwrap();
-        assert_eq!(preview.as_bytes(0).unwrap(), expected.as_raw());
-        assert_eq!(
-            preview.size(0),
-            gpui::size(
-                gpui::DevicePixels::from(size.0),
-                gpui::DevicePixels::from(size.1)
-            )
-        );
+        for (format, width) in [
+            (image::ImageFormat::Png, 1601),
+            (image::ImageFormat::Jpeg, 767),
+            (image::ImageFormat::Jpeg, 1536),
+        ] {
+            let path = root.path().join("preview.bin");
+            let original =
+                image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, 7, |x, y| {
+                    image::Rgba([(x % 256) as u8, (y * 20) as u8, 90, (x % 255) as u8])
+                }));
+            if format == image::ImageFormat::Jpeg {
+                original.to_rgb8().save_with_format(&path, format).unwrap();
+            } else {
+                original.save_with_format(&path, format).unwrap();
+            }
+            let decoded =
+                image::load_from_memory_with_format(&std::fs::read(&path).unwrap(), format)
+                    .unwrap();
+            let scale = (768. / width as f32).min(1.);
+            let mut expected = decoded
+                .thumbnail((width as f32 * scale) as u32, (7. * scale) as u32)
+                .into_rgba8();
+            let size = expected.dimensions();
+            cap_gpui_kernels::frame::swap_red_blue(&mut expected);
+            let preview = decode_preview_image(&path).unwrap();
+            assert_eq!(preview.as_bytes(0).unwrap(), expected.as_raw());
+            assert_eq!(
+                preview.size(0),
+                gpui::size(
+                    gpui::DevicePixels::from(size.0),
+                    gpui::DevicePixels::from(size.1)
+                )
+            );
+        }
     }
 
     #[test]
@@ -4989,7 +5001,6 @@ mod tests {
         assert!(decode_preview_image(&path).is_none());
         for bytes in [b"not an image".as_slice(), &[0xff, 0xd8, 0xff, 0xd9]] {
             std::fs::write(&path, bytes).unwrap();
-            assert!(decode_large_preview_jpeg(bytes).is_none());
             assert!(decode_preview_image(&path).is_none());
         }
     }
