@@ -2051,9 +2051,13 @@ mod countdown_tests {
     async fn start_cue_stays_silent_when_the_start_is_dropped_before_it_primes() {
         let (ready, primed) = tokio::sync::watch::channel(false);
         let gate = cap_recording::RecordingStartGate::new();
-        let cue = tokio::spawn(play_cue_when_primed(Some(primed), gate.clone(), |_| async {
-            panic!("the cue played for a start that never primed");
-        }));
+        let cue = tokio::spawn(play_cue_when_primed(
+            Some(primed),
+            gate.clone(),
+            |_| async {
+                panic!("the cue played for a start that never primed");
+            },
+        ));
         drop(ready);
         cue.await.unwrap();
         assert!(!gate.is_armed());
