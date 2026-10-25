@@ -26,6 +26,7 @@ const SEEDED_CAPTION_SEGMENTS: usize = 300;
 
 #[derive(Clone, Copy)]
 enum Scenario {
+    Zoom,
     Tick,
     TickZoomedOut,
     Hover,
@@ -38,6 +39,7 @@ enum Scenario {
 impl Scenario {
     fn label(self) -> &'static str {
         match self {
+            Self::Zoom => "zoom",
             Self::Tick => "tick",
             Self::TickZoomedOut => "tick-zoomed-out",
             Self::Hover => "hover",
@@ -50,6 +52,10 @@ impl Scenario {
 
     fn prepare(self, view: &mut EditorWindow, window: &mut Window, cx: &mut Context<EditorWindow>) {
         match self {
+            Self::Zoom => {
+                view.stop_for_measurement(cx);
+                view.bench_zoom_to(view.total_duration(), cx);
+            }
             Self::Tick => {
                 if !view.playing {
                     view.toggle_play(window, cx);
@@ -109,6 +115,11 @@ impl Scenario {
         cx: &mut Context<EditorWindow>,
     ) {
         match self {
+            Self::Zoom => {
+                let progress = iteration as f64 / (WARMUP_FRAMES + MEASURED_FRAMES - 1) as f64;
+                let seconds = view.total_duration() * (3.0 / view.total_duration()).powf(progress);
+                view.bench_zoom_to(seconds, cx);
+            }
             Self::Tick | Self::TickZoomedOut | Self::Follow | Self::TickFields => {
                 view.invalidate_playback_chrome(window, cx)
             }
@@ -170,9 +181,19 @@ fn seed_caption_fields(
 }
 
 pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
-    if !std::env::var("CAP_GPUI_AUTO_TIMELINE_BENCH").is_ok_and(|value| value == "1") {
-        return;
-    }
+    let scenarios: &[Scenario] = match std::env::var("CAP_GPUI_AUTO_TIMELINE_BENCH").as_deref() {
+        Ok("1") => &[
+            Scenario::Tick,
+            Scenario::TickZoomedOut,
+            Scenario::Hover,
+            Scenario::Follow,
+            Scenario::Clean,
+            Scenario::CaptionDownload,
+            Scenario::TickFields,
+        ],
+        Ok("zoom") => &[Scenario::Zoom],
+        _ => return,
+    };
 
     let started = Instant::now();
     loop {
@@ -183,6 +204,10 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             })
             .unwrap_or(false);
         if ready {
+            println!(
+                "timeline-bench: first-frame-and-waveforms-ms {:.3}",
+                started.elapsed().as_secs_f64() * 1000.
+            );
             break;
         }
         if started.elapsed() > READY_TIMEOUT {
@@ -211,15 +236,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
     };
     println!("{header}");
 
-    for scenario in [
-        Scenario::Tick,
-        Scenario::TickZoomedOut,
-        Scenario::Hover,
-        Scenario::Follow,
-        Scenario::Clean,
-        Scenario::CaptionDownload,
-        Scenario::TickFields,
-    ] {
+    for &scenario in scenarios {
         if handle
             .update(cx, |view, window, cx| scenario.prepare(view, window, cx))
             .is_err()
