@@ -20,7 +20,9 @@ const fileSystemMock = vi.hoisted(() => ({
 	readAsStringAsync: vi.fn(
 		(): Promise<string> => Promise.reject(new Error("Not found")),
 	),
-	writeAsStringAsync: vi.fn((_uri: string, _value: string) => Promise.resolve()),
+	writeAsStringAsync: vi.fn((_uri: string, _value: string) =>
+		Promise.resolve(),
+	),
 }));
 
 const uploadToTarget = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -280,14 +282,20 @@ describe("RecordingUploadProvider", () => {
 				"file:///recording",
 				{ idempotent: true },
 			);
-			await act(async () => vi.advanceTimersByTimeAsync(30_000));
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
 			expect(authState.completeRecording).toHaveBeenCalledTimes(2);
 			authState.getCapStatuses.mockResolvedValue({
 				caps: [{ id: "cap_123", upload: null }],
 			});
-			await act(async () => vi.advanceTimersByTimeAsync(3000));
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(3000);
+			});
 			expect(recordingUploads?.queue.jobs[0]?.status).toBe("complete");
-			await act(async () => vi.advanceTimersByTimeAsync(4000));
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(4000);
+			});
 			expect(recordingUploads?.queue.jobs).toEqual([]);
 		},
 	);
@@ -342,7 +350,9 @@ describe("RecordingUploadProvider", () => {
 				expect.objectContaining({ durationSeconds: 2 }),
 			);
 			expect(uploadToTarget).not.toHaveBeenCalled();
-			await act(async () => vi.advanceTimersByTimeAsync(30_000));
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
 			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
 			await act(async () => recoveryRenderer?.unmount());
 			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(persisted);
@@ -443,7 +453,9 @@ describe("RecordingUploadProvider", () => {
 		expect(authState.deleteCap).toHaveBeenCalledWith("cap_123");
 		await act(async () => acknowledge?.());
 		await flushQueue();
-		await act(async () => vi.advanceTimersByTimeAsync(30_000));
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(30_000);
+		});
 		expect(recordingUploads?.queue.jobs).toEqual([]);
 		expect(authState.completeRecording).toHaveBeenCalledTimes(1);
 	});
