@@ -178,6 +178,13 @@ jobs:
           name: verify-archive-${{ inputs.platform }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}
 
+      # A test process that crashes (SIGSEGV) leaves no Rust backtrace;
+      # macOS writes a crash report instead, collected below on failure.
+      - name: Mark crash report start
+        if: inputs.platform == 'macos'
+        shell: bash
+        run: touch "$RUNNER_TEMP/crash-reports-since"
+
       - name: Prepare recorded fixtures without concurrent rendering
         if: contains(format(',{0},', inputs.suites), ',export,')
         shell: bash
@@ -217,8 +224,27 @@ jobs:
           --junit "$CAP_VERIFY_REPORT_DIR/junit.xml" --flaky "$CAP_VERIFY_FLAKY_FILE"
           "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Collect macOS crash reports
+        id: crash-reports
+        if: failure() && inputs.platform == 'macos'
+        continue-on-error: true
+        shell: bash
+        run: |
+          dest="$RUNNER_TEMP/verify-report/crash-reports"
+          for dir in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            [[ -d "$dir" ]] || continue
+            { find "$dir" -type f \( -name '*.ips' -o -name '*.crash' \) -newer "$RUNNER_TEMP/crash-reports-since" -print0 2>/dev/null || true; } |
+              while IFS= read -r -d '' report; do
+                mkdir -p "$dest"
+                cp "$report" "$dest/" && echo "collected $report" || echo "could not copy $report"
+              done
+          done
+          if [[ -n "$(ls -A "$dest" 2>/dev/null)" ]]; then
+            echo "collected=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload report
-        if: always() && steps.test.outcome != 'skipped'
+        if: always() && (steps.test.outcome != 'skipped' || steps.crash-reports.outputs.collected == 'true')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verify-report-${{ inputs.platform }}-${{ inputs.tier }}-${{ matrix.shard }}

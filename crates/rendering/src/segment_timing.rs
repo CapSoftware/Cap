@@ -129,4 +129,21 @@ mod tests {
             ((segment_time as f64 + offset) as f32).to_bits()
         );
     }
+
+    #[test]
+    fn missing_system_audio_timestamp_keeps_video_offsets() {
+        let metadata: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "segments": [{
+                "display": { "path": "display", "fps": 60, "start_time": 10.0 },
+                "camera": { "path": "camera", "fps": 24, "start_time": 10.25 },
+                "mic": { "path": "mic.aac", "start_time": 10.5 },
+                "system_audio": { "path": "system.ogg" }
+            }]
+        }))
+        .unwrap();
+        let timing = segment_video_timing(&metadata, 0);
+        assert_eq!(timing.latest_start_time, Some(10.5));
+        assert_eq!(timing.screen_offset, 0.5);
+        assert_eq!(timing.camera_offset, 0.25);
+    }
 }
