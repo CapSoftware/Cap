@@ -653,6 +653,31 @@ pub enum BgSlider {
 }
 
 impl BgSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Blur
+            | Self::Padding
+            | Self::Rounding
+            | Self::MotionBlur
+            | Self::BorderWidth
+            | Self::BorderOpacity
+            | Self::NotchWidth
+            | Self::NotchHeight
+            | Self::NotchX
+            | Self::Shadow
+            | Self::ShadowSize
+            | Self::ShadowOpacity
+            | Self::ShadowBlur
+            | Self::GradientAngle
+            | Self::GradientNoise
+            | Self::GradientGrain => false,
+        }
+    }
+
     /// `minValue` / `maxValue` / `step`, per call site. `NotchX`'s maximum is
     /// `notchXMax()` and therefore not constant; it is patched in by
     /// [`EditorWindow::slider_limits`].
@@ -1062,6 +1087,32 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.edit_background_inner(true, reason, change, window, cx);
+    }
+
+    /// [`Self::edit_background`] for edits that cannot change the timeline
+    /// model or its lanes -- the background tab's sliders and the
+    /// animated-gradient add/remove/stop/reset edits, whose fields
+    /// [`crate::editor_timeline::TimelineModel::build`] and
+    /// [`crate::editor_timeline::TrackLanes::from_project`] do not read.
+    fn edit_background_without_timeline(
+        &mut self,
+        reason: &'static str,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_background_inner(false, reason, change, window, cx);
+    }
+
+    fn edit_background_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -1076,7 +1127,11 @@ impl EditorWindow {
         if !self.apply_control_change(change) {
             return;
         }
-        self.project_changed(window, cx);
+        if rebuild_timeline {
+            self.project_changed(window, cx);
+        } else {
+            self.project_changed_without_timeline(window, cx);
+        }
         self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
         self.note_sidebar_edit(reason);
     }
@@ -1092,6 +1147,31 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
     ) {
+        self.edit_project_with_rebuild(true, reason, window, cx, change);
+    }
+
+    /// [`Self::edit_project`] for edits that cannot change the timeline model.
+    pub(crate) fn edit_project_without_timeline(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
+        self.edit_project_with_rebuild(false, reason, window, cx, change);
+    }
+
+    /// The shared project write. `rebuild_timeline` is true for edits that
+    /// touch a field [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads.
+    pub(crate) fn edit_project_with_rebuild(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -1099,7 +1179,11 @@ impl EditorWindow {
         if !self.apply_control_change(change) {
             return;
         }
-        self.project_changed(window, cx);
+        if rebuild_timeline {
+            self.project_changed(window, cx);
+        } else {
+            self.project_changed_without_timeline(window, cx);
+        }
         self.note_project_edit(reason);
     }
 
@@ -1345,7 +1429,8 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let base = self.notch_base();
-        self.edit_background(
+        self.edit_background_inner(
+            slider.changes_timeline_model(),
             "slider",
             |project| {
                 let background = &mut project.background;

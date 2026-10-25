@@ -503,7 +503,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_background(
+        self.edit_background_without_timeline(
             "animated-gradient-setting",
             |project| match &mut project.background.source {
                 BackgroundSource::AnimatedGradient { config } => change(config),
