@@ -9,12 +9,11 @@ import {
 	ChevronDown,
 	Copy,
 	Download,
-	Edit3,
 	Globe,
 	LoaderCircle,
 	MessageSquare,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
 import {
 	type LanguageCode,
@@ -27,6 +26,7 @@ import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
 import type { TranscriptEntry } from "../utils/parse-transcript-vtt";
 import { parseTranscriptVTT } from "../utils/parse-transcript-vtt";
+import { TranscriptEditor, TranscriptRow } from "./transcript-row";
 
 interface TranscriptProps {
 	data: VideoData;
@@ -49,7 +49,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
 	const [retryTriggered, setRetryTriggered] = useState(false);
 	const [editingEntry, setEditingEntry] = useState<number | null>(null);
-	const [editText, setEditText] = useState<string>("");
 	const [isSaving, setIsSaving] = useState(false);
 	const [isCopying, setIsCopying] = useState(false);
 	const [copyPressed, setCopyPressed] = useState(false);
@@ -249,36 +248,32 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		);
 	}, [data.createdAt, data.transcriptionStatus, retryTriggered]);
 
-	const handleTranscriptClick = (entry: TranscriptEntry) => {
-		if (editingEntry === entry.id) {
-			return;
-		}
+	const handleTranscriptClick = useCallback(
+		(entry: TranscriptEntry) => {
+			if (editingEntry === entry.id) {
+				return;
+			}
 
-		setSelectedEntry(entry.id);
+			setSelectedEntry(entry.id);
+			onSeek?.(entry.startTime);
+		},
+		[editingEntry, onSeek],
+	);
 
-		onSeek?.(entry.startTime);
-	};
-
-	const startEditing = (entry: TranscriptEntry) => {
+	const startEditing = useCallback((entry: TranscriptEntry) => {
 		setEditingEntry(entry.id);
-		setEditText(entry.text);
-	};
+	}, []);
 
 	const cancelEditing = () => {
 		setEditingEntry(null);
-		setEditText("");
 	};
 
-	const saveEdit = async () => {
+	const saveEdit = async (editText: string) => {
 		const normalizedEditText = normalizeTranscriptCueText(editText);
 
 		if (!editingEntry || !normalizedEditText) {
 			return;
 		}
-
-		const _originalEntry = transcriptData.find(
-			(entry) => entry.id === editingEntry,
-		);
 
 		setIsSaving(true);
 		try {
@@ -297,7 +292,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 					),
 				);
 				setEditingEntry(null);
-				setEditText("");
 				invalidateTranscript(data.id);
 			} else {
 				console.error("[Transcript] Failed to save transcript edit:", {
@@ -796,87 +790,30 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 					</div>
 				)}
 				<div className="px-3 py-3">
-					{transcriptData.map((entry) => (
-						<div
-							key={entry.id}
-							className={`group flex items-start gap-1 rounded-lg px-2 transition-colors ${
-								editingEntry === entry.id
-									? "bg-gray-2"
-									: selectedEntry === entry.id
-										? "bg-gray-3"
-										: "hover:bg-gray-2"
-							}`}
-						>
-							{editingEntry === entry.id ? (
-								<div className="min-w-0 flex-1 py-2">
-									<textarea
-										value={editText}
-										onChange={(e) => setEditText(e.target.value)}
-										className="w-full resize-none rounded-lg border border-gray-4 bg-gray-1 p-2.5 text-[13px] leading-[22px] text-gray-12 outline-none transition placeholder:text-gray-8 focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20"
-										rows={Math.max(2, Math.ceil(editText.length / 60))}
-										onClick={(e) => e.stopPropagation()}
-										placeholder="Edit transcript text..."
-									/>
-									<div className="mt-2 flex justify-end gap-1.5">
-										<button
-											type="button"
-											onClick={(e) => {
-												e.stopPropagation();
-												cancelEditing();
-											}}
-											disabled={isSaving}
-											className="inline-flex h-7 items-center rounded-full px-3 text-[11px] font-medium text-gray-11 transition hover:bg-gray-3 hover:text-gray-12 disabled:opacity-50"
-										>
-											Cancel
-										</button>
-										<button
-											type="button"
-											onClick={(e) => {
-												e.stopPropagation();
-												saveEdit();
-											}}
-											disabled={isSaving || !editText.trim()}
-											className="inline-flex h-7 items-center gap-1.5 rounded-full bg-gray-12 px-3 text-[11px] font-semibold text-white transition hover:bg-gray-11 disabled:pointer-events-none disabled:opacity-50"
-										>
-											{isSaving && (
-												<LoaderCircle className="size-3 animate-spin" />
-											)}
-											Save
-										</button>
-									</div>
-								</div>
-							) : (
-								<>
-									<button
-										className="flex min-w-0 flex-1 items-baseline gap-2.5 py-1.5 text-left"
-										onClick={() => handleTranscriptClick(entry)}
-										type="button"
-									>
-										<span className="min-w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
-											{entry.timestamp}
-										</span>
-										<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
-											{entry.text}
-										</span>
-									</button>
-									{canEdit && (
-										<button
-											onClick={(e) => {
-												e.stopPropagation();
-												startEditing(entry);
-											}}
-											type="button"
-											aria-label="Edit transcript entry"
-											title="Edit transcript entry"
-											className="mt-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-gray-9 opacity-0 transition-all hover:bg-gray-4 hover:text-gray-12 focus-visible:opacity-100 group-hover:opacity-100"
-										>
-											<Edit3 className="size-3" />
-										</button>
-									)}
-								</>
-							)}
-						</div>
-					))}
+					{transcriptData.map((entry) =>
+						editingEntry === entry.id ? (
+							<div
+								key={entry.id}
+								className="group flex items-start gap-1 rounded-lg bg-gray-2 px-2 transition-colors"
+							>
+								<TranscriptEditor
+									entry={entry}
+									isSaving={isSaving}
+									onSave={saveEdit}
+									onCancel={cancelEditing}
+								/>
+							</div>
+						) : (
+							<TranscriptRow
+								key={entry.id}
+								entry={entry}
+								selected={selectedEntry === entry.id}
+								canEdit={canEdit}
+								onSelect={handleTranscriptClick}
+								onEdit={startEditing}
+							/>
+						),
+					)}
 				</div>
 			</div>
 		</div>
