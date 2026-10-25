@@ -7,6 +7,7 @@ mod app_sounds;
 mod app_windows;
 mod assets;
 mod auth;
+mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
 #[cfg(target_os = "macos")]
@@ -292,7 +293,8 @@ fn main() {
     crash_capture::install(&diagnostics::logs_dir());
 
     single_instance::acquire();
-    crash_capture::begin_session(&diagnostics::logs_dir());
+    let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
+    blur_recovery::configure(previous_session);
     if cfg!(debug_assertions) {
         store::mark_handoff_session();
     }
