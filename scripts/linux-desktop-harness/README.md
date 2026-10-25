@@ -45,6 +45,12 @@ onboarding, or the main window with `RAISE_WINDOW=main`, to the front.
 window's own close button (GNOME draws no title bar for it). Clicks go through
 `mutter-pointer.py`, one virtual pointer that exists before Cap starts: gpui
 binds the seat's pointer once, so a pointer created per click never reaches it.
+`SCENARIO=pick-background` (with `GNOME_UNSAFE=1`) records a clip, opens it in
+the editor and presses the Image background's picker
+(`CAP_GPUI_AUTO_PICK_BACKGROUND=1`), then types a picture's path into the
+portal's file chooser through `mutter-keys.py --type` and presses Select.
+Mutter's RemoteDesktop drops the first key of each session, so `mutter-keys.py`
+leads every session with a Shift tap.
 
 `report.sh <out-dir>` prints the results with Cap's own log lines. The
 Hyprland image needs `modprobe vkms` on the host. With `GNOME_UNSAFE=1`,
