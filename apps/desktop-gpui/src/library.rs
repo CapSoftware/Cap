@@ -392,13 +392,19 @@ pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
         .collect()
 }
 
-/// The display track of the newest studio recording that has one, however
-/// many screenshots or Instant recordings are newer. Metas are loaded newest
-/// first and only until it is found.
+/// The display track of the newest finished studio recording that has one,
+/// however many screenshots or Instant recordings are newer. A recording
+/// still finalizing is skipped. Metas are loaded newest first and only until
+/// it is found.
 #[cfg(target_os = "macos")]
 pub(crate) fn newest_studio_display_path() -> Option<PathBuf> {
-    recording_items_in(&known_recordings_dirs())
-        .filter(|item| item.mode == RecordingMode::Studio)
+    newest_studio_display_path_in(&known_recordings_dirs())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn newest_studio_display_path_in(dirs: &[PathBuf]) -> Option<PathBuf> {
+    recording_items_in(dirs)
+        .filter(RecordingItem::opens_editor)
         .find_map(|item| crate::recording::studio_display_path(&item.path))
 }
 
@@ -1765,6 +1771,41 @@ mod tests {
         assert_eq!(bounded[1].clip_count, 3);
         assert!(recording_items_in(&dirs).take(0).next().is_none());
         assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn newest_studio_display_skips_newer_instant_unfinished_and_trackless_recordings() {
+        let root = temp_dir("newest-studio-display");
+        let finished = write_studio_bundle(&root, "finished-studio", 1);
+        let display = finished.join("content/segments/segment-0/display.mp4");
+        std::fs::create_dir_all(display.parent().unwrap()).unwrap();
+        std::fs::write(&display, b"").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_studio_bundle(&root, "trackless-studio", 1);
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let unfinished = write_bundle(
+            &root,
+            "unfinished-studio",
+            r#"{"pretty_name":"Unfinished","sharing":null,"segments":[{"display":{"path":"content/segments/segment-0/display.mp4","fps":30}}],"status":{"status":"InProgress"}}"#,
+        );
+        let unfinished_display = unfinished.join("content/segments/segment-0/display.mp4");
+        std::fs::create_dir_all(unfinished_display.parent().unwrap()).unwrap();
+        std::fs::write(&unfinished_display, b"").unwrap();
+        for index in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(6));
+            write_bundle(
+                &root,
+                &format!("instant-{index}"),
+                r#"{"pretty_name":"Instant","sharing":null,"fps":30,"sample_rate":48000}"#,
+            );
+        }
+
+        assert_eq!(
+            newest_studio_display_path_in(std::slice::from_ref(&root)),
+            Some(display)
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

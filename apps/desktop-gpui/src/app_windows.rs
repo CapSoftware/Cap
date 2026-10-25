@@ -692,6 +692,7 @@ fn open_preparing_studio_editor(session: &Entity<RecordingSession>, cx: &mut App
         .preparing_studio_editor()
         .is_some_and(|pending| matches!(pending.presentation, StudioEditorPresentation::Opened(_)))
     {
+        warm_video_decoder_for_editor(cx);
         close_controls(session, cx);
         close_target_overlays(cx);
         close_camera_window(cx);
@@ -4937,9 +4938,9 @@ const LAUNCH_RENDER_WARMUP_DELAY: std::time::Duration = std::time::Duration::fro
 /// The first editor open in a process paid for the system font scan, the
 /// shared device and the renderer's first pipeline compiles and draw before
 /// its first frame: 0.7-1.2 s, against ~0.2 s for every later open. This warms
-/// them a few seconds after launch, off the main thread, along with the video
-/// decoder's first start. The layers and the decoder are dropped again; only
-/// the driver's compiled pipelines, the device and the font database stay.
+/// them a few seconds after launch, off the main thread. The layers are
+/// dropped again; only the driver's compiled pipelines, the device and the
+/// font database stay.
 pub(crate) fn schedule_launch_render_warmup(cx: &App) {
     gpui_tokio::Tokio::spawn(cx, async {
         tokio::time::sleep(LAUNCH_RENDER_WARMUP_DELAY).await;
@@ -4951,44 +4952,59 @@ pub(crate) fn schedule_launch_render_warmup(cx: &App) {
             return;
         }
         let fonts_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let (renderer_ms, decoder_ms) = tokio::join!(warm_renderer(), warm_video_decoder());
-        tracing::info!(
-            fonts_ms,
-            ?renderer_ms,
-            ?decoder_ms,
-            "launch render warmup finished"
-        );
+        let renderer_ms = warm_renderer().await;
+        tracing::info!(fonts_ms, ?renderer_ms, "launch render warmup finished");
     })
     .detach();
 }
 
-/// Any H.264 file warms the decode pipeline; the newest studio recording is
-/// the one the next editor most likely opens.
+/// Set once an editor starts building its instance, whose decoders bring up
+/// the decode pipeline themselves, so the post-recording warmup stays out of
+/// their way.
+static EDITOR_DECODERS_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(target_os = "macos")]
-async fn warm_video_decoder() -> Option<f64> {
-    if gpu_work_requested() {
-        return None;
+fn editor_decoders_started() -> bool {
+    EDITOR_DECODERS_STARTED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// A Studio recording that stops into the editor makes the editor's decoders
+/// the next ones to start, and the first `AVAssetReader` a process starts is
+/// slow. Starting one on the newest finished studio recording while the new
+/// one finalizes pays that before the editor needs its first frame.
+#[cfg(target_os = "macos")]
+fn warm_video_decoder_for_editor(cx: &App) {
+    if editor_decoders_started() {
+        return;
     }
-    let started = std::time::Instant::now();
-    let tokio_handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
-        let path = crate::library::newest_studio_display_path()?;
-        if gpu_work_requested() {
-            return None;
+    gpui_tokio::Tokio::spawn(cx, async {
+        let started = std::time::Instant::now();
+        let tokio_handle = tokio::runtime::Handle::current();
+        let warmed = tokio::task::spawn_blocking(move || {
+            let path = crate::library::newest_studio_display_path()?;
+            if editor_decoders_started() {
+                return None;
+            }
+            cap_rendering::prewarm_video_decoder(&path, tokio_handle)
+                .inspect_err(|error| tracing::warn!(%error, "editor decoder warmup failed"))
+                .ok()
+        })
+        .await
+        .ok()
+        .flatten();
+        if warmed.is_some() {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                "editor decoder warmup finished"
+            );
         }
-        cap_rendering::prewarm_video_decoder(&path, tokio_handle)
-            .inspect_err(|error| tracing::warn!(%error, "launch decoder warmup failed"))
-            .ok()
     })
-    .await
-    .ok()??;
-    Some(started.elapsed().as_secs_f64() * 1000.0)
+    .detach();
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn warm_video_decoder() -> Option<f64> {
-    None
-}
+fn warm_video_decoder_for_editor(_cx: &App) {}
 
 #[cfg(target_os = "macos")]
 async fn warm_renderer() -> Option<f64> {
@@ -5323,6 +5339,7 @@ fn load_editor_project_candidate(
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
                 let frame_format = cap_editor::EditorFrameFormat::Rgba;
+                EDITOR_DECODERS_STARTED.store(true, std::sync::atomic::Ordering::Release);
                 if let Some(previous) = previous {
                     return previous
                         .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
