@@ -5239,6 +5239,7 @@ mod tests {
     }
 }
 
-pub(crate) mod render_bench;
+#[cfg(test)]
+mod render_bench;
 
 mod recordings_list;
