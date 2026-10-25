@@ -14,6 +14,10 @@ image = { version = "0.25.1", default-features = false, features = ["jpeg", "png
 md-5 = "0.10"
 simd-adler32 = "0.3"
 tracing = "0.1"
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112", optional = true }
+
+[features]
+swscale-bench = ["dep:ffmpeg"]
 
 [[bench]]
 name = "screenshot_blit"
@@ -58,3 +62,8 @@ harness = false
 [[bench]]
 name = "screenshot_blur"
 harness = false
+
+[[bench]]
+name = "yuyv_preview"
+harness = false
+required-features = ["swscale-bench"]

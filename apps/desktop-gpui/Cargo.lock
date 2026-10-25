@@ -1777,6 +1777,7 @@ dependencies = [
  "cap-audio",
  "cap-project",
  "crc32fast",
+ "ffmpeg-next",
  "flate2",
  "image 0.25.10",
  "md-5",
