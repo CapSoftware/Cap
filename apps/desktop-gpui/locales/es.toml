@@ -29,6 +29,7 @@ settings = "Ajustes…"
 close_window = "Cerrar ventana"
 title = "Archivo"
 open_file = "Abrir archivo…"
+open_recent = "Abrir reciente"
 import_media = "Importar contenido…"
 
 [menu.edit]
@@ -604,3 +605,10 @@ download = "Descargar actualización…"
 checking = "Buscando actualizaciones…"
 downloading = "Descargando actualización…"
 restart = "Reiniciar para actualizar…"
+
+[settings.general.updates.download_policy]
+auto = "Automático"
+description = "Elige si Cap descarga las actualizaciones automáticamente."
+label = "Descargas de actualizaciones"
+manual = "Manual"
+never = "Nunca"

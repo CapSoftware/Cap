@@ -29,6 +29,7 @@ settings = "Settings…"
 close_window = "Close Window"
 title = "File"
 open_file = "Open File…"
+open_recent = "Open Recent"
 import_media = "Import Media…"
 
 [menu.edit]
@@ -606,3 +607,10 @@ download = "Download update…"
 checking = "Checking for Update…"
 downloading = "Downloading update…"
 restart = "Restart to update…"
+
+[settings.general.updates.download_policy]
+auto = "Auto"
+description = "Choose whether Cap downloads updates automatically."
+label = "Update downloads"
+manual = "Manual"
+never = "Never"

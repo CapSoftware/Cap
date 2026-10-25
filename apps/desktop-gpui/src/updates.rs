@@ -72,6 +72,7 @@ struct UpdateScheduler {
     manual_in_flight: bool,
     status: UpdateStatus,
     download_policy: UpdateDownloadPolicy,
+    simulation_version: Option<Version>,
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
     download_epoch: u64,
@@ -188,6 +189,17 @@ pub(crate) fn check_manually(cx: &mut App) {
             prompt_restart(cx);
             return;
         }
+        UpdateStatus::Downloading {
+            version,
+            fraction: None,
+        } if cx
+            .try_global::<UpdateScheduler>()
+            .and_then(|scheduler| scheduler.simulation_version.as_ref())
+            == Some(&version) =>
+        {
+            simulate_download(version, cx);
+            return;
+        }
         UpdateStatus::Downloading { version, .. } | UpdateStatus::Installing { version } => {
             cx.spawn(async move |_| {
                 crate::platform::activate_app();
@@ -285,6 +297,7 @@ fn harness_update_version() -> Option<Version> {
 #[cfg(debug_assertions)]
 fn simulate_update(version: Version, cx: &mut App) {
     tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: available");
+    cx.global_mut::<UpdateScheduler>().simulation_version = Some(version.clone());
     set_status(
         UpdateStatus::Downloading {
             version: version.clone(),
@@ -292,22 +305,39 @@ fn simulate_update(version: Version, cx: &mut App) {
         },
         cx,
     );
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(400))
+            .await;
+        cx.update(crate::menus::reapply_update_row);
+    })
+    .detach();
+
     if GeneralSettings::load().update_download_policy != UpdateDownloadPolicy::Auto {
         tracing::info!("CAP_GPUI_UPDATE_SIMULATION_VERSION: manual policy, waiting");
         return;
     }
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_secs(3)).await;
-        cx.update(|cx| {
-            tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
-            set_status(
-                UpdateStatus::Downloading {
-                    version: version.clone(),
-                    fraction: Some(0.0),
-                },
-                cx,
-            );
-        });
+        cx.update(|cx| simulate_download(version, cx));
+    })
+    .detach();
+}
+
+#[cfg(debug_assertions)]
+fn simulate_download(version: Version, cx: &mut App) {
+    if !matches!(status(cx), UpdateStatus::Downloading { fraction: None, .. }) {
+        return;
+    }
+    tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
+    set_status(
+        UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction: Some(0.0),
+        },
+        cx,
+    );
+    cx.spawn(async move |cx| {
         for step in 1..=10u8 {
             cx.background_executor()
                 .timer(Duration::from_millis(800))
@@ -330,6 +360,9 @@ fn simulate_update(version: Version, cx: &mut App) {
     .detach();
 }
 
+#[cfg(not(debug_assertions))]
+fn simulate_download(_version: Version, _cx: &mut App) {}
+
 pub(crate) fn schedule_startup_check(cx: &mut App) {
     let (wake, requests) = flume::bounded(1);
     cx.set_global(UpdateScheduler {
@@ -338,6 +371,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         manual_in_flight: false,
         status: UpdateStatus::Idle,
         download_policy: GeneralSettings::load().update_download_policy,
+        simulation_version: None,
         staged: None,
         download: None,
         download_epoch: 0,

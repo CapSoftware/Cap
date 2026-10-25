@@ -26,6 +26,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::app::preferences(), "Preferences…".into()),
         (tr::menu::file::close_window(), "Close Window".into()),
         (tr::menu::file::open_file(), "Open File…".into()),
+        (tr::menu::file::open_recent(), "Open Recent".into()),
         (tr::menu::file::import_media(), "Import Media…".into()),
         (tr::menu::file::title(), "File".into()),
         (tr::menu::edit::copy(), "Copy".into()),
@@ -415,6 +416,26 @@ fn english_matches_the_literals_it_replaced() {
             "Versioned releases (recommended)".into(),
         ),
         (tr::settings::general::updates::title(), "Updates".into()),
+        (
+            tr::settings::general::updates::download_policy::label(),
+            "Update downloads".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::description(),
+            "Choose whether Cap downloads updates automatically.".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::manual(),
+            "Manual".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::auto(),
+            "Auto".into(),
+        ),
+        (
+            tr::settings::general::updates::download_policy::never(),
+            "Never".into(),
+        ),
         (
             tr::settings::general::updates::channel::description(),
             "Which release channel Cap updates from.".into(),

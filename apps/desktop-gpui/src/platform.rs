@@ -764,15 +764,18 @@ mod mac {
             return;
         };
         let has_recent_menu = file_menu.itemAtIndex(OPEN_RECENT_ROW).is_some_and(|item| {
-            item.title()
-                .isEqualToString(&NSString::from_str("Open Recent"))
+            item.title().isEqualToString(&NSString::from_str(
+                crate::i18n::tr::menu::file::open_recent(),
+            ))
         });
         if has_recent_menu {
             return;
         }
 
         let recent_menu = NSMenu::new(main_thread);
-        recent_menu.setTitle(&NSString::from_str("Open Recent"));
+        recent_menu.setTitle(&NSString::from_str(
+            crate::i18n::tr::menu::file::open_recent(),
+        ));
         let name = NSString::from_str("NSRecentDocumentsMenu");
         let key = NSString::from_str("menuName");
         let registered = exception::catch(AssertUnwindSafe(|| {
@@ -783,7 +786,9 @@ mod mac {
         }
 
         let recent_item = NSMenuItem::new(main_thread);
-        recent_item.setTitle(&NSString::from_str("Open Recent"));
+        recent_item.setTitle(&NSString::from_str(
+            crate::i18n::tr::menu::file::open_recent(),
+        ));
         recent_item.setSubmenu(Some(&recent_menu));
         recent_item.setAllowsAutomaticKeyEquivalentLocalization(true);
         file_menu.insertItem_atIndex(&recent_item, OPEN_RECENT_ROW);

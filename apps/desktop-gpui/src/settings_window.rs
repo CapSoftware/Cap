@@ -4448,6 +4448,7 @@ impl SettingsWindow {
                         },
                     )),
             )
+            .child(div().h(px(1.)).bg(theme.settings_border()))
             .child(
                 div()
                     .flex()
@@ -4461,20 +4462,44 @@ impl SettingsWindow {
                             .flex_col()
                             .gap(px(2.))
                             .min_w_0()
-                            .child(div().text_size(px(13.)).child("Update downloads"))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .child(tr::settings::general::updates::download_policy::label()),
+                            )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
                                     .text_color(theme.settings_muted())
-                                    .child("Choose whether Cap downloads updates automatically."),
+                                    .child(
+                                        tr::settings::general::updates::download_policy::description(),
+                                    ),
                             ),
                     )
-                    .child(self.segmented::<UpdateDownloadPolicy>(
+                    .child(self.segmented_raw(
                         "update-download-policy",
-                        current_policy,
+                        vec![
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::manual(),
+                                current_policy == UpdateDownloadPolicy::Manual,
+                            ),
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::auto(),
+                                current_policy == UpdateDownloadPolicy::Auto,
+                            ),
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::never(),
+                                current_policy == UpdateDownloadPolicy::Never,
+                            ),
+                        ],
                         cx,
-                        |this, value, cx| {
+                        |this, index, cx| {
+                            let value = match index {
+                                0 => UpdateDownloadPolicy::Manual,
+                                1 => UpdateDownloadPolicy::Auto,
+                                _ => UpdateDownloadPolicy::Never,
+                            };
                             if this.settings.update_download_policy == value {
                                 return;
                             }

@@ -29,6 +29,7 @@ settings = "设置…"
 close_window = "关闭窗口"
 title = "文件"
 open_file = "打开文件…"
+open_recent = "打开最近使用"
 import_media = "导入媒体…"
 
 [menu.edit]
@@ -604,3 +605,10 @@ download = "下载更新…"
 checking = "正在检查更新…"
 downloading = "正在下载更新…"
 restart = "重新启动以更新…"
+
+[settings.general.updates.download_policy]
+auto = "自动"
+description = "选择 Cap 是否自动下载更新。"
+label = "更新下载"
+manual = "手动"
+never = "从不"

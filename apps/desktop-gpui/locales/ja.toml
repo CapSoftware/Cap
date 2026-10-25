@@ -29,6 +29,7 @@ settings = "設定…"
 close_window = "ウィンドウを閉じる"
 title = "ファイル"
 open_file = "ファイルを開く…"
+open_recent = "最近使った項目を開く"
 import_media = "メディアを読み込む…"
 
 [menu.edit]
@@ -604,3 +605,10 @@ download = "アップデートをダウンロード…"
 checking = "アップデートを確認中…"
 downloading = "アップデートをダウンロード中…"
 restart = "アップデートのために再起動…"
+
+[settings.general.updates.download_policy]
+auto = "自動"
+description = "Cap がアップデートを自動でダウンロードするか選択します。"
+label = "アップデートのダウンロード"
+manual = "手動"
+never = "しない"

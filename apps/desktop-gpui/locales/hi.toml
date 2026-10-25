@@ -29,6 +29,7 @@ settings = "सेटिंग्स…"
 close_window = "विंडो बंद करें"
 title = "फ़ाइल"
 open_file = "फ़ाइल खोलें…"
+open_recent = "हाल ही में खोलें"
 import_media = "मीडिया इम्पोर्ट करें…"
 
 [menu.edit]
@@ -604,3 +605,10 @@ download = "अपडेट डाउनलोड करें…"
 checking = "अपडेट जाँच रहे हैं…"
 downloading = "अपडेट डाउनलोड हो रहा है…"
 restart = "अपडेट करने के लिए फिर से शुरू करें…"
+
+[settings.general.updates.download_policy]
+auto = "स्वचालित"
+description = "चुनें कि Cap अपडेट स्वचालित रूप से डाउनलोड करे या नहीं।"
+label = "अपडेट डाउनलोड"
+manual = "मैन्युअल"
+never = "कभी नहीं"

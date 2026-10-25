@@ -307,6 +307,18 @@ pub(crate) fn refresh_update_menu(cx: &mut App) {
     install_menus(cx);
 }
 
+pub(crate) fn reapply_update_row(cx: &mut App) {
+    if !cx.has_global::<MenuRegistration>() {
+        return;
+    }
+    let row = UpdateRow::of(&updates::status(cx));
+    cx.global_mut::<MenuRegistration>().0 = row.clone();
+    #[cfg(target_os = "macos")]
+    platform::set_update_menu_item(row.title, row.badge.as_deref(), row.enabled);
+    #[cfg(not(target_os = "macos"))]
+    install_menus(cx);
+}
+
 fn install_menus(cx: &mut App) {
     let update_status = updates::status(cx);
     cx.set_menus(build_menus(&update_status));
