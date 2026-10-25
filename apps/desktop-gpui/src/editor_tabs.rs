@@ -362,8 +362,7 @@ impl CameraSlider {
         match self {
             // `minValue={20} maxValue={80} step={0.1}` (`:3204-3206`).
             Self::Size => (20., 80., 0.1),
-            // `minValue={10} maxValue={60}` (`:3213-3215`).
-            Self::ZoomSize => (10., 60., 0.1),
+            Self::ZoomSize => (10., 100., 0.1),
             Self::CropLeft | Self::CropTop | Self::CropRight | Self::CropBottom => (0., 45., 0.5),
             _ => (0., 100., 0.1),
         }
@@ -374,8 +373,7 @@ impl CameraSlider {
         let shadow = camera.advanced_shadow.as_ref();
         match self {
             Self::Size => camera.size,
-            // `project.camera.zoomSize ?? 60`
-            Self::ZoomSize => camera.zoom_size.unwrap_or(60.),
+            Self::ZoomSize => camera.scale_during_zoom * 100.,
             Self::Rounding => camera.rounding,
             Self::Shadow => camera.shadow,
             Self::ShadowSize => shadow.map_or(UI_SHADOW_FALLBACK.size, |s| s.size),
@@ -1013,7 +1011,7 @@ impl EditorWindow {
             let camera = &mut project.camera;
             match slider {
                 CameraSlider::Size => camera.size = value,
-                CameraSlider::ZoomSize => camera.zoom_size = Some(value),
+                CameraSlider::ZoomSize => camera.scale_during_zoom = value / 100.,
                 CameraSlider::Rounding => camera.rounding = value,
                 CameraSlider::Shadow => camera.shadow = value,
                 // `...(project.camera.advancedShadow ?? {50, 18, 50})`
@@ -3184,7 +3182,10 @@ impl EditorWindow {
                     .timer(Duration::from_millis(150))
                     .await;
                 let active = transcription::download_active();
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                if this
+                    .update(cx, |this, cx| this.repaint_caption_download(cx))
+                    .is_err()
+                {
                     break;
                 }
                 if !active {
@@ -3193,6 +3194,12 @@ impl EditorWindow {
             }
         })
         .detach();
+    }
+
+    /// One tick of [`Self::spawn_caption_download_poll`]. Only the captions
+    /// tab reads the download, so only the sidebar is rebuilt.
+    pub(crate) fn repaint_caption_download(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_sidebar(cx);
     }
 
     /// `downloadModel` (`CaptionsTab.tsx:643-690`). The download runs on the
@@ -3529,7 +3536,7 @@ mod tests {
     #[test]
     fn every_tab_slider_has_the_range_its_call_site_declares() {
         assert_eq!(CameraSlider::Size.limits(), (20., 80., 0.1));
-        assert_eq!(CameraSlider::ZoomSize.limits(), (10., 60., 0.1));
+        assert_eq!(CameraSlider::ZoomSize.limits(), (10., 100., 0.1));
         assert_eq!(CameraSlider::ShadowBlur.limits(), (0., 100., 0.1));
         assert_eq!(AudioSlider::MicVolume.limits(), (-30., 10., 0.1));
         assert_eq!(CursorSlider::Size.limits(), (20., 300., 1.));
@@ -3541,6 +3548,16 @@ mod tests {
             (50., 1000., 10.)
         );
         assert_eq!(CaptionSlider::FadeDuration.limits(), (0., 50., 1.));
+    }
+
+    #[test]
+    fn camera_zoom_size_slider_shows_the_rendered_scale() {
+        let mut project = ProjectConfiguration::default();
+        assert_eq!(CameraSlider::ZoomSize.read(&project), 70.);
+        project.camera.scale_during_zoom = 0.4;
+        assert_eq!(CameraSlider::ZoomSize.read(&project), 40.);
+        project.camera.scale_during_zoom = 1.;
+        assert_eq!(CameraSlider::ZoomSize.read(&project), 100.);
     }
 
     #[test]

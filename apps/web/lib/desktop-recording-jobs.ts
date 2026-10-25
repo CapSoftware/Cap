@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import {
+	mediaProcessingBudgets,
 	videoProcessingJobs,
 	videos,
 	videoUploads,
@@ -28,6 +29,10 @@ import {
 	type RecordingVerification,
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
+import {
+	RECORDING_PROCESSING_ATTEMPTS,
+	recordingBudgetKey,
+} from "@/lib/media-processing-budget";
 
 export const DESKTOP_RECORDING_LEASE_MS = 5 * 60 * 1_000;
 export const DESKTOP_RECORDING_SOURCE_RETRY_MS = 60 * 60 * 1_000;
@@ -36,7 +41,7 @@ export const DESKTOP_RECORDING_DELETING = "video-deleting";
 export const DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED =
 	"source-reupload-required";
 export const DESKTOP_RECORDING_RETRY_EXHAUSTED = "processing-retry-exhausted";
-const MAX_AUTOMATIC_ATTEMPTS = 5;
+const MAX_AUTOMATIC_ATTEMPTS = RECORDING_PROCESSING_ATTEMPTS;
 const RETRY_EXHAUSTED_MESSAGE =
 	"Processing paused after repeated failures. Your uploaded recording is retained. Please contact support.";
 
@@ -928,6 +933,89 @@ export async function deferWithoutMediaServer(
 			.delete(videoUploads)
 			.where(eq(videoUploads.videoId, fence.videoId));
 		return true;
+	});
+}
+
+// Blocked recordings whose source is committed and whose failure an operator can reasonably retry once the cause is fixed.
+const OPERATOR_RETRYABLE_BLOCKS = new Set([
+	"processing-budget-exhausted",
+	"source-invalid",
+	DESKTOP_RECORDING_RETRY_EXHAUSTED,
+]);
+
+export async function retryBlockedDesktopRecording({
+	videoId,
+	now = new Date(),
+}: {
+	videoId: Video.VideoId;
+	now?: Date;
+}): Promise<
+	| { status: "queued"; ownerId: User.UserId; previousErrorCode: string }
+	| { status: "not-found" }
+	| { status: "not-retryable"; state: string; errorCode: string | null }
+> {
+	return db().transaction(async (tx) => {
+		const [row] = await tx
+			.select()
+			.from(videoProcessingJobs)
+			.where(eq(videoProcessingJobs.videoId, videoId))
+			.for("update");
+		if (!row) return { status: "not-found" as const };
+		const job = parseDesktopRecordingJob(row);
+		if (
+			job.state !== "source-blocked" ||
+			!job.source ||
+			!job.errorCode ||
+			!OPERATOR_RETRYABLE_BLOCKS.has(job.errorCode)
+		)
+			return {
+				status: "not-retryable" as const,
+				state: job.state,
+				errorCode: job.errorCode,
+			};
+		await tx
+			.update(videoProcessingJobs)
+			.set({
+				state: "retry",
+				attemptCount: 0,
+				leaseExpiresAt: null,
+				nextRetryAt: now,
+				workflowRunId: null,
+				errorCode: null,
+				errorMessage: null,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(videoProcessingJobs.videoId, videoId),
+					eq(videoProcessingJobs.generation, job.generation),
+					eq(videoProcessingJobs.state, "source-blocked"),
+				),
+			);
+		// Earlier attempts spent this generation's transfer budget; the retry starts with a fresh one.
+		await tx
+			.delete(mediaProcessingBudgets)
+			.where(
+				eq(
+					mediaProcessingBudgets.id,
+					recordingBudgetKey(videoId, job.generation),
+				),
+			);
+		await tx
+			.update(videoUploads)
+			.set({
+				phase: "processing",
+				processingProgress: 0,
+				processingMessage: "Retrying video processing...",
+				processingError: null,
+				updatedAt: now,
+			})
+			.where(eq(videoUploads.videoId, videoId));
+		return {
+			status: "queued" as const,
+			ownerId: job.ownerId,
+			previousErrorCode: job.errorCode,
+		};
 	});
 }
 
