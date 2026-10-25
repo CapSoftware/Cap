@@ -29,8 +29,40 @@ env:
   CAP_DEB_SHA256: bb03dddc5268f64d3e6eb4c11534462e5b7a8a5c1c7bb5bca5f5bdaa99d11c56
 
 jobs:
+  # A pull request from a fork that changes only this workflow or the harness
+  # does not queue the desktop jobs; one that also changes the app does, and
+  # so does any change from this repository.
+  scope:
+    name: Scope
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != pull_request || "$SAME_REPO" == true ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          if grep -qE '^(apps/desktop-gpui/|crates/(recording|utils|scap-targets)/|scripts/prepare-gpui-dependency\.sh$)' "$RUNNER_TEMP/changed.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "A fork pull request that changes no app code does not run the Linux desktop suite." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
   desktops:
     name: Record on GNOME
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 90
     env:
