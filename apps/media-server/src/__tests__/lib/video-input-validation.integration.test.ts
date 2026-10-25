@@ -119,10 +119,11 @@ describe("raw recording input validation", () => {
 		expect(readFileSync(corrupt).length).toBeGreaterThan(0);
 	});
 
-	for (const [name, source, expectedPhase, extension] of [
-		["clean", clean, "complete", ".webm"],
-		["damaged", corrupt, "error", ".webm"],
-		["fragmented-mp4", cleanMp4, "complete", ".mp4"],
+	for (const [name, source, expectedPhase, extension, importedOriginal] of [
+		["clean", clean, "complete", ".webm", false],
+		["damaged", corrupt, "error", ".webm", false],
+		["imported-damaged", corrupt, "complete", ".webm", true],
+		["fragmented-mp4", cleanMp4, "complete", ".mp4", false],
 	] as const) {
 		test(`processing route handles ${name} source before conversion`, async () => {
 			spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
@@ -155,6 +156,7 @@ describe("raw recording input validation", () => {
 							outputPresignedUrl: "https://example.com/result.mp4",
 							inputExtension: extension,
 							preset: "ultrafast",
+							...(importedOriginal ? { importedOriginal } : {}),
 						}),
 					}),
 				);

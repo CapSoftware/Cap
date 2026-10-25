@@ -194,6 +194,7 @@ const processSchema = z.object({
 	preset: z.enum(["ultrafast", "fast", "medium", "slow"]).optional(),
 	remuxOnly: z.boolean().optional(),
 	normalizeH264Level: z.boolean().optional(),
+	importedOriginal: z.boolean().optional(),
 });
 
 const editRangeSchema = z
@@ -1586,7 +1587,7 @@ async function processVideoAsync(
 		}
 
 		const isWebm = isWebmInput(options.inputExtension);
-		if (isWebm) {
+		if (isWebm && !options.importedOriginal) {
 			updateJob(jobId, { message: "Checking the original recording..." });
 			await withJobHeartbeat(jobId, () =>
 				validateVideoInput(input.path, signal),
