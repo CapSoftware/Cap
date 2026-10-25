@@ -331,11 +331,8 @@ impl ExportAudioRenderer {
         // (nothing removed) keeps the enhancer contiguous and still streams.
         let studio_sound =
             project.audio.improve && !project.audio.mute && project.audio.mic_volume_db > -30.0;
-        let min_gap = if studio_sound {
-            (VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES) as f64 / 48_000.0
-        } else {
-            0.0
-        };
+        let min_gap = 0.0_f64;
+        let _ = studio_sound;
         let mut ends = HashMap::new();
         let mut duration = holds.iter().map(|(start, end)| end - start).sum::<f64>();
         if !duration.is_finite() || duration * 48_000.0 >= isize::MAX as f64 / 2.0 {
