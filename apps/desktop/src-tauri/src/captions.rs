@@ -1651,6 +1651,10 @@ pub async fn save_captions(
         "activeWordHighlight".to_string(),
         serde_json::Value::Bool(settings.active_word_highlight),
     );
+    settings_obj.insert(
+        "segmentWords".to_string(),
+        serde_json::Value::Number(settings.segment_words.into()),
+    );
 
     json_obj.insert(
         "settings".to_string(),
@@ -1807,6 +1811,12 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
+                    let segment_words = settings_obj
+                        .get("segmentWords")
+                        .or_else(|| settings_obj.get("segment_words"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(6) as u32;
+
                     let preset = settings_obj
                         .get("preset")
                         .and_then(|v| v.as_str())
@@ -1859,6 +1869,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         linger_duration,
                         word_transition_duration,
                         active_word_highlight,
+                        segment_words,
                         manual_position,
                         preset,
                         animation,

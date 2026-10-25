@@ -1090,18 +1090,29 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut CaptionSettings),
     ) {
-        self.set_caption_setting_inner(true, reason, window, cx, change);
+        self.set_caption_setting_inner(true, false, reason, window, cx, change);
     }
 
     fn set_caption_setting_inner(
         &mut self,
         rebuild_timeline: bool,
+        seed_when_missing: bool,
         reason: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut CaptionSettings),
     ) {
         let apply = |project: &mut ProjectConfiguration| {
+            if seed_when_missing {
+                // The segment size is picked before the first transcription,
+                // so that write seeds the captions block instead of no-oping
+                // like the style settings do.
+                let captions = project
+                    .captions
+                    .get_or_insert_with(cap_project::CaptionsData::default);
+                change(&mut captions.settings);
+                return true;
+            }
             with_caption_settings(project, |settings| {
                 change(settings);
                 // `STYLE_PRESET_KEYS` knocks the grade to "custom"
@@ -1265,6 +1276,7 @@ impl EditorWindow {
     ) {
         self.set_caption_setting_inner(
             slider.changes_timeline_model(),
+            matches!(slider, CaptionSlider::SegmentWords),
             "caption-slider",
             window,
             cx,

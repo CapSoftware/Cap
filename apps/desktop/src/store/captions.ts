@@ -180,7 +180,6 @@ export const defaultCaptionSettings: EditorCaptionSettings = {
 	exportWithSubtitles: false,
 	lingerDuration: 0.4,
 	wordTransitionDuration: 0.25,
-	segmentWords: 6,
 	manualPosition: null,
 	preset: classicPreset.id,
 	...classicPreset.style,
