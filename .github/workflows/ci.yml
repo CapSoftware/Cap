@@ -128,6 +128,7 @@ jobs:
       - name: Test web React compatibility
         run: >-
           bun run --cwd apps/web test
+          __tests__/unit/analytics-track-route.test.ts
           __tests__/unit/caps-keyboard.test.ts
           __tests__/unit/comment-composer-composition.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
