@@ -5299,6 +5299,21 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								) {
 									return { state: "forbidden" };
 								}
+								const result = await tx
+									.delete(Db.organizationMembers)
+									.where(
+										and(
+											eq(Db.organizationMembers.id, path.memberId),
+											eq(
+												Db.organizationMembers.organizationId,
+												path.organizationId,
+											),
+										),
+									);
+								if (affectedRows(result) === 0) return { state: "not_found" };
+								if (member.hasProSeat) {
+									await releaseProSeatSubscription(tx, member.userId);
+								}
 								const organizationSpaces = await tx
 									.select({ id: Db.spaces.id })
 									.from(Db.spaces)
@@ -5325,21 +5340,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											sql`LOWER(TRIM(${Db.organizationInvites.invitedEmail})) = ${member.email.toLowerCase()}`,
 										),
 									);
-								const result = await tx
-									.delete(Db.organizationMembers)
-									.where(
-										and(
-											eq(Db.organizationMembers.id, path.memberId),
-											eq(
-												Db.organizationMembers.organizationId,
-												path.organizationId,
-											),
-										),
-									);
-								if (affectedRows(result) === 0) return { state: "not_found" };
-								if (member.hasProSeat) {
-									await releaseProSeatSubscription(tx, member.userId);
-								}
 								const now = new Date();
 								return {
 									state: "success",

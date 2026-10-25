@@ -27,6 +27,7 @@ const tables = vi.hoisted(() => ({
 }));
 
 const lockRows = vi.fn();
+const reads: { table: unknown; joined: boolean; locked: boolean }[] = [];
 const updates: { table: unknown; value: Record<string, unknown> }[] = [];
 
 type SelectQuery = Promise<unknown[]> & {
@@ -38,19 +39,24 @@ type SelectQuery = Promise<unknown[]> & {
 };
 
 function selectQuery() {
-	let source: unknown;
+	const read = { table: undefined as unknown, joined: false, locked: false };
+	reads.push(read);
 	const query: SelectQuery = Object.assign(
 		Promise.resolve(mocks.selectResults.shift() ?? []),
 		{
 			from: (table: unknown) => {
-				source = table;
+				read.table = table;
 				return query;
 			},
-			innerJoin: () => query,
+			innerJoin: () => {
+				read.joined = true;
+				return query;
+			},
 			where: () => query,
 			limit: () => query,
 			for: (mode: string) => {
-				lockRows(mode, source);
+				read.locked = true;
+				lockRows(mode, read.table);
 				return query;
 			},
 		},
@@ -114,6 +120,7 @@ describe("toggleProSeat", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		updates.length = 0;
+		reads.length = 0;
 		mocks.selectResults = [];
 		mocks.user.thirdPartyStripeSubscriptionId = "sub_this_org";
 		mocks.getCurrentUser.mockResolvedValue({ id: "owner" });
@@ -165,6 +172,11 @@ describe("toggleProSeat", () => {
 				["update", tables.organizationMembers],
 				["update", tables.users],
 			]);
+			expect(reads.find((read) => !read.locked)).toEqual({
+				table: tables.organizationMembers,
+				joined: true,
+				locked: false,
+			});
 		});
 
 		it("does nothing when the seat is already off", async () => {

@@ -30,6 +30,7 @@ const tables = vi.hoisted(() => ({
 }));
 
 const lockRows = vi.fn();
+const reads: { table: unknown; joined: boolean; locked: boolean }[] = [];
 const deletes: unknown[] = [];
 
 type SelectQuery = Promise<unknown[]> & {
@@ -41,19 +42,24 @@ type SelectQuery = Promise<unknown[]> & {
 };
 
 function selectQuery() {
-	let source: unknown;
+	const read = { table: undefined as unknown, joined: false, locked: false };
+	reads.push(read);
 	const query: SelectQuery = Object.assign(
 		Promise.resolve(mocks.selectResults.shift() ?? []),
 		{
 			from: (table: unknown) => {
-				source = table;
+				read.table = table;
 				return query;
 			},
-			innerJoin: () => query,
+			innerJoin: () => {
+				read.joined = true;
+				return query;
+			},
 			where: () => query,
 			limit: () => query,
 			for: (mode: string) => {
-				lockRows(mode, source);
+				read.locked = true;
+				lockRows(mode, read.table);
 				return query;
 			},
 		},
@@ -103,10 +109,10 @@ async function declineProSeat(
 			},
 		],
 		[{ id: "member-1", hasProSeat: true }],
-		[],
-		[],
 		[{ id: "user-1" }],
 		remainingSeats,
+		[],
+		[],
 	];
 	const { POST } = await import("@/app/api/invite/decline/route");
 	return POST(
@@ -126,6 +132,7 @@ describe("POST /api/invite/decline with a Pro seat", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		deletes.length = 0;
+		reads.length = 0;
 		mocks.user.thirdPartyStripeSubscriptionId = "sub_org_1";
 		mocks.getCurrentUser.mockResolvedValue({
 			id: "user-1",
@@ -178,5 +185,15 @@ describe("POST /api/invite/decline with a Pro seat", () => {
 			["update", tables.organizationMembers],
 			["update", tables.users],
 		]);
+	});
+
+	it("reads the remaining seats before any other plain read", async () => {
+		await declineProSeat([{ stripeSubscriptionId: "sub_other" }]);
+
+		expect(reads.find((read) => !read.locked)).toEqual({
+			table: tables.organizationMembers,
+			joined: true,
+			locked: false,
+		});
 	});
 });

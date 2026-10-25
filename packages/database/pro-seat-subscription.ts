@@ -10,7 +10,10 @@ type Transaction = Parameters<
 // Call after a member's Pro seat row is gone. Seats don't record who sponsored
 // them, so when only manager-sponsored seats remain the current pointer stays.
 // The user row lock serializes releases for one user. Locking the remaining
-// seat rows instead deadlocks two orgs turning off the same user's seats.
+// seat rows instead deadlocks two orgs turning off the same user's seats. Run
+// this before the transaction's first plain read: under REPEATABLE READ that
+// read pins the snapshot, and a release committed while this one waited on the
+// user lock would stay invisible.
 export async function releaseProSeatSubscription(
 	tx: Transaction,
 	userId: User.UserId,

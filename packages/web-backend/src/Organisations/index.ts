@@ -157,11 +157,6 @@ export class Organisations extends Effect.Service<Organisations>()(
 
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
-						const videoIds = videos.map((video) => video.id);
-						const spaceRows = await tx
-							.select({ id: Db.spaces.id })
-							.from(Db.spaces)
-							.where(Dz.eq(Db.spaces.organizationId, id));
 						const memberRows = await tx
 							.select({
 								userId: Db.organizationMembers.userId,
@@ -170,6 +165,26 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.from(Db.organizationMembers)
 							.where(Dz.eq(Db.organizationMembers.organizationId, id))
 							.for("update");
+						await tx
+							.delete(Db.organizationMembers)
+							.where(Dz.eq(Db.organizationMembers.organizationId, id));
+
+						const proSeatUserIds = [
+							...new Set(
+								memberRows
+									.filter((member) => member.hasProSeat)
+									.map((member) => member.userId),
+							),
+						].sort();
+						for (const proSeatUserId of proSeatUserIds) {
+							await releaseProSeatSubscription(tx, proSeatUserId);
+						}
+
+						const videoIds = videos.map((video) => video.id);
+						const spaceRows = await tx
+							.select({ id: Db.spaces.id })
+							.from(Db.spaces)
+							.where(Dz.eq(Db.spaces.organizationId, id));
 						const integrationRows = await tx
 							.select({ id: Db.storageIntegrations.id })
 							.from(Db.storageIntegrations)
@@ -258,9 +273,6 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.delete(Db.integrationInstallations)
 							.where(Dz.eq(Db.integrationInstallations.organizationId, id));
 						await tx
-							.delete(Db.organizationMembers)
-							.where(Dz.eq(Db.organizationMembers.organizationId, id));
-						await tx
 							.delete(Db.storageIntegrations)
 							.where(Dz.eq(Db.storageIntegrations.organizationId, id));
 						await tx
@@ -269,17 +281,6 @@ export class Organisations extends Effect.Service<Organisations>()(
 						await tx
 							.delete(Db.organizations)
 							.where(Dz.eq(Db.organizations.id, id));
-
-						const proSeatUserIds = [
-							...new Set(
-								memberRows
-									.filter((member) => member.hasProSeat)
-									.map((member) => member.userId),
-							),
-						].sort();
-						for (const proSeatUserId of proSeatUserIds) {
-							await releaseProSeatSubscription(tx, proSeatUserId);
-						}
 
 						for (const affectedUserId of affectedUserIds) {
 							const [otherOrg] = await tx

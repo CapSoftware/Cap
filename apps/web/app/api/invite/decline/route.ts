@@ -65,6 +65,14 @@ export async function POST(request: NextRequest) {
 				.for("update");
 
 			if (membership) {
+				await tx
+					.delete(organizationMembers)
+					.where(eq(organizationMembers.id, membership.id));
+
+				if (membership.hasProSeat) {
+					await releaseProSeatSubscription(tx, user.id);
+				}
+
 				const organizationSpaces = await tx
 					.select({ id: spaces.id })
 					.from(spaces)
@@ -82,10 +90,6 @@ export async function POST(request: NextRequest) {
 						);
 				}
 
-				await tx
-					.delete(organizationMembers)
-					.where(eq(organizationMembers.id, membership.id));
-
 				const [remainingMembership] = await tx
 					.select({ organizationId: organizationMembers.organizationId })
 					.from(organizationMembers)
@@ -101,10 +105,6 @@ export async function POST(request: NextRequest) {
 				if (user.defaultOrgId === invite.organizationId) {
 					userUpdate.defaultOrgId = remainingMembership?.organizationId ?? null;
 				}
-				if (membership.hasProSeat) {
-					await releaseProSeatSubscription(tx, user.id);
-				}
-
 				if (Object.keys(userUpdate).length > 0) {
 					await tx.update(users).set(userUpdate).where(eq(users.id, user.id));
 				}
