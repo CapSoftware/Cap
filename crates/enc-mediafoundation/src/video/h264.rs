@@ -17,22 +17,26 @@ use windows::{
         Foundation::E_NOTIMPL,
         Graphics::{
             Direct3D11::{ID3D11Device, ID3D11Texture2D},
-            Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
+            Dxgi::{
+                Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
+                IDXGIDevice,
+            },
         },
         Media::MediaFoundation::{
             self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
-            IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
-            MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NONE, MF_EVENT_TYPE,
-            MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-            MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
-            MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
-            MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
-            MFCreateSample, MFMediaType_Video, MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE,
-            MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_FLUSH,
-            MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
-            MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-            MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_SET_TYPE_TEST_ONLY,
-            MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+            IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_EVENTS_AVAILABLE,
+            MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NO_WAIT,
+            MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE,
+            MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+            MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+            MF_TRANSFORM_ASYNC_UNLOCK, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer,
+            MFCreateMediaType, MFCreateSample, MFMediaType_Video, MFT_ENUM_FLAG,
+            MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_DRAIN,
+            MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+            MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING,
+            MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER,
+            MFT_OUTPUT_DATA_BUFFER, MFT_SET_TYPE_TEST_ONLY, MFVideoFormat_H264, MFVideoFormat_NV12,
+            MFVideoInterlace_Progressive,
         },
     },
     core::{Error, Interface},
@@ -163,6 +167,7 @@ pub struct H264Encoder {
     output_stream_id: u32,
     output_type: IMFMediaType,
     bitrate: u32,
+    drain_on_stop: bool,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -251,6 +256,11 @@ impl H264Encoder {
             frame_rate,
             bitrate_multipler,
         );
+        let adapter = d3d_device
+            .cast::<IDXGIDevice>()
+            .and_then(|device| unsafe { device.GetAdapter()?.GetDesc() })
+            .map_err(NewVideoEncoderError::DeviceManager)?;
+        let is_amd = adapter.VendorId == 0x1002;
 
         let transform =
             EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
@@ -270,6 +280,9 @@ impl H264Encoder {
             frame_rate,
         )
         .map_err(NewVideoEncoderError::VideoProcessor)?;
+        if is_amd {
+            video_processor.set_bt709_color_space(format);
+        }
 
         let mut device_manager_reset_token: u32 = 0;
         let media_device_manager = {
@@ -367,6 +380,9 @@ impl H264Encoder {
             MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
             output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+            if is_amd {
+                set_bt709_attributes(&output_type)?;
+            }
             transform.SetOutputType(output_stream_id, &output_type, 0)?;
             Ok(output_type)
         })()
@@ -386,6 +402,9 @@ impl H264Encoder {
                 let attributes: IMFAttributes = input_type.cast()?;
                 input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                 input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+                if is_amd {
+                    set_bt709_attributes(&input_type)?;
+                }
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,
@@ -431,6 +450,7 @@ impl H264Encoder {
             input_stream_id,
             output_stream_id,
             bitrate,
+            drain_on_stop: is_amd,
 
             output_type,
         })
@@ -557,7 +577,19 @@ impl H264Encoder {
 
             let mut consecutive_empty_samples: u8 = 0;
             let mut should_exit = false;
+            let mut drain_started: Option<Instant> = None;
             while !should_exit {
+                if drain_started
+                    .is_some_and(|started| started.elapsed() > ENCODER_OPERATION_TIMEOUT)
+                {
+                    let _ = self.cleanup_encoder();
+                    return Err(EncoderRuntimeError::EncoderUnhealthy {
+                        reason: EncoderFailureReason::Timeout,
+                        inputs_without_output: health_monitor.inputs_without_output,
+                        process_failures: health_monitor.consecutive_process_failures,
+                        frames_encoded: health_monitor.total_frames_encoded,
+                    });
+                }
                 let health_status = health_monitor.check_health();
                 if !health_status.is_healthy
                     && let Some(reason) = health_status.failure_reason
@@ -571,11 +603,25 @@ impl H264Encoder {
                     });
                 }
 
-                let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
+                let event = if drain_started.is_some() {
+                    match self.event_generator.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
+                        Ok(event) => event,
+                        Err(error) if error.code() == MF_E_NO_EVENTS_AVAILABLE => {
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                } else {
+                    self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?
+                };
 
                 let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
                 match event_type {
                     MediaFoundation::METransformNeedInput => {
+                        if drain_started.is_some() {
+                            continue;
+                        }
                         health_monitor.record_input();
                         should_exit = true;
                         let get_frame_started = Instant::now();
@@ -631,6 +677,14 @@ impl H264Encoder {
                                     should_exit = false;
                                 }
                             }
+                        } else if self.drain_on_stop {
+                            // AMD retains input at stop; flushing here discards the final frames.
+                            self.transform
+                                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
+                            self.transform
+                                .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+                            drain_started = Some(Instant::now());
+                            should_exit = false;
                         }
                     }
                     MediaFoundation::METransformHaveOutput => {
@@ -660,6 +714,9 @@ impl H264Encoder {
                                 });
                             }
                         }
+                    }
+                    MediaFoundation::METransformDrainComplete if drain_started.is_some() => {
+                        should_exit = true;
                     }
                     _ => {
                         panic!("Unknown media event type: {}", event_type.0);
@@ -694,4 +751,18 @@ impl H264Encoder {
 fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
     let frame_rate_factor = (fps as f32 - 30.0).max(0.0) / 2.0 + 30.0;
     (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
+}
+
+fn set_bt709_attributes(media_type: &IMFMediaType) -> windows::core::Result<()> {
+    use MediaFoundation::{
+        MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
+        MF_MT_YUV_MATRIX, MFNominalRange_16_235, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
+        MFVideoTransferMatrix_BT709,
+    };
+    unsafe {
+        media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+    }
 }

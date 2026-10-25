@@ -18,7 +18,10 @@ use windows::{
                 ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
                 ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
             },
-            Dxgi::Common::{DXGI_FORMAT, DXGI_RATIONAL, DXGI_SAMPLE_DESC},
+            Dxgi::Common::{
+                DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_RATIONAL,
+                DXGI_SAMPLE_DESC,
+            },
         },
     },
     core::Interface,
@@ -216,6 +219,30 @@ impl VideoProcessor {
 
     pub fn output_texture(&self) -> &ID3D11Texture2D {
         &self.video_output_texture
+    }
+
+    pub(super) fn set_bt709_color_space(&self, input_format: DXGI_FORMAT) {
+        let input_range = if matches!(
+            input_format,
+            DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM
+        ) {
+            D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255
+        } else {
+            D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235
+        };
+        // Nominal_Range occupies bits 4-5; unshifted values change Usage/RGB_Range.
+        let output = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+            _bitfield: 1 | (1 << 2) | ((D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235.0 as u32) << 4),
+        };
+        let input = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+            _bitfield: 1 | (1 << 2) | ((input_range.0 as u32) << 4),
+        };
+        unsafe {
+            self.video_context
+                .VideoProcessorSetOutputColorSpace(&self.video_processor, &output);
+            self.video_context
+                .VideoProcessorSetStreamColorSpace(&self.video_processor, 0, &input);
+        }
     }
 
     pub fn process_texture(

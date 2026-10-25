@@ -237,12 +237,7 @@ impl Muxer for WindowsMuxer {
                             .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software()
-                        || matches!(
-                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
-                            Some(cap_frame_converter::GpuVendor::Amd)
-                        )
-                    {
+                    if encoder_preferences.should_force_software() {
                         return fallback(None);
                     }
 
@@ -507,6 +502,75 @@ impl Muxer for WindowsMuxer {
 #[cfg(test)]
 mod tests {
     use super::reference_video_frame;
+
+    #[tokio::test]
+    #[ignore = "Requires AMD D3D11/MF hardware"]
+    async fn amd_muxer_tries_textures_and_preserves_ffmpeg_fallback() -> anyhow::Result<()> {
+        use super::{Muxer, WindowsMuxer, WindowsMuxerConfig};
+        use crate::{
+            TaskPool, capture_pipeline::EncoderPreferences,
+            output_pipeline::core::PipelineBuildScope,
+        };
+        use std::sync::{Arc, atomic::AtomicBool};
+        use std::time::Duration;
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN,
+        };
+
+        assert_eq!(
+            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
+            Some(cap_frame_converter::GpuVendor::Amd)
+        );
+        cap_mediafoundation_utils::thread_init();
+        ffmpeg::init()?;
+        let directory = tempfile::tempdir()?;
+        let device = cap_enc_mediafoundation::d3d::create_d3d_device()?;
+        for (index, (pixel_format, force_software, expect_fallback)) in [
+            (DXGI_FORMAT_R8G8B8A8_UNORM, false, false),
+            (DXGI_FORMAT_UNKNOWN, false, true),
+            (DXGI_FORMAT_R8G8B8A8_UNORM, true, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let preferences = EncoderPreferences::new();
+            if force_software {
+                preferences.force_software_only();
+            }
+            let scope = PipelineBuildScope::new();
+            let mut tasks = TaskPool::default();
+            let mut muxer = scope
+                .run(WindowsMuxer::setup(
+                    WindowsMuxerConfig {
+                        pixel_format,
+                        d3d_device: device.clone(),
+                        frame_rate: 30,
+                        bitrate_multiplier: 0.15,
+                        output_size: None,
+                        encoder_preferences: preferences.clone(),
+                        fragmented: false,
+                        frag_duration_us: 2_000_000,
+                    },
+                    directory.path().join(format!("selection-{index}.mp4")),
+                    Some(cap_media_info::VideoInfo::from_raw_ffmpeg(
+                        ffmpeg::format::Pixel::RGBA,
+                        1920,
+                        1080,
+                        30,
+                    )),
+                    None,
+                    Arc::new(AtomicBool::new(false)),
+                    &mut tasks,
+                ))
+                .await?;
+            let used_fallback = preferences.should_force_software();
+            muxer.stop();
+            scope.cancel_and_join().await.map_err(anyhow::Error::msg)?;
+            muxer.finish(Duration::ZERO)??;
+            assert_eq!(used_fallback, expect_fallback, "case {index}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn retained_software_frame_shares_pixels_and_survives_original() {
@@ -781,12 +845,7 @@ impl Muxer for WindowsCameraMuxer {
                             .map_err(|e| anyhow!("CameraSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software()
-                        || matches!(
-                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
-                            Some(cap_frame_converter::GpuVendor::Amd)
-                        )
-                    {
+                    if encoder_preferences.should_force_software() {
                         return fallback(None);
                     }
 
