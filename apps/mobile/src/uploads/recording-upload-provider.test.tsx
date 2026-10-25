@@ -292,10 +292,22 @@ describe("RecordingUploadProvider", () => {
 		},
 	);
 
-	it.each([null, "uploading"] as const)(
-		"recovers an already-stranded camera completion with persisted server phase %s once",
-		async (serverPhase) => {
+	it.each([
+		{ serverPhase: null, durationSeconds: 2 },
+		{ serverPhase: "uploading", durationSeconds: 2 },
+		{ serverPhase: null, durationSeconds: null },
+		{ serverPhase: "uploading", durationSeconds: null },
+	] as const)(
+		"recovers uploaded recording media with saved state %j once per launch",
+		async ({ serverPhase, durationSeconds }) => {
 			vi.useFakeTimers();
+			let persisted = "";
+			fileSystemMock.writeAsStringAsync.mockImplementation(
+				(_uri: string, value: string) => {
+					persisted = value;
+					return Promise.resolve();
+				},
+			);
 			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(
 				JSON.stringify({
 					jobs: [
@@ -303,6 +315,7 @@ describe("RecordingUploadProvider", () => {
 							...uploadedRecording,
 							status: serverPhase === null ? "processing" : "uploading",
 							serverPhase,
+							durationSeconds,
 						},
 					],
 				}),
@@ -324,9 +337,21 @@ describe("RecordingUploadProvider", () => {
 			});
 			await mountRecoveryProvider();
 			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+			expect(authState.completeRecording).toHaveBeenCalledWith(
+				"cap_123",
+				expect.objectContaining({ durationSeconds: 2 }),
+			);
 			expect(uploadToTarget).not.toHaveBeenCalled();
 			await act(async () => vi.advanceTimersByTimeAsync(30_000));
 			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+			await act(async () => recoveryRenderer?.unmount());
+			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(persisted);
+			await mountRecoveryProvider();
+			expect(authState.completeRecording).toHaveBeenCalledTimes(2);
+			expect(authState.completeRecording.mock.calls[1]).toEqual(
+				authState.completeRecording.mock.calls[0],
+			);
+			expect(uploadToTarget).not.toHaveBeenCalled();
 		},
 	);
 
@@ -335,7 +360,6 @@ describe("RecordingUploadProvider", () => {
 		{ serverPhase: "processing" },
 		{ serverPhase: "generating_thumbnail" },
 		{ status: "complete" },
-		{ durationSeconds: null },
 		{ segments: [] },
 		{
 			segments: uploadedRecording.segments.map((segment) => ({

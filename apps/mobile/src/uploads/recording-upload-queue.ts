@@ -387,7 +387,7 @@ const parseJob = (value: unknown): RecordingUploadJob | null => {
 			: segmentUploadedBytes;
 	const resumeCompletion =
 		uploadOwner === "app" &&
-		storedDuration !== null &&
+		durationSeconds !== null &&
 		status !== "complete" &&
 		(status === "processing" || serverPhase === "uploading") &&
 		(serverPhase === null || serverPhase === "uploading") &&
