@@ -1,28 +1,13 @@
 use cap_camera::CapturedFrame;
 use cap_camera_avfoundation::ImageBufExt;
 use cidre::*;
-use ffmpeg::{ffi, format::Pixel, software::scaling};
+use ffmpeg::{format::Pixel, software::scaling};
 use std::{
     cell::RefCell,
-    ffi::c_void,
-    ptr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use crate::{CONVERSION_STATS, CapturedFrameExt};
-
-type CVPixelBufferRef = *mut c_void;
-
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    fn CVPixelBufferGetBaseAddress(pixel_buffer: CVPixelBufferRef) -> *mut u8;
-    fn CVPixelBufferGetBytesPerRow(pixel_buffer: CVPixelBufferRef) -> usize;
-    fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
-    fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
-}
 
 type CachedScaler = (Pixel, u32, u32, scaling::Context, ffmpeg::frame::Video);
 
@@ -73,181 +58,6 @@ fn fourcc_to_pixel_format(fourcc: &str) -> Option<FourccInfo> {
 
 static FALLBACK_WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    fn CVPixelBufferLockBaseAddress(pixel_buffer: CVPixelBufferRef, flags: u64) -> i32;
-    fn CVPixelBufferUnlockBaseAddress(pixel_buffer: CVPixelBufferRef, flags: u64) -> i32;
-}
-
-const CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 1;
-
-#[derive(Clone, Copy)]
-struct SamplePlane {
-    ptr: *mut u8,
-    len: usize,
-    stride: usize,
-}
-
-struct WrappedSampleBuf {
-    _image_buf: cidre::arc::R<cidre::cv::ImageBuf>,
-    pixel_buffer: CVPixelBufferRef,
-    locked: bool,
-}
-
-unsafe impl Send for WrappedSampleBuf {}
-unsafe impl Sync for WrappedSampleBuf {}
-
-impl Drop for WrappedSampleBuf {
-    fn drop(&mut self) {
-        if self.locked {
-            unsafe {
-                CVPixelBufferUnlockBaseAddress(self.pixel_buffer, CV_PIXEL_BUFFER_LOCK_READ_ONLY);
-            }
-        }
-    }
-}
-
-unsafe extern "C" fn release_wrapped_sample_buf(opaque: *mut c_void, _data: *mut u8) {
-    if !opaque.is_null() {
-        drop(unsafe { Box::from_raw(opaque as *mut Arc<WrappedSampleBuf>) });
-    }
-}
-
-fn sample_buf_planes(
-    image_buf: &cidre::cv::ImageBuf,
-    format: &str,
-) -> Option<(Pixel, Vec<SamplePlane>, Option<ffmpeg::color::Range>)> {
-    let (pixel, plane_count, range) = match format {
-        "2vuy" => (Pixel::UYVY422, 0, None),
-        "yuvs" => (Pixel::YUYV422, 0, None),
-        "BGRA" => (Pixel::BGRA, 0, None),
-        "ARGB" => (Pixel::ARGB, 0, None),
-        "24BG" => (Pixel::BGR24, 0, None),
-        "24RG" => (Pixel::RGB24, 0, None),
-        "L008" | "GRAY" => (Pixel::GRAY8, 0, None),
-        "L016" => (Pixel::GRAY16LE, 0, None),
-        "420v" => (Pixel::NV12, 2, Some(ffmpeg::color::Range::MPEG)),
-        "420f" => (Pixel::NV12, 2, Some(ffmpeg::color::Range::JPEG)),
-        "y420" => (Pixel::YUV420P, 3, None),
-        _ => return None,
-    };
-
-    if image_buf.plane_count() != plane_count {
-        return None;
-    }
-
-    let mut planes = Vec::with_capacity(plane_count.max(1));
-    if plane_count == 0 {
-        let pixel_buffer = image_buf as *const cidre::cv::ImageBuf as CVPixelBufferRef;
-        let ptr = unsafe { CVPixelBufferGetBaseAddress(pixel_buffer) };
-        let stride = unsafe { CVPixelBufferGetBytesPerRow(pixel_buffer) };
-        let height = unsafe { CVPixelBufferGetHeight(pixel_buffer) };
-        if ptr.is_null() || stride == 0 || height == 0 {
-            return None;
-        }
-        planes.push(SamplePlane {
-            ptr,
-            len: stride.checked_mul(height)?,
-            stride,
-        });
-    } else {
-        for plane in 0..plane_count {
-            let ptr = image_buf.plane_base_address(plane) as *mut u8;
-            let stride = image_buf.plane_bytes_per_row(plane);
-            let height = image_buf.plane_height(plane);
-            if ptr.is_null() || stride == 0 || height == 0 {
-                return None;
-            }
-            planes.push(SamplePlane {
-                ptr,
-                len: stride.checked_mul(height)?,
-                stride,
-            });
-        }
-    }
-
-    Some((pixel, planes, range))
-}
-
-fn wrap_sample_buf(sample_buf: &cidre::cm::SampleBuf) -> Option<ffmpeg::frame::Video> {
-    let image_buf = sample_buf.image_buf()?.retained();
-    let format_desc = sample_buf.format_desc()?;
-    let format = cidre::four_cc_to_str(&mut format_desc.media_sub_type().to_be_bytes());
-    let pixel_buffer = (&*image_buf) as *const cidre::cv::ImageBuf as CVPixelBufferRef;
-
-    if unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, CV_PIXEL_BUFFER_LOCK_READ_ONLY) } != 0 {
-        return None;
-    }
-
-    let Some((pixel, planes, range)) = sample_buf_planes(&image_buf, format) else {
-        unsafe {
-            CVPixelBufferUnlockBaseAddress(pixel_buffer, CV_PIXEL_BUFFER_LOCK_READ_ONLY);
-        }
-        return None;
-    };
-
-    let owner = Arc::new(WrappedSampleBuf {
-        _image_buf: image_buf,
-        pixel_buffer,
-        locked: true,
-    });
-
-    let mut frame = ffmpeg::frame::Video::empty();
-    let ptr = unsafe { frame.as_mut_ptr() };
-    let format: ffi::AVPixelFormat = pixel.into();
-    unsafe {
-        (*ptr).format = format as i32;
-        (*ptr).width = image_buf_width(&owner) as i32;
-        (*ptr).height = image_buf_height(&owner) as i32;
-    }
-
-    let mut buffers = Vec::with_capacity(planes.len());
-    for plane in &planes {
-        let opaque = Box::into_raw(Box::new(Arc::clone(&owner))) as *mut c_void;
-        let buffer = unsafe {
-            ffi::av_buffer_create(
-                plane.ptr,
-                plane.len,
-                Some(release_wrapped_sample_buf),
-                opaque,
-                ffi::AV_BUFFER_FLAG_READONLY,
-            )
-        };
-        if buffer.is_null() {
-            unsafe {
-                drop(Box::from_raw(opaque as *mut Arc<WrappedSampleBuf>));
-                for mut buffer in buffers {
-                    ffi::av_buffer_unref(&mut buffer);
-                }
-            }
-            return None;
-        }
-        buffers.push(buffer);
-    }
-
-    for (index, (buffer, plane)) in buffers.into_iter().zip(&planes).enumerate() {
-        unsafe {
-            (*ptr).buf[index] = buffer;
-            (*ptr).data[index] = plane.ptr;
-            (*ptr).linesize[index] = plane.stride as i32;
-        }
-    }
-
-    if let Some(range) = range {
-        frame.set_color_range(range);
-    }
-
-    Some(frame)
-}
-
-fn image_buf_width(owner: &WrappedSampleBuf) -> usize {
-    unsafe { CVPixelBufferGetWidth(owner.pixel_buffer) }
-}
-
-fn image_buf_height(owner: &WrappedSampleBuf) -> usize {
-    unsafe { CVPixelBufferGetHeight(owner.pixel_buffer) }
-}
-
 impl CapturedFrameExt for CapturedFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         sample_buf_as_ffmpeg(self.native().sample_buf())
@@ -259,11 +69,6 @@ impl CapturedFrameExt for CapturedFrame {
 pub fn sample_buf_as_ffmpeg(
     sample_buf: &cm::SampleBuf,
 ) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-    if let Some(frame) = wrap_sample_buf(sample_buf) {
-        CONVERSION_STATS.record_zero_copy();
-        return Ok(frame);
-    }
-
     let started = std::time::Instant::now();
     let frame = {
         let mut image_buf = sample_buf

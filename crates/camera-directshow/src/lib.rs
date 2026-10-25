@@ -39,6 +39,10 @@ pub fn initialize_directshow() -> windows_core::Result<()> {
     unsafe { CoInitialize(None) }.ok()
 }
 
+fn initialize_directshow_worker() {
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+}
+
 pub trait IPinExt {
     /// # Safety
     /// Do it correctly
@@ -465,8 +469,10 @@ impl VideoInputDevice {
                 .SetFormat(&**format)
                 .map_err(StartCapturingError::Other)?;
 
-            let (sink_filter, callback_worker) = SinkFilter::new(format.clone(), callback)
-                .map_err(StartCapturingError::CallbackWorker)?;
+            let dropped = Arc::new(AtomicU64::new(0));
+            let (sink_filter, callback_worker) =
+                SinkFilter::new(format.clone(), callback, dropped.clone())
+                    .map_err(StartCapturingError::CallbackWorker)?;
 
             let input_sink_pin = sink_filter
                 .get_pin(0)
@@ -522,6 +528,7 @@ impl VideoInputDevice {
                 output_capture_pin: bound.output_pin,
                 input_sink_pin,
                 callback_worker,
+                dropped_samples: dropped,
             })
         }
     }
@@ -533,9 +540,14 @@ pub struct CaptureHandle {
     output_capture_pin: IPin,
     input_sink_pin: IPin,
     callback_worker: CallbackWorker,
+    dropped_samples: Arc<AtomicU64>,
 }
 
 impl CaptureHandle {
+    pub fn dropped_samples(&self) -> u64 {
+        self.dropped_samples.load(Ordering::Relaxed)
+    }
+
     // Chromium: VideoCaptureDeviceWin::StopAndDeallocate
     pub fn stop_capturing(self) -> windows_core::Result<()> {
         unsafe { self.media_control.Stop() }?;
@@ -594,6 +606,11 @@ impl Iterator for VideoMediaTypesIterator<'_> {
 #[derive(Default, Debug)]
 pub struct AMMediaType(AM_MEDIA_TYPE);
 
+// The media type owns its format block and is immutable after construction;
+// the callback worker only reads it.
+unsafe impl Send for AMMediaType {}
+unsafe impl Sync for AMMediaType {}
+
 impl AMMediaType {
     pub fn new(typ: &AM_MEDIA_TYPE) -> Self {
         Self(unsafe { copy_media_type(typ) })
@@ -604,6 +621,32 @@ impl AMMediaType {
         let inner = unsafe { ptr::read(&wrapper.0) };
         std::mem::forget(wrapper);
         inner
+    }
+
+    fn matches_media_type(&self, other: &AM_MEDIA_TYPE) -> bool {
+        let a = &self.0;
+        let b = other;
+
+        if a.majortype != b.majortype
+            || a.subtype != b.subtype
+            || a.formattype != b.formattype
+            || a.cbFormat != b.cbFormat
+        {
+            return false;
+        }
+
+        if a.cbFormat == 0 {
+            return true;
+        }
+
+        if a.pbFormat.is_null() || b.pbFormat.is_null() {
+            return a.pbFormat == b.pbFormat;
+        }
+
+        unsafe {
+            std::slice::from_raw_parts(a.pbFormat, a.cbFormat as usize)
+                == std::slice::from_raw_parts(b.pbFormat, b.cbFormat as usize)
+        }
     }
 }
 
@@ -643,9 +686,9 @@ impl SinkFilter {
     pub(crate) fn new(
         desired_media_type: AMMediaType,
         callback: SinkCallback,
+        dropped: Arc<AtomicU64>,
     ) -> std::io::Result<(ComObject<Self>, CallbackWorker)> {
         let (callback_tx, callback_rx) = sync_channel(CALLBACK_QUEUE_DEPTH);
-        let dropped = Arc::new(AtomicU64::new(0));
         let callback_worker =
             CallbackWorker::spawn(callback, callback_rx, Arc::new(AtomicBool::new(false)))?;
 
@@ -841,7 +884,7 @@ const CALLBACK_QUEUE_DEPTH: usize = 4;
 
 struct OwnedCallbackData {
     sample: IMediaSample,
-    media_type: AMMediaType,
+    media_type: Arc<AMMediaType>,
     timestamp: Duration,
     perf_counter: i64,
 }
@@ -863,12 +906,12 @@ impl CallbackWorker {
         let handle = thread::Builder::new()
             .name("dshow-camera-callback".to_string())
             .spawn(move || {
-                let _ = initialize_directshow();
+                initialize_directshow_worker();
                 while !worker_stop.load(Ordering::Acquire) {
                     match samples.recv_timeout(Duration::from_millis(100)) {
                         Ok(data) => callback(CallbackData {
                             sample: &data.sample,
-                            media_type: &data.media_type,
+                            media_type: data.media_type.as_ref(),
                             timestamp: data.timestamp,
                             perf_counter: data.perf_counter,
                         }),
@@ -897,8 +940,7 @@ impl Drop for CallbackWorker {
 #[implement(IPin, IMemInputPin)]
 struct SinkInputPin {
     desired_media_type: AMMediaType,
-    #[allow(unused)]
-    current_media_type: RefCell<AMMediaType>,
+    current_media_type: RefCell<Arc<AMMediaType>>,
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<IBaseFilter>>,
     callback_tx: SyncSender<OwnedCallbackData>,
@@ -969,7 +1011,7 @@ impl IPin_Impl for SinkInputPin_Impl {
         };
         *connected_pin = Some(pconnector.clone());
         self.current_media_type
-            .replace(AMMediaType::new(unsafe { &*pmt }));
+            .replace(Arc::new(AMMediaType::new(unsafe { &*pmt })));
         S_OK.ok()
     }
 
@@ -996,7 +1038,7 @@ impl IPin_Impl for SinkInputPin_Impl {
             .as_ref()
             .ok_or(VFW_E_NOT_CONNECTED)?;
 
-        unsafe { *pmt = self.current_media_type.borrow().clone().into_inner() };
+        unsafe { *pmt = (**self.current_media_type.borrow()).clone().into_inner() };
 
         Ok(())
     }
@@ -1099,16 +1141,16 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             return Ok(());
         };
 
-        unsafe {
-            if let Ok(new_media_type) = psample.GetMediaType()
+        let media_type = {
+            let mut current = self.current_media_type.borrow_mut();
+            if let Ok(new_media_type) = unsafe { psample.GetMediaType() }
                 && !new_media_type.is_null()
+                && !current.matches_media_type(unsafe { &*new_media_type })
             {
-                self.current_media_type
-                    .replace(AMMediaType::new(&*new_media_type));
+                *current = Arc::new(AMMediaType::new(unsafe { &*new_media_type }));
             }
-        }
-
-        let media_type = self.current_media_type.borrow().clone();
+            Arc::clone(&*current)
+        };
 
         let length = unsafe { psample.GetActualDataLength() };
 

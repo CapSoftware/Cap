@@ -42,11 +42,26 @@ pub struct ConversionStats {
 impl ConversionStats {
     pub fn record_zero_copy(&self) {
         self.zero_copy_frames.fetch_add(1, Ordering::Relaxed);
+        self.log_periodically();
     }
 
     pub fn record_copy(&self, elapsed_nanos: u64) {
         self.copied_frames.fetch_add(1, Ordering::Relaxed);
         self.copy_nanos.fetch_add(elapsed_nanos, Ordering::Relaxed);
+        self.log_periodically();
+    }
+
+    fn log_periodically(&self) {
+        let snapshot = self.snapshot();
+        let total = snapshot.zero_copy_frames + snapshot.copied_frames;
+        if total > 0 && total.is_multiple_of(300) {
+            tracing::debug!(
+                zero_copy_frames = snapshot.zero_copy_frames,
+                copied_frames = snapshot.copied_frames,
+                average_copy_micros = snapshot.average_copy_micros(),
+                "Camera frame conversion stats"
+            );
+        }
     }
 
     pub fn snapshot(&self) -> ConversionStatsSnapshot {

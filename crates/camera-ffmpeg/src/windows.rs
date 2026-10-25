@@ -372,9 +372,7 @@ fn lock_mf_buffer(
     format: PixelFormat,
     width: usize,
     height: usize,
-) -> Option<(WrappedMfBuffer, Vec<MfPlane>, Pixel)> {
-    let pixel = mf_pixel_format(format)?;
-
+) -> Option<(WrappedMfBuffer, Vec<MfPlane>)> {
     unsafe {
         if let Ok(buffer_2d) = buffer.cast::<IMF2DBuffer2>() {
             let mut scanline = ptr::null_mut();
@@ -403,7 +401,6 @@ fn lock_mf_buffer(
                             lock: MfLock::TwoD2(buffer_2d),
                         },
                         planes,
-                        pixel,
                     ));
                 }
 
@@ -433,7 +430,6 @@ fn lock_mf_buffer(
                             lock: MfLock::TwoD(buffer_2d),
                         },
                         planes,
-                        pixel,
                     ));
                 }
 
@@ -456,7 +452,6 @@ fn lock_mf_buffer(
                         lock: MfLock::Contiguous,
                     },
                     planes,
-                    pixel,
                 ));
             }
 
@@ -474,12 +469,75 @@ pub fn media_buffer_as_ffmpeg(
     height: usize,
     is_bottom_up: bool,
 ) -> Option<FFVideo> {
-    if is_bottom_up || width == 0 || height == 0 {
+    if !should_use_2d_lock(format, is_bottom_up) || width == 0 || height == 0 {
         return None;
     }
 
-    let (owner, planes, pixel) = lock_mf_buffer(buffer, format, width, height)?;
+    let pixel = mf_pixel_format(format)?;
+    let (owner, planes) = lock_mf_buffer(buffer, format, width, height)?;
     wrap_mf_frame(&planes, pixel, width as u32, height as u32, Arc::new(owner))
+}
+
+// UYVY and NV21 use the format-converting copy paths, which lock with
+// IMFMediaBuffer::Lock; all consumers of a buffer must use the same lock type.
+pub fn should_use_2d_lock(format: PixelFormat, is_bottom_up: bool) -> bool {
+    !is_bottom_up
+        && format != PixelFormat::UYVY422
+        && format != PixelFormat::NV21
+        && mf_pixel_format(format).is_some()
+}
+
+pub fn with_media_buffer_data<R>(
+    buffer: &IMFMediaBuffer,
+    format: PixelFormat,
+    width: usize,
+    height: usize,
+    f: impl FnOnce(&[u8], usize, usize) -> R,
+) -> Option<R> {
+    if !should_use_2d_lock(format, false) {
+        return None;
+    }
+
+    let (owner, planes) = lock_mf_buffer(buffer, format, width, height)?;
+    let total_len = planes.iter().map(|plane| plane.len).sum::<usize>();
+    let data = unsafe { std::slice::from_raw_parts(planes[0].ptr, total_len) };
+    let primary_stride = planes[0].stride;
+    let secondary_stride = planes.get(1).map_or(primary_stride, |plane| plane.stride);
+    let result = f(data, primary_stride, secondary_stride);
+    drop(owner);
+    Some(result)
+}
+
+pub fn copy_media_buffer_to_ffmpeg(
+    buffer: &IMFMediaBuffer,
+    format: PixelFormat,
+    width: usize,
+    height: usize,
+) -> Option<FFVideo> {
+    if !should_use_2d_lock(format, false) {
+        return None;
+    }
+
+    let pixel = mf_pixel_format(format)?;
+    let row_bytes = mf_row_bytes(format, width)?;
+    let (owner, planes) = lock_mf_buffer(buffer, format, width, height)?;
+    let mut frame = FFVideo::new(pixel, width as u32, height as u32);
+
+    for (index, plane) in planes.iter().enumerate() {
+        let plane_height = plane.len / plane.stride;
+        let destination_stride = frame.stride(index);
+        let destination = frame.data_mut(index);
+
+        for row in 0..plane_height {
+            let source =
+                unsafe { std::slice::from_raw_parts(plane.ptr.add(row * plane.stride), row_bytes) };
+            let destination_start = row * destination_stride;
+            destination[destination_start..destination_start + row_bytes].copy_from_slice(source);
+        }
+    }
+
+    drop(owner);
+    Some(frame)
 }
 
 fn wrap_mf_frame(
@@ -546,11 +604,14 @@ impl CapturedFrameExt for CapturedFrame {
             return Err(AsFFmpegError::Empty);
         }
 
-        if let Some(buffer) = native.media_buffer()
+        let started = std::time::Instant::now();
+
+        if should_use_2d_lock(native.pixel_format, is_bottom_up)
+            && let Some(buffer) = native.media_buffer()
             && let Some(frame) =
-                media_buffer_as_ffmpeg(&buffer, native.pixel_format, width, height, is_bottom_up)
+                copy_media_buffer_to_ffmpeg(&buffer, native.pixel_format, width, height)
         {
-            CONVERSION_STATS.record_zero_copy();
+            CONVERSION_STATS.record_copy(started.elapsed().as_nanos() as u64);
             return Ok(frame);
         }
 
@@ -560,7 +621,6 @@ impl CapturedFrameExt for CapturedFrame {
             return Err(AsFFmpegError::Empty);
         }
 
-        let started = std::time::Instant::now();
         let frame = match native.pixel_format {
             PixelFormat::YUV420P => {
                 let mut ff_frame = FFVideo::new(Pixel::YUV420P, width as u32, height as u32);
@@ -825,10 +885,96 @@ impl CapturedFrameExt for CapturedFrame {
 }
 
 #[cfg(test)]
-mod zero_copy_tests {
+mod conversion_tests {
     use super::*;
+    use cap_camera_windows::Frame;
     use cap_mediafoundation_utils::IMFMediaBufferExt;
-    use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
+    use windows::Win32::Media::MediaFoundation::{MFCreate2DMediaBuffer, MFCreateMemoryBuffer};
+
+    #[test]
+    fn nv12_2d_buffer_can_be_wrapped_twice() {
+        cap_mediafoundation_utils::thread_init();
+
+        let width = 80;
+        let height = 48;
+        let buffer =
+            unsafe { MFCreate2DMediaBuffer(width, height, u32::from_le_bytes(*b"NV12"), false) }
+                .expect("2D buffer");
+
+        let first = media_buffer_as_ffmpeg(
+            &buffer,
+            PixelFormat::NV12,
+            width as usize,
+            height as usize,
+            false,
+        )
+        .expect("first frame");
+        let second = media_buffer_as_ffmpeg(
+            &buffer,
+            PixelFormat::NV12,
+            width as usize,
+            height as usize,
+            false,
+        );
+
+        assert!(second.is_some(), "second lock failed");
+        drop(first);
+        let third = media_buffer_as_ffmpeg(
+            &buffer,
+            PixelFormat::NV12,
+            width as usize,
+            height as usize,
+            false,
+        );
+        assert!(third.is_some(), "third lock failed");
+    }
+
+    #[test]
+    fn copy_conversion_can_nest_inside_zero_copy_frame() {
+        cap_mediafoundation_utils::thread_init();
+
+        let width = 80;
+        let height = 48;
+        let buffer =
+            unsafe { MFCreate2DMediaBuffer(width, height, u32::from_le_bytes(*b"NV12"), false) }
+                .expect("2D buffer");
+
+        let zero_copy = media_buffer_as_ffmpeg(
+            &buffer,
+            PixelFormat::NV12,
+            width as usize,
+            height as usize,
+            false,
+        )
+        .expect("zero-copy frame");
+        let copied = copy_media_buffer_to_ffmpeg(
+            &buffer,
+            PixelFormat::NV12,
+            width as usize,
+            height as usize,
+        )
+        .expect("copied frame");
+
+        assert_eq!(copied.format(), Pixel::NV12);
+        assert_eq!(copied.width(), width);
+        assert_eq!(copied.height(), height);
+
+        let data_len = with_media_buffer_data(
+            &buffer,
+            PixelFormat::NV12,
+            width as usize,
+            height as usize,
+            |data, primary_stride, secondary_stride| {
+                assert_eq!(primary_stride, secondary_stride);
+                assert!(primary_stride >= width as usize);
+                data.len()
+            },
+        )
+        .expect("locked data");
+
+        assert!(data_len >= width as usize * height as usize * 3 / 2);
+        drop(zero_copy);
+    }
 
     #[test]
     fn nv12_media_buffer_is_wrapped_without_copying() {
@@ -868,5 +1014,34 @@ mod zero_copy_tests {
         assert_eq!(frame.data(0)[stride + 1], 2);
         assert_eq!(frame.data(1)[0], 0);
         assert_eq!(frame.data(1)[stride + 2], 5);
+    }
+
+    #[test]
+    fn as_ffmpeg_keeps_nv12_for_nv21_frames() {
+        cap_mediafoundation_utils::thread_init();
+
+        let width = 80;
+        let height = 48;
+        let stride = 80;
+        let len = stride * height + stride * (height / 2);
+        let buffer = unsafe { MFCreateMemoryBuffer(len as u32) }.expect("buffer");
+        unsafe { buffer.SetCurrentLength(len as u32) }.expect("length");
+
+        let frame = Frame::from_media_foundation(
+            buffer,
+            PixelFormat::NV21,
+            width,
+            height,
+            false,
+            std::time::Duration::ZERO,
+            0,
+        );
+        let captured =
+            cap_camera::CapturedFrame::from_windows_frame(frame, std::time::Duration::ZERO);
+        let converted = captured.as_ffmpeg().expect("conversion");
+
+        assert_eq!(converted.format(), Pixel::NV12);
+        assert_eq!(converted.width(), width as u32);
+        assert_eq!(converted.height(), height as u32);
     }
 }

@@ -264,7 +264,7 @@ impl Device {
             let video_callback = VideoCallback {
                 event_tx,
                 samples: sample_tx,
-                dropped,
+                dropped: dropped.clone(),
             }
             .into_object();
 
@@ -389,6 +389,7 @@ impl Device {
                 engine: Some(engine),
                 event_rx,
                 callback_worker,
+                dropped_samples: dropped,
             })
         }
     }
@@ -425,11 +426,16 @@ pub struct CaptureHandle {
     engine: Option<IMFCaptureEngine>,
     event_rx: Receiver<CaptureEngineEvent>,
     callback_worker: CallbackWorker,
+    dropped_samples: Arc<AtomicU64>,
 }
 
 impl CaptureHandle {
     pub fn event_rx(&self) -> &Receiver<CaptureEngineEvent> {
         &self.event_rx
+    }
+
+    pub fn dropped_samples(&self) -> u64 {
+        self.dropped_samples.load(Ordering::Relaxed)
     }
 
     pub fn stop_capturing(mut self) -> windows_core::Result<()> {

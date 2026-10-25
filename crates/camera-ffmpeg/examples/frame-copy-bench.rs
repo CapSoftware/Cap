@@ -1,7 +1,7 @@
 #[cfg(windows)]
 fn main() {
     use cap_camera::CapturedFrame;
-    use cap_camera_ffmpeg::{CapturedFrameExt, conversion_stats};
+    use cap_camera_ffmpeg::media_buffer_as_ffmpeg;
     use cap_camera_windows::{Frame, PixelFormat};
     use cap_mediafoundation_utils::IMFMediaBufferExt;
     use ffmpeg::{format::Pixel, frame::Video};
@@ -33,14 +33,18 @@ fn main() {
     );
     let captured = CapturedFrame::from_windows_frame(frame, Duration::ZERO);
 
+    let native_buffer = captured.native().media_buffer().expect("native buffer");
+
     for _ in 0..50 {
-        let frame = captured.as_ffmpeg().expect("warmup conversion");
+        let frame = media_buffer_as_ffmpeg(&native_buffer, PixelFormat::NV12, WIDTH, HEIGHT, false)
+            .expect("warmup conversion");
         std::hint::black_box(frame);
     }
 
     let start = Instant::now();
     for _ in 0..ITERATIONS {
-        let frame = captured.as_ffmpeg().expect("conversion");
+        let frame = media_buffer_as_ffmpeg(&native_buffer, PixelFormat::NV12, WIDTH, HEIGHT, false)
+            .expect("conversion");
         std::hint::black_box(frame);
     }
     let zero_copy = start.elapsed();
@@ -78,7 +82,6 @@ fn main() {
     }
     let bytes_copy = start.elapsed();
 
-    let stats = conversion_stats();
     println!(
         "zero-copy: {:.3} ms/frame ({:.1} fps)",
         zero_copy.as_secs_f64() * 1000.0 / ITERATIONS as f64,
@@ -96,12 +99,6 @@ fn main() {
     println!(
         "bytes copy:   {:.3} ms/frame",
         bytes_copy.as_secs_f64() * 1000.0 / ITERATIONS as f64
-    );
-    println!(
-        "stats: zero_copy={} copied={} avg_copy={:.3} us",
-        stats.zero_copy_frames,
-        stats.copied_frames,
-        stats.average_copy_micros()
     );
 }
 
