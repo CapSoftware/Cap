@@ -47,6 +47,8 @@ mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod linux_dialog;
 mod library;
 mod main_window;
 mod media_access;
@@ -287,6 +289,14 @@ fn main() {
     if let Err(error) = cap_cli_install::appimage::dispatch_cli() {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+
+    // A confirmation or alert shown for the running app on a desktop without
+    // zenity (`linux_dialog`): not a second Cap, so before logging and the
+    // single-instance check.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    if let Some(status) = linux_dialog::run_from_args() {
+        std::process::exit(status);
     }
 
     let _log_guard = init_logging();
