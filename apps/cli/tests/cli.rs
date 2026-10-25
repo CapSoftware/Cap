@@ -702,7 +702,9 @@ fn project_config_get_without_file_returns_default() {
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
-    assert!(json.is_object(), "expected a default project config object");
+    let expected_json =
+        serde_json::to_string(&cap_project::ProjectConfiguration::default()).unwrap();
+    assert_eq!(json, serde_json::from_str::<Value>(&expected_json).unwrap());
 }
 
 #[test]
