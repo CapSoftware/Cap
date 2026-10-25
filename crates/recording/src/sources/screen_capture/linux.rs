@@ -480,7 +480,43 @@ fn capture_wayland(
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
 ) -> anyhow::Result<()> {
-    let _portal_session = input.portal_session;
+    let WaylandInputConfig {
+        fd,
+        node_id,
+        fps,
+        crop_bounds,
+        portal_session: _portal_session,
+    } = input;
+    capture_pipewire_node(
+        video_info,
+        PipewireNodeInput {
+            fd,
+            node_id,
+            fps,
+            crop_bounds,
+        },
+        video_tx,
+        stop_token,
+        health_tx,
+    )
+}
+
+/// A PipeWire video node to capture: the portal's remote and node, or in
+/// tests any producer on a PipeWire daemon.
+struct PipewireNodeInput {
+    fd: OwnedFd,
+    node_id: u32,
+    fps: u32,
+    crop_bounds: Option<CropBounds>,
+}
+
+fn capture_pipewire_node(
+    video_info: VideoInfo,
+    input: PipewireNodeInput,
+    video_tx: mpsc::Sender<FFmpegVideoFrame>,
+    stop_token: CancellationToken,
+    health_tx: output_pipeline::HealthSender,
+) -> anyhow::Result<()> {
     let stop_requested = Arc::new(AtomicBool::new(false));
     let fatal_error = Arc::new(parking_lot::Mutex::new(None));
     let sent = Arc::new(AtomicU64::new(0));
@@ -530,9 +566,17 @@ fn capture_wayland(
                 state.set_fatal_error(format!("PipeWire screen capture stream failed: {error}"));
             }
         })
-        .param_changed(|_, state, id, param| {
-            if let Err(error) = update_pipewire_format(state, id, param) {
-                state.set_fatal_error(error.to_string());
+        .param_changed(|stream, state, id, param| {
+            match update_pipewire_format(state, id, param) {
+                Ok(PipewireFormatChange::DmaBuf) => {
+                    // A compositor that only shares DMA-BUFs (niri) still has to
+                    // be told the consumer takes them.
+                    if let Err(error) = request_dmabuf_buffers(stream) {
+                        state.set_fatal_error(error.to_string());
+                    }
+                }
+                Ok(PipewireFormatChange::None | PipewireFormatChange::Memory) => {}
+                Err(error) => state.set_fatal_error(error.to_string()),
             }
         })
         .process(|stream, state| {
@@ -557,9 +601,19 @@ fn capture_wayland(
         .register()
         .context("register PipeWire stream listener")?;
 
-    let param_bytes = pipewire_format_param(input.fps)?;
-    let mut params = [spa::pod::Pod::from_bytes(&param_bytes)
-        .ok_or_else(|| anyhow!("create PipeWire format parameter"))?];
+    // Shared memory first, so compositors that offer it (GNOME, KDE, wlroots)
+    // keep negotiating it; LINEAR DMA-BUFs for those that share nothing else.
+    let param_bytes = [
+        pipewire_format_param(input.fps)?,
+        pipewire_dmabuf_format_param(input.fps)?,
+    ];
+    let mut params = param_bytes
+        .iter()
+        .map(|bytes| {
+            spa::pod::Pod::from_bytes(bytes)
+                .ok_or_else(|| anyhow!("create PipeWire format parameter"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     stream
         .connect(
@@ -598,16 +652,23 @@ fn capture_wayland(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PipewireFormatChange {
+    None,
+    Memory,
+    DmaBuf,
+}
+
 fn update_pipewire_format(
     state: &mut PipewireCaptureState,
     id: u32,
     param: Option<&spa::pod::Pod>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PipewireFormatChange> {
     let Some(param) = param else {
-        return Ok(());
+        return Ok(PipewireFormatChange::None);
     };
     if id != spa::param::ParamType::Format.as_raw() {
-        return Ok(());
+        return Ok(PipewireFormatChange::None);
     }
 
     let (media_type, media_subtype) =
@@ -615,7 +676,7 @@ fn update_pipewire_format(
     if media_type != spa::param::format::MediaType::Video
         || media_subtype != spa::param::format::MediaSubtype::Raw
     {
-        return Ok(());
+        return Ok(PipewireFormatChange::None);
     }
 
     let mut format = spa::param::video::VideoInfoRaw::default();
@@ -630,7 +691,127 @@ fn update_pipewire_format(
     })?;
     state.format = format;
 
-    Ok(())
+    let dmabuf = param.as_object().is_ok_and(|object| {
+        object
+            .find_prop(spa::utils::Id(
+                spa::param::format::FormatProperties::VideoModifier.0,
+            ))
+            .is_some()
+    });
+    if dmabuf {
+        tracing::info!(
+            modifier = format.modifier(),
+            format = ?format.format(),
+            "PipeWire screen capture negotiated DMA-BUF frames"
+        );
+    }
+    Ok(if dmabuf {
+        PipewireFormatChange::DmaBuf
+    } else {
+        PipewireFormatChange::Memory
+    })
+}
+
+fn request_dmabuf_buffers(stream: &pw::stream::Stream) -> anyhow::Result<()> {
+    let dmabuf = 1 << spa::buffer::DataType::DmaBuf.as_raw();
+    let object = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamBuffers,
+        spa::param::ParamType::Buffers,
+        spa::pod::Property::new(
+            spa::sys::SPA_PARAM_BUFFERS_dataType,
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Flags {
+                    default: dmabuf,
+                    flags: vec![dmabuf],
+                },
+            ))),
+        )
+    );
+    let bytes = serialize_pod(object, "PipeWire buffers parameter")?;
+    let pod = spa::pod::Pod::from_bytes(&bytes)
+        .ok_or_else(|| anyhow!("create PipeWire buffers parameter"))?;
+    stream
+        .update_params(&mut [pod])
+        .context("ask PipeWire for DMA-BUF screen capture buffers")
+}
+
+/// A DMA-BUF the producer did not map, mapped for reading one frame. LINEAR
+/// buffers are plain rows a CPU can read once the kernel syncs the buffer.
+struct DmaBufMapping {
+    fd: std::os::fd::RawFd,
+    pointer: *mut libc::c_void,
+    len: usize,
+}
+
+const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+const DMA_BUF_SYNC_READ: u64 = 1;
+const DMA_BUF_SYNC_END: u64 = 1 << 2;
+
+impl DmaBufMapping {
+    fn map(fd: std::os::fd::RawFd, minimum_len: usize) -> anyhow::Result<Self> {
+        if fd < 0 {
+            bail!("PipeWire screen capture DMA-BUF had no file descriptor");
+        }
+        let size = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        let len = usize::try_from(size)
+            .ok()
+            .filter(|len| *len > 0)
+            .unwrap_or(minimum_len);
+        if len < minimum_len {
+            bail!(
+                "PipeWire screen capture DMA-BUF holds {len} bytes, the frame needs {minimum_len}"
+            );
+        }
+        let pointer = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        if pointer == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error())
+                .context("map the PipeWire screen capture DMA-BUF");
+        }
+        let mapping = Self { fd, pointer, len };
+        mapping.sync(DMA_BUF_SYNC_READ);
+        Ok(mapping)
+    }
+
+    /// Best effort: a buffer that is not a real DMA-BUF (memfd) has no sync.
+    fn sync(&self, flags: u64) {
+        let sync = flags;
+        unsafe {
+            libc::ioctl(self.fd, DMA_BUF_IOCTL_SYNC, &sync as *const u64);
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.pointer as *const u8, self.len) }
+    }
+}
+
+impl Drop for DmaBufMapping {
+    fn drop(&mut self) {
+        self.sync(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END);
+        unsafe {
+            libc::munmap(self.pointer, self.len);
+        }
+    }
+}
+
+fn serialize_pod(object: spa::pod::Object, what: &str) -> anyhow::Result<Vec<u8>> {
+    Ok(spa::pod::serialize::PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(object),
+    )
+    .map_err(|error| anyhow!("serialize {what}: {error:?}"))?
+    .0
+    .into_inner())
 }
 
 fn process_pipewire_frame(
@@ -740,11 +921,22 @@ fn frame_from_pipewire_data(
     };
     let (crop_x, crop_y, crop_width, crop_height) =
         pipewire_crop(source_width, source_height, crop_bounds)?;
-    let source = data
-        .data()
-        .ok_or_else(|| anyhow!("PipeWire screen capture buffer was not memory-mapped"))?;
     let offset = chunk_offset as usize;
-    let source_limit = if chunk_size > 0 {
+    let dmabuf_fd = (data.type_() == spa::buffer::DataType::DmaBuf).then(|| data.fd() as i32);
+    let mapping;
+    let source: &[u8] = match data.data() {
+        Some(source) => source,
+        None => {
+            let Some(fd) = dmabuf_fd else {
+                bail!("PipeWire screen capture buffer was not memory-mapped");
+            };
+            mapping = DmaBufMapping::map(fd, offset + source_stride * source_height)?;
+            mapping.bytes()
+        }
+    };
+    // DMA-BUF producers may leave the chunk size unset (the PipeWire DMA-BUF
+    // docs tell consumers to ignore it), so the mapping bounds the frame.
+    let source_limit = if chunk_size > 0 && dmabuf_fd.is_none() {
         offset
             .checked_add(chunk_size as usize)
             .map(|limit| limit.min(source.len()))
@@ -905,6 +1097,80 @@ fn pipewire_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
     .map_err(|error| anyhow!("serialize PipeWire format parameter: {error:?}"))?
     .0
     .into_inner())
+}
+
+/// The offer for compositors that share only DMA-BUFs with a mandatory
+/// modifier (niri 26.04): LINEAR, so the frames can be read on the CPU.
+fn pipewire_dmabuf_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
+    let fps = fps.max(1);
+    let linear = 0i64;
+    let object = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamFormat,
+        spa::param::ParamType::EnumFormat,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaType,
+            Id,
+            spa::param::format::MediaType::Video
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaSubtype,
+            Id,
+            spa::param::format::MediaSubtype::Raw
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFormat,
+            Choice,
+            Enum,
+            Id,
+            spa::param::video::VideoFormat::BGRx,
+            spa::param::video::VideoFormat::BGRx,
+            spa::param::video::VideoFormat::BGRA,
+            spa::param::video::VideoFormat::RGBx,
+            spa::param::video::VideoFormat::RGBA
+        ),
+        spa::pod::Property {
+            key: spa::param::format::FormatProperties::VideoModifier.as_raw(),
+            flags: spa::pod::PropertyFlags::MANDATORY,
+            value: spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: linear,
+                    alternatives: vec![linear],
+                },
+            ))),
+        },
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoSize,
+            Choice,
+            Range,
+            Rectangle,
+            spa::utils::Rectangle {
+                width: 1920,
+                height: 1080
+            },
+            spa::utils::Rectangle {
+                width: 1,
+                height: 1
+            },
+            spa::utils::Rectangle {
+                width: 8192,
+                height: 8192
+            }
+        ),
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFramerate,
+            Choice,
+            Range,
+            Fraction,
+            spa::utils::Fraction { num: fps, denom: 1 },
+            spa::utils::Fraction { num: 0, denom: 1 },
+            spa::utils::Fraction {
+                num: 1000,
+                denom: 1
+            }
+        )
+    );
+    serialize_pod(object, "PipeWire DMA-BUF format parameter")
 }
 
 pub struct SystemAudioSourceConfig {
@@ -2983,9 +3249,189 @@ mod system_audio_tests {
 #[cfg(test)]
 mod pipewire_frame_tests {
     use super::{
-        FrameScaler, LinuxCaptureSource, VideoInfo, prefers_wayland_environment,
-        prepare_pipewire_frame, wayland_area_matches_display, wayland_video_info,
+        FrameScaler, LinuxCaptureSource, PipewireNodeInput, VideoInfo, capture_pipewire_node,
+        frame_from_pipewire_data, pipewire_dmabuf_format_param, pipewire_format_param,
+        prefers_wayland_environment, prepare_pipewire_frame, spa, wayland_area_matches_display,
+        wayland_video_info,
     };
+    use std::os::fd::AsRawFd;
+
+    /// GitHub #2941: niri 26.04 shares screencasts only as DMA-BUFs with a
+    /// mandatory modifier, which 0.6.1 never offered, so nothing was ever
+    /// captured. This records from a producer that negotiates and shares
+    /// frames the way niri does (scripts/linux-desktop-harness/niri-screencast)
+    /// through Cap's real PipeWire capture loop.
+    #[test]
+    #[ignore = "needs a PipeWire daemon and CAP_FAKE_NIRI_PRODUCER"]
+    fn frames_from_a_producer_that_shares_only_dmabufs_are_captured() {
+        use std::io::BufRead;
+
+        let producer = std::env::var("CAP_FAKE_NIRI_PRODUCER")
+            .expect("set CAP_FAKE_NIRI_PRODUCER to the built producer");
+        let mut child = std::process::Command::new(producer)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        struct Kill(std::process::Child);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let stdout = child.stdout.take().unwrap();
+        let child = Kill(child);
+        let (node_tx, node_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if let Some(node) = line.strip_prefix("node ") {
+                    let _ = node_tx.send(node.trim().parse::<u32>().unwrap());
+                }
+            }
+        });
+        let node_id = node_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the producer announced no node");
+
+        let runtime = std::env::var("PIPEWIRE_RUNTIME_DIR")
+            .or_else(|_| std::env::var("XDG_RUNTIME_DIR"))
+            .unwrap();
+        let socket =
+            std::os::unix::net::UnixStream::connect(format!("{runtime}/pipewire-0")).unwrap();
+        let (video_tx, mut video_rx) = futures::channel::mpsc::channel(4);
+        let (health_tx, _health_rx) = tokio::sync::mpsc::channel(16);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let capture = std::thread::spawn({
+            let stop = stop.clone();
+            move || {
+                capture_pipewire_node(
+                    VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 640, 360, 30),
+                    PipewireNodeInput {
+                        fd: socket.into(),
+                        node_id,
+                        fps: 30,
+                        crop_bounds: None,
+                    },
+                    video_tx,
+                    stop,
+                    health_tx,
+                )
+            }
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut frames = Vec::new();
+        loop {
+            if frames.len() >= 10 || std::time::Instant::now() >= deadline || capture.is_finished()
+            {
+                break;
+            }
+            match video_rx.try_next() {
+                Ok(Some(frame)) => frames.push(frame.inner),
+                Ok(None) => break,
+                Err(_) => std::thread::park_timeout(std::time::Duration::from_millis(10)),
+            }
+        }
+        stop.cancel();
+        let result = capture.join().unwrap();
+        drop(child);
+        assert!(
+            frames.len() >= 10,
+            "captured {} frames; capture ended with {result:?}",
+            frames.len()
+        );
+        result.unwrap();
+        let mut levels = std::collections::BTreeSet::new();
+        for frame in &frames {
+            assert_eq!((frame.width(), frame.height()), (640, 360));
+            let pixel = &frame.data(0)[..4];
+            assert_eq!(&pixel[1..3], &[0x40, 0x80], "{pixel:?}");
+            levels.insert(pixel[0]);
+        }
+        assert!(
+            levels.len() > 1,
+            "every captured frame was the same picture"
+        );
+    }
+
+    /// niri 26.04 shares only DMA-BUFs: the buffer is not mapped for the
+    /// consumer, `maxsize` is 1 and the chunk carries just stride and offset.
+    /// 0.6.1 rejected every such frame ("buffer was not memory-mapped").
+    #[test]
+    fn an_unmapped_dmabuf_frame_is_read_from_its_file_descriptor() {
+        let (width, height, stride) = (4usize, 3usize, 24usize);
+        let mut bytes = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = &mut bytes[y * stride + x * 4..][..4];
+                pixel.copy_from_slice(&[x as u8, y as u8, 0x80, 0xff]);
+            }
+        }
+        let file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut &file, &bytes).unwrap();
+
+        let mut chunk = spa::sys::spa_chunk {
+            offset: 0,
+            size: 0,
+            stride: stride as i32,
+            flags: 0,
+        };
+        let mut raw: spa::sys::spa_data = unsafe { std::mem::zeroed() };
+        raw.type_ = spa::sys::SPA_DATA_DmaBuf;
+        raw.flags = spa::sys::SPA_DATA_FLAG_READWRITE;
+        raw.fd = i64::from(file.as_raw_fd());
+        raw.maxsize = 1;
+        raw.data = std::ptr::null_mut();
+        raw.chunk = &mut chunk;
+        let data = unsafe { &mut *(&mut raw as *mut spa::sys::spa_data as *mut spa::buffer::Data) };
+
+        let mut format = spa::param::video::VideoInfoRaw::new();
+        format.set_format(spa::param::video::VideoFormat::BGRx);
+        format.set_size(spa::utils::Rectangle {
+            width: width as u32,
+            height: height as u32,
+        });
+        format.set_modifier(0);
+        let frame = frame_from_pipewire_data(data, format, None)
+            .unwrap()
+            .expect("a frame");
+        assert_eq!((frame.width(), frame.height()), (4, 3));
+        assert_eq!(frame.format(), ffmpeg::format::Pixel::BGRZ);
+        for y in 0..height {
+            let row = &frame.data(0)[y * frame.stride(0)..][..width * 4];
+            assert_eq!(row, &bytes[y * stride..][..width * 4], "row {y}");
+        }
+    }
+
+    #[test]
+    fn dmabuf_offer_follows_shared_memory_with_a_mandatory_linear_modifier() {
+        let shm = pipewire_format_param(30).unwrap();
+        let shm = spa::pod::Pod::from_bytes(&shm)
+            .unwrap()
+            .as_object()
+            .unwrap();
+        let modifier = spa::utils::Id(spa::param::format::FormatProperties::VideoModifier.0);
+        assert!(shm.find_prop(modifier).is_none());
+
+        let bytes = pipewire_dmabuf_format_param(30).unwrap();
+        let object = spa::pod::Pod::from_bytes(&bytes)
+            .unwrap()
+            .as_object()
+            .unwrap();
+        let prop = object.find_prop(modifier).expect("a modifier property");
+        assert!(prop.flags().contains(spa::pod::PodPropFlags::MANDATORY));
+        let (_, value) = spa::pod::deserialize::PodDeserializer::deserialize_from::<
+            spa::utils::Choice<i64>,
+        >(prop.value().as_bytes())
+        .unwrap();
+        let spa::utils::ChoiceEnum::Enum { alternatives, .. } = value.1 else {
+            panic!("modifier is not an enum choice");
+        };
+        assert_eq!(alternatives, vec![0]);
+    }
 
     #[test]
     fn wayland_area_requires_the_selected_monitor_in_the_portal() {
