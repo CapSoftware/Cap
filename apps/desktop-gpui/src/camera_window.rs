@@ -2950,20 +2950,106 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
 /// Tauri default slot -- bottom-right of the preferred monitor measured with
 /// `DEFAULT_WINDOW_SIZE = 230.0 * 2.0` (`windows.rs:2160, 2340-2344`; the
 /// constant, not the actual window size, is what the shipping app subtracts).
-pub fn opening_position(preferred: &scap_targets::Display) -> (f32, f32) {
-    if let Some((x, y)) = saved_position(preferred) {
-        tracing::info!(x, y, "camera window restored to its saved position");
+/// Clamp against the actual size before the camera can deliver its first frame.
+pub fn opening_position(preferred: &scap_targets::Display, window_size: (f32, f32)) -> (f32, f32) {
+    let saved = saved_position(preferred);
+    let bounds = saved
+        .and_then(|(x, y)| display_for_point(x, y))
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .or_else(|| preferred.raw_handle().logical_bounds());
+    opening_position_in_bounds(saved, bounds, window_size)
+}
+
+fn opening_position_in_bounds(
+    saved: Option<(f64, f64)>,
+    bounds: Option<scap_targets::bounds::LogicalBounds>,
+    window_size: (f32, f32),
+) -> (f32, f32) {
+    let Some(bounds) = bounds else {
+        let (x, y) = saved.unwrap_or((100., 100.));
         return (x as f32, y as f32);
-    }
+    };
     const TAURI_DEFAULT_WINDOW_SIZE: f64 = 230.0 * 2.0;
-    match preferred.raw_handle().logical_bounds() {
-        Some(bounds) => (
-            (bounds.position().x() + bounds.size().width() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-            (bounds.position().y() + bounds.size().height() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-        ),
-        None => (100., 100.),
+    let (dx, dy) = (bounds.position().x(), bounds.position().y());
+    let (dw, dh) = (bounds.size().width(), bounds.size().height());
+    let (x, y) = saved.unwrap_or((
+        dx + dw - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+        dy + dh - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+    ));
+    (
+        x.clamp(dx, dx + (dw - f64::from(window_size.0)).max(0.)) as f32,
+        y.clamp(dy, dy + (dh - f64::from(window_size.1)).max(0.)) as f32,
+    )
+}
+
+#[cfg(test)]
+mod opening_position_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    fn display(x: f64, y: f64, width: f64, height: f64) -> Option<LogicalBounds> {
+        Some(LogicalBounds::new(
+            LogicalPosition::new(x, y),
+            LogicalSize::new(width, height),
+        ))
+    }
+
+    #[test]
+    fn restored_wide_preview_fits_after_display_resolution_changes() {
+        let state = CameraWindowState {
+            size: 600.,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        let dimensions = window_size(&state, Some(16. / 9.));
+        let (x, y) = opening_position_in_bounds(
+            Some((1800., 1000.)),
+            display(0., 0., 1920., 1080.),
+            dimensions,
+        );
+        assert!((x + dimensions.0 - 1920.).abs() < 0.001);
+        assert_eq!(y + dimensions.1, 1080.);
+    }
+
+    #[test]
+    fn fresh_large_preview_fits_on_a_display_with_negative_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-1280., -800., 1280., 800.), (600., 656.)),
+            (-600., -656.),
+        );
+    }
+
+    #[test]
+    fn oversized_preview_is_anchored_to_the_display_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-640., 200., 640., 480.), (1066., 656.)),
+            (-640., 200.),
+        );
+    }
+
+    #[test]
+    fn valid_saved_position_and_default_slot_are_preserved() {
+        let bounds = display(1920., 0., 1920., 1080.);
+        assert_eq!(
+            opening_position_in_bounds(Some((2000., 400.)), bounds, (230., 286.)),
+            (2000., 400.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(None, bounds, (230., 286.)),
+            (3280., 520.),
+        );
+    }
+
+    #[test]
+    fn missing_display_geometry_preserves_the_existing_fallback() {
+        assert_eq!(
+            opening_position_in_bounds(None, None, (600., 656.)),
+            (100., 100.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(Some((300., 400.)), None, (600., 656.)),
+            (300., 400.),
+        );
     }
 }
 
