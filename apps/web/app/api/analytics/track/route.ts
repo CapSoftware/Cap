@@ -17,16 +17,22 @@ import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
 	videoId: string;
-	orgId?: string | null;
-	ownerId?: string | null;
 	sessionId?: string;
-	pathname?: string;
-	hostname?: string | null;
 	userAgent?: string;
 	occurredAt?: string;
 }
 
 const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
+const MAX_CLIENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+const viewTimestamp = (occurredAt: unknown, now: number) => {
+	const time =
+		typeof occurredAt === "string" ? Date.parse(occurredAt) : Number.NaN;
+	return Number.isFinite(time) &&
+		Math.abs(time - now) <= MAX_CLIENT_CLOCK_SKEW_MS
+		? new Date(time)
+		: new Date(now);
+};
 
 const sanitizeString = (value?: string | null) => {
 	const trimmed = value?.trim();
@@ -69,7 +75,7 @@ export async function POST(request: NextRequest) {
 	const osName = parser.getOS().name ?? "unknown";
 	const deviceType = parser.getDevice().type ?? "desktop";
 
-	const timestamp = body.occurredAt ? new Date(body.occurredAt) : new Date();
+	const timestamp = viewTimestamp(body.occurredAt, Date.now());
 
 	const country =
 		sanitizeString(request.headers.get("x-vercel-ip-country")) || "";
@@ -79,13 +85,6 @@ export async function POST(request: NextRequest) {
 		sanitizeString(
 			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
 		) || "";
-
-	const hostname =
-		sanitizeString(body.hostname) ||
-		sanitizeString(request.nextUrl.hostname) ||
-		"";
-
-	const pathname = body.pathname ?? `/s/${body.videoId}`;
 
 	await runPromise(
 		Effect.gen(function* () {
@@ -108,6 +107,7 @@ export async function POST(request: NextRequest) {
 			const [videoRecord] = yield* Effect.tryPromise(() =>
 				db()
 					.select({
+						orgId: videos.orgId,
 						ownerId: videos.ownerId,
 						firstViewEmailSentAt: videos.firstViewEmailSentAt,
 						videoName: videos.name,
@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
 				Effect.orElseSucceed(
 					() =>
 						[] as {
+							orgId: string;
 							ownerId: string;
 							firstViewEmailSentAt: Date | null;
 							videoName: string;
@@ -133,23 +134,16 @@ export async function POST(request: NextRequest) {
 				),
 			);
 
-			if (videoRecord && userId === videoRecord.ownerId) {
+			if (!videoRecord || userId === videoRecord.ownerId) {
 				return;
 			}
 
 			if (
-				videoRecord &&
-				(videoRecord.activeUploadVideoId ||
-					Date.now() - videoRecord.updatedAt.getTime() < VIEW_TRACKING_DELAY_MS)
+				videoRecord.activeUploadVideoId ||
+				Date.now() - videoRecord.updatedAt.getTime() < VIEW_TRACKING_DELAY_MS
 			) {
 				return;
 			}
-
-			const tenantId =
-				body.orgId ||
-				videoRecord?.ownerId ||
-				body.ownerId ||
-				(hostname ? `domain:${hostname}` : "public");
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
@@ -158,9 +152,9 @@ export async function POST(request: NextRequest) {
 					session_id: sessionId ?? "anon",
 					action: "page_hit",
 					version: "1.0",
-					tenant_id: tenantId,
+					tenant_id: videoRecord.orgId || videoRecord.ownerId,
 					video_id: body.videoId,
-					pathname,
+					pathname: `/s/${body.videoId}`,
 					country,
 					region,
 					city,
@@ -171,8 +165,7 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
-			const isNewVideo =
-				videoRecord && videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
+			const isNewVideo = videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
 			const shouldSendFirstViewEmail =
 				isNewVideo && !videoRecord.firstViewEmailSentAt;
 
