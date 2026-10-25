@@ -1400,8 +1400,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
         return decode_mjpeg_frame(frame, mjpeg_decoder);
     }
 
-    if frame.pixel_format != cap_camera_windows::PixelFormat::UYVY422
-        && frame.pixel_format != cap_camera_windows::PixelFormat::NV21
+    if cap_camera_ffmpeg::should_use_2d_lock(frame.pixel_format, frame.is_bottom_up)
         && let Ok(buffer) = frame.buffer.lock()
         && let Some(frame) = cap_camera_ffmpeg::media_buffer_as_ffmpeg(
             &buffer,
@@ -1867,25 +1866,45 @@ pub fn upload_mf_buffer_to_texture(
     buffers: &mut CameraBuffers,
 ) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
-    use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-        D3D11_USAGE_DEFAULT,
-    };
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
-
-    let dxgi_format = frame.dxgi_format();
 
     let buffer_guard = frame
         .buffer
         .lock()
         .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?;
-    let lock = buffer_guard.lock()?;
-    let original_data = &*lock;
+    let buffer = &*buffer_guard;
+
+    // The zero-copy and preview paths lock these formats with Lock2D; the
+    // upload must use the same lock type to avoid MF_E_INVALIDREQUEST.
+    if cap_camera_ffmpeg::should_use_2d_lock(frame.pixel_format, frame.is_bottom_up)
+        && let Some(texture) = cap_camera_ffmpeg::with_media_buffer_data(
+            buffer,
+            frame.pixel_format,
+            frame.width as usize,
+            frame.height as usize,
+            |data, primary_stride, secondary_stride| {
+                upload_mf_buffer_data_to_texture(
+                    device,
+                    frame,
+                    data,
+                    CameraBufferLayout {
+                        primary_stride,
+                        secondary_stride,
+                    },
+                    buffers,
+                )
+            },
+        )
+    {
+        return texture;
+    }
+
+    let lock = buffer.lock()?;
+    let data = &*lock;
     let layout = infer_camera_buffer_layout(
         frame.pixel_format,
         frame.width as usize,
         frame.height as usize,
-        original_data.len(),
+        data.len(),
     )
     .ok_or_else(|| {
         windows::core::Error::new(
@@ -1895,10 +1914,28 @@ pub fn upload_mf_buffer_to_texture(
                 frame.pixel_format,
                 frame.width,
                 frame.height,
-                original_data.len()
+                data.len()
             ),
         )
     })?;
+
+    upload_mf_buffer_data_to_texture(device, frame, data, layout, buffers)
+}
+
+fn upload_mf_buffer_data_to_texture(
+    device: &ID3D11Device,
+    frame: &NativeCameraFrame,
+    original_data: &[u8],
+    layout: CameraBufferLayout,
+    buffers: &mut CameraBuffers,
+) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_DEFAULT,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+
+    let dxgi_format = frame.dxgi_format();
 
     let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
     let needs_flip = frame.is_bottom_up;

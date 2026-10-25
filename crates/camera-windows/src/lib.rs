@@ -173,6 +173,13 @@ pub enum CaptureHandle {
 }
 
 impl CaptureHandle {
+    pub fn dropped_samples(&self) -> u64 {
+        match self {
+            CaptureHandle::MediaFoundation(handle) => handle.dropped_samples(),
+            CaptureHandle::DirectShow(handle) => handle.dropped_samples(),
+        }
+    }
+
     pub fn stop_capturing(self) -> windows_core::Result<()> {
         match self {
             CaptureHandle::MediaFoundation(handle) => handle.stop_capturing(),
