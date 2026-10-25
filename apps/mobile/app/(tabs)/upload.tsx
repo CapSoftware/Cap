@@ -166,6 +166,9 @@ export default function UploadScreen() {
 	const mountedRef = useRef(true);
 	const activeIdRef = useRef<string | null>(null);
 	const sourceBusyRef = useRef(false);
+	const processingIdsRef = useRef(new Set<string>());
+	const processingClientRef = useRef<typeof auth.client | null>(null);
+	processingClientRef.current = auth.status === "signedIn" ? auth.client : null;
 	const uploadSourceError =
 		sourceError?.source === "files" || sourceError?.source === "photos"
 			? sourceError.message
@@ -340,14 +343,35 @@ export default function UploadScreen() {
 	};
 
 	const waitForProcessing = async (queueItemId: string, capId: string) => {
-		if (auth.status !== "signedIn") return;
+		if (!mountedRef.current || processingClientRef.current !== auth.client) {
+			return;
+		}
 
-		for (const delayMs of processingPollDelaysMs) {
-			await new Promise((resolve) => setTimeout(resolve, delayMs));
-			if (!mountedRef.current) return;
+		processingIdsRef.current.add(queueItemId);
+		const isActive = () =>
+			mountedRef.current &&
+			processingClientRef.current === auth.client &&
+			processingIdsRef.current.has(queueItemId);
 
-			try {
-				const detail = await auth.client.getCap(capId);
+		try {
+			for (let attempt = 0; isActive(); attempt += 1) {
+				const delayMs =
+					processingPollDelaysMs[
+						Math.min(attempt, processingPollDelaysMs.length - 1)
+					];
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+				if (!isActive()) return;
+
+				const detail = await auth.client.getCap(capId).catch(() => null);
+				if (!isActive()) return;
+				if (!detail) {
+					dispatchIfMounted({
+						type: "processing",
+						id: queueItemId,
+						message: "Unable to check processing. Retrying...",
+					});
+					continue;
+				}
 				const action = uploadQueueActionFromCapUpload(
 					queueItemId,
 					detail.cap.upload,
@@ -361,9 +385,11 @@ export default function UploadScreen() {
 						return;
 					}
 				}
-			} catch {
-				return;
 			}
+		} catch {
+			return;
+		} finally {
+			processingIdsRef.current.delete(queueItemId);
 		}
 	};
 
@@ -508,6 +534,7 @@ export default function UploadScreen() {
 
 	const removeQueueItem = (item: UploadQueueItem) => {
 		if (activeIdRef.current !== null) return;
+		processingIdsRef.current.delete(item.id);
 		dispatch({ type: "remove", id: item.id });
 	};
 

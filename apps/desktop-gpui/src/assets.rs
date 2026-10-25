@@ -183,6 +183,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "import.svg",
     "edit.svg",
     "copy.svg",
+    "clipboard-paste.svg",
     "record-fill.svg",
     "warning-bold.svg",
     "traffic-close.svg",
