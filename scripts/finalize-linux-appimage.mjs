@@ -119,6 +119,36 @@ export async function preserveAppImageWorkingDirectory(appDir) {
 	await writeFile(launcher, appRunWrapper, { mode: 0o755, flag: "wx" });
 }
 
+// Desktop launchers (GNOME's app grid among them) only hand an app an
+// XDG_ACTIVATION_TOKEN when its entry asks for startup notification. Without
+// one, Wayland focus stealing prevention keeps Cap's first window, and the
+// running Cap a relaunch raises, behind whatever had focus.
+export function withStartupNotify(entry) {
+	if (/^StartupNotify=/m.test(entry)) {
+		return entry.replace(/^StartupNotify=.*$/m, "StartupNotify=true");
+	}
+	return entry.replace(
+		/^\[Desktop Entry\]\n/m,
+		"[Desktop Entry]\nStartupNotify=true\n",
+	);
+}
+
+export async function notifyStartupInDesktopEntries(root, entries) {
+	const changed = [];
+	for (const entry of entries) {
+		const filename = path.join(root, entry);
+		const stats = await lstat(filename).catch(() => null);
+		if (!stats?.isFile()) continue;
+		const before = await readFile(filename, "utf8");
+		const after = withStartupNotify(before);
+		if (after !== before) {
+			await writeFile(filename, after);
+			changed.push(entry);
+		}
+	}
+	return changed;
+}
+
 export function runCommand(command, args, options = {}) {
 	const result = spawnSync(command, args, { stdio: "inherit", ...options });
 	if (result.error) throw result.error;
@@ -491,6 +521,12 @@ export async function finalizeLinuxAppImage(
 			excluded.push(
 				...(await removeWebviewRuntime(appDir, { env: tools, run })),
 			);
+		}
+		if (!webview) {
+			await notifyStartupInDesktopEntries(appDir, [
+				"Cap.desktop",
+				"usr/share/applications/Cap.desktop",
+			]);
 		}
 		await relativizeDirIcon(appDir);
 		await preserveAppImageWorkingDirectory(appDir);
