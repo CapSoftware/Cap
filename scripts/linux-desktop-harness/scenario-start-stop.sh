@@ -5,7 +5,8 @@
 # results to $HARNESS_OUT/result.txt.
 #
 # Env: HARNESS_OUT, LAUNCH (dock|terminal), RECORD_MODE (studio|instant),
-#      PRESS_AFTER (seconds; with no tray item by then, press the shortcut).
+#      PRESS_AFTER (seconds; with no tray item by then, press the shortcut),
+#      TRAY_CLICK (host|menu).
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -36,7 +37,16 @@ tray_items() {
 # Use the Stop control the way a person would.
 use_control() {
   case "$1" in
-    tray) echo click >&"${TRAY_HOST[1]}" ;;
+    tray)
+      # TRAY_CLICK=menu goes through GNOME's AppIndicator extension: the
+      # menu a single click on the icon opens, and its entry. Otherwise the
+      # harness activates the item itself.
+      if [[ ${TRAY_CLICK:-host} == menu ]]; then
+        python3 "$here/panel-menu.py" "recording" >>"$out/actions.log" 2>&1
+      else
+        echo click >&"${TRAY_HOST[1]}"
+      fi
+      ;;
     shortcut) python3 "$here/mutter-keys.py" Control_L+Shift_L+F9 >>"$out/actions.log" 2>&1 ;;
     approve) python3 "$here/atspi-press.py" "${2:-Add Keyboard Shortcuts}" "${3:-^Add$}" 20 >>"$out/actions.log" 2>&1 ;;
   esac
