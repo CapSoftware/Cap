@@ -61,9 +61,8 @@ impl KeyboardEvents {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut bytes = KEYBOARD_EVENTS_MAGIC.to_vec();
-        let payload = bincode::serde::encode_to_vec(self, bincode::config::standard())
+        bincode::serde::encode_into_std_write(self, &mut bytes, bincode::config::standard())
             .map_err(|e| format!("Failed to serialize keyboard events: {e}"))?;
-        bytes.extend(payload);
         Ok(bytes)
     }
 
@@ -1164,6 +1163,52 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "⏎");
+    }
+
+    #[test]
+    fn keyboard_encoding_matches_the_original_payload_copy() {
+        for count in [0, 1, 250, 251, 65_535, 65_536] {
+            let events = KeyboardEvents {
+                presses: (0..count)
+                    .map(|index| KeyPressEvent {
+                        key: ["", "a", "文字🖱", "LControl"][index % 4].into(),
+                        key_code: "KeyA".into(),
+                        time_ms: [
+                            f64::NEG_INFINITY,
+                            -0.0,
+                            f64::from_bits(0x7ff8_0000_0000_1234),
+                            1.25,
+                            f64::INFINITY,
+                        ][index % 5],
+                        down: index % 2 == 0,
+                    })
+                    .collect(),
+            };
+            let mut expected = KEYBOARD_EVENTS_MAGIC.to_vec();
+            expected.extend(
+                bincode::serde::encode_to_vec(&events, bincode::config::standard()).unwrap(),
+            );
+            let actual = events.to_bytes().unwrap();
+            assert_eq!(actual, expected, "{count} events");
+            let decoded = KeyboardEvents::from_bytes(&actual, Path::new("keyboard.bin")).unwrap();
+            assert_eq!(decoded.presses.len(), events.presses.len());
+            for (decoded, source) in decoded.presses.iter().zip(&events.presses) {
+                assert_eq!(decoded.key, source.key);
+                assert_eq!(decoded.key_code, source.key_code);
+                assert_eq!(decoded.time_ms.to_bits(), source.time_ms.to_bits());
+                assert_eq!(decoded.down, source.down);
+            }
+        }
+        for length in [0, 1, 250, 251, 65_535, 65_536] {
+            let events = KeyboardEvents {
+                presses: vec![key_down(&"x".repeat(length), 1.25)],
+            };
+            let mut expected = KEYBOARD_EVENTS_MAGIC.to_vec();
+            expected.extend(
+                bincode::serde::encode_to_vec(&events, bincode::config::standard()).unwrap(),
+            );
+            assert_eq!(events.to_bytes().unwrap(), expected, "key length {length}");
+        }
     }
 
     #[test]
