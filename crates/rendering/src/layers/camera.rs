@@ -530,8 +530,6 @@ impl CameraLayer {
         self.blur_active = true;
     }
 
-    pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
-
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if self.hidden {
             return;
@@ -623,6 +621,7 @@ mod tests {
     use crate::{
         CursorEvents, DecodedSegmentFrames, FrameRenderer, ProjectConfiguration, ProjectUniforms,
         RecordingMeta, RenderOptions, RenderVideoConstants, RendererLayers, ZoomTransformTimeline,
+        test_support::{TestFormat, device, read_rgba, reference_rgba, test_frame},
     };
 
     async fn constants() -> RenderVideoConstants {
@@ -663,6 +662,11 @@ mod tests {
                     &camera.uniforms_buffer,
                     &camera.frame_texture_views[index],
                 ));
+                camera.yuv_converter.set_external_output(
+                    index,
+                    camera.frame_textures[index].clone(),
+                    camera.frame_texture_views[index].clone(),
+                );
             }
         }
         layers
@@ -980,68 +984,80 @@ mod tests {
         }
     }
 
-    fn gpu_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::create_wgpu_instance_sync();
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
-    }
+    #[test]
+    fn direct_output_matches_intermediate_copy_across_size_changes() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping camera direct-output parity test");
+            return;
+        };
 
-    fn read_rgba(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texture: &wgpu::Texture,
-        width: u32,
-        height: u32,
-    ) -> Vec<u8> {
-        let stride = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("camera NV12 readback"),
-            size: u64::from(stride * height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(encoder.finish()));
-        let (sender, receiver) = std::sync::mpsc::channel();
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                sender.send(result).unwrap();
-            });
-        device.poll(wgpu::PollType::Wait).unwrap();
-        receiver.recv().unwrap().unwrap();
-        let pixels = buffer
-            .slice(..)
-            .get_mapped_range()
-            .chunks(stride as usize)
-            .flat_map(|row| row[..width as usize * 4].iter().copied())
-            .collect();
-        buffer.unmap();
-        pixels
+        let pipelines = Arc::new(YuvConverterPipelines::new(&device));
+        let composite = Arc::new(CompositeVideoFramePipeline::new(&device));
+        let sizes = [
+            (4u32, 4u32),
+            (4, 4),
+            (4, 4),
+            (5, 3),
+            (5, 3),
+            (5, 3),
+            (17, 9),
+            (17, 9),
+            (17, 9),
+        ];
+        for format in [TestFormat::Nv12, TestFormat::Yuv420p] {
+            for encoder_path in [false, true] {
+                let mut layer = CameraLayer::new_with_all_shared_pipelines(
+                    &device,
+                    Arc::clone(&pipelines),
+                    Arc::clone(&composite),
+                );
+                let mut reference_converter =
+                    YuvToRgbaConverter::new_with_shared_pipelines(&device, Arc::clone(&pipelines));
+                for (index, (width, height)) in sizes.into_iter().enumerate() {
+                    let frame = test_frame(format, width, height, index as u32);
+                    let frame_data = (XY::new(width, height), &frame, index as f32);
+
+                    if encoder_path {
+                        let mut encoder = device.create_command_encoder(&Default::default());
+                        layer.prepare_with_encoder(
+                            &device,
+                            &queue,
+                            Some(CompositeVideoFrameUniforms::default()),
+                            Some(frame_data),
+                            &mut encoder,
+                        );
+                        queue.submit(std::iter::once(encoder.finish()));
+                    } else {
+                        layer.prepare(
+                            &device,
+                            &queue,
+                            Some(CompositeVideoFrameUniforms::default()),
+                            Some(frame_data),
+                        );
+                    }
+                    device.poll(wgpu::PollType::Wait).unwrap();
+
+                    let direct = read_rgba(
+                        &device,
+                        &queue,
+                        &layer.frame_textures[layer.current_texture],
+                        width,
+                        height,
+                    );
+                    let expected =
+                        reference_rgba(&device, &queue, &mut reference_converter, &frame);
+                    assert_eq!(
+                        direct, expected,
+                        "format={format:?} encoder_path={encoder_path} {width}x{height} frame={index}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn nv12_prepare_writes_the_camera_texture_directly() {
-        let Some((device, queue)) = gpu_device() else {
+        let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter available, skipping camera NV12 direct-output test");
             return;
         };
@@ -1073,7 +1089,7 @@ mod tests {
 
     #[test]
     fn nv12_prepare_with_encoder_writes_the_camera_texture_directly() {
-        let Some((device, queue)) = gpu_device() else {
+        let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter available, skipping camera NV12 encoder test");
             return;
         };

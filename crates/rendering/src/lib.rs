@@ -59,6 +59,8 @@ mod segment_timing;
 mod shape;
 pub mod spring_mass_damper;
 mod takeover;
+#[cfg(test)]
+mod test_support;
 mod text;
 mod transition;
 #[cfg(test)]
@@ -9053,13 +9055,6 @@ impl RendererLayers {
             self.mask.begin_frame(session_views);
         }
 
-        if parts.content {
-            if render_display {
-                self.display.copy_to_texture(encoder);
-            }
-            self.camera.copy_to_texture(encoder);
-            self.camera_only.copy_to_texture(encoder);
-        }
         if parts.background {
             self.background.render_surface(encoder);
         }
