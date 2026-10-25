@@ -80,6 +80,7 @@ use crate::{
 mod frame;
 mod loading;
 mod scenes;
+mod snap;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -1458,7 +1459,7 @@ pub struct EditorWindow {
     minimap_drag: Option<timeline::MinimapDrag>,
     /// Magnetic edges for the live drag: playhead, clip cuts and every other
     /// segment's edges, gathered once when the drag arms.
-    drag_snap_targets: Vec<f64>,
+    drag_snap_targets: snap::SnapTargets,
     /// The target the drag is currently snapped onto, for the guide line.
     drag_snap_time: Option<f64>,
     /// Blip-style ghost trim: while a clip handle drags, only this draft
@@ -2099,7 +2100,7 @@ impl EditorWindow {
             clip_speed: None,
             timeline_scroll: gpui::ScrollHandle::new(),
             minimap_drag: None,
-            drag_snap_targets: Vec::new(),
+            drag_snap_targets: snap::SnapTargets::default(),
             drag_snap_time: None,
             clip_draft: None,
             clip_anim: None,
@@ -4801,7 +4802,7 @@ impl EditorWindow {
                 targets.push(segment.end);
             }
         }
-        self.drag_snap_targets = targets;
+        self.drag_snap_targets = snap::SnapTargets::new(targets);
         self.drag_snap_time = None;
     }
 
@@ -4816,14 +4817,7 @@ impl EditorWindow {
             return (value, None);
         }
         let radius = DRAG_SNAP_PX * secs_per_pixel;
-        let mut best: Option<f64> = None;
-        for &target in &self.drag_snap_targets {
-            let distance = (target - value).abs();
-            if distance <= radius && best.is_none_or(|b| (b - value).abs() > distance) {
-                best = Some(target);
-            }
-        }
-        match best {
+        match self.drag_snap_targets.nearest(value, radius) {
             Some(target) => (target, Some(target)),
             None => (value, None),
         }
@@ -4868,22 +4862,14 @@ impl EditorWindow {
                 let mut engaged = None;
                 if !snap_disabled {
                     let radius = DRAG_SNAP_PX * secs_per_pixel;
-                    let mut best = f64::INFINITY;
-                    for &target in &self.drag_snap_targets {
-                        for edge in [start + raw, end + raw] {
-                            let adjust = target - edge;
-                            if adjust.abs() <= radius && adjust.abs() < best.abs() {
-                                best = adjust;
-                                engaged = Some(target);
-                            }
-                        }
-                    }
-                    if best.is_finite() {
-                        let snapped = bounds.clamp(raw + best);
-                        if (snapped - (raw + best)).abs() < 1e-9 {
+                    if let Some((adjustment, target)) =
+                        self.drag_snap_targets
+                            .move_adjustment(start + raw, end + raw, radius)
+                    {
+                        let snapped = bounds.clamp(raw + adjustment);
+                        if (snapped - (raw + adjustment)).abs() < 1e-9 {
                             shift = snapped;
-                        } else {
-                            engaged = None;
+                            engaged = Some(target);
                         }
                     }
                 }
@@ -5902,7 +5888,7 @@ impl EditorWindow {
     /// select instead, which also moves the playhead
     /// (`props.handleUpdatePlayhead(e)`).
     fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.drag_snap_targets = Vec::new();
+        self.drag_snap_targets = snap::SnapTargets::default();
         self.drag_snap_time = None;
         let Some(drag) = self.drag.take() else {
             self.clip_draft = None;
