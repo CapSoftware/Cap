@@ -4690,14 +4690,23 @@ impl EditorWindow {
             edits::reorder_overlay_track(&mut self.project, &available, from, reorder.target_index)
         } else {
             rows.get(reorder.target_index).is_some_and(|target| {
-                self.project.timeline.as_mut().is_some_and(|timeline| {
+                let moved = self.project.timeline.as_mut().is_some_and(|timeline| {
                     edits::reorder_track_lane(
                         timeline,
                         reorder.source.kind,
                         reorder.source.lane,
                         target.lane,
                     )
-                })
+                });
+                if moved {
+                    edits::reorder_track_names(
+                        &mut self.project.track_names,
+                        reorder.source.kind,
+                        reorder.source.lane,
+                        target.lane,
+                    );
+                }
+                moved
             })
         };
         if changed {

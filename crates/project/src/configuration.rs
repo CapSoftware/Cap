@@ -2696,7 +2696,7 @@ pub struct ProjectConfiguration {
     pub text_anim_version: u32,
     /// Names the user gave timeline lanes, keyed `"<track>:<lane>"` (for
     /// example `"audio:1"`). Lanes without one show the track's own label.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub track_names: std::collections::BTreeMap<String, String>,
 }
 

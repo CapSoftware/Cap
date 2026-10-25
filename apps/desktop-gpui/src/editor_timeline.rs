@@ -1875,13 +1875,13 @@ impl SegmentUi<'_> {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// The gutter cell: a tinted 22px tile carrying the track's glyph, then the
-/// track's name. The saturated pill the source draws
-/// (`TL/TrackManager.tsx:264-281`) is gone.
 pub fn track_name_key(row: TrackRow) -> String {
     format!("{}:{}", row.kind.name_key(), row.lane)
 }
 
+/// The gutter cell: a tinted 22px tile carrying the track's glyph, then the
+/// track's name. The saturated pill the source draws
+/// (`TL/TrackManager.tsx:264-281`) is gone.
 pub fn track_chip(theme: &Theme, kind: TrackKind, name: Option<SharedString>) -> impl IntoElement {
     let color = kind.color();
     div()

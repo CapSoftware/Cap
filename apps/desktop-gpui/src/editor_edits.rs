@@ -1153,6 +1153,42 @@ pub fn reorder_overlay_track(
     true
 }
 
+/// Where `lane` ends up when lane `from` is dragged to `to`: the moved lane
+/// takes `to`, and the lanes it passed shift by one toward `from`.
+fn reordered_lane(lane: u32, from: u32, to: u32) -> u32 {
+    if lane == from {
+        to
+    } else if from < to && lane > from && lane <= to {
+        lane - 1
+    } else if from > to && lane >= to && lane < from {
+        lane + 1
+    } else {
+        lane
+    }
+}
+
+/// Moves `kind`'s lane names along with a [`reorder_track_lane`], so a name
+/// stays on the lane it was given to.
+pub fn reorder_track_names(
+    names: &mut std::collections::BTreeMap<String, String>,
+    kind: TrackKind,
+    from: u32,
+    to: u32,
+) {
+    let prefix = format!("{}:", kind.name_key());
+    let moved: Vec<(u32, String)> = names
+        .iter()
+        .filter_map(|(key, name)| {
+            let lane = key.strip_prefix(&prefix)?.parse::<u32>().ok()?;
+            Some((lane, name.clone()))
+        })
+        .collect();
+    names.retain(|key, _| !key.starts_with(&prefix));
+    for (lane, name) in moved {
+        names.insert(format!("{prefix}{}", reordered_lane(lane, from, to)), name);
+    }
+}
+
 pub fn reorder_track_lane(
     timeline: &mut TimelineConfiguration,
     kind: TrackKind,
@@ -1172,15 +1208,7 @@ pub fn reorder_track_lane(
         let mut changed = false;
         for segment in segments {
             let lane = segment.lane();
-            let next = if lane == from {
-                to
-            } else if from < to && lane > from && lane <= to {
-                lane - 1
-            } else if from > to && lane >= to && lane < from {
-                lane + 1
-            } else {
-                lane
-            };
+            let next = reordered_lane(lane, from, to);
             if next != lane {
                 set(segment, next);
                 changed = true;
@@ -2892,6 +2920,29 @@ mod tests {
     }
 
     // -- Selection ----------------------------------------------------------
+
+    #[test]
+    fn lane_names_follow_their_lane_when_lanes_are_reordered() {
+        let mut names = std::collections::BTreeMap::from([
+            ("audio:0".to_string(), "Voice".to_string()),
+            ("audio:1".to_string(), "Music".to_string()),
+            ("style:0".to_string(), "Intro".to_string()),
+        ]);
+        reorder_track_names(&mut names, TrackKind::Audio, 1, 0);
+        assert_eq!(names.get("audio:0").map(String::as_str), Some("Music"));
+        assert_eq!(names.get("audio:1").map(String::as_str), Some("Voice"));
+        assert_eq!(names.get("style:0").map(String::as_str), Some("Intro"));
+
+        // Dragging lane 0 to the bottom of three shifts the others up.
+        let mut names = std::collections::BTreeMap::from([
+            ("audio:0".to_string(), "A".to_string()),
+            ("audio:2".to_string(), "C".to_string()),
+        ]);
+        reorder_track_names(&mut names, TrackKind::Audio, 0, 2);
+        assert_eq!(names.get("audio:2").map(String::as_str), Some("A"));
+        assert_eq!(names.get("audio:1").map(String::as_str), Some("C"));
+        assert!(!names.contains_key("audio:0"));
+    }
 
     #[test]
     fn a_plain_click_selects_one_segment() {
