@@ -17,8 +17,7 @@ use objc2_app_kit::{
     NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName, NSFontManager,
     NSFontTraitMask, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSImageScaling,
     NSImageView, NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions,
-    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-    NSVisualEffectView,
+    NSView,
 };
 use objc2_foundation::{
     MainThreadMarker, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSTimer,
@@ -47,8 +46,8 @@ const PILL_W: f64 = 38.0;
 const PILL_H: f64 = 29.0;
 const PILL_GAP: f64 = 4.0;
 const CAPSULE_PAD: f64 = 3.0;
-const RIGHT_INSET: f64 = 30.0;
-const TITLE_INSET: f64 = 17.0;
+const RIGHT_INSET: f64 = 10.0;
+const TITLE_INSET: f64 = 10.0;
 const LINE_GAP: f64 = 2.0;
 const SYMBOL_SIZE: f64 = 17.0;
 const PILL_RADIUS: f64 = 14.0;
@@ -70,7 +69,6 @@ struct PickerIvars {
     tag_base: isize,
     capsule: RefCell<Option<Retained<CALayer>>>,
     pills: RefCell<Vec<Retained<CALayer>>>,
-    selection: RefCell<Option<Retained<NSVisualEffectView>>>,
     icons: RefCell<Vec<Retained<NSImageView>>>,
 }
 
@@ -155,7 +153,6 @@ impl ModePickerView {
             tag_base,
             capsule: RefCell::new(None),
             pills: RefCell::new(Vec::new()),
-            selection: RefCell::new(None),
             icons: RefCell::new(Vec::new()),
         });
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PICKER_W, PICKER_H));
@@ -178,18 +175,6 @@ impl ModePickerView {
                 .borrow_mut()
                 .push(make_layer(PILL_RADIUS));
         }
-
-        let selection = NSVisualEffectView::new(mtm);
-        selection.setMaterial(NSVisualEffectMaterial::Selection);
-        selection.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
-        selection.setState(NSVisualEffectState::Active);
-        selection.setWantsLayer(true);
-        if let Some(layer) = selection.layer() {
-            layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
-            layer.setCornerRadius(PILL_RADIUS);
-        }
-        this.addSubview(&selection);
-        *this.ivars().selection.borrow_mut() = Some(selection);
 
         for (mode, _) in PICKER_MODES.iter() {
             let view = NSImageView::new(mtm);
@@ -302,16 +287,15 @@ impl ModePickerView {
         let white = NSColor::whiteColor();
         let flash = self.ivars().flash.get();
         let icons = self.ivars().icons.borrow();
-        if let Some(selection) = self.ivars().selection.borrow().as_ref() {
-            let r = self.pill_rect(selected);
-            selection.setFrame(r);
-            selection.setHidden(flash);
-        }
         for (i, pill) in self.ivars().pills.borrow().iter().enumerate() {
             let is_sel = i == selected;
             let is_hover = focused == Some(i) && !is_sel;
-            let fill = if is_sel && flash {
-                accent.clone()
+            let fill = if is_sel {
+                if flash {
+                    accent.clone()
+                } else {
+                    white.colorWithAlphaComponent(0.95)
+                }
             } else if is_hover {
                 label.colorWithAlphaComponent(0.14)
             } else {
@@ -353,17 +337,8 @@ impl ModePickerView {
             .convertFont_toHaveTrait(&sub_font, NSFontTraitMask::ItalicFontMask);
         }
 
-        let flash = self.ivars().flash.get();
-        let label = if flash {
-            NSColor::controlAccentColor()
-        } else {
-            NSColor::labelColor()
-        };
-        let secondary = if flash {
-            NSColor::controlAccentColor()
-        } else {
-            NSColor::secondaryLabelColor()
-        };
+        let label = NSColor::labelColor();
+        let secondary = NSColor::secondaryLabelColor();
         let title = NSString::from_str(PICKER_TITLE);
         let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
         let title_attrs = NSDictionary::from_slices(

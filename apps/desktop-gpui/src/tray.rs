@@ -181,9 +181,9 @@ const ROW_ICON_SOURCES: &[(&str, &[u8])] = &[
 
 /// `Entry::Item`'s `icon` size, and the raster size of every row glyph.
 const ROW_ICON_SIZE: u32 = 32;
-/// The mode picker draws its icons at `SYMBOL_SIZE` points; rasterise at 4x so
-/// the downsample stays sharp on Retina displays.
-const PICKER_ICON_SIZE: u32 = 128;
+/// The mode picker draws its icons at 17 points. Rasterise at exactly 2x so
+/// the image maps 1:1 to device pixels on a Retina display.
+const PICKER_ICON_SIZE: u32 = 34;
 
 /// An SVG rendered to a `size`×`size` PNG, scaled to fit and centred -- the
 /// conversion `cap_mode_icon_png` makes at 90 for the palette, shared with the
@@ -576,10 +576,7 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     for target in [TargetType::Display, TargetType::Window, TargetType::Area] {
         entries.push(capture_entry(target, mode));
     }
-    // macOS keeps the row in the menu and removes/inserts it in place; the
-    // other platforms rebuild on a mode change and only need it in recording
-    // modes. Keeping it on macOS also lets a dynamic mode switch add it back.
-    if cfg!(target_os = "macos") || mode != Mode::Screenshot {
+    if mode != Mode::Screenshot {
         entries.push(Entry::icon_item(
             tr::tray::take_screenshot(),
             TrayItem::TakeScreenshot,
@@ -1036,10 +1033,6 @@ mod mac {
         static OPTION_HELD: Cell<bool> = const { Cell::new(false) };
         static CURRENT_MODE: Cell<Option<Mode>> = const { Cell::new(None) };
         static ROWS: RefCell<Vec<ActionRow>> = const { RefCell::new(Vec::new()) };
-        static TAKE_SCREENSHOT: RefCell<Option<Retained<NSMenuItem>>> =
-            const { RefCell::new(None) };
-        static TAKE_SCREENSHOT_ANCHOR: RefCell<Option<Retained<NSMenuItem>>> =
-            const { RefCell::new(None) };
         static STATUS_ITEM: RefCell<Option<Retained<NSStatusItem>>> = const { RefCell::new(None) };
     }
 
@@ -1345,9 +1338,6 @@ mod mac {
             MainThreadMarker::new().expect("tray menu construction must run on the main thread");
         menu.removeAllItems();
         ROWS.with(|rows| rows.borrow_mut().clear());
-        TAKE_SCREENSHOT.with(|item| *item.borrow_mut() = None);
-        TAKE_SCREENSHOT_ANCHOR.with(|item| *item.borrow_mut() = None);
-        let mut last_capture = None;
 
         for entry in entries {
             if let Entry::ModePicker { mode } = entry {
@@ -1389,24 +1379,11 @@ mod mac {
                         screenshot_accelerator,
                     });
                 });
-                last_capture = Some(menu_item.clone());
                 menu.addItem(&menu_item);
                 continue;
             }
 
             let menu_item = build_ns_item(entry, target, actions, mtm);
-            if matches!(
-                entry,
-                Entry::Item {
-                    item: Some(TrayItem::TakeScreenshot),
-                    ..
-                }
-            ) {
-                TAKE_SCREENSHOT.with(|item| *item.borrow_mut() = Some(menu_item.clone()));
-                TAKE_SCREENSHOT_ANCHOR.with(|anchor| {
-                    *anchor.borrow_mut() = last_capture.clone();
-                });
-            }
             menu.addItem(&menu_item);
         }
     }
@@ -1479,35 +1456,6 @@ mod mac {
                 set_key_equivalent(&row.item, accelerator);
                 set_row_image(&row.item, item);
             }
-        });
-        TAKE_SCREENSHOT.with(|slot| {
-            let slot = slot.borrow();
-            let Some(item) = slot.as_ref() else {
-                return;
-            };
-            TAKE_SCREENSHOT_ANCHOR.with(|anchor| {
-                let anchor = anchor.borrow();
-                let menu = unsafe { item.menu() }
-                    .or_else(|| anchor.as_ref().and_then(|item| unsafe { item.menu() }));
-                let Some(menu) = menu else {
-                    return;
-                };
-                let index = menu.indexOfItem(item);
-                if mode == Mode::Screenshot {
-                    if index >= 0 {
-                        menu.removeItemAtIndex(index);
-                    }
-                    return;
-                }
-                if index < 0 {
-                    let at = anchor
-                        .as_ref()
-                        .map(|item| menu.indexOfItem(item))
-                        .filter(|index| *index >= 0)
-                        .map_or(menu.numberOfItems(), |index| index + 1);
-                    menu.insertItem_atIndex(item, at);
-                }
-            });
         });
     }
 
@@ -2261,9 +2209,7 @@ mod tests {
                 "Screenshot Window",
             ]
         );
-        if !cfg!(target_os = "macos") {
-            assert!(!titles.iter().any(|title| title == "Take a Screenshot"));
-        }
+        assert!(!titles.iter().any(|title| title == "Take a Screenshot"));
     }
 
     #[test]
@@ -2445,13 +2391,7 @@ mod tests {
         };
         assert!(has(Mode::Studio));
         assert!(has(Mode::Instant));
-        if cfg!(target_os = "macos") {
-            // Kept in the model and removed from the live menu in screenshot
-            // mode, so it can be inserted again when the mode changes.
-            assert!(has(Mode::Screenshot));
-        } else {
-            assert!(!has(Mode::Screenshot));
-        }
+        assert!(!has(Mode::Screenshot));
     }
 
     #[test]
