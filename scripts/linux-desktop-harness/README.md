@@ -27,6 +27,9 @@ Each run (`run-desktop.sh <desktop> <package> <out-dir> [KEY=VALUE...]`):
    `mutter-pointer.py`);
 4. writes `result.txt`, which `check-results.sh` turns into pass or fail.
 
+`SCENARIO=clipboard` (niri, Hyprland) opens Cap's teleprompter, pastes text
+another app copied with Ctrl+V and copies it back out with Ctrl+A, Ctrl+C,
+pressed through the compositor's virtual keyboard (`wtype`).
 `SCENARIO=reopen` launches Cap from a terminal and again from the app grid,
 which must hand over to the running instance. `SCENARIO=settings-close` instead opens Cap's settings and closes it with the
 window's own close button (GNOME draws no title bar for it). Clicks go through

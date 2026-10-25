@@ -222,6 +222,17 @@ jobs:
             bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
             "$RUNNER_TEMP/out/hyprland" LAUNCH=dock
 
+      - name: Hyprland clipboard (Ctrl+V into and Ctrl+C out of a text field)
+        env:
+          SCENARIO: clipboard
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-clipboard"
+          for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
+            grep -qx "$key=yes" "$RUNNER_TEMP/out/hyprland-clipboard/result.txt"
+          done
+
       - name: Check results
         run: bash scripts/linux-desktop-harness/check-results.sh "$RUNNER_TEMP/out/hyprland"
 
@@ -320,6 +331,19 @@ jobs:
             bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
             "$RUNNER_TEMP/out/niri" LAUNCH=dock NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
             GSK_RENDERER=cairo
+
+      - name: niri clipboard (Ctrl+V into and Ctrl+C out of a text field)
+        env:
+          SCENARIO: clipboard
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            HARNESS_IMAGE=cap-harness-arch-niri \
+            bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/niri-clipboard" NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
+            GSK_RENDERER=cairo
+          for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
+            grep -qx "$key=yes" "$RUNNER_TEMP/out/niri-clipboard/result.txt"
+          done
 
       - name: Check results
         run: |
