@@ -28,6 +28,7 @@ use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
 
 use super::mac::{post, set_status_mode};
 use super::{TrayItem, mode_name, mode_picker_icon};
+use crate::i18n::tr;
 use crate::main_window::Mode;
 
 const PICKER_MODES: [(Mode, TrayItem); 3] = [
@@ -39,7 +40,6 @@ const PICKER_MODES: [(Mode, TrayItem); 3] = [
 const FLASH_INTERVAL: f64 = 0.08;
 const FLASH_ON_PICK: bool = true;
 
-const PICKER_TITLE: &str = "Recording Mode";
 const PICKER_W: f64 = 300.0;
 const PICKER_H: f64 = 41.0;
 const PILL_W: f64 = 38.0;
@@ -266,7 +266,7 @@ impl ModePickerView {
         *this.ivars().tracking.borrow_mut() = Some(area);
 
         this.setAccessibilityRole(Some(unsafe { NSAccessibilityRadioGroupRole }));
-        this.setAccessibilityLabel(Some(&NSString::from_str(PICKER_TITLE)));
+        this.setAccessibilityLabel(Some(&NSString::from_str(tr::tray::recording_mode())));
         let children: Vec<Retained<AnyObject>> = PICKER_MODES
             .iter()
             .enumerate()
@@ -436,7 +436,7 @@ impl ModePickerView {
 
         let label = NSColor::labelColor();
         let secondary = NSColor::secondaryLabelColor();
-        let title = NSString::from_str(PICKER_TITLE);
+        let title = NSString::from_str(tr::tray::recording_mode());
         let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
         let title_attrs = NSDictionary::from_slices(
             &[unsafe { NSFontAttributeName }, unsafe {
@@ -602,7 +602,7 @@ pub(super) fn append_mode_picker(
     let view = ModePickerView::new(mtm, index, tag_base);
 
     let item = NSMenuItem::new(mtm);
-    item.setTitle(&NSString::from_str(PICKER_TITLE)); // also its accessibility title
+    item.setTitle(&NSString::from_str(tr::tray::recording_mode())); // also its accessibility title
     item.setEnabled(true);
     item.setView(Some(&view));
     menu.addItem(&item);

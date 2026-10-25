@@ -21,12 +21,15 @@ about = "Über Cap"
 hide = "Cap ausblenden"
 hide_others = "Andere ausblenden"
 quit = "Cap beenden"
+preferences = "Einstellungen…"
 services = "Dienste"
 settings = "Einstellungen…"
 
 [menu.file]
 close_window = "Fenster schließen"
 title = "Ablage"
+open_file = "Datei öffnen…"
+import_media = "Medien importieren…"
 
 [menu.edit]
 copy = "Kopieren"
@@ -49,12 +52,21 @@ zoom = "Zoomen"
 
 [menu.help]
 title = "Hilfe"
+changelog = "Änderungsprotokoll"
+dashboard = "Dashboard"
+documentation = "Dokumentation"
+faq = "FAQ"
+self_hosting = "Selbsthosting"
+help_center = "Hilfe-Center"
+system_status = "Systemstatus"
+discord = "Discord-Community beitreten"
 
 [tray]
 import_media = "Medien importieren..."
 no_recent_items = "Noch keine Einträge"
 open_main_window = "Hauptfenster öffnen"
 previous = "Zuletzt erstellt"
+recording_mode = "Aufnahmemodus"
 quit = "Cap beenden"
 record_area = "Bereich aufnehmen"
 record_display = "Bildschirm aufnehmen"
@@ -583,3 +595,11 @@ click_or_press = "Hier klicken oder drücken:"
 get_started = "Los geht’s"
 space_key = "Leertaste"
 tagline = "Die Open-Source-App zum Teilen des Bildschirms für alle."
+
+[menu.update]
+badge_progress = "v{version} · {percent} %"
+badge_version = "v{version}"
+check = "Nach Updates suchen"
+checking = "Suche nach Updates…"
+downloading = "Update wird geladen…"
+restart = "Zum Aktualisieren neu starten…"

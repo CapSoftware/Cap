@@ -21,12 +21,15 @@ about = "关于 Cap"
 hide = "隐藏 Cap"
 hide_others = "隐藏其他"
 quit = "退出 Cap"
+preferences = "偏好设置…"
 services = "服务"
 settings = "设置…"
 
 [menu.file]
 close_window = "关闭窗口"
 title = "文件"
+open_file = "打开文件…"
+import_media = "导入媒体…"
 
 [menu.edit]
 copy = "拷贝"
@@ -49,12 +52,21 @@ zoom = "缩放"
 
 [menu.help]
 title = "帮助"
+changelog = "更新日志"
+dashboard = "仪表盘"
+documentation = "文档"
+faq = "常见问题"
+self_hosting = "自托管"
+help_center = "帮助中心"
+system_status = "系统状态"
+discord = "加入 Discord 社区"
 
 [tray]
 import_media = "导入媒体..."
 no_recent_items = "没有最近的项目"
 open_main_window = "打开主窗口"
 previous = "最近项目"
+recording_mode = "录制模式"
 quit = "退出 Cap"
 record_area = "录制区域"
 record_display = "录制屏幕"
@@ -583,3 +595,11 @@ click_or_press = "点击此处，或按下"
 get_started = "开始使用"
 space_key = "空格"
 tagline = "人人可用的开源屏幕分享应用。"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "检查更新"
+checking = "正在检查更新…"
+downloading = "正在下载更新…"
+restart = "重新启动以更新…"

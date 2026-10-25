@@ -58,27 +58,27 @@ struct UpdateRow {
     badge: Option<String>,
 }
 
-const CHECK_TITLE: &str = "Check for Update";
-const CHECKING_TITLE: &str = "Checking for Update…";
-const DOWNLOAD_TITLE: &str = "Download update…";
-const RESTART_TITLE: &str = "Restart to update…";
-
-// macOS recognizes `Preferences…` as the proper menu item for settings.
-// On macOS 15+ it uses the new translation showing `Settings…` along with the gear sf symbol.
-#[cfg(target_os = "macos")]
-const SETTINGS_LABEL: &str = "Preferences…";
-#[cfg(not(target_os = "macos"))]
-const SETTINGS_LABEL: &str = "Settings…";
+fn settings_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        tr::menu::app::preferences()
+    } else {
+        tr::menu::app::settings()
+    }
+}
 
 impl UpdateRow {
     fn of(status: &updates::UpdateStatus) -> Self {
         use updates::UpdateStatus;
 
         let title = match status {
-            UpdateStatus::Idle => CHECK_TITLE,
-            UpdateStatus::Checking => CHECKING_TITLE,
-            UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => DOWNLOAD_TITLE,
-            UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => RESTART_TITLE,
+            UpdateStatus::Idle => tr::menu::update::check(),
+            UpdateStatus::Checking => tr::menu::update::checking(),
+            UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => {
+                tr::menu::update::downloading()
+            }
+            UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => {
+                tr::menu::update::restart()
+            }
         };
         Self {
             title,
@@ -96,14 +96,14 @@ fn update_menu_badge(status: &updates::UpdateStatus) -> Option<String> {
         UpdateStatus::Downloading {
             version,
             fraction: Some(fraction),
-        } => Some(format!(
-            "v{version} · {}%",
-            (fraction * 100.0).round() as u32
+        } => Some(tr::menu::update::badge_progress(
+            version,
+            (fraction * 100.0).round() as u32,
         )),
         UpdateStatus::Downloading { version, .. }
         | UpdateStatus::Ready { version }
         | UpdateStatus::Installing { version }
-        | UpdateStatus::Installed { version, .. } => Some(format!("v{version}")),
+        | UpdateStatus::Installed { version, .. } => Some(tr::menu::update::badge_version(version)),
         UpdateStatus::Idle | UpdateStatus::Checking => None,
     }
 }
@@ -336,7 +336,7 @@ pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
                 MenuItem::action(tr::menu::app::about(), About),
                 MenuItem::action(update_row.title, CheckForUpdate).disabled(!update_row.enabled),
                 MenuItem::separator(),
-                MenuItem::action(SETTINGS_LABEL, OpenSettings),
+                MenuItem::action(settings_label(), OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu(tr::menu::app::services(), SystemMenuType::Services),
                 MenuItem::separator(),
@@ -350,8 +350,8 @@ pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
             name: tr::menu::file::title().into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Open File…", OpenFile),
-                MenuItem::action("Import Media…", ImportMedia),
+                MenuItem::action(tr::menu::file::open_file(), OpenFile),
+                MenuItem::action(tr::menu::file::import_media(), ImportMedia),
                 MenuItem::separator(),
                 MenuItem::action(tr::menu::file::close_window(), CloseWindow),
             ],
@@ -409,15 +409,15 @@ pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
             name: tr::menu::help::title().into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Changelog", Changelog),
+                MenuItem::action(tr::menu::help::changelog(), Changelog),
                 MenuItem::separator(),
-                MenuItem::action("Dashboard", HelpDashboard),
-                MenuItem::action("Documentation", HelpDocs),
-                MenuItem::action("FAQ", HelpFaq),
-                MenuItem::action("Self-hosting", HelpSelfHosting),
-                MenuItem::action("Help Center", HelpCenter),
-                MenuItem::action("System Status", HelpStatus),
-                MenuItem::action("Join Discord Community", HelpDiscord),
+                MenuItem::action(tr::menu::help::dashboard(), HelpDashboard),
+                MenuItem::action(tr::menu::help::documentation(), HelpDocs),
+                MenuItem::action(tr::menu::help::faq(), HelpFaq),
+                MenuItem::action(tr::menu::help::self_hosting(), HelpSelfHosting),
+                MenuItem::action(tr::menu::help::help_center(), HelpCenter),
+                MenuItem::action(tr::menu::help::system_status(), HelpStatus),
+                MenuItem::action(tr::menu::help::discord(), HelpDiscord),
             ],
         },
     ]
@@ -1222,7 +1222,7 @@ mod tests {
                         "About Cap".to_string(),
                         "Check for Update".into(),
                         "-".into(),
-                        SETTINGS_LABEL.into(),
+                        settings_label().into(),
                         "-".into(),
                         "Services".into(),
                         "-".into(),
@@ -1312,7 +1312,7 @@ mod tests {
 
         let cold = UpdateRow::of(&downloading(None));
         let warm = UpdateRow::of(&downloading(Some(0.42)));
-        assert_eq!(cold.title, "Download update…");
+        assert_eq!(cold.title, "Downloading update…");
         assert!(cold.enabled);
         assert_eq!(warm.title, cold.title);
 

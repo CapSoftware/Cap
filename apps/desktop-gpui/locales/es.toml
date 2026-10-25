@@ -21,12 +21,15 @@ about = "Acerca de Cap"
 hide = "Ocultar Cap"
 hide_others = "Ocultar otros"
 quit = "Salir de Cap"
+preferences = "Preferencias…"
 services = "Servicios"
 settings = "Ajustes…"
 
 [menu.file]
 close_window = "Cerrar ventana"
 title = "Archivo"
+open_file = "Abrir archivo…"
+import_media = "Importar contenido…"
 
 [menu.edit]
 copy = "Copiar"
@@ -49,12 +52,21 @@ zoom = "Zoom"
 
 [menu.help]
 title = "Ayuda"
+changelog = "Registro de cambios"
+dashboard = "Panel"
+documentation = "Documentación"
+faq = "Preguntas frecuentes"
+self_hosting = "Autoalojamiento"
+help_center = "Centro de ayuda"
+system_status = "Estado del sistema"
+discord = "Unirse a la comunidad de Discord"
 
 [tray]
 import_media = "Importar contenido..."
 no_recent_items = "No hay elementos recientes"
 open_main_window = "Abrir ventana principal"
 previous = "Recientes"
+recording_mode = "Modo de grabación"
 quit = "Salir de Cap"
 record_area = "Grabar área"
 record_display = "Grabar pantalla"
@@ -583,3 +595,11 @@ click_or_press = "Haz clic aquí o pulsa"
 get_started = "Empezar"
 space_key = "Espacio"
 tagline = "La app de código abierto para compartir pantalla, para todo el mundo."
+
+[menu.update]
+badge_progress = "v{version} · {percent} %"
+badge_version = "v{version}"
+check = "Buscar actualizaciones"
+checking = "Buscando actualizaciones…"
+downloading = "Descargando actualización…"
+restart = "Reiniciar para actualizar…"
