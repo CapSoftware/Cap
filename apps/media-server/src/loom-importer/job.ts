@@ -27,6 +27,7 @@ import {
 	type Semaphore,
 } from "./fetch";
 import {
+	buildAudioOnlyArgs,
 	buildRemuxArgs,
 	chooseContainer,
 	PLAYLIST_INPUT_ARGS,
@@ -345,7 +346,10 @@ export async function runLoomImport(
 				signal,
 			);
 			const codecs = await probeCodecs(source.inputArgs, source.input, signal);
-			const container = chooseContainer(codecs);
+			const container =
+				codecs.video === null && codecs.audio !== null
+					? "audio-only"
+					: chooseContainer(codecs);
 			if (!container)
 				throw new UnsupportedStreamError(
 					`Loom source codecs are not supported (${codecs.video ?? "none"}/${codecs.audio ?? "none"})`,
@@ -357,16 +361,24 @@ export async function runLoomImport(
 			progressUpdate(job.jobId, "processing", 65, "Packaging video...");
 			outputPath = join(
 				workDir,
-				container === "mp4" ? "result.mp4" : "original.webm",
+				container === "webm" ? "original.webm" : "result.mp4",
 			);
 			await runCommand(
-				buildRemuxArgs(
-					source.inputArgs,
-					source.input,
-					outputPath,
-					container,
-					codecs.audio !== null,
-				),
+				container === "audio-only" && codecs.audio
+					? buildAudioOnlyArgs(
+							source.inputArgs,
+							source.input,
+							outputPath,
+							codecs.audio,
+							codecs.duration,
+						)
+					: buildRemuxArgs(
+							source.inputArgs,
+							source.input,
+							outputPath,
+							container === "webm" ? "webm" : "mp4",
+							codecs.audio !== null,
+						),
 				settings.remuxTimeoutMs,
 				signal,
 			);
