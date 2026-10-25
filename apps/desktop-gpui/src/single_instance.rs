@@ -956,6 +956,24 @@ fn linux_reopen_allowed(
                 && mode == Some(crate::recording::RecordingMode::Studio)))
 }
 
+/// A hidden main window maps again a moment after it is shown, and an
+/// activation sent before then has no window to raise; the compositor drops
+/// repeats once the token is used.
+#[cfg(target_os = "linux")]
+fn raise_main_with_token(token: String, cx: &mut gpui::App) {
+    let main = cx.global::<crate::app_windows::AppWindows>().main;
+    cx.spawn(async move |cx| {
+        for delay in [0, 150, 400, 1000] {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(delay))
+                .await;
+            let token = token.clone();
+            let _ = main.update(cx, |_, window, _| window.activate_window_with_token(token));
+        }
+    })
+    .detach();
+}
+
 #[cfg(target_os = "linux")]
 pub fn init_linux_reopen(cx: &mut gpui::App) {
     let requests = linux_reopen_channel().1.clone();
@@ -978,8 +996,7 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
                     crate::app_windows::show_main_window(cx);
                     if let Some(token) = token {
                         tracing::info!("raising the main window with the relaunch's activation token");
-                        let main = cx.global::<crate::app_windows::AppWindows>().main;
-                        let _ = main.update(cx, |_, window, _| window.activate_window_with_token(token));
+                        raise_main_with_token(token, cx);
                     }
                 } else {
                     tracing::info!("Cap controls remain hidden while recording is changing state or cannot pause");
