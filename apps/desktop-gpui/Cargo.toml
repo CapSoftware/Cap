@@ -102,6 +102,7 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # move gpui's own pin.
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 jpeg-decoder = "0.3"
+rxing = { version = "0.9.2", default-features = false, features = ["decoders", "encoding_rs", "full_barcode_format_support"] }
 smallvec = "1"
 # The OS language list the UI language follows when set to System default.
 # Already in this lockfile through cosmic-text.
@@ -174,6 +175,7 @@ tauri-winres = "0.3.5"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = ["test-support"] }
+rxing = { version = "0.9.2", default-features = false, features = ["encoders"] }
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in

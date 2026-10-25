@@ -8,6 +8,11 @@ use gpui::{App, ClipboardItem};
 
 use crate::app_windows;
 
+enum RecognizedText {
+    Barcode(String),
+    Ocr(String),
+}
+
 pub fn capture_text(target: ScreenCaptureTarget, cx: &mut App) {
     app_windows::ocr_capture_started(cx);
     if matches!(target, ScreenCaptureTarget::CameraOnly) {
@@ -31,10 +36,18 @@ pub fn capture_text(target: ScreenCaptureTarget, cx: &mut App) {
             .await
             .context("capturing the selected area")?;
         let recognition_image = image.clone();
-        let text = tokio::task::spawn_blocking(move || recognize_text(recognition_image))
-            .await
-            .context("the OCR task failed")??;
-        let text = text.trim().to_string();
+        let recognized_text = tokio::task::spawn_blocking(move || {
+            match crate::barcode::decode_barcode(&recognition_image) {
+                Some(payload) => Ok(RecognizedText::Barcode(payload)),
+                None => recognize_text(recognition_image).map(RecognizedText::Ocr),
+            }
+        })
+        .await
+        .context("the OCR task failed")??;
+        let text = match recognized_text {
+            RecognizedText::Barcode(payload) => payload,
+            RecognizedText::Ocr(text) => text.trim().to_string(),
+        };
         if text.is_empty() {
             return Err(anyhow!(no_text_error));
         }
