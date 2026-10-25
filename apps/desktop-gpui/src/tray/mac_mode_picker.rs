@@ -378,6 +378,32 @@ impl ModePickerView {
     }
 }
 
+/// The picker row currently installed, for an in-place menu refresh that keeps
+/// the view the user is interacting with alive.
+pub(super) fn current_item() -> Option<Retained<NSMenuItem>> {
+    PICKER.with(|p| p.borrow().as_ref().map(|(item, _)| item.clone()))
+}
+
+/// Pull the live picker back to `mode` after a refresh driven by another
+/// surface (hotkey, mode-select window) changed it under the open menu.
+pub(super) fn select_mode(mode: Mode) {
+    let Some(index) = PICKER_MODES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == mode)
+    else {
+        return;
+    };
+    PICKER.with(|p| {
+        let p = p.borrow();
+        let Some((_, view)) = p.as_ref() else {
+            return;
+        };
+        view.ivars().selected.set(index);
+        view.ivars().focused.set(Some(index));
+        view.refresh();
+    });
+}
+
 /// Appends the mode picker row to `menu` and registers one action per pill, so a click
 /// arrives through the usual tag channel as `ModeInstant` / `ModeStudio` / `ModeScreenshot`.
 pub(super) fn append_mode_picker(
@@ -442,9 +468,7 @@ pub(super) fn install_key_hook() {
         return;
     };
     let enc = unsafe {
-        let p = objc2::ffi::method_getTypeEncoding(
-            method as *const _ as *const objc2::ffi::objc_method,
-        );
+        let p = objc2::ffi::method_getTypeEncoding(method as *const objc2::runtime::Method);
         if p.is_null() {
             return;
         }
@@ -467,7 +491,7 @@ pub(super) fn install_key_hook() {
     });
     unsafe {
         let imp = objc2::ffi::imp_implementationWithBlock(&*block as *const _ as *mut AnyObject);
-        method.set_implementation(std::mem::transmute(imp));
+        method.set_implementation(imp);
     }
     std::mem::forget(block); // the replacement must outlive the process
     tracing::info!("key hook installed");

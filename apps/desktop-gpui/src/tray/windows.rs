@@ -143,6 +143,9 @@ fn build_native_menu(entries: &[Entry]) -> anyhow::Result<NativeMenu> {
     let menu = Menu::new();
     let mut actions = HashMap::new();
     for entry in entries {
+        if entry.is_alternate() {
+            continue;
+        }
         let item = build_native_item(entry, &mut actions)?;
         menu.append(item.as_ref())?;
     }
@@ -161,6 +164,8 @@ fn build_native_item(
             item,
             enabled,
             icon,
+            accelerator,
+            ..
         } => {
             let icon = icon
                 .as_deref()
@@ -172,14 +177,17 @@ fn build_native_item(
                     }
                 });
             let enabled = *enabled && item.is_some();
+            let accelerator = accelerator.map(|accelerator| {
+                menu::accelerator::Accelerator::new(Some(accelerator.modifiers), accelerator.code)
+            });
             let native_item: Box<dyn IsMenuItem> = match icon {
                 Some(icon) => Box::new(IconMenuItem::new(
                     menu_text(title),
                     enabled,
                     Some(icon),
-                    None,
+                    accelerator,
                 )),
-                None => Box::new(MenuItem::new(menu_text(title), enabled, None)),
+                None => Box::new(MenuItem::new(menu_text(title), enabled, accelerator)),
             };
             if enabled && let Some(item) = item {
                 let _ = actions.insert(native_item.id().clone(), item.clone());

@@ -23,10 +23,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use gpui::{App, Global};
 
 use crate::{
     app_windows,
+    hotkeys::{self, HotkeyAction},
     i18n::tr,
     library::{self, MediaKind},
     main_window::{Mode, TargetType},
@@ -69,6 +71,12 @@ pub enum TrayItem {
     RecordWindow,
     RecordArea,
     TakeScreenshot,
+    ScreenshotDisplay,
+    ScreenshotWindow,
+    ScreenshotArea,
+    RecordDisplayFromScreenshot,
+    RecordWindowFromScreenshot,
+    RecordAreaFromScreenshot,
     ImportMedia,
     ViewAllRecordings,
     ViewAllScreenshots,
@@ -79,6 +87,23 @@ pub enum TrayItem {
     ModeStudio,
     ModeInstant,
     ModeScreenshot,
+}
+
+/// A global hotkey as the menu renders it: the NSMenuItem key equivalent on
+/// macOS, a `muda` accelerator on Windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Accelerator {
+    pub modifiers: Modifiers,
+    pub code: Code,
+}
+
+impl From<HotKey> for Accelerator {
+    fn from(hotkey: HotKey) -> Self {
+        Self {
+            modifiers: hotkey.mods,
+            code: hotkey.key,
+        }
+    }
 }
 
 /// One row of the menu.
@@ -97,6 +122,11 @@ pub enum Entry {
         /// image -- Windows draws it; macOS draws `row_symbol`'s SF Symbol
         /// instead (photos aside).
         icon: Option<Vec<u8>>,
+        /// The row's global shortcut, if one is registered for its action.
+        accelerator: Option<Accelerator>,
+        /// An AppKit alternate row: hidden until Option is held, when it
+        /// replaces the row before it. Windows ignores these.
+        alternate: bool,
     },
     Submenu {
         title: String,
@@ -180,14 +210,21 @@ fn menu_icon(name: &str) -> Option<Vec<u8>> {
 /// (the chrome rows, the mode rows of the pre-14 menu) stay bare on both.
 #[cfg(target_os = "macos")]
 fn row_symbol(item: &TrayItem) -> Option<&'static str> {
+    let window_symbol = if objc2::available!(macos = 26.0) {
+        "interface.window"
+    } else {
+        "macwindow"
+    };
     match item {
-        TrayItem::RecordDisplay => Some("display"),
-        TrayItem::RecordWindow => Some(if objc2::available!(macos = 26.0) {
-            "interface.window"
-        } else {
-            "macwindow"
-        }),
-        TrayItem::RecordArea => Some("rectangle.dashed"),
+        TrayItem::RecordDisplay
+        | TrayItem::ScreenshotDisplay
+        | TrayItem::RecordDisplayFromScreenshot => Some("display"),
+        TrayItem::RecordWindow
+        | TrayItem::ScreenshotWindow
+        | TrayItem::RecordWindowFromScreenshot => Some(window_symbol),
+        TrayItem::RecordArea | TrayItem::ScreenshotArea | TrayItem::RecordAreaFromScreenshot => {
+            Some("rectangle.dashed")
+        }
         TrayItem::TakeScreenshot => Some("camera.on.rectangle"),
         TrayItem::ImportMedia => Some("square.and.arrow.down"),
         TrayItem::OpenSettings => Some("gear"),
@@ -206,6 +243,8 @@ impl Entry {
             item: Some(item),
             enabled: true,
             icon: None,
+            accelerator: None,
+            alternate: false,
         }
     }
 
@@ -216,6 +255,20 @@ impl Entry {
             item: Some(item),
             enabled: true,
             icon: menu_icon(icon),
+            accelerator: None,
+            alternate: false,
+        }
+    }
+
+    /// The Option-held twin of the row before it.
+    fn alternate(title: impl Into<String>, item: TrayItem, icon: &str) -> Self {
+        Self::Item {
+            title: title.into(),
+            item: Some(item),
+            enabled: true,
+            icon: menu_icon(icon),
+            accelerator: None,
+            alternate: true,
         }
     }
 
@@ -227,7 +280,19 @@ impl Entry {
             item: None,
             enabled: false,
             icon: None,
+            accelerator: None,
+            alternate: false,
         }
+    }
+
+    fn is_alternate(&self) -> bool {
+        matches!(
+            self,
+            Self::Item {
+                alternate: true,
+                ..
+            }
+        )
     }
 }
 
@@ -398,6 +463,8 @@ fn previous_submenu(previous: &[PreviousItem]) -> Entry {
                 item: Some(TrayItem::PreviousItem(item.path.clone())),
                 enabled: true,
                 icon: item.thumbnail.clone(),
+                accelerator: None,
+                alternate: false,
             })
             .collect(),
     }
@@ -440,6 +507,69 @@ fn mode_submenu(mode: Mode) -> Entry {
     }
 }
 
+fn capture_title(target: TargetType, screenshot: bool) -> &'static str {
+    match (target, screenshot) {
+        (TargetType::Display, true) => tr::tray::screenshot_display(),
+        (TargetType::Window, true) => tr::tray::screenshot_window(),
+        (TargetType::Area, true) => tr::tray::screenshot_area(),
+        (TargetType::Display, false) => tr::tray::record_display(),
+        (TargetType::Window, false) => tr::tray::record_window(),
+        (TargetType::Area, false) => tr::tray::record_area(),
+        (TargetType::CameraOnly, _) => "",
+    }
+}
+
+fn capture_icon(target: TargetType) -> &'static str {
+    match target {
+        TargetType::Display => "display",
+        TargetType::Window => "window",
+        TargetType::Area => "area",
+        TargetType::CameraOnly => "display",
+    }
+}
+
+fn capture_item(target: TargetType) -> TrayItem {
+    match target {
+        TargetType::Display => TrayItem::RecordDisplay,
+        TargetType::Window => TrayItem::RecordWindow,
+        TargetType::Area => TrayItem::RecordArea,
+        TargetType::CameraOnly => TrayItem::RecordDisplay,
+    }
+}
+
+fn alternate_capture_item(target: TargetType, screenshot: bool) -> TrayItem {
+    match (target, screenshot) {
+        (TargetType::Display, true) => TrayItem::ScreenshotDisplay,
+        (TargetType::Window, true) => TrayItem::ScreenshotWindow,
+        (TargetType::Area, true) => TrayItem::ScreenshotArea,
+        (TargetType::Display, false) => TrayItem::RecordDisplayFromScreenshot,
+        (TargetType::Window, false) => TrayItem::RecordWindowFromScreenshot,
+        (TargetType::Area, false) => TrayItem::RecordAreaFromScreenshot,
+        (TargetType::CameraOnly, _) => TrayItem::RecordDisplayFromScreenshot,
+    }
+}
+
+/// A capture row as the menu normally shows it, or the Option-held alternate
+/// for the other action set: in a recording mode Option previews the screenshot
+/// rows, and in Screenshot mode it previews the recording rows.
+fn capture_entry(target: TargetType, mode: Mode, alternate: bool) -> Entry {
+    let screenshot = (mode == Mode::Screenshot) ^ alternate;
+    let icon = capture_icon(target);
+    if alternate {
+        Entry::alternate(
+            capture_title(target, screenshot),
+            alternate_capture_item(target, screenshot),
+            icon,
+        )
+    } else {
+        Entry::icon_item(
+            capture_title(target, screenshot),
+            capture_item(target),
+            icon,
+        )
+    }
+}
+
 /// `build_tray_menu`, minus the onboarding-minimal branch.
 pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
@@ -454,38 +584,13 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
         entries.push(Entry::Separator);
     }
 
-    if mode == Mode::Screenshot {
-        entries.push(Entry::icon_item(
-            tr::tray::screenshot_display(),
-            TrayItem::RecordDisplay,
-            "display",
-        ));
-        entries.push(Entry::icon_item(
-            tr::tray::screenshot_window(),
-            TrayItem::RecordWindow,
-            "window",
-        ));
-        entries.push(Entry::icon_item(
-            tr::tray::screenshot_area(),
-            TrayItem::RecordArea,
-            "area",
-        ));
-    } else {
-        entries.push(Entry::icon_item(
-            tr::tray::record_display(),
-            TrayItem::RecordDisplay,
-            "display",
-        ));
-        entries.push(Entry::icon_item(
-            tr::tray::record_window(),
-            TrayItem::RecordWindow,
-            "window",
-        ));
-        entries.push(Entry::icon_item(
-            tr::tray::record_area(),
-            TrayItem::RecordArea,
-            "area",
-        ));
+    for target in [TargetType::Display, TargetType::Window, TargetType::Area] {
+        entries.push(capture_entry(target, mode, false));
+        if cfg!(target_os = "macos") {
+            entries.push(capture_entry(target, mode, true));
+        }
+    }
+    if mode != Mode::Screenshot {
         entries.push(Entry::icon_item(
             tr::tray::take_screenshot(),
             TrayItem::TakeScreenshot,
@@ -545,11 +650,63 @@ pub fn build_onboarding_menu(version: &str) -> Vec<Entry> {
     ]
 }
 
+/// The hotkey that performs a capture row's action. The same row means a
+/// recording or a screenshot depending on the mode, so the lookup follows the
+/// mode and the alternate's own action.
+fn hotkey_action(item: &TrayItem, mode: Mode) -> Option<HotkeyAction> {
+    let screenshot = mode == Mode::Screenshot;
+    match item {
+        TrayItem::RecordDisplay => Some(if screenshot {
+            HotkeyAction::ScreenshotDisplay
+        } else {
+            HotkeyAction::OpenRecordingPickerDisplay
+        }),
+        TrayItem::RecordWindow => Some(if screenshot {
+            HotkeyAction::ScreenshotWindow
+        } else {
+            HotkeyAction::OpenRecordingPickerWindow
+        }),
+        TrayItem::RecordArea => Some(if screenshot {
+            HotkeyAction::ScreenshotArea
+        } else {
+            HotkeyAction::OpenRecordingPickerArea
+        }),
+        TrayItem::TakeScreenshot => Some(HotkeyAction::ScreenshotDisplay),
+        TrayItem::ScreenshotDisplay => Some(HotkeyAction::ScreenshotDisplay),
+        TrayItem::ScreenshotWindow => Some(HotkeyAction::ScreenshotWindow),
+        TrayItem::ScreenshotArea => Some(HotkeyAction::ScreenshotArea),
+        TrayItem::RecordDisplayFromScreenshot => Some(HotkeyAction::OpenRecordingPickerDisplay),
+        TrayItem::RecordWindowFromScreenshot => Some(HotkeyAction::OpenRecordingPickerWindow),
+        TrayItem::RecordAreaFromScreenshot => Some(HotkeyAction::OpenRecordingPickerArea),
+        _ => None,
+    }
+}
+
+fn decorate_accelerators(entries: &mut [Entry], mode: Mode, cx: &App) {
+    for entry in entries {
+        match entry {
+            Entry::Item {
+                item: Some(item),
+                accelerator,
+                ..
+            } => {
+                *accelerator = hotkey_action(item, mode)
+                    .and_then(|action| hotkeys::accelerator(action, cx))
+                    .map(Into::into);
+            }
+            Entry::Submenu { items, .. } => decorate_accelerators(items, mode, cx),
+            _ => {}
+        }
+    }
+}
+
 fn current_menu_entries(cx: &App, mode: Mode, previous: &[PreviousItem]) -> Vec<Entry> {
     if crate::app_windows::onboarding_is_open(cx) && !crate::permissions::necessary_granted() {
         return build_onboarding_menu(crate::menus::app_version());
     }
-    build_menu(mode, previous, crate::menus::app_version())
+    let mut entries = build_menu(mode, previous, crate::menus::app_version());
+    decorate_accelerators(&mut entries, mode, cx);
+    entries
 }
 
 // ---------------------------------------------------------------------------
@@ -571,17 +728,35 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         TrayItem::RecordDisplay => app_windows::arm_target_mode(TargetType::Display, cx),
         TrayItem::RecordWindow => app_windows::arm_target_mode(TargetType::Window, cx),
         TrayItem::RecordArea => app_windows::arm_target_mode(TargetType::Area, cx),
-        TrayItem::TakeScreenshot => {
-            // `TrayItem::TakeScreenshot` captures the display under the
-            // cursor, primary as the fallback (`tray.rs:816` over there).
-            let display = scap_targets::Display::get_containing_cursor()
-                .unwrap_or_else(scap_targets::Display::primary);
-            crate::screenshot::take_screenshot(
-                cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
-                    id: display.id(),
+        // `TrayItem::TakeScreenshot` captures the display under the cursor,
+        // primary as the fallback (`tray.rs:816` over there).
+        TrayItem::TakeScreenshot | TrayItem::ScreenshotDisplay => take_display_screenshot(cx),
+        TrayItem::ScreenshotWindow => match crate::devices::topmost_foreign_window_at_cursor() {
+            Some(window) => crate::screenshot::take_screenshot(
+                cap_recording::sources::screen_capture::ScreenCaptureTarget::Window {
+                    id: window.id(),
                 },
                 cx,
-            );
+            ),
+            None => tracing::warn!("no window under the cursor to screenshot"),
+        },
+        TrayItem::ScreenshotArea => {
+            set_mode(Mode::Screenshot, cx);
+            app_windows::arm_target_mode(TargetType::Area, cx);
+        }
+        // Option in Screenshot mode previews the recording rows: recording is
+        // not a mode Screenshot can start from, so Studio is chosen first.
+        TrayItem::RecordDisplayFromScreenshot => {
+            set_mode(Mode::Studio, cx);
+            app_windows::arm_target_mode(TargetType::Display, cx);
+        }
+        TrayItem::RecordWindowFromScreenshot => {
+            set_mode(Mode::Studio, cx);
+            app_windows::arm_target_mode(TargetType::Window, cx);
+        }
+        TrayItem::RecordAreaFromScreenshot => {
+            set_mode(Mode::Studio, cx);
+            app_windows::arm_target_mode(TargetType::Area, cx);
         }
         // `TrayItem::ImportVideo` (`src-tauri/src/tray.rs:839-911`): one
         // picker over both media filters, routed by extension.
@@ -608,6 +783,15 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         TrayItem::ModeInstant => set_mode(Mode::Instant, cx),
         TrayItem::ModeScreenshot => set_mode(Mode::Screenshot, cx),
     }
+}
+
+fn take_display_screenshot(cx: &mut App) {
+    let display = scap_targets::Display::get_containing_cursor()
+        .unwrap_or_else(scap_targets::Display::primary);
+    crate::screenshot::take_screenshot(
+        cap_recording::sources::screen_capture::ScreenCaptureTarget::Display { id: display.id() },
+        cx,
+    );
 }
 
 /// `handle_mode_selection`: persist, swap the icon, rebuild the menu. All three
@@ -700,6 +884,9 @@ fn stop_recording(cx: &mut App) {
 pub fn describe_menu(entries: &[Entry]) -> String {
     fn walk(entries: &[Entry], depth: usize, out: &mut String) {
         for entry in entries {
+            if entry.is_alternate() {
+                continue;
+            }
             let pad = "  ".repeat(depth);
             match entry {
                 Entry::Separator => out.push_str(&format!("{pad}---\n")),
@@ -840,7 +1027,7 @@ mod mac {
     };
     use objc2_foundation::{MainThreadMarker, NSData, NSString};
 
-    use super::mac_mode_picker::{append_mode_picker, install_key_hook};
+    use super::mac_mode_picker::{append_mode_picker, current_item, install_key_hook, select_mode};
     use super::{
         Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem, current_menu_entries,
         handle_item, mode_icon, mode_submenu, row_symbol, scan_previous, stop_recording,
@@ -854,12 +1041,10 @@ mod mac {
     const ICON_HEIGHT: f64 = 18.0;
     /// Not a menu item: the status button itself, clicked mid-recording.
     const STOP_TAG: isize = -1;
-    const REBUILD_TAG: isize = -2;
 
     thread_local! {
         static TRAY_TX: RefCell<Option<flume::Sender<isize>>> = const { RefCell::new(None) };
         static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
-        static REBUILD_PENDING: Cell<bool> = const { Cell::new(false) };
     }
 
     define_class!(
@@ -901,9 +1086,6 @@ mod mac {
             #[unsafe(method(menuDidClose:))]
             fn menu_did_close(&self, _menu: &NSMenu) {
                 MENU_OPEN.with(|o| o.set(false));
-                if REBUILD_PENDING.with(|p| p.replace(false)) {
-                    post(REBUILD_TAG); // handled by the drain, with a clean borrow
-                }
             }
         }
     );
@@ -955,10 +1137,6 @@ mod mac {
                             stop_recording(cx);
                             return;
                         }
-                        REBUILD_TAG => {
-                            rebuild(cx);
-                            return;
-                        }
                         _ => {}
                     }
                     let item = cx.global::<Tray>().actions.get(tag as usize).cloned();
@@ -990,45 +1168,43 @@ mod mac {
     }
 
     fn create_status_item() -> Option<Tray> {
-        unsafe {
-            let mtm = MainThreadMarker::new()?;
-            let status_item =
-                NSStatusBar::systemStatusBar().statusItemWithLength(NS_VARIABLE_STATUS_ITEM_LENGTH);
-            let target: Retained<TrayTarget> = unsafe { msg_send![TrayTarget::alloc(mtm), init] };
+        let mtm = MainThreadMarker::new()?;
+        let status_item =
+            NSStatusBar::systemStatusBar().statusItemWithLength(NS_VARIABLE_STATUS_ITEM_LENGTH);
+        let target: Retained<TrayTarget> = unsafe { msg_send![TrayTarget::alloc(mtm), init] };
 
-            let mode = Mode::from_store();
-            let tray = Tray {
-                status_item,
-                target,
-                menu: None,
-                actions: Vec::new(),
-                mode,
-                previous: Vec::new(),
-                previous_generation: 0,
-                recording: false,
-            };
-            set_button_image(&tray, mode_icon(mode));
-            let button = tray.status_item.button(mtm);
-            let frame = button.as_ref().map_or_else(
-                || {
-                    objc2_foundation::NSRect::new(
-                        objc2_foundation::NSPoint::new(0.0, 0.0),
-                        objc2_foundation::NSSize::new(0.0, 0.0),
-                    )
-                },
-                |button| button.frame(),
-            );
+        let mode = Mode::from_store();
+        let tray = Tray {
+            status_item,
+            target,
+            menu: None,
+            actions: Vec::new(),
+            mode,
+            previous: Vec::new(),
+            previous_generation: 0,
+            recording: false,
+        };
+        set_button_image(&tray, mode_icon(mode));
+        let button = tray.status_item.button(mtm);
+        let frame = button.as_ref().map_or_else(
+            || {
+                objc2_foundation::NSRect::new(
+                    objc2_foundation::NSPoint::new(0.0, 0.0),
+                    objc2_foundation::NSSize::new(0.0, 0.0),
+                )
+            },
+            |button| button.frame(),
+        );
 
-            tracing::info!(
-                has_button = button.is_some(),
-                visible = tray.status_item.isVisible(),
-                width = frame.size.width,
-                height = frame.size.height,
-                ?mode,
-                "status item created"
-            );
-            Some(tray)
-        }
+        tracing::info!(
+            has_button = button.is_some(),
+            visible = tray.status_item.isVisible(),
+            width = frame.size.width,
+            height = frame.size.height,
+            ?mode,
+            "status item created"
+        );
+        Some(tray)
     }
 
     /// `set_icon_for_ns_status_item_button`: an 18pt-tall template image on the
@@ -1096,29 +1272,40 @@ mod mac {
 
     /// Rebuild the menu from the current mode and Previous cache, and attach it
     /// (unless a recording is running, in which case the *button* owns the
-    /// click -- see [`set_recording`]).
+    /// click -- see [`set_recording`]). While the menu is open the rows are
+    /// replaced in place instead, so a mode picked from the custom picker
+    /// updates the capture actions without closing the menu.
     pub fn rebuild(cx: &mut App) {
-        if MENU_OPEN.with(Cell::get) {
-            REBUILD_PENDING.with(|p| p.set(true));
-            return;
-        }
         if !cx.has_global::<Tray>() {
             return;
         }
-
-        if !cx.has_global::<Tray>() {
-            return;
-        }
-        let (mode, previous) = {
+        let (mode, previous, target, open) = {
             let tray = cx.global::<Tray>();
-            (tray.mode, tray.previous.clone())
+            (
+                tray.mode,
+                tray.previous.clone(),
+                tray.target.clone(),
+                MENU_OPEN.with(Cell::get),
+            )
         };
         let entries = current_menu_entries(cx, mode, &previous);
-
         let mut actions = Vec::new();
-        let tray = cx.global::<Tray>();
-        let menu = build_ns_menu(&entries, &tray.target, &mut actions);
-        menu.setDelegate(Some(ProtocolObject::from_ref(&*tray.target)));
+
+        if open {
+            let Some(menu) = cx.global::<Tray>().menu.clone() else {
+                return;
+            };
+            let picker = current_item();
+            fill_ns_menu(&menu, &entries, &target, &mut actions, picker.as_deref());
+            menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+            menu.update();
+            select_mode(mode);
+            cx.global_mut::<Tray>().actions = actions;
+            return;
+        }
+
+        let menu = build_ns_menu(&entries, &target, &mut actions);
+        menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
 
         let tray = cx.global::<Tray>();
         if !tray.recording {
@@ -1139,11 +1326,55 @@ mod mac {
             MainThreadMarker::new().expect("tray menu construction must run on the main thread");
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
+        fill_ns_menu(&menu, entries, target, actions, None);
+        menu
+    }
 
+    fn fill_ns_menu(
+        menu: &NSMenu,
+        entries: &[Entry],
+        target: &TrayTarget,
+        actions: &mut Vec<TrayItem>,
+        reuse_picker: Option<&NSMenuItem>,
+    ) {
+        let mtm =
+            MainThreadMarker::new().expect("tray menu construction must run on the main thread");
+
+        if let Some(picker) = reuse_picker
+            && let picker_index = menu.indexOfItem(picker)
+            && picker_index >= 0
+        {
+            for index in (picker_index + 1..menu.numberOfItems()).rev() {
+                menu.removeItemAtIndex(index);
+            }
+            let mut picker_seen = false;
+            for entry in entries {
+                if let Entry::ModePicker { .. } = entry {
+                    actions.extend([
+                        TrayItem::ModeStudio,
+                        TrayItem::ModeInstant,
+                        TrayItem::ModeScreenshot,
+                    ]);
+                    picker_seen = true;
+                    continue;
+                }
+                let item = build_ns_item(entry, target, actions, mtm);
+                if !picker_seen {
+                    continue;
+                }
+                if entry.is_alternate() {
+                    item.setAlternate(true);
+                }
+                menu.addItem(&item);
+            }
+            return;
+        }
+
+        menu.removeAllItems();
         for entry in entries {
             if let Entry::ModePicker { mode } = entry {
                 if objc2::available!(macos = 14.0) {
-                    append_mode_picker(&menu, *mode, actions, mtm);
+                    append_mode_picker(menu, *mode, actions, mtm);
                 } else {
                     let submenu = mode_submenu(*mode);
                     menu.addItem(&build_ns_item(&submenu, target, actions, mtm));
@@ -1151,10 +1382,11 @@ mod mac {
                 continue;
             }
             let item = build_ns_item(entry, target, actions, mtm);
+            if entry.is_alternate() {
+                item.setAlternate(true);
+            }
             menu.addItem(&item);
         }
-
-        menu
     }
 
     fn build_ns_item(
@@ -1174,6 +1406,8 @@ mod mac {
                 item,
                 enabled,
                 icon,
+                accelerator,
+                ..
             } => {
                 let menu_item = new_menu_item(title, Some(sel!(capTrayItem:)), mtm);
                 unsafe { menu_item.setTarget(Some(target)) };
@@ -1181,6 +1415,12 @@ mod mac {
                 if let Some(item) = item {
                     menu_item.setTag(actions.len() as isize);
                     actions.push(item.clone());
+                }
+                if let Some(accelerator) = accelerator
+                    && let Some(key) = key_equivalent(accelerator.code)
+                {
+                    menu_item.setKeyEquivalent(&NSString::from_str(&key));
+                    menu_item.setKeyEquivalentModifierMask(modifier_flags(accelerator.modifiers));
                 }
                 if *item == Some(TrayItem::OpenSettings) {
                     menu_item.setKeyEquivalent(&NSString::from_str(","));
@@ -1253,6 +1493,115 @@ mod mac {
                 menu_item
             }
         }
+    }
+
+    pub(super) fn modifier_flags(modifiers: super::Modifiers) -> NSEventModifierFlags {
+        let mut flags = NSEventModifierFlags::empty();
+        if modifiers.contains(super::Modifiers::SUPER) {
+            flags |= NSEventModifierFlags::Command;
+        }
+        if modifiers.contains(super::Modifiers::CONTROL) {
+            flags |= NSEventModifierFlags::Control;
+        }
+        if modifiers.contains(super::Modifiers::ALT) {
+            flags |= NSEventModifierFlags::Option;
+        }
+        if modifiers.contains(super::Modifiers::SHIFT) {
+            flags |= NSEventModifierFlags::Shift;
+        }
+        flags
+    }
+
+    /// The character AppKit wants for a menu key equivalent. Function keys use
+    /// the `NSF1FunctionKey`..`NSF35FunctionKey` private-use range.
+    pub(super) fn key_equivalent(code: super::Code) -> Option<String> {
+        use super::Code;
+
+        let character = match code {
+            Code::KeyA => "a",
+            Code::KeyB => "b",
+            Code::KeyC => "c",
+            Code::KeyD => "d",
+            Code::KeyE => "e",
+            Code::KeyF => "f",
+            Code::KeyG => "g",
+            Code::KeyH => "h",
+            Code::KeyI => "i",
+            Code::KeyJ => "j",
+            Code::KeyK => "k",
+            Code::KeyL => "l",
+            Code::KeyM => "m",
+            Code::KeyN => "n",
+            Code::KeyO => "o",
+            Code::KeyP => "p",
+            Code::KeyQ => "q",
+            Code::KeyR => "r",
+            Code::KeyS => "s",
+            Code::KeyT => "t",
+            Code::KeyU => "u",
+            Code::KeyV => "v",
+            Code::KeyW => "w",
+            Code::KeyX => "x",
+            Code::KeyY => "y",
+            Code::KeyZ => "z",
+            Code::Digit0 => "0",
+            Code::Digit1 => "1",
+            Code::Digit2 => "2",
+            Code::Digit3 => "3",
+            Code::Digit4 => "4",
+            Code::Digit5 => "5",
+            Code::Digit6 => "6",
+            Code::Digit7 => "7",
+            Code::Digit8 => "8",
+            Code::Digit9 => "9",
+            Code::Backquote => "`",
+            Code::Backslash => "\\",
+            Code::BracketLeft => "[",
+            Code::BracketRight => "]",
+            Code::Comma => ",",
+            Code::Equal => "=",
+            Code::Minus => "-",
+            Code::Period => ".",
+            Code::Quote => "'",
+            Code::Semicolon => ";",
+            Code::Slash => "/",
+            Code::Space => " ",
+            Code::Enter => "\r",
+            Code::Tab => "\t",
+            Code::Escape => "\u{1b}",
+            Code::Backspace => "\u{8}",
+            Code::Delete => "\u{7f}",
+            Code::ArrowUp => "\u{f700}",
+            Code::ArrowDown => "\u{f701}",
+            Code::ArrowLeft => "\u{f702}",
+            Code::ArrowRight => "\u{f703}",
+            Code::Home => "\u{f729}",
+            Code::End => "\u{f72b}",
+            Code::PageUp => "\u{f72c}",
+            Code::PageDown => "\u{f72d}",
+            Code::F1 => "\u{f704}",
+            Code::F2 => "\u{f705}",
+            Code::F3 => "\u{f706}",
+            Code::F4 => "\u{f707}",
+            Code::F5 => "\u{f708}",
+            Code::F6 => "\u{f709}",
+            Code::F7 => "\u{f70a}",
+            Code::F8 => "\u{f70b}",
+            Code::F9 => "\u{f70c}",
+            Code::F10 => "\u{f70d}",
+            Code::F11 => "\u{f70e}",
+            Code::F12 => "\u{f70f}",
+            Code::F13 => "\u{f710}",
+            Code::F14 => "\u{f711}",
+            Code::F15 => "\u{f712}",
+            Code::F16 => "\u{f713}",
+            Code::F17 => "\u{f714}",
+            Code::F18 => "\u{f715}",
+            Code::F19 => "\u{f716}",
+            Code::F20 => "\u{f717}",
+            _ => return None,
+        };
+        Some(character.to_string())
     }
 
     fn new_menu_item(
@@ -1652,6 +2001,7 @@ mod tests {
     fn titles(entries: &[Entry]) -> Vec<String> {
         entries
             .iter()
+            .filter(|entry| !entry.is_alternate())
             .map(|entry| match entry {
                 Entry::Separator => "-".to_string(),
                 Entry::ModePicker { mode } => mode_name(*mode).to_string(),
@@ -1827,5 +2177,159 @@ mod tests {
                 vec!["Upload Logs", "Cap v0.1.0"]
             }
         );
+    }
+    fn capture_rows(mode: Mode) -> Vec<Entry> {
+        build_menu(mode, &[], "0.1.0")
+            .into_iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    Entry::Item {
+                        item: Some(
+                            TrayItem::RecordDisplay
+                                | TrayItem::RecordWindow
+                                | TrayItem::RecordArea
+                                | TrayItem::ScreenshotDisplay
+                                | TrayItem::ScreenshotWindow
+                                | TrayItem::ScreenshotArea
+                                | TrayItem::RecordDisplayFromScreenshot
+                                | TrayItem::RecordWindowFromScreenshot
+                                | TrayItem::RecordAreaFromScreenshot
+                        ),
+                        ..
+                    }
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn capture_rows_switch_their_alternates_with_the_mode() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+
+        for (mode, normal_titles, alternate_titles, normal_items, alternate_items) in [
+            (
+                Mode::Studio,
+                ["Record Display", "Record Window", "Record Area"],
+                ["Screenshot Display", "Screenshot Window", "Screenshot Area"],
+                [
+                    TrayItem::RecordDisplay,
+                    TrayItem::RecordWindow,
+                    TrayItem::RecordArea,
+                ],
+                [
+                    TrayItem::ScreenshotDisplay,
+                    TrayItem::ScreenshotWindow,
+                    TrayItem::ScreenshotArea,
+                ],
+            ),
+            (
+                Mode::Screenshot,
+                ["Screenshot Display", "Screenshot Window", "Screenshot Area"],
+                ["Record Display", "Record Window", "Record Area"],
+                [
+                    TrayItem::RecordDisplay,
+                    TrayItem::RecordWindow,
+                    TrayItem::RecordArea,
+                ],
+                [
+                    TrayItem::RecordDisplayFromScreenshot,
+                    TrayItem::RecordWindowFromScreenshot,
+                    TrayItem::RecordAreaFromScreenshot,
+                ],
+            ),
+        ] {
+            let rows = capture_rows(mode);
+            let mut seen_normal = Vec::new();
+            let mut seen_alternate = Vec::new();
+            for entry in rows {
+                let Entry::Item {
+                    title,
+                    item,
+                    alternate,
+                    ..
+                } = entry
+                else {
+                    continue;
+                };
+                if alternate {
+                    seen_alternate.push((title, item));
+                } else {
+                    seen_normal.push((title, item));
+                }
+            }
+            assert_eq!(
+                seen_normal,
+                normal_titles
+                    .into_iter()
+                    .zip(normal_items)
+                    .map(|(title, item)| (title.to_string(), Some(item)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                seen_alternate,
+                alternate_titles
+                    .into_iter()
+                    .zip(alternate_items)
+                    .map(|(title, item)| (title.to_string(), Some(item)))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn screenshot_mode_drops_take_a_screenshot_and_recording_mode_keeps_it() {
+        let has = |mode| {
+            build_menu(mode, &[], "0.1.0").iter().any(|entry| {
+                matches!(
+                    entry,
+                    Entry::Item {
+                        item: Some(TrayItem::TakeScreenshot),
+                        ..
+                    }
+                )
+            })
+        };
+        assert!(has(Mode::Studio));
+        assert!(has(Mode::Instant));
+        assert!(!has(Mode::Screenshot));
+    }
+
+    #[test]
+    fn capture_rows_look_up_their_mode_specific_hotkey() {
+        assert_eq!(
+            hotkey_action(&TrayItem::RecordDisplay, Mode::Studio),
+            Some(HotkeyAction::OpenRecordingPickerDisplay)
+        );
+        assert_eq!(
+            hotkey_action(&TrayItem::RecordDisplay, Mode::Screenshot),
+            Some(HotkeyAction::ScreenshotDisplay)
+        );
+        assert_eq!(
+            hotkey_action(&TrayItem::TakeScreenshot, Mode::Studio),
+            Some(HotkeyAction::ScreenshotDisplay)
+        );
+        assert_eq!(
+            hotkey_action(&TrayItem::ScreenshotWindow, Mode::Studio),
+            Some(HotkeyAction::ScreenshotWindow)
+        );
+        assert_eq!(
+            hotkey_action(&TrayItem::RecordWindowFromScreenshot, Mode::Screenshot),
+            Some(HotkeyAction::OpenRecordingPickerWindow)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accelerators_render_as_appkit_key_equivalents() {
+        let flags = mac::modifier_flags(Modifiers::SUPER | Modifiers::SHIFT);
+        assert!(flags.contains(objc2_app_kit::NSEventModifierFlags::Command));
+        assert!(flags.contains(objc2_app_kit::NSEventModifierFlags::Shift));
+        assert_eq!(mac::key_equivalent(Code::Digit4).as_deref(), Some("4"));
+        assert_eq!(mac::key_equivalent(Code::KeyS).as_deref(), Some("s"));
+        assert_eq!(mac::key_equivalent(Code::F1).as_deref(), Some("\u{f704}"));
+        assert_eq!(mac::key_equivalent(Code::MetaLeft), None);
     }
 }
