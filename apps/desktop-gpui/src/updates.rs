@@ -283,13 +283,19 @@ fn harness_update_version() -> Option<Version> {
 
 #[cfg(debug_assertions)]
 fn simulate_update(version: Version, cx: &mut App) {
-    tracing::info!(%version, "CAP_GPUI_AUTO_UPDATE: simulating update");
-    set_status(UpdateStatus::Checking, cx);
+    tracing::info!(%version, "CAP_GPUI_AUTO_UPDATE: simulating download");
+    set_status(
+        UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction: Some(0.0),
+        },
+        cx,
+    );
     cx.spawn(async move |cx| {
         cx.background_executor()
             .timer(Duration::from_millis(600))
             .await;
-        for step in 0..=10u8 {
+        for step in 1..=10u8 {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
                 .await;
