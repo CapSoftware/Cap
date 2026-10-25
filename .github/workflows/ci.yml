@@ -147,6 +147,7 @@ jobs:
           __tests__/unit/playback-store.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/seo-demo-videos.test.ts
+          __tests__/unit/share-page-round-trips.test.ts
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/space-folder-page-access.test.ts
           __tests__/unit/space-page-round-trips.test.ts
@@ -159,6 +160,7 @@ jobs:
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
           __tests__/unit/video-analytics-access.test.ts
+          __tests__/unit/video-download-permissions.test.ts
           __tests__/unit/voice-note-playback.test.ts
 
       - name: Typecheck
