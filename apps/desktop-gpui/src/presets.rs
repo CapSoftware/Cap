@@ -145,6 +145,7 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
         map.insert("timeline".into(), Value::Null);
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
+        map.remove("lockedTracks");
     }
     value
 }
@@ -161,6 +162,7 @@ pub fn apply_preset(
     next.text_size_version = current.text_size_version;
     next.text_anim_version = current.text_anim_version;
     next.overlay_order = current.overlay_order.clone();
+    next.locked_tracks = current.locked_tracks.clone();
     next.clips = current.clips.clone();
     Some(next)
 }
@@ -264,6 +266,23 @@ mod tests {
         assert_eq!(applied.background.blur, 42.);
         assert_eq!(applied.overlay_order, current.overlay_order);
         assert!(applied.timeline.is_some(), "current timeline is kept");
+    }
+
+    #[test]
+    fn track_locks_stay_with_the_project_not_the_preset() {
+        let current = ProjectConfiguration {
+            locked_tracks: vec![cap_project::LockableTimelineTrack::Zoom],
+            ..Default::default()
+        };
+        let mut preset_source = ProjectConfiguration::default();
+        preset_source.locked_tracks = vec![cap_project::LockableTimelineTrack::Text];
+        let preset = preset_config(&preset_source);
+        assert!(preset.get("lockedTracks").is_none(), "presets never store locks");
+
+        let applied = apply_preset(&preset, &current).expect("preset deserializes");
+        assert_eq!(applied.locked_tracks, current.locked_tracks);
+        let unlocked = apply_preset(&preset, &ProjectConfiguration::default()).unwrap();
+        assert!(unlocked.locked_tracks.is_empty(), "a preset doesn't lock tracks");
     }
 
     #[test]

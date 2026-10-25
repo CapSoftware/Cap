@@ -7233,6 +7233,7 @@ impl EditorWindow {
         let mut next = crate::presets::default_project_config();
         next.timeline = self.project.timeline.clone();
         next.overlay_order = self.project.overlay_order.clone();
+        next.locked_tracks = self.project.locked_tracks.clone();
         next.clips = self.project.clips.clone();
         self.apply_project_preset(next, window, cx);
     }
