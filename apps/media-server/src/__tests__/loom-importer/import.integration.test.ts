@@ -233,6 +233,8 @@ describe("runLoomImport", () => {
 				"video.m3u8",
 			].join("\n"),
 		);
+		await cp(audioOnly, join(root, "hls-audio-gap"), { recursive: true });
+		await rm(join(root, "hls-audio-gap", "audio-001.ts"));
 		ffmpeg(
 			[
 				"-f",
@@ -511,6 +513,29 @@ describe("runLoomImport", () => {
 		expect(uploads.get("hls-audio/thumbnail.jpg")?.byteLength).toBeGreaterThan(
 			0,
 		);
+	}, 60_000);
+
+	test("keeps the full length of an audio-only recording with a missing segment", async () => {
+		const job = await run(
+			request(
+				"hls-audio-gap",
+				`${base}/media/hls-audio-gap/master.m3u8?${SIGNATURE}`,
+			),
+		);
+		expect(job?.phase).toBe("complete");
+		const imported = join(root, "audio-gap.mp4");
+		await writeFile(
+			imported,
+			uploads.get("hls-audio-gap/result.mp4") ?? new Uint8Array(),
+		);
+		const output = probe(imported);
+		expect(Number(output.format.duration)).toBeCloseTo(7, 0);
+		expect(
+			Number(
+				output.streams.find((stream) => stream.codec_type === "video")
+					?.start_time,
+			),
+		).toBe(0);
 	}, 60_000);
 
 	test("imports an Opus-only file as an MP4 with AAC audio", async () => {

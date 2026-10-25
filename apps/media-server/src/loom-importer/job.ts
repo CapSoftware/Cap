@@ -176,6 +176,7 @@ function progressUpdate(
 interface PreparedSource {
 	input: string;
 	inputArgs: string[];
+	skippedSeconds: number;
 }
 
 async function prepareSource(
@@ -203,7 +204,7 @@ async function prepareSource(
 		);
 		if (result.bytes > maxBytes)
 			throw new Error("Loom imports are limited to 10 GB");
-		return { input: sourcePath, inputArgs: [] };
+		return { input: sourcePath, inputArgs: [], skippedSeconds: 0 };
 	}
 	const manifestDir = join(workDir, "manifest");
 	const segmentDir = join(workDir, "segments");
@@ -243,6 +244,7 @@ async function prepareSource(
 	return {
 		input: prefetched.masterPath,
 		inputArgs: PLAYLIST_INPUT_ARGS(await getFfmpegHlsCapabilities()),
+		skippedSeconds: prefetched.skippedSeconds,
 	};
 }
 
@@ -370,7 +372,9 @@ export async function runLoomImport(
 							source.input,
 							outputPath,
 							codecs.audio,
-							codecs.duration,
+							codecs.duration === null
+								? null
+								: codecs.duration + source.skippedSeconds,
 						)
 					: buildRemuxArgs(
 							source.inputArgs,

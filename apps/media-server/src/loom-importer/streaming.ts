@@ -186,6 +186,7 @@ export interface PrefetchResult {
 	masterPath: string;
 	bytes: number;
 	segments: number;
+	skippedSeconds: number;
 }
 
 const MISSING_SEGMENT_FRACTION = 0.01;
@@ -251,11 +252,14 @@ export async function prefetchMaterializedHls(
 		tracks.map(async (track) => {
 			const content = await readFile(track.path, "utf8");
 			const resources = listMediaPlaylistResources(content);
+			const lines = content.split(/\r?\n/);
 			return {
 				...track,
-				lines: content.split(/\r?\n/),
+				lines,
 				resources,
-				segments: resources.filter((resource) => !resource.attribute).length,
+				durations: resources
+					.filter((resource) => !resource.attribute)
+					.map((resource) => segmentDuration(lines, resource.lineIndex)),
 			};
 		}),
 	);
@@ -263,6 +267,7 @@ export async function prefetchMaterializedHls(
 		playlist.resources.map((resource, index) => ({
 			playlist,
 			resource,
+			duration: segmentDuration(playlist.lines, resource.lineIndex),
 			path: join(
 				workDir,
 				`${playlist.name}-${String(index).padStart(6, "0")}${segmentExtension(resource.url)}`,
@@ -300,12 +305,12 @@ export async function prefetchMaterializedHls(
 								throw error;
 							missing.add(download);
 							progress.completedSegments++;
-							const lost = [...missing].filter(
-								(entry) => entry.playlist === download.playlist,
-							).length;
-							if (lost > missingSegmentLimit(download.playlist.segments)) {
+							const lost = [...missing]
+								.filter((entry) => entry.playlist === download.playlist)
+								.map((entry) => entry.duration);
+							if (!canSkipMissingSegments(lost, download.playlist.durations)) {
 								const tooMany = new Error(
-									`Loom is missing ${lost} of ${download.playlist.segments} ${download.playlist.name} segments`,
+									`Loom is missing ${lost.length} of ${download.playlist.durations.length} ${download.playlist.name} segments`,
 								);
 								failure.abort(tooMany);
 								throw tooMany;
@@ -340,19 +345,6 @@ export async function prefetchMaterializedHls(
 		options.signal.throwIfAborted();
 		throw failure.signal.reason ?? rejected.reason;
 	}
-	for (const playlist of playlists) {
-		const media = downloads.filter(
-			(download) =>
-				download.playlist === playlist && !download.resource.attribute,
-		);
-		const durationOf = (download: (typeof downloads)[number]) =>
-			segmentDuration(playlist.lines, download.resource.lineIndex);
-		const lost = media.filter((download) => missing.has(download));
-		if (!canSkipMissingSegments(lost.map(durationOf), media.map(durationOf)))
-			throw new Error(
-				`Loom is missing ${lost.length} of ${media.length} ${playlist.name} segments`,
-			);
-	}
 	for (const download of downloads) {
 		if (missing.has(download)) {
 			removeSegmentLines(download.playlist.lines, download.resource.lineIndex);
@@ -374,11 +366,16 @@ export async function prefetchMaterializedHls(
 	const audioPlaylist = selection.audio
 		? localPlaylists.get(selection.audio)
 		: undefined;
-	if (
-		audioPlaylist &&
+	const audioOnly =
+		audioPlaylist !== undefined &&
 		(playlistBytes.get("video") ?? 0) === 0 &&
-		(playlistBytes.get("audio") ?? 0) > 0
-	) {
+		(playlistBytes.get("audio") ?? 0) > 0;
+	const skippedSeconds = [...missing]
+		.filter(
+			(download) => download.playlist.name === (audioOnly ? "audio" : "video"),
+		)
+		.reduce((sum, download) => sum + download.duration, 0);
+	if (audioOnly && audioPlaylist) {
 		await writeFile(localMasterPath, await readFile(audioPlaylist, "utf8"));
 	} else if (selection.masterLines.length > 0) {
 		await writeFile(
@@ -404,5 +401,6 @@ export async function prefetchMaterializedHls(
 		masterPath: localMasterPath,
 		bytes: progress.bytes,
 		segments: downloads.length,
+		skippedSeconds,
 	};
 }
