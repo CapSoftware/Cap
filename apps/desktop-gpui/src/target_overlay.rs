@@ -580,8 +580,9 @@ fn area_from_anchor_with_ratio(
 }
 
 /// An edge-handle resize at `ratio`: the opposite edge stays put, the dragged
-/// span follows the pointer, and the other span grows around the area's
-/// centre line, shrinking to stay on the display.
+/// edge follows the pointer to whichever side of it the pointer is, and the
+/// other span grows around the area's centre line, shrinking to stay on the
+/// display.
 fn area_edge_resize_with_ratio(
     handle: AreaHandle,
     start: AreaRect,
@@ -589,29 +590,24 @@ fn area_edge_resize_with_ratio(
     ratio: f32,
     display: (f32, f32),
 ) -> AreaRect {
-    let horizontal = handle.east() || handle.west();
     let (center_x, center_y) = (start.x + start.width / 2., start.y + start.height / 2.);
-    if horizontal {
+    if handle.east() || handle.west() {
         let anchor = if handle.west() {
             start.right()
         } else {
             start.x
         };
-        let mut width = (pointer.0 - anchor).abs();
-        let room_x = if handle.west() {
-            anchor
-        } else {
-            display.0 - anchor
-        };
+        let before = pointer.0 < anchor;
+        let room_x = if before { anchor } else { display.0 - anchor };
         let room_y = 2. * center_y.min(display.1 - center_y);
-        width = width.min(room_x).min(room_y * ratio).max(0.);
+        let width = (pointer.0 - anchor)
+            .abs()
+            .min(room_x)
+            .min(room_y * ratio)
+            .max(0.);
         let height = width / ratio;
         AreaRect {
-            x: if handle.west() {
-                anchor - width
-            } else {
-                anchor
-            },
+            x: if before { anchor - width } else { anchor },
             y: center_y - height / 2.,
             width,
             height,
@@ -622,22 +618,18 @@ fn area_edge_resize_with_ratio(
         } else {
             start.y
         };
-        let mut height = (pointer.1 - anchor).abs();
-        let room_y = if handle.north() {
-            anchor
-        } else {
-            display.1 - anchor
-        };
+        let before = pointer.1 < anchor;
+        let room_y = if before { anchor } else { display.1 - anchor };
         let room_x = 2. * center_x.min(display.0 - center_x);
-        height = height.min(room_y).min(room_x / ratio).max(0.);
+        let height = (pointer.1 - anchor)
+            .abs()
+            .min(room_y)
+            .min(room_x / ratio)
+            .max(0.);
         let width = height * ratio;
         AreaRect {
             x: center_x - width / 2.,
-            y: if handle.north() {
-                anchor - height
-            } else {
-                anchor
-            },
+            y: if before { anchor - height } else { anchor },
             width,
             height,
         }
@@ -2987,6 +2979,16 @@ mod tests {
             area_edge_resize_with_ratio(AreaHandle::East, start, (1000., 0.), ratio, display);
         assert_eq!((east.x, east.width), (400., 600.));
         assert_eq!(east.y + east.height / 2., 500.);
+        // Past the opposite edge, the selection follows the pointer over it.
+        let crossed =
+            area_edge_resize_with_ratio(AreaHandle::East, start, (300., 0.), ratio, display);
+        assert_eq!((crossed.x, crossed.width), (300., 100.));
+        let crossed =
+            area_edge_resize_with_ratio(AreaHandle::South, start, (0., 200.), ratio, display);
+        assert_eq!((crossed.y, crossed.height), (200., 100.));
+        let crossed =
+            area_edge_resize_with_ratio(AreaHandle::West, start, (900., 0.), ratio, display);
+        assert_eq!((crossed.x, crossed.width), (800., 100.));
     }
 
     #[test]

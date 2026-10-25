@@ -454,15 +454,15 @@ pub enum CaptionSlider {
     Size,
     BackgroundOpacity,
     FadeDuration,
-    /// Manual placement, as a percentage of the frame width.
     ManualX,
-    /// Manual placement, as a percentage of the frame height.
     ManualY,
 }
 
-/// Where a preset places the caption's centre, as fractions of the frame
-/// (`captionPositionCenter`, `CaptionsTab.tsx:362-378`). Manual placement
-/// starts here, so switching to it does not move the captions.
+/// Where Manual placement starts for each preset, as fractions of the frame
+/// (`captionPositionCenter`, `CaptionsTab.tsx:362-378`). Centred presets keep
+/// their spot exactly. The renderer draws left and right presets from a 5%
+/// margin rather than centring them there, and the box width is only known
+/// to the renderer, so those start against the frame edge instead.
 pub fn caption_position_center(position: &str) -> (f32, f32) {
     match position {
         "top-left" => (0.05, 0.08),
@@ -474,7 +474,6 @@ pub fn caption_position_center(position: &str) -> (f32, f32) {
     }
 }
 
-/// The manual caption centre: the stored one, else the preset's.
 pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
     settings.manual_position.map_or_else(
         || caption_position_center(&settings.position),
@@ -482,7 +481,6 @@ pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
     )
 }
 
-/// Moves the manual caption centre, given as percentages of the frame.
 pub fn set_caption_manual_center(settings: &mut CaptionSettings, x: Option<f32>, y: Option<f32>) {
     let (current_x, current_y) = caption_manual_center(settings);
     let fraction = |value: f32| (value / 100.).clamp(0., 1.);
