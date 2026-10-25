@@ -2440,14 +2440,27 @@ impl EditorWindow {
         self.project_changed_inner(true, window, cx);
     }
 
-    /// [`Self::project_changed`] for edits that only write `background.frame`.
+    /// [`Self::project_changed`] for edits that cannot change the drawn
+    /// timeline model.
     ///
-    /// [`crate::editor_timeline::TimelineModel::build`] never reads the frame
-    /// or the background (the style track draws a segment's name and enabled
-    /// flag only), so a frame edit can skip the rebuild. The frame text fields
-    /// call this once per keystroke; any edit that touches a field the timeline
-    /// model reads must go through [`Self::project_changed`] instead.
-    fn project_changed_without_timeline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// [`crate::editor_timeline::TimelineModel::build`] reads segment arrays,
+    /// track enabled flags, overlay order, audio levels, and whether a camera
+    /// exists; [`crate::editor_timeline::TrackLanes::from_project`] reads the
+    /// same segment and track state. Neither reads the frame, background
+    /// styling, camera geometry, cursor styling, caption/keyboard styling, or
+    /// color correction, so edits to those fields can skip the rebuild.
+    ///
+    /// The frame text fields, the classified background/camera/cursor/
+    /// caption/keyboard sliders, color-grade sliders, and animated-gradient
+    /// parameter/stop/add/remove/reset edits call this. Audio levels, clip
+    /// volume, panel sliders, animated-gradient preset selection, and any edit
+    /// that touches a field the timeline model or lanes read still go through
+    /// [`Self::project_changed`].
+    pub(crate) fn project_changed_without_timeline(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.project_changed_inner(false, window, cx);
     }
 
