@@ -782,19 +782,19 @@ mod mac {
             tracing::warn!("Could not register Open Recent menu name: {error:?}");
         }
 
-        let clear_item = NSMenuItem::new(main_thread);
-        clear_item.setTitle(&NSString::from_str("Clear Menu"));
-        unsafe { clear_item.setAction(Some(sel!(clearRecentDocuments:))) };
-        recent_menu.addItem(&clear_item);
-
         let recent_item = NSMenuItem::new(main_thread);
         recent_item.setTitle(&NSString::from_str("Open Recent"));
         recent_item.setSubmenu(Some(&recent_menu));
         file_menu.insertItem_atIndex(&recent_item, OPEN_RECENT_ROW);
 
+        // NSDocumentController owns the recent items and the standard
+        // "Clear Menu" validation; it only needs the empty, named submenu.
         let controller = NSDocumentController::sharedDocumentController(main_thread);
         let can_install_menu: bool =
             unsafe { msg_send![&*controller, respondsToSelector: sel!(_installOpenRecentMenus)] };
+        // Each menu-bar rebuild creates a fresh named submenu, so bind the
+        // controller to this instance. Recent-document updates afterwards are
+        // handled by NSDocumentController, not by another install call.
         if can_install_menu {
             unsafe {
                 let _: () = msg_send![&*controller, _installOpenRecentMenus];
