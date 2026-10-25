@@ -143,9 +143,6 @@ fn build_native_menu(entries: &[Entry]) -> anyhow::Result<NativeMenu> {
     let menu = Menu::new();
     let mut actions = HashMap::new();
     for entry in entries {
-        if entry.is_alternate() {
-            continue;
-        }
         let item = build_native_item(entry, &mut actions)?;
         menu.append(item.as_ref())?;
     }

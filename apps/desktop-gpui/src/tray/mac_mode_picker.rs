@@ -6,29 +6,38 @@
 //! seam every other tray action uses.
 
 use std::cell::{Cell, RefCell};
+use std::ptr::NonNull;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSColor, NSEvent, NSEventType, NSFont,
-    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightMedium, NSFontWeightSemibold,
-    NSForegroundColorAttributeName, NSImageScaling, NSImageSymbolConfiguration, NSImageView,
-    NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSAppearance, NSAppearanceCustomization, NSColor, NSEvent, NSEventTrackingRunLoopMode,
+    NSEventType, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightSemibold,
+    NSForegroundColorAttributeName, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem,
+    NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSDictionary, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSTimer,
+};
 use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
 
-use super::mac::{post, symbol_image};
-use super::{TrayItem, mode_name};
+use super::mac::{post, set_status_mode};
+use super::{TrayItem, menu_icon, mode_name};
 use crate::main_window::Mode;
 
 const PICKER_MODES: [(Mode, TrayItem, &str); 3] = [
-    (Mode::Instant, TrayItem::ModeInstant, "bolt.fill"),
-    (Mode::Studio, TrayItem::ModeStudio, "film"),
-    (Mode::Screenshot, TrayItem::ModeScreenshot, "photo"),
+    (Mode::Instant, TrayItem::ModeInstant, "mode-instant"),
+    (Mode::Studio, TrayItem::ModeStudio, "mode-studio"),
+    (
+        Mode::Screenshot,
+        TrayItem::ModeScreenshot,
+        "mode-screenshot",
+    ),
 ];
+
+const FLASH_INTERVAL: f64 = 0.06;
 
 const PICKER_TITLE: &str = "Recording Mode";
 const PICKER_W: f64 = 300.0;
@@ -48,11 +57,14 @@ thread_local! {
     /// The live picker and its menu item, read by the key hook. Set on every rebuild.
     static PICKER: RefCell<Option<(Retained<NSMenuItem>, Retained<ModePickerView>)>> =
         const { RefCell::new(None) };
+    static FLASH_TIMER: RefCell<Option<Retained<NSTimer>>> = const { RefCell::new(None) };
+    static FLASH_STEP: Cell<u8> = const { Cell::new(0) };
 }
 
 struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
+    flash: Cell<bool>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
     capsule: RefCell<Option<Retained<CALayer>>>,
@@ -137,6 +149,7 @@ impl ModePickerView {
         let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
             selected: Cell::new(selected),
             focused: Cell::new(None),
+            flash: Cell::new(false),
             tag_base,
             capsule: RefCell::new(None),
             pills: RefCell::new(Vec::new()),
@@ -163,14 +176,15 @@ impl ModePickerView {
                 .push(make_layer(PILL_RADIUS));
         }
 
-        for (_, _, symbol) in PICKER_MODES.iter() {
+        for (_, _, icon) in PICKER_MODES.iter() {
             let view = NSImageView::new(mtm);
-            if let Some(base) = symbol_image(symbol) {
-                let cfg = NSImageSymbolConfiguration::configurationWithPointSize_weight(
-                    SYMBOL_SIZE,
-                    unsafe { NSFontWeightMedium },
-                );
-                view.setImage(base.imageWithSymbolConfiguration(&cfg).as_deref());
+            if let Some(bytes) = menu_icon(icon)
+                && let Some(image) =
+                    NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes))
+            {
+                image.setSize(NSSize::new(SYMBOL_SIZE, SYMBOL_SIZE));
+                image.setTemplate(true);
+                view.setImage(Some(&image));
             }
             view.setImageScaling(NSImageScaling::ScaleNone);
             this.addSubview(&view);
@@ -264,12 +278,15 @@ impl ModePickerView {
             cap.setBackgroundColor(Some(&color));
         }
 
+        let accent = NSColor::controlAccentColor();
+        let white = NSColor::whiteColor();
+        let flash = self.ivars().flash.get();
         let icons = self.ivars().icons.borrow();
         for (i, pill) in self.ivars().pills.borrow().iter().enumerate() {
             let is_sel = i == selected;
             let is_hover = focused == Some(i) && !is_sel;
             let fill = if is_sel {
-                NSColor::whiteColor()
+                if flash { white.clone() } else { accent.clone() }
             } else if is_hover {
                 label.colorWithAlphaComponent(0.14)
             } else {
@@ -283,7 +300,7 @@ impl ModePickerView {
             if let Some(icon) = icons.get(i) {
                 icon.setFrame(r);
                 let tint = if is_sel {
-                    NSColor::selectedContentBackgroundColor()
+                    if flash { accent.clone() } else { white.clone() }
                 } else {
                     label.clone()
                 };
@@ -343,12 +360,37 @@ impl ModePickerView {
 
     // -- actions -----------------------------------------------------------
 
-    /// Selects pill `i` and posts its tag. Deliberately does not close the menu.
+    /// Selects pill `i`, flashes it twice like a clicked AppKit menu item, then
+    /// closes the menu.
     fn choose(&self, i: usize) {
+        if FLASH_TIMER.with(|timer| timer.borrow().is_some()) {
+            return;
+        }
+        let mode = PICKER_MODES[i].0;
         self.ivars().selected.set(i);
         self.ivars().focused.set(Some(i));
+        self.ivars().flash.set(true);
         self.refresh();
         post(self.ivars().tag_base + i as isize);
+        super::mac::apply(mode, super::mac::current_option());
+        set_status_mode(mode);
+
+        let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
+            flash_step();
+        });
+        let timer =
+            unsafe { NSTimer::timerWithTimeInterval_repeats_block(FLASH_INTERVAL, true, &block) };
+        let run_loop = NSRunLoop::currentRunLoop();
+        unsafe {
+            run_loop.addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
+        }
+        FLASH_TIMER.with(|slot| *slot.borrow_mut() = Some(timer));
+    }
+
+    fn set_flash(&self, flash: bool) {
+        if self.ivars().flash.replace(flash) != flash {
+            self.refresh();
+        }
     }
 
     /// Moves keyboard focus one pill. Returns false at either end, so the key falls
@@ -378,10 +420,38 @@ impl ModePickerView {
     }
 }
 
-/// The picker row currently installed, for an in-place menu refresh that keeps
-/// the view the user is interacting with alive.
-pub(super) fn current_item() -> Option<Retained<NSMenuItem>> {
-    PICKER.with(|p| p.borrow().as_ref().map(|(item, _)| item.clone()))
+fn flash_step() {
+    let step = FLASH_STEP.with(|step| {
+        let next = step.get().wrapping_add(1);
+        step.set(next);
+        next
+    });
+    if step >= 3 {
+        stop_flash();
+        PICKER.with(|p| {
+            if let Some((item, view)) = p.borrow().as_ref() {
+                view.set_flash(false);
+                if let Some(menu) = unsafe { item.menu() } {
+                    menu.cancelTracking();
+                }
+            }
+        });
+        return;
+    }
+    PICKER.with(|p| {
+        if let Some((_, view)) = p.borrow().as_ref() {
+            view.set_flash(step.is_multiple_of(2));
+        }
+    });
+}
+
+pub(super) fn stop_flash() {
+    FLASH_TIMER.with(|slot| {
+        if let Some(timer) = slot.borrow_mut().take() {
+            timer.invalidate();
+        }
+    });
+    FLASH_STEP.with(|step| step.set(0));
 }
 
 /// Pull the live picker back to `mode` after a refresh driven by another
