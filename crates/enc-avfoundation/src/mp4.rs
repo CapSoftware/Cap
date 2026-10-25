@@ -4362,7 +4362,9 @@ mod tests {
                 cidre::cv::PixelFormat::_2VUY,
                 cidre::cv::PixelFormat::_420V,
             ] {
-                let case = format!("{writer_width}x{writer_height} writer, {frame_width}x{frame_height} {format:?} frames");
+                let case = format!(
+                    "{writer_width}x{writer_height} writer, {frame_width}x{frame_height} {format:?} frames"
+                );
                 let output = test_output_path("camera_size_from_first_frame");
                 let pixel = if format == cidre::cv::PixelFormat::_32_BGRA {
                     ffmpeg::format::Pixel::BGRA
@@ -4371,8 +4373,7 @@ mod tests {
                 } else {
                     ffmpeg::format::Pixel::NV12
                 };
-                let config =
-                    VideoInfo::from_raw_ffmpeg(pixel, writer_width, writer_height, 30);
+                let config = VideoInfo::from_raw_ffmpeg(pixel, writer_width, writer_height, 30);
                 let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
                 let pool = create_pixel_buffer_pool_with_format(
                     frame_width as usize,
