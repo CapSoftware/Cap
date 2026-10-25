@@ -24,16 +24,23 @@ eval "$(systemctl --user show-environment | grep -E "^(WAYLAND_DISPLAY|XDG_SESSI
 if [[ ${WALLPAPER:-} == swaybg ]]; then
   expected=/tmp/cap-wallpaper.png
   python3 - "$expected" <<'PY'
+import struct
 import sys
+import zlib
 
-import gi
+width, height = 640, 360
+rows = b"".join(b"\x00" + bytes((0x2E, 0x8B, 0x57)) * width for _ in range(height))
 
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf
 
-image = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 640, 360)
-image.fill(0x2E8B57FF)
-image.savev(sys.argv[1], "png", [], [])
+def chunk(kind, body):
+    return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+
+with open(sys.argv[1], "wb") as png:
+    png.write(b"\x89PNG\r\n\x1a\n")
+    png.write(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)))
+    png.write(chunk(b"IDAT", zlib.compress(rows)))
+    png.write(chunk(b"IEND", b""))
 PY
   swaybg -i "$expected" -m fill >"$out/swaybg.log" 2>&1 &
   sleep 1
