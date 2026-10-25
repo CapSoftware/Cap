@@ -99,7 +99,6 @@ impl PillAccessibilityElement {
 struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
-    pressed: Cell<Option<usize>>,
     flash: Cell<bool>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
@@ -177,16 +176,13 @@ define_class!(
         }
 
         #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, event: &NSEvent) {
-            // Only remember the press. The selection and the commit happen
-            // together on mouse-up, so a release that never reaches this view
-            // cannot leave the picker showing an unapplied mode.
-            self.ivars().pressed.set(self.pill_at(event));
-        }
+        fn mouse_down(&self, _event: &NSEvent) {}
 
         #[unsafe(method(mouseUp:))]
-        fn mouse_up(&self, _event: &NSEvent) {
-            if let Some(i) = self.ivars().pressed.take() {
+        fn mouse_up(&self, event: &NSEvent) {
+            // The release point chooses the pill; a release outside the menu
+            // changes nothing, so the shown and applied modes stay in sync.
+            if let Some(i) = self.pill_at(event) {
                 self.choose(i);
             }
         }
@@ -204,7 +200,6 @@ impl ModePickerView {
         let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
             selected: Cell::new(selected),
             focused: Cell::new(None),
-            pressed: Cell::new(None),
             flash: Cell::new(false),
             tag_base,
             capsule: RefCell::new(None),
@@ -319,7 +314,10 @@ impl ModePickerView {
     }
 
     fn pill_at(&self, event: &NSEvent) -> Option<usize> {
-        let p = self.convertPoint_fromView(event.locationInWindow(), None);
+        self.pill_at_point(self.convertPoint_fromView(event.locationInWindow(), None))
+    }
+
+    fn pill_at_point(&self, p: NSPoint) -> Option<usize> {
         (0..PICKER_MODES.len()).find(|&i| {
             let r = self.pill_rect(i);
             p.x >= r.origin.x - PILL_GAP / 2.0
@@ -327,6 +325,18 @@ impl ModePickerView {
                 && p.y >= r.origin.y
                 && p.y <= r.origin.y + r.size.height
         })
+    }
+
+    fn hover_from_pointer(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let point = self.convertPoint_fromView(window.mouseLocationOutsideOfEventStream(), None);
+        let hit = self.pill_at_point(point);
+        if self.ivars().focused.get() != hit {
+            self.ivars().focused.set(hit);
+            self.refresh();
+        }
     }
 
     // -- state -> visuals --------------------------------------------------
@@ -549,6 +559,14 @@ pub(super) fn clear_hover() {
     PICKER.with(|p| {
         if let Some((_, view)) = p.borrow().as_ref() {
             view.clear_focus();
+        }
+    });
+}
+
+pub(super) fn hover_from_pointer() {
+    PICKER.with(|p| {
+        if let Some((_, view)) = p.borrow().as_ref() {
+            view.hover_from_pointer();
         }
     });
 }
