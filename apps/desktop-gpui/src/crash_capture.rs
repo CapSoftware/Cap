@@ -53,10 +53,13 @@ pub fn install(logs_dir: &Path) {
         }
         Err(error) => tracing::warn!(%error, "could not open the crash record file"),
     }
-    report_previous_session(logs_dir);
+    let owns_session = report_previous_session(logs_dir);
     install_panic_hook();
     native::install();
-    capture_stderr(logs_dir);
+    // A second instance hands off and exits; the running one keeps its files.
+    if owns_session {
+        capture_stderr(logs_dir);
+    }
 }
 
 /// Clears the session marker; call from the app's quit path.
@@ -76,21 +79,22 @@ fn record(text: &str) {
     }
 }
 
-fn report_previous_session(logs_dir: &Path) {
+/// False when another running Cap owns the session marker.
+fn report_previous_session(logs_dir: &Path) -> bool {
     let marker = logs_dir.join(SESSION_FILE);
-    if let Ok(previous) = std::fs::read_to_string(&marker) {
-        let previous = previous.trim();
-        let pid = previous
-            .split_whitespace()
-            .find_map(|field| field.strip_prefix("pid="))
-            .and_then(|pid| pid.parse::<u32>().ok());
-        if pid.is_some_and(|pid| pid != std::process::id() && !process_alive(pid)) {
+    let previous = std::fs::read_to_string(&marker).ok();
+    match classify_previous(previous.as_deref(), std::process::id(), process_alive) {
+        // Another Cap is running and owns the marker: this launch is a second
+        // instance about to hand off and exit, and must not overwrite it.
+        Previous::Running => return false,
+        Previous::Unclean(previous) => {
             tracing::error!(previous = %previous, "the previous Cap session ended without a clean quit");
             record(&format!(
                 "{} previous session ended without a clean quit: {previous}\n",
                 now()
             ));
         }
+        Previous::None => {}
     }
     let contents = format!(
         "pid={} started={} version={}\n",
@@ -100,6 +104,28 @@ fn report_previous_session(logs_dir: &Path) {
     );
     if std::fs::write(&marker, contents).is_ok() {
         let _ = SESSION_MARKER.set(marker);
+    }
+    true
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Previous {
+    None,
+    Running,
+    Unclean(String),
+}
+
+fn classify_previous(marker: Option<&str>, own_pid: u32, alive: impl Fn(u32) -> bool) -> Previous {
+    let Some(marker) = marker.map(str::trim).filter(|marker| !marker.is_empty()) else {
+        return Previous::None;
+    };
+    let pid = marker
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("pid="))
+        .and_then(|pid| pid.parse::<u32>().ok());
+    match pid {
+        Some(pid) if pid != own_pid && alive(pid) => Previous::Running,
+        _ => Previous::Unclean(marker.to_string()),
     }
 }
 
@@ -510,6 +536,35 @@ mod native {
         let mut out = [0u8; 16];
         out[..width].copy_from_slice(&digits[16 - width..]);
         out
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::{Previous, classify_previous};
+
+    #[test]
+    fn a_marker_left_behind_is_an_unclean_end_unless_its_process_still_runs() {
+        let marker = "pid=41 started=2026-10-25T00:00:00.000Z version=0.6.1";
+        assert_eq!(classify_previous(None, 7, |_| false), Previous::None);
+        assert_eq!(classify_previous(Some(" \n"), 7, |_| false), Previous::None);
+        assert_eq!(
+            classify_previous(Some(marker), 7, |_| false),
+            Previous::Unclean(marker.into())
+        );
+        assert_eq!(
+            classify_previous(Some(marker), 7, |pid| pid == 41),
+            Previous::Running
+        );
+        // A reused pid that is now this process is still a dead session.
+        assert_eq!(
+            classify_previous(Some(marker), 41, |_| true),
+            Previous::Unclean(marker.into())
+        );
+        assert_eq!(
+            classify_previous(Some("garbage"), 7, |_| true),
+            Previous::Unclean("garbage".into())
+        );
     }
 }
 
