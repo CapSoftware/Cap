@@ -1328,7 +1328,10 @@ fn with_instant_metadata_lock<T>(
     update()
 }
 
-fn save_instant_metadata(meta: &cap_project::RecordingMeta) -> anyhow::Result<()> {
+pub(crate) const INSTANT_STOPPED_BEFORE_COMPLETION: &str =
+    "instant recording stopped before completion";
+
+pub(crate) fn save_instant_metadata(meta: &cap_project::RecordingMeta) -> anyhow::Result<()> {
     let contents = serde_json::to_vec_pretty(meta)?;
     write_instant_metadata(&meta.project_path, |file| file.write_all(&contents))
 }
@@ -1950,7 +1953,7 @@ fn persist_instant_meta(
             .to_string();
         let meta = match &completed.meta {
             InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
-                error: "instant recording stopped before completion".to_string(),
+                error: INSTANT_STOPPED_BEFORE_COMPLETION.to_string(),
             },
             other => other.clone(),
         };
