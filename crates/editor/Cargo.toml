@@ -26,6 +26,10 @@ path = "examples/audio-output-idle-benchmark.rs"
 name = "editor-startup-benchmark"
 path = "examples/editor-startup-benchmark.rs"
 
+[features]
+# Offline audio output for the cap-verify suite. Never enabled by the app.
+test-hooks = []
+
 [dependencies]
 cap-utils = { path = "../utils" }
 cap-media = { path = "../media" }
@@ -47,14 +51,14 @@ sentry.workspace = true
 futures = { workspace = true }
 tracing.workspace = true
 flume.workspace = true
-tokio-util = "0.7.15"
+tokio-util = { version = "0.7.15", features = ["rt"] }
 ringbuf = "0.4.8"
 lru = "0.12"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = ["Win32_Media"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Media", "Win32_Security", "Win32_System_Threading"] }
 
 [dev-dependencies]
 cap-audio = { path = "../audio", features = ["test-support"] }

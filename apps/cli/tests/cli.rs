@@ -238,6 +238,67 @@ fn project_inspect_missing_fails() {
 }
 
 #[test]
+fn project_commands_report_duration_for_readable_media() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("recording.cap");
+    write_test_media(&project.join("content/display.mp4"));
+    write_single_segment_meta(&project);
+
+    for command in ["validate", "inspect"] {
+        let output = run(&[
+            "project",
+            command,
+            project.to_str().unwrap(),
+            "--format",
+            "json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{command} stderr: {}",
+            stderr(&output)
+        );
+        let json = parse_json(&output);
+        let duration = json["durationSeconds"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{command} did not report durationSeconds: {json}"));
+        assert!(
+            (duration - 1.0).abs() < 0.25,
+            "{command} reported unexpected duration {duration}"
+        );
+    }
+}
+
+#[test]
+fn project_commands_omit_duration_for_unreadable_media() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("recording.cap");
+    let content = project.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(content.join("display.mp4"), b"fake").unwrap();
+    write_single_segment_meta(&project);
+
+    for command in ["validate", "inspect"] {
+        let output = run(&[
+            "project",
+            command,
+            project.to_str().unwrap(),
+            "--format",
+            "json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{command} stderr: {}",
+            stderr(&output)
+        );
+        let json = parse_json(&output);
+        assert!(
+            json.get("durationSeconds").is_none(),
+            "{command} reported a duration for unreadable media: {json}"
+        );
+    }
+}
+
+#[test]
 fn project_validate_missing_meta_reports_invalid() {
     let dir = tempfile::tempdir().unwrap();
     let output = run(&[
@@ -373,6 +434,36 @@ fn record_rejects_zero_fps() {
 }
 
 #[test]
+fn record_validation_failures_emit_json_error_events() {
+    for command in [
+        &["record"][..],
+        &["record", "start"][..],
+        &["record", "start", "--detach"][..],
+    ] {
+        for json_flag in [&["--json"][..], &["--format", "json"][..]] {
+            for (params, expected_error) in [
+                (&["--duration", "0"][..], "Duration"),
+                (&["--duration", "NaN"][..], "Duration"),
+                (&["--duration", "inf"][..], "Duration"),
+                (&["--fps", "0", "--duration", "1"][..], "--fps"),
+                (&["--duration", "1"][..], "No target specified"),
+            ] {
+                let mut args = command.to_vec();
+                args.extend_from_slice(json_flag);
+                args.extend_from_slice(params);
+                let output = run(&args);
+                assert_eq!(output.status.code(), Some(1), "args: {args:?}");
+                let json = parse_json(&output);
+                assert_eq!(json["type"], "error", "args: {args:?}");
+                let error = json["error"].as_str().expect("expected an error message");
+                assert!(error.contains(expected_error), "args: {args:?}: {error}");
+                assert!(stderr(&output).contains(error), "args: {args:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn export_rejects_settings_json_with_flags() {
     let output = run(&[
         "export",
@@ -437,6 +528,56 @@ fn export_rejects_duplicate_output() {
 }
 
 #[test]
+fn export_several_projects_requires_output_directory() {
+    let output = run(&["export", "/tmp/whatever.cap", "/tmp/also.cap"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("output directory"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn export_batch_reports_every_failed_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(&[
+        "export",
+        "/tmp/whatever.cap",
+        "/tmp/also.cap",
+        "-o",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert_eq!(
+        text.matches("Failed to export ").count(),
+        2,
+        "stderr: {text}"
+    );
+}
+
+#[test]
+fn export_batch_json_streams_file_events_and_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(&[
+        "export",
+        "/tmp/whatever.cap",
+        "/tmp/also.cap",
+        "-o",
+        dir.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(!output.status.success());
+    let text = stdout(&output);
+    for event in ["\"FileStarted\"", "\"FileFailed\"", "\"BatchCompleted\""] {
+        assert!(text.contains(event), "stdout missing {event}: {text}");
+    }
+    let last = text.lines().last().unwrap_or_default();
+    assert!(last.contains("\"Error\""), "last line: {last}");
+}
+
+#[test]
 fn targets_mics_json_is_parseable() {
     let output = run(&["targets", "mics", "--format", "json"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
@@ -466,6 +607,51 @@ fn recordings_list_empty_dir_is_empty_json() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
     assert_eq!(json.as_array().map(|a| a.len()), Some(0));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recordings_list_follows_desktop_storage_unless_dir_is_explicit() {
+    let root = tempfile::tempdir().unwrap();
+    let app_data = root.path().join("so.cap.desktop");
+    let default = app_data.join("recordings");
+    let current = root.path().join("custom");
+    let previous = root.path().join("previous");
+    for dir in [&default, &current, &previous] {
+        write_single_segment_meta(&dir.join("example.cap"));
+    }
+    std::fs::write(
+        app_data.join("store"),
+        serde_json::to_vec(&serde_json::json!({
+            "general_settings": {
+                "recordingsPath": current,
+                "previousRecordingsPaths": [previous, current]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let list = |dir: Option<&Path>| {
+        let mut command = cap();
+        command
+            .env("XDG_DATA_HOME", root.path())
+            .args(["recordings", "list", "--json"]);
+        if let Some(dir) = dir {
+            command.arg("--dir").arg(dir);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+        parse_json(&output)
+    };
+
+    assert_eq!(list(None).as_array().unwrap().len(), 3);
+    let explicit = list(Some(&current));
+    assert_eq!(explicit.as_array().unwrap().len(), 1);
+    assert_eq!(
+        explicit[0]["path"],
+        current.join("example.cap").to_str().unwrap()
+    );
 }
 
 #[test]
@@ -516,7 +702,30 @@ fn project_config_get_without_file_returns_default() {
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
-    assert!(json.is_object(), "expected a default project config object");
+    let expected_json =
+        serde_json::to_string(&cap_project::ProjectConfiguration::default()).unwrap();
+    assert_eq!(json, serde_json::from_str::<Value>(&expected_json).unwrap());
+}
+
+#[test]
+fn project_config_commands_reject_directories_without_recordings() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("not-a-recording.cap");
+    std::fs::create_dir(&project).unwrap();
+
+    for command in ["get", "set"] {
+        let mut args = vec!["project", "config", command, project.to_str().unwrap()];
+        if command == "set" {
+            args.extend(["--settings-json", "{}"]);
+        }
+        args.push("--json");
+
+        let output = run(&args);
+        assert!(!output.status.success(), "{command} unexpectedly succeeded");
+        assert!(parse_json(&output)["error"].is_string());
+    }
+
+    assert!(!project.join("project-config.json").exists());
 }
 
 #[test]
@@ -1228,6 +1437,59 @@ fn auth_login_defaults_to_the_creator_profile() {
     assert!(stdout(&output).contains("[default: creator]"));
 }
 
+fn write_test_media(path: &Path) {
+    use ffmpeg::format::Pixel;
+    ffmpeg::init().unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut output = ffmpeg::format::output(path).unwrap();
+    let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::MPEG4).unwrap();
+    let mut encoder = ffmpeg::codec::Context::new_with_codec(codec)
+        .encoder()
+        .video()
+        .unwrap();
+    encoder.set_width(32);
+    encoder.set_height(32);
+    encoder.set_format(Pixel::YUV420P);
+    encoder.set_time_base((1, 30));
+    encoder.set_frame_rate(Some((30, 1)));
+    encoder.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
+    let mut encoder = encoder.open_as(codec).unwrap();
+    output.add_stream(codec).unwrap().set_parameters(&encoder);
+    output.write_header().unwrap();
+    let output_time_base = output.stream(0).unwrap().time_base();
+    {
+        let mut drain = |encoder: &mut ffmpeg::encoder::video::Encoder, finished: bool| loop {
+            let mut packet = ffmpeg::Packet::empty();
+            match encoder.receive_packet(&mut packet) {
+                Ok(()) => {
+                    packet.set_stream(0);
+                    packet.rescale_ts((1, 30), output_time_base);
+                    packet.write_interleaved(&mut output).unwrap();
+                }
+                Err(ffmpeg::Error::Other { errno })
+                    if !finished && errno == ffmpeg::ffi::EAGAIN =>
+                {
+                    break;
+                }
+                Err(ffmpeg::Error::Eof) if finished => break,
+                Err(error) => panic!("test media encoding failed: {error}"),
+            }
+        };
+        for index in 0..30 {
+            let mut frame = ffmpeg::frame::Video::new(Pixel::YUV420P, 32, 32);
+            frame.data_mut(0).fill(32 + index as u8);
+            frame.data_mut(1).fill(128);
+            frame.data_mut(2).fill(128);
+            frame.set_pts(Some(index));
+            encoder.send_frame(&frame).unwrap();
+            drain(&mut encoder, false);
+        }
+        encoder.send_eof().unwrap();
+        drain(&mut encoder, true);
+    }
+    output.write_trailer().unwrap();
+}
+
 fn write_single_segment_meta(project: &Path) {
     std::fs::create_dir_all(project).unwrap();
     let meta = serde_json::json!({
@@ -1239,4 +1501,23 @@ fn write_single_segment_meta(project: &Path) {
         serde_json::to_vec_pretty(&meta).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn caps_json_errors_include_the_standard_error_field() {
+    for flags in [&["--json"][..], &["--format", "json"][..]] {
+        let output = cap()
+            .args(["caps", "get", "!"])
+            .args(flags)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error = parse_json(&output);
+        assert_eq!(error["error"], "Cap ID contains invalid characters");
+        assert_eq!(error["message"], "Cap ID contains invalid characters");
+        assert_eq!(error["code"], "INVALID_REQUEST");
+        assert_eq!(error["retryable"], false);
+    }
 }

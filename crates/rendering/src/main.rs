@@ -68,11 +68,8 @@ async fn main() -> Result<()> {
     // Load the project similar to ExporterBase
     println!("Loading project from: {}", args.project_path.display());
 
-    let project_config: ProjectConfiguration = serde_json::from_reader(
-        std::fs::File::open(args.project_path.join("project-config.json"))
-            .context("Failed to open project-config.json")?,
-    )
-    .context("Failed to parse project configuration")?;
+    let project_config = ProjectConfiguration::load(&args.project_path)
+        .context("Failed to load project configuration")?;
 
     let recording_meta = RecordingMeta::load_for_project(&args.project_path)
         .map_err(|e| anyhow::anyhow!("Failed to load recording metadata: {}", e))?;
@@ -204,6 +201,7 @@ async fn main() -> Result<()> {
             XY::new(output_size.0, output_size.1),
             &recordings,
             None,
+            false,
         )
         .await
     });

@@ -1,0 +1,50 @@
+[package]
+name = "cap-verify"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+cap-media-info = { path = "../media-info" }
+cap-project = { path = "../project" }
+cap-recording = { path = "../recording" }
+cap-timestamp = { path = "../timestamp" }
+
+anyhow = { workspace = true }
+ffmpeg = { workspace = true }
+flume = { workspace = true }
+futures = { workspace = true }
+relative-path = "1.9.3"
+rustfft = "6.4.1"
+serde = { workspace = true }
+serde_json = "1"
+tokio = { workspace = true }
+cap-verify-expect = { path = "../verify-expect" }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cap-enc-avfoundation = { path = "../enc-avfoundation" }
+cidre = { workspace = true }
+
+[dev-dependencies]
+cap-recording = { path = "../recording", features = ["test-utils"] }
+cap-editor = { path = "../editor", features = ["test-hooks"] }
+cap-audio = { path = "../audio" }
+cap-export = { path = "../export", features = ["test-hooks"] }
+cap-rendering = { path = "../rendering" }
+cpal = { workspace = true }
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+scap-targets = { path = "../scap-targets" }
+
+[target.'cfg(windows)'.dev-dependencies]
+scap-targets = { path = "../scap-targets" }
+cap-camera-windows = { path = "../camera-windows" }
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
+windows = { workspace = true, features = ["Win32_Media_MediaFoundation"] }

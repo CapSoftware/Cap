@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { runPromise } from "@/lib/server";
@@ -141,10 +141,15 @@ export async function getVideoDownloadInfo(
 	}
 
 	try {
+		const decodedVideo = decodeStorageVideo(video);
+		if (variant === "current") {
+			const source = Video.Video.getSource(decodedVideo);
+			if (source instanceof Video.Mp4Source) {
+				downloadKey = source.getFileKey();
+			}
+		}
 		const downloadUrl = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
+			const [bucket] = yield* Storage.getAccessForVideo(decodedVideo);
 			const exists = yield* bucket.headObject(downloadKey).pipe(
 				Effect.as(true),
 				Effect.catchAll(() => Effect.succeed(false)),

@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::{TextAlign, TextBackgroundStyle};
-use glyphon::cosmic_text::Align;
+use glyphon::cosmic_text::{Align, AttrsOwned};
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
@@ -10,7 +10,17 @@ use glyphon::{
 use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
-use crate::text::{PreparedText, StaggerEdge, stagger_alpha};
+use crate::text::{PreparedText, REFERENCE_HEIGHT, StaggerEdge, stagger_alpha};
+
+#[derive(PartialEq)]
+struct ShapeKey {
+    content: String,
+    attrs: AttrsOwned,
+    align: Align,
+    metrics: Metrics,
+    wrap_width: u32,
+    colors: Option<Vec<Color>>,
+}
 
 pub struct TextLayer {
     font_system: FontSystem,
@@ -19,6 +29,11 @@ pub struct TextLayer {
     text_renderer: TextRenderer,
     viewport: Viewport,
     buffers: Vec<Buffer>,
+    buffer_keys: Vec<ShapeKey>,
+    // Last frame's shaped buffers. Shaping (with font fallback for emoji and
+    // mixed scripts) dominates a text segment's per-frame cost, and inputs
+    // rarely change between frames, so a buffer with the same key is reused.
+    previous_buffers: Vec<(ShapeKey, Buffer)>,
     draws: Vec<TextDraw>,
     segment_renderers: Vec<TextRenderer>,
     background: Option<TextBackgroundResources>,
@@ -140,7 +155,7 @@ impl TextBackgroundResources {
         );
     }
 
-    fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, index: usize) {
+    fn render(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_groups[index], &[]);
         pass.draw(0..6, 0..1);
@@ -371,6 +386,8 @@ impl TextLayer {
             text_renderer,
             viewport,
             buffers: Vec::new(),
+            buffer_keys: Vec::new(),
+            previous_buffers: Vec::new(),
             draws: Vec::new(),
             segment_renderers: Vec::new(),
             background: None,
@@ -407,6 +424,25 @@ impl TextLayer {
         wrap_width: f32,
         colors: Option<&[Color]>,
     ) -> usize {
+        let key = ShapeKey {
+            content: content.to_owned(),
+            attrs: AttrsOwned::new(attrs),
+            align,
+            metrics,
+            wrap_width: wrap_width.to_bits(),
+            colors: colors.map(<[Color]>::to_vec),
+        };
+        if let Some(index) = self
+            .previous_buffers
+            .iter()
+            .position(|(previous, _)| *previous == key)
+        {
+            let (key, buffer) = self.previous_buffers.swap_remove(index);
+            self.buffers.push(buffer);
+            self.buffer_keys.push(key);
+            return self.buffers.len() - 1;
+        }
+
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         // The box only constrains wrapping; height is unbounded so every
         // line is laid out even when the configured box is a little
@@ -436,6 +472,7 @@ impl TextLayer {
         }
         buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffers.push(buffer);
+        self.buffer_keys.push(key);
         self.buffers.len() - 1
     }
 
@@ -447,7 +484,10 @@ impl TextLayer {
         texts: &[PreparedText],
         force_segmented: bool,
     ) {
-        self.buffers.clear();
+        self.previous_buffers = std::mem::take(&mut self.buffer_keys)
+            .into_iter()
+            .zip(self.buffers.drain(..))
+            .collect();
         self.draws.clear();
         let mut backgrounds: Vec<TextBackgroundUniforms> = Vec::new();
         let output_px = [output_size.0.max(1) as f32, output_size.1.max(1) as f32];
@@ -467,7 +507,7 @@ impl TextLayer {
             // the editor genuinely wrapped too.
             let output_width = output_px[0];
             let wrap_width = if width < output_width * 0.98 {
-                (width * 1.05 + 4.0).min(output_width.max(width))
+                (width * 1.05 + 4.0 * output_px[1] / REFERENCE_HEIGHT).min(output_width.max(width))
             } else {
                 width
             };
@@ -759,7 +799,7 @@ impl TextLayer {
         }
     }
 
-    fn render_draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, index: usize) {
+    fn render_draw(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
         let draw = &self.draws[index];
         if let Some(background) = &self.background {
             for rect in draw.background.clone() {
@@ -773,7 +813,7 @@ impl TextLayer {
         }
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if self.segmented_render {
             for index in 0..self.draws.len() {
                 self.render_draw(pass, index);
@@ -786,7 +826,7 @@ impl TextLayer {
         }
     }
 
-    pub fn render_track<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, track: u32) {
+    pub fn render_track(&self, pass: &mut wgpu::RenderPass<'_>, track: u32) {
         if !self.segmented_render {
             return;
         }
@@ -973,6 +1013,144 @@ mod gpu_tests {
     fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
         let index = ((y * OUTPUT + x) * 4) as usize;
         pixels[index..index + 4].try_into().unwrap()
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn text_wrap_width_scales_with_output_resolution() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let mut layer = TextLayer::new(&device, &queue);
+        let mut overlay = text([100.0, 100.0, 600.0, 300.0], [0.0; 4]);
+        overlay.background_color = None;
+        overlay.content = "A line of text near the wrap boundary".to_string();
+
+        layer.prepare(&device, &queue, (1920, 1080), &[overlay.clone()]);
+        let width_1080 = layer.buffers[0].size().0.unwrap();
+
+        overlay.bounds = [200.0, 200.0, 1200.0, 600.0];
+        overlay.font_size *= 2.0;
+        layer.prepare(&device, &queue, (3840, 2160), &[overlay]);
+        let width_2160 = layer.buffers[0].size().0.unwrap();
+
+        assert_eq!(width_2160, width_1080 * 2.0);
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_shaping_renders_exactly_like_fresh_shaping_and_follows_edits() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let mut words = text([4.0, 4.0, 60.0, 60.0], [0.0, 0.0, 0.0, 0.0]);
+        words.background_color = None;
+        words.color = [0.1, 0.2, 0.9, 1.0];
+        words.font_size = 14.0;
+        words.content = "Cap \u{1F4A5} \u{05E9}\u{05DC}\u{05D5}\u{05DD} wraps".to_string();
+        let mut gradient = words.clone();
+        gradient.bounds = [4.0, 34.0, 60.0, 60.0];
+        gradient.gradient_color = Some([0.9, 0.1, 0.1, 1.0]);
+        gradient.shadow = 0.5;
+        let fresh = |texts: &[PreparedText]| {
+            let mut layer = TextLayer::new(&device, &queue);
+            layer.prepare(&device, &queue, (OUTPUT, OUTPUT), texts);
+            render_pixels(&device, &queue, &layer)
+        };
+
+        let mut cached = TextLayer::new(&device, &queue);
+        let frame = [words.clone(), gradient.clone()];
+        cached.prepare(&device, &queue, (OUTPUT, OUTPUT), &frame);
+        cached.prepare(&device, &queue, (OUTPUT, OUTPUT), &frame);
+        assert!(
+            cached.previous_buffers.is_empty(),
+            "every buffer was reused"
+        );
+        let reused = render_pixels(&device, &queue, &cached);
+        assert_eq!(reused, fresh(&frame));
+
+        let mut edited = words.clone();
+        edited.content = "Edited".to_string();
+        let frame = [edited, gradient];
+        cached.prepare(&device, &queue, (OUTPUT, OUTPUT), &frame);
+        let after_edit = render_pixels(&device, &queue, &cached);
+        assert_ne!(after_edit, reused);
+        assert_eq!(after_edit, fresh(&frame));
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layouts_follow_each_shaping_input() {
+        type Edit = (&'static str, fn(&mut PreparedText));
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let base = PreparedText {
+            color: [0.0, 0.0, 0.0, 1.0],
+            background_color: None,
+            content: "Hi yo\ngq".to_string(),
+            font_size: 16.0,
+            line_height: 1.25,
+            ..text([4.0, 4.0, 60.0, 60.0], [0.0; 4])
+        };
+        // Family, weight, and italic only change pixels when the host has a
+        // distinct face. The cache key still has to include them: a miss leaves
+        // the previous buffer unused.
+        let face_edits: [Edit; 3] = [
+            ("font family", |text| {
+                text.font_family = "monospace".to_string()
+            }),
+            ("font weight", |text| text.font_weight = 800.0),
+            ("italic", |text| text.italic = true),
+        ];
+        let layout_edits: [Edit; 5] = [
+            ("font size", |text| {
+                text.font_size = 20.0;
+                text.line_height = 1.0;
+            }),
+            ("letter spacing", |text| text.letter_spacing = 3.0),
+            ("alignment", |text| text.align = TextAlign::Right),
+            ("line height", |text| text.line_height = 2.0),
+            ("wrap width", |text| text.bounds[2] = 24.0),
+        ];
+        let render_fresh = |text: &PreparedText| {
+            let mut layer = TextLayer::new(&device, &queue);
+            layer.prepare(
+                &device,
+                &queue,
+                (OUTPUT, OUTPUT),
+                std::slice::from_ref(text),
+            );
+            render_pixels(&device, &queue, &layer)
+        };
+        let base_pixels = render_fresh(&base);
+        assert!(base_pixels.chunks_exact(4).any(|pixel| pixel != [255; 4]));
+
+        let check = |name: &str, edit: fn(&mut PreparedText), require_pixel_change: bool| {
+            let mut edited = base.clone();
+            edit(&mut edited);
+            let expected = render_fresh(&edited);
+            if require_pixel_change {
+                assert!(
+                    expected != base_pixels,
+                    "{name} edit should change the output"
+                );
+            }
+
+            let mut reused = TextLayer::new(&device, &queue);
+            reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[base.clone()]);
+            reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[edited]);
+            assert_eq!(
+                reused.previous_buffers.len(),
+                1,
+                "{name} edit reused the previous layout"
+            );
+            assert_eq!(
+                render_pixels(&device, &queue, &reused),
+                expected,
+                "{name} edit drew a stale layout"
+            );
+        };
+        for (name, edit) in face_edits {
+            check(name, edit, false);
+        }
+        for (name, edit) in layout_edits {
+            check(name, edit, true);
+        }
     }
 
     #[test]

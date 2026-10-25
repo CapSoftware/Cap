@@ -1081,6 +1081,15 @@ pub struct CropState {
 }
 
 impl CropState {
+    /// The display frame is a full-resolution decode and the window's atlas
+    /// keeps every painted image until it is told otherwise, so a closed crop
+    /// would otherwise stay resident until the editor window closes.
+    pub fn release_frame(&mut self, window: &mut Window) {
+        if let Some(frame) = self.frame.take() {
+            let _ = window.drop_image(frame);
+        }
+    }
+
     /// `computeInitialBounds` (`:483-517`) at open, with the container the
     /// viewport gives.
     pub fn new(target: (u32, u32), box_size: (f32, f32), initial: CropBounds) -> Self {
@@ -1256,7 +1265,12 @@ impl CropState {
             CropField::Width => real.width = value,
             CropField::Height => real.height = value,
         }
-        let raw = bounds_to_raw(real, self.scale());
+        let mut raw = bounds_to_raw(real, self.scale());
+        if let CropField::Height = field
+            && let Some(ratio) = self.ratio_value()
+        {
+            raw.width = raw.height * ratio;
+        }
         self.set_raw_constraining(raw, ORIGIN_TOP_LEFT);
     }
 
@@ -1606,9 +1620,10 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.crop.take().is_none() {
+        let Some(mut state) = self.crop.take() else {
             return;
-        }
+        };
+        state.release_frame(window);
         tracing::info!(reason, "crop cancelled");
         self.publish_project();
         cx.notify();
@@ -1630,6 +1645,7 @@ impl EditorWindow {
             cx.notify();
             return;
         }
+        state.release_frame(window);
         let bounds = state.real();
         let crop = Crop {
             position: XY::new(bounds.x.max(0.) as u32, bounds.y.max(0.) as u32),
@@ -2154,12 +2170,16 @@ impl EditorWindow {
                 Some(task) => task.await.ok().flatten(),
                 None => None,
             };
-            this.update(cx, |this: &mut Self, cx| {
+            this.update_in(cx, |this: &mut Self, window, cx| {
                 let Some(state) = this.crop.as_mut() else {
                     return;
                 };
                 match image {
-                    Some(image) => state.frame = Some(image),
+                    Some(image) => {
+                        if let Some(previous) = state.frame.replace(image) {
+                            let _ = window.drop_image(previous);
+                        }
+                    }
                     None => {
                         tracing::warn!("crop: display frame decode failed");
                         state.frame_failed = true;
@@ -2280,7 +2300,7 @@ async fn decode_display_frame(
             let y = screen.y_plane()?;
             let uv = screen.uv_plane()?;
             let mut out = vec![0u8; (width * height * 4) as usize];
-            cpu_yuv::nv12_to_rgba(
+            cpu_yuv::nv12_to_rgba_with_matrix(
                 y,
                 uv,
                 width,
@@ -2288,6 +2308,7 @@ async fn decode_display_frame(
                 screen.y_stride(),
                 screen.uv_stride(),
                 &mut out,
+                screen.matrix(),
             );
             out
         }
@@ -2296,7 +2317,7 @@ async fn decode_display_frame(
             let u = screen.u_plane()?;
             let v = screen.v_plane()?;
             let mut out = vec![0u8; (width * height * 4) as usize];
-            cpu_yuv::yuv420p_to_rgba(
+            cpu_yuv::yuv420p_to_rgba_with_matrix(
                 y,
                 u,
                 v,
@@ -2305,6 +2326,7 @@ async fn decode_display_frame(
                 screen.y_stride(),
                 screen.uv_stride(),
                 &mut out,
+                screen.matrix(),
             );
             out
         }
@@ -3906,6 +3928,56 @@ mod tests {
         assert!((real.width - 1512.).abs() <= 6.);
         assert_eq!(real.x, 0.);
         assert_eq!(real.height, 1964.);
+    }
+
+    #[test]
+    fn locked_size_fields_resize_from_the_edited_dimension() {
+        for (ratio, width, height) in [((16, 9), 640., 360.), ((9, 16), 360., 640.)] {
+            let mut state = CropState::new(
+                (1920, 1080),
+                (482., 272.),
+                CropBounds::new(160., 80., 960., 540.),
+            );
+            state.set_aspect(Some(ratio));
+            state.stop_animation();
+            let before = state.real();
+
+            state.set_property(CropField::Height, height);
+            assert_eq!(
+                state.real(),
+                CropBounds::new(before.x, before.y, width, height)
+            );
+
+            state.set_property(CropField::Width, width / 2.);
+            assert_eq!(
+                state.real(),
+                CropBounds::new(before.x, before.y, width / 2., height / 2.)
+            );
+        }
+    }
+
+    #[test]
+    fn locked_height_edits_still_fit_inside_the_source() {
+        let mut state = CropState::new(
+            (1920, 1080),
+            (482., 272.),
+            CropBounds::new(160., 80., 960., 540.),
+        );
+        state.set_aspect(Some((16, 9)));
+        state.stop_animation();
+        state.set_property(CropField::Height, 2160.);
+        assert_eq!(state.real(), CropBounds::new(0., 0., 1920., 1080.));
+    }
+
+    #[test]
+    fn free_height_edits_preserve_width_and_position() {
+        let mut state = CropState::new(
+            (1920, 1080),
+            (482., 272.),
+            CropBounds::new(160., 80., 960., 540.),
+        );
+        state.set_property(CropField::Height, 360.);
+        assert_eq!(state.real(), CropBounds::new(160., 80., 960., 360.));
     }
 
     #[test]

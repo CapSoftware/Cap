@@ -38,6 +38,7 @@ outputs
 .zed
 .output
 .vinxi
+*.config.timestamp_*.js
 native-deps*
 .tinyb
 
@@ -77,3 +78,5 @@ analysis/
 analysis/plans/
 .ralphy
 tmp/
+
+__pycache__/

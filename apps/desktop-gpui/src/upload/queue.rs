@@ -3,11 +3,13 @@ use cap_project::{InstantRecordingMeta, RecordingMetaInner};
 use cap_recording::upload_resume::{UploadLock, UploadLockError, collect_segment_events};
 use cap_recording::upload_verification::{UploadVerification, VerifiedUploadReceipt};
 use futures_util::FutureExt as _;
+use std::ffi::OsString;
 use std::io::Write;
+use std::time::SystemTime;
 
 static STATE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-const STATE_FILE: &str = "instant-upload.json";
+pub(super) const STATE_FILE: &str = "instant-upload.json";
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
@@ -53,6 +55,18 @@ pub(crate) struct UploadState {
 }
 
 impl UploadState {
+    pub(crate) fn video_id(&self) -> &str {
+        &self.video_id
+    }
+
+    pub(crate) fn server_url(&self) -> &str {
+        &self.server_url
+    }
+
+    pub(crate) fn owner_id(&self) -> Option<&str> {
+        self.owner_id.as_deref()
+    }
+
     pub(super) fn request_context(&self) -> Result<auth::UploadRequestContext, String> {
         auth::UploadRequestContext::for_upload(&self.server_url, self.owner_id.as_deref())
             .map_err(|error| error.to_string())
@@ -270,6 +284,16 @@ pub(super) fn record_cancelled(project: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps the local recording after its upload verifies, whatever the
+/// delete-after-upload setting says.
+pub(crate) fn record_preserve_local(project: &Path) -> Result<(), String> {
+    if let Some(mut state) = read_state(project)? {
+        state.preserve_local = true;
+        write_state(project, &state)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn record_failure(project: &Path, error: &str) -> Result<(), String> {
     if let Some(mut state) = read_state(project)? {
         state.fail(error.to_string(), now());
@@ -370,6 +394,7 @@ trait UploadBackend: Send + Sync + 'static {
         verification: &UploadVerification,
     ) -> Result<(), String>;
     fn delete_after_upload(&self) -> bool;
+    fn forget_start_cleanup(&self, video_id: &str) -> bool;
     fn notify_failure(&self);
 }
 
@@ -377,7 +402,7 @@ struct LiveBackend;
 
 impl UploadBackend for LiveBackend {
     fn check_account(&self, state: &UploadState) -> Result<(), String> {
-        if state.server_url != auth::server_url()
+        if !auth::has_same_origin(&state.server_url, &auth::server_url())
             || state.owner_id != owner_id()
             || store_auth_missing()
         {
@@ -407,9 +432,18 @@ impl UploadBackend for LiveBackend {
                     &serde_json::to_vec(&manifest).map_err(|error| error.to_string())?,
                     required_audio,
                 );
-                upload.finish_screenshot(project).await?;
-                upload.authorize_manifest(manifest)?;
-                upload.finish_segments().await?;
+                let recorded_length = recorded_length_json(&manifest).map(|bytes| {
+                    publish_recorded_length(upload.video.id.clone(), bytes, upload.cancel.clone())
+                });
+                let finish = async {
+                    upload.finish_screenshot(project).await?;
+                    upload.authorize_manifest(manifest)?;
+                    upload.finish_segments().await
+                };
+                match recorded_length {
+                    Some(recorded_length) => alongside(finish, recorded_length).await?,
+                    None => finish.await?,
+                }
                 Ok(verification)
             }
             UploadKind::Mp4 => {
@@ -517,6 +551,10 @@ impl UploadBackend for LiveBackend {
         crate::store::GeneralSettings::load().delete_instant_recordings_after_upload
     }
 
+    fn forget_start_cleanup(&self, video_id: &str) -> bool {
+        super::instant_cleanup::forget_verified(video_id)
+    }
+
     fn notify_failure(&self) {
         crate::app_sounds::play_notification();
     }
@@ -536,6 +574,7 @@ struct Manager<B> {
     wake: tokio::sync::Notify,
     confirmation_timeout: Duration,
     pending_rechecks: Mutex<HashMap<String, u32>>,
+    skipped_meta: Mutex<SkippedMeta>,
 }
 
 impl<B: UploadBackend> Manager<B> {
@@ -547,6 +586,7 @@ impl<B: UploadBackend> Manager<B> {
             wake: tokio::sync::Notify::new(),
             confirmation_timeout,
             pending_rechecks: Mutex::new(HashMap::new()),
+            skipped_meta: Mutex::new(SkippedMeta::default()),
         }
     }
 
@@ -562,6 +602,12 @@ impl<B: UploadBackend> Manager<B> {
         } else {
             RECONCILE_INTERVAL
         }
+    }
+
+    fn skipped_meta(&self) -> std::sync::MutexGuard<'_, SkippedMeta> {
+        self.skipped_meta
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     fn forget_pending_rechecks(&self, video_id: &str) {
@@ -812,9 +858,12 @@ impl<B: UploadBackend> Manager<B> {
             Some(&upload.cancel),
         )
         .map_err(|error| error.to_string())?;
+        let cleanup_cleared = self.backend.forget_start_cleanup(&state.video_id);
         if !state.preserve_local && self.backend.delete_after_upload() {
             check_segment_cancelled(&upload.cancel)?;
-            if let Err(error) = std::fs::remove_dir_all(project) {
+            if !cleanup_cleared {
+                tracing::warn!(path = %project.display(), "Verified upload kept locally because its cleanup entry could not be cleared");
+            } else if let Err(error) = std::fs::remove_dir_all(project) {
                 tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
             }
         }
@@ -901,9 +950,93 @@ fn legacy_state(meta: &RecordingMeta) -> Option<UploadState> {
     })
 }
 
+fn upload_candidate(meta: &RecordingMeta) -> bool {
+    matches!(
+        meta.inner,
+        RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. })
+    ) && !matches!(meta.upload, None | Some(UploadMeta::Complete))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MetaStamp {
+    modified: SystemTime,
+    len: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+
+impl MetaStamp {
+    fn read(project: &Path) -> Option<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(project.join("recording-meta.json")).ok()?;
+        Some(Self {
+            modified: metadata.modified().ok()?,
+            len: metadata.len(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            #[cfg(unix)]
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        })
+    }
+}
+
+// Only "not a candidate" verdicts from a successfully loaded meta are cached:
+// that verdict depends solely on recording-meta.json, while candidates still
+// go through the upload lock and instant-upload.json (where auth changes
+// apply) on every pass. A failed load may be transient (sharing violation,
+// antivirus lock) and leaves the stamp unchanged, so it is retried every pass.
+// Every writer replaces the file by rename, so a save also changes the inode
+// on unix.
+#[derive(Default)]
+struct SkippedMeta {
+    stamps: HashMap<OsString, (MetaStamp, u64)>,
+    pass: u64,
+}
+
+impl SkippedMeta {
+    fn begin_pass(&mut self) {
+        self.pass = self.pass.wrapping_add(1);
+    }
+
+    fn is_candidate(
+        &mut self,
+        project: &Path,
+        load: impl FnOnce(&Path) -> Option<RecordingMeta>,
+    ) -> bool {
+        let stamp = MetaStamp::read(project);
+        if let Some(stamp) = stamp
+            && let Some((cached, seen)) = self.stamps.get_mut(project.as_os_str())
+            && *cached == stamp
+        {
+            *seen = self.pass;
+            return false;
+        }
+        let candidate = load(project).map(|meta| upload_candidate(&meta));
+        match (stamp, candidate) {
+            (Some(stamp), Some(false)) => {
+                self.stamps
+                    .insert(project.as_os_str().to_os_string(), (stamp, self.pass));
+            }
+            _ => {
+                self.stamps.remove(project.as_os_str());
+            }
+        }
+        candidate.unwrap_or(false)
+    }
+
+    fn finish_pass(&mut self) {
+        let pass = self.pass;
+        self.stamps.retain(|_, (_, seen)| *seen == pass);
+    }
+}
+
 impl Manager<LiveBackend> {
     async fn reconcile(self: &Arc<Self>, auth_changed: bool) {
         self.reap().await;
+        self.skipped_meta().begin_pass();
         for directory in crate::library::known_recordings_dirs() {
             let Ok(entries) = std::fs::read_dir(directory) else {
                 continue;
@@ -913,16 +1046,9 @@ impl Manager<LiveBackend> {
                     return;
                 }
                 let project = entry.path();
-                let Ok(meta) = RecordingMeta::load_for_project(&project) else {
-                    continue;
-                };
-                if !matches!(
-                    meta.inner,
-                    RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. })
-                ) {
-                    continue;
-                }
-                if matches!(meta.upload, None | Some(UploadMeta::Complete)) {
+                if !self.skipped_meta().is_candidate(&project, |project| {
+                    RecordingMeta::load_for_project(project).ok()
+                }) {
                     continue;
                 }
                 let ownership = match UploadLock::acquire(&project) {
@@ -951,6 +1077,7 @@ impl Manager<LiveBackend> {
                 }
             }
         }
+        self.skipped_meta().finish_pass();
     }
 
     async fn resume(
@@ -1107,8 +1234,13 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
         state.phase = UploadPhase::Cancelled;
         write_state(&canonical, &state)?;
     }
-    crate::library::delete_recording_directory(&project)
+    tokio::task::spawn_blocking(move || crate::library::delete_recording_directory(&project))
+        .await
+        .map_err(|error| error.to_string())?
 }
+
+#[cfg(test)]
+mod verify_resume_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1251,6 +1383,7 @@ mod tests {
         stall_confirmation: AtomicBool,
         reupload_required: AtomicBool,
         delete: AtomicBool,
+        keep_cleanup_entry: AtomicBool,
         transfers: AtomicUsize,
         confirmations: AtomicUsize,
         failure_notifications: AtomicUsize,
@@ -1340,6 +1473,10 @@ mod tests {
         }
         fn delete_after_upload(&self) -> bool {
             self.delete.load(Ordering::Acquire)
+        }
+
+        fn forget_start_cleanup(&self, _video_id: &str) -> bool {
+            !self.keep_cleanup_entry.load(Ordering::Acquire)
         }
 
         fn notify_failure(&self) {
@@ -1768,6 +1905,23 @@ mod tests {
                 fixture.assert_retained();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn verified_upload_stays_local_when_its_cleanup_entry_cannot_be_cleared() {
+        let fixture = Fixture::new();
+        let backend = FakeBackend::default();
+        backend.verified.store(true, Ordering::Release);
+        backend.delete.store(true, Ordering::Release);
+        backend.keep_cleanup_entry.store(true, Ordering::Release);
+        let manager = Arc::new(Manager::new(backend, Duration::from_secs(1)));
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(fixture.state().phase, UploadPhase::Verified);
+        assert!(fixture.project().join("content/output.mp4").is_file());
     }
 
     #[tokio::test]
@@ -2281,5 +2435,168 @@ mod tests {
         assert_eq!(state.attempt_count, 2);
         assert_eq!(state.phase, UploadPhase::Retrying);
         fixture.assert_retained();
+    }
+
+    fn save_library_meta(project: &Path, upload: Option<UploadMeta>) {
+        std::fs::create_dir_all(project).unwrap();
+        RecordingMeta {
+            platform: None,
+            project_path: project.to_path_buf(),
+            pretty_name: "Library recording".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            }),
+            upload,
+        }
+        .save_for_project()
+        .unwrap();
+    }
+
+    fn scan_library(
+        skipped: &mut SkippedMeta,
+        library: &Path,
+        parses: &AtomicUsize,
+    ) -> Vec<PathBuf> {
+        skipped.begin_pass();
+        let mut candidates = std::fs::read_dir(library)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|project| {
+                skipped.is_candidate(project, |project| {
+                    parses.fetch_add(1, Ordering::Relaxed);
+                    RecordingMeta::load_for_project(project).ok()
+                })
+            })
+            .collect::<Vec<_>>();
+        skipped.finish_pass();
+        candidates.sort();
+        candidates
+    }
+
+    fn library_with_skipped_projects(skipped_projects: usize) -> Fixture {
+        let fixture = Fixture::new();
+        for index in 0..skipped_projects {
+            let upload = (index % 2 == 0).then_some(UploadMeta::Complete);
+            save_library_meta(&fixture.0.join(format!("skip-{index}.cap")), upload);
+        }
+        std::fs::write(fixture.0.join("notes.txt"), b"not a recording").unwrap();
+        fixture
+    }
+
+    #[test]
+    fn unchanged_skipped_recordings_are_not_parsed_again() {
+        let fixture = library_with_skipped_projects(6);
+        let mut skipped = SkippedMeta::default();
+        let parses = AtomicUsize::new(0);
+
+        assert_eq!(
+            scan_library(&mut skipped, &fixture.0, &parses),
+            vec![fixture.project()]
+        );
+        assert_eq!(parses.swap(0, Ordering::Relaxed), 8);
+        assert_eq!(skipped.stamps.len(), 6);
+
+        assert_eq!(
+            scan_library(&mut skipped, &fixture.0, &parses),
+            vec![fixture.project()]
+        );
+        assert_eq!(parses.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            read_state(&fixture.project()).unwrap().unwrap().phase,
+            UploadPhase::Pending
+        );
+    }
+
+    #[test]
+    fn rewritten_recording_meta_is_reclassified_on_the_next_pass() {
+        let fixture = library_with_skipped_projects(2);
+        let mut skipped = SkippedMeta::default();
+        let parses = AtomicUsize::new(0);
+        let flipped = fixture.0.join("skip-1.cap");
+        scan_library(&mut skipped, &fixture.0, &parses);
+
+        save_library_meta(
+            &flipped,
+            Some(UploadMeta::SinglePartUpload {
+                video_id: "flipped-video".into(),
+                file_path: flipped.join("content/output.mp4"),
+                screenshot_path: flipped.join("screenshots/display.jpg"),
+                recording_dir: flipped.clone(),
+            }),
+        );
+        assert_eq!(
+            scan_library(&mut skipped, &fixture.0, &parses),
+            vec![fixture.project(), flipped.clone()]
+        );
+        assert!(!skipped.stamps.contains_key(flipped.as_os_str()));
+
+        save_library_meta(&flipped, Some(UploadMeta::Complete));
+        assert_eq!(
+            scan_library(&mut skipped, &fixture.0, &parses),
+            vec![fixture.project()]
+        );
+        parses.store(0, Ordering::Relaxed);
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert_eq!(parses.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn recordings_whose_meta_failed_to_load_are_retried() {
+        let fixture = Fixture::new();
+        let project = fixture.project();
+        let mut skipped = SkippedMeta::default();
+
+        skipped.begin_pass();
+        assert!(!skipped.is_candidate(&project, |_| None));
+        skipped.finish_pass();
+        assert!(!skipped.stamps.contains_key(project.as_os_str()));
+
+        skipped.begin_pass();
+        assert!(skipped.is_candidate(&project, |project| {
+            RecordingMeta::load_for_project(project).ok()
+        }));
+        skipped.finish_pass();
+        assert!(skipped.stamps.is_empty());
+    }
+
+    #[test]
+    fn unparsable_recording_meta_is_parsed_again_every_pass() {
+        let fixture = library_with_skipped_projects(2);
+        let mut skipped = SkippedMeta::default();
+        let parses = AtomicUsize::new(0);
+        let corrupt = fixture.0.join("skip-0.cap");
+        std::fs::write(corrupt.join("recording-meta.json"), b"{ not json").unwrap();
+
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert!(!skipped.stamps.contains_key(corrupt.as_os_str()));
+        assert_eq!(skipped.stamps.len(), 1);
+
+        parses.store(0, Ordering::Relaxed);
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert_eq!(parses.load(Ordering::Relaxed), 3);
+        assert!(!skipped.stamps.contains_key(corrupt.as_os_str()));
+    }
+
+    #[test]
+    fn deleted_recordings_leave_the_skip_cache() {
+        let fixture = library_with_skipped_projects(4);
+        let mut skipped = SkippedMeta::default();
+        let parses = AtomicUsize::new(0);
+        let deleted = fixture.0.join("skip-2.cap");
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert!(skipped.stamps.contains_key(deleted.as_os_str()));
+
+        std::fs::remove_dir_all(&deleted).unwrap();
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert_eq!(skipped.stamps.len(), 3);
+        assert!(!skipped.stamps.contains_key(deleted.as_os_str()));
+
+        std::fs::remove_dir_all(&fixture.0).unwrap();
+        std::fs::create_dir_all(&fixture.0).unwrap();
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert!(skipped.stamps.is_empty());
     }
 }

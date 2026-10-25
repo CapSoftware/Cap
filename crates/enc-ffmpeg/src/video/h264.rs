@@ -11,7 +11,7 @@ use ffmpeg::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::base::EncoderBase;
+use crate::base::{EncoderBase, PacketSink};
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
@@ -618,42 +618,14 @@ pub(crate) fn open_video_encoder_with_flags(
     )
 }
 
-fn is_rgb(format: format::Pixel) -> bool {
-    format.descriptor().is_some_and(|descriptor| unsafe {
-        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
-    })
-}
-
 fn configure_rgb_converter(
     converter: &mut ffmpeg::software::scaling::Context,
     input: format::Pixel,
     output: format::Pixel,
 ) -> Result<(), H264EncoderError> {
-    if !is_rgb(input) || is_rgb(output) {
-        return Ok(());
-    }
-
-    // swscale defaults to BT.601 even though the encoder declares BT.709.
-    // RGB input is full range; the encoded YUV contract below is limited range.
-    let result = unsafe {
-        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
-        ffmpeg::ffi::sws_setColorspaceDetails(
-            converter.as_mut_ptr(),
-            coefficients,
-            1,
-            coefficients,
-            0,
-            0,
-            1 << 16,
-            1 << 16,
-        )
-    };
-    if result < 0 {
-        return Err(H264EncoderError::ColorConversion(ffmpeg::Error::from(
-            result,
-        )));
-    }
-    Ok(())
+    // The encoded YUV contract below is limited range.
+    super::colour::use_bt709_for_rgb_input(converter, input, output)
+        .map_err(H264EncoderError::ColorConversion)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -907,6 +879,14 @@ impl H264Encoder {
             .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))
     }
 
+    /// Whether the selected codec is a hardware encoder, which can fail at
+    /// runtime after opening (a busy or reset media engine).
+    pub fn is_hardware(&self) -> bool {
+        self.encoder
+            .codec()
+            .is_some_and(|codec| is_hardware_h264(codec.name()))
+    }
+
     pub fn conversion_requirements(&self) -> ConversionRequirements {
         let needs_conversion = self.input_format != self.output_format
             || self.input_width != self.output_width
@@ -924,9 +904,18 @@ impl H264Encoder {
 
     pub fn queue_frame(
         &mut self,
-        mut frame: frame::Video,
+        frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
+        self.queue_frame_to(frame, timestamp, output)
+    }
+
+    pub fn queue_frame_to<S: PacketSink + ?Sized>(
+        &mut self,
+        mut frame: frame::Video,
+        timestamp: Duration,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
@@ -934,8 +923,7 @@ impl H264Encoder {
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
             let converted = self.converted_frame_pool.as_mut().unwrap();
-            converter
-                .run(&frame, converted)
+            super::convert_or_scale(&frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -964,8 +952,7 @@ impl H264Encoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
-            converter
-                .run(frame, converted)
+            super::convert_or_scale(frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
             converted as &frame::Video
@@ -1008,6 +995,28 @@ impl H264Encoder {
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.process_eof(output, &mut self.encoder)
+    }
+
+    pub fn flush_to<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.process_eof(output, &mut self.encoder)
+    }
+
+    /// Configured target bitrate in bits per second, estimated from the
+    /// output geometry when the encoder runs without a bitrate target.
+    pub fn bit_rate(&self) -> u64 {
+        let configured = unsafe { (*self.encoder.as_ptr()).bit_rate };
+        if configured > 0 {
+            return configured as u64;
+        }
+        get_bitrate(
+            self.output_width,
+            self.output_height,
+            30.0,
+            H264EncoderBuilder::QUALITY_BPP,
+        ) as u64
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
@@ -1655,8 +1664,12 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     let area = (width as f64) * (height as f64);
     let pixels_per_second = area * frame_rate_multiplier;
 
-    (pixels_per_second * bpp as f64) as usize
+    // 1 Gbit/s is far past any real H.264 stream; the cap keeps a hostile
+    // bpp from overflowing the max-bitrate math below.
+    ((pixels_per_second * bpp as f64) as usize).min(MAX_BITRATE)
 }
+
+const MAX_BITRATE: usize = 1_000_000_000;
 
 #[cfg(test)]
 mod self_test_tests {
@@ -1798,6 +1811,7 @@ mod self_test_tests {
 
 #[cfg(test)]
 mod rgb_color_tests {
+    use super::super::colour::is_rgb;
     use super::*;
 
     const COLORS: [[u8; 3]; 6] = [
@@ -2079,6 +2093,58 @@ mod rgb_color_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn queue_frame_to_bgrz_flat_red_decodes_as_bt709() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bgrz.mp4");
+        let mut output = format::output_as(&path, "mp4").unwrap();
+        let info = VideoInfo::from_raw_ffmpeg(format::Pixel::BGRZ, 64, 64, 30);
+        let mut encoder = H264Encoder::builder(info)
+            .with_preset(H264Preset::Ultrafast)
+            .with_crf(18)
+            .with_encoder_priority_override(&["libx264"])
+            .build(&mut output)
+            .unwrap();
+        let mut frame = frame::Video::new(format::Pixel::BGRZ, 64, 64);
+        for y in 0..64 {
+            let stride = frame.stride(0);
+            for x in 0..64 {
+                let offset = y * stride + x * 4;
+                frame.data_mut(0)[offset..offset + 4].copy_from_slice(&[40, 40, 220, 255]);
+            }
+        }
+        let mut sink = crate::PacketQueue::new(ffmpeg::Rational(1, 90_000));
+        encoder
+            .queue_frame_to(frame, Duration::ZERO, &mut sink)
+            .unwrap();
+        encoder.flush_to(&mut sink).unwrap();
+        let packets = sink.take();
+        assert!(!packets.is_empty());
+
+        let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264).unwrap();
+        let mut decoder = context::Context::new_with_codec(codec)
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frames = Vec::new();
+        for packet in &packets {
+            decoder.send_packet(packet).unwrap();
+            receive_frames(&mut decoder, &mut frames);
+        }
+        decoder.send_eof().unwrap();
+        receive_frames(&mut decoder, &mut frames);
+        assert_eq!(frames.len(), 1);
+        let decoded = &frames[0];
+        assert_eq!(decoded.color_space(), color::Space::BT709);
+        assert_eq!(decoded.color_range(), color::Range::MPEG);
+        let y = decoded.data(0)[32 * decoded.stride(0) + 32];
+        assert!(
+            y.abs_diff(83) <= 2,
+            "decoded luma {y} is not limited BT.709 red"
+        );
     }
 
     #[test]

@@ -70,9 +70,12 @@ windows_0_58 = { package = "windows", version = "0.58", features = [
 
 [dev-dependencies]
 cap-media-info = { path = "../media-info" }
+cap-video-decode = { path = "../video-decode", features = ["scripted"] }
+cap-verify-expect = { path = "../verify-expect" }
 tempfile = "3"
 pollster = "0.4.0"
 pretty_assertions = "1.4.1"
+tracing-subscriber = "0.3.19"
 
 [build-dependencies]
 build-time = "0.1"

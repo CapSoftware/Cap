@@ -45,6 +45,8 @@ export const SpeedController = () => {
 	};
 
 	const validateAndSetFile = (selectedFile: File) => {
+		if (isProcessing) return;
+
 		setError(null);
 		setOutputUrl(null);
 		setVideoInfo(null);
@@ -130,8 +132,11 @@ export const SpeedController = () => {
 			console.log(`Input file: ${file.name}, size: ${file.size} bytes`);
 
 			const fileUrl = URL.createObjectURL(file);
-			await adjustVideoSpeed(fileUrl);
-			URL.revokeObjectURL(fileUrl);
+			try {
+				await adjustVideoSpeed(fileUrl);
+			} finally {
+				URL.revokeObjectURL(fileUrl);
+			}
 		} catch (err: any) {
 			console.error("Detailed processing error:", err);
 
@@ -272,6 +277,7 @@ export const SpeedController = () => {
 					};
 
 					recorder.onstop = () => {
+						video.onerror = null;
 						const chunks = recordedChunksRef.current;
 						const blob = new Blob(chunks, {
 							type: selectedMimeType.split(";")[0],
@@ -349,6 +355,24 @@ export const SpeedController = () => {
 						}
 					};
 
+					const discardRecording = (err: unknown) => {
+						clearTimeout(safetyTimeout);
+						cancelAnimationFrame(animationFrameId);
+						video.onerror = null;
+						video.onended = null;
+						recorder.ondataavailable = null;
+						recorder.onstop = null;
+						if (recorder.state === "recording") recorder.stop();
+						for (const track of stream.getTracks()) track.stop();
+						video.pause();
+						videoRef.current = null;
+						mediaRecorderRef.current = null;
+						recordedChunksRef.current = [];
+						reject(err);
+					};
+					video.onerror = () =>
+						discardRecording(new Error("Error loading video"));
+
 					video
 						.play()
 						.then(() => {
@@ -356,7 +380,7 @@ export const SpeedController = () => {
 						})
 						.catch((err) => {
 							console.error("Error playing video:", err);
-							reject(err);
+							discardRecording(err);
 						});
 
 					const safetyTimeout = setTimeout(
@@ -498,7 +522,15 @@ export const SpeedController = () => {
 					{SPEED_OPTIONS.map((option) => (
 						<button
 							key={option.value}
-							onClick={() => setSelectedSpeed(option.value)}
+							disabled={isProcessing}
+							onClick={() => {
+								if (option.value === selectedSpeed) return;
+								setSelectedSpeed(option.value);
+								if (outputUrl) {
+									URL.revokeObjectURL(outputUrl);
+									setOutputUrl(null);
+								}
+							}}
 							className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
 								selectedSpeed === option.value
 									? "bg-blue-600 text-white"
@@ -528,6 +560,7 @@ export const SpeedController = () => {
 					accept="video/*"
 					className="hidden"
 					onChange={handleFileChange}
+					disabled={isProcessing}
 					ref={fileInputRef}
 				/>
 

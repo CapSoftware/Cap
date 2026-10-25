@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::SourceBindGroups;
 use crate::ProjectUniforms;
 
 pub struct BlurLayer {
@@ -11,6 +12,7 @@ pub struct BlurLayer {
     pipeline: BlurPipeline,
     cached_uniforms: Option<BlurUniforms>,
     result: Option<(BlurResultKey, wgpu::Texture)>,
+    bind_groups: SourceBindGroups,
 }
 
 /// Everything the blurred background depends on. While it matches, the
@@ -53,6 +55,7 @@ impl BlurLayer {
             pipeline: BlurPipeline::new(device),
             cached_uniforms: None,
             result: None,
+            bind_groups: SourceBindGroups::default(),
         }
     }
 
@@ -61,6 +64,15 @@ impl BlurLayer {
             .as_ref()
             .filter(|(cached, _)| *cached == key)
             .map(|(_, texture)| texture)
+    }
+
+    pub fn clear_result(&mut self) {
+        self.result = None;
+    }
+
+    #[cfg(test)]
+    pub fn has_cached_result(&self) -> bool {
+        self.result.is_some()
     }
 
     pub fn store_result(
@@ -123,39 +135,53 @@ impl BlurLayer {
         }
     }
 
+    pub fn retain_views(&mut self, views: [&wgpu::TextureView; 2]) {
+        self.bind_groups.retain_views(views);
+    }
+
+    #[cfg(test)]
+    pub fn bind_groups_created(&self) -> usize {
+        self.bind_groups.created()
+    }
+
     pub fn render_h(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
-        self.render_pass(pass, device, source_texture, &self.uniforms_buffer_h);
+        self.render_pass(pass, device, source_texture, false);
     }
 
     pub fn render_v(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
     ) {
-        self.render_pass(pass, device, source_texture, &self.uniforms_buffer_v);
+        self.render_pass(pass, device, source_texture, true);
     }
 
     fn render_pass(
-        &self,
+        &mut self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
-        uniforms_buffer: &wgpu::Buffer,
+        vertical: bool,
     ) {
+        let uniforms_buffer = if vertical {
+            &self.uniforms_buffer_v
+        } else {
+            &self.uniforms_buffer_h
+        };
+        let bind_group = self
+            .bind_groups
+            .get_or_create(uniforms_buffer, source_texture, || {
+                self.pipeline
+                    .bind_group(device, uniforms_buffer, source_texture, &self.sampler)
+            });
         pass.set_pipeline(&self.pipeline.render_pipeline);
-        pass.set_bind_group(
-            0,
-            &self
-                .pipeline
-                .bind_group(device, uniforms_buffer, source_texture, &self.sampler),
-            &[],
-        );
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..4, 0..1);
     }
 }
