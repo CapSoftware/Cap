@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -12,7 +13,6 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
 import {
 	notifyStartupInDesktopEntries,
 	runCommand,

@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+	notifyStartupInDesktopEntries,
+	withStartupNotify,
+} from "./finalize-linux-appimage.mjs";
+import {
 	finalizeGpuiDeb,
 	finalizeGpuiRpm,
 	linkDuplicateLibraries,
@@ -26,10 +30,6 @@ import {
 	withoutWebviewRpmRequirements,
 	withUpdatedChecksums,
 } from "./finalize-linux-gpui-packages.mjs";
-import {
-	notifyStartupInDesktopEntries,
-	withStartupNotify,
-} from "./finalize-linux-appimage.mjs";
 
 const available = (command) =>
 	spawnSync("sh", ["-c", `command -v ${command}`]).status === 0;
