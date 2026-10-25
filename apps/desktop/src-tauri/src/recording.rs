@@ -2071,6 +2071,7 @@ async fn start_recording_prepared(
             app_state.was_camera_only_recording = true;
         }
     }
+    crate::upload_health::cancel_in_flight_probe(&app).await;
 
     let storage_generation = crate::clean_capture::generation(&app);
     #[cfg(target_os = "linux")]
@@ -2303,7 +2304,7 @@ async fn start_recording_prepared(
                 notify_recording_start_failed(&app, &error);
                 return Err(error);
             };
-            let instant_mode_max_resolution = if auth.is_upgraded() {
+            let configured_max_resolution = if auth.is_upgraded() {
                 general_settings
                     .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
                         settings.instant_mode_max_resolution
@@ -2311,6 +2312,12 @@ async fn start_recording_prepared(
             } else {
                 cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
             };
+            let instant_mode_max_resolution =
+                crate::upload_health::resolve_instant_max_resolution(
+                    &app,
+                    configured_max_resolution,
+                )
+                .await;
             let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
                 "desktopMP4"
             } else {

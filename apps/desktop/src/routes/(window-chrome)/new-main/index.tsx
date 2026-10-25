@@ -38,6 +38,7 @@ import toast from "solid-toast";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
+import { UploadHealthIndicator } from "~/components/upload-health-indicator";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import {
@@ -3432,6 +3433,7 @@ function Page() {
 					</div>
 				</div>
 			</Show>
+			<UploadHealthIndicator isRecording={isRecording} />
 			<RecoveryToast />
 		</div>
 	);

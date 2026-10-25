@@ -587,6 +587,12 @@ async restartApp() : Promise<null> {
 },
 async updatesChannelChanged() : Promise<null> {
     return await TAURI_INVOKE("updates_channel_changed");
+},
+async getUploadHealthStatus() : Promise<UploadHealthStatus> {
+    return await TAURI_INVOKE("get_upload_health_status");
+},
+async refreshUploadHealthStatus() : Promise<UploadHealthStatus> {
+    return await TAURI_INVOKE("refresh_upload_health_status");
 }
 }
 
@@ -626,6 +632,7 @@ setCaptureAreaPending: SetCaptureAreaPending,
 targetUnderCursor: TargetUnderCursor,
 updateDownloadProgress: UpdateDownloadProgress,
 updateReady: UpdateReady,
+uploadHealthUpdated: UploadHealthUpdated,
 uploadProgressEvent: UploadProgressEvent,
 videoImportProgress: VideoImportProgress
 }>({
@@ -661,6 +668,7 @@ setCaptureAreaPending: "set-capture-area-pending",
 targetUnderCursor: "target-under-cursor",
 updateDownloadProgress: "update-download-progress",
 updateReady: "update-ready",
+uploadHealthUpdated: "upload-health-updated",
 uploadProgressEvent: "upload-progress-event",
 videoImportProgress: "video-import-progress"
 })
@@ -1377,6 +1385,9 @@ export type VideoMeta = { path: string; fps?: number; start_time?: number | null
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
 export type VoiceIsolation = "light" | "balanced" | "strong"
+export type UploadHealthState = "checking" | "healthy" | "degraded" | "unavailable" | "unauthenticated"
+export type UploadHealthStatus = { state: UploadHealthState; uploadMbps: number | null; recommendedMaxResolution: number; qualityLabel: string; message: string; supportUrl: string; checkedAtUnixMs: number | null }
+export type UploadHealthUpdated = { status: UploadHealthStatus }
 export type WindowExclusion = { bundleIdentifier?: string | null; ownerName?: string | null; windowTitle?: string | null }
 export type WindowId = string
 export type WindowPosition = { x: number; y: number; displayId?: DisplayId | null }

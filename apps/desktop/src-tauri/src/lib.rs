@@ -61,6 +61,7 @@ mod tray;
 mod update_project_names;
 mod updates;
 mod upload;
+pub mod upload_health;
 pub mod web_api;
 mod window_exclusion;
 mod window_position_persistence;
@@ -6959,6 +6960,8 @@ fn specta_builder() -> tauri_specta::Builder {
             updates::updates_download_and_install,
             restart_app,
             updates::updates_channel_changed,
+            upload_health::get_upload_health_status,
+            upload_health::refresh_upload_health_status,
         ])
         .events(tauri_specta::collect_events![
             linux_instant_camera::CameraPresentationRequested,
@@ -6995,6 +6998,7 @@ fn specta_builder() -> tauri_specta::Builder {
             updates::UpdateDownloadProgress,
             updates::UpdateReady,
             diagnostics::DiagnosticProgress,
+            upload_health::UploadHealthUpdated,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -7283,6 +7287,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: Option<PathB
             app.manage(editor_preparing::PreparingConsumers::default());
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
+            app.manage(Arc::new(upload_health::UploadHealthManager::default()));
+            upload_health::spawn_startup_check(app.clone());
 
             #[cfg(unix)]
             {

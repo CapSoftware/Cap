@@ -661,3 +661,83 @@ app.post(
 		return c.json({ error: true }, { status: 400 });
 	},
 );
+
+const MAX_UPLOAD_HEALTH_PROBE_BYTES = 1024 * 1024;
+
+async function readUploadHealthProbeBytes(
+	stream: ReadableStream<Uint8Array> | null,
+	maxBytes: number,
+): Promise<{ receivedBytes: number; exceeded: boolean }> {
+	if (!stream) {
+		return { receivedBytes: 0, exceeded: false };
+	}
+
+	const reader = stream.getReader();
+	let receivedBytes = 0;
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			receivedBytes += value?.byteLength ?? 0;
+			if (receivedBytes > maxBytes) {
+				await reader.cancel().catch(() => undefined);
+				return { receivedBytes, exceeded: true };
+			}
+		}
+		return { receivedBytes, exceeded: false };
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+app.on(["GET", "HEAD"], "/upload-health", withAuth, async (c) => {
+	return c.json({
+		ok: true,
+		storageReady: true,
+		timestamp: Date.now(),
+	});
+});
+
+app.post("/upload-health", withAuth, async (c) => {
+	// Best-effort fast-path check when Content-Length is voluntarily advertised;
+	// readUploadHealthProbeBytes enforces the strict stream limit below.
+	const rawContentLength = c.req.header("content-length");
+	if (rawContentLength !== undefined) {
+		const contentLength = Number(rawContentLength);
+		if (
+			Number.isFinite(contentLength) &&
+			contentLength > MAX_UPLOAD_HEALTH_PROBE_BYTES
+		) {
+			return c.json(
+				{
+					ok: false,
+					error: "Upload probe payload exceeds maximum allowed size",
+				},
+				{ status: 413 },
+			);
+		}
+	}
+
+	const { receivedBytes, exceeded } = await readUploadHealthProbeBytes(
+		c.req.raw.body,
+		MAX_UPLOAD_HEALTH_PROBE_BYTES,
+	);
+
+	if (exceeded) {
+		return c.json(
+			{
+				ok: false,
+				error: "Upload probe payload exceeds maximum allowed size",
+			},
+			{ status: 413 },
+		);
+	}
+
+	return c.json({
+		ok: true,
+		receivedBytes,
+		storageReady: true,
+		timestamp: Date.now(),
+	});
+});
