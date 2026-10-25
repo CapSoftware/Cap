@@ -12498,6 +12498,46 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn field_text(
+        editor: &Entity<EditorWindow>,
+        key: crate::editor_panels::FieldKey,
+        cx: &mut gpui::VisualTestContext,
+    ) -> String {
+        editor.read_with(cx, |editor, cx| {
+            editor.field(key).unwrap().read(cx).text().to_string()
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn set_caption_timeline(editor: &mut EditorWindow, captions: &[(&str, f64, f64)]) {
+        editor.project.timeline = Some(TimelineConfiguration {
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            segments: Vec::new(),
+            transitions: Vec::new(),
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: captions
+                .iter()
+                .map(|(id, start, end)| {
+                    serde_json::from_value(serde_json::json!({
+                        "id": id,
+                        "start": start,
+                        "end": end,
+                        "text": format!("caption {id}"),
+                    }))
+                    .unwrap()
+                })
+                .collect(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
+        });
+    }
+
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     #[ignore = "manual preset menu repaint benchmark"]
     fn benchmark_presets_menu_repaint(cx: &mut gpui::TestAppContext) {
@@ -13520,6 +13560,238 @@ mod tests {
         assert_eq!(text(&editor, FieldKey::CaptionText(0), cx), "Bye");
         assert_eq!(caption.read_with(cx, |input, _| input.selection()), 3..3);
         assert_eq!(text(&editor, FieldKey::CaptionStart(0), cx), "1.25");
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn visible_field_sync_leaves_hidden_fields_until_they_are_visible(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::editor_panels::FieldKey;
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let visible = [
+            FieldKey::CaptionText(0),
+            FieldKey::CaptionStart(0),
+            FieldKey::CaptionEnd(0),
+        ];
+        let hidden = [
+            FieldKey::CaptionText(1),
+            FieldKey::CaptionStart(1),
+            FieldKey::CaptionEnd(1),
+        ];
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("fields".into(), window, cx);
+            set_caption_timeline(editor, &[("first", 1.25, 3.5), ("second", 4., 6.)]);
+            for key in visible.into_iter().chain(hidden) {
+                editor.ensure_field(key, window, cx);
+            }
+            editor.sync_fields(window, cx);
+        });
+        assert_eq!(
+            hidden.map(|key| field_text(&editor, key, cx)),
+            ["caption second", "4.00", "6.00"]
+        );
+
+        // A hidden field is not touched by a sync that only lists the visible
+        // caption, even after its value moved.
+        editor.update_in(cx, |editor, window, cx| {
+            let segment = &mut editor.project.timeline.as_mut().unwrap().caption_segments[1];
+            segment.text = "caught up".into();
+            segment.start = 5.;
+            segment.end = 7.;
+            editor.sync_visible_fields(&visible, window, cx);
+        });
+        assert_eq!(
+            hidden.map(|key| field_text(&editor, key, cx)),
+            ["caption second", "4.00", "6.00"]
+        );
+
+        // Becoming visible lists it again, and it catches up then.
+        editor.update_in(cx, |editor, window, cx| {
+            editor.sync_visible_fields(&hidden, window, cx);
+        });
+        assert_eq!(
+            hidden.map(|key| field_text(&editor, key, cx)),
+            ["caught up", "5.00", "7.00"]
+        );
+
+        // The all-fields path still catches every hidden field up, which is
+        // the old behaviour the benchmark compares against.
+        editor.update_in(cx, |editor, window, cx| {
+            editor.project.timeline.as_mut().unwrap().caption_segments[1].text = "all".into();
+            editor.sync_fields(window, cx);
+        });
+        assert_eq!(field_text(&editor, FieldKey::CaptionText(1), cx), "all");
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn visible_field_sync_never_overwrites_a_focused_field(cx: &mut gpui::TestAppContext) {
+        use crate::editor_panels::FieldKey;
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let visible = [
+            FieldKey::CaptionText(0),
+            FieldKey::CaptionStart(0),
+            FieldKey::CaptionEnd(0),
+        ];
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("fields".into(), window, cx);
+            set_caption_timeline(editor, &[("first", 1.25, 3.5)]);
+            for key in visible {
+                editor.ensure_field(key, window, cx);
+            }
+            editor.sync_fields(window, cx);
+        });
+        let start_focus = editor.read_with(cx, |editor, cx| {
+            editor
+                .field(FieldKey::CaptionStart(0))
+                .unwrap()
+                .read(cx)
+                .focus_handle()
+        });
+
+        // The visible caption moved, but its start box is being typed into.
+        editor.update_in(cx, |editor, window, cx| {
+            window.focus(&start_focus, cx);
+            let segment = &mut editor.project.timeline.as_mut().unwrap().caption_segments[0];
+            segment.start = 2.;
+            segment.text = "Bye".into();
+            editor.sync_visible_fields(&visible, window, cx);
+        });
+        assert_eq!(field_text(&editor, FieldKey::CaptionText(0), cx), "Bye");
+        assert_eq!(field_text(&editor, FieldKey::CaptionStart(0), cx), "1.25");
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn prepare_sidebar_fields_syncs_only_the_selected_caption_and_the_crop(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::{
+            editor_crop::{CropBounds, CropField, CropState},
+            editor_panels::FieldKey,
+        };
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let caption0 = [
+            FieldKey::CaptionText(0),
+            FieldKey::CaptionStart(0),
+            FieldKey::CaptionEnd(0),
+        ];
+        let caption1 = [
+            FieldKey::CaptionText(1),
+            FieldKey::CaptionStart(1),
+            FieldKey::CaptionEnd(1),
+        ];
+        let crop_fields = [
+            FieldKey::Crop(CropField::Width),
+            FieldKey::Crop(CropField::Height),
+            FieldKey::Crop(CropField::X),
+            FieldKey::Crop(CropField::Y),
+        ];
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("fields".into(), window, cx);
+            set_caption_timeline(editor, &[("first", 1.25, 3.5), ("second", 4., 6.)]);
+            // Both captions were selected at some point, so both sets of
+            // fields exist and start in sync.
+            for key in caption0.into_iter().chain(caption1) {
+                editor.ensure_field(key, window, cx);
+            }
+            editor.sync_fields(window, cx);
+            editor.crop = Some(CropState::new(
+                (1920, 1080),
+                (510., 331.),
+                CropBounds::new(96., 54., 960., 540.),
+            ));
+            editor.selection = Some(Selection::single(TrackKind::Caption, 0));
+        });
+        assert_eq!(
+            caption1.map(|key| field_text(&editor, key, cx)),
+            ["caption second", "4.00", "6.00"]
+        );
+
+        // Move both captions, then run the production prepare path. It draws
+        // caption 0 and the crop dialog, so caption 1 stays behind.
+        editor.update_in(cx, |editor, window, cx| {
+            let timeline = editor.project.timeline.as_mut().unwrap();
+            timeline.caption_segments[0].text = "visible".into();
+            timeline.caption_segments[0].start = 1.5;
+            timeline.caption_segments[0].end = 3.0;
+            timeline.caption_segments[1].text = "hidden".into();
+            editor.prepare_sidebar_fields(window, cx);
+        });
+        assert_eq!(field_text(&editor, FieldKey::CaptionText(0), cx), "visible");
+        assert_eq!(field_text(&editor, FieldKey::CaptionStart(0), cx), "1.50");
+        assert_eq!(field_text(&editor, FieldKey::CaptionEnd(0), cx), "3.00");
+        assert_eq!(
+            field_text(&editor, FieldKey::CaptionText(1), cx),
+            "caption second"
+        );
+
+        // The crop boxes are part of the visible set.
+        let crop = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().real());
+        assert_eq!(
+            crop_fields.map(|key| {
+                let FieldKey::Crop(_) = key else {
+                    unreachable!()
+                };
+                field_text(&editor, key, cx)
+            }),
+            crop_fields.map(|key| {
+                let FieldKey::Crop(field) = key else {
+                    unreachable!()
+                };
+                crate::ui::format_number(field.read(crop))
+            })
+        );
+
+        // Selecting caption 1 makes it visible, and it catches up.
+        editor.update_in(cx, |editor, window, cx| {
+            editor.selection = Some(Selection::single(TrackKind::Caption, 1));
+            editor.prepare_sidebar_fields(window, cx);
+        });
+        assert_eq!(field_text(&editor, FieldKey::CaptionText(1), cx), "hidden");
+
+        // The crop dialog is independent of the timeline: its four fields
+        // still sync through the early-return path.
+        editor.update_in(cx, |editor, window, cx| {
+            editor.project.timeline = None;
+            editor.crop = Some(CropState::new(
+                (1920, 1080),
+                (510., 331.),
+                CropBounds::new(10., 20., 320., 480.),
+            ));
+            editor.prepare_sidebar_fields(window, cx);
+        });
+        let crop = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().real());
+        assert_eq!(
+            crop_fields.map(|key| {
+                let FieldKey::Crop(_) = key else {
+                    unreachable!()
+                };
+                field_text(&editor, key, cx)
+            }),
+            crop_fields.map(|key| {
+                let FieldKey::Crop(field) = key else {
+                    unreachable!()
+                };
+                crate::ui::format_number(field.read(crop))
+            })
+        );
     }
 
     /// `default_editor_preview_resolution()` is asserted to be 1248x702 in the

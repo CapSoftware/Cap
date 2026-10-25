@@ -141,7 +141,7 @@ fn seed_caption_fields(
 ) {
     let step = view.total_duration() / SEEDED_CAPTION_SEGMENTS as f64;
     let Some(timeline) = view.project.timeline.as_mut() else {
-        return;
+        panic!("timeline-bench: the fixture has no timeline to seed caption fields");
     };
     timeline.caption_segments = (0..SEEDED_CAPTION_SEGMENTS)
         .map(|index| cap_project::CaptionTrackSegment {
@@ -167,6 +167,11 @@ fn seed_caption_fields(
             view.ensure_field(key, window, cx);
         }
     }
+    assert!(
+        view.fields.len() >= SEEDED_CAPTION_SEGMENTS * 3,
+        "timeline-bench: only {} caption fields were seeded",
+        view.fields.len()
+    );
 }
 
 pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
@@ -288,6 +293,21 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         );
     }
 
+    // The visible case models the production sidebar on the Captions tab with
+    // caption 0 selected. `TickFields` seeds the fields without changing the
+    // tab, so set that state explicitly before either sync loop.
+    let Ok(()) = handle.update(cx, |view, _, cx| {
+        view.sidebar.tab = SidebarTab::Captions;
+        view.selection = Some(crate::editor_edits::Selection::single(
+            editor_timeline::TrackKind::Caption,
+            0,
+        ));
+        cx.notify();
+    }) else {
+        eprintln!("timeline-bench: the editor window closed");
+        std::process::exit(1);
+    };
+
     // The per-render field sync on its own, with the seeded fields in place.
     let mut sync_us = Vec::with_capacity(MEASURED_FRAMES);
     for iteration in 0..WARMUP_FRAMES + MEASURED_FRAMES {
@@ -310,6 +330,58 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         }
     }
     draw_bench::report("timeline-bench", "sync-fields", &mut sync_us);
+
+    // The production path over the same seeded state: the Captions tab with
+    // caption 0 selected makes `prepare_sidebar_fields` list exactly these
+    // three keys (`TrackKind::Caption`'s arm), so this is what a render now
+    // syncs. The
+    // all-fields case above is the faithful old path. The keys are written out
+    // rather than derived by calling `prepare_sidebar_fields` because that
+    // call would also time key derivation and field creation, not the sync.
+    let visible = [
+        FieldKey::CaptionText(0),
+        FieldKey::CaptionStart(0),
+        FieldKey::CaptionEnd(0),
+    ];
+    let Ok(missing) = handle.update(cx, |view, _, _| {
+        visible
+            .iter()
+            .filter(|key| !view.fields.contains_key(key))
+            .count()
+    }) else {
+        eprintln!("timeline-bench: the editor window closed");
+        std::process::exit(1);
+    };
+    assert_eq!(
+        missing, 0,
+        "timeline-bench: the visible caption fields were not seeded"
+    );
+    let mut visible_sync_us = Vec::with_capacity(MEASURED_FRAMES);
+    for iteration in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+        let Ok(elapsed) = handle.update(cx, |view, window, cx| {
+            if view.playing {
+                view.stop_for_measurement(cx);
+            }
+            let started = Instant::now();
+            view.sync_visible_fields(&visible, window, cx);
+            started.elapsed()
+        }) else {
+            eprintln!("timeline-bench: the editor window closed");
+            std::process::exit(1);
+        };
+        if iteration >= WARMUP_FRAMES {
+            visible_sync_us.push(elapsed.as_secs_f64() * 1e6);
+        }
+    }
+    println!(
+        "timeline-bench: sync-visible-fields over {} fields",
+        visible.len()
+    );
+    draw_bench::report(
+        "timeline-bench",
+        "sync-visible-fields",
+        &mut visible_sync_us,
+    );
 
     std::process::exit(0);
 }
