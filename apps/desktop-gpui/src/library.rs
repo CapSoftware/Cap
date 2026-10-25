@@ -612,9 +612,7 @@ pub fn open_path(path: &Path) {
         }
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", &path.to_string_lossy()])
-                .spawn()
+            shell_open(path)
         }
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         {
@@ -623,6 +621,46 @@ pub fn open_path(path: &Path) {
     };
     if let Err(error) = result {
         tracing::warn!(path = %path.display(), "opening a path failed: {error}");
+    }
+}
+
+/// `ShellExecuteW` rather than `cmd /C start`: `cmd` is a console program, so a
+/// GUI-subsystem parent gets a console window, and the path would be parsed as
+/// part of a command line instead of a single file argument.
+#[cfg(target_os = "windows")]
+fn shell_open(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::{
+        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+        w,
+    };
+
+    let wide = |value: &std::ffi::OsStr| {
+        value
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let file = wide(path.as_os_str());
+    // SAFETY: `file` is NUL-terminated and outlives the call; the remaining
+    // arguments are the documented nulls for the default verb.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            w!("open"),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Windows could not open the path (code {})",
+            result as isize
+        ))
     }
 }
 
