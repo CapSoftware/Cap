@@ -19,7 +19,13 @@ esac
 name=cap-$desktop-$$
 [[ -d "$out" ]] && find "$out" -mindepth 1 -delete
 mkdir -p "$out" && chmod 777 "$out"
-docker build -q -f "$here/$dockerfile" -t "$image" "$here" >/dev/null
+# HARNESS_IMAGE: an image built from this one (a patched compositor) to run
+# instead.
+if [[ -n "${HARNESS_IMAGE:-}" ]]; then
+  image=$HARNESS_IMAGE
+else
+  docker build -q -f "$here/$dockerfile" -t "$image" "$here" >/dev/null
+fi
 # DEV_BIN=<path to a built cap-gpui> with DEV_LIBS=<its FFmpeg lib dir> runs a
 # local build in place of the packaged binary (the package still provides the
 # desktop file and dependencies).
@@ -27,7 +33,10 @@ dev_mounts=()
 if [[ -n "${DEV_BIN:-}" ]]; then
   dev_mounts=(-v "$(realpath "$DEV_BIN")":/dev-bin/cap-gpui:ro -v "$(realpath "${DEV_LIBS:?set DEV_LIBS}")":/dev-libs:ro)
 fi
-docker run -d --name "$name" --privileged --cgroupns=host \
+# DOCKER_EXTRA: more `docker run` flags, e.g. `--gpus all -e
+# NVIDIA_DRIVER_CAPABILITIES=all` to hand a real GPU's userspace to the desktop.
+read -r -a docker_extra <<<"${DOCKER_EXTRA:-}"
+docker run -d --name "$name" --privileged --cgroupns=host "${docker_extra[@]}" \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock \
   -v "$package":/pkgs/"$(basename "$package")":ro -v "$here":/harness:ro -v "$out":/out \
   "${dev_mounts[@]}" "$image" >/dev/null

@@ -8,8 +8,12 @@ export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 out=${HARNESS_OUT:-/out}
 mkdir -p "$out"
 
+# GNOME_GPU=1 leaves rendering to the host's GPU (passed in with
+# DOCKER_EXTRA); otherwise everything renders in software, as on CI.
+software=(LIBGL_ALWAYS_SOFTWARE=1)
+[[ ${GNOME_GPU:-} == 1 ]] && software=()
 systemctl --user set-environment XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=ubuntu:GNOME \
-  XDG_SESSION_DESKTOP=ubuntu GNOME_SHELL_SESSION_MODE=ubuntu LIBGL_ALWAYS_SOFTWARE=1
+  XDG_SESSION_DESKTOP=ubuntu GNOME_SHELL_SESSION_MODE=ubuntu "${software[@]}"
 # A logged-in GNOME session has graphical-session.target active, and the GNOME
 # portal backend will not start without it. It refuses a manual start, so bind
 # a harness target to it the way gnome-session's own targets do.
@@ -53,7 +57,7 @@ for _ in $(seq 300); do
     --method org.freedesktop.DBus.Properties.Get org.gnome.Shell ShellVersion >/dev/null 2>&1 && break
   sleep 0.1
 done
-export WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=ubuntu:GNOME XDG_SESSION_DESKTOP=ubuntu GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1
+export WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=ubuntu:GNOME XDG_SESSION_DESKTOP=ubuntu GSK_RENDERER=cairo "${software[@]}"
 systemctl --user set-environment WAYLAND_DISPLAY=wayland-0
-dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP GSK_RENDERER LIBGL_ALWAYS_SOFTWARE
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP GSK_RENDERER "${software[@]%%=*}"
 echo "gnome-up: $(gnome-shell --version) on wayland-0"

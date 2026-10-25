@@ -15,8 +15,13 @@ on:
       - "crates/scap-targets/**"
       - "scripts/linux-desktop-harness/**"
       - "scripts/prepare-gpui-dependency.sh"
+      - "scripts/finalize-linux-appimage.mjs"
       - ".github/workflows/linux-desktop-reliability.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,6 +32,9 @@ env:
   # binary under test is this commit's build.
   CAP_DEB_URL: https://cdn.crabnebula.app/asset/01M5CHFS77QM2HSZ69KT784SAV
   CAP_DEB_SHA256: bb03dddc5268f64d3e6eb4c11534462e5b7a8a5c1c7bb5bca5f5bdaa99d11c56
+  # The 0.6.1 AppImage, whose libraries the NixOS check lays out both ways.
+  CAP_APPIMAGE_URL: https://cdn.crabnebula.app/asset/01M5CHFYYW4JXX4M9SPZ1NF6HM
+  CAP_APPIMAGE_SHA256: dd579d76b91173a2e620034c407e63ec3ae4ae5420540de80f5fededb7519b97
 
 jobs:
   # A pull request from a fork that changes only this workflow or the harness
@@ -52,7 +60,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-          if grep -qE '^(apps/desktop-gpui/|crates/(recording|utils|scap-targets)/|scripts/prepare-gpui-dependency\.sh$)' "$RUNNER_TEMP/changed.txt"; then
+          if grep -qE '^(apps/desktop-gpui/|crates/(recording|utils|scap-targets)/|scripts/(prepare-gpui-dependency\.sh|finalize-linux-appimage\.mjs)$)' "$RUNNER_TEMP/changed.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -98,6 +106,16 @@ jobs:
 
       - name: Build cap-gpui
         run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+
+      # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
+      # modifier (GitHub #2941). niri itself refuses software rendering, so a
+      # producer that negotiates and shares frames the way it does stands in.
+      - name: Capture from a niri-style DMA-BUF screencast
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo apt-get install -y -qq pipewire wireplumber libpipewire-0.3-dev dbus >/dev/null
+          RUSTUP_TOOLCHAIN=1.95.0 bash scripts/linux-desktop-harness/niri-screencast/run.sh
 
       - name: Confirmation dialog without zenity (X11 input)
         run: |
@@ -258,6 +276,17 @@ jobs:
             "$RUNNER_TEMP/out/hyprland-gl" LAUNCH=dock VK_ICD_FILENAMES=/nonexistent.json
           grep -q 'Selected GPU adapter: .*(Gl)' "$RUNNER_TEMP/out/hyprland-gl/cap.log"
 
+      - name: Hyprland clipboard (Ctrl+V into and Ctrl+C out of a text field)
+        env:
+          SCENARIO: clipboard
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-clipboard"
+          for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
+            grep -qx "$key=yes" "$RUNNER_TEMP/out/hyprland-clipboard/result.txt"
+          done
+
       - name: Check results
         run: |
           bash scripts/linux-desktop-harness/check-results.sh \
@@ -270,3 +299,118 @@ jobs:
           name: linux-desktop-reliability-hyprland
           path: ${{ runner.temp }}/out
           if-no-files-found: ignore
+
+  appimage-nixos:
+    name: AppImage screen capture on NixOS
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    # NixOS users run the AppImage through appimage-run. The PipeWire plugins
+    # that load into Cap there link NixOS's FFmpeg, which needs a newer libva
+    # than the one 0.6.1 bundled ahead of the host's (GitHub #2941). This
+    # connects a capture stream through the real launchers, with the AppDir as
+    # 0.6.1 shipped it and as scripts/finalize-linux-appimage.mjs lays it out.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch the 0.6.1 AppImage
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/Cap.AppImage" "$CAP_APPIMAGE_URL"
+          echo "$CAP_APPIMAGE_SHA256  $RUNNER_TEMP/Cap.AppImage" | sha256sum --check
+
+      - name: Connect a capture stream in NixOS appimage-run
+        run: |
+          sudo bash scripts/linux-desktop-harness/appimage-pipewire/run.sh \
+            "$RUNNER_TEMP/Cap.AppImage" "$RUNNER_TEMP/out/appimage-nixos"
+
+      - name: Check results
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/out/appimage-nixos/result.txt"
+          cat "$result"
+          # The shipped layout is the control: it must still reproduce the
+          # failure, or the check proves nothing.
+          grep -qx "shipped_connects=no" "$result"
+          grep -qx "fixed_connects=yes" "$result"
+          # Programs Cap starts (xdg-open, file managers) no longer inherit
+          # the bundle's libraries.
+          grep -qx "shipped_children_get_bundle_libraries=yes" "$result"
+          grep -qx "fixed_children_get_bundle_libraries=no" "$result"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-appimage-nixos
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  niri:
+    name: Record on niri
+    needs: desktops
+    # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
+    # modifier (GitHub #2941). It refuses software rendering, so this builds
+    # the release with only that check removed and runs it on vkms.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Virtual display devices
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+          sudo modprobe vkms
+          ls -la /dev/dri
+
+      - name: Build niri
+        run: |
+          cd scripts/linux-desktop-harness
+          sudo docker build -q -f arch.Dockerfile -t cap-harness-arch . >/dev/null
+          sudo docker build -q -f niri-software.Dockerfile -t cap-harness-arch-niri . >/dev/null
+
+      # The runner's Hyper-V display (card1, Virtual-1) is a second output; with
+      # two, the screen-share dialog waits for a pick the harness never makes.
+      - name: niri (DMA-BUF screencast, tray Stop control)
+        run: |
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            HARNESS_IMAGE=cap-harness-arch-niri \
+            bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/niri" LAUNCH=dock NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
+            GSK_RENDERER=cairo
+
+      - name: niri clipboard (Ctrl+V into and Ctrl+C out of a text field)
+        env:
+          SCENARIO: clipboard
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            HARNESS_IMAGE=cap-harness-arch-niri \
+            bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/niri-clipboard" NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
+            GSK_RENDERER=cairo
+          for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
+            grep -qx "$key=yes" "$RUNNER_TEMP/out/niri-clipboard/result.txt"
+          done
+
+      - name: Check results
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh "$RUNNER_TEMP/out/niri"
+          grep -q "negotiated DMA-BUF frames" "$RUNNER_TEMP/out/niri/cap.log"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-niri
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
