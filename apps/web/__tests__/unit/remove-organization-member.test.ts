@@ -98,8 +98,9 @@ async function removeSeat(
 				hasProSeat: true,
 			},
 		],
-		[],
+		[{ id: "teammate" }],
 		remainingSeats,
+		[],
 	];
 	const { removeOrganizationMember } = await import(
 		"@/actions/organization/remove-member"
