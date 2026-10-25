@@ -76,7 +76,7 @@ lazy_static::lazy_static! {
 const WHISPER_SAMPLE_RATE: u32 = 16000;
 
 use cap_project::caption_words::{
-    caption_text_from_words, caption_word_chunks, normalize_caption_words,
+    caption_text_from_words, caption_word_chunks, caption_word_chunks_with, normalize_caption_words,
     MAX_CAPTION_WORD_DURATION,
 };
 
@@ -802,6 +802,7 @@ fn process_with_whisper(
     context: Arc<WhisperContext>,
     language: &str,
     transcription_hints: &[String],
+    segment_words: usize,
 ) -> Result<CaptionData, String> {
     log::info!("=== WHISPER TRANSCRIPTION START ===");
     log::info!("Processing audio file: {audio_path:?}");
@@ -1023,7 +1024,7 @@ fn process_with_whisper(
             continue;
         }
 
-        for (chunk_idx, chunk_words) in caption_word_chunks(&words).into_iter().enumerate() {
+        for (chunk_idx, chunk_words) in caption_word_chunks_with(&words, segment_words).into_iter().enumerate() {
             let segment_text = caption_text_from_words(chunk_words);
 
             let segment_start = chunk_words
@@ -1091,6 +1092,7 @@ fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
 fn process_with_parakeet(
     audio_path: &std::path::Path,
     model_dir: &str,
+    segment_words: usize,
 ) -> Result<CaptionData, String> {
     tracing::info!("Processing audio file: {audio_path:?}");
     tracing::info!("Model directory: {model_dir}");
@@ -1164,7 +1166,7 @@ fn process_with_parakeet(
 
     let mut segments = Vec::new();
 
-    for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
+    for (chunk_idx, chunk) in caption_word_chunks_with(&words, segment_words).into_iter().enumerate() {
         let segment_text = caption_text_from_words(chunk);
         let segment_start = chunk.first().map(|w| w.start).unwrap_or(0.0);
         let segment_end = chunk.last().map(|w| w.end).unwrap_or(0.0);
@@ -1194,6 +1196,7 @@ fn process_with_parakeet(
 fn process_with_parakeet(
     _audio_path: &std::path::Path,
     _model_dir: &str,
+    _segment_words: usize,
 ) -> Result<CaptionData, String> {
     Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
 }
@@ -1207,11 +1210,13 @@ pub async fn transcribe_audio(
     model_path: String,
     language: String,
     engine: TranscriptionEngine,
+    segment_words: Option<u32>,
 ) -> Result<CaptionData, String> {
     log::info!("=== TRANSCRIBE AUDIO COMMAND START ===");
     log::info!("Video path: {}", video_path);
     log::info!("Model path: {}", model_path);
     log::info!("Language: {}", language);
+    let segment_words = segment_words.unwrap_or(6).max(1) as usize;
 
     let validated_model_path = validate_model_path(&app, &model_path)?;
 
@@ -1259,7 +1264,7 @@ pub async fn transcribe_audio(
             let model_dir = model_path.clone();
             tokio::task::spawn_blocking(move || {
                 let _guard = lock_transcription_worker_slot();
-                process_with_parakeet(&audio_path, &model_dir)
+                process_with_parakeet(&audio_path, &model_dir, segment_words)
             })
             .await
             .map_err(|e| format!("Parakeet task panicked: {e}"))?
@@ -1284,8 +1289,13 @@ pub async fn transcribe_audio(
                         return Err(format!("Failed to initialize transcription model: {e}"));
                     }
                 };
-                let result =
-                    process_with_whisper(&audio_path, context, &language, &transcription_hints);
+                let result = process_with_whisper(
+                    &audio_path,
+                    context,
+                    &language,
+                    &transcription_hints,
+                    segment_words,
+                );
                 release_whisper_context_after_transcription();
                 result
             })
@@ -1499,6 +1509,10 @@ pub async fn save_captions(
         "activeWordHighlight".to_string(),
         serde_json::Value::Bool(settings.active_word_highlight),
     );
+    settings_obj.insert(
+        "segmentWords".to_string(),
+        serde_json::Value::Number(settings.segment_words.into()),
+    );
 
     json_obj.insert(
         "settings".to_string(),
@@ -1655,6 +1669,12 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
+                    let segment_words = settings_obj
+                        .get("segmentWords")
+                        .or_else(|| settings_obj.get("segment_words"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(6) as u32;
+
                     let preset = settings_obj
                         .get("preset")
                         .and_then(|v| v.as_str())
@@ -1707,6 +1727,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         linger_duration,
                         word_transition_duration,
                         active_word_highlight,
+                        segment_words,
                         manual_position,
                         preset,
                         animation,
