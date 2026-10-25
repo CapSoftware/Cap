@@ -17,7 +17,6 @@ export const CANVAS = { w: 1040, h: 600 } as const;
 
 export const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
-/** 0 before `from`, 1 after `to`, eased in between. */
 export const seg = (t: number, from: number, to: number) =>
 	ease(clamp01((t - from) / (to - from)));
 
@@ -29,7 +28,6 @@ export const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 export type SceneView = ComponentType<{
 	t: number;
 	playing: boolean;
-	/** Option picked by hand in the scene's picker, if any. */
 	pick: number | null;
 }>;
 
@@ -42,19 +40,15 @@ export type Scene = {
 	lead: string;
 	body: string;
 	duration: number;
-	/** Time shown when motion is reduced. */
 	pose: number;
 	View: SceneView;
-	/** Lets visitors drive the scene themselves (layouts, backgrounds). */
 	picker?: {
 		options: PickerOption[];
-		/** Which option the autoplay is showing at time t. */
 		at: (t: number) => number;
 		swatches?: boolean;
 	};
 };
 
-/** One clock for a whole showcase: rAF while on screen, frozen otherwise. */
 const useClock = ({
 	playing,
 	duration,
@@ -70,14 +64,14 @@ const useClock = ({
 	const tRef = useRef(0);
 	const endRef = useRef(onEnd);
 	endRef.current = onEnd;
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: resetKey restarts the clock
-	useEffect(() => {
-		tRef.current = 0;
-		setT(0);
-	}, [resetKey]);
+	const resetRef = useRef(resetKey);
 
 	useEffect(() => {
+		if (resetRef.current !== resetKey) {
+			resetRef.current = resetKey;
+			tRef.current = 0;
+			setT(0);
+		}
 		if (!playing) return;
 		let raf = 0;
 		let last = performance.now();
@@ -97,7 +91,7 @@ const useClock = ({
 		};
 		raf = requestAnimationFrame(frame);
 		return () => cancelAnimationFrame(raf);
-	}, [playing, duration]);
+	}, [playing, duration, resetKey]);
 
 	return t;
 };
@@ -134,7 +128,6 @@ const Tabs = ({
 
 	return (
 		<div
-			role="tablist"
 			className={classNames(
 				"relative inline-flex max-w-full gap-0.5 overflow-x-auto rounded-full bg-white p-1.5 shadow-[0_0_0_1px_rgba(17,17,17,0.07),0_1px_2px_rgba(17,17,17,0.05),0_12px_28px_-14px_rgba(17,24,39,0.3)] [scrollbar-width:none]",
 				className,
@@ -170,8 +163,7 @@ const Tabs = ({
 							refs.current[i] = el;
 						}}
 						type="button"
-						role="tab"
-						aria-selected={on}
+						aria-pressed={on}
 						onClick={() => onPick(i)}
 						className={classNames(
 							"relative z-10 flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-full px-3.5 text-[14px] tracking-[-0.01em] transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]",
@@ -268,10 +260,6 @@ const Picker = ({
 	</div>
 );
 
-/**
- * A big quiet panel that plays one scene at a time, with pill tabs to pick
- * the scene and a caption underneath that says what it shows in plain words.
- */
 export const Showcase = ({
 	scenes,
 	tone = TONES.instant,
@@ -290,12 +278,10 @@ export const Showcase = ({
 	const pageVisible = usePageVisible();
 	const reduced = useReducedMotion();
 	const [active, setActive] = useState(0);
-	const [paused, setPaused] = useState(false);
 	const [round, setRound] = useState(0);
 	const [picked, setPicked] = useState<number | null>(null);
-	// Every showcase passes at least one scene.
 	const scene = (scenes[active] ?? scenes[0]) as Scene;
-	const playing = inView && pageVisible && !paused && !reduced;
+	const playing = inView && pageVisible && picked === null && !reduced;
 
 	const t = useClock({
 		playing,
@@ -314,21 +300,12 @@ export const Showcase = ({
 		setRound((r) => r + 1);
 		setPicked(null);
 	};
-	// Picking by hand holds the scene where the visitor left it for a while,
-	// then the autoplay picks up again on its own.
-	const pickOption = (i: number) => {
-		setPicked(i);
-		setPaused(true);
-	};
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a new pick restarts the hold
+	const pickOption = (i: number) => setPicked(i);
 	useEffect(() => {
-		if (!paused) return;
-		const resume = setTimeout(() => {
-			setPicked(null);
-			setPaused(false);
-		}, 8000);
+		if (picked === null) return;
+		const resume = setTimeout(() => setPicked(null), 8000);
 		return () => clearTimeout(resume);
-	}, [paused, picked]);
+	}, [picked]);
 	const picker = scene.picker;
 	const pickerActive = picker ? (picked ?? picker.at(shown)) : 0;
 	const progress = reduced ? 0 : shown / scene.duration;
@@ -419,7 +396,6 @@ const useNarrow = () => {
 	return narrow;
 };
 
-/** On phones, show only a horizontal slice of the canvas so text stays legible. */
 const Cropped = ({
 	canvas,
 	crop,
@@ -445,7 +421,6 @@ const Cropped = ({
 	);
 };
 
-/** Self-running panel for a single looping scene, no tabs. */
 export const Loop = ({
 	View,
 	duration,
