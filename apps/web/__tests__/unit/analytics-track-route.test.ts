@@ -1,3 +1,4 @@
+import type { Effect as EffectModule } from "effect";
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,11 +36,13 @@ vi.mock("@cap/web-backend", async () => {
 	const { Context, Effect } = await import("effect");
 	const { CurrentUser } = await import("@cap/web-domain");
 	const Tinybird = Context.GenericTag<{
-		appendEvents: (events: unknown[]) => Effect.Effect<void>;
+		appendEvents: (events: unknown[]) => EffectModule.Effect<void>;
 	}>("Tinybird");
 	return {
 		Tinybird,
-		provideOptionalAuth: (app: Effect.Effect<unknown, unknown, never>) => {
+		provideOptionalAuth: (
+			app: EffectModule.Effect<unknown, unknown, never>,
+		) => {
 			const withTinybird = app.pipe(
 				Effect.provideService(Tinybird, {
 					appendEvents: (events) =>
