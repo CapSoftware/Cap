@@ -23,6 +23,9 @@ UNIT
 systemctl --user daemon-reload
 systemctl --user start cap-harness-session.target
 gsettings set org.gnome.shell enabled-extensions "['ubuntu-appindicators@ubuntu.com']"
+# The virtual pointer starts at the top-left corner; the hot corner would open
+# the overview under every injected click.
+gsettings set org.gnome.desktop.interface enable-hot-corners false
 gsettings set org.gnome.shell disable-user-extensions false
 gsettings set org.gnome.desktop.interface toolkit-accessibility true
 

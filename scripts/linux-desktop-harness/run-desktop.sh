@@ -59,7 +59,11 @@ if [[ -n "${DEV_BIN:-}" ]]; then
 fi
 for kv in "$@"; do envs+=(-e "$kv"); done
 docker exec -u tester "${envs[@]}" "$name" bash "/harness/$up"
-docker exec -u tester "${envs[@]}" "$name" bash /harness/scenario-start-stop.sh
+# SCENARIO picks scenario-<name>.sh (default start-stop); SCENARIO=none only
+# brings the desktop up (with KEEP_CONTAINER, for running other checks in it).
+if [[ ${SCENARIO:-start-stop} != none ]]; then
+  docker exec -u tester "${envs[@]}" "$name" bash "/harness/scenario-${SCENARIO:-start-stop}.sh"
+fi
 if [[ -n "${KEEP_CONTAINER:-}" ]]; then
   trap - EXIT
   echo "kept container $name"
