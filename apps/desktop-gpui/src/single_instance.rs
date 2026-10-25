@@ -960,15 +960,26 @@ fn linux_reopen_allowed(
 /// activation sent before then has no window to raise; the compositor drops
 /// repeats once the token is used.
 #[cfg(target_os = "linux")]
-fn raise_main_with_token(token: String, cx: &mut gpui::App) {
-    let main = cx.global::<crate::app_windows::AppWindows>().main;
+fn raise_shown_window_with_token(token: String, cx: &mut gpui::App) {
+    let windows = cx.global::<crate::app_windows::AppWindows>();
+    // The reopen brings onboarding forward in place of the main window, which
+    // stays hidden (and unmapped) until onboarding is done.
+    let target: gpui::AnyWindowHandle = match windows.onboarding {
+        Some(onboarding) => onboarding.into(),
+        None => windows.main.into(),
+    };
     cx.spawn(async move |cx| {
         for delay in [0, 150, 400, 1000] {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(delay))
                 .await;
             let token = token.clone();
-            let _ = main.update(cx, |_, window, _| window.activate_window_with_token(token));
+            if let Err(error) =
+                target.update(cx, |_, window, _| window.activate_window_with_token(token))
+            {
+                tracing::warn!(%error, "the reopened window was gone before it could be raised");
+                return;
+            }
         }
     })
     .detach();
@@ -995,8 +1006,8 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
                 if linux_reopen_allowed(current.phase, current.mode(), current.instant_cleanup_safe()) {
                     crate::app_windows::show_main_window(cx);
                     if let Some(token) = token {
-                        tracing::info!("raising the main window with the relaunch's activation token");
-                        raise_main_with_token(token, cx);
+                        tracing::info!("raising the reopened window with the relaunch's activation token");
+                        raise_shown_window_with_token(token, cx);
                     }
                 } else {
                     tracing::info!("Cap controls remain hidden while recording is changing state or cannot pause");
