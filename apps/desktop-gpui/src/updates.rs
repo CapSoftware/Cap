@@ -7,7 +7,7 @@ use semver::Version;
 use crate::{
     installer::{self, ArtifactKind, Release},
     session::RecordingSession,
-    store::{GeneralSettings, UpdateChannel},
+    store::{GeneralSettings, UpdateChannel, UpdateDownloadPolicy},
 };
 
 const STABLE_FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
@@ -71,6 +71,7 @@ struct UpdateScheduler {
     pending: PendingUpdateRequests,
     manual_in_flight: bool,
     status: UpdateStatus,
+    download_policy: UpdateDownloadPolicy,
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
     download_epoch: u64,
@@ -291,6 +292,10 @@ fn simulate_update(version: Version, cx: &mut App) {
         },
         cx,
     );
+    if GeneralSettings::load().update_download_policy != UpdateDownloadPolicy::Auto {
+        tracing::info!("CAP_GPUI_UPDATE_SIMULATION_VERSION: manual policy, waiting");
+        return;
+    }
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_secs(3)).await;
         cx.update(|cx| {
@@ -332,6 +337,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         pending: PendingUpdateRequests::default(),
         manual_in_flight: false,
         status: UpdateStatus::Idle,
+        download_policy: GeneralSettings::load().update_download_policy,
         staged: None,
         download: None,
         download_epoch: 0,
@@ -352,7 +358,13 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             .background_executor()
             .spawn(async { GeneralSettings::load().update_channel })
             .await;
-        let mut delay = (!cfg!(debug_assertions)).then(|| first_check_delay(channel));
+        let mut policy = cx
+            .update(|cx| cx.global::<UpdateScheduler>().download_policy);
+        let mut delay = if policy == UpdateDownloadPolicy::Never {
+            None
+        } else {
+            (!cfg!(debug_assertions)).then(|| first_check_delay(channel))
+        };
         let mut ignored_version: Option<Version> = None;
 
         loop {
@@ -380,6 +392,16 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 std::mem::take(&mut scheduler.pending)
             });
 
+            let policy_now = cx.update(|cx| cx.global::<UpdateScheduler>().download_policy);
+            if policy_now != policy {
+                policy = policy_now;
+                delay = if policy == UpdateDownloadPolicy::Never {
+                    None
+                } else {
+                    next_check_delay(channel)
+                };
+            }
+
             if signaled && request == PendingUpdateRequests::default() {
                 continue;
             }
@@ -391,6 +413,10 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             }
 
             let manual = request.manual;
+            if policy == UpdateDownloadPolicy::Never && !manual {
+                delay = None;
+                continue;
+            }
             if cfg!(debug_assertions) && !manual {
                 delay = None;
                 continue;
@@ -489,6 +515,12 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 continue;
             }
 
+            if policy == UpdateDownloadPolicy::Auto {
+                cx.update(|cx| finish_manual_check(cx, manual));
+                cx.update(|cx| start_download(release, cx));
+                continue;
+            }
+
             cx.update(|cx| set_status(UpdateStatus::Idle, cx));
 
             crate::platform::activate_app();
@@ -511,6 +543,14 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         }
     })
     .detach();
+}
+
+pub(crate) fn update_download_policy_changed(policy: UpdateDownloadPolicy, cx: &mut App) {
+    if !cx.has_global::<UpdateScheduler>() {
+        return;
+    }
+    cx.global_mut::<UpdateScheduler>().download_policy = policy;
+    let _ = cx.global::<UpdateScheduler>().wake.try_send(());
 }
 
 fn start_download(release: Release, cx: &mut App) {

@@ -38,7 +38,7 @@ use crate::{
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
-        SettingsEnum, StudioQuality, UpdateChannel, WindowExclusion,
+        SettingsEnum, StudioQuality, UpdateChannel, UpdateDownloadPolicy, WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -4392,6 +4392,7 @@ impl SettingsWindow {
     fn render_updates(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let current = self.settings.update_channel;
+        let current_policy = self.settings.update_download_policy;
         let description = UPDATE_CHANNEL_DESCRIPTIONS
             .iter()
             .find(|(channel, _)| *channel == current)
@@ -4444,6 +4445,42 @@ impl SettingsWindow {
                                 this.settings.update_channel,
                                 cx,
                             );
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_start()
+                    .gap(px(16.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .min_w_0()
+                            .child(div().text_size(px(13.)).child("Update downloads"))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(theme.settings_muted())
+                                    .child("Choose whether Cap downloads updates automatically."),
+                            ),
+                    )
+                    .child(self.segmented::<UpdateDownloadPolicy>(
+                        "update-download-policy",
+                        current_policy,
+                        cx,
+                        |this, value, cx| {
+                            if this.settings.update_download_policy == value {
+                                return;
+                            }
+                            this.settings.update_download_policy = value;
+                            this.write_enum("updateDownloadPolicy", value, cx);
+                            crate::updates::update_download_policy_changed(value, cx);
                         },
                     )),
             )
