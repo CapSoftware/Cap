@@ -197,6 +197,13 @@ const processSchema = z.object({
 	importedOriginal: z.boolean().optional(),
 });
 
+export function isCompleteRecovery(
+	outputDuration: number,
+	inputDuration: number,
+): boolean {
+	return outputDuration >= inputDuration - Math.max(1, inputDuration * 0.01);
+}
+
 const editRangeSchema = z
 	.object({
 		start: z.number().min(0),
@@ -1644,6 +1651,15 @@ async function processVideoAsync(
 		lastResortRepairFile = processed.lastResortRepairFile;
 		const outputPath = processed.outputFile.path;
 		updateJob(jobId, { outputTempFile: processed.outputFile });
+		if (options.importedOriginal) {
+			const recovered = await withJobHeartbeat(jobId, () =>
+				probeVideoFile(outputPath),
+			);
+			if (!isCompleteRecovery(recovered.duration, metadata.duration))
+				throw new Error(
+					"The imported original could not be fully recovered. The original has been preserved.",
+				);
+		}
 		if (
 			options.maxImportBytes &&
 			file(outputPath).size > options.maxImportBytes
