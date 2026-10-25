@@ -9,7 +9,7 @@ runs it on every pull request that touches the desktop app.
 | --- | --- | --- |
 | `gnome` | Ubuntu 26.04, GNOME 50 headless, AppIndicator, xdg-desktop-portal 1.21+ | Ubuntu users: shortcut approval dialog, `ShortcutsChanged`, Share Screen dialog |
 | `hyprland` | Arch, Hyprland on vkms, waybar tray, xdg-desktop-portal-hyprland | Omarchy users: the portal refuses host apps ("An app id is required"), tray Stop control, no configure after a remap |
-| `sway`, `niri` | Arch on vkms | Exploration only; their portals need a render node vkms does not have |
+| `sway`, `niri` | Arch on vkms | Exploration only: their portals need a render node vkms does not have, and niri refuses software rendering |
 
 Each run (`run-desktop.sh <desktop> <package> <out-dir> [KEY=VALUE...]`):
 
@@ -41,3 +41,18 @@ Harness-only workarounds (not in the app): Mesa's device_select Vulkan layer is
 disabled on the vkms images because it crashes on their virtual devices, and
 the GNOME session gets a target bound to `graphical-session.target`, which a
 real login activates.
+
+## Checks without a desktop
+
+- `niri-screencast/run.sh` records through Cap's PipeWire capture loop from a
+  producer that negotiates and shares frames the way niri 26.04 does: a
+  mandatory DMA-BUF modifier, DMA-BUF buffers the consumer must map itself,
+  and a chunk size of 1 (GitHub #2941). It needs a host with PipeWire and
+  WirePlumber, and runs in the GNOME job.
+- `appimage-pipewire/run.sh <Cap.AppImage> <out-dir>` connects a screen
+  capture stream inside NixOS's `appimage-run`, through the AppImage's real
+  launchers, with the AppDir as the given AppImage shipped it and as
+  `scripts/finalize-linux-appimage.mjs` lays it out now. A stand-in for Cap
+  links the bundled FFmpeg the way Cap does, so the bundled libva loads ahead
+  of the host's PipeWire plugins, as in Cap.
+

@@ -745,6 +745,17 @@ jobs:
             echo "::error::The Cap AppImage bundles PipeWire that can conflict with host ALSA plugins"
             exit 1
           fi
+          if [[ -n "$(find "$APPROOT/usr/lib" -maxdepth 1 -name 'libva*.so*' -print -quit)" ]]; then
+            echo "::error::The Cap AppImage puts its libva where Cap loads it ahead of the host's, which breaks host PipeWire plugins"
+            exit 1
+          fi
+          test -e "$APPROOT/usr/lib/cap/libva/libva.so.2"
+          test -e "$APPROOT/usr/lib/cap/libva/libva-drm.so.2"
+          grep -qx 'exec "$cap_appdir/usr/bin/Cap" "$@"' "$APPROOT/AppRun"
+          if grep -q 'AppRun.cap-original' "$APPROOT/AppRun"; then
+            echo "::error::The Cap AppImage still starts through the generic AppImage launcher"
+            exit 1
+          fi
 
       - name: Build Arch Linux package
         id: build_arch
