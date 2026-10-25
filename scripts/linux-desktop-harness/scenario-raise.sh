@@ -33,7 +33,9 @@ if ! wait_log cap "settings window opened" 30; then
   exit 0
 fi
 shell 'Main.overview.hide()' >/dev/null
-sleep 3
+sleep 2
+shell "global.display.list_all_windows().find(w => w.get_title() === 'Cap Settings').activate(global.get_current_time())" >/dev/null
+sleep 1
 before=$(focused)
 result focused_before "${before:-none}"
 
@@ -44,6 +46,7 @@ cat >"$HOME/.local/share/applications/cap-under-test.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Cap under test
+StartupNotify=true
 Exec=env CAP_GPUI_APP_DATA_DIR=$profile CAP_GPUI_RECORDINGS_DIR=$profile/recordings CAP_GPUI_LOG_DIR=$profile/logs LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} RUST_LOG=info sh -c 'exec "\$0" >"$out/second.log" 2>&1' ${CAP_BIN:-/usr/bin/Cap}
 DESKTOP
 shell "imports.gi.Gio.DesktopAppInfo.new_from_filename('$HOME/.local/share/applications/cap-under-test.desktop').launch([], global.create_app_launch_context(0, -1))" >>"$out/actions.log"
@@ -52,7 +55,7 @@ grep -q "forwarding the launcher's activation token" "$out/second.log" && result
 sleep 3
 after=$(focused)
 result focused_after "${after:-none}"
-if [[ -n "$after" && $after != "$before" && $after != *Settings* ]]; then
+if [[ $before == "Cap Settings" && -n "$after" && $after != "Cap Settings" ]]; then
   result main_raised yes
 else
   result main_raised no
