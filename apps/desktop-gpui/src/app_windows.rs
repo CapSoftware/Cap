@@ -1249,6 +1249,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
     };
 
     cx.global_mut::<AppWindows>().settings = Some(handle);
+    settings_window::render_bench::run(handle, cx);
 
     // Read the native handle inside the update; act on it outside.
     let native = handle
