@@ -1,6 +1,8 @@
 use crate::{EditorInstance, editor::RendererTransitionInput};
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{ProjectUniforms, RenderedFrame, ZoomTransformTimeline};
+use cap_rendering::{
+    PrecomputedCursorTimeline, ProjectUniforms, RenderedFrame, ZoomTransformTimeline,
+};
 use std::{io::Write, path::Path, sync::Arc};
 
 const THUMBNAIL_SIZE: XY<u32> = XY { x: 640, y: 640 };
@@ -85,7 +87,8 @@ impl EditorInstance {
             segment.recording_clip,
         );
         zoom.ensure_precomputed_until(1.0 / THUMBNAIL_FPS as f32);
-        let uniforms = ProjectUniforms::new(
+        let cursor_timeline = PrecomputedCursorTimeline::from_project(&media.cursor, &project);
+        let uniforms = ProjectUniforms::new_with_precomputed_cursor(
             &self.render_constants,
             &project,
             0,
@@ -95,6 +98,7 @@ impl EditorInstance {
             &frames,
             duration,
             &zoom,
+            &cursor_timeline,
         );
         let frame = self
             .renderer
