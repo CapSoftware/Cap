@@ -292,12 +292,9 @@ fn simulate_update(version: Version, cx: &mut App) {
         cx,
     );
     cx.spawn(async move |cx| {
-        cx.background_executor()
-            .timer(Duration::from_millis(600))
-            .await;
         for step in 1..=10u8 {
             cx.background_executor()
-                .timer(Duration::from_millis(120))
+                .timer(Duration::from_millis(800))
                 .await;
             cx.update(|cx| {
                 set_status(
