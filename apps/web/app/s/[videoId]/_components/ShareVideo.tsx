@@ -28,7 +28,6 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
-import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
 	isRecordingUpload,
 	shouldDeferPlaybackSource,
@@ -51,6 +50,11 @@ const CapVideoPlayer = dynamic(() =>
 );
 const HLSVideoPlayer = dynamic(() =>
 	import("./HLSVideoPlayer").then((m) => m.HLSVideoPlayer),
+);
+const ShareableLinkLimitOverlay = dynamic(() =>
+	import("./ShareableLinkLimitOverlay").then(
+		(m) => m.ShareableLinkLimitOverlay,
+	),
 );
 
 // Both ride outside the first paint: the tracker only mounts mid-upload (its
