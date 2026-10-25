@@ -2613,10 +2613,9 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
 
     let device_phase = readiness::Phase::start("wgpu.device");
     let mut last_error = None;
-    let mut tried = Vec::new();
     let mut created = None;
     if let Some(adapter) = preferred {
-        match try_rendering_device(adapter, &mut tried).await {
+        match try_rendering_device(adapter).await {
             Ok(found) => created = Some(found),
             Err(error) => last_error = Some(error),
         }
@@ -2625,8 +2624,8 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     // without compute shaders, a broken install). Only then are the others
     // enumerated, hardware first, then the fallback adapter.
     if created.is_none() {
-        for adapter in other_wgpu_adapters(&instance, force_software_adapter, &tried).await {
-            match try_rendering_device(adapter, &mut tried).await {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter).await {
+            match try_rendering_device(adapter).await {
                 Ok(found) => {
                     created = Some(found);
                     break;
@@ -2668,13 +2667,13 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     })
 }
 
-/// Every adapter not yet tried, hardware ahead of software, then the
-/// fallback adapter.
+// Identical cards report identical `AdapterInfo` (wgpu 25 has no bus id), so
+// the preferred adapter is not filtered out: one more failed attempt on it is
+// cheaper than skipping a working twin.
 #[cfg(not(target_arch = "wasm32"))]
 async fn other_wgpu_adapters(
     instance: &wgpu::Instance,
     force_software_adapter: bool,
-    tried: &[wgpu::AdapterInfo],
 ) -> Vec<wgpu::Adapter> {
     let mut adapters = if force_software_adapter {
         Vec::new()
@@ -2692,25 +2691,14 @@ async fn other_wgpu_adapters(
     {
         adapters.push(fallback);
     }
-    let mut seen = tried.to_vec();
-    adapters.retain(|adapter| {
-        let info = adapter.get_info();
-        let new = !seen.iter().any(|known| same_wgpu_adapter(known, &info));
-        if new {
-            seen.push(info);
-        }
-        new
-    });
     adapters
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn try_rendering_device(
     adapter: wgpu::Adapter,
-    tried: &mut Vec<wgpu::AdapterInfo>,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
     let info = adapter.get_info();
-    tried.push(info.clone());
     match request_rendering_device(&adapter).await {
         Ok((device, queue)) => Ok((adapter, device, queue)),
         Err(error) => {
@@ -2723,10 +2711,6 @@ async fn try_rendering_device(
             Err(error)
         }
     }
-}
-
-fn same_wgpu_adapter(a: &wgpu::AdapterInfo, b: &wgpu::AdapterInfo) -> bool {
-    a.backend == b.backend && a.vendor == b.vendor && a.device == b.device && a.name == b.name
 }
 
 #[cfg(not(target_arch = "wasm32"))]
