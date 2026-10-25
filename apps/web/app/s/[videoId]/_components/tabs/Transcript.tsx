@@ -454,7 +454,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								onClick={() => handleTranscriptClick(entry)}
 								type="button"
 							>
-								<span className="w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
+								<span className="min-w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
 									{entry.timestamp}
 								</span>
 								<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
@@ -852,7 +852,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 										onClick={() => handleTranscriptClick(entry)}
 										type="button"
 									>
-										<span className="w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
+										<span className="min-w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
 											{entry.timestamp}
 										</span>
 										<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
