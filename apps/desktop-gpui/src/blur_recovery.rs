@@ -12,8 +12,6 @@ use serde_json::Value;
 
 use crate::crash_capture::{self, UncleanEnd};
 
-/// `general_settings.cameraBlurDisabledByCrash`: the app version whose crash
-/// disabled blur, or absent.
 const DISABLED_BY_CRASH: &str = "cameraBlurDisabledByCrash";
 
 /// Call once at startup, after [`crash_capture::begin_session`] and before any
