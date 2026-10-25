@@ -525,7 +525,10 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
     let first_frame = log
         .lines()
         .map(without_ansi)
-        .find(|line| line.contains("Start gate") && line.contains("video frame"))
+        .find(|line| {
+            line.contains("Start gate")
+                && (line.contains("video frame") || line.contains("frame on screen"))
+        })
         .unwrap_or_else(|| panic!("no first video frame in the app log:\n{log}"));
     let held = first_frame
         .split("held_frames=")
