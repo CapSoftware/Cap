@@ -1144,7 +1144,16 @@ impl CapsArgs {
         if let Err(error) = &result
             && output_format == OutputFormat::Json
         {
-            let _ = write_json(error);
+            #[derive(Serialize)]
+            struct JsonError<'a> {
+                error: &'a str,
+                #[serde(flatten)]
+                details: &'a AgentApiError,
+            }
+            let _ = write_json(&JsonError {
+                error: &error.message,
+                details: error,
+            });
         }
         result.map_err(|error| error.to_string())
     }

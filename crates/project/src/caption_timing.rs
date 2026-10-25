@@ -329,27 +329,11 @@ pub fn derive_caption_track_segments(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<CaptionTrackSegment> {
-    struct TrackOverrides {
-        fade_duration: Option<f32>,
-        linger_duration: Option<f32>,
-        position: Option<String>,
-        color: Option<String>,
-        background_color: Option<String>,
-        font_size: Option<u32>,
-    }
-
-    let mut overrides_by_source_id: HashMap<String, TrackOverrides> = HashMap::new();
+    let mut overrides_by_source_id = HashMap::new();
     for segment in &timeline.caption_segments {
         overrides_by_source_id
-            .entry(source_caption_id(&segment.id).to_string())
-            .or_insert_with(|| TrackOverrides {
-                fade_duration: segment.fade_duration_override,
-                linger_duration: segment.linger_duration_override,
-                position: segment.position_override.clone(),
-                color: segment.color_override.clone(),
-                background_color: segment.background_color_override.clone(),
-                font_size: segment.font_size_override,
-            });
+            .entry(source_caption_id(&segment.id))
+            .or_insert(segment);
     }
 
     let mut mapped =
@@ -361,17 +345,18 @@ pub fn derive_caption_track_segments(
         .map(|segment| {
             let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
             CaptionTrackSegment {
-                id: segment.id.clone(),
+                id: segment.id,
                 start: segment.start,
                 end: segment.end,
                 text: segment.text,
                 words: segment.words,
-                fade_duration_override: overrides.and_then(|o| o.fade_duration),
-                linger_duration_override: overrides.and_then(|o| o.linger_duration),
-                position_override: overrides.and_then(|o| o.position.clone()),
-                color_override: overrides.and_then(|o| o.color.clone()),
-                background_color_override: overrides.and_then(|o| o.background_color.clone()),
-                font_size_override: overrides.and_then(|o| o.font_size),
+                fade_duration_override: overrides.and_then(|o| o.fade_duration_override),
+                linger_duration_override: overrides.and_then(|o| o.linger_duration_override),
+                position_override: overrides.and_then(|o| o.position_override.clone()),
+                color_override: overrides.and_then(|o| o.color_override.clone()),
+                background_color_override: overrides
+                    .and_then(|o| o.background_color_override.clone()),
+                font_size_override: overrides.and_then(|o| o.font_size_override),
             }
         })
         .collect()

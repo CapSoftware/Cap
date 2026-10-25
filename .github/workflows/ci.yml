@@ -117,6 +117,9 @@ jobs:
       - name: Test Chrome extension
         run: bun run --cwd apps/chrome-extension test
 
+      - name: Test recorder SDK
+        run: bun --no-install test packages/sdk-recorder
+
       - name: Test render farm orchestration
         run: |
           bun test apps/render-farm
@@ -126,6 +129,7 @@ jobs:
         run: >-
           bun run --cwd apps/web test
           __tests__/unit/caps-keyboard.test.ts
+          __tests__/unit/comment-composer-composition.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
@@ -150,6 +154,7 @@ jobs:
           __tests__/unit/speed-controller.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
+          __tests__/unit/timeline-paused-window.test.ts
           __tests__/unit/toggle-pro-seat.test.ts
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
@@ -314,6 +319,7 @@ jobs:
           cargo test --locked -p cap --bin cap recordings::tests
           cargo test --locked -p cap --test cli recordings_list
           cargo test --locked -p cap --test cli project_config_get_without_file_returns_default
+          cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets

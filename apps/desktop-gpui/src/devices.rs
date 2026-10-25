@@ -888,20 +888,37 @@ pub fn list_windows() -> Vec<WindowOption> {
 /// `collect_windows_with_thumbnails` (`thumbnails/mod.rs:107-137`), which needs
 /// the handle for both the ScreenCaptureKit filter and `Window::app_icon()`.
 pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
+    list_window_targets_inner(
+        #[cfg(target_os = "windows")]
+        &mut scap_targets::platform::WindowListCache::default(),
+    )
+}
+
+pub(crate) fn list_window_targets_inner(
+    #[cfg(target_os = "windows")] cache: &mut scap_targets::platform::WindowListCache,
+) -> Vec<(WindowOption, Window)> {
     #[cfg(target_os = "linux")]
     if let Some(targets) = linux_window_targets_from_snapshot() {
         return targets;
     }
 
-    Window::list()
+    #[cfg(target_os = "windows")]
+    let windows = cache.list();
+    #[cfg(not(target_os = "windows"))]
+    let windows = Window::list();
+
+    windows
         .into_iter()
         .filter_map(|window| {
             #[cfg(target_os = "windows")]
-            if !window.raw_handle().is_valid() || !window.raw_handle().is_on_screen() {
+            if !cache.is_valid(&window) || !cache.is_on_screen(&window) {
                 return None;
             }
 
             let label = window.name().filter(|name| !name.trim().is_empty())?;
+            #[cfg(target_os = "windows")]
+            let app = cache.owner_name(&window)?;
+            #[cfg(not(target_os = "windows"))]
             let app = window.owner_name()?;
 
             if app == "Window Server" {
