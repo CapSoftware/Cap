@@ -155,17 +155,25 @@ export class CapRecorder {
 
 			this.chunks = [];
 			this.recorder.ondataavailable = (e) => {
-				if (e.data.size > 0) {
+				if (this.recorder === recorder && e.data.size > 0) {
 					this.chunks.push(e.data);
 				}
+			};
+
+			const stop = () => {
+				if (this.recorder !== recorder) return;
+				this.stop().catch((error: unknown) => {
+					if (error instanceof DOMException && error.name === "AbortError") {
+						return;
+					}
+					console.error("CapRecorder: failed to stop recording:", error);
+				});
 			};
 
 			if (this.streams.display) {
 				const videoTrack = this.streams.display.getVideoTracks()[0];
 				if (videoTrack) {
-					videoTrack.onended = () => {
-						this.stop();
-					};
+					videoTrack.onended = stop;
 				}
 			}
 
@@ -173,9 +181,7 @@ export class CapRecorder {
 			this.accumulatedMs = 0;
 			this.lastResumeTime = Date.now();
 			this.startDurationTimer();
-			this.maxDurationTimeout = setTimeout(() => {
-				this.stop();
-			}, maxDurationMs);
+			this.maxDurationTimeout = setTimeout(stop, maxDurationMs);
 			this.setPhase("recording");
 		} catch (error) {
 			if (startup.signal.aborted) return;
@@ -212,18 +218,22 @@ export class CapRecorder {
 			throw new Error(`Cannot stop from phase "${this._phase}"`);
 		}
 
+		const recorder = this.recorder;
+		const streams = this.streams;
+		const stopped = this.recordingStopped;
 		this._durationMs =
 			this.accumulatedMs +
 			(this._phase === "recording" ? Date.now() - this.lastResumeTime : 0);
 		this.setPhase("stopping");
 		this.stopDurationTimer();
 
-		const recorder = this.recorder;
-		const stopped = this.recordingStopped;
 		if (recorder.state !== "inactive") recorder.stop();
 		await stopped;
-		if (this.streams) {
-			releaseStreams(this.streams);
+		if (this.recorder !== recorder) {
+			throw new DOMException("Recording was canceled", "AbortError");
+		}
+		if (streams) {
+			releaseStreams(streams);
 			this.streams = null;
 		}
 		return this.uploadRecording();
