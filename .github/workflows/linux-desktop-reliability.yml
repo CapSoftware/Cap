@@ -140,6 +140,23 @@ jobs:
           grep -qx attempt1_control=shortcut "$RUNNER_TEMP/out/gnome-terminal/result.txt"
           grep -qx app_id_required=0 "$RUNNER_TEMP/out/gnome-terminal/result.txt"
 
+      # Fedora's GNOME without the AppIndicator extension, launched where the
+      # portal grants no shortcut: no tray and no Stop shortcut. Cap records
+      # with its controls visible instead of refusing to start.
+      - name: GNOME 50 without a tray or a shortcut records with visible controls
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-no-control" LAUNCH=terminal GNOME_TRAY=0 CAP_GPUI_PORTAL_APP_ID=0 \
+            GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-no-control/result.txt"
+          for line in attempt1_control=visible visible_controls_shown=yes attempt1_finished=yes blocked=0 \
+            restoration_unconfirmed=0 panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-no-control/result.txt"
+          done
+
       - name: GNOME 50 settings window closes from its own button
         env:
           DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
