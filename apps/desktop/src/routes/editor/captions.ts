@@ -540,13 +540,20 @@ export async function transcribeEditorCaptions(
 	videoPath: string,
 	modelName = DEFAULT_CAPTION_MODEL,
 	language = DEFAULT_CAPTION_LANGUAGE,
+	segmentWords = 6,
 ): Promise<CaptionData> {
 	const resolvedModelName = resolveCaptionModel(modelName);
 	const modelPath = await getModelPath(resolvedModelName);
 	const engine = PARAKEET_DIR_MODELS.has(resolvedModelName)
 		? "Parakeet"
 		: "Whisper";
-	return await commands.transcribeAudio(videoPath, modelPath, language, engine);
+	return await commands.transcribeAudio(
+		videoPath,
+		modelPath,
+		language,
+		engine,
+		segmentWords,
+	);
 }
 
 const CAPTION_ATTACHING_PUNCTUATION = new Set([

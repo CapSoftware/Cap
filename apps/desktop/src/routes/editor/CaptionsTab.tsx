@@ -731,6 +731,7 @@ export function CaptionsTab(props: {
 				editorInstance.path,
 				selectedModel(),
 				selectedLanguage(),
+				getSetting("segmentWords"),
 			);
 
 			if (result && result.segments.length > 0) {
@@ -1135,6 +1136,18 @@ export function CaptionsTab(props: {
 								maxValue={100}
 								step={1}
 								disabled={!hasCaptions()}
+							/>
+						</Field>
+
+						<Field name="Words Per Caption" inline>
+							<Slider
+								value={[getSetting("segmentWords")]}
+								onChange={(v: number[]) =>
+									updateCaptionSetting("segmentWords", Math.max(1, v[0]))
+								}
+								minValue={1}
+								maxValue={8}
+								step={1}
 							/>
 						</Field>
 

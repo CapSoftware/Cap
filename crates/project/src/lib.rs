@@ -13,7 +13,7 @@ pub use caption_timing::{derive_caption_track_segments, source_caption_id, synch
 pub use caption_words::{
     MAX_CAPTION_WORD_DURATION, MAX_CAPTION_WORDS_PER_SEGMENT, MIN_FINAL_CAPTION_WORDS,
     TARGET_CAPTION_WORDS_PER_SEGMENT, caption_boundary_word_is_weak, caption_text_from_words,
-    caption_word_chunks, normalize_caption_words,
+    caption_word_chunks, caption_word_chunks_with, normalize_caption_words,
 };
 pub use configuration::*;
 pub use cursor::*;

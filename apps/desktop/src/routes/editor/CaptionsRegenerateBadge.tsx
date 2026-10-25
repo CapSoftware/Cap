@@ -29,6 +29,7 @@ export function CaptionsRegenerateBadge(props: { class?: string }) {
 				editorInstance.path,
 				model,
 				language,
+				project?.captions?.settings?.segmentWords ?? 6,
 			);
 			if (result.segments.length < 1) {
 				toast.error(
