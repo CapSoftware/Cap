@@ -263,19 +263,19 @@ fn busy_alert(cx: &mut App) {
     .detach();
 }
 
-/// `CAP_GPUI_AUTO_UPDATE=<version>` (debug builds only): skip the network
-/// check and play a fake download of a newer version, then stop at Ready
-/// without installing anything.
+/// `CAP_GPUI_UPDATE_SIMULATION_VERSION=<version>` (debug builds only): skip
+/// the network check, announce a newer version, play a fake download, then
+/// stop at Ready without installing anything.
 #[cfg(debug_assertions)]
 fn harness_update_version() -> Option<Version> {
-    let value = std::env::var("CAP_GPUI_AUTO_UPDATE").ok()?;
+    let value = std::env::var("CAP_GPUI_UPDATE_SIMULATION_VERSION").ok()?;
     let version = Version::parse(&value).ok()?;
     if current_version().is_ok_and(|current| version > current) {
         Some(version)
     } else {
         tracing::warn!(
             version = %version,
-            "CAP_GPUI_AUTO_UPDATE must be newer than the running version"
+            "CAP_GPUI_UPDATE_SIMULATION_VERSION must be newer than the running version"
         );
         None
     }
@@ -283,15 +283,26 @@ fn harness_update_version() -> Option<Version> {
 
 #[cfg(debug_assertions)]
 fn simulate_update(version: Version, cx: &mut App) {
-    tracing::info!(%version, "CAP_GPUI_AUTO_UPDATE: simulating download");
+    tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: available");
     set_status(
         UpdateStatus::Downloading {
             version: version.clone(),
-            fraction: Some(0.0),
+            fraction: None,
         },
         cx,
     );
     cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(1)).await;
+        cx.update(|cx| {
+            tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: downloading");
+            set_status(
+                UpdateStatus::Downloading {
+                    version: version.clone(),
+                    fraction: Some(0.0),
+                },
+                cx,
+            );
+        });
         for step in 1..=10u8 {
             cx.background_executor()
                 .timer(Duration::from_millis(800))
@@ -307,7 +318,7 @@ fn simulate_update(version: Version, cx: &mut App) {
             });
         }
         cx.update(|cx| {
-            tracing::info!(%version, "CAP_GPUI_AUTO_UPDATE: ready");
+            tracing::info!(%version, "CAP_GPUI_UPDATE_SIMULATION_VERSION: ready");
             set_status(UpdateStatus::Ready { version }, cx);
         });
     })
@@ -332,8 +343,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         return;
     }
     #[cfg(not(debug_assertions))]
-    if std::env::var_os("CAP_GPUI_AUTO_UPDATE").is_some() {
-        tracing::warn!("CAP_GPUI_AUTO_UPDATE is ignored in release builds");
+    if std::env::var_os("CAP_GPUI_UPDATE_SIMULATION_VERSION").is_some() {
+        tracing::warn!("CAP_GPUI_UPDATE_SIMULATION_VERSION is ignored in release builds");
     }
 
     cx.spawn(async move |cx| {
