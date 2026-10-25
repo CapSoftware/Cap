@@ -1659,7 +1659,7 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     /// The header's History dropdown: where it opens.
-    history_menu: Option<(gpui::Point<Pixels>, gpui::ScrollHandle)>,
+    history_menu: Option<HistoryMenu>,
     preset_dialog: Option<PresetDialog>,
     style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
@@ -1672,6 +1672,14 @@ pub struct EditorWindow {
     transcript_view: Entity<EditorSectionView>,
     /// The right-hand panel's shared width and its grip drag.
     pub(crate) panel: crate::editor_side_panel::PanelState,
+}
+
+/// The header's History dropdown, with the step labels worked out when it
+/// opened.
+struct HistoryMenu {
+    origin: gpui::Point<Pixels>,
+    scroll: gpui::ScrollHandle,
+    labels: Vec<String>,
 }
 
 struct PresetsMenu {
@@ -10080,10 +10088,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// `PresetsDropdown.tsx`'s menu: `w-72 max-h-56` on the dropdown palette
-    /// (`rounded-xl border-gray-3 bg-gray-1 shadow-s`), a scrollable row list,
-    /// and a bordered footer with "Create new preset". Each row applies on
-    /// click; its gear opens the five-item submenu.
     fn open_history_menu(
         &mut self,
         anchor: gpui::Point<Pixels>,
@@ -10100,22 +10104,25 @@ impl EditorWindow {
         let x = f32::from(anchor.x)
             .min(f32::from(viewport.width) - HISTORY_MENU_WIDTH - 12.)
             .max(12.);
-        self.history_menu = Some((
-            point(px(x), px(f32::from(anchor.y) + 8.)),
-            gpui::ScrollHandle::new(),
-        ));
+        self.history_menu = Some(HistoryMenu {
+            origin: point(px(x), px(f32::from(anchor.y) + 8.)),
+            scroll: gpui::ScrollHandle::new(),
+            labels: self.history.labels(),
+        });
         cx.notify();
     }
 
     /// The History dropdown: every undo step, newest first. Steps after the
     /// current one (undone, still redoable) are dimmed.
     fn render_history_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let (origin, scroll) = self.history_menu.as_ref()?;
+        let HistoryMenu {
+            origin,
+            scroll,
+            labels,
+        } = self.history_menu.as_ref()?;
         let theme = self.theme;
         let cursor = self.history.cursor();
-        let rows = self
-            .history
-            .labels()
+        let rows = labels
             .iter()
             .enumerate()
             .rev()
@@ -10205,6 +10212,10 @@ impl EditorWindow {
         )
     }
 
+    /// `PresetsDropdown.tsx`'s menu: `w-72 max-h-56` on the dropdown palette
+    /// (`rounded-xl border-gray-3 bg-gray-1 shadow-s`), a scrollable row list,
+    /// and a bordered footer with "Create new preset". Each row applies on
+    /// click; its gear opens the five-item submenu.
     fn render_presets_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.presets_menu.as_ref()?;
         let theme = self.theme;
@@ -10947,7 +10958,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "editor-history")
                             .left_icon("icons/history.svg")
                             .tooltip(&theme, "History")
-                            .disabled(!self.project_ready() || self.history.labels().len() < 2)
+                            .disabled(!self.project_ready() || self.history.len() < 2)
                             .pressed(self.history_menu.is_some())
                             .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
                                 this.open_history_menu(bounds.bottom_left(), window, cx);

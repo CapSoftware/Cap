@@ -149,8 +149,9 @@ const HISTORY_LIMIT: usize = 100;
 #[derive(Debug, Clone)]
 pub struct ProjectHistory {
     entries: Vec<ProjectConfiguration>,
-    /// A short description of what each entry changed, for the history menu.
-    labels: Vec<String>,
+    /// Whether the limit has dropped the oldest entries, so the first one left
+    /// is no longer the state the project opened in.
+    trimmed: bool,
     /// `history().count` -- steps walked back from the newest entry.
     count: usize,
     /// `pauseCount` (`:1917`). A drag brackets itself with `pause`/`resume` so
@@ -168,7 +169,7 @@ impl ProjectHistory {
     pub fn new(initial: ProjectConfiguration) -> Self {
         Self {
             entries: vec![initial],
-            labels: vec!["Opened project".to_string()],
+            trimmed: false,
             count: 0,
             paused: 0,
             dirty: false,
@@ -184,18 +185,12 @@ impl ProjectHistory {
         }
         let new_length = self.entries.len() - self.count;
         self.entries.truncate(new_length);
-        self.labels.truncate(new_length);
-        let label = self.entries.last().map_or_else(
-            || "Edit".to_string(),
-            |previous| describe_change(previous, config),
-        );
         if self.entries.len() >= HISTORY_LIMIT {
             let excess = self.entries.len() - HISTORY_LIMIT + 1;
             self.entries.drain(0..excess);
-            self.labels.drain(0..excess);
+            self.trimmed = true;
         }
         self.entries.push(config.clone());
-        self.labels.push(label);
         self.count = 0;
     }
 
@@ -277,9 +272,25 @@ impl ProjectHistory {
         self.entries.get(self.entries.len() - self.count - 1)
     }
 
-    /// Each entry's label, oldest first.
-    pub fn labels(&self) -> &[String] {
-        &self.labels
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Each entry's label, oldest first. Worked out on demand (when the
+    /// History menu opens) so `record` never pays for the diff.
+    pub fn labels(&self) -> Vec<String> {
+        let first = if self.trimmed {
+            "Earlier changes"
+        } else {
+            "Opened project"
+        };
+        std::iter::once(first.to_string())
+            .chain(
+                self.entries
+                    .windows(2)
+                    .map(|pair| describe_change(&pair[0], &pair[1])),
+            )
+            .collect()
     }
 
     /// Index (into [`Self::labels`]) of the entry the project is at now.
@@ -302,36 +313,11 @@ impl ProjectHistory {
     }
 }
 
-/// Compares the JSON the two configs save as, stopping at the first differing
-/// byte. Building two `serde_json::Value` trees instead took ~14 ms on every
-/// drag release in a captioned 20 minute project.
-fn serializes_equal(before: &ProjectConfiguration, after: &ProjectConfiguration) -> bool {
-    struct Unmatched<'a>(&'a [u8]);
-
-    impl std::io::Write for Unmatched<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            let rest = self
-                .0
-                .strip_prefix(bytes)
-                .ok_or(std::io::ErrorKind::InvalidData)?;
-            self.0 = rest;
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let Ok(before) = serde_json::to_vec(before) else {
-        return false;
-    };
-    let mut unmatched = Unmatched(&before);
-    serde_json::to_writer(&mut unmatched, after).is_ok() && unmatched.0.is_empty()
-}
-
 /// A short human label for what changed between two project snapshots, e.g.
-/// "Added zoom" or "Changed background".
+/// "Added zoom" or "Changed background". Clip edits come first: deleting or
+/// retiming a clip ripples every other track, and the label should name the
+/// clip edit, not a track it shifted. Among the rest, a track whose segment
+/// count changed beats one whose segments only moved.
 pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfiguration) -> String {
     let (Ok(serde_json::Value::Object(before)), Ok(serde_json::Value::Object(after))) =
         (serde_json::to_value(before), serde_json::to_value(after))
@@ -344,17 +330,27 @@ pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfigurati
         _ => empty.clone(),
     };
     let (before_timeline, after_timeline) = (timeline(&before), timeline(&after));
+    let count =
+        |value: Option<&serde_json::Value>| value.and_then(|v| v.as_array()).map_or(0, Vec::len);
     let mut keys: Vec<&String> = before_timeline
         .keys()
         .chain(after_timeline.keys())
         .collect();
     keys.sort();
     keys.dedup();
-    for key in keys {
-        let (a, b) = (before_timeline.get(key), after_timeline.get(key));
-        if a == b {
-            continue;
-        }
+    let changed: Vec<&String> = keys
+        .into_iter()
+        .filter(|key| before_timeline.get(*key) != after_timeline.get(*key))
+        .collect();
+    let counted =
+        |key: &&String| count(before_timeline.get(*key)) != count(after_timeline.get(*key));
+    let pick = changed
+        .iter()
+        .find(|key| key.as_str() == "segments")
+        .or_else(|| changed.iter().find(|key| key.as_str() == "transitions"))
+        .or_else(|| changed.iter().find(|key| counted(key)))
+        .or_else(|| changed.first());
+    if let Some(key) = pick {
         let name = match key.as_str() {
             "segments" => "clip",
             "zoomSegments" => "zoom",
@@ -370,12 +366,12 @@ pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfigurati
             "transitions" => "transition",
             other => other,
         };
-        let count = |value: Option<&serde_json::Value>| {
-            value.and_then(|v| v.as_array()).map_or(0, Vec::len)
-        };
-        let (before_count, after_count) = (count(a), count(b));
+        let (before_count, after_count) = (
+            count(before_timeline.get(*key)),
+            count(after_timeline.get(*key)),
+        );
         return match after_count.cmp(&before_count) {
-            std::cmp::Ordering::Greater if key == "segments" => "Split clip".to_string(),
+            std::cmp::Ordering::Greater if key.as_str() == "segments" => "Split clip".to_string(),
             std::cmp::Ordering::Greater => format!("Added {name}"),
             std::cmp::Ordering::Less => format!("Deleted {name}"),
             std::cmp::Ordering::Equal => format!("Edited {name}"),
@@ -405,6 +401,34 @@ pub fn describe_change(before: &ProjectConfiguration, after: &ProjectConfigurati
         return format!("Changed {name}");
     }
     "Edit".to_string()
+}
+
+/// Compares the JSON the two configs save as, stopping at the first differing
+/// byte. Building two `serde_json::Value` trees instead took ~14 ms on every
+/// drag release in a captioned 20 minute project.
+fn serializes_equal(before: &ProjectConfiguration, after: &ProjectConfiguration) -> bool {
+    struct Unmatched<'a>(&'a [u8]);
+
+    impl std::io::Write for Unmatched<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let rest = self
+                .0
+                .strip_prefix(bytes)
+                .ok_or(std::io::ErrorKind::InvalidData)?;
+            self.0 = rest;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let Ok(before) = serde_json::to_vec(before) else {
+        return false;
+    };
+    let mut unmatched = Unmatched(&before);
+    serde_json::to_writer(&mut unmatched, after).is_ok() && unmatched.0.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -3370,6 +3394,52 @@ mod tests {
         history.record(&with_zoom_count(5));
         assert_eq!(history.labels().len(), 4);
         assert_eq!(history.labels()[3], "Added zoom");
+    }
+
+    #[test]
+    fn a_clip_delete_is_labelled_as_one_even_when_it_shifts_other_tracks() {
+        let before = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 20.0, "end": 30.0 }
+                ],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 12.0, "end": 18.0, "track": 0, "path": "music.mp3", "name": "Music", "duration": 6.0 }
+                ],
+                "captionSegments": [
+                    { "id": "a", "start": 1.0, "end": 2.0, "text": "kept" },
+                    { "id": "b", "start": 3.0, "end": 4.0, "text": "deleted" }
+                ]
+            }
+        }));
+        let mut after = before.clone();
+        let timeline = after.timeline.as_mut().unwrap();
+        timeline.segments.remove(0);
+        timeline.audio_segments[0].start -= 10.0;
+        timeline.audio_segments[0].end -= 10.0;
+        timeline.caption_segments.remove(1);
+        assert_eq!(describe_change(&before, &after), "Deleted clip");
+
+        // Without a clip change, a track that lost a segment beats one that
+        // only shifted.
+        let mut shifted = before.clone();
+        let timeline = shifted.timeline.as_mut().unwrap();
+        timeline.audio_segments[0].start += 1.0;
+        timeline.caption_segments.remove(1);
+        assert_eq!(describe_change(&before, &shifted), "Deleted caption");
+    }
+
+    #[test]
+    fn labels_are_worked_out_on_demand_and_survive_the_limit() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        for count in 1..=(HISTORY_LIMIT + 5) {
+            history.record(&with_zoom_count(count % 3));
+        }
+        let labels = history.labels();
+        assert_eq!(labels.len(), HISTORY_LIMIT);
+        assert_eq!(labels[0], "Earlier changes");
     }
 
     #[test]
