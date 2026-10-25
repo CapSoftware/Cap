@@ -3353,6 +3353,11 @@ fn report_clean_capture_error(error: anyhow::Error, cx: &mut App) {
 #[cfg(target_os = "linux")]
 pub type CleanVisibility = futures_util::future::BoxFuture<'static, anyhow::Result<()>>;
 
+/// The gpui fork's error for a retained visibility request replaced by a newer
+/// one (`apps/desktop-gpui/patches/zed-linux.patch`).
+#[cfg(target_os = "linux")]
+const VISIBILITY_SUPERSEDED: &str = "Window visibility request superseded";
+
 #[cfg(target_os = "linux")]
 fn observe_visibility<F, E>(receipt: F, visible: bool, cx: &mut App)
 where
@@ -3374,6 +3379,11 @@ where
             .map_err(|error| error.to_string())
             .and_then(|result| result.map_err(|error| error.to_string()))
         {
+            // A newer show or hide replaced this one and reports for itself.
+            if error == VISIBILITY_SUPERSEDED {
+                tracing::debug!(visible, "retained window visibility request superseded");
+                return;
+            }
             tracing::error!(%error, "Could not restore retained window visibility");
         }
     })
