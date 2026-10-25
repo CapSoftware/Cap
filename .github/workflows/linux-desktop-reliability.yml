@@ -162,6 +162,19 @@ jobs:
           cat "$RUNNER_TEMP/out/gnome-reopen/result.txt"
           grep -qx reopen_forwarded=yes "$RUNNER_TEMP/out/gnome-reopen/result.txt"
 
+      - name: GNOME 50 relaunch brings Cap to the front over its settings
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: raise
+        run: |
+          for window in main onboarding; do
+            sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+              "$RUNNER_TEMP/out/gnome-raise-$window" GNOME_UNSAFE=1 RAISE_WINDOW=$window
+            cat "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
+            grep -qx main_raised=yes "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
+          done
+
       - name: Check results
         run: |
           bash scripts/linux-desktop-harness/check-results.sh \
