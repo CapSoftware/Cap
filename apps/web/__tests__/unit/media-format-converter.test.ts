@@ -76,45 +76,60 @@ afterEach(() => {
 	URL.createObjectURL = originalCreate;
 	URL.revokeObjectURL = originalRevoke;
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
-it("converts a MOV to a downloadable MP4 using Remotion", async () => {
-	const bytes = await readFile(join(__dirname, "../fixtures/converter.mov"));
-	root.render(
-		createElement(MediaFormatConverter, {
-			initialConversionPath: "mov-to-mp4",
-		}),
-	);
-	await vi.waitFor(() =>
-		expect(container.querySelector("input[type=file]")).not.toBeNull(),
-	);
-	const input = container.querySelector("input[type=file]") as HTMLInputElement;
-	Object.defineProperty(input, "files", {
-		value: [new File([bytes], "clip.mov", { type: "video/quicktime" })],
-	});
-	input.dispatchEvent(new Event("change", { bubbles: true }));
-	await vi.waitFor(() => expect(container.textContent).toContain("clip.mov"));
-	const convert = Array.from(container.querySelectorAll("button")).find(
-		(button) => button.textContent === "Convert to MP4",
-	);
-	expect(convert).toBeDefined();
-	convert?.click();
+it.each(["clip.mov", "clip.MOV", "clip.MoV"])(
+	"converts %s to a downloadable MP4 using Remotion",
+	async (fileName) => {
+		const bytes = await readFile(join(__dirname, "../fixtures/converter.mov"));
+		root.render(
+			createElement(MediaFormatConverter, {
+				initialConversionPath: "mov-to-mp4",
+			}),
+		);
+		await vi.waitFor(() =>
+			expect(container.querySelector("input[type=file]")).not.toBeNull(),
+		);
+		const input = container.querySelector("input[type=file]") as HTMLInputElement;
+		Object.defineProperty(input, "files", {
+			value: [new File([bytes], fileName, { type: "video/quicktime" })],
+		});
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await vi.waitFor(() => expect(container.textContent).toContain(fileName));
+		const convert = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent === "Convert to MP4",
+		);
+		expect(convert).toBeDefined();
+		convert?.click();
 
-	await vi.waitFor(() =>
-		expect(container.textContent).toContain("Conversion complete!"),
-	);
-	if (!(output instanceof globalThis.Blob)) {
-		throw new Error("No converted media was saved");
-	}
-	expect(output.type).toBe("video/mp4");
-	const metadata = await parseMedia({
-		src: output,
-		fields: { videoCodec: true, durationInSeconds: true },
-	});
-	expect(metadata.videoCodec).toBe("h264");
-	expect(metadata.durationInSeconds).toBeGreaterThan(0);
-	expect(container.textContent).toContain("Download MP4");
-});
+		await vi.waitFor(() =>
+			expect(container.textContent).toContain("Conversion complete!"),
+		);
+		if (!(output instanceof globalThis.Blob)) {
+			throw new Error("No converted media was saved");
+		}
+		expect(output.type).toBe("video/mp4");
+		const metadata = await parseMedia({
+			src: output,
+			fields: { videoCodec: true, durationInSeconds: true },
+		});
+		expect(metadata.videoCodec).toBe("h264");
+		expect(metadata.durationInSeconds).toBeGreaterThan(0);
+		expect(container.textContent).toContain("Download MP4");
+		let downloadedName: string | undefined;
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+			function (this: HTMLAnchorElement) {
+				downloadedName = this.download;
+			},
+		);
+		const download = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent === "Download MP4",
+		);
+		download?.click();
+		expect(downloadedName).toBe("clip.mp4");
+	},
+);
 
 it.each([
 	{ duration: 24, frames: 150 },

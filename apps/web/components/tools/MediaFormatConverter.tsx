@@ -719,7 +719,7 @@ export const MediaFormatConverter = ({
 		const fileExtension = `.${currentSourceFormat}`;
 		const newExtension = `.${actualExtension}`;
 		const downloadFileName = file.name.replace(
-			new RegExp(`${fileExtension}$`),
+			new RegExp(`${fileExtension}$`, "i"),
 			newExtension,
 		);
 
