@@ -245,9 +245,10 @@ pub struct AppWindows {
     /// tray-opened picker reveals the main window.
     pub main_hidden_for_picker: bool,
     /// Whether the main window was on screen when the picker hid it. Only the
-    /// copy/save screenshot finish reads it; the cancel reveal keeps the
-    /// Tauri behaviour above.
+    /// screenshot/OCR finish reads it. Concurrent OCR captures retain the
+    /// original visibility until all of them finish.
     pub main_visible_before_picker: bool,
+    ocr_restore: OcrRestoreState,
     /// `hiddenForPicker` in the editor's record modal
     /// (`ClipsSidebar.tsx:311-341, 413-426`): the editor window that hid
     /// itself for an editor-owned target picker ("Record a new clip"). A
@@ -263,6 +264,63 @@ pub struct AppWindows {
     clean_capture: Option<CleanCaptureUi>,
     #[cfg(target_os = "linux")]
     clean_capture_generation: u64,
+}
+
+#[derive(Default)]
+struct OcrRestoreState {
+    captures_in_flight: usize,
+    pending: bool,
+}
+
+impl OcrRestoreState {
+    fn arm_picker(&mut self, remembered: &mut bool, visible: bool, picker_hidden: bool) {
+        if !self.pending {
+            if !picker_hidden {
+                *remembered = visible;
+            }
+            self.pending = true;
+        }
+    }
+
+    fn remember_main_visibility(&self, remembered: &mut bool, visible: bool, picker_hidden: bool) {
+        if self.captures_in_flight == 0 && !self.pending && !picker_hidden {
+            *remembered = visible;
+        }
+    }
+
+    fn capture_started(&mut self) {
+        self.pending = true;
+        self.captures_in_flight = self.captures_in_flight.saturating_add(1);
+    }
+
+    fn capture_finished(&mut self) -> bool {
+        if self.captures_in_flight == 0 {
+            return false;
+        }
+        self.captures_in_flight -= 1;
+        self.captures_in_flight == 0
+    }
+
+    fn restore_if_idle(
+        &mut self,
+        remembered_visibility: &mut bool,
+        picker_open: bool,
+    ) -> Option<bool> {
+        if self.pending && self.captures_in_flight == 0 && !picker_open {
+            self.pending = false;
+            Some(std::mem::take(remembered_visibility))
+        } else {
+            None
+        }
+    }
+
+    fn clear_pending(&mut self) {
+        self.pending = false;
+    }
+
+    fn pending(&self) -> bool {
+        self.pending
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -521,6 +579,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         main_visible_before_picker: false,
+        ocr_restore: OcrRestoreState::default(),
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
         #[cfg(target_os = "linux")]
@@ -1132,7 +1191,10 @@ fn first_registered_reopen_target(
 }
 
 pub fn open_quality_settings(mode: Mode, cx: &mut App) {
-    if mode == Mode::Screenshot {
+    if TargetSelect::global(cx)
+        .read(cx)
+        .is_screenshot_like_for_mode(mode)
+    {
         return;
     }
     #[cfg(target_os = "linux")]
@@ -1873,12 +1935,23 @@ fn pinned_window_resolution_matches(
     requested.is_none_or(|requested| resolved.is_some_and(|resolved| requested == resolved))
 }
 
-/// An area screenshot never inherits a selection: re-arming one over an open
-/// Area picker (the Screenshot Area hotkey or tray item while a recording-mode
-/// area is drawn) reopens the overlays empty instead of keeping that crop.
+/// An area screenshot or OCR picker never inherits a selection: re-arming one
+/// over an open Area picker reopens the overlays empty instead of keeping that crop.
 /// https://github.com/CapSoftware/Cap/issues/2432
-fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, recording_mode: Mode) -> bool {
-    armed != Some(mode) || (mode == TargetType::Area && recording_mode == Mode::Screenshot)
+fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, screenshot_like: bool) -> bool {
+    armed != Some(mode) || (mode == TargetType::Area && screenshot_like)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn arm_ocr_area(cx: &mut App) {
+    if cx.global::<AppWindows>().editor_hidden_for_picker.is_some() {
+        dismiss_target_overlays(cx);
+    }
+    let select = TargetSelect::global(cx);
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| view.arm_overlay(TargetType::Area, cx))
+        .ok();
+    select.update(cx, |select, cx| select.set_ocr_area(true, cx));
 }
 
 pub(crate) fn reject_unavailable_window(cx: &mut App) {
@@ -1915,9 +1988,23 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
             || main
                 .update(cx, |_, window, _| platform::window_is_visible(window))
                 .unwrap_or(true);
+        let ocr_area = TargetSelect::global(cx).read(cx).ocr_area;
         let windows = cx.global_mut::<AppWindows>();
+        let picker_hidden = windows.main_hidden_for_picker;
+        if ocr_area {
+            windows.ocr_restore.arm_picker(
+                &mut windows.main_visible_before_picker,
+                visible,
+                picker_hidden,
+            );
+        } else {
+            windows.ocr_restore.remember_main_visibility(
+                &mut windows.main_visible_before_picker,
+                visible,
+                picker_hidden,
+            );
+        }
         windows.main_hidden_for_picker = true;
-        windows.main_visible_before_picker = visible;
         hide_main_window(cx);
     }
 }
@@ -1997,7 +2084,10 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     }
 
     let select = TargetSelect::global(cx);
-    if reopens_overlays(select.read(cx).mode, request.mode, request.recording_mode) {
+    let screenshot_like = select
+        .read(cx)
+        .is_screenshot_like_for_mode(request.recording_mode);
+    if reopens_overlays(select.read(cx).mode, request.mode, screenshot_like) {
         close_overlay_windows(cx);
     }
 
@@ -2011,8 +2101,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     });
     sync_camera_presentation(cx);
 
-    if request.mode == TargetType::Window
-        || (request.mode == TargetType::Area && request.recording_mode != Mode::Screenshot)
+    if request.mode == TargetType::Window || (request.mode == TargetType::Area && !screenshot_like)
     {
         arm_camera_park(request.mode, cx);
     }
@@ -2127,6 +2216,10 @@ pub fn dismiss_target_overlays(cx: &mut App) {
         return;
     }
 
+    restore_main_after_ocr_if_idle(cx);
+    if cx.global::<AppWindows>().ocr_restore.pending() {
+        return;
+    }
     let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
     tracing::info!(hidden, idle, "picker dismissed");
@@ -2364,6 +2457,7 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     let excluded = overlay_window_ids(cx);
     let retained_area =
         cfg!(target_os = "macos") && matches!(&target, ScreenCaptureTarget::Area { .. });
+    clear_ocr_restore_state(cx);
     if retained_area {
         let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
             handle
@@ -2783,6 +2877,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         screenshot_editors,
         main_hidden_for_picker: _,
         main_visible_before_picker: _,
+        ocr_restore: _,
         editor_hidden_for_picker: _,
         camera_park: _,
         #[cfg(target_os = "linux")]
@@ -3791,6 +3886,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     if session.read(cx).phase != Phase::Idle {
         return;
     }
+    clear_ocr_restore_state(cx);
 
     // `start_recording`'s first act (`src-tauri/src/recording.rs:1492-1494`):
     // an armed editor recording target forces Studio, whatever mode the main
@@ -4556,7 +4652,7 @@ pub fn sync_camera_area(display_id: DisplayId, crop: Option<AreaRect>, cx: &mut 
     }
     let select = TargetSelect::global(cx);
     if select.read(cx).mode != Some(TargetType::Area)
-        || select.read(cx).recording_mode == Mode::Screenshot
+        || select.read(cx).is_screenshot_like()
         || cx.global::<AppWindows>().camera_park.released
     {
         return;
@@ -6659,20 +6755,7 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
     true
 }
 
-/// A screenshot finished (`Some` PNG path) or failed (`None`): refresh every
-/// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
-/// the Tauri app -- and open the screenshot editor on the new bundle, the
-/// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
-/// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
-    let Some(png) = captured else {
-        let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
-        if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
-            show_main_window(cx);
-        }
-        return;
-    };
-
+pub fn refresh_screenshot_listings(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
         settings
@@ -6682,6 +6765,74 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
+}
+
+pub fn ocr_capture_started(cx: &mut App) {
+    cx.global_mut::<AppWindows>().ocr_restore.capture_started();
+}
+
+pub fn ocr_finished(cx: &mut App) {
+    cx.global_mut::<AppWindows>().ocr_restore.capture_finished();
+    restore_main_after_ocr_if_idle(cx);
+}
+
+fn clear_ocr_restore_state(cx: &mut App) {
+    let windows = cx.global_mut::<AppWindows>();
+    windows.ocr_restore.clear_pending();
+    windows.main_visible_before_picker = false;
+}
+
+fn restore_main_after_ocr_if_idle(cx: &mut App) {
+    let picker_open = !cx.global::<AppWindows>().overlays.is_empty()
+        || TargetSelect::global(cx).read(cx).mode.is_some();
+    if picker_open || RecordingSession::global(cx).read(cx).phase != Phase::Idle {
+        return;
+    }
+    let was_visible = {
+        let windows = cx.global_mut::<AppWindows>();
+        windows
+            .ocr_restore
+            .restore_if_idle(&mut windows.main_visible_before_picker, picker_open)
+    };
+    let Some(was_visible) = was_visible else {
+        return;
+    };
+    let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+    if !hidden || !was_visible {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    show_main_window(cx);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let main = cx.global::<AppWindows>().main;
+        main.update(cx, |_, window, _| {
+            platform::show_window_without_focus(window)
+        })
+        .ok();
+    }
+}
+
+/// A screenshot finished (`Some` PNG path) or failed (`None`): refresh every
+/// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
+/// the Tauri app -- and open the screenshot editor on the new bundle, the
+/// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
+/// window if the picker had hidden it, since nothing else will.
+pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
+    restore_main_after_ocr_if_idle(cx);
+    let ocr_restore_pending = cx.global::<AppWindows>().ocr_restore.pending();
+    let Some(png) = captured else {
+        if ocr_restore_pending {
+            return;
+        }
+        let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+        if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+            show_main_window(cx);
+        }
+        return;
+    };
+
+    refresh_screenshot_listings(cx);
 
     let behaviour = crate::store::GeneralSettings::load().post_screenshot_behaviour;
     if behaviour.copies() {
@@ -6703,6 +6854,9 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         return;
     }
 
+    if ocr_restore_pending {
+        return;
+    }
     // Copy or save only: put the main window back only if it was actually on
     // screen before the picker hid it, so a shortcut pressed from another app
     // leaves that app in front.
@@ -6933,6 +7087,97 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    #[test]
+    fn overlapping_ocr_captures_preserve_the_first_visibility_snapshot() {
+        let mut restore = OcrRestoreState::default();
+        let mut visible_before_picker = false;
+
+        restore.arm_picker(&mut visible_before_picker, true, false);
+        restore.capture_started();
+        restore.remember_main_visibility(&mut visible_before_picker, false, true);
+        restore.capture_started();
+
+        assert!(visible_before_picker);
+        assert!(!restore.capture_finished());
+        assert!(restore.capture_finished());
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn ocr_finishing_while_another_picker_is_open_waits_for_cancellation() {
+        let mut restore = OcrRestoreState::default();
+        let mut visible_before_picker = false;
+
+        restore.arm_picker(&mut visible_before_picker, true, false);
+        restore.capture_started();
+        assert!(restore.capture_finished());
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, true),
+            None
+        );
+        assert!(restore.pending());
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            Some(true)
+        );
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            None
+        );
+    }
+
+    #[test]
+    fn ocr_finishing_without_a_picker_restores_the_main_window() {
+        let mut restore = OcrRestoreState::default();
+        let mut visible_before_picker = false;
+
+        restore.arm_picker(&mut visible_before_picker, true, false);
+        restore.capture_started();
+        assert!(restore.capture_finished());
+
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn ocr_restore_waits_for_screenshot_finish_after_picker_closes() {
+        let mut restore = OcrRestoreState::default();
+        let mut visible_before_picker = false;
+
+        restore.arm_picker(&mut visible_before_picker, true, false);
+
+        assert!(restore.pending());
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            Some(true)
+        );
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            None
+        );
+    }
+
+    #[test]
+    fn ocr_restore_does_not_show_a_main_window_that_was_hidden() {
+        let mut restore = OcrRestoreState::default();
+        let mut visible_before_picker = true;
+
+        restore.arm_picker(&mut visible_before_picker, false, false);
+        restore.capture_started();
+        assert!(restore.capture_finished());
+
+        assert_eq!(
+            restore.restore_if_idle(&mut visible_before_picker, false),
+            Some(false)
+        );
+        assert!(!visible_before_picker);
+    }
 
     #[test]
     fn small_display_keeps_editor_and_minimum_size_inside_the_work_area() {
@@ -7859,37 +8104,32 @@ mod tests {
 
     #[test]
     fn area_screenshots_reopen_the_overlays_instead_of_inheriting_a_selection() {
-        assert!(reopens_overlays(None, TargetType::Area, Mode::Screenshot));
+        assert!(reopens_overlays(None, TargetType::Area, true));
         assert!(reopens_overlays(
             Some(TargetType::Display),
             TargetType::Area,
-            Mode::Studio
+            false
         ));
         assert!(reopens_overlays(
             Some(TargetType::Area),
             TargetType::Area,
-            Mode::Screenshot
+            true
         ));
 
         assert!(!reopens_overlays(
             Some(TargetType::Area),
             TargetType::Area,
-            Mode::Studio
-        ));
-        assert!(!reopens_overlays(
-            Some(TargetType::Area),
-            TargetType::Area,
-            Mode::Instant
+            false
         ));
         assert!(!reopens_overlays(
             Some(TargetType::Display),
             TargetType::Display,
-            Mode::Screenshot
+            true
         ));
         assert!(!reopens_overlays(
             Some(TargetType::Window),
             TargetType::Window,
-            Mode::Screenshot
+            true
         ));
     }
 

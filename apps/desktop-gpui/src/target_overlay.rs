@@ -69,6 +69,10 @@ fn area_min_size(mode: Mode) -> f32 {
     }
 }
 
+fn screenshot_like(mode: Mode, ocr_area: bool) -> bool {
+    ocr_area || mode == Mode::Screenshot
+}
+
 fn required_window_title_matches(required: Option<&str>, actual: Option<&str>) -> bool {
     required.is_none_or(|required| actual == Some(required))
 }
@@ -292,6 +296,7 @@ pub struct TargetSelect {
     pub mode: Option<TargetType>,
     /// The recording mode the start cluster labels itself with.
     pub recording_mode: Mode,
+    pub ocr_area: bool,
     pub cursor_display: Option<DisplayId>,
     pub hovered_window: Option<HoveredWindow>,
     /// A window locked in by a click (or seeded from the main window's picker),
@@ -311,6 +316,7 @@ impl TargetSelect {
         let select = cx.new(|_| Self {
             mode: None,
             recording_mode: Mode::Instant,
+            ocr_area: false,
             cursor_display: None,
             hovered_window: None,
             pinned_window: None,
@@ -336,6 +342,9 @@ impl TargetSelect {
     ) {
         self.recording_mode = recording_mode;
         self.pinned_window = pinned_window;
+        if mode.is_none() || mode != Some(TargetType::Area) {
+            self.ocr_area = false;
+        }
         if self.mode == mode {
             cx.notify();
             return;
@@ -349,6 +358,29 @@ impl TargetSelect {
             self.cursor_display = None;
         }
         cx.notify();
+    }
+
+    pub fn set_ocr_area(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.ocr_area != enabled {
+            self.ocr_area = enabled;
+            cx.notify();
+        }
+    }
+
+    pub fn is_screenshot_like(&self) -> bool {
+        self.is_screenshot_like_for_mode(self.recording_mode)
+    }
+
+    pub fn is_screenshot_like_for_mode(&self, mode: Mode) -> bool {
+        screenshot_like(mode, self.ocr_area)
+    }
+
+    pub fn area_min_size(&self) -> f32 {
+        if self.is_screenshot_like() {
+            SCREENSHOT_MIN_SIZE
+        } else {
+            area_min_size(self.recording_mode)
+        }
     }
 
     pub fn set_recording_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
@@ -857,7 +889,7 @@ impl OverlayWindow {
             });
         }
         let select = self.select.read(cx);
-        let min = area_min_size(select.recording_mode);
+        let min = select.area_min_size();
         match select.mode? {
             TargetType::Display => Some(ScreenCaptureTarget::Display {
                 id: self.display_id.clone(),
@@ -914,12 +946,18 @@ impl OverlayWindow {
             }
         }
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
-        if self.select.read(cx).recording_mode == Mode::Screenshot {
-            // Screenshots never reach the recording actors: the target goes
-            // straight to the capture path, which closes these overlays
-            // itself (`startRecording`'s screenshot branch,
-            // `target-select-overlay.tsx:1995`).
-            cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
+        let (screenshot_like, ocr_area) = {
+            let select = self.select.read(cx);
+            (select.is_screenshot_like(), select.ocr_area)
+        };
+        if screenshot_like {
+            if !ocr_area {
+                // Screenshots never reach the recording actors: the target goes
+                // straight to the capture path, which closes these overlays
+                // itself (`startRecording`'s screenshot branch,
+                // `target-select-overlay.tsx:1995`).
+                cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
+            }
             return;
         }
         // Deferred: this runs inside the overlay's own window update and the
@@ -973,7 +1011,8 @@ impl OverlayWindow {
     }
 
     fn sync_area_camera(&self, cx: &mut Context<Self>) {
-        if self.select.read(cx).recording_mode == Mode::Screenshot {
+        let select = self.select.read(cx);
+        if select.is_screenshot_like() {
             return;
         }
         let display = self.display_id.clone();
@@ -1699,7 +1738,8 @@ impl OverlayWindow {
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = self.recording_area || interacting || self.is_active_display(window, cx);
         let crop = self.crop;
-        let min = area_min_size(self.select.read(cx).recording_mode);
+        let select = self.select.read(cx);
+        let min = select.area_min_size();
         let valid = crop.is_some_and(|crop| crop.is_valid_for(min));
         let interactive = !self.recording_area;
 
@@ -2089,14 +2129,12 @@ impl OverlayWindow {
             width: 0.,
             height: 0.,
         });
-        let min = area_min_size(self.select.read(cx).recording_mode);
+        let select = self.select.read(cx);
+        let min = select.area_min_size();
         let available = self.controls_work_area.clamped(self.display_size);
-        let cluster_height = CLUSTER_HEIGHT
-            + if self.select.read(cx).recording_mode == Mode::Screenshot {
-                0.
-            } else {
-                78.
-            };
+        let screenshot_like = select.is_screenshot_like();
+        let ocr_area = select.ocr_area;
+        let cluster_height = CLUSTER_HEIGHT + if screenshot_like { 0. } else { 78. };
         let (x, y) = area_controls_position(crop, available, cluster_height);
 
         div()
@@ -2107,7 +2145,7 @@ impl OverlayWindow {
             .flex()
             .flex_col()
             .items_center()
-            .when(valid, |this| {
+            .when(valid && !ocr_area, |this| {
                 this.child(self.render_controls_cluster(self.target(cx), false, cx))
             })
             .when(!valid, |this| {
@@ -2173,7 +2211,10 @@ impl OverlayWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let mode = self.select.read(cx).recording_mode;
+        let (mode, screenshot_like) = {
+            let select = self.select.read(cx);
+            (select.recording_mode, select.is_screenshot_like())
+        };
         let disabled = disabled || target.is_none();
 
         // `flex flex-col gap-2.5 items-stretch my-2.5 w-104`.
@@ -2241,7 +2282,7 @@ impl OverlayWindow {
                         ),
                 ),
             )
-            .when(mode != Mode::Screenshot, |cluster| {
+            .when(!screenshot_like, |cluster| {
                 cluster.child(
                     self.glass_surface().p(px(12.)).child(
                         div()
@@ -2619,15 +2660,21 @@ impl OverlayWindow {
             }
         }
         self.sync_area_camera(cx);
-        // Releasing a fresh draw in screenshot mode captures immediately --
-        // the screenshot area picker has no confirm step
-        // (`target-select-overlay.tsx`'s area mouse-up). Move/resize grabs
-        // keep the crop for the Start button, same as recording mode.
+        let (ocr_area, screenshot_like) = {
+            let select = self.select.read(cx);
+            (select.ocr_area, select.is_screenshot_like())
+        };
+        // Releasing a fresh draw in screenshot or OCR mode captures immediately:
+        // neither area picker has a confirm step. Move/resize grabs keep the
+        // crop for the Start button, the same as recording mode.
         if matches!(drag, AreaDrag::Draw { .. })
-            && self.select.read(cx).recording_mode == Mode::Screenshot
             && let Some(target) = self.target(cx)
         {
-            cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
+            if ocr_area {
+                cx.defer(move |cx: &mut App| crate::ocr::capture_text(target, cx));
+            } else if screenshot_like {
+                cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
+            }
         }
         cx.notify();
     }
@@ -2814,6 +2861,13 @@ mod tests {
         assert!(!rect(0., 0., 400., 149.).is_valid_for(area_min_size(Mode::Studio)));
         assert!(rect(0., 0., 20., 20.).is_valid_for(area_min_size(Mode::Screenshot)));
         assert!(!rect(0., 0., 0.5, 20.).is_valid_for(area_min_size(Mode::Screenshot)));
+    }
+
+    #[test]
+    fn ocr_areas_use_screenshot_sizing_and_chrome() {
+        assert!(screenshot_like(Mode::Studio, true));
+        assert!(screenshot_like(Mode::Screenshot, false));
+        assert!(!screenshot_like(Mode::Studio, false));
     }
 
     /// The `ScreenCaptureTarget::Area` bounds are display-relative logical

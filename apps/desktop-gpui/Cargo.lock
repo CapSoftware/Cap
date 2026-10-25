@@ -1583,6 +1583,7 @@ dependencies = [
  "libc",
  "lyon_tessellation",
  "minisign-verify",
+ "notify-rust",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
@@ -1612,6 +1613,7 @@ dependencies = [
  "wayland-client",
  "wgpu 25.0.2",
  "whisper-rs",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
  "x11rb",
 ]

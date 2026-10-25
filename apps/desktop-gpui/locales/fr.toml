@@ -117,6 +117,18 @@ label = "Toujours afficher l'icône dans le Dock"
 description = "Afficher des notifications pour les copies dans le presse-papiers, les fichiers enregistrés, etc. Vous devrez peut-être autoriser Cap dans les réglages de notifications de votre système."
 label = "Notifications système"
 
+[settings.general.ocr]
+description = "Copiez du texte n’importe où sur votre écran avec le raccourci OCR."
+title = "Capture de texte (OCR)"
+
+[settings.general.ocr.keep_screenshot]
+description = "Enregistrez la zone sélectionnée dans vos captures d’écran lorsque vous copiez du texte. Si l’option est désactivée, rien n’est enregistré."
+label = "Conserver une capture de la zone sélectionnée"
+
+[settings.general.ocr.show_notification]
+description = "Affichez une notification système avec un aperçu du texte copié."
+label = "Afficher une notification lorsque du texte est copié"
+
 [settings.general.recording]
 description = "Comportement pendant l'enregistrement et après l'arrêt."
 title = "Enregistrement"
@@ -586,3 +598,10 @@ click_or_press = "Cliquez ici ou appuyez sur"
 get_started = "Commencer"
 space_key = "Espace"
 tagline = "L'app open source de partage d'écran pour tout le monde."
+
+[ocr.notification]
+copy_failed_title = "Échec de la copie du texte"
+no_text_found = "Aucun texte n’a été trouvé dans la zone sélectionnée"
+screenshot_save_failed_body = "Le texte est dans le presse-papiers, mais la capture d’écran n’a pas été enregistrée."
+screenshot_save_failed_title = "Impossible d’enregistrer la capture d’écran"
+text_copied_title = "Texte copié dans le presse-papiers"

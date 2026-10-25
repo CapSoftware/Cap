@@ -121,6 +121,31 @@ fn english_matches_the_literals_it_replaced() {
             "System notifications".into(),
         ),
         (
+            tr::settings::general::ocr::title(),
+            "Text capture (OCR)".into(),
+        ),
+        (
+            tr::settings::general::ocr::description(),
+            "Copy text from anywhere on your screen with the OCR hotkey.".into(),
+        ),
+        (
+            tr::settings::general::ocr::keep_screenshot::label(),
+            "Keep a screenshot of the captured area".into(),
+        ),
+        (
+            tr::settings::general::ocr::keep_screenshot::description(),
+            "Save the selected region to your screenshots when copying text. When off, nothing is stored."
+                .into(),
+        ),
+        (
+            tr::settings::general::ocr::show_notification::label(),
+            "Show a notification when text is copied".into(),
+        ),
+        (
+            tr::settings::general::ocr::show_notification::description(),
+            "Display a system notification with a preview of the copied text.".into(),
+        ),
+        (
             tr::settings::general::recording::description(),
             "Behaviour while you record and after you stop.".into(),
         ),
@@ -430,6 +455,26 @@ fn english_matches_the_literals_it_replaced() {
         (
             tr::settings::general::privacy::telemetry::label(),
             "Share anonymous telemetry".into(),
+        ),
+        (
+            tr::ocr::notification::copy_failed_title(),
+            "Failed to copy text".into(),
+        ),
+        (
+            tr::ocr::notification::no_text_found(),
+            "No text was found in the selected area".into(),
+        ),
+        (
+            tr::ocr::notification::screenshot_save_failed_body(),
+            "The text is on your clipboard, but the screenshot wasn't saved.".into(),
+        ),
+        (
+            tr::ocr::notification::screenshot_save_failed_title(),
+            "Couldn't save the screenshot".into(),
+        ),
+        (
+            tr::ocr::notification::text_copied_title(),
+            "Text copied to clipboard".into(),
         ),
     ];
     for (translated, literal) in pairs {

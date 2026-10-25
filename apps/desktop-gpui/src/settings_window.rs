@@ -1849,7 +1849,10 @@ impl Render for SettingsWindow {
         // the frame to the app; without this the window had no way to close.
         #[cfg(target_os = "linux")]
         let shell = shell.when(
-            matches!(window.window_decorations(), gpui::Decorations::Client { .. }),
+            matches!(
+                window.window_decorations(),
+                gpui::Decorations::Client { .. }
+            ),
             |shell| shell.child(linux_close_button(theme)),
         );
 
@@ -3208,8 +3211,10 @@ impl SettingsWindow {
         if i18n::picker_enabled() {
             sections.push(self.render_language(cx).into_any_element());
         }
+        sections.push(self.render_app_section(cx).into_any_element());
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        sections.push(self.render_text_capture(cx).into_any_element());
         sections.extend([
-            self.render_app_section(cx).into_any_element(),
             self.render_recording(cx).into_any_element(),
             self.render_storage(cx).into_any_element(),
             self.render_project_name(window, cx).into_any_element(),
@@ -3367,6 +3372,60 @@ impl SettingsWindow {
                                     !this.settings.enable_notifications;
                                 let value = this.settings.enable_notifications;
                                 this.write_bool("enableNotifications", value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                ])
+                .into_any_element(),
+            ],
+        )
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn render_text_capture(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.section(
+            tr::settings::general::ocr::title(),
+            Some(tr::settings::general::ocr::description()),
+            None,
+            vec![
+                self.rows(vec![
+                    self.setting_row(
+                        tr::settings::general::ocr::keep_screenshot::label(),
+                        Some(tr::settings::general::ocr::keep_screenshot::description()),
+                        self.toggle(
+                            "ocr-keep-screenshot",
+                            tr::settings::general::ocr::keep_screenshot::label(),
+                            self.settings.ocr_keep_screenshot,
+                            cx,
+                            |this, cx| {
+                                this.settings.ocr_keep_screenshot =
+                                    !this.settings.ocr_keep_screenshot;
+                                this.write_bool(
+                                    "ocrKeepScreenshot",
+                                    this.settings.ocr_keep_screenshot,
+                                    cx,
+                                );
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
+                        tr::settings::general::ocr::show_notification::label(),
+                        Some(tr::settings::general::ocr::show_notification::description()),
+                        self.toggle(
+                            "ocr-show-notification",
+                            tr::settings::general::ocr::show_notification::label(),
+                            self.settings.ocr_show_notification,
+                            cx,
+                            |this, cx| {
+                                this.settings.ocr_show_notification =
+                                    !this.settings.ocr_show_notification;
+                                this.write_bool(
+                                    "ocrShowNotification",
+                                    this.settings.ocr_show_notification,
+                                    cx,
+                                );
                             },
                         )
                         .into_any_element(),

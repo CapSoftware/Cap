@@ -191,6 +191,14 @@ libc = "0.2"
 clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
+notify-rust = "4.11"
+windows = { version = "0.61.3", features = [
+    "Foundation",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_System_WinRT",
+] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -216,6 +224,7 @@ raw-window-handle = "0.6"
 x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+notify-rust = "4.11"
 # Native window treatment (panel levels, Spaces) gpui does not expose. Same
 # versions gpui's own tree compiles, so no second objc2 universe gets built.
 objc2 = "0.5.2"
