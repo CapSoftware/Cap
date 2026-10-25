@@ -252,6 +252,23 @@ fn kill(app: App) {
     drop(app);
 }
 
+fn without_ansi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
 /// A normal Instant recording uploads, verifies, and leaves nothing for the
 /// cleanup journal.
 #[ignore]
@@ -502,9 +519,23 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
         line("Recording start cue playing") > building,
         "the start cue played before capture was being built"
     );
+    // Capture that is already running when the cue ends holds its first frame
+    // behind the start gate. A cue that played first opened the gate before
+    // any capture existed, so nothing was ever held.
+    let first_frame = log
+        .lines()
+        .map(without_ansi)
+        .find(|line| line.contains("Start gate") && line.contains("video frame"))
+        .unwrap_or_else(|| panic!("no first video frame in the app log:\n{log}"));
+    let held = first_frame
+        .split("held_frames=")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|count| count.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no held_frames in {first_frame:?}"));
     assert!(
-        line("Recording start gate armed") > building,
-        "the start gate opened before capture was being built"
+        held >= 1,
+        "capture was not running when the start cue ended: {first_frame}"
     );
     assert_eq!(mock.created().len(), 1);
 }
