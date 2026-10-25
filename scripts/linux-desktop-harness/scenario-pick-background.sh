@@ -10,7 +10,6 @@ export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 out=${HARNESS_OUT:-/out}
 
-# 1. A recording to edit, made the usual way.
 bash "$here/scenario-start-stop.sh" >/dev/null
 recorded=$(sed -n 's/^attempt1_finished=//p' "$out/result.txt")
 mv "$out/result.txt" "$out/recording-result.txt"
@@ -42,7 +41,6 @@ wait_log() {
   return 1
 }
 
-# 2. The recording in the editor, and the picker opened from it.
 bash "$here/launch-cap.sh" cap2 CAP_GPUI_AUTO_EDITOR=1 CAP_GPUI_AUTO_PICK_BACKGROUND=1 >/dev/null
 if ! wait_log "editor project validated" 60; then
   result editor_opened no
@@ -52,7 +50,6 @@ result editor_opened yes
 gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
   --method org.gnome.Shell.Eval 'Main.overview.hide()' >/dev/null 2>&1
 
-# The portal's file chooser: wait for it, then type the path.
 chooser=no
 for _ in $(seq 60); do
   if gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
@@ -68,7 +65,6 @@ gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --met
   "global.display.list_all_windows().map(w => (w.get_title() || '') + ' [' + (w.get_wm_class() || '') + ']').join(' | ')" >>"$out/actions.log" 2>&1
 if [[ $chooser == yes ]]; then
   sleep 1
-  # The chooser takes the keys, as it does when a person clicks into it.
   gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval \
     "global.display.list_all_windows().filter(w => /xdg-desktop-portal-gnome|org.gnome.Nautilus/i.test(w.get_wm_class() || '')).forEach(w => w.activate(global.display.get_current_time_roundtrip()))" >/dev/null 2>&1
   sleep 1

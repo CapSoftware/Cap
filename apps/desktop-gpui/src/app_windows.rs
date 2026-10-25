@@ -5800,8 +5800,6 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
-    // `CAP_GPUI_AUTO_PICK_BACKGROUND=1`: open the background image picker the
-    // way the Image tab's button does.
     let pick_background =
         std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
     if tab.is_none()
