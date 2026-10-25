@@ -27,7 +27,7 @@ use objc2_foundation::{
 use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
 
 use super::mac::{post, set_status_mode};
-use super::{TrayItem, mode_name, mode_picker_icon};
+use super::{TrayItem, mode_heading, mode_name, mode_picker_icon};
 use crate::i18n::tr;
 use crate::main_window::Mode;
 
@@ -438,7 +438,7 @@ impl ModePickerView {
         let label = NSColor::labelColor();
         let secondary = NSColor::secondaryLabelColor();
         let title = NSString::from_str(tr::tray::recording_mode());
-        let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
+        let subtitle = NSString::from_str(mode_heading(PICKER_MODES[shown].0));
         let title_attrs = NSDictionary::from_slices(
             &[unsafe { NSFontAttributeName }, unsafe {
                 NSForegroundColorAttributeName

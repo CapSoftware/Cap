@@ -465,6 +465,14 @@ fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
+fn mode_heading(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Studio => tr::main::mode::header::studio(),
+        Mode::Instant => tr::main::mode::header::instant(),
+        Mode::Screenshot => tr::main::mode::header::screenshot(),
+    }
+}
+
 /// `create_mode_submenu`: a `✓ ` prefix on the current mode and three spaces on
 /// the others, so the labels stay aligned without a real check mark.
 fn mode_submenu(mode: Mode) -> Entry {
