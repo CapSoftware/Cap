@@ -68,10 +68,12 @@ type Message = {
 const app = new Hono<{ Bindings: Env }>();
 
 app.post("/interactions", async (c) => {
-	const body = await c.req.json();
+	const rawBody = await c.req.text();
 
-	const verification = await verifyRequest(c.req.raw, body);
+	const verification = verifyRequest(c.req.raw, rawBody);
 	if (!verification) return new Response("Invalid signature", { status: 401 });
+
+	const body = JSON.parse(rawBody);
 
 	// Ping
 	if (body.type === 1) return Response.json({ type: 1 });
@@ -294,17 +296,16 @@ async function handleCommand(interaction: InteractionBody, env: Env) {
 	}
 }
 
-async function verifyRequest(request: Request, jsonBody: unknown) {
+function verifyRequest(request: Request, rawBody: string) {
 	const signature = request.headers.get("X-Signature-Ed25519");
-	if (!signature) throw new Error("Signature header not found");
-
 	const timestamp = request.headers.get("X-Signature-Timestamp");
-	if (!timestamp) throw new Error("Timestamp header not found");
+	if (!signature || !/^[0-9a-f]{128}$/i.test(signature) || !timestamp)
+		return false;
 
 	return nacl.sign.detached.verify(
-		new Buffer(timestamp + JSON.stringify(jsonBody)),
-		new Buffer(signature, "hex"),
-		new Buffer(PUBLIC_KEY, "hex"),
+		Buffer.from(timestamp + rawBody),
+		Buffer.from(signature, "hex"),
+		Buffer.from(PUBLIC_KEY, "hex"),
 	);
 }
 

@@ -609,6 +609,51 @@ fn recordings_list_empty_dir_is_empty_json() {
     assert_eq!(json.as_array().map(|a| a.len()), Some(0));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn recordings_list_follows_desktop_storage_unless_dir_is_explicit() {
+    let root = tempfile::tempdir().unwrap();
+    let app_data = root.path().join("so.cap.desktop");
+    let default = app_data.join("recordings");
+    let current = root.path().join("custom");
+    let previous = root.path().join("previous");
+    for dir in [&default, &current, &previous] {
+        write_single_segment_meta(&dir.join("example.cap"));
+    }
+    std::fs::write(
+        app_data.join("store"),
+        serde_json::to_vec(&serde_json::json!({
+            "general_settings": {
+                "recordingsPath": current,
+                "previousRecordingsPaths": [previous, current]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let list = |dir: Option<&Path>| {
+        let mut command = cap();
+        command
+            .env("XDG_DATA_HOME", root.path())
+            .args(["recordings", "list", "--json"]);
+        if let Some(dir) = dir {
+            command.arg("--dir").arg(dir);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+        parse_json(&output)
+    };
+
+    assert_eq!(list(None).as_array().unwrap().len(), 3);
+    let explicit = list(Some(&current));
+    assert_eq!(explicit.as_array().unwrap().len(), 1);
+    assert_eq!(
+        explicit[0]["path"],
+        current.join("example.cap").to_str().unwrap()
+    );
+}
+
 #[test]
 fn project_config_set_then_get_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
@@ -657,7 +702,9 @@ fn project_config_get_without_file_returns_default() {
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
-    assert!(json.is_object(), "expected a default project config object");
+    let expected_json =
+        serde_json::to_string(&cap_project::ProjectConfiguration::default()).unwrap();
+    assert_eq!(json, serde_json::from_str::<Value>(&expected_json).unwrap());
 }
 
 #[test]
@@ -1454,4 +1501,23 @@ fn write_single_segment_meta(project: &Path) {
         serde_json::to_vec_pretty(&meta).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn caps_json_errors_include_the_standard_error_field() {
+    for flags in [&["--json"][..], &["--format", "json"][..]] {
+        let output = cap()
+            .args(["caps", "get", "!"])
+            .args(flags)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error = parse_json(&output);
+        assert_eq!(error["error"], "Cap ID contains invalid characters");
+        assert_eq!(error["message"], "Cap ID contains invalid characters");
+        assert_eq!(error["code"], "INVALID_REQUEST");
+        assert_eq!(error["retryable"], false);
+    }
 }

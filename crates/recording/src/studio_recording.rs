@@ -145,7 +145,9 @@ fn persist_segment_input_events(
             moves: response.moves,
         })
         .map_err(anyhow::Error::from)
-        .and_then(|events| std::fs::write(path, events).map_err(anyhow::Error::from))
+        .and_then(|events| {
+            crate::cursor::write_atomically(path, &[events.as_bytes()]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save cursor events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -156,8 +158,11 @@ fn persist_segment_input_events(
         let result = KeyboardEvents {
             presses: response.keyboard_presses,
         }
-        .write_to_file(path)
+        .to_bytes()
         .map_err(anyhow::Error::msg)
+        .and_then(|bytes| {
+            crate::cursor::write_atomically(path, &[&bytes]).map_err(anyhow::Error::from)
+        })
         .with_context(|| format!("Could not save keyboard events to {}", path.display()));
         accumulate_finalization_error(failure, result);
     }
@@ -2838,12 +2843,14 @@ async fn stop_recording(
                         start_time: mic_start_time,
                         device_id: s.mic_device_id.clone(),
                         gap_summary: to_project_gap_summary(mic.audio_gap_summary),
+                        digital_silence_ms: mic.digital_silence_ms,
                     }),
                     system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
                         path: make_relative(&audio.path),
                         start_time: start_times.system_audio,
                         device_id: None,
                         gap_summary: to_project_gap_summary(audio.audio_gap_summary),
+                        digital_silence_ms: None,
                     }),
                     cursor: s
                         .pipeline
@@ -3659,6 +3666,7 @@ async fn create_segment_pipeline(
                         cursor: incremental_output,
                         keyboard: keyboard_incremental_output,
                     },
+                    keyboard_capture,
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
@@ -4613,6 +4621,7 @@ mod tests {
                         video_frame_count: 30,
                         video_timestamp_span: Some((Duration::ZERO, Duration::from_millis(967))),
                         audio_gap_summary: None,
+                        digital_silence_ms: None,
                     },
                     microphone: None,
                     camera: None,
@@ -5405,6 +5414,7 @@ mod tests {
             video_frame_count,
             video_timestamp_span: None,
             audio_gap_summary: None,
+            digital_silence_ms: None,
         }
     }
 

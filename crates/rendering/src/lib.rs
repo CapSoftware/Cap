@@ -2,8 +2,8 @@ use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
     ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
-    FrameStyle, OverlayTrackKind, ProjectConfiguration, RecordingMeta, SceneMode,
-    StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
+    FrameStyle, OverlayTrackKind, ProjectConfiguration, ProjectStyleCache, RecordingMeta,
+    SceneMode, StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
 };
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
@@ -29,7 +29,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::{borrow::Cow, path::PathBuf, time::Instant};
+use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
 pub mod camera3d;
@@ -907,6 +907,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
     frame_windows: Option<FrameWindows>,
+    owned_frames: bool,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
     validate_timeline(project, render_segments.len())?;
@@ -980,6 +981,9 @@ pub async fn render_video_to_channel(
 
     let mut frame_renderer = FrameRenderer::new(constants);
     frame_renderer.use_export_deadlines();
+    if owned_frames {
+        frame_renderer.deliver_owned_frames();
+    }
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -2571,6 +2575,7 @@ pub struct RenderVideoConstants {
     pub is_software_adapter: bool,
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
+    project_styles: ProjectStyleCache,
 }
 
 /// Instance, adapter and device the way every renderer creates them. A
@@ -2669,6 +2674,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let device_phase = readiness::Phase::start("wgpu.device");
     let (device, queue) = adapter.request_device(&device_descriptor).await?;
     device_phase.finish("returned");
+    log_uncaptured_errors(&device, "cap-rendering-device");
     Ok(SharedWgpuDevice {
         instance,
         adapter,
@@ -2676,6 +2682,33 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
         queue,
         is_software_adapter,
     })
+}
+
+/// wgpu panics on an error nothing captured. After a device is lost (a driver
+/// reset, sleep, a GPU switch) every call on it fails validation, so that
+/// default ended the app at the next frame or export. Log those errors
+/// instead, at most a few per second; the operation that hit them fails on
+/// its own (a readback that cannot map, a frame that never presents) and the
+/// next device request gets a new device.
+pub fn log_uncaptured_errors(device: &wgpu::Device, label: &'static str) {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    let last = Mutex::new(None::<std::time::Instant>);
+    let suppressed = AtomicU64::new(0);
+    device.on_uncaptured_error(Box::new(move |error| {
+        let now = std::time::Instant::now();
+        let mut last = last.lock().unwrap_or_else(|error| error.into_inner());
+        if last.is_some_and(|last| now.duration_since(last) < MIN_INTERVAL) {
+            suppressed.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        *last = Some(now);
+        let suppressed = suppressed.swap(0, Ordering::Relaxed);
+        tracing::error!(device = label, suppressed, %error, "uncaptured wgpu error");
+    }));
 }
 
 #[derive(Clone, Debug)]
@@ -2734,6 +2767,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2764,6 +2798,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -2825,6 +2860,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -4239,7 +4275,9 @@ impl ProjectUniforms {
         let camera_only_padding = project.camera_only_padding_at(timeline_time);
         let base_crop = Self::get_crop(options, project);
         let base_padding = project.background.padding;
-        let styled_project = project.style_at(timeline_time);
+        let styled_project = constants
+            .project_styles
+            .resolve(shared_project, timeline_time);
         let project = styled_project.as_ref();
         let styled_crop = Self::get_crop(options, project);
         let has_layout_override =
@@ -5296,10 +5334,7 @@ impl ProjectUniforms {
             frame_chrome,
             notch,
             display_outer_bounds,
-            project: match styled_project {
-                Cow::Borrowed(_) => Arc::clone(shared_project),
-                Cow::Owned(styled) => Arc::new(styled),
-            },
+            project: styled_project,
             zoom,
             scene,
             split: split_layout,
@@ -6418,6 +6453,7 @@ mod style_image_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -6483,10 +6519,12 @@ mod style_image_tests {
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 3.0, XY::new(160, 90));
         let mut layers = RendererLayers::new(&constants.device, &constants.queue);
         let mut renderer = FrameRenderer::new(&constants);
+        let shared_project = Arc::new(project.clone());
+        let mut previous_styled = None;
         for frame_number in [41, 42, 60, 83, 84] {
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &Arc::new(project.clone()),
+                &shared_project,
                 frame_number,
                 60,
                 XY::new(160, 90),
@@ -6498,6 +6536,10 @@ mod style_image_tests {
             assert_eq!(uniforms.output_size, (160, 90));
             let active = (42..84).contains(&frame_number);
             if active {
+                if let Some(previous) = &previous_styled {
+                    assert!(Arc::ptr_eq(previous, &uniforms.project));
+                }
+                previous_styled = Some(Arc::clone(&uniforms.project));
                 assert!(uniforms.display.target_size[0] < uniforms.display.target_size[1]);
                 let camera = uniforms.camera_only.expect("camera-only layout");
                 assert_eq!(camera.target_bounds, [9.0, 9.0, 151.0, 81.0]);
@@ -6667,6 +6709,7 @@ mod export_order_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -6745,6 +6788,7 @@ mod export_order_tests {
                 XY::new(SIZE, SIZE),
                 &recordings,
                 None,
+                false,
             );
             let collect = async {
                 let mut order = Vec::new();
@@ -7002,6 +7046,7 @@ mod nv12_flush_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
@@ -7227,6 +7272,7 @@ pub struct FrameRenderer<'a> {
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
     export_deadlines: bool,
+    owned_frames: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -7245,6 +7291,7 @@ impl<'a> FrameRenderer<'a> {
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
             export_deadlines: false,
+            owned_frames: false,
         }
     }
 
@@ -7253,6 +7300,13 @@ impl<'a> FrameRenderer<'a> {
     /// failed readback costs the export a frame.
     pub(crate) fn use_export_deadlines(&mut self) {
         self.export_deadlines = true;
+    }
+
+    /// Frames are delivered with no other owner: the readback does not keep
+    /// a clone for recycling, so the consumer can take the buffer by value
+    /// instead of copying it out of a shared `Arc`.
+    pub(crate) fn deliver_owned_frames(&mut self) {
+        self.owned_frames = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -7303,6 +7357,7 @@ impl<'a> FrameRenderer<'a> {
         let session = self.session.get_or_insert_with(|| {
             RenderSession::new(&self.constants.device, width, height)
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
         });
         session.update_texture_size(&self.constants.device, width, height);
     }
@@ -7351,6 +7406,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -7429,6 +7485,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7601,6 +7658,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7739,6 +7797,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7825,6 +7884,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -8018,6 +8078,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -8116,7 +8177,7 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
-    fn reset_frame_state(&mut self) {
+    pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();
@@ -10645,27 +10706,43 @@ mod project_uniforms_tests {
     }
 
     #[tokio::test]
-    async fn uniforms_share_the_project_unless_a_style_segment_is_active() {
+    async fn uniforms_share_base_and_styled_project_snapshots() {
         let constants = cursor_test_constants().await;
         let mut project = captioned_project(10);
         project.timeline.as_mut().unwrap().style_segments = serde_json::from_value(
             serde_json::json!([{"start": 1.0, "end": 2.0, "overrides": {"background": {"padding": 30.0}}}]),
         )
         .unwrap();
-        let project = Arc::new(project);
+        let mut project = Arc::new(project);
 
         let before = uniforms_at(&constants, &project, 15);
         let styled = uniforms_at(&constants, &project, 45);
+        let next_styled = uniforms_at(&constants, &project, 46);
         let after = uniforms_at(&constants, &project, 75);
 
         assert!(Arc::ptr_eq(&before.project, &project));
         assert!(Arc::ptr_eq(&after.project, &project));
         assert!(!Arc::ptr_eq(&styled.project, &project));
+        assert!(Arc::ptr_eq(&styled.project, &next_styled.project));
         assert_eq!(styled.project.background.padding, 30.0);
         assert_eq!(
             styled.project.captions.as_ref().unwrap().segments.len(),
             project.captions.as_ref().unwrap().segments.len()
         );
+        Arc::make_mut(&mut project)
+            .timeline
+            .as_mut()
+            .unwrap()
+            .style_segments[0]
+            .overrides
+            .background
+            .as_mut()
+            .unwrap()
+            .padding = 15.0;
+        let edited = uniforms_at(&constants, &project, 45);
+        assert_eq!(edited.project.background.padding, 15.0);
+        assert_eq!(styled.project.background.padding, 30.0);
+        assert!(!Arc::ptr_eq(&edited.project, &styled.project));
     }
 
     #[tokio::test]

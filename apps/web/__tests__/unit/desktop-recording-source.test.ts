@@ -10,6 +10,7 @@ import type { RecordingVerification } from "@/lib/desktop-recording-verification
 const mocks = vi.hoisted(() => ({
 	storage: vi.fn(),
 	pageSize: undefined as number | undefined,
+	treePageSize: undefined as number | undefined,
 }));
 
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
@@ -27,6 +28,9 @@ vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 		},
 		get SOURCE_COMMIT_AWS_PAGE_SIZE() {
 			return mocks.pageSize ?? actual.SOURCE_COMMIT_AWS_PAGE_SIZE;
+		},
+		get SOURCE_COMMIT_TREE_PAGE_SIZE() {
+			return mocks.treePageSize ?? actual.SOURCE_COMMIT_TREE_PAGE_SIZE;
 		},
 	};
 });
@@ -176,6 +180,18 @@ function storageFixture(provider = "s3", customBucket = false) {
 				seed(key, body);
 			}),
 		),
+		...(provider === "googleDrive"
+			? {
+					putObjectWithChecksum: vi.fn((key: string, body: string) =>
+						checked(() => {
+							seed(key, body);
+							return {
+								sha256Checksum: hash(objects.get(key)?.body ?? ""),
+							} as { sha256Checksum: string | null };
+						}),
+					),
+				}
+			: {}),
 		copyObject: vi.fn((source: string, target: string, options: CopyOptions) =>
 			checked(() => {
 				const { value } = copiedSource(source, options);
@@ -446,6 +462,7 @@ function seedSegments(
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.pageSize = undefined;
+	mocks.treePageSize = undefined;
 });
 
 describe("recording source preparation during upload", () => {
@@ -1265,6 +1282,194 @@ describe("durable desktop recording source commit", () => {
 			).rejects.toThrow();
 		},
 	);
+	it("checks each S3 original once per phase and does not read receipts back", async () => {
+		const storage = storageFixture();
+		seedSegments(storage);
+		await commitDesktopRecordingSource(recording(), generation);
+		const segmentKey = `${prefix}/segments/video/segment_001.m4s`;
+		expect(
+			storage.bucket.headObject.mock.calls.filter(
+				([key]) => key === segmentKey,
+			),
+		).toHaveLength(3);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
+	});
+
+	it("writes Drive receipts without reading them back", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		await commitDesktopRecordingSource(recording(), generation);
+		expect(
+			storage.bucket.putObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(true);
+		expect(
+			storage.bucket.getObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
+	});
+	it.each(["s3", "googleDrive"] as const)(
+		"reads each %s checkpoint page back once and reuses it for the rest of the commit",
+		async (provider) => {
+			const storage = storageFixture(provider);
+			seedSegments(
+				storage,
+				Array.from({ length: 150 }, (_, index) => index + 1),
+			);
+			await commitDesktopRecordingSource(recording(), generation);
+			const pageReads = new Map<string, number>();
+			for (const [key] of storage.bucket.getObject.mock.calls)
+				if (key.includes("/pages/"))
+					pageReads.set(key, (pageReads.get(key) ?? 0) + 1);
+			const pagesWritten = [
+				...storage.bucket.putObject.mock.calls,
+				...(storage.bucket.putObjectWithChecksum?.mock.calls ?? []),
+			].filter(([key]) => key.includes("/pages/")).length;
+			expect(pagesWritten).toBeGreaterThan(1);
+			expect(Math.max(0, ...pageReads.values())).toBeLessThanOrEqual(1);
+		},
+	);
+
+	it("still reads committed pages from storage when building source URLs", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const before = storage.bucket.getObject.mock.calls.length;
+		await buildDesktopRecordingSourceUrls(recording(), source);
+		expect(
+			storage.bucket.getObject.mock.calls
+				.slice(before)
+				.some(([key]) => key.includes("/pages/")),
+		).toBe(true);
+	});
+	it("trusts Drive's stored SHA-256 for checkpoint pages instead of reading them back", async () => {
+		const pageReads = async (checksum: boolean) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(
+				storage,
+				Array.from({ length: 150 }, (_, index) => index + 1),
+			);
+			const put = storage.bucket.putObjectWithChecksum;
+			const store = put?.getMockImplementation();
+			if (!put || !store) throw new Error("Missing fixture operation");
+			if (!checksum)
+				put.mockImplementation((key, body) =>
+					store(key, body).pipe(Effect.as({ sha256Checksum: null })),
+				);
+			await commitDesktopRecordingSource(recording(), generation);
+			return {
+				written: put.mock.calls.length,
+				reads: storage.bucket.getObject.mock.calls.filter(([key]) =>
+					key.includes("/pages/"),
+				).length,
+			};
+		};
+		const trusted = await pageReads(true);
+		const fallback = await pageReads(false);
+		expect(trusted.written).toBeGreaterThan(3);
+		expect(trusted.written).toBe(fallback.written);
+		expect(trusted.reads).toBe(fallback.reads - fallback.written);
+	});
+
+	it("reads a Drive checkpoint page back when Drive returns no checksum", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const put = storage.bucket.putObjectWithChecksum;
+		const store = put?.getMockImplementation();
+		if (!put || !store) throw new Error("Missing fixture operation");
+		put.mockImplementation((key, body) =>
+			store(key, body).pipe(Effect.as({ sha256Checksum: null })),
+		);
+		await commitDesktopRecordingSource(recording(), generation);
+		const reads = new Set(
+			storage.bucket.getObject.mock.calls.map(([key]) => key),
+		);
+		expect(put.mock.calls.every(([key]) => reads.has(key))).toBe(true);
+	});
+
+	it("does not commit a Drive checkpoint page stored with different bytes", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const put = storage.bucket.putObjectWithChecksum;
+		const store = put?.getMockImplementation();
+		if (!put || !store) throw new Error("Missing fixture operation");
+		put.mockImplementation((key, body) => store(key, `${body}\ncorrupt`));
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toThrow("Durable recording source readback did not match");
+		expect(
+			storage.bucket.putObject.mock.calls.some(([key]) =>
+				key.endsWith("/inventory.json"),
+			),
+		).toBe(false);
+	});
+	it.each([
+		["plan", "/plans/", "/plan.json"],
+		["finalize", "/commits/", "/inventory.json"],
+	])(
+		"writes the %s manifest copy alongside its sibling file",
+		async (_phase, directory, sibling) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(storage);
+			const put = storage.bucket.putObject.getMockImplementation();
+			if (!put) throw new Error("Missing fixture operation");
+			let manifestPending = false;
+			let overlapped = false;
+			let siblingStarted: () => void = () => {};
+			const siblingWrite = new Promise<void>((resolve) => {
+				siblingStarted = resolve;
+			});
+			storage.bucket.putObject.mockImplementation((key, body) => {
+				if (key.includes(directory) && key.endsWith(sibling)) {
+					if (manifestPending) overlapped = true;
+					siblingStarted();
+				}
+				if (key.includes(directory) && key.endsWith("/manifest.json")) {
+					manifestPending = true;
+					return Effect.promise(() =>
+						Promise.race([
+							siblingWrite,
+							new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+						]),
+					).pipe(
+						Effect.zipRight(put(key, body)),
+						Effect.ensuring(
+							Effect.sync(() => {
+								manifestPending = false;
+							}),
+						),
+					);
+				}
+				return put(key, body);
+			});
+			await commitDesktopRecordingSource(recording(), generation);
+			expect(overlapped).toBe(true);
+		},
+	);
+
+	it.each(["/plans/", "/commits/"])(
+		"does not commit when the manifest copy under %s fails",
+		async (directory) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(storage);
+			const put = storage.bucket.putObject.getMockImplementation();
+			if (!put) throw new Error("Missing fixture operation");
+			storage.bucket.putObject.mockImplementation((key, body) =>
+				key.includes(directory) && key.endsWith("/manifest.json")
+					? Effect.fail(new Error("Manifest copy unavailable"))
+					: put(key, body),
+			);
+			await expect(
+				commitDesktopRecordingSource(recording(), generation),
+			).rejects.toThrow();
+		},
+	);
 });
 
 describe("large desktop recording snapshots", () => {
@@ -1394,15 +1599,15 @@ describe("large desktop recording snapshots", () => {
 	});
 
 	it.each([
-		["s3", 64],
-		["googleDrive", 16],
+		["s3", 256],
+		["googleDrive", 64],
 	] as const)(
 		"resumes a completed %s copy when the database checkpoint write was lost",
 		async (provider, page) => {
 			const storage = storageFixture(provider);
 			seedSegments(
 				storage,
-				Array.from({ length: 129 }, (_, index) => index + 1),
+				Array.from({ length: 299 }, (_, index) => index + 1),
 				false,
 			);
 			const video = recording();
@@ -1427,8 +1632,8 @@ describe("large desktop recording snapshots", () => {
 			expect(replay.checkpoint.snapshotId).toBe(checkpoint.snapshotId);
 			const source = await finishSnapshot(video, replay.checkpoint);
 			const urls = await buildDesktopRecordingSourceUrls(video, source);
-			expect(urls.sourceObjects).toHaveLength(130);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(130);
+			expect(urls.sourceObjects).toHaveLength(300);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(300);
 			expect(JSON.stringify(replay.checkpoint).length).toBeLessThan(5_000);
 		},
 	);
@@ -1657,11 +1862,15 @@ describe("large desktop recording snapshots", () => {
 describe("source commit page size", () => {
 	const segmentCount = 130;
 
-	function pagedFixture(provider = "s3", customBucket = false) {
+	function pagedFixture(
+		provider = "s3",
+		customBucket = false,
+		segments = segmentCount,
+	) {
 		const storage = storageFixture(provider, customBucket);
 		seedSegments(
 			storage,
-			Array.from({ length: segmentCount }, (_, index) => index + 1),
+			Array.from({ length: segments }, (_, index) => index + 1),
 		);
 		return storage;
 	}
@@ -1755,8 +1964,8 @@ describe("source commit page size", () => {
 		};
 	}
 
-	async function referenceOutput(pageSize: number) {
-		const storage = pagedFixture();
+	async function referenceOutput(pageSize: number, segments = segmentCount) {
+		const storage = pagedFixture("s3", false, segments);
 		const result = await advanceWithPageSize(pageSize, snapshotCheckpoint());
 		if (!result.source) throw new Error("Snapshot did not complete");
 		return {
@@ -1766,23 +1975,81 @@ describe("source commit page size", () => {
 		};
 	}
 
-	it("uses 64-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
+	it("uses 256-entry pages for Cap's bucket and keeps 16 elsewhere, both within the leaf schema", async () => {
 		const actual = await vi.importActual<
 			typeof import("@/lib/desktop-recording-source-checkpoint")
 		>("@/lib/desktop-recording-source-checkpoint");
-		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(64);
+		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBe(256);
 		expect(actual.SOURCE_COMMIT_PAGE_SIZE).toBe(16);
 		expect(actual.SOURCE_COMMIT_AWS_PAGE_SIZE).toBeLessThanOrEqual(
-			actual.SOURCE_COMMIT_PART_PAGE_SIZE,
+			actual.SOURCE_COMMIT_TREE_PAGE_SIZE,
+		);
+		expect(actual.SOURCE_COMMIT_TREE_PAGE_SIZE).toBeLessThanOrEqual(
+			actual.SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
+		);
+	});
+
+	it("resumes a commit saved with 256-entry pages using the previous 128-entry writer, as after a rollback", async () => {
+		mocks.treePageSize = 128;
+		const reference = await referenceOutput(128, 300);
+		mocks.treePageSize = undefined;
+		const storage = pagedFixture("s3", false, 300);
+		const partial = await advanceWithPageSize(
+			256,
+			snapshotCheckpoint(),
+			(checkpoint) => checkpoint.phase === "verify",
+		);
+		expect(partial.source).toBeUndefined();
+		expect(partial.checkpoint.phase).toBe("verify");
+		const savedLeaves = [...storage.objects.values()].flatMap((object) => {
+			try {
+				const page = JSON.parse(object.body ?? "");
+				return page?.type === "leaf" ? [page.entries.length] : [];
+			} catch {
+				return [];
+			}
+		});
+		expect(savedLeaves).toContain(256);
+		mocks.treePageSize = 128;
+		const resumed = await advanceWithPageSize(128, partial.checkpoint);
+		mocks.treePageSize = undefined;
+		if (!resumed.source) throw new Error("Resumed commit did not complete");
+		expect(await snapshotOutput(storage, resumed.source)).toEqual(
+			reference.output,
 		);
 	});
 
 	it.each([
-		["a custom S3-compatible bucket", "s3", true],
-		["Google Drive", "googleDrive", false],
+		[256, true],
+		[257, false],
 	] as const)(
-		"keeps 16-entry checkpoints for %s",
-		async (_, provider, customBucket) => {
+		"reads a commit with %i-entry tree pages only within the read limit",
+		async (size, readable) => {
+			const storage = storageFixture("s3");
+			seedSegments(
+				storage,
+				Array.from({ length: 300 }, (_, index) => index + 1),
+			);
+			mocks.treePageSize = size;
+			const commit = advanceWithPageSize(size, snapshotCheckpoint());
+			if (readable) {
+				const result = await commit;
+				if (!result.source) throw new Error("Commit did not complete");
+				expect(
+					Math.max(...leafSizes(storage, result.source.inventoryKey)),
+				).toBe(size);
+			} else {
+				await expect(commit).rejects.toMatchObject({ code: "source-invalid" });
+			}
+		},
+	);
+
+	it.each([
+		["a custom S3-compatible bucket", "s3", true, 16],
+		["Google Drive", "googleDrive", false, 64],
+	] as const)(
+		"uses %s's checkpoint page size",
+		async (_, provider, customBucket, pageSize) => {
 			pagedFixture(provider, customBucket);
 			mocks.pageSize = undefined;
 			let checkpoint = snapshotCheckpoint();
@@ -1796,7 +2063,9 @@ describe("source commit page size", () => {
 				if ("source" in result) break;
 				checkpoint = result.checkpoint;
 			}
-			expect(checkpoints).toBe(2 + 3 * Math.ceil((segmentCount + 3) / 16));
+			expect(checkpoints).toBe(
+				2 + 3 * Math.ceil((segmentCount + 3) / pageSize),
+			);
 		},
 	);
 
@@ -1857,13 +2126,13 @@ describe("source commit page size", () => {
 	}
 
 	it.each([
-		["Cap's AWS bucket", "s3", false, 32],
+		["Cap's AWS bucket", "s3", false, 256],
 		["a custom S3-compatible bucket", "s3", true, 8],
-		["Google Drive", "googleDrive", false, 8],
+		["Google Drive", "googleDrive", false, 32],
 	] as const)(
 		"bounds parallel storage requests for %s",
 		async (_, provider, customBucket, expected) => {
-			const storage = pagedFixture(provider, customBucket);
+			const storage = pagedFixture(provider, customBucket, 300);
 			const active = { head: 0, copy: 0 };
 			const peak = { head: 0, copy: 0 };
 			const track = <A, E>(
@@ -1908,7 +2177,7 @@ describe("source commit page size", () => {
 			// bound is on objects in flight; requests peak at two per object.
 			expect(peak.head).toBeLessThanOrEqual(expected * 2);
 			expect(readInventory(storage, source.inventoryKey).objects).toHaveLength(
-				segmentCount + 3,
+				300 + 3,
 			);
 		},
 	);

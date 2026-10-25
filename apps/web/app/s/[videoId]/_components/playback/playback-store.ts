@@ -1,3 +1,5 @@
+import { seekLength } from "../early-length";
+
 /**
  * Framework-free subscription store around the share page's `<video>` element.
  *
@@ -175,13 +177,17 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 	const getPlaying = () => playing;
 
 	const setFallbackDuration = (next: number | null) => {
+		const previousDuration = getDuration();
 		fallback = normalizeDuration(next);
 		if (!isFiniteDuration(duration)) duration = fallback;
+		if (getDuration() !== previousDuration) {
+			emitTime();
+		}
 	};
 
 	const seek = (target: number) => {
 		if (!element) return;
-		const total = getDuration();
+		const total = seekLength(element, getDuration());
 		const clamped = isFiniteDuration(total)
 			? Math.max(0, Math.min(total - 0.001, target))
 			: Math.max(0, target);
