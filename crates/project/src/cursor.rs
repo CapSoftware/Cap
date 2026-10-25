@@ -298,22 +298,29 @@ fn deserialize_cursor_file<T: serde::de::DeserializeOwned>(file: File) -> serde_
         && metadata.is_file()
         && metadata.len() <= MAX_BUFFERED_CURSOR_FILE_BYTES
     {
-        let mut reader = file.take(MAX_BUFFERED_CURSOR_FILE_BYTES + 1);
-        let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
-        reader
-            .read_to_end(&mut bytes)
-            .map_err(serde_json::Error::io)?;
-        if bytes.len() as u64 <= MAX_BUFFERED_CURSOR_FILE_BYTES {
-            // The reader and slice parsers report different columns for some malformed numbers.
-            return serde_json::from_slice(&bytes)
-                .or_else(|_| serde_json::from_reader(bytes.as_slice()));
-        }
-        // A file can grow after metadata is read; keep the prefix and stream the remainder.
-        return serde_json::from_reader(BufReader::new(
-            std::io::Cursor::new(bytes).chain(reader.into_inner()),
-        ));
+        return deserialize_buffered_cursor_json(file, metadata.len() as usize);
     }
     serde_json::from_reader(BufReader::new(file))
+}
+
+fn deserialize_buffered_cursor_json<T: serde::de::DeserializeOwned>(
+    reader: impl Read,
+    initial_size: usize,
+) -> serde_json::Result<T> {
+    let mut reader = reader.take(MAX_BUFFERED_CURSOR_FILE_BYTES + 1);
+    let mut bytes = Vec::with_capacity(initial_size + 1);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(serde_json::Error::io)?;
+    if bytes.len() as u64 <= MAX_BUFFERED_CURSOR_FILE_BYTES {
+        // The reader and slice parsers report different columns for some malformed numbers.
+        return serde_json::from_slice(&bytes)
+            .or_else(|_| serde_json::from_reader(bytes.as_slice()));
+    }
+    // A file can grow after metadata is read; keep the prefix and stream the remainder.
+    serde_json::from_reader(BufReader::new(
+        std::io::Cursor::new(bytes).chain(reader.into_inner()),
+    ))
 }
 
 #[derive(Clone)]
@@ -433,6 +440,31 @@ mod tests {
             expected
         );
         assert_eq!(CursorData::load_from_file(&missing).unwrap_err(), expected);
+    }
+
+    #[test]
+    fn buffered_cursor_parser_preserves_the_remainder_after_growth() {
+        let click = click_event(12.5, "文字🖱");
+        let mut bytes = br#"{"moves":[],"clicks":["#.to_vec();
+        bytes.resize(MAX_BUFFERED_CURSOR_FILE_BYTES as usize + 1, b' ');
+        bytes.extend_from_slice(&serde_json::to_vec(&click).unwrap());
+        bytes.extend_from_slice(b"]}");
+        let actual: CursorEvents = deserialize_buffered_cursor_json(bytes.as_slice(), 0).unwrap();
+        assert!(actual.moves.is_empty());
+        assert_eq!(actual.clicks, vec![click]);
+
+        let prefix = br#"{"moves":[],"clicks":[]}"#;
+        bytes.clear();
+        bytes.extend_from_slice(prefix);
+        bytes.resize(MAX_BUFFERED_CURSOR_FILE_BYTES as usize + 1, b' ');
+        bytes.push(b'!');
+        let actual =
+            deserialize_buffered_cursor_json::<CursorEvents>(bytes.as_slice(), prefix.len());
+        let expected = serde_json::from_reader::<_, CursorEvents>(bytes.as_slice());
+        assert_eq!(
+            actual.unwrap_err().to_string(),
+            expected.unwrap_err().to_string()
+        );
     }
 
     #[test]
