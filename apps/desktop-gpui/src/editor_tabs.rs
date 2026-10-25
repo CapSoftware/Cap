@@ -458,11 +458,8 @@ pub enum CaptionSlider {
     ManualY,
 }
 
-/// Where Manual placement starts for each preset, as fractions of the frame
-/// (`captionPositionCenter`, `CaptionsTab.tsx:362-378`). Centred presets keep
-/// their spot exactly. The renderer draws left and right presets from a 5%
-/// margin rather than centring them there, and the box width is only known
-/// to the renderer, so those start against the frame edge instead.
+/// Where Manual placement starts for a preset no caption was drawn at yet, as
+/// fractions of the frame (`captionPositionCenter`, `CaptionsTab.tsx:362-378`).
 pub fn caption_position_center(position: &str) -> (f32, f32) {
     match position {
         "top-left" => (0.05, 0.08),
@@ -496,8 +493,20 @@ pub fn set_caption_manual_center(settings: &mut CaptionSettings, x: Option<f32>,
 /// `CaptionsTab.tsx:380-394`); without it Manual drew bottom-centre and had
 /// nothing to adjust.
 pub fn set_caption_position(settings: &mut CaptionSettings, position: &str) {
+    set_caption_position_from(settings, position, cap_rendering::last_caption_center);
+}
+
+/// [`set_caption_position`] with the renderer's last drawn caption centre
+/// supplied: left and right presets align the box's edge to a margin, so
+/// only the drawn box says where its centre is.
+fn set_caption_position_from(
+    settings: &mut CaptionSettings,
+    position: &str,
+    drawn_center: impl FnOnce(&str) -> Option<(f32, f32)>,
+) {
     if position == "manual" && settings.position != "manual" {
-        let (x, y) = caption_position_center(&settings.position);
+        let (x, y) = drawn_center(&settings.position)
+            .unwrap_or_else(|| caption_position_center(&settings.position));
         settings.manual_position = Some(cap_project::XY::new(x, y));
     }
     settings.position = position.to_string();
@@ -3552,6 +3561,35 @@ impl EditorWindow {
 mod tests {
     use super::*;
 
+    /// A left-aligned caption sits a margin in from the edge, its centre a
+    /// half box width further in. Manual starts at that drawn centre, so
+    /// switching does not move it.
+    #[test]
+    fn manual_caption_position_starts_at_the_drawn_caption() {
+        let mut settings = CaptionSettings {
+            position: "bottom-left".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_position_from(&mut settings, "manual", |position| {
+            (position == "bottom-left").then_some((0.16, 0.86))
+        });
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.16, 0.86))
+        );
+
+        // Nothing drawn yet: the preset's table entry.
+        let mut settings = CaptionSettings {
+            position: "top-right".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_position_from(&mut settings, "manual", |_| None);
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.95, 0.08))
+        );
+    }
+
     /// A 0.6.1 report: with the caption position set to Manual, the captions
     /// stayed bottom-centre and nothing could move them. Manual now starts
     /// where the preset drew them and the sliders move it.
@@ -3561,7 +3599,7 @@ mod tests {
             position: "top-center".into(),
             ..CaptionSettings::default()
         };
-        set_caption_position(&mut settings, "manual");
+        set_caption_position_from(&mut settings, "manual", |_| None);
         assert_eq!(settings.position, "manual");
         assert_eq!(
             settings.manual_position.map(|xy| (xy.x, xy.y)),
