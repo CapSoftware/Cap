@@ -48,8 +48,45 @@ pub fn unpad_rgba_to_bgra(
 }
 
 pub fn swap_red_blue(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") {
+        // SAFETY: guarded by the runtime feature check above.
+        unsafe { swap_red_blue_avx2(pixels) };
+        return;
+    }
+    swap_red_blue_words(pixels);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn swap_red_blue_avx2(pixels: &mut [u8]) {
+    use std::arch::x86_64::{
+        __m256i, _mm256_loadu_si256, _mm256_setr_epi8, _mm256_shuffle_epi8, _mm256_storeu_si256,
+    };
+
+    // `pshufb` indexes within each 128-bit lane, so the pattern repeats twice.
+    let mask = _mm256_setr_epi8(
+        2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15, 2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11,
+        14, 13, 12, 15,
+    );
+    let (vectors, rest) = pixels.as_chunks_mut::<32>();
+    for vector in vectors {
+        // SAFETY: every chunk is exactly 32 bytes of `pixels`.
+        let shuffled = unsafe {
+            let source = _mm256_loadu_si256(vector.as_ptr().cast::<__m256i>());
+            _mm256_shuffle_epi8(source, mask)
+        };
+        // SAFETY: the same 32 bytes are writable, and the store is unaligned.
+        unsafe { _mm256_storeu_si256(vector.as_mut_ptr().cast::<__m256i>(), shuffled) };
+    }
+    swap_red_blue_words(rest);
+}
+
+fn swap_red_blue_words(pixels: &mut [u8]) {
+    let (words, _) = pixels.as_chunks_mut::<4>();
+    for word in words {
+        let value = u32::from_ne_bytes(*word);
+        *word = ((value & 0x00FF_00FF).rotate_left(16) | (value & 0xFF00_FF00)).to_ne_bytes();
     }
 }
 
@@ -403,6 +440,29 @@ mod tests {
         let mut target = vec![0; 99];
         swap_red_blue_into(&[1, 2, 3, 4], &mut target);
         assert_eq!(target, vec![3, 2, 1, 4]);
+    }
+
+    #[test]
+    fn swaps_every_length_and_leaves_a_partial_pixel_alone() {
+        for len in 0..40 {
+            let source: Vec<u8> = (0..len).map(|index| index as u8 + 1).collect();
+            let mut swapped = source.clone();
+            swap_red_blue(&mut swapped);
+            let complete = len / 4 * 4;
+            for index in (0..complete).step_by(4) {
+                assert_eq!(
+                    &swapped[index..index + 4],
+                    &[
+                        source[index + 2],
+                        source[index + 1],
+                        source[index],
+                        source[index + 3]
+                    ],
+                    "len {len} pixel {index}"
+                );
+            }
+            assert_eq!(&swapped[complete..], &source[complete..], "len {len}");
+        }
     }
 
     #[test]
