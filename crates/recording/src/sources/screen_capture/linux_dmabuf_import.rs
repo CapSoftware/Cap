@@ -67,6 +67,10 @@ struct GpuImporter {
     query_modifiers: QueryDmaBufModifiers,
     framebuffer: Option<glow::Framebuffer>,
     texture: Option<glow::Texture>,
+    /// The kernel driver of the GPU's render node (`amdgpu`, `nvidia`, ...).
+    driver: Option<String>,
+    /// The GPU's render node, which identifies it between recordings.
+    node: Option<String>,
 }
 
 // The EGL context is made current on whichever single thread uses the
@@ -81,6 +85,17 @@ pub(super) struct DmaBufImporter {
     gpus: Vec<GpuImporter>,
     supported: Vec<std::collections::HashMap<u32, Vec<u64>>>,
     last: usize,
+    remembered: bool,
+}
+
+/// The render node of the GPU that last read a screencast frame, kept for the
+/// rest of the session.
+static LAST_IMPORT_NODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn remembered_gpu(nodes: &[Option<&str>], remembered: Option<&str>) -> usize {
+    remembered
+        .and_then(|remembered| nodes.iter().position(|node| *node == Some(remembered)))
+        .unwrap_or(0)
 }
 
 impl DmaBufImporter {
@@ -101,10 +116,23 @@ impl DmaBufImporter {
             return Err(last_error.unwrap_or_else(|| anyhow!("EGL lists no devices")));
         }
         let supported = gpus.iter().map(|_| Default::default()).collect();
+        // Several GPUs of one vendor can't be told apart by the frame's
+        // exporter; the one that read the previous recording is tried first.
+        let last = remembered_gpu(
+            &gpus
+                .iter()
+                .map(|gpu| gpu.node.as_deref())
+                .collect::<Vec<_>>(),
+            LAST_IMPORT_NODE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref(),
+        );
         Ok(Self {
             gpus,
             supported,
-            last: 0,
+            last,
+            remembered: false,
         })
     }
 
@@ -142,15 +170,28 @@ impl DmaBufImporter {
         stride: u32,
         out: &mut [u8],
     ) -> anyhow::Result<()> {
-        let (count, first) = (self.gpus.len(), self.last);
+        let exporter = dma_buf_exporter(fd);
+        let drivers = self
+            .gpus
+            .iter()
+            .map(|gpu| gpu.driver.as_deref())
+            .collect::<Vec<_>>();
+        let order = import_order(&drivers, exporter.as_deref(), self.last);
         let mut last_error = None;
-        for gpu in (0..count).map(|step| (first + step) % count) {
+        for gpu in order {
             if !self.supported(gpu, fourcc).contains(&modifier) {
                 continue;
             }
             match self.gpus[gpu].read_rgba(fd, fourcc, modifier, width, height, offset, stride, out)
             {
                 Ok(()) => {
+                    if self.last != gpu || !self.remembered {
+                        *LAST_IMPORT_NODE
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            self.gpus[gpu].node.clone();
+                        self.remembered = true;
+                    }
                     self.last = gpu;
                     return Ok(());
                 }
@@ -195,15 +236,30 @@ impl GpuImporter {
         // A GPU (a device with a render node) can import what a GPU
         // allocated; without one, the devices EGL has are all there is.
         let devices = &devices[..count.max(0) as usize];
+        let device_string = |device: *mut c_void, name: egl::Int| {
+            let value = unsafe { query_device_string(device, name) };
+            (!value.is_null()).then(|| {
+                unsafe { std::ffi::CStr::from_ptr(value) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        };
         let gpus = devices
             .iter()
-            .copied()
-            .filter(|device| {
-                !unsafe { query_device_string(*device, EGL_DRM_RENDER_NODE_FILE_EXT) }.is_null()
+            .filter_map(|&device| {
+                let node = device_string(device, EGL_DRM_RENDER_NODE_FILE_EXT)?;
+                let driver = render_node_driver(&node);
+                let extensions = device_string(device, egl::EXTENSIONS).unwrap_or_default();
+                // Opening a device no EGL vendor can drive only logs errors.
+                drivable(driver.as_deref(), &extensions).then_some((device, driver, Some(node)))
             })
             .collect::<Vec<_>>();
-        let candidates = if gpus.is_empty() { devices } else { &gpus[..] };
-        let Some(&device) = candidates.get(index) else {
+        let candidates = if gpus.is_empty() {
+            devices.iter().map(|&device| (device, None, None)).collect()
+        } else {
+            gpus
+        };
+        let Some((device, driver, node)) = candidates.get(index).cloned() else {
             return Ok(None);
         };
         let raw =
@@ -259,6 +315,8 @@ impl GpuImporter {
             query_modifiers,
             framebuffer: None,
             texture: None,
+            driver,
+            node,
         };
         importer.make_current()?;
         importer.release();
@@ -447,5 +505,100 @@ impl Drop for GpuImporter {
             self.release();
         }
         let _ = self.egl.destroy_context(self.display, self.context);
+    }
+}
+
+/// The kernel driver bound to a DRM node, from sysfs.
+fn render_node_driver(node: &str) -> Option<String> {
+    let name = std::path::Path::new(node).file_name()?;
+    let link = std::fs::read_link(
+        std::path::Path::new("/sys/class/drm")
+            .join(name)
+            .join("device/driver"),
+    )
+    .ok()?;
+    Some(link.file_name()?.to_string_lossy().into_owned())
+}
+
+/// Whether an EGL device can be initialized at all. vgem and vkms have no
+/// GPU behind them, and Mesa lists NVIDIA's nodes but only NVIDIA's own EGL
+/// (the one with `EGL_NV_device_cuda`) drives them.
+fn drivable(driver: Option<&str>, extensions: &str) -> bool {
+    match driver {
+        Some("vgem" | "vkms") => false,
+        Some(driver) if driver.starts_with("nvidia") => extensions
+            .split_ascii_whitespace()
+            .any(|extension| extension == "EGL_NV_device_cuda"),
+        _ => true,
+    }
+}
+
+/// The driver that exported a DMA-BUF (`exp_name` in its fdinfo).
+fn dma_buf_exporter(fd: RawFd) -> Option<String> {
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}")).ok()?;
+    info.lines()
+        .find_map(|line| line.strip_prefix("exp_name:"))
+        .map(|name| name.trim().to_string())
+}
+
+/// GPUs to try a frame on: those whose driver exported it, then the rest,
+/// each starting from the GPU that read the last frame.
+fn import_order(drivers: &[Option<&str>], exporter: Option<&str>, last: usize) -> Vec<usize> {
+    let count = drivers.len();
+    let rotated = (0..count).map(|step| (last + step) % count);
+    let exported_by = |gpu: usize| {
+        matches!((drivers[gpu], exporter), (Some(driver), Some(exporter))
+            if exporter.starts_with(driver) || driver.starts_with(exporter))
+    };
+    let (mut order, rest): (Vec<_>, Vec<_>) = rotated.partition(|&gpu| exported_by(gpu));
+    order.extend(rest);
+    order
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn devices_without_a_driver_for_them_are_not_opened() {
+        assert!(!drivable(Some("vgem"), "EGL_EXT_device_drm"));
+        assert!(!drivable(Some("vkms"), ""));
+        assert!(!drivable(
+            Some("nvidia"),
+            "EGL_EXT_device_drm EGL_EXT_device_drm_render_node"
+        ));
+        assert!(drivable(
+            Some("nvidia"),
+            "EGL_NV_device_cuda EGL_EXT_device_drm"
+        ));
+        assert!(drivable(Some("amdgpu"), "EGL_EXT_device_drm"));
+        assert!(drivable(None, ""));
+    }
+
+    #[test]
+    fn the_gpu_that_read_the_last_recording_is_tried_first() {
+        let nodes = [
+            Some("/dev/dri/renderD128"),
+            Some("/dev/dri/renderD129"),
+            Some("/dev/dri/renderD131"),
+        ];
+        assert_eq!(remembered_gpu(&nodes, Some("/dev/dri/renderD131")), 2);
+        assert_eq!(remembered_gpu(&nodes, None), 0);
+        // A GPU that has gone since (unplugged, driver reloaded) is ignored.
+        assert_eq!(remembered_gpu(&nodes, Some("/dev/dri/renderD130")), 0);
+    }
+
+    #[test]
+    fn a_frame_goes_first_to_the_gpu_whose_driver_exported_it() {
+        // An Intel and NVIDIA laptop: niri renders on NVIDIA, EGL lists Intel first.
+        let drivers = [Some("i915"), Some("nvidia")];
+        assert_eq!(import_order(&drivers, Some("nvidia-drm"), 0), vec![1, 0]);
+        assert_eq!(import_order(&drivers, Some("i915"), 1), vec![0, 1]);
+        // Unknown exporter: the GPU that read the last frame first.
+        assert_eq!(import_order(&drivers, None, 1), vec![1, 0]);
+        // Several GPUs of one vendor keep the last one first among them.
+        let same = [Some("nvidia"), Some("nvidia"), Some("nvidia")];
+        assert_eq!(import_order(&same, Some("nvidia-drm"), 2), vec![2, 0, 1]);
+        assert!(import_order(&[], None, 0).is_empty());
     }
 }
