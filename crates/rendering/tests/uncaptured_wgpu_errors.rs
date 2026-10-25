@@ -31,7 +31,6 @@ fn texture(device: &wgpu::Device) -> wgpu::Texture {
     })
 }
 
-/// Collects formatted log lines so the test can see what was reported.
 #[derive(Clone, Default)]
 struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
