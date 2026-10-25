@@ -1,7 +1,9 @@
 use crate::{EditorInstance, editor::RendererTransitionInput};
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{ProjectUniforms, RenderedFrame, ZoomTransformTimeline};
-use std::{io::Write, path::Path};
+use cap_rendering::{
+    PrecomputedCursorTimeline, ProjectUniforms, RenderedFrame, ZoomTransformTimeline,
+};
+use std::{io::Write, path::Path, sync::Arc};
 
 const THUMBNAIL_SIZE: XY<u32> = XY { x: 640, y: 640 };
 const THUMBNAIL_FPS: u32 = 30;
@@ -53,6 +55,7 @@ impl EditorInstance {
         let Some((project, signature)) = pending else {
             return Ok(None);
         };
+        let project = Arc::new(project);
         let (source_time, segment) = project
             .get_segment_time(0.0)
             .ok_or("No first frame in the edited timeline")?;
@@ -84,7 +87,8 @@ impl EditorInstance {
             segment.recording_clip,
         );
         zoom.ensure_precomputed_until(1.0 / THUMBNAIL_FPS as f32);
-        let uniforms = ProjectUniforms::new(
+        let cursor_timeline = PrecomputedCursorTimeline::from_project(&media.cursor, &project);
+        let uniforms = ProjectUniforms::new_with_precomputed_cursor(
             &self.render_constants,
             &project,
             0,
@@ -94,6 +98,7 @@ impl EditorInstance {
             &frames,
             duration,
             &zoom,
+            &cursor_timeline,
         );
         let frame = self
             .renderer
@@ -165,7 +170,6 @@ fn save_thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn project() -> (tempfile::TempDir, Vec<u8>) {
         let root = tempfile::tempdir().unwrap();

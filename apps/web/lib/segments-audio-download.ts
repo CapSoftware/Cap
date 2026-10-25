@@ -1,4 +1,5 @@
 import { createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
 
 /**
  * Byte-level segment assembly. Lives apart from the pure planning helpers in
@@ -83,15 +84,9 @@ export async function downloadConcatenatedSegments(
 	);
 	const fetchImpl = options.fetchImpl ?? fetch;
 
-	const stream = createWriteStream(outputPath);
 	let totalBytes = 0;
 
-	const write = (chunk: Buffer) =>
-		new Promise<void>((resolve, reject) => {
-			stream.write(chunk, (error) => (error ? reject(error) : resolve()));
-		});
-
-	try {
+	async function* downloadSegments() {
 		for (let start = 0; start < urls.length; start += concurrency) {
 			const batch = urls.slice(start, start + concurrency);
 			const buffers = await Promise.all(
@@ -113,12 +108,11 @@ export async function downloadConcatenatedSegments(
 						`Segment audio exceeds ${MAX_SEGMENTS_AUDIO_BYTES} bytes`,
 					);
 				}
-				await write(buffer);
+				yield buffer;
 			}
 		}
-	} finally {
-		await new Promise<void>((resolve) => stream.end(() => resolve()));
 	}
 
+	await pipeline(downloadSegments(), createWriteStream(outputPath));
 	return totalBytes;
 }

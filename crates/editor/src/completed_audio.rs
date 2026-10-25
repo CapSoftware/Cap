@@ -187,6 +187,7 @@ pub(crate) mod tests {
                                 start_time: Some(0.125),
                                 device_id: Some("mic".into()),
                                 gap_summary: None,
+                                digital_silence_ms: None,
                             }),
                             system_audio: Some(AudioMeta {
                                 path: format!("content/segments/segment-{index}/system_audio.ogg")
@@ -194,6 +195,7 @@ pub(crate) mod tests {
                                 start_time: Some(-0.25),
                                 device_id: None,
                                 gap_summary: None,
+                                digital_silence_ms: None,
                             }),
                             cursor: None,
                             keyboard: None,

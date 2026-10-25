@@ -9,10 +9,14 @@ import { z } from "zod";
 import {
 	type DesktopRecordingSourceCheckpoint,
 	desktopRecordingSourceCheckpointSchema,
+	SOURCE_COMMIT_AWS_PAGE_SIZE,
+	SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE,
 	SOURCE_COMMIT_MAX_OBJECTS,
+	SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES,
 	SOURCE_COMMIT_PAGE_SIZE,
 	SOURCE_COMMIT_PART_BATCH_SIZE,
 	SOURCE_COMMIT_PART_PAGE_SIZE,
+	SOURCE_COMMIT_TREE_PAGE_SIZE,
 	type SourceCommitPageReference,
 	type SourceCommitReference,
 	sourceCommitPageReferenceSchema,
@@ -60,9 +64,10 @@ export type DesktopRecordingSource = z.infer<
 >;
 type SourceObject = z.infer<typeof sourceObjectSchema>;
 type DbVideo = typeof videos.$inferSelect;
-type RecordingStorage = Effect.Effect.Success<
+type RecordingStorageAccess = Effect.Effect.Success<
 	ReturnType<typeof Storage.getAccessForVideo>
->[0];
+>;
+type RecordingStorage = RecordingStorageAccess[0];
 
 const sourceInventorySchema = z.object({
 	version: z.literal(1),
@@ -199,6 +204,10 @@ type SourceContext = {
 	bucket: RecordingStorage;
 	prefix: string;
 	run: SourceRun;
+	concurrency: number;
+	pageSize: number;
+	// Only a commit in progress may reuse pages it verified; committed sources must prove their pages still exist.
+	reuseVerifiedPages?: boolean;
 };
 type TreeKind = "plan" | "objects" | "parts";
 
@@ -229,7 +238,10 @@ const treePageSchema = z.discriminatedUnion("type", [
 		kind: z.enum(["plan", "objects", "parts"]),
 		scope: z.string(),
 		start: z.number().int().nonnegative(),
-		entries: z.array(z.unknown()).min(1).max(SOURCE_COMMIT_PART_PAGE_SIZE),
+		entries: z
+			.array(z.unknown())
+			.min(1)
+			.max(SOURCE_COMMIT_MAX_TREE_PAGE_ENTRIES),
 	}),
 	z.object({
 		version: z.literal(1),
@@ -256,6 +268,27 @@ const committedInventorySchema = z.union([
 ]);
 const SOURCE_COMMIT_STEP_TIMEOUT_MS = 180_000;
 const SOURCE_COMMIT_IO_TIMEOUT_MS = 60_000;
+const SOURCE_COMMIT_CONCURRENCY = 8;
+const SOURCE_COMMIT_AWS_CONCURRENCY = 256;
+// About 100 Drive requests a second, half of Drive's 12,000-a-minute per-user quota; driveFetch backs off on rate limits.
+const SOURCE_COMMIT_GOOGLE_DRIVE_CONCURRENCY = 32;
+
+function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
+	if (bucket.provider === "s3" && Option.isNone(customBucket))
+		return {
+			concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
+			pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
+		};
+	if (bucket.provider === "googleDrive")
+		return {
+			concurrency: SOURCE_COMMIT_GOOGLE_DRIVE_CONCURRENCY,
+			pageSize: SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE,
+		};
+	return {
+		concurrency: SOURCE_COMMIT_CONCURRENCY,
+		pageSize: SOURCE_COMMIT_PAGE_SIZE,
+	};
+}
 
 function invalidSource(message: string): never {
 	throw new DesktopRecordingSourceError("source-invalid", message);
@@ -272,12 +305,13 @@ function parseSourceJson(content: string): unknown {
 async function mapBounded<T, R>(
 	items: T[],
 	operation: (item: T) => Promise<R>,
+	concurrency = SOURCE_COMMIT_CONCURRENCY,
 ) {
 	const output = new Array<R>(items.length);
 	const entries = items.entries();
 	let failure: unknown;
 	await Promise.all(
-		Array.from({ length: Math.min(8, items.length) }, async () => {
+		Array.from({ length: Math.min(concurrency, items.length) }, async () => {
 			while (failure === undefined) {
 				const next = entries.next();
 				if (next.done) return;
@@ -310,17 +344,41 @@ async function readSourceText(context: SourceContext, key: string) {
 	return result.value;
 }
 
+// Checkpoint pages are addressed by their SHA-256, so a page this process already wrote and read back, or
+// read and verified, can be served from memory: storage could only return these same bytes or fail the hash.
+const VERIFIED_PAGE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const verifiedPages = new Map<string, string>();
+let verifiedPageBytes = 0;
+
+function rememberVerifiedPage(key: string, sha256: string, content: string) {
+	const id = `${key}\n${sha256}`;
+	if (verifiedPages.has(id) || content.length > VERIFIED_PAGE_CACHE_MAX_BYTES)
+		return;
+	verifiedPages.set(id, content);
+	verifiedPageBytes += content.length;
+	for (const [oldest, value] of verifiedPages) {
+		if (verifiedPageBytes <= VERIFIED_PAGE_CACHE_MAX_BYTES) break;
+		verifiedPages.delete(oldest);
+		verifiedPageBytes -= value.length;
+	}
+}
+
 async function readReference(
 	context: SourceContext,
 	reference: SourceCommitReference,
 ) {
 	assertContextKey(context, reference.key);
+	const cached = context.reuseVerifiedPages
+		? verifiedPages.get(`${reference.key}\n${reference.sha256}`)
+		: undefined;
+	if (cached !== undefined) return parseSourceJson(cached);
 	const content = await readSourceText(context, reference.key);
 	if (hash(content) !== reference.sha256)
 		throw new DesktopRecordingSourceError(
 			"source-changed",
 			"A recording source checkpoint changed after it was saved",
 		);
+	rememberVerifiedPage(reference.key, reference.sha256, content);
 	return parseSourceJson(content);
 }
 
@@ -335,15 +393,35 @@ async function writeSourceText(
 	);
 	if ((await readSourceText(context, key)) !== content)
 		throw new Error("Durable recording source readback did not match");
-	return { key, sha256: hash(content) };
+	const sha256 = hash(content);
+	rememberVerifiedPage(key, sha256, content);
+	return { key, sha256 };
 }
 
 async function writeReference(context: SourceContext, value: unknown) {
-	return writeSourceText(
-		context,
-		`${context.prefix}/pages/${randomUUID()}.json`,
-		JSON.stringify(value),
-	);
+	const key = `${context.prefix}/pages/${randomUUID()}.json`;
+	const content = JSON.stringify(value);
+	const bucket = context.bucket;
+	// Pages get a fresh random key, so no other writer can replace them; a SHA-256 Drive computed from the
+	// stored bytes proves the write as well as reading it back, which costs another Drive round trip.
+	if (bucket.provider === "googleDrive" && "putObjectWithChecksum" in bucket) {
+		assertContextKey(context, key);
+		const sha256 = hash(content);
+		const stored = await context.run(
+			bucket.putObjectWithChecksum(key, content, {
+				contentType: "application/json",
+			}),
+		);
+		if (stored.sha256Checksum !== sha256) {
+			if (stored.sha256Checksum !== null)
+				throw new Error("Durable recording source readback did not match");
+			if ((await readSourceText(context, key)) !== content)
+				throw new Error("Durable recording source readback did not match");
+		}
+		rememberVerifiedPage(key, sha256, content);
+		return { key, sha256 };
+	}
+	return writeSourceText(context, key, content);
 }
 
 function treeCount(roots: SourceCommitPageReference[]) {
@@ -367,7 +445,7 @@ async function appendTree(
 	scope: string,
 	entries: unknown[],
 ) {
-	if (entries.length === 0 || entries.length > SOURCE_COMMIT_PART_PAGE_SIZE)
+	if (entries.length === 0 || entries.length > SOURCE_COMMIT_TREE_PAGE_SIZE)
 		invalidSource("Invalid source page size");
 	const start = treeCount(roots);
 	const leaf = await writeReference(context, {
@@ -424,51 +502,57 @@ async function readTree<T>(
 	let pending = roots.filter(overlaps);
 	const leaves: { start: number; entries: T[] }[] = [];
 	while (pending.length > 0) {
-		const pages = await mapBounded(pending, async (reference) => {
-			const parsed = treePageSchema.safeParse(
-				await readReference(context, reference),
-			);
-			if (!parsed.success) invalidSource("Recording source page is invalid");
-			const page = parsed.data;
-			if (page.kind !== kind || page.scope !== scope)
-				invalidSource("Recording source page belongs to a different snapshot");
-			if (page.type === "leaf") {
+		const pages = await mapBounded(
+			pending,
+			async (reference) => {
+				const parsed = treePageSchema.safeParse(
+					await readReference(context, reference),
+				);
+				if (!parsed.success) invalidSource("Recording source page is invalid");
+				const page = parsed.data;
+				if (page.kind !== kind || page.scope !== scope)
+					invalidSource(
+						"Recording source page belongs to a different snapshot",
+					);
+				if (page.type === "leaf") {
+					if (
+						reference.level !== 0 ||
+						page.start !== reference.start ||
+						page.entries.length !== reference.count
+					)
+						invalidSource(
+							"Recording source leaf does not match its committed range",
+						);
+					return {
+						children: [],
+						leaf: {
+							start: page.start,
+							entries: page.entries.map((entry) => {
+								const parsed = schema.safeParse(entry);
+								if (!parsed.success)
+									invalidSource(
+										"Recording source page contains an invalid receipt",
+									);
+								return parsed.data;
+							}),
+						},
+					};
+				}
+				const [left, right] = page.children;
 				if (
-					reference.level !== 0 ||
-					page.start !== reference.start ||
-					page.entries.length !== reference.count
+					left.start !== reference.start ||
+					left.start + left.count !== right.start ||
+					left.count + right.count !== reference.count ||
+					left.level + 1 !== reference.level ||
+					right.level !== left.level
 				)
 					invalidSource(
-						"Recording source leaf does not match its committed range",
+						"Recording source branch does not match its committed range",
 					);
-				return {
-					children: [],
-					leaf: {
-						start: page.start,
-						entries: page.entries.map((entry) => {
-							const parsed = schema.safeParse(entry);
-							if (!parsed.success)
-								invalidSource(
-									"Recording source page contains an invalid receipt",
-								);
-							return parsed.data;
-						}),
-					},
-				};
-			}
-			const [left, right] = page.children;
-			if (
-				left.start !== reference.start ||
-				left.start + left.count !== right.start ||
-				left.count + right.count !== reference.count ||
-				left.level + 1 !== reference.level ||
-				right.level !== left.level
-			)
-				invalidSource(
-					"Recording source branch does not match its committed range",
-				);
-			return { children: page.children.filter(overlaps), leaf: null };
-		});
+				return { children: page.children.filter(overlaps), leaf: null };
+			},
+			context.concurrency,
+		);
 		pending = [];
 		for (const page of pages) {
 			pending.push(...page.children);
@@ -532,18 +616,11 @@ async function createSourcePlan(
 				"The recording source inventory exceeds the supported object count",
 			);
 		const manifestKey = `${directory}/manifest.json`;
-		await writeSourceText(context, manifestKey, content);
-		plan = {
-			version: 1,
-			kind: "segments",
-			manifestSha256: manifest.manifestSha256,
-			manifestKey,
-			originalManifestKey,
-			requiredAudio: manifest.hasAudio,
-			videoCount,
-			audioCount,
-			objectCount: videoCount + audioCount,
-			sourcePreparation: await context
+		// The plan is only referenced once both files are durable, so the manifest copy can be written
+		// alongside the plan; a failure leaves both unreferenced in this plan's own directory.
+		const [, planReference] = await Promise.all([
+			writeSourceText(context, manifestKey, content),
+			context
 				.run(
 					context.bucket
 						.getObject(preparationMarkerKey(context.video))
@@ -556,8 +633,27 @@ async function createSourcePlan(
 							.object({ version: z.literal(1) })
 							.safeParse(JSON.parse(marker.value)).success,
 				)
-				.catch(() => false),
-		};
+				.catch(() => false)
+				.then((sourcePreparation) =>
+					writeSourceText(
+						context,
+						`${directory}/plan.json`,
+						JSON.stringify({
+							version: 1,
+							kind: "segments",
+							manifestSha256: manifest.manifestSha256,
+							manifestKey,
+							originalManifestKey,
+							requiredAudio: manifest.hasAudio,
+							videoCount,
+							audioCount,
+							objectCount: videoCount + audioCount,
+							sourcePreparation,
+						} satisfies SourcePlan),
+					),
+				),
+		]);
+		return planReference;
 	} else {
 		const video = context.video;
 		const publishedKey = getPublishedRecordingOutputKey(video);
@@ -758,10 +854,13 @@ function objectDirectory(key: string) {
 }
 
 async function saveObjectReceipt(context: SourceContext, object: SourceObject) {
-	await writeSourceText(
-		context,
-		`${objectDirectory(object.key)}/receipt.json`,
-		JSON.stringify(object),
+	const key = `${objectDirectory(object.key)}/receipt.json`;
+	const content = JSON.stringify(object);
+	// A receipt only lets a retry find this copy, and a retry re-checks the receipt and the copy
+	// before reusing it, so a receipt skips the readback that inventory pages need.
+	assertContextKey(context, key);
+	await context.run(
+		context.bucket.putObject(key, content, { contentType: "application/json" }),
 	);
 	return object;
 }
@@ -770,8 +869,9 @@ async function reusableCopy(
 	context: SourceContext,
 	original: OriginalObject,
 	position: number,
+	checkFirst = true,
 ) {
-	await checkOriginal(context, original);
+	if (checkFirst) await checkOriginal(context, original);
 	let continuationToken: string | undefined;
 	for (let page = 0; page < 4; page++) {
 		const listing = await context.run(
@@ -840,30 +940,38 @@ async function copySmallObject(
 	position: number,
 	prepared = false,
 ) {
+	// Every reuse and every new copy ends in checkCopy, which re-checks the original, so the
+	// original is checked up front only when a copy fails and its error needs classifying.
 	if (prepared && original.index > 0) {
 		const existing = await reusableCopy(
 			{ ...context, prefix: preparedSourcePrefix(context.video, original) },
 			original,
 			original.index,
+			false,
 		).catch(() => null);
 		if (existing) return existing;
 	}
-	const existing = await reusableCopy(context, original, position);
+	const existing = await reusableCopy(context, original, position, false);
 	if (existing) return existing;
 	const key = newCopyKey(context, original, position);
-	await context.run(
-		context.bucket.copyObject(
-			`${context.bucket.bucketName}/${original.originalKey}`,
-			key,
-			{
-				CopySourceIfMatch: original.originalIdentity,
-				IfNoneMatch: "*",
-				MetadataDirective: "REPLACE",
-				Metadata: copyMetadata(original),
-				ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
-			},
-		),
-	);
+	try {
+		await context.run(
+			context.bucket.copyObject(
+				`${context.bucket.bucketName}/${original.originalKey}`,
+				key,
+				{
+					CopySourceIfMatch: original.originalIdentity,
+					IfNoneMatch: "*",
+					MetadataDirective: "REPLACE",
+					Metadata: copyMetadata(original),
+					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
+				},
+			),
+		);
+	} catch (error) {
+		await checkOriginal(context, original);
+		throw error;
+	}
 	return saveObjectReceipt(context, await checkCopy(context, original, key));
 }
 
@@ -922,6 +1030,8 @@ export async function prepareDesktopRecordingSegments(
 		bucket,
 		run,
 		prefix: sourcePrefix(video).slice(0, -1),
+		concurrency: SOURCE_COMMIT_CONCURRENCY,
+		pageSize: SOURCE_COMMIT_PAGE_SIZE,
 	};
 	const unique = [
 		...new Map(
@@ -1153,7 +1263,7 @@ async function advanceSourceSnapshot(
 			invalidSource("Recording source plan cursor is incomplete");
 		const end = Math.min(
 			plan.objectCount,
-			checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE,
+			checkpoint.cursor + context.pageSize,
 		);
 		const originals = await mapBounded(
 			Array.from(
@@ -1166,6 +1276,7 @@ async function advanceSourceSnapshot(
 					originalAt(context.video, plan, position),
 					verification,
 				),
+			context.concurrency,
 		);
 		const planRoots = await appendTree(
 			context,
@@ -1198,7 +1309,7 @@ async function advanceSourceSnapshot(
 			scope,
 			originalObjectSchema,
 			checkpoint.cursor,
-			Math.min(plan.objectCount, checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE),
+			Math.min(plan.objectCount, checkpoint.cursor + context.pageSize),
 		);
 		const large =
 			context.bucket.provider === "s3"
@@ -1235,6 +1346,7 @@ async function advanceSourceSnapshot(
 						position,
 						plan.sourcePreparation === true,
 					),
+				context.concurrency,
 			);
 		}
 		const receiptRoots = await appendTree(
@@ -1261,7 +1373,7 @@ async function advanceSourceSnapshot(
 	if (checkpoint.phase === "verify") {
 		const end = Math.min(
 			plan.objectCount,
-			checkpoint.cursor + SOURCE_COMMIT_PAGE_SIZE,
+			checkpoint.cursor + context.pageSize,
 		);
 		const [originals, objects] = await Promise.all([
 			readTree(
@@ -1299,6 +1411,7 @@ async function advanceSourceSnapshot(
 					);
 				await checkCopy(context, original, object.key, object.objectIdentity);
 			},
+			context.concurrency,
 		);
 		return {
 			checkpoint: {
@@ -1316,6 +1429,7 @@ async function advanceSourceSnapshot(
 	let inventoryKey: string;
 	let inventory: unknown;
 	let mp4: DesktopRecordingSource["mp4"];
+	let manifestCopy: Promise<unknown> | undefined;
 	if (plan.kind === "mp4") {
 		const [object] = await readTree(
 			context,
@@ -1350,7 +1464,6 @@ async function advanceSourceSnapshot(
 				"Recording manifest changed while its durable snapshot was being saved",
 			);
 		const directory = `${context.prefix}/commits/${randomUUID()}`;
-		await writeSourceText(context, `${directory}/manifest.json`, saved);
 		inventoryKey = `${directory}/inventory.json`;
 		inventory = {
 			version: 2,
@@ -1360,12 +1473,17 @@ async function advanceSourceSnapshot(
 			scope,
 			roots: checkpoint.receiptRoots,
 		};
+		// The commit directory is new and only referenced once both writes are durable.
+		manifestCopy = writeSourceText(
+			context,
+			`${directory}/manifest.json`,
+			saved,
+		);
 	}
-	const saved = await writeSourceText(
-		context,
-		inventoryKey,
-		JSON.stringify(inventory),
-	);
+	const [saved] = await Promise.all([
+		writeSourceText(context, inventoryKey, JSON.stringify(inventory)),
+		manifestCopy,
+	]);
 	return {
 		source: desktopRecordingSourceSchema.parse({
 			version: 1,
@@ -1419,7 +1537,7 @@ export async function advanceDesktopRecordingSourceCommit(
 		);
 	};
 	try {
-		const [bucket] = await run(
+		const access = await run(
 			Storage.getAccessForVideo(decodeStorageVideo(video), {
 				resolvePublishedOutput: false,
 			}),
@@ -1427,9 +1545,11 @@ export async function advanceDesktopRecordingSourceCommit(
 		const result = await advanceSourceSnapshot(
 			{
 				video,
-				bucket,
+				bucket: access[0],
 				run,
 				prefix: `${sourcePrefix(video)}${parsed.generation}/${parsed.snapshotId}`,
+				...sourceLimits(access),
+				reuseVerifiedPages: true,
 			},
 			parsed,
 			verification,
@@ -1480,9 +1600,10 @@ export async function buildDesktopRecordingSourceUrls(
 	source: DesktopRecordingSource,
 ) {
 	assertSourceKey(video, source.inventoryKey);
-	const [bucket] = await runWorkflowPromise(
+	const access = await runWorkflowPromise(
 		Storage.getAccessForVideo(decodeStorageVideo(video)),
 	);
+	const [bucket] = access;
 	const content = await readRequiredObject(bucket, source.inventoryKey);
 	if (hash(content) !== source.inventorySha256) {
 		throw new DesktopRecordingSourceError(
@@ -1526,6 +1647,7 @@ export async function buildDesktopRecordingSourceUrls(
 						bucket,
 						run,
 						prefix: sourcePrefix(video).slice(0, -1),
+						...sourceLimits(access),
 					},
 					inventory.roots,
 					"objects",
