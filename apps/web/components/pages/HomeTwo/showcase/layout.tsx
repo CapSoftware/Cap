@@ -6,7 +6,6 @@ import { BODY_TEXT, GRAIN, H_SECTION } from "../theme";
 // detail lists and the stage panel. No client code, so the copy renders as
 // plain HTML and ships no JavaScript.
 
-/** One colour per section, used by its tabs, picker and stage wash. */
 export type Tone = { accent: string; ink: string; wash: string };
 
 export const TONES = {
@@ -19,7 +18,6 @@ export const TONES = {
 	platforms: { accent: "#64748B", ink: "#334155", wash: "#F1F4F8" },
 } satisfies Record<string, Tone>;
 
-/** Key phrase in a lede, in the section's colour (set by Section). */
 export const Em = ({ children }: { children: ReactNode }) => (
 	<span className="font-normal text-[var(--tone-ink,#111111)]">{children}</span>
 );
@@ -33,10 +31,6 @@ export const toneVars = (tone?: Tone) =>
 			}
 		: {}) as CSSProperties;
 
-/**
- * Says which part of Cap a section is about: the mode's own icon in a
- * coloured disc, then the name in sentence case.
- */
 export const Badge = ({
 	icon,
 	children,
@@ -189,7 +183,6 @@ export const Section = ({
 	className,
 	children,
 }: {
-	/** Scroll target id. */
 	anchor?: string;
 	tone?: Tone;
 	className?: string;
@@ -207,11 +200,13 @@ export const Section = ({
 export const FADE_CSS = `
 	@keyframes ht-fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 	.ht-fade-in { animation: ht-fade-in 400ms cubic-bezier(0.16,1,0.3,1) both; }
+	@media (prefers-reduced-motion: reduce) { .ht-fade-in { animation: none; } }
 `;
 
 export const POP_CSS = `
 	@keyframes ht-pop-in { 0% { opacity: 0; transform: translateY(8px) scale(0.96); } 60% { opacity: 1; transform: translateY(-2px) scale(1.01); } 100% { opacity: 1; transform: none; } }
 	.ht-pop-in { animation: ht-pop-in 520ms cubic-bezier(0.16,1,0.3,1) both; }
+	@media (prefers-reduced-motion: reduce) { .ht-pop-in { animation: none; } }
 `;
 
 /**
