@@ -50,7 +50,10 @@ export const parseTranscriptVTT = (vttContent: string): TranscriptEntry[] => {
 		const fraction = fractionPart ? Number(`0.${fractionPart}`) : 0;
 
 		return {
-			mm_ss: `${minutesStr}:${secondsPart}`,
+			mm_ss:
+				Number(hoursStr) > 0
+					? `${hoursStr}:${minutesStr}:${secondsPart}`
+					: `${minutesStr}:${secondsPart}`,
 			totalSeconds: totalSeconds + (Number.isFinite(fraction) ? fraction : 0),
 		};
 	};

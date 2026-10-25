@@ -1644,6 +1644,7 @@ pub struct PendingReadback {
     frame_number: u32,
     frame_rate: u32,
     export_deadlines: bool,
+    recycle_readback_frames: bool,
 }
 
 fn active_readback_byte_len(
@@ -1772,7 +1773,7 @@ impl PendingReadback {
             phase.finish("frame_ready");
         }
         let data = Arc::new(data_vec);
-        if self.export_deadlines {
+        if self.export_deadlines && self.recycle_readback_frames {
             recycled.keep(&data);
         }
         Ok(RenderedFrame {
@@ -1827,6 +1828,7 @@ pub struct PipelinedGpuReadback {
     pending_resize_size: u64,
     readiness_first_output: bool,
     export_deadlines: bool,
+    recycle_readback_frames: bool,
 }
 
 impl PipelinedGpuReadback {
@@ -1850,6 +1852,7 @@ impl PipelinedGpuReadback {
             pending_resize_size: 0,
             readiness_first_output: true,
             export_deadlines: false,
+            recycle_readback_frames: true,
         }
     }
 
@@ -1982,6 +1985,7 @@ impl PipelinedGpuReadback {
             frame_number: uniforms.frame_number,
             frame_rate: uniforms.frame_rate,
             export_deadlines: self.export_deadlines,
+            recycle_readback_frames: self.recycle_readback_frames,
         });
 
         Ok(())
@@ -2000,6 +2004,7 @@ pub struct RenderSession {
     texture_width: u32,
     texture_height: u32,
     export_deadlines: bool,
+    recycle_readback_frames: bool,
 }
 
 /// The blurred-background cache copies its result into the current session
@@ -2044,6 +2049,7 @@ impl RenderSession {
             texture_width: width,
             texture_height: height,
             export_deadlines: false,
+            recycle_readback_frames: true,
         };
         phase.finish("returned");
         session
@@ -2052,6 +2058,11 @@ impl RenderSession {
     /// See `FrameRenderer::use_export_deadlines`.
     pub fn with_export_deadlines(mut self, export_deadlines: bool) -> Self {
         self.export_deadlines = export_deadlines;
+        self
+    }
+
+    pub fn with_recycle_readback_frames(mut self, recycle_readback_frames: bool) -> Self {
+        self.recycle_readback_frames = recycle_readback_frames;
         self
     }
 
@@ -2223,10 +2234,12 @@ pub async fn finish_encoder_timed(
     let initial_buffer_size =
         (padded_bytes_per_row(uniforms.output_size) * uniforms.output_size.1) as u64;
     let export_deadlines = session.export_deadlines;
+    let recycle_readback_frames = session.recycle_readback_frames;
     let readback = session
         .pipelined_readback
         .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
     readback.export_deadlines = export_deadlines;
+    readback.recycle_readback_frames = recycle_readback_frames;
 
     let previous = readback.take_pending();
 
@@ -2448,6 +2461,7 @@ mod readback_output_tests {
                 frame_number: 7,
                 frame_rate: 30,
                 export_deadlines: false,
+                recycle_readback_frames: true,
             };
             if fail {
                 readback_allocation_failure::inject(7);

@@ -7,6 +7,7 @@ mod app_sounds;
 mod app_windows;
 mod assets;
 mod auth;
+mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
 #[cfg(target_os = "macos")]
@@ -16,6 +17,7 @@ mod camera_blur_portable;
 mod camera_loading;
 mod camera_window;
 mod controls_window;
+mod crash_capture;
 mod deeplink;
 mod dev_restore;
 mod devices;
@@ -45,6 +47,8 @@ mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod linux_dialog;
 mod library;
 mod main_window;
 mod media_access;
@@ -144,6 +148,14 @@ fn resolve_auto_screenshot_editor(target: &str) -> Option<std::path::PathBuf> {
         .into_iter()
         .find(|item| item.kind == library::MediaKind::Screenshot)
         .map(|item| item.bundle)
+}
+
+/// Windows ends the process at logoff or shutdown without running
+/// `on_app_quit`, so both markers that mean "this session crashed" clear here.
+#[cfg(target_os = "windows")]
+fn end_windows_session() {
+    crate::store::clear_handoff_marker();
+    crash_capture::mark_clean_exit();
 }
 
 /// stdout, plus a rolling daily file the Feedback page can upload.
@@ -279,9 +291,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    // A confirmation or alert shown for the running app on a desktop without
+    // zenity (`linux_dialog`): not a second Cap, so before logging and the
+    // single-instance check.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    if let Some(status) = linux_dialog::run_from_args() {
+        std::process::exit(status);
+    }
+
     let _log_guard = init_logging();
+    crash_capture::install(&diagnostics::logs_dir());
 
     single_instance::acquire();
+    let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
+    blur_recovery::configure(previous_session);
     if cfg!(debug_assertions) {
         store::mark_handoff_session();
     }
@@ -378,7 +401,7 @@ fn main() {
                         ..Default::default()
                     }),
                     #[cfg(target_os = "linux")]
-                    app_id: Some("Cap".into()),
+                    app_id: Some(crate::app_windows::APP_ID.into()),
                     #[cfg(target_os = "linux")]
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
@@ -419,6 +442,10 @@ fn main() {
             })
             .detach();
         }
+        cx.on_app_quit(|_| async {
+            crash_capture::mark_clean_exit();
+        })
+        .detach();
 
         app_windows::init(window_handle, session, cx);
         #[cfg(target_os = "macos")]
@@ -583,8 +610,7 @@ fn main() {
             if let Err(error) = platform::install_main_window_frame_policy(&native) {
                 tracing::warn!(%error, "could not install Main window frame policy");
             }
-            if let Err(error) =
-                platform::install_session_end_handler(&native, crate::store::clear_handoff_marker)
+            if let Err(error) = platform::install_session_end_handler(&native, end_windows_session)
             {
                 tracing::warn!(%error, "could not install the Windows session end handler");
             }

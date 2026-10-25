@@ -757,6 +757,12 @@ fn video_mux_send_error(frame_count: u64, error: anyhow::Error) -> anyhow::Error
     anyhow!("Video muxer stopped accepting frames at frame {frame_count}: {error}")
 }
 
+/// Keeps the whole cause chain: a bare context such as "connect PipeWire
+/// stream to portal node" says nothing about why.
+fn task_failure(name: &str, error: &anyhow::Error) -> anyhow::Error {
+    anyhow!("Task {name} failed: {error:#}")
+}
+
 pub(crate) struct AudioTimestampGenerator {
     sample_rate: u32,
     total_samples: u64,
@@ -3261,7 +3267,7 @@ async fn finish_build(
             while let Some((result, name)) = futures.next().await {
                 let error = match result {
                     Err(_) => Some(anyhow::anyhow!("Task {name} failed unexpectedly")),
-                    Ok(Err(error)) => Some(anyhow::anyhow!("Task {name} failed: {error}")),
+                    Ok(Err(error)) => Some(task_failure(name, &error)),
                     Ok(Ok(())) => None,
                 };
                 if let Some(error) = error {
@@ -5389,6 +5395,17 @@ pub trait VideoMuxer: Muxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0.6.1 Niri logs only said "connect PipeWire stream to portal node".
+    #[test]
+    fn a_task_failure_names_its_root_cause() {
+        let error = anyhow!("Invalid argument (os error 22)")
+            .context("connect PipeWire stream to portal node");
+        assert_eq!(
+            task_failure("wayland-pipewire-capture-thread", &error).to_string(),
+            "Task wayland-pipewire-capture-thread failed: connect PipeWire stream to portal node: Invalid argument (os error 22)"
+        );
+    }
 
     #[cfg(not(target_os = "linux"))]
     mod video_skipped_frames {
