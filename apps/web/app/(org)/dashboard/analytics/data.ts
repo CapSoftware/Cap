@@ -2,9 +2,10 @@ import { db } from "@cap/database";
 import { comments, spaceVideos, videos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
 import { and, between, eq, inArray } from "drizzle-orm";
-import { sql } from "drizzle-orm/sql";
+import { type SQL, sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
 
+import { videoBelongsToOrganization } from "@/lib/cap-analytics-access";
 import { runPromise } from "@/lib/server";
 
 import type {
@@ -339,6 +340,7 @@ export const getOrgAnalyticsData = async (
 		tinybirdData.topCapsRaw
 			.map((cap: TopCapRow) => cap.videoId)
 			.filter(Boolean),
+		videoBelongsToOrganization(typedOrgId),
 	);
 
 	let capName: string | undefined;
@@ -516,13 +518,13 @@ const formatBreakdown = <T extends { name: string; views: number }>(
 		percentage: totalViews > 0 ? row.views / totalViews : 0,
 	}));
 
-const loadVideoNames = async (videoIds: ReadonlyArray<string>) => {
+const loadVideoNames = async (videoIds: ReadonlyArray<string>, scope?: SQL) => {
 	if (videoIds.length === 0) return new Map<string, string>();
 	const typedVideoIds = videoIds.map((id) => id as VideoId);
 	const records = await db()
 		.select({ id: videos.id, name: videos.name })
 		.from(videos)
-		.where(inArray(videos.id, typedVideoIds));
+		.where(and(inArray(videos.id, typedVideoIds), scope));
 	return new Map(records.map((record) => [record.id, record.name]));
 };
 

@@ -429,8 +429,7 @@ fn primary_person_mask(
 ) -> Result<(), String> {
     let labels = observation.instance_mask();
     let (width, height) = (labels.width(), labels.height());
-    areas.clear();
-    areas.resize(256, 0);
+    let mut lanes = [[0; 256]; 4];
     with_locked_base(
         &mut labels.retained(),
         cv::pixel_buffer::LockFlags::READ_ONLY,
@@ -440,13 +439,14 @@ fn primary_person_mask(
             }
             for y in 0..height {
                 let row = unsafe { std::slice::from_raw_parts(base.add(y * stride), width) };
-                for &label in row {
-                    areas[usize::from(label)] += 1;
-                }
+                count_labels(row, &mut lanes);
             }
             Ok(())
         },
     )?;
+    areas.clear();
+    areas
+        .extend((0..256).map(|label| lanes.iter().map(|lane| lane[label] as usize).sum::<usize>()));
     let Some(primary) = (1..areas.len())
         .filter(|&label| areas[label] > 0)
         .max_by_key(|&label| areas[label])
@@ -461,6 +461,24 @@ fn primary_person_mask(
     let mask = unsafe { observation.generate_mask_err(&instances, &mut error) }
         .ok_or_else(|| format!("Vision instance mask failed: {error:?}"))?;
     read_mask(&mask, output, dimensions)
+}
+
+/// Tallies every label in `row`. Nearly every sample repeats its
+/// neighbour's label, so a single table would chain each increment on the
+/// previous store to the same counter; four interleaved tables keep four
+/// independent chains in flight.
+fn count_labels(row: &[u8], lanes: &mut [[u32; 256]; 4]) {
+    let chunks = row.chunks_exact(4);
+    let tail = chunks.remainder();
+    for chunk in chunks {
+        lanes[0][usize::from(chunk[0])] += 1;
+        lanes[1][usize::from(chunk[1])] += 1;
+        lanes[2][usize::from(chunk[2])] += 1;
+        lanes[3][usize::from(chunk[3])] += 1;
+    }
+    for &label in tail {
+        lanes[0][usize::from(label)] += 1;
+    }
 }
 
 fn read_mask(
@@ -713,6 +731,33 @@ mod tests {
         assert_eq!(input_dimensions(1080, 1920), (540, 960));
         assert_eq!(input_dimensions(640, 480), (640, 480));
         assert_eq!(input_dimensions(1440, 1080), (720, 540));
+    }
+
+    #[test]
+    fn label_tallies_match_a_plain_count() {
+        let mut state = 0x2545_f491_u32;
+        let mut row = Vec::new();
+        while row.len() < 517 * 3 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let label = [0, 0, 1, 2, 255][(state % 5) as usize];
+            row.extend(std::iter::repeat_n(label, (state >> 8) as usize % 40 + 1));
+        }
+        for width in [1, 3, 4, 5, 512, 517] {
+            let mut lanes = [[0; 256]; 4];
+            let mut expected = [0usize; 256];
+            for chunk in row.chunks(width) {
+                count_labels(chunk, &mut lanes);
+                for &label in chunk {
+                    expected[usize::from(label)] += 1;
+                }
+            }
+            for (label, &expected) in expected.iter().enumerate() {
+                let total: usize = lanes.iter().map(|lane| lane[label] as usize).sum();
+                assert_eq!(total, expected, "width {width} label {label}");
+            }
+        }
     }
 
     #[test]

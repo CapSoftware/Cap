@@ -23,6 +23,7 @@ use gpui::{App, Global};
 
 use crate::{
     app_windows,
+    i18n::tr,
     library::{self, MediaKind},
     main_window::{Mode, TargetType},
     menus,
@@ -173,17 +174,20 @@ pub fn cover_crop_geometry(orig_w: u32, orig_h: u32, size: u32) -> (u32, u32, u3
 
 /// `load_thumbnail_data`, ending in a PNG rather than raw RGBA -- muda hands
 /// its icon to AppKit as a PNG too (`PlatformIcon::to_nsimage`), so this is the
-/// same conversion one step earlier. A JPEG source starts from the Recents card
+/// same conversion one step earlier. An opaque source (a recording's JPEG, a
+/// display or area screenshot's RGB PNG) starts from the Recents card
 /// thumbnail cache instead of the native-resolution original. That cache is
-/// itself JPEG and drops alpha, so anything else (a transparent screenshot PNG)
-/// still decodes directly.
+/// itself JPEG and drops alpha, so a source that can carry alpha (a window
+/// screenshot's rounded-corner RGBA PNG) still decodes directly.
 fn load_thumbnail_png(path: &Path) -> Option<Vec<u8>> {
-    use image::{GenericImageView, ImageEncoder, ImageFormat, RgbaImage, imageops::FilterType};
+    use image::{GenericImageView, ImageEncoder, RgbaImage, imageops::FilterType};
 
-    let img = if ImageFormat::from_path(path).ok() == Some(ImageFormat::Jpeg) {
-        image::DynamicImage::ImageRgba8(library::thumbnail_rgba(path)?)
-    } else {
-        image::load_from_memory(&std::fs::read(path).ok()?).ok()?
+    let cached = (!source_may_have_alpha(path))
+        .then(|| library::thumbnail_rgba(path))
+        .flatten();
+    let img = match cached {
+        Some(rgba) => image::DynamicImage::ImageRgba8(rgba),
+        None => image::load_from_memory(&std::fs::read(path).ok()?).ok()?,
     };
     let (orig_w, orig_h) = img.dimensions();
     if orig_w == 0 || orig_h == 0 {
@@ -209,6 +213,24 @@ fn load_thumbnail_png(path: &Path) -> Option<Vec<u8>> {
         .write_image(result.as_raw(), size, size, image::ExtendedColorType::Rgba8)
         .ok()?;
     Some(png)
+}
+
+/// Reads only the signature and, for a PNG, the header chunks: the color type
+/// says whether the pixels can carry alpha without decoding any of them.
+fn source_may_have_alpha(path: &Path) -> bool {
+    use image::{ImageDecoder, ImageFormat, ImageReader};
+
+    let Ok(reader) = ImageReader::open(path).and_then(ImageReader::with_guessed_format) else {
+        return true;
+    };
+    match reader.format() {
+        Some(ImageFormat::Jpeg) => false,
+        Some(ImageFormat::Png) => reader
+            .into_decoder()
+            .ok()
+            .is_none_or(|decoder| decoder.color_type().has_alpha()),
+        _ => true,
+    }
 }
 
 /// `load_all_previous_items` + the background thumbnail pass, in one call.
@@ -241,13 +263,13 @@ pub fn scan_previous(load_thumbnails: bool) -> Vec<PreviousItem> {
 fn previous_submenu(previous: &[PreviousItem]) -> Entry {
     if previous.is_empty() {
         return Entry::Submenu {
-            title: "Previous".into(),
+            title: tr::tray::previous().into(),
             enabled: false,
-            items: vec![Entry::disabled("No recent items")],
+            items: vec![Entry::disabled(tr::tray::no_recent_items())],
         };
     }
     Entry::Submenu {
-        title: "Previous".into(),
+        title: tr::tray::previous().into(),
         enabled: true,
         items: previous
             .iter()
@@ -283,32 +305,50 @@ fn mode_submenu(mode: Mode) -> Entry {
         )
     };
     Entry::Submenu {
-        title: "Select Mode".into(),
+        title: tr::tray::select_mode().into(),
         enabled: true,
         items: vec![
-            label(Mode::Studio, "Studio"),
-            label(Mode::Instant, "Instant"),
-            label(Mode::Screenshot, "Screenshot"),
+            label(Mode::Studio, tr::tray::mode::studio()),
+            label(Mode::Instant, tr::tray::mode::instant()),
+            label(Mode::Screenshot, tr::tray::mode::screenshot()),
         ],
     }
 }
 
 /// `build_tray_menu`, minus the onboarding-minimal branch.
 pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<Entry> {
-    let mut entries = vec![Entry::item("Open Main Window", TrayItem::OpenCap)];
+    let mut entries = vec![Entry::item(tr::tray::open_main_window(), TrayItem::OpenCap)];
 
     if mode == Mode::Screenshot {
-        entries.push(Entry::item("Screenshot Display", TrayItem::RecordDisplay));
-        entries.push(Entry::item("Screenshot Window", TrayItem::RecordWindow));
-        entries.push(Entry::item("Screenshot Area", TrayItem::RecordArea));
+        entries.push(Entry::item(
+            tr::tray::screenshot_display(),
+            TrayItem::RecordDisplay,
+        ));
+        entries.push(Entry::item(
+            tr::tray::screenshot_window(),
+            TrayItem::RecordWindow,
+        ));
+        entries.push(Entry::item(
+            tr::tray::screenshot_area(),
+            TrayItem::RecordArea,
+        ));
     } else {
-        entries.push(Entry::item("Record Display", TrayItem::RecordDisplay));
-        entries.push(Entry::item("Record Window", TrayItem::RecordWindow));
-        entries.push(Entry::item("Record Area", TrayItem::RecordArea));
-        entries.push(Entry::item("Take a Screenshot", TrayItem::TakeScreenshot));
+        entries.push(Entry::item(
+            tr::tray::record_display(),
+            TrayItem::RecordDisplay,
+        ));
+        entries.push(Entry::item(
+            tr::tray::record_window(),
+            TrayItem::RecordWindow,
+        ));
+        entries.push(Entry::item(tr::tray::record_area(), TrayItem::RecordArea));
+        entries.push(Entry::item(
+            tr::tray::take_screenshot(),
+            TrayItem::TakeScreenshot,
+        ));
     }
 
-    entries.push(Entry::item("Import Media...", TrayItem::ImportMedia));
+    entries.push(Entry::item(tr::tray::import_media(), TrayItem::ImportMedia));
 
     entries.push(Entry::Separator);
     entries.push(mode_submenu(mode));
@@ -316,31 +356,34 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     entries.push(Entry::Separator);
 
     entries.push(Entry::item(
-        "View all recordings",
+        tr::tray::view_all_recordings(),
         TrayItem::ViewAllRecordings,
     ));
     entries.push(Entry::item(
-        "View all screenshots",
+        tr::tray::view_all_screenshots(),
         TrayItem::ViewAllScreenshots,
     ));
-    entries.push(Entry::item("Settings", TrayItem::OpenSettings));
+    entries.push(Entry::item(tr::tray::settings(), TrayItem::OpenSettings));
 
     entries.push(Entry::Separator);
     // `logging::upload_log_file` needs the auth token and the HTTP client,
     // neither of which this app has.
-    entries.push(Entry::disabled("Upload Logs"));
-    entries.push(Entry::disabled(format!("Cap v{version}")));
-    entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+    entries.push(Entry::disabled(tr::tray::upload_logs()));
+    entries.push(Entry::disabled(tr::tray::version(version)));
+    entries.push(Entry::item(tr::tray::quit(), TrayItem::Quit));
 
     entries
 }
 
 pub fn build_onboarding_menu(version: &str) -> Vec<Entry> {
     vec![
-        Entry::item("Request Permissions", TrayItem::RequestPermissions),
+        Entry::item(
+            tr::tray::request_permissions(),
+            TrayItem::RequestPermissions,
+        ),
         Entry::Separator,
-        Entry::disabled(format!("Cap v{version}")),
-        Entry::item("Quit Cap", TrayItem::Quit),
+        Entry::disabled(tr::tray::version(version)),
+        Entry::item(tr::tray::quit(), TrayItem::Quit),
     ]
 }
 
@@ -693,6 +736,7 @@ mod mac {
         actions: Vec<TrayItem>,
         mode: Mode,
         previous: Vec<PreviousItem>,
+        previous_generation: u64,
         recording: bool,
     }
 
@@ -770,6 +814,7 @@ mod mac {
                 actions: Vec::new(),
                 mode,
                 previous: Vec::new(),
+                previous_generation: 0,
                 recording: false,
             };
             set_button_image(&tray, mode_icon(mode));
@@ -1042,13 +1087,17 @@ mod mac {
         if !cx.has_global::<Tray>() {
             return;
         }
+        let tray = cx.global_mut::<Tray>();
+        tray.previous_generation = tray.previous_generation.wrapping_add(1);
+        let generation = tray.previous_generation;
         cx.spawn(async move |cx| {
             let previous = cx
                 .background_executor()
                 .spawn(async { scan_previous(true) })
                 .await;
             cx.update(|cx| {
-                if !cx.has_global::<Tray>() {
+                if !cx.has_global::<Tray>() || cx.global::<Tray>().previous_generation != generation
+                {
                     return;
                 }
                 cx.global_mut::<Tray>().previous = previous;
@@ -1261,6 +1310,8 @@ mod tests {
             let icon = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
                 .unwrap()
                 .into_rgba8();
+            assert_eq!(icon.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+            assert!(icon.get_pixel(0, 0)[3] < 8, "{scan} scan lost the corner");
             assert!(
                 icon.get_pixel(2, 16)[3] < 8,
                 "{scan} scan lost the transparent half"
@@ -1270,6 +1321,50 @@ mod tests {
                 "{scan} scan lost the opaque half"
             );
         }
+        let cache = library::thumbnail_cache_file(&png).unwrap();
+        assert!(
+            !cache.exists(),
+            "a transparent PNG never goes through the alpha-dropping cache"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn previous_thumbnails_reuse_the_cache_for_an_opaque_png() {
+        let root = temp_root("opaque-png");
+        std::fs::create_dir_all(&root).unwrap();
+        let png = root.join("screenshot.png");
+        image::RgbImage::from_pixel(1280, 720, image::Rgb([20, 120, 220]))
+            .save_with_format(&png, image::ImageFormat::Png)
+            .unwrap();
+        let cache = library::thumbnail_cache_file(&png).unwrap();
+        std::fs::remove_file(&cache).ok();
+
+        let cold = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(cold.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+        assert_eq!(cold.get_pixel(0, 0)[3], 255);
+        assert!(cache.exists(), "the first scan fills the shared cache");
+
+        let marker = image::Rgb([200, 30, 90]);
+        image::RgbImage::from_pixel(398, 224, marker)
+            .save_with_format(&cache, image::ImageFormat::Jpeg)
+            .unwrap();
+        let warm = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(warm.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
+        assert!(
+            warm.pixels().all(|pixel| pixel.0[..3]
+                .iter()
+                .zip(marker.0)
+                .all(|(a, b)| a.abs_diff(b) <= 3)
+                && pixel.0[3] == 255),
+            "the warm icon is built from the cached thumbnail, not the original"
+        );
+
+        std::fs::remove_file(&cache).ok();
         std::fs::remove_dir_all(&root).ok();
     }
 

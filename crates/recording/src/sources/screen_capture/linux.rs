@@ -35,6 +35,12 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+#[cfg(test)]
+mod x11_tests;
+
+#[cfg(test)]
+mod system_audio_channel_tests;
+
 #[derive(Debug)]
 pub struct X11Capture;
 
@@ -141,9 +147,13 @@ impl ScreenCaptureConfig<X11Capture> {
                 if matches!(&self.config.linux_source, LinuxCaptureSource::Window { .. }) {
                     self.video_info
                 } else {
+                    let output_size = constrain_capture_size(
+                        PhysicalSize::new(f64::from(width), f64::from(height)),
+                        Some((self.video_info.width, self.video_info.height)),
+                    );
                     VideoInfo {
-                        width,
-                        height,
+                        width: output_size.width() as u32,
+                        height: output_size.height() as u32,
                         ..self.video_info
                     }
                 };
@@ -160,8 +170,8 @@ impl ScreenCaptureConfig<X11Capture> {
                     },
                     x,
                     y,
-                    width: video_info.width,
-                    height: video_info.height,
+                    width,
+                    height,
                     fps: self.config.fps,
                     show_cursor: self.config.show_cursor,
                 }),
@@ -1341,7 +1351,12 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
-        let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
+        let setup = crate::sources::Microphone::setup_with_channels(
+            config.feed_lock,
+            tx,
+            ctx,
+            X11Capture::audio_info().channels,
+        );
         async move {
             let inner = setup
                 .await
@@ -1965,13 +1980,14 @@ impl FrameScaler {
 }
 
 fn capture_x11(
-    _video_info: VideoInfo,
+    video_info: VideoInfo,
     input_config: X11InputConfig,
     mut video_tx: mpsc::Sender<FFmpegVideoFrame>,
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
 ) -> anyhow::Result<()> {
     let mut grabber = X11Grabber::new(&input_config)?;
+    grabber.output = video_info;
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(input_config.fps.max(1)));
     let started = Instant::now();
     let mut next_capture = Instant::now();

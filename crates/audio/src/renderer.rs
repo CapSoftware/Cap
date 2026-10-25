@@ -68,6 +68,29 @@ pub fn render_audio<T: AudioSampleSource>(
         return 0;
     }
     let out = &mut out[out_offset..out_offset + samples * 2];
+    if let [track] = tracks
+        && matches!(track.stereo_mode, StereoMode::Stereo)
+        && track.data.channels() == 2
+    {
+        let gain = gain_for_db(track.gain);
+        if gain == f32::NEG_INFINITY {
+            out.fill(0.0);
+            return samples;
+        }
+        if let Ok(first) = usize::try_from(offset as i128 + track.offset as i128)
+            && let Some(first) = first.checked_mul(2)
+            && let Some(end) = first.checked_add(out.len())
+            && let Some(input) = track.data.sample_slice(first..end)
+            && input.len() == out.len()
+        {
+            let mut index = 0;
+            while index < out.len() {
+                out[index] = (0.0 + input[index] * gain).clamp(-1.0, 1.0);
+                index += 1;
+            }
+            return samples;
+        }
+    }
     out.fill(0.0);
 
     for track in tracks {
@@ -255,6 +278,146 @@ mod tests {
 
         fn sample_slice(&self, range: Range<usize>) -> Option<&[f32]> {
             self.slices.then(|| self.data.sample_slice(range)).flatten()
+        }
+    }
+
+    #[test]
+    fn single_stereo_mixing_matches_indexed_samples_at_boundaries() {
+        let data = AudioData::from_raw_f32(
+            vec![
+                0.0,
+                -0.0,
+                -2.0,
+                2.0,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::from_bits(0x7fc0_1234),
+                f32::from_bits(1),
+                -f32::from_bits(1),
+                0.25,
+                -0.25,
+                1.0,
+                -1.0,
+                0.5,
+            ],
+            2,
+        );
+        for gain in [
+            f32::NEG_INFINITY,
+            -31.0,
+            -30.0,
+            -6.0,
+            0.0,
+            6.0,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            for offset in [-3, 0, 2] {
+                for cursor in [0, 1, 4, 100] {
+                    for count in [0, 1, 3, 16] {
+                        for mode in [0, 1, 2] {
+                            let render = |slices| {
+                                let source = Source {
+                                    data: &data,
+                                    slices,
+                                };
+                                let track = AudioRendererTrack {
+                                    data: &source,
+                                    gain,
+                                    offset,
+                                    stereo_mode: match mode {
+                                        1 => StereoMode::MonoL,
+                                        2 => StereoMode::MonoR,
+                                        _ => StereoMode::Stereo,
+                                    },
+                                };
+                                let mut output = [13.0_f32; 36];
+                                let rendered =
+                                    render_audio(&[track], cursor, count, 2, &mut output);
+                                (rendered, output)
+                            };
+                            let (expected_count, expected) = render(false);
+                            let (actual_count, actual) = render(true);
+                            assert_eq!(actual_count, expected_count);
+                            for (actual, expected) in actual.into_iter().zip(expected) {
+                                if expected.is_nan() {
+                                    assert!(actual.is_nan());
+                                } else {
+                                    assert_eq!(actual.to_bits(), expected.to_bits());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partial_stereo_slices_keep_the_unavailable_tail_silent() {
+        struct PartialSlice;
+        impl AudioSampleSource for PartialSlice {
+            fn channels(&self) -> u16 {
+                2
+            }
+            fn sample_count(&self) -> usize {
+                4
+            }
+            fn sample(&self, _index: usize) -> Option<&f32> {
+                None
+            }
+            fn sample_slice(&self, _range: Range<usize>) -> Option<&[f32]> {
+                Some(&[0.25, -0.5, 0.75, -2.0])
+            }
+        }
+        let tracks = [AudioRendererTrack {
+            data: &PartialSlice,
+            gain: 0.0,
+            offset: 0,
+            stereo_mode: StereoMode::Stereo,
+        }];
+        let mut output = [13.0_f32; 12];
+        assert_eq!(render_audio(&tracks, 0, 4, 2, &mut output), 4);
+        assert_eq!(
+            output,
+            [
+                13.0, 13.0, 0.25, -0.5, 0.75, -1.0, 0.0, 0.0, 0.0, 0.0, 13.0, 13.0
+            ]
+        );
+    }
+
+    #[test]
+    fn muted_stereo_tracks_do_not_read_samples() {
+        struct Muted;
+        impl AudioSampleSource for Muted {
+            fn channels(&self) -> u16 {
+                2
+            }
+            fn sample_count(&self) -> usize {
+                4
+            }
+            fn sample(&self, _index: usize) -> Option<&f32> {
+                panic!("muted sample read")
+            }
+            fn sample_slice(&self, _range: Range<usize>) -> Option<&[f32]> {
+                panic!("muted slice read")
+            }
+        }
+        for gain in [f32::NEG_INFINITY, -31.0, -30.0] {
+            let tracks = [AudioRendererTrack {
+                data: &Muted,
+                gain,
+                offset: 0,
+                stereo_mode: StereoMode::Stereo,
+            }];
+            let mut output = [13.0_f32; 12];
+            assert_eq!(render_audio(&tracks, 0, 4, 2, &mut output), 4);
+            assert_eq!(
+                output,
+                [
+                    13.0, 13.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 13.0, 13.0
+                ]
+            );
         }
     }
 

@@ -385,6 +385,12 @@ fn skia_stroke(width: f64, round: bool) -> tiny_skia::Stroke {
 /// order -- rect, ellipse, arrow, freehand with tiny-skia, text with
 /// cosmic-text, each under its own `globalAlpha`.
 fn draw_annotations_onto(canvas: &mut [u8], width: u32, height: u32, scaled: &[Annotation]) {
+    if scaled
+        .iter()
+        .all(|annotation| annotation.annotation_type == AnnotationType::Mask)
+    {
+        return;
+    }
     pixels::premultiply(canvas);
     if let Some(mut pixmap) = tiny_skia::PixmapMut::from_bytes(canvas, width, height) {
         for annotation in scaled {
@@ -659,6 +665,79 @@ mod tests {
         };
     }
 
+    #[test]
+    fn mask_only_draw_preserves_straight_alpha_pixels() {
+        let original: Vec<u8> = (0..=255u8).flat_map(|alpha| [17, 30, 77, alpha]).collect();
+        for scaled in [
+            Vec::new(),
+            vec![annotation(AnnotationType::Mask, 0., 0., 16., 16.)],
+        ] {
+            let mut canvas = original.clone();
+            draw_annotations_onto(&mut canvas, 16, 16, &scaled);
+            assert_eq!(canvas, original);
+        }
+    }
+
+    #[test]
+    fn off_canvas_mask_does_not_change_translucent_export_pixels() {
+        let raw = RawFrame {
+            rgba: vec![17, 30, 77, 1, 123, 45, 67, 127],
+            width: 2,
+            height: 1,
+            base_width: 2,
+            base_height: 1,
+        };
+        let mut config = ProjectConfiguration::default();
+        invisible_background(&mut config);
+        config
+            .annotations
+            .push(annotation(AnnotationType::Mask, 3., 0., 2., 1.));
+
+        let out = composite(&raw, &config);
+
+        assert_eq!((out.width, out.height), (2, 1));
+        assert_eq!(out.rgba, raw.rgba);
+    }
+
+    #[test]
+    fn pixelated_export_preserves_pixels_outside_the_mask_and_draws_shapes() {
+        let raw = RawFrame {
+            rgba: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 17, 30, 77, 1, 123, 45, 67, 127, 255, 255, 0, 255,
+                0, 0, 255, 255, 23, 41, 83, 3, 111, 55, 99, 129,
+            ],
+            width: 4,
+            height: 2,
+            base_width: 4,
+            base_height: 2,
+        };
+        let mut config = ProjectConfiguration::default();
+        invisible_background(&mut config);
+        let mut mask = annotation(AnnotationType::Mask, 0., 0., 2., 2.);
+        mask.mask_type = Some(cap_project::MaskType::Pixelate);
+        mask.mask_level = Some(2.);
+        config.annotations.push(mask);
+        let mut expected = raw.rgba.clone();
+        for index in [0, 1, 4, 5] {
+            expected[index * 4..index * 4 + 4].copy_from_slice(&[0, 0, 255, 255]);
+        }
+
+        let out = composite(&raw, &config);
+
+        assert_eq!((out.width, out.height), (4, 2));
+        assert_eq!(out.rgba, expected);
+
+        let mut rectangle = annotation(AnnotationType::Rectangle, 2., 0., 2., 2.);
+        rectangle.fill_color = "#ff0000".into();
+        rectangle.stroke_width = 0.;
+        config.annotations.push(rectangle);
+        for index in [2, 3, 6, 7] {
+            expected[index * 4..index * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
+        }
+
+        assert_eq!(composite(&raw, &config).rgba, expected);
+    }
+
     /// `stableValue`: keys sorted at every depth, arrays kept in order.
     #[test]
     fn stable_stringify_sorts_keys_recursively() {
@@ -902,6 +981,66 @@ mod tests {
             composite(&raw, &config).rgba,
             reference_unannotated_composite(&raw, &config).rgba,
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_mask_only_screenshot_composite() {
+        use std::{hint::black_box, time::Instant};
+        for (width, height) in [(1920, 1080), (3840, 2160)] {
+            for translucent_border in [false, true] {
+                let raw = RawFrame {
+                    rgba: (0..width * height)
+                        .flat_map(|i: u32| {
+                            let x = i % width;
+                            let y = i / width;
+                            let border = x < 32 || y < 32 || x >= width - 32 || y >= height - 32;
+                            let alpha = if translucent_border && border {
+                                (i % 254 + 1) as u8
+                            } else {
+                                255
+                            };
+                            [
+                                i as u8,
+                                i.wrapping_mul(17) as u8,
+                                i.wrapping_mul(31) as u8,
+                                alpha,
+                            ]
+                        })
+                        .collect(),
+                    width,
+                    height,
+                    base_width: width,
+                    base_height: height,
+                };
+                let mut config = ProjectConfiguration::default();
+                invisible_background(&mut config);
+                let mut mask = annotation(AnnotationType::Mask, 100., 100., 256., 256.);
+                mask.mask_type = Some(cap_project::MaskType::Pixelate);
+                mask.mask_level = Some(16.);
+                config.annotations.push(mask);
+                let mut samples_ns = Vec::new();
+                for iteration in 0..35 {
+                    let start = Instant::now();
+                    black_box(composite(black_box(&raw), black_box(&config)));
+                    let elapsed = start.elapsed().as_nanos();
+                    if iteration >= 5 {
+                        samples_ns.push(elapsed);
+                    }
+                }
+                samples_ns.sort_unstable();
+                let median_ms = (samples_ns[14] + samples_ns[15]) as f64 / 2_000_000.;
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "width": width, "height": height,
+                        "translucent_border": translucent_border,
+                        "median_ms": median_ms, "samples_ns": samples_ns,
+                        "scope": "CPU mask-only composite; excludes GPU, PNG, disk and native UI"
+                    })
+                );
+            }
+        }
     }
 
     #[test]

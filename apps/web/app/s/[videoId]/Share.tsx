@@ -8,7 +8,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	Suspense,
 	startTransition,
@@ -21,15 +21,16 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	getVideoStatus,
-	type VideoStatusResult,
-} from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import {
+	VideoStatusNotFoundError,
+	videoStatusQueryOptions,
+} from "@/lib/video-status-query";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { DashboardBackLink } from "./_components/DashboardBackLink";
+import { seekLength } from "./_components/early-length";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
@@ -195,6 +196,7 @@ interface ShareProps {
 	viewerId?: string | null;
 	isEditProcessing: boolean;
 	recordingStopped?: boolean;
+	earlySegmentPlayback?: boolean;
 	defaultPlaybackSpeed?: number;
 	initialAiData?: {
 		title?: string | null;
@@ -238,13 +240,7 @@ const useVideoStatus = (
 	enabled: boolean = true,
 ) => {
 	return useQuery({
-		queryKey: ["videoStatus", videoId],
-		queryFn: async (): Promise<VideoStatusResult> => {
-			const res = await getVideoStatus(videoId);
-			if ("success" in res && res.success === false)
-				throw new Error("Failed to fetch video status");
-			return res as VideoStatusResult;
-		},
+		...videoStatusQueryOptions(videoId),
 		initialData: initialData
 			? {
 					transcriptionStatus:
@@ -260,6 +256,7 @@ const useVideoStatus = (
 			: undefined,
 		enabled,
 		refetchInterval: (query) => {
+			if (query.state.error instanceof VideoStatusNotFoundError) return false;
 			const data = query.state.data;
 			if (!data) return 2000;
 
@@ -332,6 +329,7 @@ export const Share = ({
 	viewerId,
 	isEditProcessing,
 	recordingStopped = false,
+	earlySegmentPlayback = false,
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
@@ -365,7 +363,7 @@ export const Share = ({
 		},
 	);
 
-	const { data: videoStatus } = useVideoStatus(
+	const { data: videoStatus, error: videoStatusError } = useVideoStatus(
 		data.id,
 		{
 			aiGeneration: aiGenerationAvailable,
@@ -378,6 +376,11 @@ export const Share = ({
 		},
 		!isScreenshot,
 	);
+	const router = useRouter();
+	const videoWasDeleted = videoStatusError instanceof VideoStatusNotFoundError;
+	useEffect(() => {
+		if (videoWasDeleted) router.refresh();
+	}, [videoWasDeleted, router]);
 
 	const transcriptionStatus =
 		videoStatus?.transcriptionStatus || data.transcriptionStatus;
@@ -482,7 +485,10 @@ export const Share = ({
 		);
 	}, [data.source.type, searchParams]);
 
+	const cancelPendingSeek = useRef<(() => void) | null>(null);
+
 	const handleSeek = useCallback((time: number) => {
+		cancelPendingSeek.current?.();
 		const v =
 			playerRef.current ??
 			(document.querySelector("video") as HTMLVideoElement | null);
@@ -491,8 +497,8 @@ export const Share = ({
 			return;
 		}
 		const seekOnce = (t: number) => {
-			const dur =
-				Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+			const length = seekLength(v, v.duration);
+			const dur = Number.isFinite(length) && length > 0 ? length : null;
 			const clamped = dur ? Math.max(0, Math.min(dur - 0.001, t)) : t;
 			try {
 				v.currentTime = clamped;
@@ -504,19 +510,21 @@ export const Share = ({
 			seekOnce(time);
 			return;
 		}
-		let timeoutId: ReturnType<typeof setTimeout> | null = null;
-		const handleReady = () => {
-			seekOnce(time);
+		// A timeline seek before metadata moves currentTime; don't undo it.
+		const requestedFrom = v.currentTime;
+		const cancel = () => {
 			v.removeEventListener("canplay", handleReady);
 			v.removeEventListener("loadedmetadata", handleReady);
-			if (timeoutId) clearTimeout(timeoutId);
+			if (cancelPendingSeek.current === cancel)
+				cancelPendingSeek.current = null;
+		};
+		const handleReady = () => {
+			cancel();
+			if (v.currentTime === requestedFrom) seekOnce(time);
 		};
 		v.addEventListener("canplay", handleReady, { once: true });
 		v.addEventListener("loadedmetadata", handleReady, { once: true });
-		timeoutId = setTimeout(() => {
-			v.removeEventListener("canplay", handleReady);
-			v.removeEventListener("loadedmetadata", handleReady);
-		}, 3000);
+		cancelPendingSeek.current = cancel;
 	}, []);
 
 	useEffect(() => {
@@ -988,6 +996,7 @@ export const Share = ({
 														showPlaybackStatusBadge={viewerId === data.owner.id}
 														isEditProcessing={isEditProcessing}
 														recordingStopped={recordingStopped}
+														earlySegmentPlayback={earlySegmentPlayback}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
 														callToAction={data.callToAction}

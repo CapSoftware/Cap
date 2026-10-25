@@ -10,6 +10,7 @@ import { Effect, Schedule } from "effect";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { isVideoStorageKey } from "@/lib/video-storage-key";
 
 async function verifyRawFileUploaded(
 	video: typeof videos.$inferSelect,
@@ -49,6 +50,12 @@ export async function triggerVideoProcessing({
 
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
+	if (!isVideoStorageKey(video, rawFileKey)) {
+		throw new Error("Upload file does not belong to this video");
+	}
+	if ((video.bucket ?? null) !== (bucketId ?? null)) {
+		throw new Error("Upload bucket does not match this video");
+	}
 
 	await verifyRawFileUploaded(video, rawFileKey);
 
