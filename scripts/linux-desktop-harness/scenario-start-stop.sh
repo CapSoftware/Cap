@@ -87,6 +87,12 @@ attempt() {
     else
       result "attempt${n}_finished" no
     fi
+    # The windows Cap hid for the capture must come back after a stop too.
+    if wait_log "recording UI restored" 15 "$restored_before"; then
+      result "attempt${n}_restored" yes
+    else
+      result "attempt${n}_restored" no
+    fi
   else
     result "attempt${n}_started" no
     # A person whose recording never starts presses Stop: Cap must come back.

@@ -44,7 +44,7 @@ def find(scope_re, button_re):
                 name = node.get_name() or ""
             except Exception:
                 continue
-            if role in (Atspi.Role.BUTTON, Atspi.Role.PUSH_BUTTON, Atspi.Role.TOGGLE_BUTTON) and button_re.search(name):
+            if role in (Atspi.Role.PUSH_BUTTON, Atspi.Role.TOGGLE_BUTTON) and button_re.search(name):
                 return node
     return None
 

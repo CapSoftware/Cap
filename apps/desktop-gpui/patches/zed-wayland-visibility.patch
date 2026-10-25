@@ -131,7 +131,7 @@
              (VisibilityPhase::Visible, false) => {
                  let transition = state.visibility.begin_unmap();
                  drop(state);
-@@ -1139,38 +1209,76 @@
+@@ -1139,38 +1209,78 @@
                  state.renderer_presented = false;
                  state.resize_throttle = false;
                  state.fixed_geometry_size = None;
@@ -225,6 +225,8 @@
 +            decoration,
 +            dialog: None,
 +        });
++        // The first remap attempt cached its size limits for the old role.
++        state.fixed_geometry_size = None;
 +        state.apply_toplevel_state();
 +        state.update_size_constraints();
 +        state.surface.commit();
@@ -233,7 +235,7 @@
      pub(crate) fn visibility_processed(&self, sync: &VisibilitySync) {
          let mut state = self.state.borrow_mut();
          if state.surface.id() != sync.surface
-@@ -1315,6 +1423,7 @@
+@@ -1315,6 +1425,7 @@
  
              if matches!(state.visibility.phase, VisibilityPhase::Configuring(_))
                  && !state.acknowledged_first_configure
@@ -241,7 +243,7 @@
              {
                  let raw = RawWindow {
                      window: state.surface.id().as_ptr().cast::<c_void>(),
-@@ -1348,6 +1457,7 @@
+@@ -1348,6 +1459,7 @@
                      self.unmap_surface(transition);
                      return;
                  }
@@ -249,7 +251,7 @@
                  state.force_render_after_recovery = true;
              }
              let request_frame_callback = !state.acknowledged_first_configure;
-@@ -2176,6 +2286,7 @@
+@@ -2176,6 +2288,7 @@
          }
  
          state.renderer_presented = state.renderer.draw(scene);
@@ -257,7 +259,7 @@
          if state.renderer_presented
              && let VisibilityPhase::Configuring(transition) = state.visibility.phase
          {
-@@ -2676,6 +2787,24 @@
+@@ -2676,6 +2789,24 @@
          }
      }
  

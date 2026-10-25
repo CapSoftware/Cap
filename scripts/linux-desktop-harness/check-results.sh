@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fail unless every scenario directory given recorded, stopped and finished a
-# recording with no blocked lease, unconfirmed restore, preflight failure,
-# pipeline failure or panic, and Cap still running at the end.
+# recording and brought its windows back, with no blocked lease, unconfirmed
+# restore, preflight failure, pipeline failure or panic, and Cap still running
+# at the end.
 # Usage: check-results.sh <out-dir>...
 status=0
 for out in "$@"; do
@@ -16,6 +17,7 @@ for out in "$@"; do
   problems=()
   [[ $(value attempt1_started) == yes ]] || problems+=("recording never started")
   [[ $(value attempt1_finished) == yes ]] || problems+=("recording never finished")
+  [[ $(value attempt1_restored) == yes ]] || problems+=("recording UI never came back")
   [[ $(value cap_alive) == yes ]] || problems+=("Cap exited")
   for key in blocked restoration_unconfirmed preflight_failed pipeline_failed panics; do
     [[ $(value "$key") == 0 ]] || problems+=("$key=$(value "$key")")
