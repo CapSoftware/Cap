@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	lstat,
 	mkdir,
@@ -13,6 +14,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+	notifyStartupInDesktopEntries,
+	withStartupNotify,
+} from "./finalize-linux-appimage.mjs";
+import {
 	finalizeGpuiDeb,
 	finalizeGpuiRpm,
 	linkDuplicateLibraries,
@@ -23,6 +28,7 @@ import {
 	withoutLinkedFiles,
 	withoutWebviewDebDependencies,
 	withoutWebviewRpmRequirements,
+	withUpdatedChecksums,
 } from "./finalize-linux-gpui-packages.mjs";
 
 const available = (command) =>
@@ -677,3 +683,42 @@ for (const payload of ["usr/bin/Cap", "usr/lib/cap/libmedia.so"]) {
 		},
 	);
 }
+
+test("Cap's desktop entries ask for startup notification, once", async (t) => {
+	const shipped = `[Desktop Entry]
+Categories=AudioVideo;Video;
+Exec=Cap
+StartupWMClass=Cap
+Name=Cap
+Type=Application
+`;
+	const notified = withStartupNotify(shipped);
+	assert.match(notified, /^\[Desktop Entry\]\nStartupNotify=true\n/);
+	assert.equal(withStartupNotify(notified), notified);
+	assert.equal(
+		withStartupNotify(
+			shipped.replace("Exec=Cap\n", "Exec=Cap\nStartupNotify=false\n"),
+		),
+		shipped.replace("Exec=Cap\n", "Exec=Cap\nStartupNotify=true\n"),
+	);
+
+	const root = await mkdtemp(path.join(tmpdir(), "cap-desktop-entry-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const entry = "usr/share/applications/Cap.desktop";
+	await mkdir(path.join(root, "usr/share/applications"), { recursive: true });
+	await writeFile(path.join(root, entry), shipped);
+	assert.deepEqual(
+		await notifyStartupInDesktopEntries(root, [entry, "missing.desktop"]),
+		[entry],
+	);
+	assert.deepEqual(await notifyStartupInDesktopEntries(root, [entry]), []);
+	const sums = await withUpdatedChecksums(
+		`0123  usr/bin/Cap\nffff  ${entry}\n`,
+		root,
+		[entry],
+	);
+	const digest = createHash("md5")
+		.update(await readFile(path.join(root, entry)))
+		.digest("hex");
+	assert.equal(sums, `0123  usr/bin/Cap\n${digest}  ${entry}\n`);
+});

@@ -78,6 +78,24 @@ enum CountdownAdvance {
     Start,
 }
 
+/// Waits for the pipeline to be primed, then plays the cue. A start that is
+/// dropped before it primes plays nothing.
+async fn play_cue_when_primed<F, Fut>(
+    primed: Option<tokio::sync::watch::Receiver<bool>>,
+    gate: cap_recording::RecordingStartGate,
+    play: F,
+) where
+    F: FnOnce(cap_recording::RecordingStartGate) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if let Some(mut primed) = primed
+        && primed.wait_for(|primed| *primed).await.is_err()
+    {
+        return;
+    }
+    play(gate).await;
+}
+
 fn countdown_advance(
     phase: Phase,
     current_generation: u64,
@@ -440,6 +458,10 @@ pub struct RecordingSession {
     /// A capture pipeline that finished warming up while the countdown or the
     /// start cue was still running; activated the moment the cue ends.
     primed: Option<ActiveRecording>,
+    /// Set once the pipeline is primed. The start cue waits for it, so the cue
+    /// never promises a recording that has not begun capturing (an Instant
+    /// start waits on the server's video before it builds the pipeline).
+    primed_ready: Option<tokio::sync::watch::Sender<bool>>,
     /// Teardown of a cancelled primed start still releasing its devices; the
     /// next start waits for it before locking the mic and camera again.
     discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
@@ -488,6 +510,7 @@ impl RecordingSession {
             start_gate: None,
             start_cue: None,
             primed: None,
+            primed_ready: None,
             discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
@@ -665,6 +688,7 @@ impl RecordingSession {
         self.start_gate = Some(start_gate);
         self.start_cue = Some(crate::app_sounds::prime_recording_start_sound());
         self.discard_primed(cx);
+        self.primed_ready = Some(tokio::sync::watch::channel(false).0);
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
@@ -687,7 +711,8 @@ impl RecordingSession {
         cx.notify();
 
         // The pipeline warms up during the final countdown second so capture is
-        // live when the cue ends; without a countdown it warms up under the cue.
+        // live when the cue ends; without a countdown it warms up before the cue.
+        // Either way the cue waits until the pipeline is primed.
         if countdown <= 1 {
             self.prime_engine(config.clone(), generation, cx);
         }
@@ -742,27 +767,29 @@ impl RecordingSession {
         .detach();
     }
 
-    /// Plays the start cue; the returned future completes once the recording's
-    /// start gate is armed, whether the cue played, failed or was aborted.
+    /// Plays the start cue once the pipeline is primed; the returned future
+    /// completes once the recording's start gate is armed, whether the cue
+    /// played, failed or was aborted.
     fn play_start_cue(
         &mut self,
         cx: &mut Context<Self>,
     ) -> std::pin::Pin<Box<dyn Future<Output = ()>>> {
         let gate = self.start_gate.clone().unwrap_or_default();
         let cue = self.start_cue.take();
+        let primed = self.primed_ready.as_ref().map(|ready| ready.subscribe());
         let (abort, registration) = futures_util::future::AbortHandle::new_pair();
         self.countdown_cue_abort = Some(abort);
         let task = gpui_tokio::Tokio::spawn(
             cx,
             futures_util::future::Abortable::new(
-                async move {
+                play_cue_when_primed(primed, gate, move |gate| async move {
                     match cue {
                         Some(cue) => crate::app_sounds::play_recording_start_sound(cue, gate).await,
                         None => {
                             gate.arm();
                         }
                     }
-                },
+                }),
                 registration,
             ),
         );
@@ -842,6 +869,9 @@ impl RecordingSession {
                     Ok(Ok(active)) => {
                         if this.countdown_remaining.is_some() {
                             this.primed = Some(active);
+                            if let Some(ready) = &this.primed_ready {
+                                ready.send_replace(true);
+                            }
                         } else {
                             this.activate(active, cx);
                         }
@@ -1945,6 +1975,7 @@ impl RecordingSession {
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.abort_start_cue();
         self.discard_primed(cx);
+        self.primed_ready = None;
         self.start_gate = None;
         #[cfg(target_os = "linux")]
         if !self.instant_cleanup_safe() {
@@ -1990,6 +2021,47 @@ fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> b
 #[cfg(test)]
 mod countdown_tests {
     use super::*;
+
+    /// The start cue promises that recording has begun, so it must not play
+    /// before the pipeline is built (an Instant start first waits for the
+    /// server to create the video).
+    #[tokio::test]
+    async fn start_cue_waits_for_the_primed_pipeline() {
+        let (ready, primed) = tokio::sync::watch::channel(false);
+        let played = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = cap_recording::RecordingStartGate::new();
+        let cue = tokio::spawn({
+            let played = played.clone();
+            let gate = gate.clone();
+            play_cue_when_primed(Some(primed), gate, move |gate| async move {
+                played.store(true, std::sync::atomic::Ordering::SeqCst);
+                gate.arm();
+            })
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!played.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!gate.is_armed());
+        ready.send_replace(true);
+        cue.await.unwrap();
+        assert!(played.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(gate.is_armed());
+    }
+
+    #[tokio::test]
+    async fn start_cue_stays_silent_when_the_start_is_dropped_before_it_primes() {
+        let (ready, primed) = tokio::sync::watch::channel(false);
+        let gate = cap_recording::RecordingStartGate::new();
+        let cue = tokio::spawn(play_cue_when_primed(
+            Some(primed),
+            gate.clone(),
+            |_| async {
+                panic!("the cue played for a start that never primed");
+            },
+        ));
+        drop(ready);
+        cue.await.unwrap();
+        assert!(!gate.is_armed());
+    }
 
     #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
