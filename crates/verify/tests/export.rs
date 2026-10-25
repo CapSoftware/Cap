@@ -1537,6 +1537,9 @@ fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
 /// an export after the editor preview, crashed on Windows.
 #[test]
 fn camera_blur_exports_twice_in_one_process() {
+    if !report::selected("export/multi-segment/camera-blur-twice") {
+        return;
+    }
     let project = common::project(&catalog::multi_segment(report::tier()));
     let mut config = project.config();
     camera_blur_and_captions(&mut config);
