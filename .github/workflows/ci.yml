@@ -314,6 +314,7 @@ jobs:
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap --bin cap recordings::tests
           cargo test --locked -p cap --test cli recordings_list
+          cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets
