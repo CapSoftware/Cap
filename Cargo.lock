@@ -2051,6 +2051,7 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "wgpu",
  "wgpu-core",
  "wgpu-hal",

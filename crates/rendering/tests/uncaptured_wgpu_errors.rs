@@ -31,12 +31,35 @@ fn texture(device: &wgpu::Device) -> wgpu::Texture {
     })
 }
 
+/// Collects formatted log lines so the test can see what was reported.
+#[derive(Clone, Default)]
+struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[test]
 fn validation_errors_on_a_lost_device_are_logged_not_fatal() {
     let Some(device) = device() else {
         eprintln!("no wgpu adapter; skipping");
         return;
     };
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let _subscriber = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
     cap_rendering::log_uncaptured_errors(&device, "test-device");
 
     let _invalid = device.create_buffer(&wgpu::BufferDescriptor {
@@ -51,4 +74,10 @@ fn validation_errors_on_a_lost_device_are_logged_not_fatal() {
         let _ = texture(&device);
     }
     let _ = device.poll(wgpu::PollType::Wait);
+
+    let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logs.contains("uncaptured wgpu error") && logs.contains("device=\"test-device\""),
+        "{logs}"
+    );
 }
