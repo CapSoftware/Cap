@@ -18,7 +18,6 @@ rounds=${ROUNDS:-4}
 : >"$out/result.txt"
 result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
 
-# Prints "yes" when the launch registered, "no" otherwise.
 launch() {
   local name=$1 log=$out/$1.log line=""
   bash "$here/launch-cap.sh" "$name" >/dev/null
