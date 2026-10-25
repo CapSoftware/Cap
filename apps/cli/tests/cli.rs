@@ -702,7 +702,30 @@ fn project_config_get_without_file_returns_default() {
     ]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
-    assert!(json.is_object(), "expected a default project config object");
+    let expected_json =
+        serde_json::to_string(&cap_project::ProjectConfiguration::default()).unwrap();
+    assert_eq!(json, serde_json::from_str::<Value>(&expected_json).unwrap());
+}
+
+#[test]
+fn project_config_commands_reject_directories_without_recordings() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("not-a-recording.cap");
+    std::fs::create_dir(&project).unwrap();
+
+    for command in ["get", "set"] {
+        let mut args = vec!["project", "config", command, project.to_str().unwrap()];
+        if command == "set" {
+            args.extend(["--settings-json", "{}"]);
+        }
+        args.push("--json");
+
+        let output = run(&args);
+        assert!(!output.status.success(), "{command} unexpectedly succeeded");
+        assert!(parse_json(&output)["error"].is_string());
+    }
+
+    assert!(!project.join("project-config.json").exists());
 }
 
 #[test]
@@ -1499,4 +1522,23 @@ fn write_single_segment_meta(project: &Path) {
         serde_json::to_vec_pretty(&meta).unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn caps_json_errors_include_the_standard_error_field() {
+    for flags in [&["--json"][..], &["--format", "json"][..]] {
+        let output = cap()
+            .args(["caps", "get", "!"])
+            .args(flags)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error = parse_json(&output);
+        assert_eq!(error["error"], "Cap ID contains invalid characters");
+        assert_eq!(error["message"], "Cap ID contains invalid characters");
+        assert_eq!(error["code"], "INVALID_REQUEST");
+        assert_eq!(error["retryable"], false);
+    }
 }

@@ -654,7 +654,11 @@ export default function CapDetailScreen() {
 			const cap = await auth.client.updateCapSharing(detail.cap.id, {
 				public: isPublic,
 			});
-			setDetail((current) => (current ? { ...current, cap } : current));
+			setDetail((current) =>
+				current
+					? { ...current, cap: { ...current.cap, public: cap.public } }
+					: current,
+			);
 			await auth.refresh();
 		} catch (error) {
 			Alert.alert(
@@ -674,7 +678,11 @@ export default function CapDetailScreen() {
 			cap: detail.cap,
 			client: auth.client,
 			onUpdated: async (cap) => {
-				setDetail((current) => (current ? { ...current, cap } : current));
+				setDetail((current) =>
+					current
+						? { ...current, cap: { ...current.cap, protected: cap.protected } }
+						: current,
+				);
 				await auth.refresh();
 			},
 		});
@@ -686,7 +694,11 @@ export default function CapDetailScreen() {
 			cap: detail.cap,
 			client: auth.client,
 			onUpdated: async (cap) => {
-				setDetail((current) => (current ? { ...current, cap } : current));
+				setDetail((current) =>
+					current
+						? { ...current, cap: { ...current.cap, title: cap.title } }
+						: current,
+				);
 				await auth.refresh();
 			},
 		});

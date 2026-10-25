@@ -228,6 +228,12 @@ function createServerEnv() {
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
 				),
+			LOOM_IMPORTER_URL: z
+				.string()
+				.optional()
+				.describe(
+					"URL of the dedicated Loom importer; Loom downloads use the media server when unset",
+				),
 
 			/// Ignore
 			NODE_ENV: z.string(),

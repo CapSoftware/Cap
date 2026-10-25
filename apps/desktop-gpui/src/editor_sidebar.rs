@@ -761,6 +761,11 @@ pub struct SidebarState {
     pub audio_enhancement_default: bool,
     pub audio_enhancement_error: Option<String>,
     pub(crate) style_target: Option<(usize, StyleGroup)>,
+    /// Set while `EditorWindow::with_style_controls` has swapped the scoped
+    /// project into place. Controls rendered inside that scope read it through
+    /// `style_control_project`, which would otherwise clone the whole project
+    /// again for every slider and swatch on the page.
+    style_scoped: bool,
     pub(crate) image_import_error: Option<String>,
     pub(crate) image_asset_status: Option<(String, bool)>,
     animated_gradient: animated_gradient::AnimatedGradientState,
@@ -881,6 +886,7 @@ impl SidebarState {
             audio_enhancement_default: crate::store::studio_sound_by_default(),
             audio_enhancement_error: None,
             style_target: None,
+            style_scoped: false,
             image_import_error: None,
             image_asset_status: None,
             animated_gradient: animated_gradient::AnimatedGradientState::new(),
@@ -1936,8 +1942,9 @@ const WALLPAPER_TILE_MAX: u32 = 128;
 
 /// One wallpaper tile, through the persistent cache. The bundled assets are
 /// immutable in practice, so after the first-ever run every theme switch is
-/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the mtime
-/// in the key still invalidates if an app update ever replaces them.
+/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the
+/// version (mtime plus length) in the key still invalidates if an app update
+/// ever replaces them.
 pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
     let path = wallpaper_path(id)?;
     // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
@@ -4466,6 +4473,12 @@ impl EditorWindow {
     }
 
     pub(crate) fn style_control_project(&self) -> std::borrow::Cow<'_, ProjectConfiguration> {
+        // `with_style_controls` already replaced `self.project` with the scoped
+        // configuration, so inside its closure the override is in place and a
+        // second clone would only copy the copy.
+        if self.sidebar.style_scoped {
+            return std::borrow::Cow::Borrowed(&self.project);
+        }
         let Some((index, group)) = self.sidebar.style_target else {
             return std::borrow::Cow::Borrowed(&self.project);
         };
@@ -4499,12 +4512,20 @@ impl EditorWindow {
     }
 
     pub(crate) fn with_style_controls<R>(&mut self, render: impl FnOnce(&mut Self) -> R) -> R {
+        // A nested scope would see the outer override through the flag and
+        // silently render with it, so callers must enter one scope at a time.
+        debug_assert!(
+            !self.sidebar.style_scoped,
+            "with_style_controls must not nest"
+        );
         let std::borrow::Cow::Owned(scoped) = self.style_control_project() else {
             return render(self);
         };
         // Existing controls read the project while building their elements. Restore the base before any event can publish or save it.
         let base = std::mem::replace(&mut self.project, scoped);
+        self.sidebar.style_scoped = true;
         let result = render(self);
+        self.sidebar.style_scoped = false;
         self.project = base;
         result
     }

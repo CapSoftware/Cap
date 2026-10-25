@@ -2691,6 +2691,41 @@ mod mac {
         }
     }
 
+    /// `NSApp.windowsMenu` and `NSApp.helpMenu`, looked up by the titles the
+    /// menu bar was just built with. `None` clears the Help menu.
+    pub fn register_system_menus(window_title: &str, help_title: Option<&str>) {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe fn submenu(bar: *mut AnyObject, title: &str) -> *mut AnyObject {
+            unsafe {
+                let item: *mut AnyObject =
+                    msg_send![bar, itemWithTitle: &*NSString::from_str(title)];
+                if item.is_null() {
+                    return std::ptr::null_mut();
+                }
+                msg_send![item, submenu]
+            }
+        }
+
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return;
+            }
+            let bar: *mut AnyObject = msg_send![app, mainMenu];
+            if bar.is_null() {
+                return;
+            }
+            let windows = submenu(bar, window_title);
+            if !windows.is_null() {
+                let _: () = msg_send![app, setWindowsMenu: windows];
+            }
+            let help = help_title.map_or(std::ptr::null_mut(), |title| submenu(bar, title));
+            let _: () = msg_send![app, setHelpMenu: help];
+        }
+    }
+
     /// One-line diagnostic of everything AppKit weighs into occlusion
     /// visibility -- how the macOS 26 display-link failure was diagnosed; keep
     /// it for the next platform mystery.
@@ -2936,6 +2971,16 @@ mod stub {
         cancel: &str,
         warning: bool,
     ) -> bool {
+        if !crate::linux_dialog::zenity_available()
+            && let Some(accepted) = crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: accept.to_string(),
+                cancel: Some(cancel.to_string()),
+            })
+        {
+            return accepted;
+        }
         let level = if warning {
             rfd::MessageLevel::Warning
         } else {
@@ -2954,6 +2999,17 @@ mod stub {
     }
 
     pub fn alert_dialog(title: &str, message: &str) {
+        if !crate::linux_dialog::zenity_available()
+            && crate::linux_dialog::show(&crate::linux_dialog::Request {
+                title: title.to_string(),
+                message: message.to_string(),
+                accept: "OK".to_string(),
+                cancel: None,
+            })
+            .is_some()
+        {
+            return;
+        }
         let _ = rfd::MessageDialog::new()
             .set_title(title)
             .set_description(message)

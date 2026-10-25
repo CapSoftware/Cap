@@ -204,14 +204,23 @@ function videoTailIntegrity(
 		return `end:${relativeVideoNanoseconds(stream, lastVideoEndPts)}\n`;
 	}
 	const timeScale = BigInt(timing.timeScale);
-	if (
+	const differences = [
 		(timing.lastTimestampTicks - timing.firstTimestampTicks) *
 			timeBaseDenominator !==
-			(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale ||
-		timing.videoPacketCount !== stream.frameCount ||
+		(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale
+			? `span ${timing.lastTimestampTicks - timing.firstTimestampTicks}/${timing.timeScale} s vs decoded ${(lastVideoPts - firstVideoPts) * timeBaseNumerator}/${timeBaseDenominator} s`
+			: null,
+		timing.videoPacketCount !== stream.frameCount
+			? `packets ${timing.videoPacketCount} vs decoded frames ${stream.frameCount}`
+			: null,
 		timing.terminalPacketCount !== stream.terminalVideoFrameCount
-	) {
-		throw new Error("Recording container timing does not match decoded video");
+			? `final tied packets ${timing.terminalPacketCount} vs decoded ${stream.terminalVideoFrameCount}`
+			: null,
+	].filter((difference) => difference !== null);
+	if (differences.length > 0) {
+		throw new Error(
+			`Recording container timing does not match decoded video (${differences.join("; ")})`,
+		);
 	}
 	if (!/^[a-f0-9]{64}$/.test(timing.packetTimelineSha256)) {
 		throw new Error("Recording container packet timing is missing");

@@ -573,11 +573,13 @@ describe("bounded source commitment steps", () => {
 	});
 
 	it.each([
-		[0, 32],
-		[-1, 32],
-		[1_000, 15],
-		[14_999, 2],
-		[15_000, 1],
+		[0, 128],
+		[-1, 128],
+		[1_000, 45],
+		[14_999, 4],
+		[15_000, 3],
+		[44_999, 2],
+		[45_000, 1],
 		[180_000, 1],
 	])("yields after bounded work with %i ms pages", async (duration, pages) => {
 		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
@@ -708,7 +710,7 @@ describe("bounded source commitment steps", () => {
 	it("leaves dispatch to its own step after a slow commit", async () => {
 		withCurrent({ source: null });
 		mocks.commitSource.mockImplementation(async () => {
-			vi.setSystemTime(Date.now() + 15_000);
+			vi.setSystemTime(Date.now() + 45_000);
 			return { source };
 		});
 		await expect(
@@ -720,7 +722,7 @@ describe("bounded source commitment steps", () => {
 	it("does not dispatch while the source commit is still in progress", async () => {
 		withCurrent({ source: null });
 		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
-			vi.setSystemTime(Date.now() + 15_000);
+			vi.setSystemTime(Date.now() + 45_000);
 			return advanceCheckpoint(_video, checkpoint);
 		});
 		await expect(
@@ -733,7 +735,7 @@ describe("bounded source commitment steps", () => {
 		mocks.commitSource.mockImplementation(advanceCheckpoint);
 		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
 			withCurrent({ output: checkpoint });
-			vi.setSystemTime(Date.now() + 15_000);
+			vi.setSystemTime(Date.now() + 45_000);
 			return true;
 		});
 		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");

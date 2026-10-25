@@ -164,7 +164,7 @@ export const createAccountDeletionRequest = async ({
 		fromOverride: ACCOUNT_DELETION_EMAIL_FROM,
 		idempotencyKey: `account-deletion-${request.id}`,
 	})
-		.then(() => true)
+		.then((delivery) => !delivery?.error)
 		.catch(() => false);
 
 	return {
@@ -264,7 +264,7 @@ export const createMobileContentReport = async ({
 		fromOverride: ACCOUNT_DELETION_EMAIL_FROM,
 		idempotencyKey: `mobile-content-report-${request.id}`,
 	})
-		.then(() => true)
+		.then((delivery) => !delivery?.error)
 		.catch(() => false);
 
 	return {

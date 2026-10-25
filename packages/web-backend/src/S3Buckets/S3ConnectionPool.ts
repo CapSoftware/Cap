@@ -42,5 +42,6 @@ const makeS3ConnectionPool = (maxFreeSockets: number, maxSockets = 50) =>
 	);
 
 export const s3ConnectionPool = makeS3ConnectionPool(8);
-// Desktop source commits copy 128 objects at once in Cap's own bucket.
-export const defaultBucketS3ConnectionPool = makeS3ConnectionPool(32, 128);
+// Desktop source commits copy 256 objects at once in Cap's own bucket, page after page; keeping those
+// sockets between pages (they still expire after 30 s idle) avoids re-opening TLS to S3 for every page.
+export const defaultBucketS3ConnectionPool = makeS3ConnectionPool(256, 256);

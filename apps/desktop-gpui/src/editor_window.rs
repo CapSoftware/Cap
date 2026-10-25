@@ -66,6 +66,7 @@ use gpui::{
     div, point, prelude::FluentBuilder, px, svg,
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
@@ -2275,8 +2276,7 @@ impl EditorWindow {
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
     fn rebuild_timeline(&mut self) {
-        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
-        self.text_menu = None;
+        self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
@@ -2292,6 +2292,13 @@ impl EditorWindow {
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
+    }
+
+    /// The transient popovers a project change closes, shared by the full
+    /// rebuild and the frame-only path so the two cannot drift.
+    fn dismiss_transient_menus(&mut self) {
+        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
+        self.text_menu = None;
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -2418,12 +2425,36 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_changed_inner(true, window, cx);
+    }
+
+    /// [`Self::project_changed`] for edits that only write `background.frame`.
+    ///
+    /// [`crate::editor_timeline::TimelineModel::build`] never reads the frame
+    /// or the background (the style track draws a segment's name and enabled
+    /// flag only), so a frame edit can skip the rebuild. The frame text fields
+    /// call this once per keystroke; any edit that touches a field the timeline
+    /// model reads must go through [`Self::project_changed`] instead.
+    fn project_changed_without_timeline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_changed_inner(false, window, cx);
+    }
+
+    fn project_changed_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.project_ready() {
             return;
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
-        self.rebuild_timeline();
+        if rebuild_timeline {
+            self.rebuild_timeline();
+        } else {
+            self.dismiss_transient_menus();
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();
@@ -3908,6 +3939,13 @@ impl EditorWindow {
         self.transport_controls.update(cx, |_, cx| cx.notify());
     }
 
+    /// State only the sidebar draws, such as a caption model download's
+    /// progress. Same idea as [`Self::invalidate_hover_chrome`]: the header,
+    /// toolbar, transport and timeline stay cached.
+    pub(crate) fn invalidate_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_view.update(cx, |_, cx| cx.notify());
+    }
+
     fn set_hovered_track(
         &mut self,
         track: Option<TrackKind>,
@@ -4520,7 +4558,9 @@ impl EditorWindow {
             return;
         }
         let valid_target = self.lane_reorder_position_valid(current.source, x, y);
-        let target_index = if valid_target { self.lane_reorder_target_index(current.source, y) } else { current.target_index };
+        let target_index = valid_target
+            .then(|| self.lane_reorder_target_index(current.source, y))
+            .unwrap_or(current.target_index);
         if promote {
             self.history.pause();
         }
@@ -9063,7 +9103,7 @@ impl EditorWindow {
     fn render_presets_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.presets_menu.as_ref()?;
         let theme = self.theme;
-        let store = menu.store.clone();
+        let store = &menu.store;
         let submenu = menu.submenu;
 
         let mut rows: Vec<gpui::AnyElement> = vec![self.render_preset_row(
@@ -11576,6 +11616,7 @@ impl Render for EditorWindow {
                 .flex()
                 .flex_col()
                 .font_family(crate::theme::UI_FONT)
+                .locale_font()
                 .bg(self.root_bg())
                 .text_color(Hsla::from(theme.gray_12))
                 .track_focus(&self.focus)
@@ -11603,6 +11644,7 @@ impl Render for EditorWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
@@ -12213,6 +12255,191 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    #[ignore = "manual preset menu repaint benchmark"]
+    fn benchmark_presets_menu_repaint(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("benchmark".into(), window, cx);
+            editor.presets_menu = None;
+        });
+        let config = crate::presets::preset_config(&ProjectConfiguration::default());
+        for count in [5, 50] {
+            let store = crate::presets::PresetsStore {
+                presets: (0..count)
+                    .map(|index| crate::presets::PresetEntry {
+                        name: format!("Preset {index}"),
+                        config: config.clone(),
+                    })
+                    .collect(),
+                default: Some(count - 1),
+            };
+            editor.update_in(cx, |editor, _, _| {
+                editor.presets_menu = Some(PresetsMenu {
+                    origin: point(px(0.), px(0.)),
+                    store: store.clone(),
+                    submenu: None,
+                    scroll: gpui::ScrollHandle::new(),
+                });
+            });
+            let mut samples = Vec::new();
+            for _ in 0..32 {
+                cx.draw(
+                    point(px(0.), px(0.)),
+                    gpui::size(px(800.), px(600.)),
+                    |_, cx| {
+                        editor.update(cx, |editor, cx| {
+                            let started = std::time::Instant::now();
+                            for _ in 0..10 {
+                                drop(std::hint::black_box(editor.render_presets_menu(cx)));
+                            }
+                            samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+                        });
+                        div()
+                    },
+                );
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.presets_menu.as_ref().unwrap().store, store);
+            });
+            println!(
+                "presets={count} config_bytes={} samples=31 repaints_per_sample=10 median_us={:.3}",
+                serde_json::to_vec(&config).unwrap().len(),
+                samples[samples.len() / 2]
+            );
+        }
+    }
+
+    /// The style-edit scope swaps the overridden configuration into
+    /// `self.project`; controls built inside it must borrow that project
+    /// instead of cloning it once per slider. Pin both halves: the override is
+    /// visible while the scope is active, and the base project comes back
+    /// (with a clone) once it ends.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn style_controls_borrow_the_scoped_project(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, _window, _cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            padding: 77.5,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            editor.project = config;
+            editor.sidebar.style_target = Some((0, crate::editor_sidebar::StyleGroup::Background));
+            let base_padding = editor.project.background.padding;
+
+            editor.with_style_controls(|editor| {
+                assert_eq!(editor.project.background.padding, 77.5);
+                let scoped = editor.style_control_project();
+                assert!(matches!(&scoped, std::borrow::Cow::Borrowed(_)));
+                assert_eq!(scoped.background.padding, 77.5);
+            });
+
+            assert_eq!(editor.project.background.padding, base_padding);
+            // Outside the scope the method still owns the override for the
+            // control builders; only the base project itself is restored.
+            let restored = editor.style_control_project();
+            assert!(matches!(&restored, std::borrow::Cow::Owned(_)));
+            assert_eq!(restored.background.padding, 77.5);
+        });
+    }
+
+    /// Manual A/B benchmark for the style-edit scope. Run with:
+    /// `cargo test -p cap-desktop-gpui --bin cap-gpui -- --ignored benchmark_style_control_repaint --nocapture`
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    #[ignore = "manual style-control repaint benchmark"]
+    fn benchmark_style_control_repaint(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, _window, _cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: vec![cap_project::TimelineSegment::default(); 2_000],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            padding: 77.5,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            editor.project = config;
+            editor.sidebar.style_target = Some((0, crate::editor_sidebar::StyleGroup::Background));
+            editor.sidebar.tab = crate::editor_sidebar::SidebarTab::Background;
+        });
+
+        let mut samples = Vec::new();
+        for _ in 0..32 {
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(800.), px(600.)),
+                |_, cx| {
+                    editor.update(cx, |editor, cx| {
+                        let started = std::time::Instant::now();
+                        for _ in 0..10 {
+                            drop(std::hint::black_box(editor.with_style_controls(|editor| {
+                                editor.render_sidebar(cx).into_any_element()
+                            })));
+                        }
+                        samples.push(started.elapsed().as_secs_f64() * 1_000_000. / 10.);
+                    });
+                    div()
+                },
+            );
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "style_controls timeline_segments=2000 samples=31 repaints_per_sample=10 median_us={:.3}",
+            samples[samples.len() / 2]
+        );
+    }
 
     #[test]
     fn auto_zoom_loads_clicks_without_losing_take_indices() {
@@ -12917,6 +13144,141 @@ mod tests {
         cx.simulate_click(title, gpui::Modifiers::default());
 
         cx.update(|window, _| assert!(input_focus.is_focused(window)));
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn caption_download_tick_rebuilds_only_the_sidebar(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("captions".into(), window, cx);
+        });
+        let sidebar = editor.read_with(cx, |editor, _| editor.sidebar_view.clone());
+        let editor_notifies = Rc::new(Cell::new(0));
+        let sidebar_notifies = Rc::new(Cell::new(0));
+        let _subscriptions = cx.update(|_, cx| {
+            let editor_count = editor_notifies.clone();
+            let sidebar_count = sidebar_notifies.clone();
+            [
+                cx.observe(&editor, move |_, _| {
+                    editor_count.set(editor_count.get() + 1)
+                }),
+                cx.observe(&sidebar, move |_, _| {
+                    sidebar_count.set(sidebar_count.get() + 1)
+                }),
+            ]
+        });
+        cx.run_until_parked();
+        editor_notifies.set(0);
+        sidebar_notifies.set(0);
+
+        editor.update(cx, |editor, cx| editor.repaint_caption_download(cx));
+
+        assert_eq!(editor_notifies.get(), 0);
+        assert_eq!(sidebar_notifies.get(), 1);
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn field_sync_rewrites_only_unfocused_fields_whose_value_moved(cx: &mut gpui::TestAppContext) {
+        use crate::{editor_panels::FieldKey, editor_tabs::OffsetKind};
+
+        fn text(
+            editor: &Entity<EditorWindow>,
+            key: FieldKey,
+            cx: &mut gpui::VisualTestContext,
+        ) -> String {
+            editor.read_with(cx, |editor, cx| {
+                editor.field(key).unwrap().read(cx).text().to_string()
+            })
+        }
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let keys = [
+            FieldKey::CaptionText(0),
+            FieldKey::CaptionStart(0),
+            FieldKey::CaptionEnd(0),
+            FieldKey::CaptionText(1),
+            FieldKey::KeyboardText(0),
+            FieldKey::KeyboardEnd(0),
+            FieldKey::SyncOffset(0, OffsetKind::Mic),
+        ];
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_error("fields".into(), window, cx);
+            editor.project.timeline = Some(TimelineConfiguration {
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: vec![
+                    serde_json::from_value(serde_json::json!({
+                        "id": "caption",
+                        "start": 1.25,
+                        "end": 3.5,
+                        "text": "Hello",
+                    }))
+                    .unwrap(),
+                ],
+                keyboard_segments: vec![
+                    serde_json::from_value(serde_json::json!({
+                        "id": "keys",
+                        "start": 0.5,
+                        "end": 2.0,
+                        "displayText": "Cmd K",
+                    }))
+                    .unwrap(),
+                ],
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            });
+            for key in keys {
+                editor.ensure_field(key, window, cx);
+            }
+            editor.sync_fields(window, cx);
+        });
+        let texts = keys.map(|key| text(&editor, key, cx));
+        assert_eq!(texts, ["Hello", "1.25", "3.50", "", "Cmd K", "2.00", "0"]);
+
+        // An unchanged value leaves the field, and its selection, alone.
+        let caption = editor.read_with(cx, |editor, _| {
+            editor.field(FieldKey::CaptionText(0)).unwrap().clone()
+        });
+        caption.update(cx, |input, cx| input.select_all_text(cx));
+        editor.update_in(cx, |editor, window, cx| editor.sync_fields(window, cx));
+        assert_eq!(caption.read_with(cx, |input, _| input.selection()), 0..5);
+
+        // A moved value is rewritten, except into the field being typed in.
+        let start_focus = editor.read_with(cx, |editor, cx| {
+            editor
+                .field(FieldKey::CaptionStart(0))
+                .unwrap()
+                .read(cx)
+                .focus_handle()
+        });
+        editor.update_in(cx, |editor, window, cx| {
+            window.focus(&start_focus, cx);
+            let segment = &mut editor.project.timeline.as_mut().unwrap().caption_segments[0];
+            segment.start = 2.;
+            segment.text = "Bye".into();
+            editor.sync_fields(window, cx);
+        });
+        assert_eq!(text(&editor, FieldKey::CaptionText(0), cx), "Bye");
+        assert_eq!(caption.read_with(cx, |input, _| input.selection()), 3..3);
+        assert_eq!(text(&editor, FieldKey::CaptionStart(0), cx), "1.25");
     }
 
     /// `default_editor_preview_resolution()` is asserted to be 1248x702 in the

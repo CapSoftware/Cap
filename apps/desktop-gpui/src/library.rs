@@ -672,6 +672,30 @@ pub struct ScreenshotItem {
     pub pretty_name: String,
     pub sort_time_millis: f64,
     pub thumbnail: Option<PathBuf>,
+    /// The thumbnail PNG's version (mtime plus length), so a row can tell a
+    /// re-scan that found the same file from one whose screenshot was
+    /// rewritten in place.
+    pub thumbnail_version: Option<u128>,
+}
+
+/// Whether a library row can keep the image it already has for `item`.
+///
+/// The PNG path and its version both have to match, the previous row must have
+/// finished decoding, and it must not already be waiting on a newer decode: a
+/// row whose decode never landed (or was cancelled) still has to ask again.
+pub(crate) fn screenshot_thumbnail_is_current(
+    item: &ScreenshotItem,
+    previous: Option<&ScreenshotItem>,
+    previous_has_thumbnail: bool,
+    previous_stale: bool,
+) -> bool {
+    !previous_stale
+        && previous.is_some_and(|previous| {
+            previous.thumbnail == item.thumbnail
+                && previous.thumbnail_version.is_some()
+                && previous.thumbnail_version == item.thumbnail_version
+                && previous_has_thumbnail
+        })
 }
 
 /// `list_screenshots` (`lib.rs:4055-4091`): `*.cap` directories only, and the
@@ -702,6 +726,7 @@ fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
                 path: png.clone(),
                 pretty_name: meta.pretty_name,
                 sort_time_millis,
+                thumbnail_version: source_version(&png),
                 thumbnail: Some(png),
                 bundle,
             })
@@ -781,7 +806,7 @@ fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
                 pretty_name: item.pretty_name,
                 clip_count: 1,
                 sort_time_millis: item.sort_time_millis,
-                thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
+                thumbnail_version: item.thumbnail_version,
                 thumbnail: item.thumbnail,
                 sharing: None,
             }),
@@ -932,6 +957,24 @@ fn source_mtime_nanos(path: &Path) -> Option<u128> {
         .map(|elapsed| elapsed.as_nanos())
 }
 
+/// A source file's version: its mtime plus its length, so a rewrite that
+/// preserves the timestamp but changes the length (`cp -p` of a re-encoded
+/// file, `touch -r` after an edit) still invalidates the image a screenshot
+/// library row is holding and misses the decode cache. A rewrite that
+/// preserves both is undetectable without reading the file. The high and low
+/// halves cannot overlap (mtime is well under 2^64 nanos, length is shifted
+/// above it), so this is a lossless encoding rather than a hash.
+fn source_version(path: &Path) -> Option<u128> {
+    let metadata = path.metadata().ok()?;
+    let mtime = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(mtime ^ ((metadata.len() as u128) << 64))
+}
+
 /// FNV-1a, spelled out because `DefaultHasher`'s algorithm is unspecified
 /// across Rust releases and a silent change would orphan every cached file.
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -957,15 +1000,16 @@ fn is_bundle_display(path: &Path) -> bool {
             .is_some_and(|name| name == "screenshots")
 }
 
-/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<mtime>.jpg`.
+/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<version>.jpg`.
 ///
-/// The source's mtime is baked into the file name, so freshness is exact-name
-/// existence -- no comparison logic, and a source rewritten in place simply
-/// misses. [`Self::store`] sweeps the stale mtime variants after writing.
+/// The source's version (mtime plus length) is baked into the file name, so
+/// freshness is exact-name existence -- no comparison logic, and a source
+/// whose version changes simply misses. [`Self::store`] sweeps the stale
+/// version variants after writing.
 pub struct CacheSlot {
     dir: PathBuf,
     prefix: String,
-    mtime: u128,
+    version: u128,
 }
 
 impl CacheSlot {
@@ -975,7 +1019,7 @@ impl CacheSlot {
     /// screenshot PNGs live in bundles both apps extension-scan, so extra
     /// files are not written there.
     fn for_source(source: &Path) -> Option<Self> {
-        let mtime = source_mtime_nanos(source)?;
+        let version = source_version(source)?;
         if is_bundle_display(source) {
             return Some(Self {
                 dir: source.parent()?.to_path_buf(),
@@ -984,7 +1028,7 @@ impl CacheSlot {
                 } else {
                     "thumbnail".to_string()
                 },
-                mtime,
+                version,
             });
         }
         Some(Self {
@@ -993,7 +1037,7 @@ impl CacheSlot {
                 "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}",
                 fnv1a64(source.to_string_lossy().as_bytes())
             ),
-            mtime,
+            version,
         })
     }
 
@@ -1005,13 +1049,13 @@ impl CacheSlot {
         Some(Self {
             dir: thumbnail_cache_dir(),
             prefix,
-            mtime: source_mtime_nanos(source)?,
+            version: source_version(source)?,
         })
     }
 
     fn file(&self) -> PathBuf {
         self.dir
-            .join(format!("{}-{:x}.jpg", self.prefix, self.mtime))
+            .join(format!("{}-{:x}.jpg", self.prefix, self.version))
     }
 
     pub fn load(&self) -> Option<Arc<RenderImage>> {
@@ -1038,12 +1082,12 @@ impl CacheSlot {
             return;
         };
         let file = self.file();
-        // The prefix keeps two same-mtime slots (wallpapers installed in one
+        // The prefix keeps two same-version slots (wallpapers installed in one
         // copy) from interleaving writes into one tmp file.
         let tmp = self.dir.join(format!(
             "{}-{:x}.{}.tmp",
             self.prefix,
-            self.mtime,
+            self.version,
             std::process::id()
         ));
         if std::fs::write(&tmp, &encoded).is_err() || std::fs::rename(&tmp, &file).is_err() {
@@ -1053,7 +1097,7 @@ impl CacheSlot {
         self.remove_stale_variants(&file);
     }
 
-    /// Sweep the other `<prefix>-<hex>.jpg` mtime variants. The remainder must
+    /// Sweep the other `<prefix>-<hex>.jpg` version variants. The remainder must
     /// parse as bare hex so that one key can never delete another key's files
     /// when it happens to be a string prefix of it (`wallpaper-a-128` vs a
     /// hypothetical `wallpaper-a-128-128`), and so `display.jpg` next to a
@@ -1788,6 +1832,7 @@ mod tests {
                     path: png.clone(),
                     pretty_name: meta.pretty_name,
                     sort_time_millis: media_sort_time_millis(&png),
+                    thumbnail_version: source_version(&png),
                     thumbnail: Some(png),
                     bundle,
                 });
@@ -2595,21 +2640,21 @@ mod tests {
 
         assert!(
             CacheSlot::for_source(&root.join("missing.jpg")).is_none(),
-            "no mtime, no slot"
+            "no version, no slot"
         );
 
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn store_sweeps_stale_mtime_variants_but_not_lookalike_keys() {
+    fn store_sweeps_stale_version_variants_but_not_lookalike_keys() {
         let root = temp_dir("sweep");
         let rgba = image::RgbaImage::from_pixel(8, 6, image::Rgba([200, 40, 40, 255]));
 
         let stale = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 1,
+            version: 1,
         };
         stale.store(&rgba);
         assert!(stale.file().is_file());
@@ -2624,11 +2669,11 @@ mod tests {
         let fresh = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 2,
+            version: 2,
         };
         fresh.store(&rgba);
 
-        assert!(!stale.file().exists(), "the old mtime variant is swept");
+        assert!(!stale.file().exists(), "the old version variant is swept");
         assert!(fresh.file().is_file());
         assert!(lookalike.is_file(), "another key's file survives the sweep");
         assert!(display.is_file());
@@ -2639,11 +2684,11 @@ mod tests {
         let missing = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 3,
+            version: 3,
         };
         assert!(
             missing.load().is_none(),
-            "a missing mtime variant is a miss, not a fallback"
+            "a missing version variant is a miss, not a fallback"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -2696,5 +2741,191 @@ mod tests {
         assert_eq!(image::image_dimensions(&second[0]).unwrap(), (392, 392));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_same_mtime_length_change_misses_the_decode_cache() {
+        let root = temp_dir("same-mtime-cache");
+        let screenshots = root.join("bundle.cap").join("screenshots");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        let display = screenshots.join("display.jpg");
+        image::RgbImage::from_pixel(800, 600, image::Rgb([10, 120, 240]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        let modified = std::fs::metadata(&display).unwrap().modified().unwrap();
+        let first_len = std::fs::metadata(&display).unwrap().len();
+
+        assert!(decode_thumbnail(&display).is_some());
+        let first = thumbnail_cache_file(&display).expect("a cache slot");
+        assert_eq!(image::image_dimensions(&first).unwrap(), (392, 294));
+
+        // Rewrite the pixels, then put the old timestamp back: the only
+        // difference the scan can see is the length.
+        image::RgbImage::from_pixel(600, 600, image::Rgb([240, 120, 10]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&display)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&display).unwrap().len(),
+            first_len,
+            "the test needs a length change"
+        );
+
+        assert!(decode_thumbnail(&display).is_some());
+        let second = thumbnail_cache_file(&display).expect("a cache slot");
+        assert_ne!(
+            second, first,
+            "a length change at the same mtime is a new cache slot"
+        );
+        assert_eq!(
+            image::image_dimensions(&second).unwrap(),
+            (392, 392),
+            "the new pixels are decoded, not the old cache entry"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn screenshot_thumbnail_reuse_tracks_the_png_version() {
+        let item = ScreenshotItem {
+            path: PathBuf::from("/lib/shot.cap/original.png"),
+            bundle: PathBuf::from("/lib/shot.cap"),
+            pretty_name: "shot".into(),
+            sort_time_millis: 1.,
+            thumbnail: Some(PathBuf::from("/lib/shot.cap/original.png")),
+            thumbnail_version: Some(1),
+        };
+        assert!(!screenshot_thumbnail_is_current(&item, None, false, false));
+        assert!(
+            !screenshot_thumbnail_is_current(&item, Some(&item), false, false),
+            "a row whose decode never landed still asks for one"
+        );
+        assert!(
+            !screenshot_thumbnail_is_current(&item, Some(&item), true, true),
+            "a row already waiting on a newer decode asks again"
+        );
+        assert!(screenshot_thumbnail_is_current(
+            &item,
+            Some(&item),
+            true,
+            false
+        ));
+
+        let mut changed = item.clone();
+        changed.thumbnail_version = Some(2);
+        assert!(
+            !screenshot_thumbnail_is_current(&changed, Some(&item), true, false),
+            "a rewritten png is a new version"
+        );
+
+        let mut moved = item.clone();
+        moved.thumbnail = Some(PathBuf::from("/lib/other.cap/original.png"));
+        assert!(
+            !screenshot_thumbnail_is_current(&moved, Some(&item), true, false),
+            "a different png path is a new source"
+        );
+
+        let mut unknown = item.clone();
+        unknown.thumbnail_version = None;
+        assert!(
+            !screenshot_thumbnail_is_current(&unknown, Some(&unknown), true, false),
+            "an unknown version cannot be reused"
+        );
+    }
+
+    #[test]
+    fn screenshot_items_stamp_the_png_they_thumbnail() {
+        let root = temp_dir("screenshot-version");
+        let bundle = write_screenshot_bundle(&root, "shot");
+        let png = bundle.join("shot.png");
+        let items = list_screenshots_in(&root);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].thumbnail.as_deref(), Some(png.as_path()));
+        assert_eq!(items[0].thumbnail_version, source_version(&png));
+
+        let modified = std::fs::metadata(&png).unwrap().modified().unwrap();
+        let original_len = std::fs::metadata(&png).unwrap().len();
+        std::fs::write(&png, b"new png with a different length").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&png)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&png).unwrap().len(),
+            original_len,
+            "the test needs a length change"
+        );
+        let rewritten = list_screenshots_in(&root);
+        assert_eq!(rewritten.len(), 1);
+        assert_ne!(
+            rewritten[0].thumbnail_version, items[0].thumbnail_version,
+            "a length change bumps the version even at the same mtime"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The library panel drops and rebuilds its rows on every open; before
+    /// the reconcile, that re-decoded all 20 thumbnails (a native PNG decode
+    /// on the first pass, then a cache JPEG decode plus an atlas upload).
+    #[test]
+    #[ignore = "manual screenshot thumbnail reuse benchmark"]
+    fn benchmark_screenshot_thumbnail_reuse() {
+        let root = temp_dir("screenshot-bench");
+        let dir = root.join("screenshots");
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = root.join("source.png");
+        image::RgbaImage::from_pixel(3024, 1964, image::Rgba([120, 90, 60, 255]))
+            .save_with_format(&source, image::ImageFormat::Png)
+            .unwrap();
+        for i in 0..20 {
+            let bundle = write_screenshot_bundle(&dir, &format!("shot-{i:02}"));
+            std::fs::copy(&source, bundle.join("shot.png")).unwrap();
+        }
+        let items = list_screenshots_in(&dir);
+        assert_eq!(items.len(), 20);
+        let thumbnails: Vec<_> = items
+            .iter()
+            .filter_map(|item| item.thumbnail.as_deref())
+            .collect();
+        assert_eq!(thumbnails.len(), 20);
+        for path in &thumbnails {
+            if let Some(cache) = thumbnail_cache_file(path) {
+                std::fs::remove_file(cache).ok();
+            }
+        }
+
+        let cold_start = std::time::Instant::now();
+        for path in &thumbnails {
+            assert!(decode_thumbnail(path).is_some());
+        }
+        let cold = cold_start.elapsed();
+
+        let warm_start = std::time::Instant::now();
+        for path in &thumbnails {
+            assert!(decode_thumbnail(path).is_some());
+        }
+        let warm = warm_start.elapsed();
+
+        println!(
+            "screenshots=20 first_open_cold={:.1}ms reopen_warm={:.1}ms",
+            cold.as_secs_f64() * 1e3,
+            warm.as_secs_f64() * 1e3,
+        );
+
+        for path in &thumbnails {
+            if let Some(cache) = thumbnail_cache_file(path) {
+                std::fs::remove_file(cache).ok();
+            }
+        }
+        std::fs::remove_dir_all(root).ok();
     }
 }

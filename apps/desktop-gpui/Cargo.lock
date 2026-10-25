@@ -1552,6 +1552,7 @@ dependencies = [
  "cap-enc-ffmpeg",
  "cap-export",
  "cap-gpui-kernels",
+ "cap-i18n-build",
  "cap-media-info",
  "cap-project",
  "cap-recording",
@@ -1600,6 +1601,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
+ "sys-locale",
  "tauri-winres",
  "tempfile",
  "tiny-skia",
@@ -1781,6 +1783,13 @@ dependencies = [
  "md-5",
  "simd-adler32",
  "tracing",
+]
+
+[[package]]
+name = "cap-i18n-build"
+version = "0.1.0"
+dependencies = [
+ "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]

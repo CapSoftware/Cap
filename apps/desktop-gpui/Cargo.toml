@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = [".", "kernels"]
+members = [".", "kernels", "i18n-build"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -110,6 +110,9 @@ image = { version = "0.25.1", default-features = false, features = [
 ] }
 jpeg-decoder = "0.3"
 smallvec = "1"
+# The OS language list the UI language follows when set to System default.
+# Already in this lockfile through cosmic-text.
+sys-locale = "0.3"
 # Grapheme boundaries for `ui::TextInput`: Backspace deletes a user-perceived
 # character, not a `char`, so a flag emoji or a combining accent goes in one
 # press. gpui's own input example uses the same crate and it is already in this
@@ -175,6 +178,7 @@ dirs = "6"
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cap-i18n-build = { path = "i18n-build" }
 cc = "1.4"
 tauri-winres = "0.3.5"
 
@@ -207,6 +211,12 @@ tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

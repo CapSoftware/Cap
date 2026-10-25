@@ -27,6 +27,7 @@ use gpui::{App, Global};
 
 use crate::{
     app_windows,
+    i18n::tr,
     library::{self, MediaKind},
     main_window::{Mode, TargetType},
     menus,
@@ -376,14 +377,14 @@ pub fn scan_previous(load_thumbnails: bool) -> Vec<PreviousItem> {
 fn previous_submenu(previous: &[PreviousItem]) -> Entry {
     if previous.is_empty() {
         return Entry::Submenu {
-            title: "Previous".into(),
+            title: tr::tray::previous().into(),
             enabled: false,
             icon: menu_icon("previous"),
-            items: vec![Entry::disabled("No recent items")],
+            items: vec![Entry::disabled(tr::tray::no_recent_items())],
         };
     }
     Entry::Submenu {
-        title: "Previous".into(),
+        title: tr::tray::previous().into(),
         enabled: true,
         icon: menu_icon("previous"),
         items: previous
@@ -428,13 +429,13 @@ fn mode_submenu(mode: Mode) -> Entry {
         )
     };
     Entry::Submenu {
-        title: "Recording Mode".into(),
+        title: tr::tray::select_mode().into(),
         enabled: true,
         icon: None,
         items: vec![
-            label(Mode::Studio, "Studio"),
-            label(Mode::Instant, "Instant"),
-            label(Mode::Screenshot, "Screenshot"),
+            label(Mode::Studio, tr::tray::mode::studio()),
+            label(Mode::Instant, tr::tray::mode::instant()),
+            label(Mode::Screenshot, tr::tray::mode::screenshot()),
         ],
     }
 }
@@ -443,7 +444,7 @@ fn mode_submenu(mode: Mode) -> Entry {
 pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
 
-    entries.push(Entry::item("Open Main Window", TrayItem::OpenCap));
+    entries.push(Entry::item(tr::tray::open_main_window(), TrayItem::OpenCap));
     entries.push(Entry::Separator);
     if cfg!(target_os = "macos") {
         entries.push(Entry::ModePicker { mode });
@@ -455,38 +456,38 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
 
     if mode == Mode::Screenshot {
         entries.push(Entry::icon_item(
-            "Screenshot Display",
+            tr::tray::screenshot_display(),
             TrayItem::RecordDisplay,
             "display",
         ));
         entries.push(Entry::icon_item(
-            "Screenshot Window",
+            tr::tray::screenshot_window(),
             TrayItem::RecordWindow,
             "window",
         ));
         entries.push(Entry::icon_item(
-            "Screenshot Area",
+            tr::tray::screenshot_area(),
             TrayItem::RecordArea,
             "area",
         ));
     } else {
         entries.push(Entry::icon_item(
-            "Record Display",
+            tr::tray::record_display(),
             TrayItem::RecordDisplay,
             "display",
         ));
         entries.push(Entry::icon_item(
-            "Record Window",
+            tr::tray::record_window(),
             TrayItem::RecordWindow,
             "window",
         ));
         entries.push(Entry::icon_item(
-            "Record Area",
+            tr::tray::record_area(),
             TrayItem::RecordArea,
             "area",
         ));
         entries.push(Entry::icon_item(
-            "Take a Screenshot",
+            tr::tray::take_screenshot(),
             TrayItem::TakeScreenshot,
             "screenshot",
         ));
@@ -495,38 +496,38 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     entries.push(Entry::Separator);
     entries.push(previous_submenu(previous));
     entries.push(Entry::item(
-        "View all recordings",
+        tr::tray::view_all_recordings(),
         TrayItem::ViewAllRecordings,
     ));
     entries.push(Entry::item(
-        "View all screenshots",
+        tr::tray::view_all_screenshots(),
         TrayItem::ViewAllScreenshots,
     ));
 
     entries.push(Entry::Separator);
     entries.push(Entry::icon_item(
-        "Import Media…",
+        tr::tray::import_media(),
         TrayItem::ImportMedia,
         "import",
     ));
     entries.push(Entry::icon_item(
-        "Settings…",
+        tr::tray::settings(),
         TrayItem::OpenSettings,
         "settings",
     ));
     // `logging::upload_log_file` needs the auth token and the HTTP client,
     // neither of which this app has.
-    entries.push(Entry::disabled("Upload Logs"));
+    entries.push(Entry::disabled(tr::tray::upload_logs()));
     entries.push(Entry::Separator);
 
     if cfg!(target_os = "macos") {
-        entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+        entries.push(Entry::item(tr::tray::quit(), TrayItem::Quit));
         entries.push(Entry::SectionHeader {
-            title: format!("Cap v{version}"),
+            title: tr::tray::version(version),
         });
     } else {
-        entries.push(Entry::disabled(format!("Cap v{version}")));
-        entries.push(Entry::item("Quit Cap", TrayItem::Quit));
+        entries.push(Entry::disabled(tr::tray::version(version)));
+        entries.push(Entry::item(tr::tray::quit(), TrayItem::Quit));
     }
 
     entries
@@ -534,10 +535,13 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
 
 pub fn build_onboarding_menu(version: &str) -> Vec<Entry> {
     vec![
-        Entry::item("Request Permissions", TrayItem::RequestPermissions),
+        Entry::item(
+            tr::tray::request_permissions(),
+            TrayItem::RequestPermissions,
+        ),
         Entry::Separator,
-        Entry::disabled(format!("Cap v{version}")),
-        Entry::item("Quit Cap", TrayItem::Quit),
+        Entry::disabled(tr::tray::version(version)),
+        Entry::item(tr::tray::quit(), TrayItem::Quit),
     ]
 }
 
@@ -1675,7 +1679,7 @@ mod tests {
         let mode_label = if cfg!(target_os = "macos") {
             "Studio"
         } else {
-            "Recording Mode"
+            "Select Mode"
         };
         let mut expected = vec!["Open Main Window", "-", mode_label, "-"];
         expected.extend([
@@ -1688,8 +1692,8 @@ mod tests {
             "View all recordings",
             "View all screenshots",
             "-",
-            "Import Media…",
-            "Settings…",
+            "Import Media...",
+            "Settings",
             "Upload Logs",
             "-",
         ]);
@@ -1709,11 +1713,17 @@ mod tests {
     fn screenshot_mode_relabels_the_capture_rows() {
         let menu = build_menu(Mode::Screenshot, &[], "0.1.0");
         let titles = titles(&menu);
+        let mode_label = if cfg!(target_os = "macos") {
+            "Screenshot"
+        } else {
+            "Select Mode"
+        };
         assert_eq!(
             &titles[..6],
             &[
                 "Open Main Window",
                 "-",
+                mode_label,
                 "-",
                 "Screenshot Display",
                 "Screenshot Window",
