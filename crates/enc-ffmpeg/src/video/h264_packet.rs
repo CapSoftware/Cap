@@ -172,6 +172,10 @@ impl H264PacketEncoder {
             let converted = converted_frame.get_or_insert_with(|| {
                 frame::Video::new(self.output_format, self.output_width, self.output_height)
             });
+            if unsafe { ffmpeg::ffi::av_frame_make_writable(converted.as_mut_ptr()) } < 0 {
+                *converted =
+                    frame::Video::new(self.output_format, self.output_width, self.output_height);
+            }
             super::convert_or_scale(frame, converted, converter)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);

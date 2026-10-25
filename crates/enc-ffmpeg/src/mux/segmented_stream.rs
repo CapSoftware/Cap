@@ -465,7 +465,15 @@ impl SegmentedVideoEncoder {
 
     pub fn queue_frame(
         &mut self,
-        frame: frame::Video,
+        mut frame: frame::Video,
+        timestamp: Duration,
+    ) -> Result<(), QueueFrameError> {
+        self.queue_frame_reusable(&mut frame, timestamp)
+    }
+
+    pub fn queue_frame_reusable(
+        &mut self,
+        frame: &mut frame::Video,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
         // Encode with the frame's real capture-derived timestamp. The encoder
@@ -473,7 +481,7 @@ impl SegmentedVideoEncoder {
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
         self.encoder
-            .queue_frame_to(frame, timestamp, &mut self.mux)?;
+            .queue_frame_to_reusable(frame, timestamp, &mut self.mux)?;
 
         self.mux.frame_queued();
 

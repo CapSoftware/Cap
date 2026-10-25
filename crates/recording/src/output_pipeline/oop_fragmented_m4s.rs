@@ -374,6 +374,7 @@ impl OutOfProcessFragmentedM4SMuxer {
                 let pixel_format = ffmpeg_pixel_format_for_cap(video_config.pixel_format);
                 let mut frame_pool =
                     FramePool::new(pixel_format, video_config.width, video_config.height);
+                let mut converted_frame: Option<ffmpeg::frame::Video> = None;
 
                 let mut encoder = encoder;
                 let mut subprocess = subprocess;
@@ -389,143 +390,148 @@ impl OutOfProcessFragmentedM4SMuxer {
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
-                    last_timestamp = Some(timestamp);
+                    cidre::objc::ar_pool(|| {
+                        let sample_buf = sample_buf;
+                        last_timestamp = Some(timestamp);
 
-                    match disk_monitor.poll(&base_path, &health_tx) {
-                        super::core::DiskSpacePollResult::Exhausted { .. } => {
-                            disk_exhausted = true;
-                        }
-                        super::core::DiskSpacePollResult::Stopped => {
-                            disk_exhausted = true;
-                        }
-                        _ => {}
-                    }
-
-                    if disk_exhausted {
-                        continue;
-                    }
-
-                    if subprocess_fatal || subprocess.is_exhausted() {
-                        continue;
-                    }
-
-                    let convert_start = std::time::Instant::now();
-                    let frame = frame_pool.get_frame();
-                    let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
-                    let convert_elapsed_ms = convert_start.elapsed().as_millis();
-
-                    if convert_elapsed_ms > slow_threshold_ms {
-                        slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = convert_elapsed_ms,
-                                count = slow_convert_count,
-                                "OOP fill_frame_from_sample_buf exceeded {}ms threshold",
-                                slow_threshold_ms
-                            );
-                        }
-                    }
-
-                    match fill_result {
-                        Ok(()) => {
-                            let owned_frame = frame_pool.take_frame();
-                            let encode_start = std::time::Instant::now();
-                            let subprocess_ref = &mut subprocess;
-                            let keyframe_emitted_ref = &mut keyframe_emitted;
-                            let encode_result = encoder.encode_frame(
-                                owned_frame,
-                                timestamp,
-                                |pkt| {
-                                    if pkt.is_keyframe {
-                                        *keyframe_emitted_ref = true;
-                                    }
-                                    dispatch_packet(subprocess_ref, pkt)
-                                },
-                            );
-                            let encode_elapsed_ms = encode_start.elapsed().as_millis();
-                            if encode_elapsed_ms > slow_threshold_ms {
-                                slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                                    debug!(
-                                        elapsed_ms = encode_elapsed_ms,
-                                        count = slow_encode_count,
-                                        "OOP encode_frame exceeded {}ms threshold",
-                                        slow_threshold_ms
-                                    );
-                                }
+                        match disk_monitor.poll(&base_path, &health_tx) {
+                            super::core::DiskSpacePollResult::Exhausted { .. } => {
+                                disk_exhausted = true;
                             }
+                            super::core::DiskSpacePollResult::Stopped => {
+                                disk_exhausted = true;
+                            }
+                            _ => {}
+                        }
 
-                            match encode_result {
-                                Ok(()) => {
-                                    tracker.on_frame(timestamp);
-                                }
-                                Err(EncodePacketError::Converter(e)) => {
-                                    warn!("OOP encoder converter failure: {e}");
-                                }
-                                Err(EncodePacketError::Encode(e)) => {
-                                    if subprocess.is_exhausted() {
-                                        error!(
-                                            respawn_attempts = subprocess.respawn_attempts(),
-                                            max_consecutive_fast_failures =
-                                                subprocess.max_consecutive_fast_failures(),
-                                            "OOP subprocess respawn budget exhausted; draining further frames to disk-only fragments"
-                                        );
-                                        subprocess_fatal = true;
-                                    } else if keyframe_emitted
-                                        && encoder_rebuild_attempts
-                                            < MAX_ENCODER_REBUILD_ATTEMPTS
-                                    {
-                                        encoder_rebuild_attempts += 1;
-                                        warn!(
-                                            attempt = encoder_rebuild_attempts,
-                                            error = ?e,
-                                            "OOP encoder mid-stream error; attempting same-codec rebuild"
-                                        );
-                                        let _ = encoder.flush(|pkt| {
-                                            if pkt.is_keyframe {
-                                                keyframe_emitted = true;
-                                            }
-                                            dispatch_packet(&mut subprocess, pkt)
-                                        });
-                                        match rebuild_builder.clone().build_standalone() {
-                                            Ok(new_enc) => {
-                                                let old_name = encoder.codec_name().to_string();
-                                                let new_name = new_enc.codec_name().to_string();
-                                                info!(
-                                                    old_codec = %old_name,
-                                                    new_codec = %new_name,
-                                                    attempt = encoder_rebuild_attempts,
-                                                    "OOP encoder rebuilt mid-stream"
-                                                );
-                                                encoder = new_enc;
-                                                health_tx.emit(
-                                                    super::core::PipelineHealthEvent::EncoderRebuilt {
-                                                        backend: new_name,
-                                                        attempt: encoder_rebuild_attempts,
-                                                    },
-                                                );
-                                            }
-                                            Err(rebuild_err) => {
-                                                error!(
-                                                    error = ?rebuild_err,
-                                                    "OOP encoder rebuild failed"
-                                                );
-                                            }
+                        if disk_exhausted {
+                            return;
+                        }
+
+                        if subprocess_fatal || subprocess.is_exhausted() {
+                            return;
+                        }
+
+                        let convert_start = std::time::Instant::now();
+                        let frame = frame_pool.get_frame();
+                        let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                        let convert_elapsed_ms = convert_start.elapsed().as_millis();
+
+                        if convert_elapsed_ms > slow_threshold_ms {
+                            slow_convert_count += 1;
+                            if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = convert_elapsed_ms,
+                                    count = slow_convert_count,
+                                    "OOP fill_frame_from_sample_buf exceeded {}ms threshold",
+                                    slow_threshold_ms
+                                );
+                            }
+                        }
+
+                        match fill_result {
+                            Ok(()) => {
+                                let encode_start = std::time::Instant::now();
+                                let subprocess_ref = &mut subprocess;
+                                let keyframe_emitted_ref = &mut keyframe_emitted;
+                                let encode_result = encoder.encode_frame_reusable(
+                                    frame,
+                                    &mut converted_frame,
+                                    timestamp,
+                                    |pkt| {
+                                        if pkt.is_keyframe {
+                                            *keyframe_emitted_ref = true;
                                         }
-                                    } else {
-                                        warn!(
-                                            "OOP encoder transient ffmpeg error (subprocess still active)"
+                                        dispatch_packet(subprocess_ref, pkt)
+                                    },
+                                );
+                                let encode_elapsed_ms = encode_start.elapsed().as_millis();
+                                if encode_elapsed_ms > slow_threshold_ms {
+                                    slow_encode_count += 1;
+                                    if slow_encode_count <= 5
+                                        || slow_encode_count.is_multiple_of(100)
+                                    {
+                                        debug!(
+                                            elapsed_ms = encode_elapsed_ms,
+                                            count = slow_encode_count,
+                                            "OOP encode_frame_reusable exceeded {slow_threshold_ms}ms threshold",
                                         );
                                     }
                                 }
+
+                                match encode_result {
+                                    Ok(()) => {
+                                        tracker.on_frame(timestamp);
+                                    }
+                                    Err(EncodePacketError::Converter(e)) => {
+                                        warn!("OOP encoder converter failure: {e}");
+                                    }
+                                    Err(EncodePacketError::Encode(e)) => {
+                                        if subprocess.is_exhausted() {
+                                            error!(
+                                                respawn_attempts = subprocess.respawn_attempts(),
+                                                max_consecutive_fast_failures =
+                                                    subprocess.max_consecutive_fast_failures(),
+                                                "OOP subprocess respawn budget exhausted; draining further frames to disk-only fragments"
+                                            );
+                                            subprocess_fatal = true;
+                                        } else if keyframe_emitted
+                                            && encoder_rebuild_attempts
+                                                < MAX_ENCODER_REBUILD_ATTEMPTS
+                                        {
+                                            encoder_rebuild_attempts += 1;
+                                            warn!(
+                                                attempt = encoder_rebuild_attempts,
+                                                error = ?e,
+                                                "OOP encoder mid-stream error; attempting same-codec rebuild"
+                                            );
+                                            let _ = encoder.flush(|pkt| {
+                                                if pkt.is_keyframe {
+                                                    keyframe_emitted = true;
+                                                }
+                                                dispatch_packet(&mut subprocess, pkt)
+                                            });
+                                            match rebuild_builder.clone().build_standalone() {
+                                                Ok(new_enc) => {
+                                                    let old_name = encoder.codec_name().to_string();
+                                                    let new_name = new_enc.codec_name().to_string();
+                                                    info!(
+                                                        old_codec = %old_name,
+                                                        new_codec = %new_name,
+                                                        attempt = encoder_rebuild_attempts,
+                                                        "OOP encoder rebuilt mid-stream"
+                                                    );
+                                                    encoder = new_enc;
+                                                    converted_frame = None;
+                                                    health_tx.emit(
+                                                        super::core::PipelineHealthEvent::EncoderRebuilt {
+                                                            backend: new_name,
+                                                            attempt: encoder_rebuild_attempts,
+                                                        },
+                                                    );
+                                                }
+                                                Err(rebuild_err) => {
+                                                    error!(
+                                                        error = ?rebuild_err,
+                                                        "OOP encoder rebuild failed"
+                                                    );
+                                                }
+                                            }
+                                        } else {
+                                            warn!(
+                                                "OOP encoder transient ffmpeg error (subprocess still active)"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("OOP failed to convert frame: {e:?}");
                             }
                         }
-                        Err(e) => {
-                            warn!("OOP failed to convert frame: {e:?}");
-                        }
-                    }
 
-                    total_frames += 1;
+                        total_frames += 1;
+                    });
                 }
 
                 let final_ts = last_timestamp.unwrap_or(Duration::ZERO);
