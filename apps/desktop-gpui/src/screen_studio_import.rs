@@ -60,15 +60,15 @@ fn sessions_by_type(metadata: &Value) -> Result<HashMap<String, Session>, String
     Ok(sessions)
 }
 
-// Filenames come from the project's own JSON, so only plain relative names
-// inside the bundle are accepted; absolute paths or `..` could otherwise make
-// the import copy arbitrary local files.
+// Filenames come from the project's own JSON, so only a bare file name is
+// accepted: Screen Studio writes flat names, and anything with a directory
+// part (`..`, an absolute path, or `sub/file` through a linked `sub`) could
+// otherwise make the import copy arbitrary local files.
 fn bundle_file(dir: &Path, name: &str) -> Result<PathBuf, String> {
     let relative = Path::new(name);
-    let plain = !name.is_empty()
-        && relative
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    let mut components = relative.components();
+    let plain = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
     if !plain {
         return Err(format!(
             "This Screen Studio project references a file outside the project: {name}"
@@ -333,17 +333,19 @@ struct CursorRegistry {
 impl CursorRegistry {
     // A cursor whose image is missing would leave events pointing at an ID
     // with no image, which hides the cursor; fall back to the arrow instead.
-    fn register(&mut self, ss_id: &str) -> String {
+    // `None` only when the arrow is missing too: an ID is never handed out
+    // without its `CursorMeta`, so a later image can't take it over.
+    fn register(&mut self, ss_id: &str) -> Option<String> {
         if let Some(id) = self.ids.get(ss_id) {
-            return id.clone();
+            return Some(id.clone());
         }
         let id = match self.import_image(ss_id) {
             Some(id) => id,
-            None if ss_id != FALLBACK_CURSOR => self.register(FALLBACK_CURSOR),
-            None => self.metas.len().to_string(),
+            None if ss_id != FALLBACK_CURSOR => self.register(FALLBACK_CURSOR)?,
+            None => return None,
         };
         self.ids.insert(ss_id.to_string(), id.clone());
-        id
+        Some(id)
     }
 
     fn import_image(&mut self, ss_id: &str) -> Option<String> {
@@ -485,6 +487,7 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
             start_time: offset_secs(session),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         }
     });
     let system_audio = optional_media("systemAudio", "system_audio")?.map(|(path, session, _)| {
@@ -493,6 +496,7 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
             start_time: offset_secs(session),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         }
     });
 
@@ -559,9 +563,12 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
             continue;
         };
         let (x, y) = normalize(x, y);
+        let Some(cursor_id) = register_cursor(event["cursorId"].as_str().unwrap_or("arrow")) else {
+            continue;
+        };
         cursor_events.moves.push(CursorMoveEvent {
             active_modifiers: modifiers(&event),
-            cursor_id: register_cursor(event["cursorId"].as_str().unwrap_or("arrow")),
+            cursor_id,
             time_ms: (time - input_start_ms).max(0.0),
             x,
             y,
@@ -586,10 +593,13 @@ pub fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, S
             Some("middle") | Some("other") => 2,
             _ => 0,
         };
+        let Some(cursor_id) = register_cursor(event["cursorId"].as_str().unwrap_or("arrow")) else {
+            continue;
+        };
         cursor_events.clicks.push(CursorClickEvent {
             active_modifiers: modifiers(&event),
             cursor_num,
-            cursor_id: register_cursor(event["cursorId"].as_str().unwrap_or("arrow")),
+            cursor_id,
             time_ms: (time - input_start_ms).max(0.0),
             down,
         });
@@ -707,6 +717,15 @@ mod tests {
         let linked_dir = bundle.path().join("recording");
         std::os::unix::fs::symlink(outside.path(), &linked_dir).unwrap();
         assert!(bundle_file(&linked_dir, "secret.mp4").is_err());
+
+        // So is a name that reaches through a linked directory inside the
+        // bundle (`escape/secret.mp4`), and any name with a directory part.
+        let recording = bundle.path().join("real");
+        std::fs::create_dir(&recording).unwrap();
+        std::os::unix::fs::symlink(outside.path(), recording.join("escape")).unwrap();
+        assert!(bundle_file(&recording, "escape/secret.mp4").is_err());
+        assert!(bundle_file(&recording, "sub/plain.mp4").is_err());
+        assert!(bundle_file(&recording, "./plain.mp4").is_err());
     }
 
     #[test]
@@ -779,12 +798,31 @@ mod tests {
             ids: HashMap::new(),
             metas: HashMap::new(),
         };
-        let missing = cursors.register("pointingHand");
-        let arrow = cursors.register("arrow");
+        let missing = cursors.register("pointingHand").unwrap();
+        let arrow = cursors.register("arrow").unwrap();
         assert_eq!(missing, arrow);
         assert!(cursors.metas.contains_key(&arrow));
         assert_eq!(cursors.metas.len(), 1);
-        assert!(cursors.register("../escape").eq(&arrow));
+        assert_eq!(cursors.register("../escape"), Some(arrow));
+    }
+
+    #[test]
+    fn a_cursor_with_no_image_and_no_arrow_gets_no_id() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let mut cursors = CursorRegistry {
+            source_dir: source.path().to_path_buf(),
+            target_dir: target.path().to_path_buf(),
+            infos: HashMap::new(),
+            ids: HashMap::new(),
+            metas: HashMap::new(),
+        };
+        assert_eq!(cursors.register("pointingHand"), None);
+        // A later image gets its own ID, not one an earlier event holds.
+        std::fs::write(source.path().join("iBeam.png"), b"png").unwrap();
+        let beam = cursors.register("iBeam").unwrap();
+        assert!(cursors.metas.contains_key(&beam));
+        assert_eq!(cursors.metas.len(), 1);
     }
 
     #[test]

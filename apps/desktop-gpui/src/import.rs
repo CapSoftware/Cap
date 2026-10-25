@@ -364,8 +364,6 @@ pub fn import_video_from_path(source_path: PathBuf, cx: &mut App) {
     spawn_import(cx, move |tx| run_video_import(&source_path, &tx));
 }
 
-/// Turns a Screen Studio project (`.screenstudio` bundle) into a Cap
-/// recording on a worker thread and opens it in the editor.
 pub fn import_screen_studio_from_path(source_path: PathBuf, cx: &mut App) {
     tracing::info!(source = %source_path.display(), "starting Screen Studio import");
     spawn_import(cx, move |tx| {
