@@ -2621,6 +2621,20 @@ mod screenshot_swscale_cache_tests {
         frame
     }
 
+    fn shift_bgrx_pixels(frame: &mut ffmpeg::frame::Video, bias: u8) {
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        let stride = frame.stride(0);
+        let data = frame.data_mut(0);
+        for row in data.chunks_mut(stride).take(height) {
+            for pixel in row.chunks_mut(4).take(width) {
+                pixel[0] = pixel[0].wrapping_add(bias);
+                pixel[1] = pixel[1].wrapping_add(bias);
+                pixel[2] = pixel[2].wrapping_add(bias);
+            }
+        }
+    }
+
     fn expected_bgrx_rgb(frame: &ffmpeg::frame::Video) -> Vec<u8> {
         let width = frame.width() as usize;
         let height = frame.height() as usize;
@@ -2691,6 +2705,19 @@ mod screenshot_swscale_cache_tests {
         assert_eq!(again.as_raw(), image.as_raw());
         assert_eq!(screenshot_scaler_builds(), 1);
 
+        let mut aligned_changed = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 3840, 2);
+        shift_bgrx_pixels(&mut aligned_changed, 17);
+        let aligned_changed_image =
+            convert_ffmpeg_frame_to_image(&aligned_changed).expect("aligned pixel change");
+        assert_eq!(
+            aligned_changed_image.as_raw(),
+            uncached_packed_rgb(&aligned_changed)
+                .expect("aligned pixel change reference")
+                .as_raw()
+        );
+        assert_ne!(aligned_changed_image.as_raw(), image.as_raw());
+        assert_eq!(screenshot_scaler_builds(), 1);
+
         let padded = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 17, 3);
         let padded_image = convert_ffmpeg_frame_to_image(&padded).expect("padded convert");
         assert_eq!(padded_image.as_raw(), expected_bgrx_rgb(&padded).as_slice());
@@ -2702,6 +2729,19 @@ mod screenshot_swscale_cache_tests {
         );
         assert_eq!(screenshot_scaler_builds(), 2);
         convert_ffmpeg_frame_to_image(&padded).expect("padded reuse");
+        assert_eq!(screenshot_scaler_builds(), 2);
+
+        let mut padded_changed = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 17, 3);
+        shift_bgrx_pixels(&mut padded_changed, 17);
+        let padded_changed_image =
+            convert_ffmpeg_frame_to_image(&padded_changed).expect("padded pixel change");
+        assert_eq!(
+            padded_changed_image.as_raw(),
+            uncached_packed_rgb(&padded_changed)
+                .expect("padded pixel change reference")
+                .as_raw()
+        );
+        assert_ne!(padded_changed_image.as_raw(), padded_image.as_raw());
         assert_eq!(screenshot_scaler_builds(), 2);
 
         let bgra = filled_bgrx(ffmpeg::format::Pixel::BGRA, 32, 2);
