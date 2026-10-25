@@ -94,6 +94,11 @@ pub fn ensure_desktop_entry(user_dir: &Path, dirs: &[PathBuf], exec: &Path) -> b
 /// run before any portal call on the process's portal connection, gpui's
 /// appearance read included, and on the runtime that keeps that connection.
 pub async fn register() {
+    // The desktop harness turns this off to keep covering the tray Stop
+    // control, which a terminal launch otherwise no longer needs.
+    if std::env::var_os("CAP_GPUI_PORTAL_APP_ID").is_some_and(|value| value == "0") {
+        return;
+    }
     let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
     if let Some(id) = unit_app_id(&cgroup)
         && (id == PACKAGED_APP_ID || id == PORTAL_APP_ID)
