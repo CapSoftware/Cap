@@ -8,8 +8,8 @@ use cap_project::{
 };
 use cap_rendering::{
     PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
-    RenderVideoConstants, SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline,
-    get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
+    RenderVideoConstants, RendererLayers, SegmentVideoPaths, SharedWgpuDevice, Video,
+    ZoomTransformTimeline, get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
     collections::HashMap,
@@ -248,6 +248,7 @@ pub struct EditorInstance {
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
+    pub preview_layers: std::sync::Mutex<Option<RendererLayers>>,
     runtime_handle: tokio::runtime::Handle,
     audio_output: Arc<crate::AudioOutput>,
 }
@@ -655,6 +656,7 @@ impl EditorInstance {
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            preview_layers: std::sync::Mutex::new(None),
             playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
@@ -781,6 +783,7 @@ impl EditorInstance {
             meta: self.meta.clone(),
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            preview_layers: std::sync::Mutex::new(None),
             runtime_handle: self.runtime_handle.clone(),
             audio_output: self.audio_output.clone(),
         });
@@ -860,10 +863,18 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
+    /// Audio scrubbing: plays `secs` of the mixed project audio at `time`
+    /// (output seconds) on this editor's own audio output, so it follows
+    /// device changes and closes with the editor. Ignored while playing.
+    pub async fn scrub_audio(&self, time: f64, secs: f64) {
+        let samples = self.audio_snippet(time, secs).await;
+        self.audio_output.play_snippet(samples);
+    }
+
     /// A short slice of the mixed project audio at `time` (output seconds),
-    /// interleaved stereo at [`crate::AudioRenderer::SAMPLE_RATE`], for audio
-    /// scrubbing. Edges are faded so back-to-back slices don't click.
-    pub async fn audio_snippet(&self, time: f64, secs: f64) -> Vec<f32> {
+    /// interleaved stereo at [`crate::AudioRenderer::SAMPLE_RATE`]. Edges are
+    /// faded so back-to-back slices don't click.
+    async fn audio_snippet(&self, time: f64, secs: f64) -> Vec<f32> {
         let segments = crate::get_audio_segments(&self.segment_medias).await;
         let music = self.load_music_tracks().await;
         let project = self.project_config.1.borrow().clone();
@@ -1877,8 +1888,7 @@ async fn create_segments_with_audio(
                     .unwrap_or_else(AudioLoader::none);
 
                 let system_audio = s
-                    .system_audio
-                    .as_ref()
+                    .usable_system_audio()
                     .filter(|_| load_audio)
                     .map(|audio| {
                         audio_loader_with_completed(

@@ -1,0 +1,18 @@
+---
+title: Self-Hosting Sign-In and EU Transcription
+publishedAt: "2026-10-23"
+---
+
+New sign-in and region options for self-hosted Cap.
+
+## Features
+
+- **Generic OIDC sign-in** - Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` to sign in with any OpenID Connect provider you run. `OIDC_NAME` labels the button.
+- **Reverse-proxy sign-in** - Sign in through an authenticating reverse proxy by setting `TRUSTED_PROXY_AUTH_HEADER` and `TRUSTED_PROXY_AUTH_EMAIL`.
+- **EU transcription** - Set `ASSEMBLY_BASE_URL` to send transcription to AssemblyAI's EU endpoint and keep recordings in the EU.
+- **Blocked signup domains** - Set `CAP_BLOCKED_SIGNUP_DOMAINS` to refuse sign-ins from specific domains or addresses, with a friendly notice.
+
+## Fixes
+
+- **Public assets** - Public assets are now served on self-hosted deployments.
+- **Encryption key check** - A bad `DATABASE_ENCRYPTION_KEY` is now caught at startup instead of failing later.

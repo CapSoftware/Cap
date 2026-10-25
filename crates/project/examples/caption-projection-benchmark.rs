@@ -69,17 +69,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("iterations must be positive".into());
     }
     let selected: Option<usize> = arguments.next().map(|value| value.parse()).transpose()?;
-    let cases = [(3600, 1, 0), (600, 20, 28), (3600, 60, 60)];
-    if selected.is_some_and(|case| case >= cases.len()) || arguments.next().is_some() {
-        return Err("case must be 0, 1 or 2; no additional arguments are accepted".into());
+    let order = arguments.next().unwrap_or_else(|| "ordered".into());
+    let cases = [
+        (3600, 1, 0, false),
+        (600, 20, 28, false),
+        (3600, 60, 60, false),
+        (3600, 1, 0, true),
+        (3600, 500, 4, false),
+    ];
+    if selected.is_some_and(|case| case >= cases.len())
+        || !matches!(order.as_str(), "ordered" | "reversed")
+        || arguments.next().is_some()
+    {
+        return Err("expected case 0..=4 and order: ordered or reversed".into());
     }
-    println!("case,clips,captions,words,sample,elapsed_ms,fingerprint");
-    for (case, (seconds, clips, spacing)) in cases.into_iter().enumerate() {
+    println!("case,order,clips,captions,words,sample,elapsed_ms,fingerprint");
+    for (case, (seconds, clips, spacing, styled)) in cases.into_iter().enumerate() {
         if selected.is_some_and(|selected| selected != case) {
             continue;
         }
         let mut project = fixture(seconds, clips, spacing);
+        if order == "reversed" {
+            project.timeline.as_mut().unwrap().segments.reverse();
+        }
         let durations = [5.0, seconds as f64];
+        if styled {
+            synchronize_captions(&mut project, &durations);
+            for caption in &mut project.timeline.as_mut().unwrap().caption_segments {
+                caption.position_override = Some("top".into());
+                caption.color_override = Some("#abcdef".into());
+                caption.background_color_override = Some("#123456".into());
+                caption.font_size_override = Some(32);
+            }
+        }
         for _ in 0..3 {
             synchronize_captions(&mut project, &durations);
         }
@@ -98,7 +120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut hasher = DefaultHasher::new();
         serde_json::to_vec(track)?.hash(&mut hasher);
         let fingerprint = hasher.finish();
-        for sample in 0..5 {
+        for sample in 0..25 {
             let started = Instant::now();
             for _ in 0..iterations {
                 synchronize_captions(black_box(&mut project), black_box(&durations));
@@ -110,7 +132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 expected_captions
             );
             println!(
-                "{case},{clips},{expected_captions},{words},{sample},{elapsed_ms:.6},{fingerprint}"
+                "{case},{order},{clips},{expected_captions},{words},{sample},{elapsed_ms:.6},{fingerprint}"
             );
         }
         let mut hasher = DefaultHasher::new();
