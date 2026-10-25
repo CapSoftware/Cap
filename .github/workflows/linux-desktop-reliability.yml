@@ -99,6 +99,17 @@ jobs:
           cat "$RUNNER_TEMP/out/gnome-settings/result.txt"
           grep -qx settings_closed=yes "$RUNNER_TEMP/out/gnome-settings/result.txt"
 
+      - name: GNOME 50 relaunch from the app grid reaches the running Cap
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: reopen
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-reopen"
+          cat "$RUNNER_TEMP/out/gnome-reopen/result.txt"
+          grep -qx reopen_forwarded=yes "$RUNNER_TEMP/out/gnome-reopen/result.txt"
+
       - name: Check results
         run: |
           bash scripts/linux-desktop-harness/check-results.sh \
