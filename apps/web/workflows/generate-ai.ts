@@ -586,6 +586,65 @@ function extractJsonObject(content: string): string {
 	throw new Error("AI response contained an incomplete JSON object");
 }
 
+// Local models such as gemma3 sometimes leave quotes inside a string
+// unescaped, eg. `data ("rows") that`, or end an array with a trailing comma.
+// A quote then ends its string only when JSON structure follows it.
+const QUOTE_ENDS_STRING = /\s*(?:[:}\]]|,\s*["{[\]}]|$)/y;
+const CLOSES_CONTAINER = /\s*[}\]]/y;
+
+function repairJson(json: string): string {
+	let repaired = "";
+	let inString = false;
+	for (let i = 0; i < json.length; i++) {
+		const character = json[i];
+		if (inString) {
+			if (character === "\\") {
+				repaired += character + (json[i + 1] ?? "");
+				i++;
+				continue;
+			}
+			if (character === '"') {
+				QUOTE_ENDS_STRING.lastIndex = i + 1;
+				if (QUOTE_ENDS_STRING.test(json)) {
+					inString = false;
+				} else {
+					repaired += "\\";
+				}
+			}
+			repaired += character;
+			continue;
+		}
+		if (character === '"') {
+			inString = true;
+		} else if (character === ",") {
+			CLOSES_CONTAINER.lastIndex = i + 1;
+			if (CLOSES_CONTAINER.test(json)) continue;
+		}
+		repaired += character;
+	}
+	return repaired;
+}
+
+function parseJsonObject(content: string): unknown {
+	try {
+		return JSON.parse(extractJsonObject(content));
+	} catch (error) {
+		const cleanedContent = cleanJsonResponse(content);
+		const start = cleanedContent.indexOf("{");
+		if (start < 0) throw error;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(
+				extractJsonObject(repairJson(cleanedContent.slice(start))),
+			);
+		} catch {
+			throw error;
+		}
+		console.warn("[ai] Repaired malformed JSON in the AI response");
+		return parsed;
+	}
+}
+
 async function generateSingleChunk(
 	segments: VttSegment[],
 	videoDuration: number,
@@ -757,7 +816,7 @@ export function parseChunkAnalysis(content: string): {
 	keyPoints: string[];
 	chapters: { title: string; start: number }[];
 } {
-	const parsed = JSON.parse(extractJsonObject(content)) as {
+	const parsed = parseJsonObject(content) as {
 		summary?: unknown;
 		keyPoints?: unknown;
 		chapters?: unknown;
@@ -790,7 +849,7 @@ export function parseFinalSummary(content: string): {
 	title: string;
 	summary: string;
 } {
-	const parsed = JSON.parse(extractJsonObject(content)) as {
+	const parsed = parseJsonObject(content) as {
 		title?: unknown;
 		summary?: unknown;
 	};
@@ -804,7 +863,7 @@ export function parseFinalSummary(content: string): {
 }
 
 export function parseAiResponse(content: string): AiResult {
-	const data = JSON.parse(extractJsonObject(content)) as {
+	const data = parseJsonObject(content) as {
 		title?: unknown;
 		summary?: unknown;
 		chapters?: unknown;
