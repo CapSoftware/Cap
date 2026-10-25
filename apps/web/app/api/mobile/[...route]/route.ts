@@ -1403,31 +1403,40 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			isNull(Db.organizations.tombstoneAt),
 		);
 		const whereClause = and(collectionWhereClause, folderFilter);
-		const [locations, [countRow]] = yield* Effect.all([
-			database.use((db) =>
-				db
-					.select({ id: Db.videos.id, folderId: Db.videos.folderId })
-					.from(Db.videos)
-					.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
-					.where(whereClause)
-					.orderBy(desc(Db.videos.effectiveCreatedAt))
-					.limit(limit)
-					.offset(offset),
-			),
-			database.use((db) =>
-				db
-					.select({
-						total:
-							sql<number>`COUNT(CASE WHEN ${folderFilter} THEN 1 END)`.mapWith(
-								Number,
-							),
-						collectionTotal: count(),
-					})
-					.from(Db.videos)
-					.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
-					.where(collectionWhereClause),
-			),
-		]);
+		const [locations, [countRow]] = yield* Effect.all(
+			[
+				database.use((db) =>
+					db
+						.select({ id: Db.videos.id, folderId: Db.videos.folderId })
+						.from(Db.videos)
+						.leftJoin(
+							Db.organizations,
+							eq(Db.videos.orgId, Db.organizations.id),
+						)
+						.where(whereClause)
+						.orderBy(desc(Db.videos.effectiveCreatedAt))
+						.limit(limit)
+						.offset(offset),
+				),
+				database.use((db) =>
+					db
+						.select({
+							total:
+								sql<number>`COUNT(CASE WHEN ${folderFilter} THEN 1 END)`.mapWith(
+									Number,
+								),
+							collectionTotal: count(),
+						})
+						.from(Db.videos)
+						.leftJoin(
+							Db.organizations,
+							eq(Db.videos.orgId, Db.organizations.id),
+						)
+						.where(collectionWhereClause),
+				),
+			],
+			{ concurrency: 2 },
+		);
 		return {
 			locations,
 			total: countRow?.total ?? 0,
@@ -1444,39 +1453,48 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			isNull(Db.organizations.tombstoneAt),
 		);
 		const whereClause = and(collectionWhereClause, folderFilter);
-		const [locations, [countRow]] = yield* Effect.all([
-			database.use((db) =>
-				db
-					.select({
-						id: Db.sharedVideos.videoId,
-						folderId: Db.sharedVideos.folderId,
-					})
-					.from(Db.sharedVideos)
-					.innerJoin(Db.videos, eq(Db.sharedVideos.videoId, Db.videos.id))
-					.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
-					.where(whereClause)
-					.orderBy(desc(Db.videos.effectiveCreatedAt))
-					.limit(limit)
-					.offset(offset),
-			),
-			database.use((db) =>
-				db
-					.select({
-						total:
-							sql<number>`COUNT(DISTINCT CASE WHEN ${folderFilter} THEN ${Db.sharedVideos.videoId} END)`.mapWith(
-								Number,
-							),
-						collectionTotal:
-							sql<number>`COUNT(DISTINCT ${Db.sharedVideos.videoId})`.mapWith(
-								Number,
-							),
-					})
-					.from(Db.sharedVideos)
-					.innerJoin(Db.videos, eq(Db.sharedVideos.videoId, Db.videos.id))
-					.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
-					.where(collectionWhereClause),
-			),
-		]);
+		const [locations, [countRow]] = yield* Effect.all(
+			[
+				database.use((db) =>
+					db
+						.select({
+							id: Db.sharedVideos.videoId,
+							folderId: Db.sharedVideos.folderId,
+						})
+						.from(Db.sharedVideos)
+						.innerJoin(Db.videos, eq(Db.sharedVideos.videoId, Db.videos.id))
+						.leftJoin(
+							Db.organizations,
+							eq(Db.videos.orgId, Db.organizations.id),
+						)
+						.where(whereClause)
+						.orderBy(desc(Db.videos.effectiveCreatedAt))
+						.limit(limit)
+						.offset(offset),
+				),
+				database.use((db) =>
+					db
+						.select({
+							total:
+								sql<number>`COUNT(DISTINCT CASE WHEN ${folderFilter} THEN ${Db.sharedVideos.videoId} END)`.mapWith(
+									Number,
+								),
+							collectionTotal:
+								sql<number>`COUNT(DISTINCT ${Db.sharedVideos.videoId})`.mapWith(
+									Number,
+								),
+						})
+						.from(Db.sharedVideos)
+						.innerJoin(Db.videos, eq(Db.sharedVideos.videoId, Db.videos.id))
+						.leftJoin(
+							Db.organizations,
+							eq(Db.videos.orgId, Db.organizations.id),
+						)
+						.where(collectionWhereClause),
+				),
+			],
+			{ concurrency: 2 },
+		);
 		return {
 			locations,
 			total: countRow?.total ?? 0,
@@ -1492,39 +1510,42 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		isNull(Db.organizations.tombstoneAt),
 	);
 	const whereClause = and(collectionWhereClause, folderFilter);
-	const [locations, [countRow]] = yield* Effect.all([
-		database.use((db) =>
-			db
-				.select({
-					id: Db.spaceVideos.videoId,
-					folderId: Db.spaceVideos.folderId,
-				})
-				.from(Db.spaceVideos)
-				.innerJoin(Db.videos, eq(Db.spaceVideos.videoId, Db.videos.id))
-				.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
-				.where(whereClause)
-				.orderBy(desc(Db.videos.effectiveCreatedAt))
-				.limit(limit)
-				.offset(offset),
-		),
-		database.use((db) =>
-			db
-				.select({
-					total:
-						sql<number>`COUNT(DISTINCT CASE WHEN ${folderFilter} THEN ${Db.spaceVideos.videoId} END)`.mapWith(
-							Number,
-						),
-					collectionTotal:
-						sql<number>`COUNT(DISTINCT ${Db.spaceVideos.videoId})`.mapWith(
-							Number,
-						),
-				})
-				.from(Db.spaceVideos)
-				.innerJoin(Db.videos, eq(Db.spaceVideos.videoId, Db.videos.id))
-				.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
-				.where(collectionWhereClause),
-		),
-	]);
+	const [locations, [countRow]] = yield* Effect.all(
+		[
+			database.use((db) =>
+				db
+					.select({
+						id: Db.spaceVideos.videoId,
+						folderId: Db.spaceVideos.folderId,
+					})
+					.from(Db.spaceVideos)
+					.innerJoin(Db.videos, eq(Db.spaceVideos.videoId, Db.videos.id))
+					.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
+					.where(whereClause)
+					.orderBy(desc(Db.videos.effectiveCreatedAt))
+					.limit(limit)
+					.offset(offset),
+			),
+			database.use((db) =>
+				db
+					.select({
+						total:
+							sql<number>`COUNT(DISTINCT CASE WHEN ${folderFilter} THEN ${Db.spaceVideos.videoId} END)`.mapWith(
+								Number,
+							),
+						collectionTotal:
+							sql<number>`COUNT(DISTINCT ${Db.spaceVideos.videoId})`.mapWith(
+								Number,
+							),
+					})
+					.from(Db.spaceVideos)
+					.innerJoin(Db.videos, eq(Db.spaceVideos.videoId, Db.videos.id))
+					.leftJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
+					.where(collectionWhereClause),
+			),
+		],
+		{ concurrency: 2 },
+	);
 	return {
 		locations,
 		total: countRow?.total ?? 0,
@@ -1648,16 +1669,20 @@ const getCapsList = Effect.fn("Mobile.getCapsList")(function* (
 	const user = yield* CurrentUser;
 	const space = yield* getSelectedSpace(params.spaceId);
 
-	const [{ locations, total, collectionTotal }, folders] = yield* Effect.all([
-		getCapLocations({ folderId, page, limit, space }),
-		folderId
-			? Effect.succeed([])
-			: space
-				? getSpaceRootFolders(space)
-				: getRootFolders(user.activeOrganizationId),
-	]);
+	const [{ locations, total, collectionTotal }, folders, blockedUserIds] =
+		yield* Effect.all(
+			[
+				getCapLocations({ folderId, page, limit, space }),
+				folderId
+					? Effect.succeed([])
+					: space
+						? getSpaceRootFolders(space)
+						: getRootFolders(user.activeOrganizationId),
+				getCurrentBlockedUserIds(),
+			],
+			{ concurrency: 3 },
+		);
 	const rows = yield* getCapRows(locations);
-	const blockedUserIds = yield* getCurrentBlockedUserIds();
 	const visibleRows = rows.filter(
 		(row) =>
 			!blockedUserIds.includes(row.ownerId) &&
