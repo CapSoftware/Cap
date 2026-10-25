@@ -60,6 +60,13 @@ const CHECKING_TITLE: &str = "Checking for Update…";
 const DOWNLOAD_TITLE: &str = "Download update…";
 const RESTART_TITLE: &str = "Restart to update…";
 
+// macOS recognizes `Preferences…` as the proper menu item for settings.
+// On macOS 15+ it uses the new translation showing `Settings…` along with the gear sf symbol.
+#[cfg(target_os = "macos")]
+const SETTINGS_LABEL: &str = "Preferences…";
+#[cfg(not(target_os = "macos"))]
+const SETTINGS_LABEL: &str = "Settings…";
+
 impl UpdateRow {
     fn of(status: &updates::UpdateStatus) -> Self {
         use updates::UpdateStatus;
@@ -298,7 +305,7 @@ pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
                 MenuItem::action(format!("About {APP_NAME}"), About),
                 MenuItem::action(update_row.title, CheckForUpdate).disabled(!update_row.enabled),
                 MenuItem::separator(),
-                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action(SETTINGS_LABEL, OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
@@ -1174,7 +1181,7 @@ mod tests {
                         "About Cap".to_string(),
                         "Check for Update".into(),
                         "-".into(),
-                        "Settings…".into(),
+                        SETTINGS_LABEL.into(),
                         "-".into(),
                         "Services".into(),
                         "-".into(),
