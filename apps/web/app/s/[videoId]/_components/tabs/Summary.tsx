@@ -10,6 +10,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Edit3 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { formatPlayerTime } from "@/lib/player-time";
 import { type SummaryEditingState, SummaryEditor } from "./SummaryEditor";
 
 type AiGenerationStatus =
@@ -41,14 +42,6 @@ interface SummaryProps {
 	duration?: number | null;
 	onEditingStateChange?: (state: SummaryEditingState) => void;
 }
-
-const formatTime = (time: number) => {
-	const minutes = Math.floor(time / 60);
-	const seconds = Math.floor(time % 60);
-	return `${minutes.toString().padStart(2, "0")}:${seconds
-		.toString()
-		.padStart(2, "0")}`;
-};
 
 const SkeletonLoader = () => (
 	<div className="p-4 space-y-6 animate-pulse">
@@ -318,7 +311,7 @@ export const Summary: React.FC<SummaryProps> = ({
 										onClick={() => handleSeek(chapter.start)}
 									>
 										<span className="w-16 text-xs text-gray-500">
-											{formatTime(chapter.start)}
+											{formatPlayerTime(chapter.start)}
 										</span>
 										<span className="ml-2 text-sm">{chapter.title}</span>
 									</button>

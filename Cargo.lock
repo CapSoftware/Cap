@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "cap"
-version = "0.1.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "cap-automation",
@@ -1270,6 +1270,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-recording",
+ "cap-rendering",
  "cap-timestamp",
  "cap-utils",
  "chrono",
@@ -1869,6 +1870,7 @@ dependencies = [
  "cap-muxer-protocol",
  "ffmpeg-next",
  "libc",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
@@ -1945,11 +1947,13 @@ dependencies = [
  "flume",
  "foreign-types-shared 0.3.1",
  "futures",
+ "glow",
  "hex",
  "image 0.25.8",
  "indexmap 2.11.4",
  "inquire",
  "kameo",
+ "khronos-egl",
  "libc",
  "libproc",
  "objc",
@@ -2049,6 +2053,7 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "wgpu",
  "wgpu-core",
  "wgpu-hal",
@@ -2158,6 +2163,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cap-audio",
+ "cap-camera-ffmpeg",
  "cap-camera-windows",
  "cap-editor",
  "cap-enc-avfoundation",
@@ -11531,6 +11537,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

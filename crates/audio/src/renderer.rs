@@ -68,6 +68,35 @@ pub fn render_audio<T: AudioSampleSource>(
         return 0;
     }
     let out = &mut out[out_offset..out_offset + samples * 2];
+    if let [track] = tracks
+        && matches!(track.stereo_mode, StereoMode::Stereo)
+        && track.data.channels() == 2
+    {
+        let gain = gain_for_db(track.gain);
+        if gain == f32::NEG_INFINITY {
+            out.fill(0.0);
+            return samples;
+        }
+        if let Ok(first) = usize::try_from(offset as i128 + track.offset as i128)
+            && let Some(first) = first.checked_mul(2)
+            && let Some(end) = first.checked_add(out.len())
+            && let Some(input) = track.data.sample_slice(first..end)
+            && input.len() == out.len()
+        {
+            let mut index = 0;
+            while index < out.len() {
+                out[index] = (0.0 + input[index] * gain).clamp(-1.0, 1.0);
+                index += 1;
+            }
+            return samples;
+        }
+    }
+    if let [track] = tracks
+        && track.data.channels() == 1
+        && try_render_single_mono(track, offset, out)
+    {
+        return samples;
+    }
     out.fill(0.0);
 
     for track in tracks {
@@ -109,9 +138,9 @@ pub fn render_audio<T: AudioSampleSource>(
                     .zip((first + count).checked_mul(2))
                     .and_then(|(start, end)| track.data.sample_slice(start..end));
                 if let Some(input) = input {
-                    for (sample, frame) in input.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
-                        mix_stereo(sample[0], sample[1], frame, &track.stereo_mode, gain);
-                    }
+                    // `opt-level = s` does not inline `chunks_exact().zip()`, so this
+                    // path was a call per frame and slower than indexing.
+                    mix_stereo_slice(input, output, count, &track.stereo_mode, gain);
                 } else {
                     for (index, frame) in output.chunks_exact_mut(2).enumerate() {
                         let base = (first + index).saturating_mul(2);
@@ -134,6 +163,79 @@ pub fn render_audio<T: AudioSampleSource>(
     }
 
     samples
+}
+
+#[inline(never)]
+fn try_render_single_mono<T: AudioSampleSource>(
+    track: &AudioRendererTrack<'_, T>,
+    offset: usize,
+    out: &mut [f32],
+) -> bool {
+    if track.gain <= -30.0 {
+        out.fill(0.0);
+        return true;
+    }
+    let Ok(first) = usize::try_from(offset as i128 + track.offset as i128) else {
+        return false;
+    };
+    let samples = out.len() / 2;
+    let Some(end) = first.checked_add(samples) else {
+        return false;
+    };
+    let Some(input) = track.data.sample_slice(first..end) else {
+        return false;
+    };
+    if input.len() != samples {
+        return false;
+    }
+    let gain = gain_for_db(track.gain);
+    for (sample, frame) in input.iter().zip(out.chunks_exact_mut(2)) {
+        let sample = (0.0 + sample * 0.707 * gain).clamp(-1.0, 1.0);
+        frame.fill(sample);
+    }
+    true
+}
+
+#[inline(always)]
+fn mix_stereo_slice(
+    input: &[f32],
+    output: &mut [f32],
+    frames: usize,
+    mode: &StereoMode,
+    gain: f32,
+) {
+    let frames = frames.min(input.len() / 2).min(output.len() / 2);
+    match mode {
+        StereoMode::Stereo => {
+            let mut index = 0;
+            while index < frames {
+                let base = index * 2;
+                output[base] += input[base] * gain;
+                output[base + 1] += input[base + 1] * gain;
+                index += 1;
+            }
+        }
+        StereoMode::MonoL => {
+            let mut index = 0;
+            while index < frames {
+                let base = index * 2;
+                let sample = input[base] * gain;
+                output[base] += sample;
+                output[base + 1] += sample;
+                index += 1;
+            }
+        }
+        StereoMode::MonoR => {
+            let mut index = 0;
+            while index < frames {
+                let base = index * 2;
+                let sample = input[base + 1] * gain;
+                output[base] += sample;
+                output[base + 1] += sample;
+                index += 1;
+            }
+        }
+    }
 }
 
 fn mix_stereo(left: f32, right: f32, frame: &mut [f32], mode: &StereoMode, gain: f32) {
@@ -214,6 +316,208 @@ mod tests {
         fn sample_slice(&self, range: Range<usize>) -> Option<&[f32]> {
             self.slices.then(|| self.data.sample_slice(range)).flatten()
         }
+    }
+
+    fn assert_single_track_mixing_matches_indexed_samples(channels: u16) {
+        let data = AudioData::from_raw_f32(
+            vec![
+                0.0,
+                -0.0,
+                -2.0,
+                2.0,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::from_bits(0x7fc0_1234),
+                f32::from_bits(1),
+                -f32::from_bits(1),
+                0.25,
+                -0.25,
+                1.0,
+                -1.0,
+                0.5,
+            ],
+            channels,
+        );
+        for gain in [
+            f32::NEG_INFINITY,
+            -31.0,
+            -30.0,
+            -6.0,
+            0.0,
+            6.0,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            for offset in [-3, 0, 2] {
+                for cursor in [0, 1, 4, 100] {
+                    for count in [0, 1, 3, 16] {
+                        for mode in [0, 1, 2] {
+                            let render = |slices| {
+                                let source = Source {
+                                    data: &data,
+                                    slices,
+                                };
+                                let track = AudioRendererTrack {
+                                    data: &source,
+                                    gain,
+                                    offset,
+                                    stereo_mode: match mode {
+                                        1 => StereoMode::MonoL,
+                                        2 => StereoMode::MonoR,
+                                        _ => StereoMode::Stereo,
+                                    },
+                                };
+                                let mut output = [13.0_f32; 36];
+                                let rendered =
+                                    render_audio(&[track], cursor, count, 2, &mut output);
+                                (rendered, output)
+                            };
+                            let (expected_count, expected) = render(false);
+                            let (actual_count, actual) = render(true);
+                            assert_eq!(actual_count, expected_count);
+                            for (actual, expected) in actual.into_iter().zip(expected) {
+                                if expected.is_nan() {
+                                    assert!(actual.is_nan());
+                                } else {
+                                    assert_eq!(actual.to_bits(), expected.to_bits());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_stereo_mixing_matches_indexed_samples_at_boundaries() {
+        assert_single_track_mixing_matches_indexed_samples(2);
+    }
+
+    #[test]
+    fn single_mono_mixing_matches_indexed_samples_at_boundaries() {
+        assert_single_track_mixing_matches_indexed_samples(1);
+    }
+
+    #[test]
+    fn partial_stereo_slices_keep_the_unavailable_tail_silent() {
+        struct PartialSlice;
+        impl AudioSampleSource for PartialSlice {
+            fn channels(&self) -> u16 {
+                2
+            }
+            fn sample_count(&self) -> usize {
+                4
+            }
+            fn sample(&self, _index: usize) -> Option<&f32> {
+                None
+            }
+            fn sample_slice(&self, _range: Range<usize>) -> Option<&[f32]> {
+                Some(&[0.25, -0.5, 0.75, -2.0])
+            }
+        }
+        let tracks = [AudioRendererTrack {
+            data: &PartialSlice,
+            gain: 0.0,
+            offset: 0,
+            stereo_mode: StereoMode::Stereo,
+        }];
+        let mut output = [13.0_f32; 12];
+        assert_eq!(render_audio(&tracks, 0, 4, 2, &mut output), 4);
+        assert_eq!(
+            output,
+            [
+                13.0, 13.0, 0.25, -0.5, 0.75, -1.0, 0.0, 0.0, 0.0, 0.0, 13.0, 13.0
+            ]
+        );
+    }
+
+    #[test]
+    fn partial_mono_slices_keep_the_unavailable_tail_silent() {
+        struct PartialSlice;
+        impl AudioSampleSource for PartialSlice {
+            fn channels(&self) -> u16 {
+                1
+            }
+            fn sample_count(&self) -> usize {
+                4
+            }
+            fn sample(&self, _index: usize) -> Option<&f32> {
+                None
+            }
+            fn sample_slice(&self, _range: Range<usize>) -> Option<&[f32]> {
+                Some(&[0.25, -0.5])
+            }
+        }
+        let tracks = [AudioRendererTrack {
+            data: &PartialSlice,
+            gain: 0.0,
+            offset: 0,
+            stereo_mode: StereoMode::Stereo,
+        }];
+        let mut output = [13.0_f32; 12];
+        assert_eq!(render_audio(&tracks, 0, 4, 2, &mut output), 4);
+        assert_eq!(
+            output,
+            [
+                13.0,
+                13.0,
+                0.25 * 0.707,
+                0.25 * 0.707,
+                -0.5 * 0.707,
+                -0.5 * 0.707,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                13.0,
+                13.0
+            ]
+        );
+    }
+
+    fn assert_muted_tracks_do_not_read_samples(channels: u16) {
+        struct Muted(u16);
+        impl AudioSampleSource for Muted {
+            fn channels(&self) -> u16 {
+                self.0
+            }
+            fn sample_count(&self) -> usize {
+                4
+            }
+            fn sample(&self, _index: usize) -> Option<&f32> {
+                panic!("muted sample read")
+            }
+            fn sample_slice(&self, _range: Range<usize>) -> Option<&[f32]> {
+                panic!("muted slice read")
+            }
+        }
+        for gain in [f32::NEG_INFINITY, -31.0, -30.0] {
+            let tracks = [AudioRendererTrack {
+                data: &Muted(channels),
+                gain,
+                offset: 0,
+                stereo_mode: StereoMode::Stereo,
+            }];
+            let mut output = [13.0_f32; 12];
+            assert_eq!(render_audio(&tracks, 0, 4, 2, &mut output), 4);
+            assert_eq!(
+                output,
+                [
+                    13.0, 13.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 13.0, 13.0
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn muted_stereo_tracks_do_not_read_samples() {
+        assert_muted_tracks_do_not_read_samples(2);
+    }
+
+    #[test]
+    fn muted_mono_tracks_do_not_read_samples() {
+        assert_muted_tracks_do_not_read_samples(1);
     }
 
     #[test]

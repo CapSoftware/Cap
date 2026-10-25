@@ -113,40 +113,11 @@ link = ""
 
 
 [[xfail]]
-case = "export/instant-gated-*mic*/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (33.3 ms at 30 fps; 12.6 to 17.2 ms measured with the gate opening between frames)"
-link = ""
-
-[[xfail]]
-case = "export/instant-gated-system-*/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (12.2 to 15.1 ms measured)"
-link = ""
-
-[[xfail]]
 case = "export/instant-gated-system-only/output/mp4/native"
 class = "audio-system"
 flaky = true
 bound = { count = 1, missing = 2, lost = 2 }
 reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early). Bound: at most 2 markers lost, none unexpected"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-mic"
-bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late after the start gate (14.2 to 15.3 ms measured)"
-link = ""
-
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-system"
-bound = { count = 1, offset-ms = [5, 34], mic-offset-ms = [5, 34], system-minus-mic-ms = [-1, 1] }
-reason = "NEW: the mixer places system audio on the microphone's timeline (system minus mic 0 ms), so it shares the gated mic offset of the sync-mic entry above (13.3 to 15.4 ms measured)"
 link = ""
 
 [[xfail]]
@@ -170,28 +141,6 @@ case = "editing/export/hold-past-end"
 class = "frame-count"
 bound = { count = 1, missing = 30 }
 reason = "NEW: same as editing/mapping/duration-covered, end to end: a 1 s fullscreen text at 5.4 s and the clip trimmed to 3.2 s give a 4.2 s timeline, but the export stops at the first unmapped frame: 96 frames instead of 126, and the text card is never rendered"
-link = ""
-
-[[xfail]]
-case = "captions/app/segmentation/unicode"
-class = "caption-segments"
-bound = { count = [1, 3] }
-reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). The case reports the first three failing token streams; an unexpected error from the product would add a problem beyond them. Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
-link = ""
-
-[[xfail]]
-case = "captions/legacy-migration/ends-at-timeline-end"
-class = "caption-migration"
-bound = { count = 1 }
-reason = "NEW (minor): loading a legacy (output-timed) project drops a caption that ends exactly at the timeline end: synchronize_captions maps each end through source_start + (end - start) / timescale, which rounds just below the timeline end after a clip transition (clips 41/15 s and 82/15 s, 0.2 s transition: 7.9999999 < 8.0), so the end does not map and the whole caption is discarded"
-link = ""
-
-[[xfail]]
-case = "editing/export/basic/seed-23"
-class = "future"
-platforms = ["linux"]
-bound = { camera-frames = 1, delta = 8, frame = [8, 8] }
-reason = "NEW: Linux only (software renderer): in seed 23's 3 s same-clip cross-fade, output frame 8 shows incoming camera source frame 84 instead of 76. The FFmpeg decoder answers every camera request with the requested frame (traced: request 76 read 76, run 38997099068, identical on macOS), so a later camera frame reaches the renderer's shared camera layer, which draws the outgoing and incoming sides in turn. Before #2661 the shared decoder made output frames 7 to 12 up to 70 frames stale and hid it. Deterministic on Linux; macOS and Windows pass"
 link = ""
 
 [[xfail]]
@@ -258,6 +207,7 @@ flaky = true
 bound = { count = 1, camera-mic-ms = [-70, 0] }
 reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms in run 39000141528, -18.4 ms in run 39004015045). Bound: two frame periods early"
 link = ""
+
 
 [[xfail]]
 case = "recording/instant/system-only"
@@ -339,114 +289,15 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38845236912"
 
 # First picture after a static screen. During a scripted hold ScreenCaptureKit
 # delivers only Idle status buffers; its first Complete frame after the hold
-# arrives 70 to 82 ms after the new picture was presented (steady state 23 to
-# 31 ms after each present), and it already shows the next picture. Frame-level
-# logs (run 38745219281, macos-15: every SCK screen buffer with its
-# SCStreamFrameInfoStatus, every Cap send, every mux call) show 0 Complete
-# frames between the post-hold picture and the next one, and 1797 Complete
-# frames = 1797 Cap sends = 1797 mux calls: the picture never reaches Cap's
-# capture callback and Cap drops nothing. The stimulus presents through the
-# standard Core Animation path, so a user's first change after a static screen
-# is affected the same way: it is recorded ~50 to 80 ms late and anything
-# shown for less than that is lost. Whether a given post-hold picture is lost
-# depends on whether the 70 to 82 ms resume outlasts that picture, so the
-# entries are bounded by the number of holds. Blacksmith VMs resume in time
-# (these cases pass there), so the entries apply to hosted runners and
-# developer Macs only (hosts).
-
-[[xfail]]
-case = "recording/studio-screen/mp4-holds"
-class = "missing-after-hold"
-platforms = ["macos"]
-hosts = ["github-hosted", "local"]
-bound = { count = 3, screen-pictures = 3 }
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 20 fps picture after each of the 3 holds is never delivered by ScreenCaptureKit (first Complete frame 80 to 82 ms after it was presented); runners 18 of 18 holds in 6 runs. Bound: one picture per hold"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-
-[[xfail]]
-case = "recording/instant/long-holds"
-class = "missing-after-hold"
-platforms = ["macos"]
-flaky = true
-hosts = ["github-hosted", "local"]
-bound = { count = 2, screen-pictures = 2 }
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after a hold is never delivered when the resume takes longer than its 67 ms (first Complete frame 70 to 74 ms after it was presented); runners: hold at 6 s 6 of 6 runs, hold at 18 s 4 of 6. Flaky: when ScreenCaptureKit happens to resume within the picture's 67 ms both pictures are caught (fix-video-timestamps track). Bound: one picture per hold (2 holds)"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-
-[[xfail]]
-case = "recording/studio-camera/long"
-class = "missing-after-hold"
-platforms = ["macos"]
-flaky = true
-hosts = ["github-hosted", "local"]
-bound = { count = 1, screen-pictures = 1 }
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-# Crash safety (crates/verify/tests/crash.rs). Measured on Blacksmith runners
-# (run 38850661948: macos-15 libx264, ubuntu-2404, windows-2025) with the suite
-# merged into main 3ec0c9497; each fix has its own proof branch
-# ci/fixproof-crash-<a|b1|c|ce> (runs 38850662667, 38850661576, 38850663436,
-# 38850662102), which removes exactly its entries. Fixes: #2640 (bug A),
-# #2641 (bug B1), #2643 (bug C), #2644 (bug E).
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "loss-time"
-bound = { count = 1, secs = [2.5, 20.5] }
-reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
-link = "https://github.com/CapSoftware/Cap/pull/2641"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "missing"
-bound = { count = 1 }
-reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2641"
-
-[[xfail]]
-case = "crash/recorder-kill/oop/r*"
-class = "loss-time"
-platforms = ["macos"]
-bound = { count = 1, secs = [2.5, 10] }
-reason = "NEW (bug C): the out-of-process muxer writes packets into a 1 MiB BufWriter around cap-muxer's stdin and flushes only at Start and Finish (oop_muxer.rs MuxerSubprocess::write_packet), so encoded video stays in the recorder's memory: killed after 4 to 8 s, nothing reached cap-muxer (init.mp4 0 bytes, no segment). Bound: everything handed before the kill, at most 10 s"
-link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "crash/recorder-kill/oop/r*"
-class = "missing"
-platforms = ["macos"]
-bound = { count = 1 }
-reason = "NEW (bug C, see loss-time): recovery finds no segment at all (no frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "crash/recorder-kill/oop/r*"
-class = "loss"
-platforms = ["macos"]
-bound = { count = 1, frames = [64, 300] }
-reason = "NEW (bug C, see loss-time): every handed frame is lost, more than one fragment plus the frames in flight (at most the 10 s handed at 30 fps)"
-link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "crash/muxer-kill/oop"
-class = "error"
-platforms = ["macos"]
-bound = { count = 1 }
-reason = "NEW (bug C): after cap-muxer is killed the recorder keeps buffering packets for the dead child (no flush, so no write error and no respawn), and stop() fails the display track: \"subprocess was reaped with unusable output\""
-link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "crash/recorder-kill/oop/static-screen"
-class = "loss-time"
-platforms = ["macos"]
-bound = { count = 1, secs = [2.5, 20.5] }
-reason = "NEW (bugs B1 and C): the static recording's fragments span 20 s of capture (frame-count keyframe interval, see the in-process entry) and the out-of-process muxer had not received any packet (1 MiB unflushed buffer)"
-link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "crash/recorder-kill/oop/static-screen"
-class = "missing"
-platforms = ["macos"]
-bound = { count = 1 }
-reason = "NEW (bugs B1 and C, see loss-time): nothing recoverable (no frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2643"
+# can arrive 70 to 82 ms after the new picture was presented (steady state 23
+# to 31 ms after each present), when it already shows the next picture.
+# Frame-level logs (run 38745219281, macos-15) showed the picture never
+# reaches Cap's capture callback and Cap drops nothing. GitHub-hosted runners
+# and developer Macs resume that late, and Blacksmith VMs have since about
+# 2026-10-23 22:00 UTC (runs 40054572525 and 40056780767). No xfail covers
+# it: the suite excuses a post-hold picture only when the stimulus's own
+# ScreenCaptureKit stream also received no frame while it was on screen,
+# and then requires the first later picture that stream did receive
+# ("capture-service drops" in the case notes; see `missing_required` in
+# tests/recording.rs). A post-hold picture the stimulus's stream received
+# but the recording lacks still fails as missing-after-hold.

@@ -196,6 +196,7 @@ pub const BACKGROUND_IMAGE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "gif",
 pub const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 /// `recording.rs:92-93`.
 const DESKTOP_BACKGROUND_MAX_DIMENSION: u32 = 2560;
+#[cfg(target_os = "macos")]
 const DESKTOP_BACKGROUND_JPEG_QUALITY: u8 = 82;
 
 /// The sidebar's fallback border/shadow objects. The UI's numbers, **not**
@@ -596,6 +597,36 @@ fn noise_texture(width: u32, height: u32, base_frequency: f32) -> Arc<RenderImag
     )]))
 }
 
+#[derive(Default)]
+struct NoiseCache {
+    current: Option<(i32, Arc<RenderImage>)>,
+    retired: Vec<Arc<RenderImage>>,
+}
+
+impl NoiseCache {
+    fn image(&mut self, scale: f32) -> Arc<RenderImage> {
+        let key = scale.round() as i32;
+        if let Some((cached, image)) = &self.current
+            && *cached == key
+        {
+            return image.clone();
+        }
+        let image = noise_texture(
+            GRADIENT_PREVIEW_WIDTH as u32,
+            GRADIENT_PREVIEW_HEIGHT as u32,
+            noise_base_frequency(scale),
+        );
+        if let Some((_, previous)) = self.current.replace((key, image.clone())) {
+            self.retired.push(previous);
+        }
+        image
+    }
+
+    fn take_retired(&mut self) -> Vec<Arc<RenderImage>> {
+        std::mem::take(&mut self.retired)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -622,6 +653,31 @@ pub enum BgSlider {
 }
 
 impl BgSlider {
+    /// Whether this slider writes a field
+    /// [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads. The match
+    /// is exhaustive so a new slider has to make the choice explicitly.
+    pub(crate) fn changes_timeline_model(self) -> bool {
+        match self {
+            Self::Blur
+            | Self::Padding
+            | Self::Rounding
+            | Self::MotionBlur
+            | Self::BorderWidth
+            | Self::BorderOpacity
+            | Self::NotchWidth
+            | Self::NotchHeight
+            | Self::NotchX
+            | Self::Shadow
+            | Self::ShadowSize
+            | Self::ShadowOpacity
+            | Self::ShadowBlur
+            | Self::GradientAngle
+            | Self::GradientNoise
+            | Self::GradientGrain => false,
+        }
+    }
+
     /// `minValue` / `maxValue` / `step`, per call site. `NotchX`'s maximum is
     /// `notchXMax()` and therefore not constant; it is patched in by
     /// [`EditorWindow::slider_limits`].
@@ -730,6 +786,11 @@ pub struct SidebarState {
     pub audio_enhancement_default: bool,
     pub audio_enhancement_error: Option<String>,
     pub(crate) style_target: Option<(usize, StyleGroup)>,
+    /// Set while `EditorWindow::with_style_controls` has swapped the scoped
+    /// project into place. Controls rendered inside that scope read it through
+    /// `style_control_project`, which would otherwise clone the whole project
+    /// again for every slider and swatch on the page.
+    style_scoped: bool,
     pub(crate) image_import_error: Option<String>,
     pub(crate) image_asset_status: Option<(String, bool)>,
     animated_gradient: animated_gradient::AnimatedGradientState,
@@ -764,9 +825,6 @@ pub struct SidebarState {
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
     /// the Background tab's and the Camera tab's open independently.
     grade_adjust: [CollapsibleState; 2],
-    /// The nine preset tiles, generated once for the process. The catalogue is
-    /// static, so nothing can invalidate them.
-    pub(crate) grade_previews: std::cell::RefCell<HashMap<&'static str, Arc<RenderImage>>>,
     /// The camera tab's own `ShadowSettings` reveal, and the cursor tab's
     /// `KCollapsible open={!project.cursor.raw}` physics panel.
     pub camera_shadow_open: CollapsibleState,
@@ -787,7 +845,7 @@ pub struct SidebarState {
     /// The gradient preview's grain, cached by the grain-scale step it was
     /// generated for -- regenerating 42k pixels of noise on every frame of a
     /// slider drag would be the one expensive thing in this panel.
-    noise: std::cell::RefCell<Option<(i32, Arc<RenderImage>)>>,
+    noise: std::cell::RefCell<NoiseCache>,
 
     /// The open `KSelect`'s menu, if any -- one slot for every select in the
     /// sidebar, the settings window's `Menu.popup()` stand-in.
@@ -850,6 +908,7 @@ impl SidebarState {
             audio_enhancement_default: crate::store::studio_sound_by_default(),
             audio_enhancement_error: None,
             style_target: None,
+            style_scoped: false,
             image_import_error: None,
             image_asset_status: None,
             animated_gradient: animated_gradient::AnimatedGradientState::new(),
@@ -869,14 +928,13 @@ impl SidebarState {
             pads: std::cell::RefCell::new(HashMap::new()),
             pad_drag: None,
             grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
-            grade_previews: std::cell::RefCell::new(HashMap::new()),
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
             cursor_ripple_open: CollapsibleState::new(config.cursor.ripple.enabled),
             cursor_previews: std::cell::RefCell::new(BTreeMap::new()),
             cursor_scale: 2.,
             panel_sections: std::cell::RefCell::new(HashMap::new()),
-            noise: std::cell::RefCell::new(None),
+            noise: std::cell::RefCell::default(),
             menu: None,
             caption_model: "best",
             caption_language: "auto",
@@ -905,19 +963,16 @@ impl SidebarState {
 
     /// The grain texture for a grain-scale value, generated once per step.
     fn noise_image(&self, scale: f32) -> Arc<RenderImage> {
-        let key = scale.round() as i32;
-        if let Some((cached, image)) = self.noise.borrow().as_ref()
-            && *cached == key
-        {
-            return image.clone();
+        self.noise.borrow_mut().image(scale)
+    }
+
+    /// Evicts the grain textures earlier steps of a slider drag left in the
+    /// window's atlas. The panel is built without a `&mut Window`, so they
+    /// are queued there and released from `render` on the next frame.
+    pub(crate) fn release_retired_images(&self, window: &mut Window) {
+        for image in self.noise.borrow_mut().take_retired() {
+            let _ = window.drop_image(image);
         }
-        let image = noise_texture(
-            GRADIENT_PREVIEW_WIDTH as u32,
-            GRADIENT_PREVIEW_HEIGHT as u32,
-            noise_base_frequency(scale),
-        );
-        *self.noise.borrow_mut() = Some((key, image.clone()));
-        image
     }
 
     /// The stored track rect, without creating one -- the pointer maths reads
@@ -1032,6 +1087,32 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.edit_background_inner(true, reason, change, window, cx);
+    }
+
+    /// [`Self::edit_background`] for edits that cannot change the timeline
+    /// model or its lanes -- the background tab's sliders and the
+    /// animated-gradient add/remove/stop/reset edits, whose fields
+    /// [`crate::editor_timeline::TimelineModel::build`] and
+    /// [`crate::editor_timeline::TrackLanes::from_project`] do not read.
+    fn edit_background_without_timeline(
+        &mut self,
+        reason: &'static str,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_background_inner(false, reason, change, window, cx);
+    }
+
+    fn edit_background_inner(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -1046,7 +1127,11 @@ impl EditorWindow {
         if !self.apply_control_change(change) {
             return;
         }
-        self.project_changed(window, cx);
+        if rebuild_timeline {
+            self.project_changed(window, cx);
+        } else {
+            self.project_changed_without_timeline(window, cx);
+        }
         self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
         self.note_sidebar_edit(reason);
     }
@@ -1062,6 +1147,31 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
     ) {
+        self.edit_project_with_rebuild(true, reason, window, cx, change);
+    }
+
+    /// [`Self::edit_project`] for edits that cannot change the timeline model.
+    pub(crate) fn edit_project_without_timeline(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
+        self.edit_project_with_rebuild(false, reason, window, cx, change);
+    }
+
+    /// The shared project write. `rebuild_timeline` is true for edits that
+    /// touch a field [`crate::editor_timeline::TimelineModel::build`] or
+    /// [`crate::editor_timeline::TrackLanes::from_project`] reads.
+    pub(crate) fn edit_project_with_rebuild(
+        &mut self,
+        rebuild_timeline: bool,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -1069,7 +1179,11 @@ impl EditorWindow {
         if !self.apply_control_change(change) {
             return;
         }
-        self.project_changed(window, cx);
+        if rebuild_timeline {
+            self.project_changed(window, cx);
+        } else {
+            self.project_changed_without_timeline(window, cx);
+        }
         self.note_project_edit(reason);
     }
 
@@ -1315,7 +1429,8 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let base = self.notch_base();
-        self.edit_background(
+        self.edit_background_inner(
+            slider.changes_timeline_model(),
             "slider",
             |project| {
                 let background = &mut project.background;
@@ -1895,22 +2010,7 @@ fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
 }
 
 fn decode_jpeg_thumbnail(bytes: &[u8], max: u32) -> Option<(image::DynamicImage, u32, u32)> {
-    let mut decoder = jpeg_decoder::Decoder::new(bytes);
-    decoder.read_info().ok()?;
-    let info = decoder.info()?;
-    let requested = max.clamp(1, u16::MAX as u32) as u16;
-    let (width, height) = decoder.scale(requested, requested).ok()?;
-    let pixels = decoder.decode().ok()?;
-    let decoded = match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        jpeg_decoder::PixelFormat::L8 => image::DynamicImage::ImageLuma8(
-            image::GrayImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        _ => return None,
-    };
-    Some((decoded, info.width as u32, info.height as u32))
+    crate::jpeg_thumbnail::decode_jpeg_thumbnail(bytes, |_, _| (max, max))
 }
 
 /// [`decode_scaled_rgba`] in gpui's BGRA order.
@@ -1923,8 +2023,9 @@ const WALLPAPER_TILE_MAX: u32 = 128;
 
 /// One wallpaper tile, through the persistent cache. The bundled assets are
 /// immutable in practice, so after the first-ever run every theme switch is
-/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the mtime
-/// in the key still invalidates if an app update ever replaces them.
+/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the
+/// version (mtime plus length) in the key still invalidates if an app update
+/// ever replaces them.
 pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
     let path = wallpaper_path(id)?;
     // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
@@ -1953,30 +2054,33 @@ pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
 /// re-encoding to JPEG at quality 82. The `sips` path matters -- macOS ships
 /// HEIC wallpapers the `image` crate cannot decode.
 fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(), String> {
-    let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
-        width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
-    });
-
-    let mut command = std::process::Command::new("sips");
-    command
-        .arg("-s")
-        .arg("format")
-        .arg("jpeg")
-        .arg("-s")
-        .arg("formatOptions")
-        .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
-    if needs_downscale {
-        command
-            .arg("-Z")
-            .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
-    }
-    if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
-        && output_status.status.success()
+    #[cfg(target_os = "macos")]
     {
-        return Ok(());
+        let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
+            width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
+        });
+
+        let mut command = std::process::Command::new("sips");
+        command
+            .arg("-s")
+            .arg("format")
+            .arg("jpeg")
+            .arg("-s")
+            .arg("formatOptions")
+            .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
+        if needs_downscale {
+            command
+                .arg("-Z")
+                .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
+        }
+        if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
+            && output_status.status.success()
+        {
+            return Ok(());
+        }
     }
 
-    let decoded = cap_gpui_kernels::codec::open_image(source)
+    let decoded = cap_gpui_kernels::codec::decode_image_file(source)
         .map_err(|err| format!("failed to decode desktop background: {err}"))?;
     let decoded = if decoded.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
         || decoded.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
@@ -2137,7 +2241,9 @@ impl EditorWindow {
     /// selected path.
     fn ensure_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.preview_path() else {
-            self.sidebar.preview = None;
+            if let Some((_, previous)) = self.sidebar.preview.take() {
+                let _ = window.drop_image(previous);
+            }
             return;
         };
         if self
@@ -2157,8 +2263,10 @@ impl EditorWindow {
                     .await
             };
             let Some(image) = decoded else { return };
-            this.update(cx, |this, cx| {
-                this.sidebar.preview = Some((target, image));
+            this.update_in(cx, |this, window, cx| {
+                if let Some((_, previous)) = this.sidebar.preview.replace((target, image)) {
+                    let _ = window.drop_image(previous);
+                }
                 cx.notify();
             })
             .ok();
@@ -2315,7 +2423,7 @@ impl EditorWindow {
     /// goes through a task rather than the click's update, and the chosen file
     /// is copied into the app-data dir as `bg-<ts>-<name>` exactly as the
     /// `<input type="file">` handler does (`:2513-2541`).
-    fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.picking_image {
             return;
         }
@@ -2323,6 +2431,14 @@ impl EditorWindow {
         let style_target = self.sidebar.style_target;
         let style_fingerprint = self.style_target_fingerprint();
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[("Image", &BACKGROUND_IMAGE_EXTENSIONS[..])],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
             let picked = cx
                 .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS))
                 .ok()
@@ -2370,6 +2486,7 @@ impl EditorWindow {
                 }
                 match stored {
                     Ok(path) => {
+                        tracing::info!(path = %path.display(), "background image chosen");
                         this.edit_background(
                             "image",
                             |project| {
@@ -2426,6 +2543,13 @@ impl EditorWindow {
                     }
                     Err(error) => {
                         tracing::error!("couldn't import your desktop wallpaper: {error}");
+                        cx.spawn(async move |_, _| {
+                            crate::platform::alert_dialog(
+                                "Couldn't import your desktop wallpaper",
+                                &error,
+                            );
+                        })
+                        .detach();
                     }
                 }
                 cx.notify();
@@ -2544,10 +2668,11 @@ impl EditorWindow {
             SidebarTab::Captions => self.render_captions_tab(cx),
         };
 
+        // Block, not a flex column: its one child lays out the same, without
+        // the extra layout pass a flex column spends sizing it on every rebuild.
         div()
             .id("sidebar-scroll")
-            .flex()
-            .flex_col()
+            .block()
             .flex_1()
             .min_h_0()
             .overflow_x_hidden()
@@ -4071,6 +4196,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_new_grain_step_retires_the_old_texture_for_atlas_eviction() {
+        let mut noise = NoiseCache::default();
+        let first = noise.image(20.);
+        assert!(Arc::ptr_eq(&noise.image(20.2), &first));
+        assert!(noise.take_retired().is_empty());
+
+        let second = noise.image(35.);
+        let third = noise.image(50.);
+        assert!(!Arc::ptr_eq(&second, &first));
+        let retired = noise.take_retired();
+        assert_eq!(retired.len(), 2);
+        assert!(Arc::ptr_eq(&retired[0], &first));
+        assert!(Arc::ptr_eq(&retired[1], &second));
+        assert!(noise.take_retired().is_empty());
+        assert!(Arc::ptr_eq(&noise.image(50.), &third));
+    }
+
+    #[test]
     fn the_catalogue_matches_the_source() {
         assert_eq!(WALLPAPER_NAMES.len(), 53);
         assert_eq!(GRADIENT_PRESETS.len(), 18);
@@ -4421,6 +4564,12 @@ impl EditorWindow {
     }
 
     pub(crate) fn style_control_project(&self) -> std::borrow::Cow<'_, ProjectConfiguration> {
+        // `with_style_controls` already replaced `self.project` with the scoped
+        // configuration, so inside its closure the override is in place and a
+        // second clone would only copy the copy.
+        if self.sidebar.style_scoped {
+            return std::borrow::Cow::Borrowed(&self.project);
+        }
         let Some((index, group)) = self.sidebar.style_target else {
             return std::borrow::Cow::Borrowed(&self.project);
         };
@@ -4454,12 +4603,20 @@ impl EditorWindow {
     }
 
     pub(crate) fn with_style_controls<R>(&mut self, render: impl FnOnce(&mut Self) -> R) -> R {
+        // A nested scope would see the outer override through the flag and
+        // silently render with it, so callers must enter one scope at a time.
+        debug_assert!(
+            !self.sidebar.style_scoped,
+            "with_style_controls must not nest"
+        );
         let std::borrow::Cow::Owned(scoped) = self.style_control_project() else {
             return render(self);
         };
         // Existing controls read the project while building their elements. Restore the base before any event can publish or save it.
         let base = std::mem::replace(&mut self.project, scoped);
+        self.sidebar.style_scoped = true;
         let result = render(self);
+        self.sidebar.style_scoped = false;
         self.project = base;
         result
     }

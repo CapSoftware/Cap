@@ -19,6 +19,8 @@
 //! `TextInput` key context, so ⌘Z is a menu key equivalent only while a field
 //! is focused and falls through to the editor's own project-undo otherwise.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui::{
     AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, Subscription,
     SystemMenuType, actions,
@@ -26,15 +28,18 @@ use gpui::{
 
 use crate::{
     app_windows::{self, AppWindows},
+    hotkeys,
+    i18n::tr,
     main_window::MainWindow,
     platform,
     session::{Phase, RecordingSession},
+    settings_window::Page,
     store,
     ui::text_input,
 };
 
 /// `productName` in `tauri.conf.json`, which is what macOS renames the first
-/// submenu to and what the About/Hide/Quit labels interpolate.
+/// submenu to.
 pub const APP_NAME: &str = "Cap";
 
 /// `env!("CARGO_PKG_VERSION")`, exactly as `build_tray_menu` spells it -- this
@@ -66,6 +71,8 @@ actions!(
         Zoom,
         /// `PredefinedMenuItem::fullscreen` -- ⌃⌘F.
         ToggleFullscreen,
+        /// Settings… -- ⌘, on macOS, Ctrl+, on Windows and Linux.
+        OpenSettings,
     ]
 );
 
@@ -77,14 +84,7 @@ pub fn init(cx: &mut App) {
     // commands. Deliberately *not* including cmd-z/x/c/v/a -- those stay the
     // text field's own `TextInput`-scoped bindings (and, for the editor, its
     // `on_key_down` project-undo). A global binding here would shadow both.
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-h", HideSelf, None),
-        KeyBinding::new("alt-cmd-h", HideOthers, None),
-        KeyBinding::new("cmd-w", CloseWindow, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
-    ]);
+    cx.bind_keys(bindings());
 
     cx.on_action(|_: &About, cx: &mut App| {
         // Ordering a window front re-enters gpui's window callbacks, so it runs
@@ -99,6 +99,29 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &CloseWindow, cx: &mut App| close_key_window(cx));
     cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
     cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
+    cx.on_action(|_: &OpenSettings, cx: &mut App| {
+        // While a recording runs, onboarding is up or the Shortcuts page is
+        // recording a combo, the chord belongs to whatever has focus.
+        let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+        let onboarding_open = cx
+            .try_global::<AppWindows>()
+            .is_some_and(|windows| windows.onboarding.is_some());
+        if !settings_shortcut_allowed(idle, onboarding_open, hotkeys::is_paused(cx)) {
+            cx.propagate();
+            return;
+        }
+        // Deferred: the keystroke arrives inside the key window's dispatch, and
+        // `open_settings` updates the settings window, which may be that one.
+        cx.defer(|cx: &mut App| {
+            let page = cx
+                .try_global::<AppWindows>()
+                .and_then(|windows| windows.settings)
+                .and_then(|settings| settings.read(cx).ok().map(|settings| settings.page))
+                .unwrap_or(Page::General);
+            app_windows::open_settings(page, cx);
+            cx.activate(true);
+        });
+    });
     cx.on_action(|_: &ToggleFullscreen, cx: &mut App| {
         #[cfg(target_os = "windows")]
         if let Some(handle) = cx.active_window() {
@@ -111,6 +134,50 @@ pub fn init(cx: &mut App) {
     });
 
     cx.set_menus(build_menus());
+    MENUS_INSTALLED.store(true, Ordering::Relaxed);
+    #[cfg(target_os = "macos")]
+    if crate::i18n::current() != crate::i18n::Locale::En {
+        register_system_menus();
+    }
+}
+
+static MENUS_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Rebuild the menu bar in the current language, if [`init`] installed one.
+pub fn refresh(cx: &mut App) {
+    if !MENUS_INSTALLED.load(Ordering::Relaxed) {
+        return;
+    }
+    cx.set_menus(build_menus());
+    #[cfg(target_os = "macos")]
+    register_system_menus();
+}
+
+/// gpui only registers a Window menu titled "Window" and never registers Help.
+/// English keeps exactly what gpui sets up; a translated bar gets both.
+#[cfg(target_os = "macos")]
+fn register_system_menus() {
+    let translated = crate::i18n::current() != crate::i18n::Locale::En;
+    platform::register_system_menus(
+        tr::menu::window::title(),
+        translated.then(tr::menu::help::title),
+    );
+}
+
+pub(crate) fn bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-h", HideSelf, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+    ]
+}
+
+fn settings_shortcut_allowed(idle: bool, onboarding_open: bool, hotkeys_paused: bool) -> bool {
+    idle && !onboarding_open && !hotkeys_paused
 }
 
 /// The menu bar model.
@@ -123,23 +190,28 @@ pub fn build_menus() -> Vec<Menu> {
             name: APP_NAME.into(),
             disabled: false,
             items: vec![
-                MenuItem::action(format!("About {APP_NAME}"), About),
+                MenuItem::action(tr::menu::app::about(), About),
                 MenuItem::separator(),
-                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::action(tr::menu::app::settings(), OpenSettings),
                 MenuItem::separator(),
-                MenuItem::action(format!("Hide {APP_NAME}"), HideSelf),
-                MenuItem::action("Hide Others", HideOthers),
+                MenuItem::os_submenu(tr::menu::app::services(), SystemMenuType::Services),
                 MenuItem::separator(),
-                MenuItem::action(format!("Quit {APP_NAME}"), Quit),
+                MenuItem::action(tr::menu::app::hide(), HideSelf),
+                MenuItem::action(tr::menu::app::hide_others(), HideOthers),
+                MenuItem::separator(),
+                MenuItem::action(tr::menu::app::quit(), Quit),
             ],
         },
         Menu {
-            name: "File".into(),
+            name: tr::menu::file::title().into(),
             disabled: false,
-            items: vec![MenuItem::action("Close Window", CloseWindow)],
+            items: vec![MenuItem::action(
+                tr::menu::file::close_window(),
+                CloseWindow,
+            )],
         },
         Menu {
-            name: "Edit".into(),
+            name: tr::menu::edit::title().into(),
             disabled: false,
             // The text field's own actions, tagged with the AppKit selector
             // that belongs to each. gpui routes `cut:`/`copy:`/`paste:`/
@@ -147,17 +219,21 @@ pub fn build_menus() -> Vec<Menu> {
             // `cx.dispatch_action`, so all six land in whatever element holds
             // focus -- there is no separate "menu implementation" of copy.
             items: vec![
-                MenuItem::os_action("Undo", text_input::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", text_input::Redo, OsAction::Redo),
+                MenuItem::os_action(tr::menu::edit::undo(), text_input::Undo, OsAction::Undo),
+                MenuItem::os_action(tr::menu::edit::redo(), text_input::Redo, OsAction::Redo),
                 MenuItem::separator(),
-                MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),
-                MenuItem::os_action("Paste", text_input::Paste, OsAction::Paste),
-                MenuItem::os_action("Select All", text_input::SelectAll, OsAction::SelectAll),
+                MenuItem::os_action(tr::menu::edit::cut(), text_input::Cut, OsAction::Cut),
+                MenuItem::os_action(tr::menu::edit::copy(), text_input::Copy, OsAction::Copy),
+                MenuItem::os_action(tr::menu::edit::paste(), text_input::Paste, OsAction::Paste),
+                MenuItem::os_action(
+                    tr::menu::edit::select_all(),
+                    text_input::SelectAll,
+                    OsAction::SelectAll,
+                ),
             ],
         },
         Menu {
-            name: "View".into(),
+            name: tr::menu::view::title().into(),
             disabled: false,
             // muda's own string for this item is "Toggle Full Screen"; AppKit
             // relabels any item wired to `toggleFullScreen:` to "Enter Full
@@ -165,20 +241,26 @@ pub fn build_menus() -> Vec<Menu> {
             // a gpui action rather than that selector, so the title is written
             // out -- and, unlike the shipping one, does not flip to "Exit Full
             // Screen" while fullscreen (noted deviation).
-            items: vec![MenuItem::action("Enter Full Screen", ToggleFullscreen)],
+            items: vec![MenuItem::action(
+                tr::menu::view::enter_full_screen(),
+                ToggleFullscreen,
+            )],
         },
         Menu {
-            name: "Window".into(),
+            // gpui_macos hands this menu to `setWindowsMenu:` only when its
+            // title is exactly "Window" (platform.rs:274); [`refresh`]
+            // registers a translated one.
+            name: tr::menu::window::title().into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Minimize", Minimize),
-                MenuItem::action("Zoom", Zoom),
+                MenuItem::action(tr::menu::window::minimize(), Minimize),
+                MenuItem::action(tr::menu::window::zoom(), Zoom),
                 MenuItem::separator(),
-                MenuItem::action("Close Window", CloseWindow),
+                MenuItem::action(tr::menu::window::close_window(), CloseWindow),
             ],
         },
         Menu {
-            name: "Help".into(),
+            name: tr::menu::help::title().into(),
             disabled: false,
             items: vec![],
         },
@@ -194,16 +276,17 @@ pub fn build_menus() -> Vec<Menu> {
 /// update that read the handle -- the `place_overlay_panel` rule, which is also
 /// why gpui's own `Window::minimize_window` is not called here.
 fn with_key_native(cx: &mut App, action: fn(&platform::NativeWindow)) {
-    let Some(handle) = cx.active_window() else {
-        tracing::info!("window command: no key window");
-        return;
-    };
+    let active = cx.active_window();
     // A ⌘-keystroke action arrives *inside* the key window's own dispatch,
     // which holds that window's lease -- `handle.update` on the same window
     // returns Err there (observed: ⌘W resolved no native handle and silently
     // did nothing). Deferred, so the lease is back first. The menu-click path
     // has no lease and rides the same defer unharmed.
     cx.defer(move |cx| {
+        let Some(handle) = active.or_else(|| key_window(cx)) else {
+            tracing::info!("window command: no key window");
+            return;
+        };
         let native = handle
             .update(cx, |_, window, _| platform::native_window(window))
             .ok()
@@ -246,6 +329,10 @@ pub fn close_key_window(cx: &mut App) {
     // is active), so even the visibility probe's `main.update` would silently
     // Err here -- the with_key_native trap, again.
     cx.defer(|cx| {
+        if let Some(handle) = key_window(cx) {
+            close_window_by_handle(handle, cx);
+            return;
+        }
         if !cx.has_global::<app_windows::AppWindows>() {
             return;
         }
@@ -260,6 +347,23 @@ pub fn close_key_window(cx: &mut App) {
             tracing::info!("close window: no key window and no visible main window");
         }
     });
+}
+
+/// The key window, if it has a close button. `active_window` is AppKit's
+/// *main* window, and a `Floating` panel such as the teleprompter becomes key
+/// without becoming main, which left ⌘W hiding the main window behind it.
+/// Panels without a close button (the controls bar, camera bubble and target
+/// overlays can all be key after a click) are skipped, so ⌘W never closes
+/// them. Call it deferred: the key window's lease is held during its own
+/// dispatch.
+fn key_window(cx: &mut App) -> Option<gpui::AnyWindowHandle> {
+    cx.windows().into_iter().find(|handle| {
+        handle
+            .update(cx, |_, window, _| {
+                window.is_window_active() && platform::window_is_closable(window)
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// The ⌘W body, keyed by handle -- split out so the harness can close a
@@ -406,10 +510,11 @@ pub fn quit(cx: &mut App) {
     }
     let phase = session.read(cx).phase;
     let ui_cleanup_pending = app_windows::clean_capture_owned(cx);
+    let finishing = ui_cleanup_pending || crate::recording::studio_thumbnails_pending();
     let Some((generation, action)) = cx
         .global_mut::<QuitCoordinator>()
         .gate
-        .request(quit_phase(phase, ui_cleanup_pending))
+        .request(quit_phase(phase, finishing))
     else {
         return;
     };
@@ -435,9 +540,23 @@ pub fn quit(cx: &mut App) {
     }
 }
 
+pub(crate) fn recheck_pending_quit(cx: &mut App) {
+    let Some(generation) = cx
+        .try_global::<QuitCoordinator>()
+        .and_then(|coordinator| coordinator.gate.pending)
+        .map(|(generation, _)| generation)
+    else {
+        return;
+    };
+    advance_pending_quit(generation, false, cx);
+}
+
 fn advance_pending_quit(generation: u64, timed_out: bool, cx: &mut App) {
     let session = RecordingSession::global(cx);
-    let phase = quit_phase(session.read(cx).phase, app_windows::clean_capture_owned(cx));
+    let phase = quit_phase(
+        session.read(cx).phase,
+        app_windows::clean_capture_owned(cx) || crate::recording::studio_thumbnails_pending(),
+    );
     let failed = session.read(cx).error.is_some();
     let action = cx
         .global_mut::<QuitCoordinator>()
@@ -858,6 +977,58 @@ mod tests {
         assert!(gate.pending.is_none());
     }
 
+    #[test]
+    fn settings_shortcut_yields_to_recording_onboarding_and_the_recorder() {
+        assert!(settings_shortcut_allowed(true, false, false));
+        assert!(!settings_shortcut_allowed(false, false, false));
+        assert!(!settings_shortcut_allowed(true, true, false));
+        assert!(!settings_shortcut_allowed(true, false, true));
+    }
+
+    fn keystrokes(binding: &KeyBinding) -> Vec<gpui::Keystroke> {
+        binding
+            .keystrokes()
+            .iter()
+            .map(|keystroke| keystroke.inner().clone())
+            .collect()
+    }
+
+    #[test]
+    fn global_keymap_is_unchanged_apart_from_settings() {
+        let settings = if cfg!(target_os = "macos") {
+            "cmd-,"
+        } else {
+            "ctrl-,"
+        };
+        let expected: &[(&str, &dyn gpui::Action)] = &[
+            ("cmd-q", &Quit),
+            ("cmd-h", &HideSelf),
+            ("alt-cmd-h", &HideOthers),
+            ("cmd-w", &CloseWindow),
+            ("cmd-m", &Minimize),
+            ("ctrl-cmd-f", &ToggleFullscreen),
+            (settings, &OpenSettings),
+        ];
+        let bindings = bindings();
+        assert_eq!(bindings.len(), expected.len());
+        for (binding, (source, action)) in bindings.iter().zip(expected) {
+            assert_eq!(
+                keystrokes(binding),
+                vec![gpui::Keystroke::parse(source).unwrap()],
+                "{source}"
+            );
+            assert!(binding.action().partial_eq(*action), "{source}");
+            assert!(binding.predicate().is_none(), "{source}");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for binding in &bindings {
+            assert!(
+                seen.insert(keystrokes(binding)),
+                "{binding:?} is bound twice"
+            );
+        }
+    }
+
     /// The menu bar, transcribed from `build_macos_app_menu`. Separators are
     /// spelled `"-"` so the ordering is checked too.
     fn describe(menu: &Menu) -> (String, Vec<String>) {
@@ -884,6 +1055,8 @@ mod tests {
                     "Cap".to_string(),
                     vec![
                         "About Cap".to_string(),
+                        "-".into(),
+                        "Settings…".into(),
                         "-".into(),
                         "Services".into(),
                         "-".into(),

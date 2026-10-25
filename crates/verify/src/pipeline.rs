@@ -17,7 +17,7 @@ use cap_project::{AudioMeta, MultipleSegment, VideoMeta};
 use cap_recording::{
     AudioFrame, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
     ChannelVideoSourceConfig, OutputPipeline,
-    ffmpeg::{FFmpegVideoFrame, Mp4Muxer, OggMuxer},
+    ffmpeg::{FFmpegVideoFrame, Mp4Muxer, OggMuxer, OggMuxerConfig},
 };
 use cap_timestamp::{Timestamp, Timestamps};
 use relative_path::RelativePathBuf;
@@ -376,7 +376,7 @@ async fn record_segment(
         let pipeline = OutputPipeline::builder(dir.join(rel("audio-input.ogg").as_str()))
             .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(mono_info, rx))
             .with_timestamps(timestamps)
-            .build::<OggMuxer>(())
+            .build::<OggMuxer>(OggMuxerConfig::default())
             .await
             .map_err(|e| anyhow!("mic pipeline: {e}"))?;
         mic = Some((pipeline, emit, rel("audio-input.ogg")));
@@ -415,7 +415,7 @@ async fn record_segment(
             .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(stereo_info, rx))
             .with_timestamps(timestamps)
             .with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch)
-            .build::<OggMuxer>(())
+            .build::<OggMuxer>(OggMuxerConfig::default())
             .await
             .map_err(|e| anyhow!("system audio pipeline: {e}"))?;
         system = Some((pipeline, emit, rel("system_audio.ogg")));
@@ -495,6 +495,7 @@ async fn record_segment(
                     overlap_dropped_frames: s.overlap_dropped_frames,
                     startup_overlap_drops: s.startup_overlap_drops,
                 }),
+            digital_silence_ms: finished.digital_silence_ms,
         };
         if name == "mic" {
             mic_meta = Some(meta);
@@ -606,9 +607,13 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
     std::fs::create_dir_all(&content)?;
     let timestamps = Timestamps::now();
     let base = timestamps.instant();
-    let gate = spec
-        .arm_at
-        .map(|_| cap_recording::RecordingStartGate::new());
+    // Mirrors the product's Instant gate: the screen track starts at the arm
+    // point, where the epoch-anchored audio below starts.
+    let gate = spec.arm_at.map(|_| {
+        let gate = cap_recording::RecordingStartGate::new();
+        gate.set_video_origin_at_arm();
+        gate
+    });
     let mut emitted = Emitted {
         fps: spec.screen.fps,
         ..Default::default()
@@ -862,7 +867,7 @@ pub async fn record_epoch_audio(
         .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(stereo_info, rx))
         .with_timestamps(timestamps)
         .with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch)
-        .build::<OggMuxer>(())
+        .build::<OggMuxer>(OggMuxerConfig::default())
         .await
         .map_err(|e| anyhow!("epoch audio pipeline: {e}"))?;
     {

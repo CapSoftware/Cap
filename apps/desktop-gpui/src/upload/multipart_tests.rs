@@ -182,12 +182,41 @@ async fn failed_part_is_retried_after_the_rest_and_upload_completes() {
         fail_once: Mutex::new(HashSet::from([3, 6])),
         ..FakeParts::default()
     };
-    let (result, progress) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+    let progress = Mutex::new(Vec::new());
+    let result = upload_file_parts(
+        &transport,
+        &export.0,
+        40,
+        4,
+        &|value| {
+            progress
+                .lock()
+                .unwrap()
+                .push((transport.started_parts().len(), value));
+        },
+        &AtomicBool::new(false),
+        None,
+    )
+    .await;
     assert_parts(&result.unwrap(), &[4; 10]);
     let started = transport.started_parts();
     assert_eq!(started.len(), 12);
     assert_eq!(&started[10..], [3, 6]);
-    assert_eq!(progress.last().copied(), Some(0.99));
+    assert_eq!(
+        progress.into_inner().unwrap(),
+        [
+            (1, 0.1),
+            (2, 0.2),
+            (4, 0.3),
+            (5, 0.4),
+            (7, 0.5),
+            (8, 0.6),
+            (9, 0.7),
+            (10, 0.8),
+            (11, 0.9),
+            (12, 0.99),
+        ]
+    );
     let retried = transport.started.lock().unwrap();
     assert_eq!(retried[10].2, retried[2].2);
 }
@@ -199,12 +228,13 @@ async fn part_failing_its_retry_returns_the_first_error() {
         fail_always: HashSet::from([2]),
         ..FakeParts::default()
     };
-    let (result, _) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+    let (result, progress) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
     assert_eq!(
         result.unwrap_err().to_string(),
         "uploader/part/2/status/500"
     );
     assert_eq!(transport.started_parts(), [1, 2, 3, 4, 5, 2]);
+    assert_eq!(progress, [0.2, 0.4, 0.6, 0.8]);
 }
 
 #[tokio::test]
@@ -592,7 +622,9 @@ fn fast_local_profile() -> mock_network::Profile {
 
 #[tokio::test]
 async fn drive_urls_without_a_drive_initiate_are_put_in_order_with_content_range() {
-    let export = TempExport::new(&export_bytes(4500));
+    const CHUNK: usize = 6 * 1024 * 1024;
+    const SIZE: usize = 2 * CHUNK + 123;
+    let export = TempExport::new(&export_bytes(SIZE));
     let server = mock_network::start(fast_local_profile());
     let transport = MockPartTransport {
         addr: server.addr,
@@ -606,36 +638,32 @@ async fn drive_urls_without_a_drive_initiate_are_put_in_order_with_content_range
         )),
         drive_urls: true,
     };
-    let (result, progress) = run(&transport, &export, 1000, &AtomicBool::new(false), None).await;
+    let (result, progress) = run(
+        &transport,
+        &export,
+        chunk_size_for(601 * 1024 * 1024),
+        &AtomicBool::new(false),
+        None,
+    )
+    .await;
     let parts = result.unwrap();
     assert_eq!(
         parts
             .iter()
             .map(|part| (part.part_number, part.size))
             .collect::<Vec<_>>(),
-        [(1, 1000), (2, 1000), (3, 1000), (4, 1000), (5, 500)]
+        [(1, CHUNK), (2, CHUNK), (3, 123)]
     );
     assert_eq!(
         *server.recorded.puts.lock().unwrap(),
         [
-            (1, Some("bytes 0-999/4500".to_string())),
-            (2, Some("bytes 1000-1999/4500".to_string())),
-            (3, Some("bytes 2000-2999/4500".to_string())),
-            (4, Some("bytes 3000-3999/4500".to_string())),
-            (5, Some("bytes 4000-4499/4500".to_string())),
+            (1, Some(format!("bytes 0-{}/{SIZE}", CHUNK - 1))),
+            (2, Some(format!("bytes {CHUNK}-{}/{SIZE}", 2 * CHUNK - 1))),
+            (3, Some(format!("bytes {}-{}/{SIZE}", 2 * CHUNK, SIZE - 1))),
         ]
     );
     assert_eq!(server.recorded.max_active_puts.load(Ordering::Acquire), 1);
-    assert_eq!(
-        progress,
-        [
-            1000.0 / 4500.0,
-            2000.0 / 4500.0,
-            3000.0 / 4500.0,
-            4000.0 / 4500.0,
-            0.99
-        ]
-    );
+    assert_eq!(progress, [CHUNK as f64 / SIZE as f64, 0.99, 0.99]);
 }
 
 #[tokio::test]
@@ -755,6 +783,114 @@ async fn multipart_mock_network_benchmark() {
             times[0],
             times[1],
             times[0] / times[1]
+        );
+    }
+}
+
+/// Signs this thread's store in against `server`, so `auth::authed_request`
+/// builds its URL and credentials exactly as the app does.
+struct SignedIn(PathBuf);
+
+impl SignedIn {
+    fn new(server: std::net::SocketAddr) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "cap-gpui-api-client-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::AcqRel),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("store");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "general_settings": { "serverUrl": format!("http://{server}") },
+                "auth": { "secret": { "api_key": "api-key" }, "user_id": "owner" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        crate::store::set_test_tauri_store_path(Some(path));
+        Self(dir)
+    }
+}
+
+impl Drop for SignedIn {
+    fn drop(&mut self) {
+        crate::store::set_test_tauri_store_path(None);
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+async fn authed_presign(part: u32) -> Duration {
+    let started = Instant::now();
+    let response = auth::authed_request(
+        reqwest::Method::POST,
+        &format!("/presign/{part}"),
+        Some(json!({ "partNumber": part })),
+    )
+    .await
+    .unwrap();
+    assert!(response.status().is_success());
+    let body = response.json::<Value>().await.unwrap();
+    assert!(
+        body["presignedUrl"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/part/{part}"))
+    );
+    started.elapsed()
+}
+
+#[tokio::test]
+async fn sequential_api_requests_reuse_one_connection_until_it_idles_out() {
+    let server = mock_network::start(fast_local_profile());
+    let _signed_in = SignedIn::new(server.addr);
+    let _shared_client = auth::SHARED_API_CLIENT_TEST_LOCK.lock().await;
+    for part in 1..=20 {
+        authed_presign(part).await;
+    }
+    // One more if the shared client reaches its maximum age mid-loop.
+    let reused = server.connections.load(Ordering::Acquire);
+    assert!(reused <= 2, "{reused} connections for 20 requests");
+
+    tokio::time::sleep(auth::API_POOL_IDLE_TIMEOUT + Duration::from_millis(500)).await;
+    authed_presign(21).await;
+    assert_eq!(server.connections.load(Ordering::Acquire), reused + 1);
+}
+
+/// `cargo test --bin cap-gpui api_request_mock_network_benchmark -- --ignored --nocapture`
+/// 100 sequential presigns through `auth::authed_request`, the way Instant
+/// recording sends them, with no added latency and over a 50 ms RTT link
+/// where a new connection costs a 2 RTT TCP and TLS handshake.
+#[tokio::test]
+#[ignore = "benchmark: 200 presigns through a throttled loopback server"]
+async fn api_request_mock_network_benchmark() {
+    const CALLS: u32 = 100;
+    println!("| RTT | connections | p50 | p95 | total |");
+    println!("|---|---|---|---|---|");
+    for (rtt_ms, handshake_rtts) in [(0u64, 0u32), (50, 2)] {
+        let server = mock_network::start(mock_network::Profile {
+            rtt: Duration::from_millis(rtt_ms),
+            link_bytes_per_sec: 1e9,
+            max_window: 1 << 20,
+            handshake_rtts,
+            presign_server_time: Duration::ZERO,
+        });
+        let _signed_in = SignedIn::new(server.addr);
+        let started = Instant::now();
+        let mut latencies = Vec::new();
+        for part in 1..=CALLS {
+            latencies.push(authed_presign(part).await);
+        }
+        let total = started.elapsed();
+        latencies.sort();
+        let percentile = |p: usize| latencies[(latencies.len() * p / 100).min(latencies.len() - 1)];
+        println!(
+            "| {rtt_ms} ms | {} | {:.2?} | {:.2?} | {total:.2?} |",
+            server.connections.load(Ordering::Acquire),
+            percentile(50),
+            percentile(95),
         );
     }
 }

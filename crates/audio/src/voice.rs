@@ -111,7 +111,9 @@ impl VoiceEnhancer {
             self.pending_start = self.next_input;
             self.pending.clear();
             self.previous.fill(0.0);
-            self.states = (0..channels).map(|_| DenoiseState::new()).collect();
+            if self.expected_start.is_some() {
+                self.states = (0..channels).map(|_| DenoiseState::new()).collect();
+            }
             self.speech_frames = 0;
             self.leveler = self.profile.and_then(|profile| {
                 VoiceFilter::new(channels as u16, &profile.filter(channels as u16))
@@ -317,6 +319,70 @@ mod tests {
             "silent render"
         );
         assert_eq!(after_seek.samples(), fresh.samples());
+    }
+
+    #[test]
+    fn initial_state_reuse_matches_forced_reset_after_empty_reads_and_seeks() {
+        ffmpeg::init().unwrap();
+        for channels in [1, 2] {
+            let source = signal(96_001, channels);
+            for profile in [false, true] {
+                let create = || {
+                    if profile {
+                        VoiceEnhancer::with_settings(channels, 0.9, VoiceProfile::default())
+                    } else {
+                        VoiceEnhancer::new(channels)
+                    }
+                };
+                for start in [0, 27_017] {
+                    for count in [1, 4_096] {
+                        let mut actual = create();
+                        let mut reference = create();
+                        reference.expected_start = Some(usize::MAX);
+                        for empty_start in [0, 50_000] {
+                            assert!(actual.render(&source, empty_start, 0).samples().is_empty());
+                            assert!(
+                                reference
+                                    .render(&source, empty_start, 0)
+                                    .samples()
+                                    .is_empty()
+                            );
+                        }
+                        let first = actual.render(&source, start, count);
+                        let expected = reference.render(&source, start, count);
+                        assert_eq!(
+                            first
+                                .samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected
+                                .samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(actual.speech_frames(), reference.speech_frames());
+                        let seek = actual.render(&source, 48_017, 997);
+                        let mut fresh = create();
+                        fresh.expected_start = Some(usize::MAX);
+                        let expected = fresh.render(&source, 48_017, 997);
+                        assert_eq!(
+                            seek.samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected
+                                .samples()
+                                .iter()
+                                .map(|value| value.to_bits())
+                                .collect::<Vec<_>>()
+                        );
+                        assert_eq!(actual.speech_frames(), fresh.speech_frames());
+                    }
+                }
+            }
+        }
     }
 
     #[test]

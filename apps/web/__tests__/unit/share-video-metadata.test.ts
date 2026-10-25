@@ -48,6 +48,8 @@ describe("share video metadata", () => {
 			name: "Product demo",
 			sourceType: "desktopMP4",
 			webUrl: "https://cap.so",
+			width: null,
+			height: null,
 			advertiseIframelyPlayer: true,
 		});
 
@@ -84,7 +86,7 @@ describe("share video metadata", () => {
 					rel: "iframely player",
 					url: "https://cap.so/embed/video123",
 					type: "text/html",
-					media: "(aspect-ratio: 16/9)",
+					media: "(aspect-ratio: 1280/720)",
 				},
 			],
 		});
@@ -99,9 +101,64 @@ describe("share video metadata", () => {
 			name: "Product demo",
 			sourceType: "desktopMP4",
 			webUrl: "https://cap.so",
+			width: null,
+			height: null,
 		});
 
 		expect(metadata.icons).toBeUndefined();
+	});
+
+	it.each([
+		[1080, 1920],
+		[1920, 1080],
+		[1440, 1080],
+	])(
+		"preserves %ix%i recording dimensions in link previews",
+		(width, height) => {
+			const metadata = buildShareVideoMetadata({
+				videoId: "video123",
+				name: "Product demo",
+				sourceType: "desktopMP4",
+				webUrl: "https://cap.so",
+				width,
+				height,
+				advertiseIframelyPlayer: true,
+			});
+
+			expect(metadata.openGraph).toMatchObject({
+				videos: [{ width, height }],
+			});
+			expect(metadata.twitter).toMatchObject({
+				players: { width, height },
+			});
+			expect(metadata.icons).toMatchObject({
+				other: [{ media: `(aspect-ratio: ${width}/${height})` }],
+			});
+		},
+	);
+
+	it.each([
+		[null, null],
+		[1080, null],
+		[null, 1920],
+		[0, 1920],
+		[1080, 0],
+	])("uses default dimensions when %s x %s is incomplete", (width, height) => {
+		const metadata = buildShareVideoMetadata({
+			videoId: "video123",
+			name: "Product demo",
+			sourceType: "desktopMP4",
+			webUrl: "https://cap.so",
+			width,
+			height,
+		});
+
+		expect(metadata.openGraph).toMatchObject({
+			videos: [{ width: 1280, height: 720 }],
+		});
+		expect(metadata.twitter).toMatchObject({
+			players: { width: 1280, height: 720 },
+		});
 	});
 
 	it.each([

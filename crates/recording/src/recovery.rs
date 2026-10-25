@@ -8,9 +8,10 @@ use cap_enc_ffmpeg::RelocatableSource;
 use cap_enc_ffmpeg::fragmented_mp4::{read_fragment_prefix, tail_is_complete};
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
-    concatenate_m4s_segments_with_init_validated, concatenate_video_fragments, get_media_duration,
-    get_video_base_fps, merge_video_audio, probe_media_valid, probe_video_can_decode,
-    probe_video_seek_points, remux_file,
+    concatenate_m4s_segments_with_init_validated, concatenate_video_fragments,
+    concatenate_video_fragments_on_timeline, get_media_duration, get_video_base_fps,
+    merge_video_audio, probe_media_valid, probe_video_can_decode, probe_video_seek_points,
+    remux_file,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
@@ -26,13 +27,9 @@ use crate::studio_recording::CompletedRecording;
 mod prefix;
 mod preparing_observer;
 mod preparing_projection;
-#[cfg(unix)]
 mod retirement;
 
-#[cfg(unix)]
 type PreparingRecoveryLock = retirement::RecoveryLease;
-#[cfg(not(unix))]
-type PreparingRecoveryLock = RecoveryLock;
 
 pub use preparing_observer::{
     LivePreparingStudioSources, PreparingAudioLease, PreparingAudioTrack, PreparingSidecarKind,
@@ -283,15 +280,35 @@ impl RecoveryManager {
             return Ok(false);
         }
 
+        // Without a preparing editor nothing reads the originals once they are
+        // published, so the backup goes with the stop instead of doubling the
+        // recording's size on disk for good -- unless it holds a legacy
+        // omitted track, which publication leaves out and only the backup
+        // keeps.
+        let unread = preparing.is_none()
+            && legacy_omitted_tracks(&incomplete.meta, project_path)
+                .is_ok_and(|tracks| tracks.is_empty());
+        let published_workspace = std::cell::RefCell::new(None);
         Self::finalize_with_publication(
             &incomplete,
             RecoveryPurpose::Finalize,
             copy_recovery_input_with_durability,
             |_, _| Ok(()),
-            publish_recovery,
+            |project, workspace| {
+                publish_recovery(project, workspace)?;
+                *published_workspace.borrow_mut() = Some(workspace.to_path_buf());
+                Ok(())
+            },
             RecoveryLock::acquire,
             preparing,
         )?;
+        if unread && let Some(workspace) = published_workspace.into_inner() {
+            let retired = RecoveryLock::acquire(project_path)
+                .and_then(|_lock| retirement::retire_unread_originals(project_path, &workspace));
+            if let Err(error) = retired {
+                warn!(path = %workspace.display(), %error, "Original media backup retained");
+            }
+        }
         Ok(true)
     }
 
@@ -1380,7 +1397,6 @@ impl RecoveryManager {
             elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
             "Studio finalization complete"
         );
-        #[cfg(unix)]
         if matches!(purpose, RecoveryPurpose::Finalize)
             && preparing_source.is_some()
             && let HeldRecoveryLock::Shared(lease) = &lock
@@ -2336,7 +2352,8 @@ impl RecoveryManager {
             std::fs::rename(&group_outputs[0], output)
                 .map_err(|e| RecoveryError::VideoConcat(cap_enc_ffmpeg::remux::RemuxError::Io(e)))
         } else {
-            concatenate_video_fragments(&group_outputs, output).map_err(RecoveryError::VideoConcat)
+            concatenate_video_fragments_on_timeline(&group_outputs, output)
+                .map_err(RecoveryError::VideoConcat)
         };
 
         for tmp in &temp_paths {
@@ -2620,6 +2637,9 @@ impl RecoveryManager {
                                     .and_then(|s| s.mic.as_ref())
                                     .and_then(|m| m.device_id.clone()),
                                 gap_summary: None,
+                                digital_silence_ms: original_segment
+                                    .and_then(|s| s.mic.as_ref())
+                                    .and_then(|m| m.digital_silence_ms),
                             })
                         } else {
                             None
@@ -2646,6 +2666,7 @@ impl RecoveryManager {
                                     .and_then(|s| s.system_audio.as_ref())
                                     .and_then(|a| a.device_id.clone()),
                                 gap_summary: None,
+                                digital_silence_ms: None,
                             })
                         } else {
                             None
@@ -3065,7 +3086,6 @@ enum HeldRecoveryLock {
 impl HeldRecoveryLock {
     fn new(lock: RecoveryLock, preparing: bool) -> Self {
         if preparing {
-            #[cfg(unix)]
             let lock = retirement::RecoveryLease::new(lock);
             Self::Shared(Arc::new(lock))
         } else {
@@ -3186,6 +3206,21 @@ impl RecoveryLock {
     }
 }
 
+impl RecoveryLock {
+    /// Whether this process took the lock: on unix a forked child inherits the
+    /// descriptor but not the lock's ownership. Windows has no fork.
+    fn owned_by_this_process(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.owner_pid == unsafe { libc::getpid() }
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    }
+}
+
 #[cfg(unix)]
 impl Drop for RecoveryLock {
     fn drop(&mut self) {
@@ -3219,6 +3254,17 @@ fn reject_recovery_link(metadata: &std::fs::Metadata) -> Result<(), RecoveryErro
     Ok(())
 }
 
+/// On exFAT/FAT volumes macOS keeps each file's extended attributes (every
+/// file Cap writes gets `com.apple.provenance`) in a visible `._<name>`
+/// AppleDouble sibling, and creates the destination's own sibling as soon as a
+/// copy creates `<name>`. Copying the source's sibling then fails with EEXIST,
+/// every time: https://github.com/CapSoftware/Cap/issues/2386. Cap never
+/// writes `._` names, so these entries are filesystem bookkeeping, not
+/// recording data.
+fn is_apple_double(name: &std::ffi::OsStr) -> bool {
+    name.as_encoded_bytes().starts_with(b"._")
+}
+
 fn copy_recovery_input(source: &Path, destination: &Path) -> Result<(), RecoveryError> {
     copy_recovery_input_with_durability(source, destination, RecoveryCopyDurability::Durable)
 }
@@ -3234,6 +3280,9 @@ fn copy_recovery_input_with_durability(
         std::fs::create_dir(destination)?;
         for entry in std::fs::read_dir(source)? {
             let entry = entry?;
+            if is_apple_double(&entry.file_name()) {
+                continue;
+            }
             copy_recovery_input_with_durability(
                 &entry.path(),
                 &destination.join(entry.file_name()),
@@ -3395,7 +3444,10 @@ fn recovery_snapshot(project: &Path) -> Result<RecoverySnapshot, RecoveryError> 
         if metadata.is_dir() {
             let _ = entries.insert(relative, None);
             for entry in std::fs::read_dir(path)? {
-                visit(root, &entry?.path(), entries, files, bytes)?;
+                let entry = entry?;
+                if !is_apple_double(&entry.file_name()) {
+                    visit(root, &entry.path(), entries, files, bytes)?;
+                }
             }
         } else if metadata.is_file() {
             files.push(path.to_path_buf());
@@ -3455,6 +3507,10 @@ const RECOVERY_PUBLICATION_MAX_BYTES: u64 = 8192;
 enum RecoveryPublicationStampVersion {
     V1,
     V2,
+    /// Leaves `._` AppleDouble entries out of the segments stamp. Receipts
+    /// written as V1/V2 keep hashing them, so publications those builds
+    /// interrupted still reconcile.
+    V3,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -3553,8 +3609,11 @@ fn recovery_publication_segments_stamp(
             Entry {
                 directory: metadata.is_dir(),
                 // V1 persists allocation sizes; some filesystems change directory sizes on rename.
-                size: if metadata.is_dir() && matches!(version, RecoveryPublicationStampVersion::V2)
-                {
+                size: if metadata.is_dir()
+                    && matches!(
+                        version,
+                        RecoveryPublicationStampVersion::V2 | RecoveryPublicationStampVersion::V3
+                    ) {
                     0
                 } else {
                     metadata.len()
@@ -3573,7 +3632,13 @@ fn recovery_publication_segments_stamp(
         );
         if metadata.is_dir() {
             for entry in std::fs::read_dir(path)? {
-                visit(root, &entry?.path(), entries, version)?;
+                let entry = entry?;
+                if matches!(version, RecoveryPublicationStampVersion::V3)
+                    && is_apple_double(&entry.file_name())
+                {
+                    continue;
+                }
+                visit(root, &entry.path(), entries, version)?;
             }
         }
         Ok(())
@@ -3598,7 +3663,7 @@ fn recovery_publication_segments_stamp(
 }
 
 fn recovery_publication_state(project: &Path) -> Result<RecoveryPublicationState, RecoveryError> {
-    recovery_publication_state_for_version(project, RecoveryPublicationStampVersion::V2)
+    recovery_publication_state_for_version(project, RecoveryPublicationStampVersion::V3)
 }
 
 fn recovery_publication_state_for_version(
@@ -3706,7 +3771,7 @@ fn begin_recovery_publication(project: &Path, workspace: &Path) -> Result<Vec<u8
         ));
     }
     let receipt = RecoveryPublication {
-        version: 2,
+        version: 3,
         project: project.canonicalize()?,
         workspace: name.into(),
         original: recovery_publication_state(project)?,
@@ -3775,6 +3840,7 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
     let version = match receipt.version {
         1 => RecoveryPublicationStampVersion::V1,
         2 => RecoveryPublicationStampVersion::V2,
+        3 => RecoveryPublicationStampVersion::V3,
         _ => {
             return Err(RecoveryError::Validation(
                 "Invalid publication identity; evidence retained".into(),
@@ -4825,7 +4891,6 @@ mod clean_studio_snapshot_tests {
         assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::Supported);
     }
 
-    #[cfg(unix)]
     #[test]
     fn preparing_retirement_preserves_every_encoded_video_packet() {
         fn packets(path: &Path) -> Vec<Vec<u8>> {
@@ -5075,6 +5140,33 @@ mod clean_studio_snapshot_tests {
     }
 
     #[test]
+    fn a_stop_without_a_preparing_editor_retires_the_original_media_backup() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+
+        assert!(RecoveryManager::remux_if_needed(project).unwrap());
+
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        assert!(!workspaces[0].join("original-segments").exists());
+        let meta = RecordingMeta::load_for_project(project).unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = meta.studio_meta().unwrap() else {
+            panic!()
+        };
+        let display = meta.path(&inner.segments[0].display.path);
+        assert!(cap_enc_ffmpeg::remux::get_video_fps(&display).is_some());
+    }
+
+    #[test]
     fn studio_finalization_keeps_the_recorded_display_fps() {
         let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
         let project = directory.path();
@@ -5133,7 +5225,6 @@ mod clean_studio_snapshot_tests {
         let project = directory.path();
         let microphone = add_fragmented_audio(project, "audio-input", 90);
         let system_audio = add_fragmented_audio(project, "system_audio", 90);
-        let original_bytes = fs::read(&microphone).unwrap();
         let original_audio = cap_audio::AudioData::from_file(&microphone).unwrap();
         let mut meta = RecordingMeta::load_for_project(project).unwrap();
         let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
@@ -5147,12 +5238,14 @@ mod clean_studio_snapshot_tests {
             start_time: Some(-0.125),
             device_id: Some("benchmark microphone".into()),
             gap_summary: None,
+            digital_silence_ms: Some(190_000),
         });
         inner.segments[0].system_audio = Some(AudioMeta {
             path: "content/segments/segment-0/system_audio.m4a".into(),
             start_time: Some(0.25),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         });
         meta.save_for_project().unwrap();
 
@@ -5169,6 +5262,7 @@ mod clean_studio_snapshot_tests {
         );
         assert_eq!(mic.start_time, Some(-0.125));
         assert_eq!(mic.device_id.as_deref(), Some("benchmark microphone"));
+        assert_eq!(mic.digital_silence_ms, Some(190_000));
         assert_eq!(
             segment.system_audio.as_ref().unwrap().start_time,
             Some(0.25)
@@ -5188,10 +5282,9 @@ mod clean_studio_snapshot_tests {
                     .starts_with(".recovery-")
             })
             .unwrap();
-        assert_eq!(
-            fs::read(backup.join("original-segments/segment-0/audio-input.m4a")).unwrap(),
-            original_bytes
-        );
+        // A stop without a preparing editor retires the original backup once
+        // the published tracks above are in place.
+        assert!(!backup.join("original-segments").exists());
     }
 
     #[test]
@@ -5216,6 +5309,7 @@ mod clean_studio_snapshot_tests {
             start_time: Some(-0.125),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         });
         meta.save_for_project().unwrap();
         let recording = RecoveryManager::analyze_incomplete(project, &meta).unwrap();
@@ -6079,15 +6173,31 @@ mod transactional_recovery_tests {
         version: u32,
         had_config: bool,
     ) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        publication_fixture_with_receipt(version, had_config, false)
+    }
+
+    fn publication_fixture_with_receipt(
+        version: u32,
+        had_config: bool,
+        apple_double: bool,
+    ) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let fixture = publication_fixture();
         let (_, project, workspace) = &fixture;
         if !had_config {
             std::fs::remove_file(project.join("project-config.json")).unwrap();
         }
+        if apple_double {
+            std::fs::write(
+                project.join("content/segments/._raw.m4s"),
+                b"\x00\x05\x16\x07",
+            )
+            .unwrap();
+        }
         interrupt_publication(project, workspace, 0);
         let stamp_version = match version {
             1 => RecoveryPublicationStampVersion::V1,
             2 => RecoveryPublicationStampVersion::V2,
+            3 => RecoveryPublicationStampVersion::V3,
             _ => unreachable!(),
         };
         let receipt = RecoveryPublication {
@@ -6109,7 +6219,7 @@ mod transactional_recovery_tests {
 
     #[test]
     fn publication_receipt_versions_reconcile_without_changing_originals() {
-        for version in [1, 2] {
+        for version in [1, 2, 3] {
             for had_config in [false, true] {
                 let (_temporary, project, workspace) =
                     publication_fixture_with_version(version, had_config);
@@ -6127,10 +6237,73 @@ mod transactional_recovery_tests {
     }
 
     #[test]
+    fn only_v3_publication_stamps_leave_out_apple_double_entries() {
+        let temporary = tempfile::tempdir().unwrap();
+        let segments = temporary.path().join("segments");
+        std::fs::create_dir(&segments).unwrap();
+        std::fs::write(segments.join("raw.m4s"), b"original raw").unwrap();
+        let modified = segments.metadata().unwrap().modified().unwrap();
+        let versions = [
+            RecoveryPublicationStampVersion::V1,
+            RecoveryPublicationStampVersion::V2,
+            RecoveryPublicationStampVersion::V3,
+        ];
+        let before = versions.map(|version| {
+            recovery_publication_segments_stamp(&segments, version)
+                .unwrap()
+                .unwrap()
+        });
+
+        std::fs::write(segments.join("._raw.m4s"), b"\x00\x05\x16\x07").unwrap();
+        let mut directory = std::fs::OpenOptions::new();
+        directory.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            directory
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+        }
+        directory
+            .open(&segments)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let after = versions.map(|version| {
+            recovery_publication_segments_stamp(&segments, version)
+                .unwrap()
+                .unwrap()
+        });
+
+        assert_ne!(before[0], after[0]);
+        assert_ne!(before[1], after[1]);
+        assert_eq!(before[2], after[2]);
+    }
+
+    #[test]
+    fn publication_receipts_reconcile_with_apple_double_entries_present() {
+        for version in [1, 2, 3] {
+            let (_temporary, project, workspace) =
+                publication_fixture_with_receipt(version, true, true);
+            let original = recovery_snapshot(&project).unwrap();
+            let receipt = std::fs::read(workspace.join(RECOVERY_PUBLICATION_RECEIPT)).unwrap();
+            let _lock = RecoveryLock::acquire(&project).unwrap();
+            assert_eq!(recovery_snapshot(&project).unwrap(), original);
+            assert!(!project.join(RECOVERY_PUBLICATION).exists());
+            assert_eq!(
+                std::fs::read(workspace.join(RECOVERY_PUBLICATION_RECEIPT)).unwrap(),
+                receipt
+            );
+        }
+    }
+
+    #[test]
     fn publication_receipt_versions_retain_conflict_guards() {
         use std::io::Write;
 
-        for version in [1, 2] {
+        for version in [1, 2, 3] {
             for changed in [
                 "raw", "added", "removed", "metadata", "config", "stamp", "receipt",
             ] {
@@ -7007,6 +7180,34 @@ mod transactional_recovery_tests {
             );
             assert_eq!(std::fs::read(&source).unwrap(), b"original");
             assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
+        }
+    }
+
+    #[test]
+    fn recovery_copies_and_snapshots_skip_apple_double_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let segment = project.join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment).unwrap();
+        std::fs::write(segment.join("display.mp4"), b"media").unwrap();
+        let before = recovery_snapshot(&project).unwrap();
+
+        let apple_double = b"\x00\x05\x16\x07";
+        std::fs::write(segment.join("._display.mp4"), apple_double).unwrap();
+        std::fs::write(project.join("content/segments/._segment-0"), apple_double).unwrap();
+        assert_eq!(recovery_snapshot(&project).unwrap(), before);
+
+        let staged = dir.path().join("staged");
+        copy_recovery_input(&project.join("content"), &staged).unwrap();
+        assert_eq!(
+            std::fs::read(staged.join("segments/segment-0/display.mp4")).unwrap(),
+            b"media"
+        );
+        for companion in ["segments/segment-0/._display.mp4", "segments/._segment-0"] {
+            assert_ne!(
+                std::fs::read(staged.join(companion)).ok().as_deref(),
+                Some(&apple_double[..])
+            );
         }
     }
 

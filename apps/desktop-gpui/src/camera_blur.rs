@@ -128,8 +128,8 @@ pub struct BlurOutput {
 /// resource is dropped on exit, the same release-on-off behaviour as
 /// `release_blur_resources` (`camera.rs:1477-1484`).
 pub fn run(jobs: flume::Receiver<BlurJob>, results: flume::Sender<BlurOutput>) {
-    // Current-thread runtime for `request_adapter` and the tokio yields
-    // inside `PendingSurface::wait`.
+    // Current-thread runtime for `request_adapter` and the timed blocking
+    // wait inside `PendingSurface::wait`.
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -209,6 +209,7 @@ fn shared_device(runtime: &tokio::runtime::Runtime) -> Option<(wgpu::Device, wgp
                         tracing::warn!("camera blur device unavailable: {error}");
                     })
                     .ok()?;
+                cap_rendering::log_uncaptured_errors(&device, "camera-preview-blur");
                 Some((device, queue))
             })
         })
@@ -293,10 +294,10 @@ impl Worker {
                 30,
             ))
             .map_err(|error| anyhow!("{error}"))?;
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
 
         let frame = runtime
-            .block_on(pending.wait(&self.device, &self.queue))
+            .block_on(pending.wait(&self.device, submission))
             .map_err(|error| anyhow!("{error}"))?;
         let cutout = if mode == cap_camera_effects::BlurMode::Remove {
             use core_foundation::base::TCFType as _;
@@ -354,6 +355,9 @@ impl Worker {
         Ok(&self.imported.last().expect("just pushed").1)
     }
 }
+
+#[cfg(test)]
+mod bench;
 
 #[cfg(test)]
 mod tests {
