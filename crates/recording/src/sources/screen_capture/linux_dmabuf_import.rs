@@ -135,7 +135,15 @@ impl DmaBufImporter {
         let config = egl
             .choose_first_config(
                 display,
-                &[egl::RENDERABLE_TYPE, egl::OPENGL_ES2_BIT, egl::NONE],
+                // Surfaceless: any surface type. The default asks for window
+                // surfaces, which a GPU's EGL device (NVIDIA's) never has.
+                &[
+                    egl::SURFACE_TYPE,
+                    0,
+                    egl::RENDERABLE_TYPE,
+                    egl::OPENGL_ES2_BIT,
+                    egl::NONE,
+                ],
             )
             .context("choose an EGL config")?
             .ok_or_else(|| anyhow!("no GLES EGL config"))?;
