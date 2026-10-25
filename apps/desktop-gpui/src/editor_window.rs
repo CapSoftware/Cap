@@ -5643,6 +5643,13 @@ impl EditorWindow {
             return;
         }
         self.audio_import_pending = None;
+        // Taken on every path, so a failed or empty import can't leave the
+        // drop time behind for the next click on a library row.
+        let dropped_at = self
+            .audio_drop_start
+            .take()
+            .filter(|(generation, _)| *generation == request.generation)
+            .map(|(_, time)| time);
         if !request.accepts(
             self.audio_picker,
             self.audio_picker_generation,
@@ -5671,11 +5678,6 @@ impl EditorWindow {
         };
         match request.picker {
             crate::editor_audio::AudioPicker::Add { lane } => {
-                let dropped_at = self
-                    .audio_drop_start
-                    .take()
-                    .filter(|(generation, _)| *generation == request.generation)
-                    .map(|(_, time)| time);
                 self.commit_audio_import(lane, imported, dropped_at, window, cx);
             }
             crate::editor_audio::AudioPicker::Replace { index } => {
@@ -7877,17 +7879,13 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let total = self.total_duration();
         let has_source = imported.duration > 0.0;
-        let source_duration = if has_source { imported.duration } else { total };
-        let length = edits::MIN_AUDIO_SEGMENT_DURATION.max(source_duration.min(if total > 0.0 {
-            total
-        } else {
-            source_duration
-        }));
-        let max_start = (total - length).max(0.0);
-        let start = start_at.unwrap_or(self.playhead).max(0.0).min(max_start);
-        let end = start + length;
+        let (start, end) = edits::audio_import_placement(
+            self.total_duration(),
+            has_source.then_some(imported.duration),
+            self.playhead,
+            start_at,
+        );
         let path = imported.path.clone();
         let inserted = self.edit(
             |timeline| {
