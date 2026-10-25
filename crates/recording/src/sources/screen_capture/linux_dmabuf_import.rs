@@ -57,7 +57,8 @@ pub(super) fn drm_fourcc(format: pipewire::spa::param::video::VideoFormat) -> Op
     }
 }
 
-pub(super) struct DmaBufImporter {
+/// One GPU's EGL device, with a context that can read its imports back.
+struct GpuImporter {
     egl: egl::DynamicInstance<egl::EGL1_5>,
     display: egl::Display,
     context: egl::Context,
@@ -70,10 +71,100 @@ pub(super) struct DmaBufImporter {
 
 // The EGL context is made current on whichever single thread uses the
 // importer, and released before it moves.
-unsafe impl Send for DmaBufImporter {}
+unsafe impl Send for GpuImporter {}
+
+/// Every GPU that can import screencast DMA-BUFs. The compositor allocates
+/// on whichever GPU it renders with, and a hybrid laptop's first GPU is often
+/// not that one, so modifiers are offered from all of them and each frame
+/// goes to a GPU that lists its modifier.
+pub(super) struct DmaBufImporter {
+    gpus: Vec<GpuImporter>,
+    supported: Vec<std::collections::HashMap<u32, Vec<u64>>>,
+    last: usize,
+}
 
 impl DmaBufImporter {
     pub(super) fn new() -> anyhow::Result<Self> {
+        let mut gpus = Vec::new();
+        let mut last_error = None;
+        for index in 0..16 {
+            match GpuImporter::open(index) {
+                Ok(Some(gpu)) => gpus.push(gpu),
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::debug!(index, %error, "EGL device cannot import DMA-BUFs");
+                    last_error = Some(error);
+                }
+            }
+        }
+        if gpus.is_empty() {
+            return Err(last_error.unwrap_or_else(|| anyhow!("EGL lists no devices")));
+        }
+        let supported = gpus.iter().map(|_| Default::default()).collect();
+        Ok(Self {
+            gpus,
+            supported,
+            last: 0,
+        })
+    }
+
+    fn supported(&mut self, gpu: usize, fourcc: u32) -> &[u64] {
+        let gpus = &self.gpus;
+        self.supported[gpu]
+            .entry(fourcc)
+            .or_insert_with(|| gpus[gpu].modifiers(fourcc))
+    }
+
+    /// The modifiers some GPU can import `fourcc` with and read back.
+    pub(super) fn modifiers(&mut self, fourcc: u32) -> Vec<u64> {
+        let mut all = Vec::new();
+        for gpu in 0..self.gpus.len() {
+            for &modifier in self.supported(gpu, fourcc) {
+                if !all.contains(&modifier) {
+                    all.push(modifier);
+                }
+            }
+        }
+        all
+    }
+
+    /// Reads one single-plane DMA-BUF into `out` as tightly packed RGBA,
+    /// starting with the GPU that read the last frame.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn read_rgba(
+        &mut self,
+        fd: RawFd,
+        fourcc: u32,
+        modifier: u64,
+        width: u32,
+        height: u32,
+        offset: u32,
+        stride: u32,
+        out: &mut [u8],
+    ) -> anyhow::Result<()> {
+        let (count, first) = (self.gpus.len(), self.last);
+        let mut last_error = None;
+        for gpu in (0..count).map(|step| (first + step) % count) {
+            if !self.supported(gpu, fourcc).contains(&modifier) {
+                continue;
+            }
+            match self.gpus[gpu].read_rgba(fd, fourcc, modifier, width, height, offset, stride, out)
+            {
+                Ok(()) => {
+                    self.last = gpu;
+                    return Ok(());
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| anyhow!("no GPU imports modifier {modifier:#x} for {fourcc:#x}")))
+    }
+}
+
+impl GpuImporter {
+    /// The `index`th GPU EGL lists, or `None` past the last.
+    fn open(index: usize) -> anyhow::Result<Option<Self>> {
         let egl = unsafe {
             egl::DynamicInstance::<egl::EGL1_5>::load_required_from_filename("libEGL.so.1")
         }
@@ -101,16 +192,20 @@ impl DmaBufImporter {
         {
             bail!("eglQueryDevicesEXT failed");
         }
-        // A GPU (one with a render node) can import what a GPU allocated.
+        // A GPU (a device with a render node) can import what a GPU
+        // allocated; without one, the devices EGL has are all there is.
         let devices = &devices[..count.max(0) as usize];
-        let device = devices
+        let gpus = devices
             .iter()
             .copied()
-            .find(|device| {
+            .filter(|device| {
                 !unsafe { query_device_string(*device, EGL_DRM_RENDER_NODE_FILE_EXT) }.is_null()
             })
-            .or_else(|| devices.first().copied())
-            .ok_or_else(|| anyhow!("EGL lists no devices"))?;
+            .collect::<Vec<_>>();
+        let candidates = if gpus.is_empty() { devices } else { &gpus[..] };
+        let Some(&device) = candidates.get(index) else {
+            return Ok(None);
+        };
         let raw =
             unsafe { get_platform_display(EGL_PLATFORM_DEVICE_EXT, device, std::ptr::null()) };
         if raw.is_null() {
@@ -167,7 +262,7 @@ impl DmaBufImporter {
         };
         importer.make_current()?;
         importer.release();
-        Ok(importer)
+        Ok(Some(importer))
     }
 
     fn make_current(&mut self) -> anyhow::Result<()> {
@@ -336,7 +431,7 @@ impl DmaBufImporter {
     }
 }
 
-impl Drop for DmaBufImporter {
+impl Drop for GpuImporter {
     fn drop(&mut self) {
         if self.make_current().is_ok() {
             if let Some(gl) = &self.gl {

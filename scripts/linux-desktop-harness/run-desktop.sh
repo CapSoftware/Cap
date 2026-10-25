@@ -24,13 +24,7 @@ mkdir -p "$out" && chmod 777 "$out"
 if [[ -n "${HARNESS_IMAGE:-}" ]]; then
   image=$HARNESS_IMAGE
 else
-  # HARNESS_IMAGE: an image built from this one (a patched compositor) to run
-# instead.
-if [[ -n "${HARNESS_IMAGE:-}" ]]; then
-  image=$HARNESS_IMAGE
-else
   docker build -q -f "$here/$dockerfile" -t "$image" "$here" >/dev/null
-fi
 fi
 # DEV_BIN=<path to a built cap-gpui> with DEV_LIBS=<its FFmpeg lib dir> runs a
 # local build in place of the packaged binary (the package still provides the
