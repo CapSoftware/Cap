@@ -800,9 +800,6 @@ pub struct SidebarState {
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
     /// the Background tab's and the Camera tab's open independently.
     grade_adjust: [CollapsibleState; 2],
-    /// The nine preset tiles, generated once for the process. The catalogue is
-    /// static, so nothing can invalidate them.
-    pub(crate) grade_previews: std::cell::RefCell<HashMap<&'static str, Arc<RenderImage>>>,
     /// The camera tab's own `ShadowSettings` reveal, and the cursor tab's
     /// `KCollapsible open={!project.cursor.raw}` physics panel.
     pub camera_shadow_open: CollapsibleState,
@@ -906,7 +903,6 @@ impl SidebarState {
             pads: std::cell::RefCell::new(HashMap::new()),
             pad_drag: None,
             grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
-            grade_previews: std::cell::RefCell::new(HashMap::new()),
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
             cursor_ripple_open: CollapsibleState::new(config.cursor.ripple.enabled),
