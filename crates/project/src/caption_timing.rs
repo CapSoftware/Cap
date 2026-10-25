@@ -220,6 +220,12 @@ fn map_captions_to_edited_timeline(
     }
 
     let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mappings_ordered = mappings
+        .iter()
+        .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())
+        && mappings.windows(2).all(|pair| {
+            pair[0].source_start <= pair[1].source_start && pair[0].source_end <= pair[1].source_end
+        });
     let holds = timeline.hold_windows();
     let hold_adjusted = |start: f64, end: f64| {
         if holds.is_empty() {
@@ -253,7 +259,21 @@ fn map_captions_to_edited_timeline(
             )
         };
 
-        for mapping in &mappings {
+        let bounds = if caption.words.is_empty() {
+            Some((f64::from(caption.start), f64::from(caption.end)))
+        } else {
+            word_bounds
+        };
+        let caption_mappings = match bounds {
+            Some((start, end)) if mappings_ordered && start.is_finite() && end.is_finite() => {
+                let first = mappings.partition_point(|mapping| mapping.source_end <= start);
+                let count = mappings[first..].partition_point(|mapping| mapping.source_start < end);
+                &mappings[first..first + count]
+            }
+            _ => &mappings,
+        };
+
+        for mapping in caption_mappings {
             if !caption.words.is_empty() {
                 if let Some((word_start, word_end)) = word_bounds
                     && (word_end <= mapping.source_start || word_start >= mapping.source_end)

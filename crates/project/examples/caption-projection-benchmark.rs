@@ -69,21 +69,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("iterations must be positive".into());
     }
     let selected: Option<usize> = arguments.next().map(|value| value.parse()).transpose()?;
+    let order = arguments.next().unwrap_or_else(|| "ordered".into());
     let cases = [
         (3600, 1, 0, false),
         (600, 20, 28, false),
         (3600, 60, 60, false),
         (3600, 1, 0, true),
+        (3600, 500, 4, false),
     ];
-    if selected.is_some_and(|case| case >= cases.len()) || arguments.next().is_some() {
-        return Err("case must be 0, 1, 2 or 3; no additional arguments are accepted".into());
+    if selected.is_some_and(|case| case >= cases.len())
+        || !matches!(order.as_str(), "ordered" | "reversed")
+        || arguments.next().is_some()
+    {
+        return Err("expected case 0..=4 and order: ordered or reversed".into());
     }
-    println!("case,clips,captions,words,sample,elapsed_ms,fingerprint");
+    println!("case,order,clips,captions,words,sample,elapsed_ms,fingerprint");
     for (case, (seconds, clips, spacing, styled)) in cases.into_iter().enumerate() {
         if selected.is_some_and(|selected| selected != case) {
             continue;
         }
         let mut project = fixture(seconds, clips, spacing);
+        if order == "reversed" {
+            project.timeline.as_mut().unwrap().segments.reverse();
+        }
         let durations = [5.0, seconds as f64];
         if styled {
             synchronize_captions(&mut project, &durations);
@@ -124,7 +132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 expected_captions
             );
             println!(
-                "{case},{clips},{expected_captions},{words},{sample},{elapsed_ms:.6},{fingerprint}"
+                "{case},{order},{clips},{expected_captions},{words},{sample},{elapsed_ms:.6},{fingerprint}"
             );
         }
         let mut hasher = DefaultHasher::new();
