@@ -10,6 +10,39 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 		const db = yield* Database;
 
 		return {
+			membershipsForVideos: (
+				userId: User.UserId,
+				videoIds: readonly Video.VideoId[],
+			) =>
+				db.use((db) =>
+					db
+						.select({
+							videoId: Db.spaceVideos.videoId,
+							membershipId: Db.spaceMembers.id,
+						})
+						.from(Db.spaceMembers)
+						.innerJoin(
+							Db.spaceVideos,
+							Dz.eq(Db.spaceMembers.spaceId, Db.spaceVideos.spaceId),
+						)
+						.where(
+							Dz.and(
+								Dz.eq(Db.spaceMembers.userId, userId),
+								Dz.inArray(Db.spaceVideos.videoId, [...videoIds]),
+							),
+						),
+				),
+			passwordsForVideos: (videoIds: readonly Video.VideoId[]) =>
+				db.use((db) =>
+					db
+						.select({
+							videoId: Db.spaceVideos.videoId,
+							password: Db.spaces.password,
+						})
+						.from(Db.spaceVideos)
+						.innerJoin(Db.spaces, Dz.eq(Db.spaceVideos.spaceId, Db.spaces.id))
+						.where(Dz.inArray(Db.spaceVideos.videoId, [...videoIds])),
+				),
 			membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
 				db
 					.use((db) =>

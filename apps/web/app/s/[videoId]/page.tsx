@@ -16,7 +16,6 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, serverEnv } from "@cap/env";
-import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
@@ -37,9 +36,8 @@ import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { after } from "next/server";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
@@ -47,6 +45,11 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
+import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
+import {
+	getPendingLoomProcessing,
+	startDeferredLoomProcessing,
+} from "@/lib/loom-deferred-processing";
 import { createNotification } from "@/lib/Notification";
 import {
 	canManageOrganizationSettings,
@@ -75,11 +78,16 @@ import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { getVideoViewCount } from "@/lib/video-view-count";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
-import { PasswordOverlay } from "./_components/PasswordOverlay";
+import {
+	AccessRestrictedState,
+	PrivateVideoState,
+	SignInRequiredState,
+} from "./_components/AccessStates";
+import { PasswordGate } from "./_components/PasswordGate";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
-import { PrivateAccessActions } from "./_components/PrivateAccessActions";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 
@@ -195,33 +203,13 @@ function PolicyDeniedView({
 	reason?: string;
 	videoId: Video.VideoId;
 }) {
-	let title = "This video is private";
-	let description: React.ReactNode = <PrivateAccessActions videoId={videoId} />;
-
 	if (reason === "email_restriction_login_required") {
-		title = "This video requires sign-in";
-		description = (
-			<>
-				The owner of this video has restricted access. Please{" "}
-				<Link href={`/login?next=${encodeURIComponent(`/s/${videoId}`)}`}>
-					sign in
-				</Link>{" "}
-				with an authorized email address to view.
-			</>
-		);
-	} else if (reason === "email_restriction_denied") {
-		title = "Access restricted";
-		description =
-			"Your email address does not meet the requirements set by the video owner.";
+		return <SignInRequiredState videoId={videoId} />;
 	}
-
-	return (
-		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-			<Logo className="size-32" />
-			<h1 className="mb-2 text-2xl font-semibold">{title}</h1>
-			<div className="text-gray-400">{description}</div>
-		</div>
-	);
+	if (reason === "email_restriction_denied") {
+		return <AccessRestrictedState videoId={videoId} />;
+	}
+	return <PrivateVideoState videoId={videoId} />;
 }
 
 const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
@@ -289,6 +277,8 @@ export async function generateMetadata(
 							videoId,
 							name: video.name,
 							sourceType: video.source.type,
+							width: Option.getOrNull(video.width),
+							height: Option.getOrNull(video.height),
 							webUrl,
 							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
@@ -411,24 +401,25 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
 		),
-		Effect.map((data) => (
-			// overflow-x-clip: the timeline view's theater strip breaks out to
-			// 100vw, which overshoots by the scrollbar width on OSes with classic
-			// scrollbars; clipping here keeps the page from gaining a horizontal
-			// scroll without creating a new scroll container.
-			// Desktop pins the page to the viewport so the comments rail can run
-			// full height and the video column scrolls on its own; phones keep
-			// ordinary document flow.
-			<div
-				key={videoId}
-				className="flex overflow-x-clip flex-col min-h-screen bg-gray-2 lg:h-screen lg:min-h-0 lg:overflow-hidden"
-			>
-				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
-				{!data.needsPassword && (
+		Effect.map((data) =>
+			data.needsPassword ? (
+				<PasswordGate key={videoId} videoId={videoId} />
+			) : (
+				// overflow-x-clip: the timeline view's theater strip breaks out to
+				// 100vw, which overshoots by the scrollbar width on OSes with classic
+				// scrollbars; clipping here keeps the page from gaining a horizontal
+				// scroll without creating a new scroll container.
+				// Desktop pins the page to the viewport so the comments rail can run
+				// full height and the video column scrolls on its own; phones keep
+				// ordinary document flow.
+				<div
+					key={videoId}
+					className="flex overflow-x-clip flex-col min-h-screen bg-gray-2 lg:h-screen lg:min-h-0 lg:overflow-hidden"
+				>
 					<AuthorizedContent video={data.video} searchParams={searchParams} />
-				)}
-			</div>
-		)),
+				</div>
+			),
+		),
 		Effect.catchTags(getShareVideoPageCatchers(videoId, awaitRecording)),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
@@ -511,6 +502,10 @@ async function AuthorizedContent({
 		Option.map(Comment.CommentId.make),
 	);
 	const recordingStopped = hasRecordingStoppedParam(searchParams);
+	const earlySegmentPlayback =
+		recordingStopped &&
+		video.source?.type === "desktopSegments" &&
+		isEarlyInstantPlaybackEnabled(video.owner.id);
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
@@ -727,7 +722,7 @@ async function AuthorizedContent({
 			);
 	}).pipe(EffectRuntime.runPromise);
 
-	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const viewsPromise = getVideoViewCount(videoId).then((v) => v.count);
 
 	const videoOrganizationRolePromise = (async () => {
 		if (!userId) return null;
@@ -871,6 +866,25 @@ async function AuthorizedContent({
 	}
 
 	const metadata = (video.metadata as VideoMetadata) || {};
+	const deferredLoomRawFileKey = hasActiveUpload
+		? null
+		: getPendingLoomProcessing(metadata, video.owner.id, videoId);
+	if (deferredLoomRawFileKey) {
+		const rawFileKey = deferredLoomRawFileKey;
+		after(() =>
+			startDeferredLoomProcessing({
+				videoId,
+				ownerId: video.owner.id,
+				bucketId: video.bucket,
+				rawFileKey,
+			}).catch((error) => {
+				console.error(
+					`[ShareVideoPage] Error starting deferred processing for ${videoId}:`,
+					error,
+				);
+			}),
+		);
+	}
 	const aiGenerationStatus = metadata.aiGenerationStatus || null;
 
 	const initialAiData = {
@@ -991,6 +1005,7 @@ async function AuthorizedContent({
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}
+				earlySegmentPlayback={earlySegmentPlayback}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}

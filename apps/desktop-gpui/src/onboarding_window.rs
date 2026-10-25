@@ -7,6 +7,8 @@ use gpui::{
     linear_gradient, prelude::FluentBuilder, px, relative, rgb, rgba, svg,
 };
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     main_window::Mode,
     onboarding_audio::OnboardingAudio,
@@ -14,8 +16,15 @@ use crate::{
     permissions_ui::{PermissionsState, RowAction},
     store,
     theme::Theme,
-    ui,
 };
+
+#[cfg(target_os = "windows")]
+use crate::ui;
+
+mod stage;
+mod welcome_script;
+
+pub use stage::Paper;
 
 pub const ONBOARDING_WIDTH: f32 = 860.;
 pub const ONBOARDING_HEIGHT: f32 = 690.;
@@ -23,12 +32,81 @@ pub const ONBOARDING_HEADER_HEIGHT: f32 = 36.;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REQUEST_GRACE: Duration = Duration::from_secs(2);
-const WELCOME_EXIT: Duration = Duration::from_millis(600);
-const CARD_W: f32 = 440.;
-const ROW_PAD_X: f32 = 16.;
-const ROW_GAP: f32 = 16.;
-const ROW_ACTION_W: f32 = 112.;
-const ROW_TEXT_W: f32 = CARD_W - 2. * ROW_PAD_X - ROW_GAP - ROW_ACTION_W;
+const WELCOME_EXIT: Duration = Duration::from_millis(1100);
+const WELCOME_REVEAL_DELAY: Duration = Duration::from_millis(450);
+struct Cloud {
+    art: &'static str,
+    aspect: f32,
+    top: f32,
+    width: f32,
+    phase: f32,
+}
+
+struct CloudLayer {
+    scale: f32,
+    pace: f32,
+    opacity: f32,
+    clouds: &'static [Cloud],
+}
+
+const fn cloud(art: (&'static str, f32), top: f32, width: f32, phase: f32) -> Cloud {
+    Cloud {
+        art: art.0,
+        aspect: art.1,
+        top,
+        width,
+        phase,
+    }
+}
+
+const CUMULUS_A: (&str, f32) = ("onboarding/clouds/cumulus-a.webp", 387. / 896.);
+const CUMULUS_B: (&str, f32) = ("onboarding/clouds/cumulus-b.webp", 360. / 760.);
+const TUFT: (&str, f32) = ("onboarding/clouds/tuft-a.webp", 300. / 600.);
+const BANK: (&str, f32) = ("onboarding/clouds/bank-a.webp", 241. / 864.);
+const WISP: (&str, f32) = ("onboarding/clouds/wisp-a.webp", 203. / 860.);
+/// The landing page's cloud art (`HomeTwo/HeroSky.tsx`) at three depths, far
+/// to near. `pace` is in points per second and stays brisk enough that pixel
+/// snapping never shows as stepping.
+const WELCOME_CLOUD_LAYERS: [CloudLayer; 3] = [
+    CloudLayer {
+        scale: 0.6,
+        pace: 7.,
+        opacity: 0.45,
+        clouds: &[
+            cloud(CUMULUS_B, 0.06, 380., 0.1),
+            cloud(WISP, 0.15, 420., 0.45),
+            cloud(TUFT, 0.28, 300., 0.7),
+            cloud(BANK, 0.38, 400., 0.25),
+            cloud(CUMULUS_A, 0.47, 450., 0.85),
+            cloud(WISP, 0.02, 360., 0.6),
+        ],
+    },
+    CloudLayer {
+        scale: 0.9,
+        pace: 12.,
+        opacity: 0.75,
+        clouds: &[
+            cloud(CUMULUS_A, 0.12, 520., 0.3),
+            cloud(BANK, 0.34, 480., 0.75),
+            cloud(TUFT, 0.5, 320., 0.05),
+            cloud(CUMULUS_B, 0.58, 440., 0.55),
+            cloud(WISP, 0.24, 380., 0.95),
+        ],
+    },
+    CloudLayer {
+        scale: 1.5,
+        pace: 20.,
+        opacity: 0.85,
+        clouds: &[
+            cloud(CUMULUS_A, 0.74, 620., 0.2),
+            cloud(BANK, 0.82, 600., 0.7),
+            cloud(CUMULUS_B, -0.2, 520., 0.45),
+        ],
+    },
+];
+/// The entrance's length; frames are requested until it ends even while the
+/// window is inactive, so it never freezes half-faded.
+const WELCOME_ENTRANCE_SECS: f32 = 3.4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
@@ -41,6 +119,10 @@ enum Step {
     Toggle,
     Shortcuts,
     Faq,
+}
+
+fn guided_permission(permission: OSPermission) -> bool {
+    permission.required() && crate::permission_guide::eligible(permission)
 }
 
 impl Step {
@@ -95,75 +177,75 @@ impl Step {
 
 struct ModeDetail {
     mode: Mode,
-    title: &'static str,
-    tagline: &'static str,
-    description: &'static str,
+    title: fn() -> &'static str,
+    tagline: fn() -> &'static str,
+    description: fn() -> &'static str,
     icon: &'static str,
-    features: [&'static str; 4],
+    features: [fn() -> &'static str; 4],
 }
 
 const MODES: [ModeDetail; 3] = [
     ModeDetail {
         mode: Mode::Instant,
-        title: "Instant Mode",
-        tagline: "Record & share in seconds",
-        description: "Your recording uploads as you capture. Stop recording and instantly get a shareable link — no waiting.",
+        title: tr::onboarding::modes::instant::title,
+        tagline: tr::onboarding::modes::instant::tagline,
+        description: tr::onboarding::modes::instant::description,
         icon: "icons/instant.svg",
         features: [
-            "Instant shareable link",
-            "Background uploading",
-            "AI transcription & summary",
-            "Browser-based playback",
+            tr::onboarding::modes::instant::feature_1,
+            tr::onboarding::modes::instant::feature_2,
+            tr::onboarding::modes::instant::feature_3,
+            tr::onboarding::modes::instant::feature_4,
         ],
     },
     ModeDetail {
         mode: Mode::Studio,
-        title: "Studio Mode",
-        tagline: "Professional editing tools",
-        description: "Record in full quality locally, then use the built-in editor to add backgrounds, padding, cursor effects, and more.",
+        title: tr::onboarding::modes::studio::title,
+        tagline: tr::onboarding::modes::studio::tagline,
+        description: tr::onboarding::modes::studio::description,
         icon: "icons/film-cut.svg",
         features: [
-            "Full quality local recording",
-            "Built-in editor & effects",
-            "Custom backgrounds & padding",
-            "Export or share when ready",
+            tr::onboarding::modes::studio::feature_1,
+            tr::onboarding::modes::studio::feature_2,
+            tr::onboarding::modes::studio::feature_3,
+            tr::onboarding::modes::studio::feature_4,
         ],
     },
     ModeDetail {
         mode: Mode::Screenshot,
-        title: "Screenshot Mode",
-        tagline: "Capture & beautify instantly",
-        description: "Take screenshots with a single hotkey, add annotations and beautiful backgrounds, then share or copy instantly.",
+        title: tr::onboarding::modes::screenshot::title,
+        tagline: tr::onboarding::modes::screenshot::tagline,
+        description: tr::onboarding::modes::screenshot::description,
         icon: "icons/screenshot.svg",
         features: [
-            "Instant hotkey capture",
-            "Annotation & drawing tools",
-            "Beautiful backgrounds",
-            "Copy, save, or share",
+            tr::onboarding::modes::screenshot::feature_1,
+            tr::onboarding::modes::screenshot::feature_2,
+            tr::onboarding::modes::screenshot::feature_3,
+            tr::onboarding::modes::screenshot::feature_4,
         ],
     },
 ];
 
-const FAQ: [(&str, &str); 5] = [
+const FAQ: [(fn() -> &'static str, fn() -> &'static str); 5] = [
     (
-        "Is Cap free to use?",
-        "Cap is free for personal use. For teams and commercial use, check out our pricing plans.",
+        tr::onboarding::faq::free::question,
+        tr::onboarding::faq::free::answer,
     ),
     (
-        "What's the difference between Instant and Studio?",
-        "Instant mode uploads as you record — stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing.",
+        tr::onboarding::faq::instant_vs_studio::question,
+        tr::onboarding::faq::instant_vs_studio::answer,
     ),
     (
-        "Where are my recordings stored?",
-        "All recordings are stored locally on your computer. In Instant mode, they're also uploaded to Cap's cloud for easy sharing. You can manage storage in Settings.",
+        tr::onboarding::faq::storage::question,
+        tr::onboarding::faq::storage::answer,
     ),
     (
-        "Can I change my shortcuts later?",
-        "Head to Settings → Shortcuts at any time to customize all your keyboard shortcuts.",
+        tr::onboarding::faq::shortcuts::question,
+        tr::onboarding::faq::shortcuts::answer,
     ),
     (
-        "How does sharing work?",
-        "In Instant mode, you get a shareable link automatically when you stop recording. In Studio mode, export your edited video and share via Cap's cloud or save locally.",
+        tr::onboarding::faq::sharing::question,
+        tr::onboarding::faq::sharing::answer,
     ),
 ];
 
@@ -174,6 +256,7 @@ pub struct OnboardingWindow {
     permissions_only: bool,
     state: PermissionsState,
     pending: Option<OSPermission>,
+    media_request_pending: bool,
     poll: Option<gpui::Task<()>>,
     verify: Option<gpui::Task<()>>,
     refresh: Option<gpui::Task<()>>,
@@ -181,9 +264,14 @@ pub struct OnboardingWindow {
     welcome: bool,
     welcome_exiting: bool,
     welcome_exit: Option<gpui::Task<()>>,
+    welcome_at: Option<std::time::Instant>,
+    welcome_exit_at: Option<std::time::Instant>,
+    welcome_scene: f32,
+    welcome_tick: Option<std::time::Instant>,
+    reduce_motion: bool,
+    step_delay: Duration,
     audio: Option<OnboardingAudio>,
     muted: bool,
-    bounce: usize,
     demo_task: Option<gpui::Task<()>>,
     demo_phase: usize,
     demo_cycle: usize,
@@ -193,6 +281,8 @@ pub struct OnboardingWindow {
     faq_open: [bool; FAQ.len()],
     error: Option<String>,
     focus: FocusHandle,
+    stage: stage::StageState,
+    step_at: std::time::Instant,
 }
 
 impl OnboardingWindow {
@@ -212,6 +302,7 @@ impl OnboardingWindow {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         crate::theme::bind_window(window, cx);
+        let granted = std::array::from_fn(|i| state.status(OSPermission::ALL[i]).permitted());
         let mut this = Self {
             theme: Theme::for_window(window, cx, true),
             step: first_step,
@@ -219,6 +310,7 @@ impl OnboardingWindow {
             permissions_only,
             state,
             pending: None,
+            media_request_pending: false,
             poll: None,
             verify: None,
             refresh: None,
@@ -226,9 +318,14 @@ impl OnboardingWindow {
             welcome,
             welcome_exiting: false,
             welcome_exit: None,
+            welcome_at: None,
+            welcome_exit_at: None,
+            welcome_scene: 0.,
+            welcome_tick: None,
+            reduce_motion: cx.reduce_motion(),
+            step_delay: Duration::ZERO,
             audio: welcome.then(|| OnboardingAudio::new(muted, cx)),
             muted,
-            bounce: 0,
             demo_task: None,
             demo_phase: 0,
             demo_cycle: 0,
@@ -238,6 +335,8 @@ impl OnboardingWindow {
             faq_open: [false; FAQ.len()],
             error: None,
             focus: cx.focus_handle(),
+            stage: stage::StageState::new(granted),
+            step_at: std::time::Instant::now(),
         };
         cx.observe_window_activation(window, |this: &mut Self, window, cx| {
             this.animated = window.is_window_active();
@@ -256,6 +355,16 @@ impl OnboardingWindow {
             cx.notify();
         })
         .detach();
+        #[cfg(debug_assertions)]
+        if !this.welcome
+            && !this.permissions_only
+            && let Ok(name) = std::env::var("CAP_GPUI_ONBOARDING_STEP")
+            && let Some(step) = Step::ALL
+                .into_iter()
+                .find(|step| format!("{step:?}").eq_ignore_ascii_case(&name))
+        {
+            this.step = step;
+        }
         this.arm_poll(window, cx);
         this.arm_demo(window, cx);
         this
@@ -303,6 +412,11 @@ impl OnboardingWindow {
                         }
                         if this.state.apply_raw(raw) {
                             this.grants_changed();
+                            cx.notify();
+                        }
+                        let media_request_pending = permissions::media_request_pending();
+                        if media_request_pending != this.media_request_pending {
+                            this.media_request_pending = media_request_pending;
                             cx.notify();
                         }
                         this.state.all_shown_granted()
@@ -365,7 +479,7 @@ impl OnboardingWindow {
             return;
         }
         if !store::set_has_completed_onboarding(true) || !store::set_has_completed_startup(true) {
-            self.error = Some("Could not save onboarding progress. Please try again.".into());
+            self.error = Some(tr::onboarding::error::save_progress().into());
             cx.notify();
             return;
         }
@@ -374,6 +488,12 @@ impl OnboardingWindow {
         self.refresh = None;
         self.demo_task = None;
         self.audio = None;
+        // A Screen Recording grant made in this session only takes effect in a
+        // new process, however onboarding was left (Skip the tour included).
+        if self.needs_relaunch() {
+            permissions::relaunch(cx);
+            return;
+        }
         cx.defer(crate::app_windows::onboarding_finished);
     }
 
@@ -382,18 +502,24 @@ impl OnboardingWindow {
             return;
         }
         if !store::set_has_completed_startup(true) {
-            self.error = Some("Could not save onboarding progress. Please try again.".into());
+            self.error = Some(tr::onboarding::error::save_progress().into());
             cx.notify();
             return;
         }
         self.welcome_exiting = true;
+        self.welcome_exit_at = Some(std::time::Instant::now());
+        self.step_at = std::time::Instant::now();
+        self.step_revision = self.step_revision.wrapping_add(1);
+        self.step_delay = WELCOME_REVEAL_DELAY;
+        self.transition_direction = 1.;
+        cx.notify();
         self.welcome_exit = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(WELCOME_EXIT).await;
             this.update_in(cx, |this, window, cx| {
                 this.welcome = false;
                 this.welcome_exiting = false;
+                this.welcome_exit_at = None;
                 this.audio = None;
-                this.step_revision = this.step_revision.wrapping_add(1);
                 this.focus_root(window, cx);
                 if this.permissions_visible() {
                     this.refresh_permissions(window, cx);
@@ -417,7 +543,9 @@ impl OnboardingWindow {
             -1.
         };
         self.step = step;
+        self.step_at = std::time::Instant::now();
         self.step_revision = self.step_revision.wrapping_add(1);
+        self.step_delay = Duration::ZERO;
         self.poll = None;
         self.verify = None;
         self.refresh = None;
@@ -437,6 +565,10 @@ impl OnboardingWindow {
 
     fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.welcome || (self.step == Step::Permissions && !self.state.necessary_granted()) {
+            return;
+        }
+        if self.step == Step::Permissions && self.needs_relaunch() {
+            permissions::relaunch(cx);
             return;
         }
         if self.permissions_only || self.step == Step::Faq {
@@ -550,7 +682,7 @@ impl OnboardingWindow {
             "isMuted",
             serde_json::Value::Bool(self.muted),
         ) {
-            self.error = Some("Could not save the sound preference.".into());
+            self.error = Some(tr::onboarding::error::save_sound().into());
         }
         cx.notify();
     }
@@ -560,6 +692,7 @@ impl OnboardingWindow {
             return;
         }
         self.pending = Some(permission);
+        self.stage.waiting_on = Some(permission);
         self.verify = Some(cx.spawn_in(window, async move |this, cx| {
             let raw = cx
                 .background_executor()
@@ -575,6 +708,15 @@ impl OnboardingWindow {
                     match action {
                         None => {
                             this.pending = None;
+                            cx.notify();
+                            false
+                        }
+                        Some(RowAction::OpenSettings) if guided_permission(permission) => {
+                            this.pending = None;
+                            this.state.note_settings_opened(permission);
+                            permissions::open_permission_settings(permission);
+                            cx.defer(move |cx| crate::permission_guide::start(permission, cx));
+                            this.arm_poll(window, cx);
                             cx.notify();
                             false
                         }
@@ -609,8 +751,17 @@ impl OnboardingWindow {
                 }
                 this.state.apply_raw(raw);
                 this.pending = None;
+                this.media_request_pending = permissions::media_request_pending();
                 if permission.required() && !this.state.status(permission).permitted() {
                     this.state.note_request_failed(permission);
+                    // The request has added Cap to the pane's list (the way
+                    // the Tauri app always asked first); if the alert did not
+                    // end in a grant, the pane opens with the drag guide.
+                    if guided_permission(permission) {
+                        this.state.note_settings_opened(permission);
+                        permissions::open_permission_settings(permission);
+                        cx.defer(move |cx| crate::permission_guide::start(permission, cx));
+                    }
                 }
                 if this.state.all_shown_granted() {
                     this.poll = None;
@@ -637,125 +788,13 @@ impl OnboardingWindow {
             )
         }
     }
+}
 
-    fn render_permission_row(
-        &self,
-        permission: OSPermission,
-        status: OSPermissionStatus,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        let (success_bg, success_border, success_fg) = self.success_palette();
-        let granted = status == OSPermissionStatus::Granted;
-        let busy = self.pending.is_some();
-
-        let action: gpui::AnyElement = if granted {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .px(px(12.))
-                .h(px(28.))
-                .rounded(px(8.))
-                .bg(success_bg)
-                .border_1()
-                .border_color(success_border)
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(success_fg)
-                .child(
-                    svg()
-                        .path("icons/check.svg")
-                        .size(px(12.))
-                        .text_color(success_fg),
-                )
-                .child("Granted")
-                .into_any_element()
-        } else {
-            let label = match self.state.action(permission) {
-                Some(RowAction::OpenSettings) => "Open Settings",
-                _ => "Grant",
-            };
-            ui::Button::plain(
-                &theme,
-                SharedString::from(format!("perm-action-{}", permission.label())),
-                ui::ButtonVariant::Gray,
-                ui::ButtonSize::Sm,
-            )
-            .radius(px(8.))
-            .label(label)
-            .disabled(busy)
-            .on_click(cx.listener(move |this, _, window, cx| this.act(permission, window, cx)))
-            .into_any_element()
-        };
-
-        div()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .gap(px(ROW_GAP))
-            .w(px(CARD_W))
-            .px(px(ROW_PAD_X))
-            .py(px(12.))
-            .rounded(px(12.))
-            .border_1()
-            .border_color(theme.body_border(4))
-            .bg(if theme.is_dark() {
-                theme.body_fill(2)
-            } else {
-                gpui::white()
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_none()
-                    .w(px(ROW_TEXT_W))
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_12))
-                                    .child(permission.label()),
-                            )
-                            .when(!permission.required(), |this| {
-                                this.child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded_full()
-                                        .bg(Hsla::from(theme.gray_3))
-                                        .text_color(Hsla::from(theme.gray_10))
-                                        .child("Optional"),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .line_height(px(15.))
-                            .text_color(Hsla::from(theme.gray_10))
-                            .child(permission.blurb()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .w(px(ROW_ACTION_W))
-                    .justify_end()
-                    .child(action),
-            )
+fn mode_doodle(mode: Mode) -> &'static crate::doodle::Doodle {
+    match mode {
+        Mode::Instant => &crate::onboarding_doodles::UPLOAD,
+        Mode::Studio => &crate::onboarding_doodles::TRACKS,
+        Mode::Screenshot => &crate::onboarding_doodles::SNAP,
     }
 }
 
@@ -785,6 +824,103 @@ fn ease(value: f32) -> f32 {
     value * value * (3. - 2. * value)
 }
 
+fn ease_in_out(value: f32) -> f32 {
+    if value < 0.5 {
+        4. * value.powi(3)
+    } else {
+        1. - (-2. * value + 2.).powi(3) / 2.
+    }
+}
+
+fn welcome_script(written: f32, opacity: f32) -> impl IntoElement {
+    const FEATHER: f32 = 0.16;
+    const EDGE: f32 = 2.4;
+    const SHADOW_DROP: f32 = 2.;
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            if opacity <= 0. || written <= 0. {
+                return;
+            }
+            let script = &welcome_script::WELCOME;
+            let Some((origin, scale)) = script.fit(bounds) else {
+                return;
+            };
+            let shadow_origin = (origin.0, origin.1 + SHADOW_DROP);
+            let (Some(fill), Some(edge), Some(shadow)) = (
+                script.path(origin, scale),
+                script.stroke(origin, scale, EDGE),
+                script.stroke(shadow_origin, scale, EDGE),
+            ) else {
+                return;
+            };
+            // Shadow, then the edge, then the white over it: the fill hides
+            // the inner half of every stroke, joins included.
+            let layers = [
+                (shadow, Hsla::from(rgba(0x3f5a821f))),
+                (edge, Hsla::from(rgba(0x5f7fae73))),
+                (fill.clone(), Hsla::from(rgba(0xfffffff2))),
+            ];
+            let left = f32::from(fill.bounds.left()) - EDGE;
+            let width = f32::from(fill.bounds.size.width) + 2. * EDGE;
+            let top = fill.bounds.top() - px(EDGE);
+            let height = fill.bounds.size.height + px(2. * EDGE + SHADOW_DROP);
+            let mask = |from: f32, to: f32| gpui::ContentMask {
+                bounds: gpui::Bounds {
+                    origin: gpui::point(px(left + from * width), top),
+                    size: gpui::size(px((to - from) * width), height),
+                },
+            };
+            let reach = written * (1. + FEATHER);
+            let solid = (reach - FEATHER).clamp(0., 1.);
+            let (start, end) = (solid, reach.min(1.));
+            for (path, color) in layers {
+                let color = color.opacity(opacity);
+                if solid > 0. {
+                    window.with_content_mask(Some(mask(0., solid)), |window| {
+                        window.paint_path(path.clone(), color);
+                    });
+                }
+                // Path gradients span the path's bounds clipped to the
+                // content mask, so the feather's stops run across its strip.
+                if end > start {
+                    let fade = (1. - (end - start) / FEATHER).max(0.);
+                    window.with_content_mask(Some(mask(start, end)), |window| {
+                        window.paint_path(
+                            path,
+                            linear_gradient(
+                                90.,
+                                linear_color_stop(color, 0.),
+                                linear_color_stop(color.opacity(fade), 1.),
+                            ),
+                        );
+                    });
+                }
+            }
+        },
+    )
+    .size_full()
+}
+
+fn ease_out(value: f32) -> f32 {
+    1. - (1. - value).powi(3)
+}
+
+fn beat(elapsed: f32, delay: f32, duration: f32) -> f32 {
+    ((elapsed - delay) / duration).clamp(0., 1.)
+}
+
+#[derive(Clone, Copy)]
+struct WelcomeMotion {
+    t: f32,
+    /// Advances only while frames are driven, so ambient motion holds still
+    /// while the window is inactive instead of jumping ahead on return.
+    scene: f32,
+    exit: f32,
+    /// 0 under Reduce Motion: fades only.
+    travel: f32,
+}
+
 impl OnboardingWindow {
     fn card(&self) -> Div {
         div()
@@ -798,204 +934,339 @@ impl OnboardingWindow {
             })
     }
 
-    fn heading(
-        &self,
-        title: &'static str,
-        subtitle: &'static str,
-        icon: Option<&'static str>,
-    ) -> Div {
-        let theme = self.theme;
+    fn paper_card(&self) -> Div {
+        let paper = stage::Paper::new(&self.theme);
+        div()
+            .rounded(px(20.))
+            .border(px(1.5))
+            .border_color(paper.track)
+            .bg(paper.card)
+    }
+
+    fn heading(&self, title: &'static str, subtitle: &'static str) -> Div {
+        let paper = stage::Paper::new(&self.theme);
         div()
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(12.))
-            .max_w(px(480.))
+            .max_w(px(500.))
             .text_center()
-            .when_some(icon, |el, path| {
-                el.child(
-                    self.card()
-                        .size(px(48.))
-                        .rounded(px(16.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(glyph(path, 20., theme.gray_11)),
-                )
-            })
             .child(
-                copy(title, 24., theme.gray_12)
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(px(30.)),
+                copy(title, 28., paper.ink)
+                    .font_weight(FontWeight::MEDIUM)
+                    .line_height(px(34.)),
             )
-            .child(copy(subtitle, 14., theme.gray_10).line_height(px(21.)))
+            .child(div().mt(px(4.)).child(crate::doodle::doodle(
+                &crate::onboarding_doodles::UNDERLINE,
+                paper.palette(),
+                self.step_at,
+                !self.animated,
+                132.,
+                12.,
+            )))
+            .child(
+                copy(subtitle, 15., paper.soft)
+                    .mt(px(10.))
+                    .font_weight(FontWeight::NORMAL)
+                    .line_height(px(22.)),
+            )
     }
 
-    fn ambient(&self, width: f32, height: f32, welcome: bool) -> AnyElement {
-        let cloud_width = width * 0.8;
-        let exiting = welcome && self.welcome_exiting;
-        let first = div()
-            .absolute()
-            .top_0()
-            .right(px(-160.))
-            .opacity(0.7)
-            .child(
-                img("onboarding/cloud-1.png")
-                    .w(px(cloud_width))
-                    .h(px(cloud_width * 1138. / 1657.)),
-            );
-        let second = div().absolute().top_0().left(px(-160.)).opacity(0.7).child(
-            img("onboarding/cloud-2.png")
-                .w(px(cloud_width))
-                .h(px(cloud_width * 892. / 1923.)),
-        );
-        let third_width = width;
-        let third = div()
-            .absolute()
-            .left_0()
-            .bottom(px(-height * 0.15))
-            .opacity(0.7)
-            .child(
-                img("onboarding/cloud-3.png")
-                    .w(px(third_width))
-                    .h(px(third_width * 703. / 3007.)),
-            );
-        let clouds = if !self.animated {
-            div().size_full().child(first).child(second).child(third)
-        } else if exiting {
-            div()
-                .size_full()
-                .child(first.with_animation(
-                    "welcome-cloud-one-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    |el, t| {
-                        el.right(px(-160. + 200. * t))
-                            .top(px(-150. * t))
-                            .opacity(0.7 * (1. - t))
-                    },
-                ))
-                .child(second.with_animation(
-                    "welcome-cloud-two-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    |el, t| {
-                        el.left(px(-160. + 200. * t))
-                            .top(px(-150. * t))
-                            .opacity(0.7 * (1. - t))
-                    },
-                ))
-                .child(third.with_animation(
-                    "welcome-cloud-three-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    move |el, t| {
-                        el.bottom(px(-height * 0.15 - 200. * t))
-                            .opacity(0.7 * (1. - t))
-                    },
-                ))
+    fn tick_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        self.reduce_motion = cx.reduce_motion();
+        let started = *self.welcome_at.get_or_insert(now);
+        let entering = !self.reduce_motion
+            && now.duration_since(started).as_secs_f32() < WELCOME_ENTRANCE_SECS;
+        let running =
+            self.welcome_exit_at.is_some() || entering || (self.animated && !self.reduce_motion);
+        if running {
+            if let Some(last) = self.welcome_tick {
+                self.welcome_scene += now.duration_since(last).as_secs_f32().min(0.1);
+            }
+            self.welcome_tick = Some(now);
+            window.request_animation_frame();
         } else {
-            div()
-                .size_full()
-                .child(first.with_animation(
-                    if welcome {
-                        "welcome-cloud-one"
-                    } else {
-                        "ambient-cloud-one"
-                    },
-                    Animation::new(Duration::from_secs(30)).repeat(),
-                    |el, t| {
-                        let amount = 1. - (2. * t - 1.).abs();
-                        el.right(px(-160. + 20. * amount)).top(px(10. * amount))
-                    },
-                ))
-                .child(second.with_animation(
-                    if welcome {
-                        "welcome-cloud-two"
-                    } else {
-                        "ambient-cloud-two"
-                    },
-                    Animation::new(Duration::from_secs(35)).repeat(),
-                    |el, t| {
-                        let amount = 1. - (2. * t - 1.).abs();
-                        el.left(px(-160. + 20. * amount)).top(px(10. * amount))
-                    },
-                ))
-                .child(third.with_animation(
-                    if welcome {
-                        "welcome-cloud-three"
-                    } else {
-                        "ambient-cloud-three"
-                    },
-                    if welcome {
-                        Animation::new(Duration::from_secs(60)).with_easing(ease)
-                    } else {
-                        Animation::new(Duration::from_secs(120)).repeat()
-                    },
-                    move |el, t| {
-                        let t = if welcome { t } else { 1. - (2. * t - 1.).abs() };
-                        let (x, y) = if t < 0.5 {
-                            (width * 0.04 * t, 20. * (1. - t * 2.))
-                        } else {
-                            (width * 0.04 * (1. - t), 0.)
-                        };
-                        el.left(px(x)).bottom(px(-height * 0.15 - y))
-                    },
-                ))
+            self.welcome_tick = None;
+        }
+    }
+
+    fn welcome_motion(&self) -> WelcomeMotion {
+        let still = self.reduce_motion;
+        WelcomeMotion {
+            t: match self.welcome_at {
+                Some(at) if !still => at.elapsed().as_secs_f32(),
+                _ => WELCOME_ENTRANCE_SECS,
+            },
+            scene: self.welcome_scene,
+            exit: self.welcome_exit_at.map_or(0., |at| {
+                (at.elapsed().as_secs_f32() / WELCOME_EXIT.as_secs_f32()).clamp(0., 1.)
+            }),
+            travel: if still { 0. } else { 1. },
+        }
+    }
+
+    fn welcome_sky(&self, width: f32, height: f32, m: WelcomeMotion) -> AnyElement {
+        let travel = m.travel;
+        let gone = ease(m.exit);
+        let unit = width / 1100.;
+        let clouds_in = ease(beat(m.t, 0.4, 2.2));
+        // Constant pace, never eased: images snap to device pixels, so an even
+        // speed is what keeps the steps invisible.
+        let layer = |depth: usize| {
+            let CloudLayer {
+                scale,
+                pace,
+                opacity,
+                clouds,
+            } = WELCOME_CLOUD_LAYERS[depth];
+            let lift = (120. + 140. * depth as f32) * gone * travel;
+            clouds.iter().map(move |cloud| {
+                let Cloud {
+                    art,
+                    aspect,
+                    top,
+                    width: cloud_width,
+                    phase,
+                } = *cloud;
+                let cloud_width = cloud_width * scale * unit * (1. + 0.25 * gone * travel);
+                let span = width + cloud_width;
+                let x = (phase * span + m.scene * pace * travel).rem_euclid(span) - cloud_width;
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(top * height - lift))
+                    .opacity(opacity * clouds_in * (1. - gone))
+                    .child(img(art).w(px(cloud_width)).h(px(cloud_width * aspect)))
+            })
         };
+        let mist = img("onboarding/mist.svg")
+            .absolute()
+            .left(px(-width * 0.1 + 20. * (m.scene / 7.).sin() * travel))
+            .top(px(-200. * gone * travel))
+            .w(px(width * 1.2))
+            .h(px(height * 1.5))
+            .object_fit(ObjectFit::Fill)
+            .opacity(clouds_in * (1. - gone));
+        let wave = |period: f32, phase: f32| {
+            (std::f32::consts::TAU * m.scene / period + phase).sin() * travel
+        };
+        let light_in = ease(beat(m.t, 0.6, 3.)) * (1. - gone);
+        // Twice the window's width so the sheet's edges stay off screen.
+        let sun_size = width * 2.;
+        let sun = img("onboarding/sun.svg")
+            .absolute()
+            .left(px(width * 0.84 - sun_size / 2.))
+            .top(px(-height * 0.06 - sun_size / 2.))
+            .size(px(sun_size))
+            .object_fit(ObjectFit::Fill)
+            .opacity(light_in * (0.85 + 0.15 * wave(9., 0.)));
+        const RAY_BLEED: f32 = 40.;
+        let rays = |art: &'static str, sway: f32, period: f32, phase: f32, strength: f32| {
+            img(art)
+                .absolute()
+                .top_0()
+                .left(px(-RAY_BLEED + sway * wave(period * 1.6, phase) * travel))
+                .w(px(width + 2. * RAY_BLEED))
+                .h(px(height))
+                .object_fit(ObjectFit::Fill)
+                .opacity(light_in * strength * (0.62 + 0.38 * wave(period, phase)))
+        };
+
+        const GRAIN_JITTER: f32 = 200.;
+        let film_frame = (m.scene * 24. * travel) as u32;
+        let shift = |salt: u32| ((film_frame.wrapping_mul(salt) >> 7) % 200) as f32;
+        let grain = img("onboarding/grain.svg")
+            .absolute()
+            .left(px(-shift(2_654_435_761)))
+            .top(px(-shift(2_246_822_519)))
+            .w(px(width + GRAIN_JITTER))
+            .h(px(height + GRAIN_JITTER))
+            .object_fit(ObjectFit::Cover);
+        let wash = (std::f32::consts::PI * beat(m.exit, 0.1, 0.75)).sin();
+        let fill =
+            |color: Hsla, opacity: f32| div().absolute().inset_0().bg(color).opacity(opacity);
+
         div()
             .absolute()
             .inset_0()
             .overflow_hidden()
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(rgb(0x3b82f6), 0.),
-                linear_color_stop(rgb(0x2563eb), 1.),
-            ))
-            .opacity(if welcome { 1. } else { 0.1 })
-            .child(clouds)
+            .bg(rgb(0xedf1f6))
             .child(
-                img("onboarding/grain.svg")
+                img("onboarding/sky.svg")
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Fill),
+            )
+            .child(rays("onboarding/rays-far.svg", 14., 10., 0., 0.9))
+            .children(layer(0))
+            .child(mist)
+            .children(layer(1))
+            .children(layer(2))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(relative(0.4))
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(gpui::hsla(0.59, 0.36, 0.95, 0.), 0.),
+                        linear_color_stop(gpui::hsla(0.59, 0.36, 0.95, 0.55), 1.),
+                    )),
+            )
+            .child(
+                img("onboarding/vignette.svg")
                     .absolute()
                     .inset_0()
                     .size_full()
                     .object_fit(ObjectFit::Fill)
-                    .opacity(0.14),
+                    .opacity(1. - gone),
             )
+            // Over the vignette, which otherwise darkens the sun's corner.
+            .child(sun)
+            .child(rays("onboarding/rays-near.svg", -18., 13., 2.1, 0.85))
+            .child(fill(gpui::white(), 0.6 * wash))
+            .child(grain)
+            .child(fill(rgb(0xf6f8fb).into(), 1. - ease(beat(m.t, 0.1, 2.4))))
             .into_any_element()
     }
 
+    /// Drawn over the whole window, header included, so no strip of the page
+    /// shows above the sky as it fades. `height` is the full window's.
     fn render_welcome(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        let glass = theme
-            .material
-            .filter(|material| material.kind == crate::platform::MaterialKind::LiquidGlass);
-        let button_fill = glass
-            .map(|material| Hsla::from(material.control_fill))
-            .unwrap_or_else(gpui::white);
-        let button_hover = glass
-            .map(|material| Hsla::from(material.control_hover))
-            .unwrap_or_else(|| rgba(0xfffffff2).into());
-        let button_text = glass
-            .map(|material| Hsla::from(material.text))
-            .unwrap_or_else(|| rgb(0x161b26).into());
-        let logo = img("onboarding/logo.svg")
-            .w(px(80.))
-            .h(px(96.))
-            .object_fit(ObjectFit::Contain);
-        let logo = if self.bounce == 0 || !self.animated {
-            logo.into_any_element()
-        } else {
-            div()
-                .relative()
-                .child(logo)
-                .with_animation(
-                    ("onboarding-logo", self.bounce),
-                    Animation::new(Duration::from_secs(1)),
-                    |el, t| el.top(px(-20. * (std::f32::consts::PI * t).sin())),
-                )
-                .into_any_element()
+        let m = self.welcome_motion();
+        let travel = m.travel;
+        let ink = Hsla::from(rgb(0x1e2a40));
+
+        let rise = |delay: f32, exit_delay: f32| {
+            let arrive = ease_out(beat(m.t, delay, 1.3));
+            let leave = ease(beat(m.exit, exit_delay, 0.4));
+            let offset = (10. * (1. - arrive) - 24. * leave) * travel;
+            (offset, ease(beat(m.t, delay, 1.2)) * (1. - leave))
         };
+        let (title_y, title_opacity) = rise(1.0, 0.06);
+        let written = if travel > 0. {
+            ease_in_out(beat(m.t, 1.0, 1.8))
+        } else {
+            1.
+        };
+        let (subtitle_y, subtitle_opacity) = rise(1.35, 0.03);
+        let (button_y, button_opacity) = rise(1.8, 0.);
+        let logo_leave = ease(beat(m.exit, 0.09, 0.4));
+        let logo_y = -24. * logo_leave * travel;
+        let logo_opacity = ease(beat(m.t, 0.6, 1.2)) * (1. - logo_leave);
+
+        let logo = img("onboarding/wordmark.svg")
+            .w(px(120.))
+            .h(px(40.))
+            .object_fit(ObjectFit::Contain);
+
+        let shadow = |color: u32, y: f32, blur: f32, spread: f32, inset: bool| gpui::BoxShadow {
+            color: rgba(color).into(),
+            offset: gpui::point(px(0.), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset,
+        };
+        let button_shadow = move |lift: bool| {
+            vec![
+                shadow(0xffffffcc, 2., 3., -1., true),
+                shadow(0x3d77c233, -1., 1., 0., true),
+                shadow(
+                    if lift { 0x3d77c238 } else { 0x3d77c233 },
+                    if lift { 2. } else { 1. },
+                    if lift { 4. } else { 2. },
+                    0.,
+                    false,
+                ),
+                shadow(
+                    if lift { 0x78b2f0a6 } else { 0x78b2f08c },
+                    if lift { 14. } else { 10. },
+                    if lift { 30. } else { 24. },
+                    -10.,
+                    false,
+                ),
+            ]
+        };
+        let button = div()
+            .id("onboarding-get-started")
+            .tab_index(0)
+            .cursor_pointer()
+            .relative()
+            .top(px(button_y))
+            .opacity(button_opacity)
+            .mt(px(52.))
+            .w(px(274.))
+            .h(px(58.))
+            .rounded(px(14.))
+            .border_1()
+            .border_color(rgba(0x3f7fcda6))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(rgb(0xf5fafe), 0.),
+                linear_color_stop(rgb(0xcfe2f6), 1.),
+            ))
+            .shadow(button_shadow(false))
+            .hover(move |el| {
+                el.border_color(rgba(0x3474c4c7))
+                    .shadow(button_shadow(true))
+            })
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .on_click(cx.listener(|this, _, window, cx| this.continue_from_welcome(window, cx)))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(3.))
+                    .left(px(3.))
+                    .right(px(3.))
+                    .h(relative(0.44))
+                    .rounded_t(px(11.))
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(rgba(0xffffff59), 0.),
+                        linear_color_stop(rgba(0xffffff00), 1.),
+                    )),
+            )
+            .child(
+                copy(tr::onboarding::welcome::get_started(), 16., ink)
+                    .line_height(px(20.))
+                    .font_weight(FontWeight::MEDIUM),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(4.))
+                    .child(
+                        copy(tr::onboarding::welcome::click_or_press(), 11., ink.opacity(0.55))
+                            .font_weight(FontWeight::NORMAL)
+                            .line_height(px(14.)),
+                    )
+                    .child(
+                        copy(tr::onboarding::welcome::space_key(), 10., ink.opacity(0.7))
+                            .font_weight(FontWeight::MEDIUM)
+                            .line_height(px(14.))
+                            .px(px(4.))
+                            .py(px(1.))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgba(0x3f7fcd40))
+                            .bg(rgba(0xffffffcc)),
+                    ),
+            );
+
         let content = div()
             .relative()
             .size_full()
+            .pt(px(ONBOARDING_HEADER_HEIGHT))
             .flex()
             .flex_col()
             .items_center()
@@ -1003,99 +1274,44 @@ impl OnboardingWindow {
             .px(px(16.))
             .child(
                 div()
-                    .id("onboarding-logo")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.bounce = this.bounce.wrapping_add(1);
-                        cx.notify();
-                    }))
+                    .relative()
+                    .top(px(logo_y))
+                    .opacity(logo_opacity)
                     .child(logo),
             )
             .child(
-                copy("Welcome to Cap", 48., gpui::white())
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(px(48.))
-                    .mt(px(40.))
-                    .mb(px(16.)),
+                div()
+                    .relative()
+                    .top(px(title_y))
+                    .mt(px(30.))
+                    .mb(px(18.))
+                    .w(px(380.))
+                    .h(px(96.))
+                    .child(welcome_script(written, title_opacity)),
             )
             .child(
                 copy(
-                    "Beautiful screen recordings, owned by you.",
-                    24.,
-                    gpui::white(),
+                    tr::onboarding::welcome::tagline(),
+                    22.,
+                    ink.opacity(0.75),
                 )
+                .relative()
+                .top(px(subtitle_y))
+                .opacity(subtitle_opacity)
+                .font_family("Source Serif 4")
+                .font_weight(FontWeight::LIGHT)
                 .line_height(px(32.))
-                .opacity(0.8)
                 .whitespace_nowrap(),
             )
-            .child(
-                div()
-                    .id("onboarding-get-started")
-                    .tab_index(0)
-                    .cursor_pointer()
-                    .mt(px(56.))
-                    .w(px(274.))
-                    .h(px(60.))
-                    .px(px(64.))
-                    .py(px(8.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(if glass.is_some() {
-                        gpui::transparent_black()
-                    } else {
-                        rgba(0xffffff4d).into()
-                    })
-                    .bg(button_fill)
-                    .hover(move |el| el.bg(button_hover))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(2.))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.continue_from_welcome(window, cx)),
-                    )
-                    .child(
-                        copy("Get Started", 14., button_text)
-                            .line_height(px(20.))
-                            .font_weight(FontWeight::MEDIUM),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.))
-                            .child(
-                                copy("Click here, or press", 11., rgba(0x161b2694))
-                                    .font_weight(FontWeight::NORMAL)
-                                    .line_height(px(14.)),
-                            )
-                            .child(
-                                copy("Space", 10., theme.gray_11)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .line_height(px(14.))
-                                    .px(px(4.))
-                                    .py(px(1.))
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(theme.gray_6)
-                                    .bg(if theme.is_dark() {
-                                        theme.body_fill(3)
-                                    } else {
-                                        gpui::white()
-                                    }),
-                            ),
-                    ),
-            )
+            .child(button)
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., gpui::white()).mt(px(12.)))
+                el.child(copy(error, 12., ink).mt(px(12.)))
             });
         let mute = div()
             .id("onboarding-mute")
             .tab_index(0)
             .absolute()
-            .top(px(12.))
+            .top(px(ONBOARDING_HEADER_HEIGHT + 12.))
             .p(px(4.))
             .when(cfg!(target_os = "macos"), |el| el.right(px(16.)))
             .when(!cfg!(target_os = "macos"), |el| el.left(px(16.)))
@@ -1109,99 +1325,31 @@ impl OnboardingWindow {
                     "onboarding/volume-2.svg"
                 },
                 24.,
-                gpui::white(),
+                ink.opacity(0.55),
             ));
-        let overlay = div()
+        let dissolve = ease(beat(m.exit, 0.45, 0.55));
+        div()
+            .id("onboarding-welcome")
             .absolute()
             .inset_0()
             .overflow_hidden()
-            .child(self.ambient(width, height, true))
+            .opacity(1. - dissolve)
+            .child(self.welcome_sky(width, height, m))
             .child(content)
-            .when(!self.welcome_exiting, |el| el.child(mute));
-        if self.welcome_exiting && self.animated {
-            overlay
-                .with_animation(
-                    "onboarding-welcome-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    |el, t| el.opacity(1. - t),
-                )
-                .into_any_element()
-        } else {
-            overlay.into_any_element()
-        }
-    }
-
-    fn render_permissions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .min_h_full()
-            .px(px(48.))
-            .py(px(24.))
-            .gap(px(24.))
-            .child(self.heading(
-                "Permissions Required",
-                "Cap needs a few permissions to record your screen and capture audio.",
-                Some("icons/shield.svg"),
-            ))
-            .child(div().flex().flex_col().w(px(CARD_W)).gap(px(8.)).children(
-                self.state.shown().map(|(permission, status)| {
-                    self.render_permission_row(permission, status, cx)
-                        .into_any_element()
-                }),
-            ))
-            .when(self.state.relaunch_hint(), |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(12.))
-                        .w(px(CARD_W))
-                        .p(px(12.))
-                        .rounded(px(12.))
-                        .bg(theme.amber_3)
-                        .border_1()
-                        .border_color(theme.amber_6)
-                        .child(glyph("icons/triangle-alert.svg", 16., theme.amber_11))
-                        .child(
-                            copy(
-                                "Granted it in System Settings? Relaunch Cap to apply.",
-                                11.,
-                                theme.amber_11,
-                            )
-                            .flex_1()
-                            .min_w_0(),
-                        )
-                        .child(
-                            ui::Button::plain(
-                                &theme,
-                                "perm-relaunch",
-                                ui::ButtonVariant::White,
-                                ui::ButtonSize::Sm,
-                            )
-                            .radius(px(8.))
-                            .icon("icons/rotate-ccw.svg")
-                            .label("Relaunch Cap")
-                            .on_click(cx.listener(|_, _, _, cx| permissions::relaunch(cx))),
-                        ),
-                )
-            })
+            .when(!self.welcome_exiting, |el| el.child(mute))
             .into_any_element()
     }
 
     fn render_overview(&self) -> AnyElement {
         let theme = self.theme;
         div().flex().flex_col().items_center().justify_center().min_h_full().px(px(40.)).gap(px(32.))
-            .child(self.heading("One app, every workflow", "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it.", None))
+            .child(self.heading(tr::onboarding::overview::title(), tr::onboarding::overview::subtitle()))
             .child(div().flex().gap(px(16.)).w_full().max_w(px(540.)).children(MODES.iter().enumerate().map(|(index, mode)| {
-                let card = self.card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(12.)).p(px(20.)).rounded(px(16.))
-                    .child(self.card().size(px(48.)).rounded(px(16.)).flex().items_center().justify_center()
-                        .child(glyph(mode.icon, 20., theme.gray_12)))
-                    .child(copy(mode.title, 14., theme.gray_12).font_weight(FontWeight::BOLD).text_center())
-                    .child(copy(mode.tagline, 11., theme.gray_9).line_height(px(15.)).text_center());
+                let paper = stage::Paper::new(&theme);
+                let card = self.paper_card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(10.)).px(px(20.)).pt(px(22.)).pb(px(24.))
+                    .child(crate::doodle::doodle(mode_doodle(mode.mode), paper.palette(), self.step_at + Duration::from_millis(index as u64 * 180), !self.animated, 96., 84.))
+                    .child(copy((mode.title)(), 15., paper.ink).font_weight(FontWeight::MEDIUM).text_center().mt(px(4.)))
+                    .child(copy((mode.tagline)(), 12., paper.soft).font_weight(FontWeight::NORMAL).line_height(px(16.)).text_center());
                 if !self.animated { return card.into_any_element(); }
                 card.with_animation(("overview-card", index), Animation::new(Duration::from_millis(700 + index as u64 * 100)),
                         |el, t| el.relative().top(px(16. * (1. - ease(t)))).opacity(ease(t))).into_any_element()
@@ -1209,7 +1357,7 @@ impl OnboardingWindow {
     }
 
     fn render_detail(&self, index: usize) -> AnyElement {
-        let theme = self.theme;
+        let paper = stage::Paper::new(&self.theme);
         let mode = &MODES[index];
         div()
             .flex()
@@ -1230,54 +1378,56 @@ impl OnboardingWindow {
                             .flex()
                             .items_center()
                             .gap(px(12.))
-                            .child(
-                                self.card()
-                                    .size(px(44.))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(glyph(mode.icon, 20., theme.gray_12)),
-                            )
+                            .child(crate::doodle::doodle(
+                                mode_doodle(mode.mode),
+                                paper.palette(),
+                                self.step_at,
+                                !self.animated,
+                                58.,
+                                50.,
+                            ))
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
                                     .gap(px(3.))
                                     .child(
-                                        copy(mode.title, 18., theme.gray_12)
-                                            .font_weight(FontWeight::BOLD),
+                                        copy((mode.title)(), 20., paper.ink)
+                                            .font_weight(FontWeight::MEDIUM),
                                     )
                                     .child(
-                                        copy(mode.tagline, 11., theme.gray_9)
-                                            .font_weight(FontWeight::MEDIUM),
+                                        copy((mode.tagline)(), 12., paper.soft)
+                                            .font_weight(FontWeight::NORMAL),
                                     ),
                             ),
                     )
-                    .child(copy(mode.description, 13., theme.gray_10).line_height(px(20.)))
+                    .child(
+                        copy((mode.description)(), 13., paper.soft)
+                            .font_weight(FontWeight::NORMAL)
+                            .line_height(px(20.)),
+                    )
                     .child(div().flex().flex_col().gap(px(10.)).children(
-                        mode.features.iter().map(|feature| {
+                        mode.features.iter().enumerate().map(|(i, feature)| {
                             div()
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
+                                .child(crate::doodle::doodle(
+                                    &crate::onboarding_doodles::TICK,
+                                    paper.palette(),
+                                    self.step_at + Duration::from_millis(400 + i as u64 * 140),
+                                    !self.animated,
+                                    18.,
+                                    18.,
+                                ))
                                 .child(
-                                    div()
-                                        .size(px(20.))
-                                        .rounded_full()
-                                        .bg(theme.blue_9)
-                                        .flex_shrink_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(glyph("icons/check.svg", 10., gpui::white())),
+                                    copy(feature(), 13., paper.ink).font_weight(FontWeight::NORMAL),
                                 )
-                                .child(copy(*feature, 12., theme.gray_11))
                         }),
                     )),
             )
             .child(
-                self.card()
+                self.paper_card()
                     .flex_1()
                     .min_w_0()
                     .h(px(if index == 1 { 300. } else { 288. }))
@@ -1311,9 +1461,8 @@ impl OnboardingWindow {
             .px(px(48.))
             .gap(px(32.))
             .child(self.heading(
-                "Switch modes anytime",
-                "Toggle between modes with a single click from the main Cap window.",
-                None,
+                tr::onboarding::toggle::title(),
+                tr::onboarding::toggle::subtitle(),
             ))
             .child(
                 div()
@@ -1322,7 +1471,7 @@ impl OnboardingWindow {
                     .items_center()
                     .gap(px(20.))
                     .child(
-                        self.card()
+                        self.paper_card()
                             .rounded_full()
                             .flex()
                             .gap(px(24.))
@@ -1367,7 +1516,7 @@ impl OnboardingWindow {
                     .child(div().flex().gap(px(24.)).px(px(16.)).children(
                         MODES.iter().enumerate().map(|(index, mode)| {
                             copy(
-                                mode.title,
+                                (mode.title)(),
                                 14.,
                                 if active == index {
                                     theme.gray_12
@@ -1392,18 +1541,18 @@ impl OnboardingWindow {
     fn render_shortcuts(&self) -> AnyElement {
         let theme = self.theme;
         div().flex().flex_col().items_center().justify_center().min_h_full().px(px(48.)).gap(px(24.))
-            .child(self.heading("Make Cap yours", "Customize everything from keyboard shortcuts to storage. Cap adapts to your workflow.", Some("icons/settings.svg")))
+            .child(self.heading(tr::onboarding::customize::title(), tr::onboarding::customize::subtitle()))
             .child(div().flex().flex_col().w_full().max_w(px(420.)).gap(px(8.)).children([
-                ("Keyboard Shortcuts", "Global hotkeys for recording, screenshots, and switching modes"),
-                ("Custom S3 Storage", "Connect your own S3-compatible bucket for full control over your recordings"),
-                ("Custom Domain", "Use your own domain for shareable links instead of cap.so"),
-                ("Recording Preferences", "FPS, quality, countdown timer, cursor effects, and more"),
+                (tr::onboarding::customize::shortcuts::title(), tr::onboarding::customize::shortcuts::description()),
+                (tr::onboarding::customize::s3::title(), tr::onboarding::customize::s3::description()),
+                (tr::onboarding::customize::domain::title(), tr::onboarding::customize::domain::description()),
+                (tr::onboarding::customize::preferences::title(), tr::onboarding::customize::preferences::description()),
             ].into_iter().map(|(title, description)| {
-                self.card().px(px(16.)).py(px(12.)).flex().flex_col().gap(px(4.))
+                self.paper_card().rounded(px(16.)).px(px(18.)).py(px(13.)).flex().flex_col().gap(px(4.))
                     .child(copy(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM))
                     .child(copy(description, 11., theme.gray_10).line_height(px(15.)))
             })))
-            .child(copy("Change any of these at any time in Settings", 12., theme.gray_9))
+            .child(copy(tr::onboarding::customize::footer(), 12., theme.gray_9))
             .into_any_element()
     }
 
@@ -1419,12 +1568,11 @@ impl OnboardingWindow {
             .py(px(24.))
             .gap(px(24.))
             .child(self.heading(
-                "Frequently Asked Questions",
-                "Everything you need to know to get started.",
-                None,
+                tr::onboarding::faq::title(),
+                tr::onboarding::faq::subtitle(),
             ))
             .child(
-                self.card()
+                self.paper_card()
                     .w_full()
                     .max_w(px(480.))
                     .overflow_hidden()
@@ -1450,7 +1598,7 @@ impl OnboardingWindow {
                                         cx.notify();
                                     }))
                                     .child(
-                                        copy(*question, 13., theme.gray_12)
+                                        copy(question(), 13., theme.gray_12)
                                             .font_weight(FontWeight::MEDIUM),
                                     )
                                     .child(glyph(
@@ -1469,11 +1617,11 @@ impl OnboardingWindow {
                                         .px(px(20.))
                                         .pb(px(16.))
                                         .child(
-                                            copy(*answer, 13., theme.gray_10).line_height(px(20.)),
+                                            copy(answer(), 13., theme.gray_10).line_height(px(20.)),
                                         )
                                         .when(index == 0, |el| {
                                             el.child(
-                                                copy("View pricing plans", 13., theme.blue_10)
+                                                copy(tr::onboarding::faq::pricing(), 13., theme.blue_10)
                                                     .id("onboarding-faq-pricing")
                                                     .cursor_pointer()
                                                     .mt(px(8.))
@@ -1487,7 +1635,7 @@ impl OnboardingWindow {
                     })),
             )
             .child(
-                copy("View pricing plans ↗", 13., theme.blue_10)
+                copy(tr::onboarding::faq::pricing_link(), 13., theme.blue_10)
                     .id("onboarding-pricing")
                     .cursor_pointer()
                     .on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)),
@@ -1496,7 +1644,7 @@ impl OnboardingWindow {
     }
 
     fn render_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let paper = stage::Paper::new(&self.theme);
         let first = self.first_step as usize;
         let current = self.step as usize - first;
         let total = if self.permissions_only {
@@ -1506,20 +1654,23 @@ impl OnboardingWindow {
         };
         let disabled = self.step == Step::Permissions && !self.state.necessary_granted();
         let last = self.permissions_only || self.step == Step::Faq;
-        let label = if self.permissions_only {
-            "Continue to Cap"
+        let relaunch = self.step == Step::Permissions && !disabled && self.needs_relaunch();
+        let label = if relaunch {
+            tr::onboarding::nav::relaunch()
+        } else if self.permissions_only {
+            tr::onboarding::nav::continue_to_cap()
         } else if last {
-            "Start Using Cap"
+            tr::onboarding::nav::start()
         } else {
-            "Continue"
+            tr::onboarding::nav::next()
         };
         div()
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(8.))
-            .px(px(32.))
-            .pb(px(20.))
+            .gap(px(10.))
+            .px(px(36.))
+            .pb(px(18.))
             .pt(px(8.))
             .flex_shrink_0()
             .child(
@@ -1530,10 +1681,10 @@ impl OnboardingWindow {
                     .w_full()
                     .child(div().flex_1().when(current > 0, |el| {
                         el.child(
-                            copy("←  Back", 13., theme.gray_10)
+                            copy(tr::onboarding::nav::back(), 13., paper.soft)
                                 .id("onboarding-back")
                                 .cursor_pointer()
-                                .hover(move |el| el.text_color(theme.gray_12))
+                                .hover(move |el| el.text_color(paper.ink))
                                 .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
                         )
                     }))
@@ -1541,95 +1692,101 @@ impl OnboardingWindow {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.))
-                            .children((0..total).map(|index| {
-                                div()
-                                    .h(px(6.))
-                                    .w(px(if current == index { 20. } else { 6. }))
-                                    .rounded_full()
-                                    .bg(if current == index {
-                                        theme.gray_12
-                                    } else if current > index {
-                                        theme.gray_8
-                                    } else {
-                                        theme.gray_5
-                                    })
-                            })),
+                            .gap(px(5.))
+                            .when(total > 1, |el| {
+                                el.children((0..total).map(|index| {
+                                    div()
+                                        .h(px(6.))
+                                        .w(px(if current == index { 22. } else { 6. }))
+                                        .rounded_full()
+                                        .bg(if current == index {
+                                            paper.ink
+                                        } else if current > index {
+                                            paper.soft
+                                        } else {
+                                            paper.track
+                                        })
+                                }))
+                            }),
                     )
                     .child(
                         div().flex_1().flex().justify_end().child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(6.))
-                                .child(
-                                    div()
-                                        .id("onboarding-continue")
-                                        .tab_index(0)
-                                        .min_w(px(152.))
-                                        .min_h(px(48.))
-                                        .px(px(40.))
-                                        .py(px(12.))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap(px(8.))
-                                        .bg(if disabled {
-                                            theme.gray_6
-                                        } else {
-                                            theme.gray_12
-                                        })
-                                        .text_color(if disabled {
-                                            theme.gray_9
-                                        } else {
-                                            theme.gray_1
-                                        })
-                                        .when(!disabled, |el| {
-                                            el.cursor_pointer().on_click(cx.listener(
-                                                |this, _, window, cx| this.next(window, cx),
-                                            ))
-                                        })
-                                        .child(
-                                            div()
-                                                .text_size(px(15.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(label),
+                            div().flex().flex_col().items_end().gap(px(8.)).child(
+                                div()
+                                    .id("onboarding-continue")
+                                    .tab_index(0)
+                                    .h(px(46.))
+                                    .px(px(26.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(px(8.))
+                                    .border(px(1.5))
+                                    .border_color(if disabled { paper.track } else { paper.ink })
+                                    .bg(if disabled {
+                                        gpui::transparent_black()
+                                    } else {
+                                        paper.ink
+                                    })
+                                    .text_color(if disabled { paper.soft } else { paper.bg })
+                                    .when(!disabled, |el| {
+                                        el.cursor_pointer().hover(|el| el.opacity(0.88)).on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.next(window, cx)
+                                            }),
                                         )
-                                        .child(glyph(
-                                            if last {
-                                                "icons/check.svg"
-                                            } else {
-                                                "icons/move-right.svg"
-                                            },
-                                            16.,
-                                            if disabled { theme.gray_9 } else { theme.gray_1 },
-                                        )),
-                                )
-                                .when(
-                                    self.state.necessary_granted() && !self.permissions_only,
-                                    |el| {
-                                        el.child(
-                                            copy("Skip onboarding", 11., theme.gray_9)
-                                                .id("onboarding-skip")
-                                                .cursor_pointer()
-                                                .on_click(
-                                                    cx.listener(|this, _, _, cx| this.finish(cx)),
-                                                ),
-                                        )
-                                    },
-                                ),
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(label),
+                                    )
+                                    .child(glyph(
+                                        if relaunch {
+                                            "icons/rotate-ccw.svg"
+                                        } else if last {
+                                            "icons/check.svg"
+                                        } else {
+                                            "icons/move-right.svg"
+                                        },
+                                        15.,
+                                        if disabled { paper.soft } else { paper.bg },
+                                    )),
+                            ),
                         ),
                     ),
             )
-            .child(copy(
-                "Press Enter ↵ or use ← → arrow keys",
-                10.,
-                theme.gray_8,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(copy(
+                        if disabled {
+                            tr::onboarding::nav::permissions_needed()
+                        } else {
+                            tr::onboarding::nav::keyboard_hint()
+                        },
+                        11.,
+                        paper.soft,
+                    ))
+                    .when(
+                        self.state.necessary_granted() && !self.permissions_only && !last,
+                        |el| {
+                            el.child(
+                                copy(tr::onboarding::nav::skip(), 11., paper.soft)
+                                    .id("onboarding-skip")
+                                    .cursor_pointer()
+                                    .hover(move |el| el.text_color(paper.ink))
+                                    .on_click(cx.listener(|this, _, _, cx| this.finish(cx))),
+                            )
+                        },
+                    ),
+            )
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., theme.gray_12))
+                el.child(copy(error, 12., paper.red))
             })
             .into_any_element()
     }
@@ -1755,12 +1912,12 @@ impl OnboardingWindow {
                                     .flex()
                                     .flex_col()
                                     .child(
-                                        copy("Start Recording", 15., gpui::white())
+                                        copy(tr::onboarding::demo::start_recording(), 15., gpui::white())
                                             .font_weight(FontWeight::MEDIUM)
                                             .whitespace_nowrap(),
                                     )
                                     .child(
-                                        copy(MODES[index].title, 11., gpui::white()).opacity(0.9),
+                                        copy((MODES[index].title)(), 11., gpui::white()).opacity(0.9),
                                     ),
                             ),
                     )
@@ -1818,7 +1975,11 @@ impl OnboardingWindow {
                                 el.child(glyph("icons/stop-circle.svg", 20., rgb(0xf87171)))
                             })
                             .child(copy(
-                                if stopped { "Stopped".into() } else { time },
+                                if stopped {
+                                    tr::onboarding::demo::stopped().into()
+                                } else {
+                                    time
+                                },
                                 14.,
                                 if stopped {
                                     Hsla::from(theme.gray_10)
@@ -1917,7 +2078,7 @@ impl OnboardingWindow {
                             .justify_center()
                             .child(glyph("icons/check.svg", 12., self.success_palette().2)),
                     )
-                    .child(copy("Link ready to share!", 12., theme.gray_12)),
+                    .child(copy(tr::onboarding::demo::link_ready(), 12., theme.gray_12)),
             )
             .child(
                 div()
@@ -1961,7 +2122,11 @@ impl OnboardingWindow {
                                 },
                             ))
                             .child(copy(
-                                if copied { "Copied!" } else { "Copy" },
+                                if copied {
+                                    tr::onboarding::demo::copied()
+                                } else {
+                                    tr::onboarding::demo::copy()
+                                },
                                 11.,
                                 if copied {
                                     self.success_palette().2
@@ -2050,10 +2215,10 @@ impl OnboardingWindow {
                             .items_center()
                             .gap(px(8.))
                             .child(self.demo_window_dots())
-                            .child(copy("Cap Editor", 10., theme.gray_11)),
+                            .child(copy(tr::onboarding::demo::editor(), 10., theme.gray_11)),
                     )
                     .child(
-                        copy("Export", 9., gpui::white())
+                        copy(tr::onboarding::demo::export(), 9., gpui::white())
                             .px(px(10.))
                             .py(px(4.))
                             .rounded(px(6.))
@@ -2091,7 +2256,7 @@ impl OnboardingWindow {
                             .flex()
                             .flex_col()
                             .gap(px(6.))
-                            .child(copy("STYLE", 8., theme.gray_9))
+                            .child(copy(tr::onboarding::demo::style(), 8., theme.gray_9))
                             .child(
                                 div()
                                     .h(px(20.))
@@ -2100,7 +2265,7 @@ impl OnboardingWindow {
                                     .border_color(theme.gray_3)
                                     .bg(theme.body_fill(2)),
                             )
-                            .child(copy("BACKGROUND", 8., theme.gray_9).mt(px(4.)))
+                            .child(copy(tr::onboarding::demo::background(), 8., theme.gray_9).mt(px(4.)))
                             .child(div().flex().gap(px(4.)).children(
                                 [0x667eea, 0xf78c88, 0xcccccc].map(|color| {
                                     div()
@@ -2144,9 +2309,9 @@ impl OnboardingWindow {
                                                 })
                                                 .child(copy(
                                                     if phase >= 11 {
-                                                        "Export complete!"
+                                                        tr::onboarding::demo::export_complete()
                                                     } else {
-                                                        "Exporting..."
+                                                        tr::onboarding::demo::exporting()
                                                     },
                                                     14.,
                                                     theme.gray_12,
@@ -2333,14 +2498,14 @@ impl OnboardingWindow {
                             .flex()
                             .gap(px(4.))
                             .child(
-                                copy("Copy", 9., theme.gray_12)
+                                copy(tr::onboarding::demo::copy(), 9., theme.gray_12)
                                     .px(px(6.))
                                     .py(px(4.))
                                     .rounded(px(4.))
                                     .bg(theme.body_fill(3)),
                             )
                             .child(
-                                copy("Save", 9., gpui::white())
+                                copy(tr::onboarding::demo::save(), 9., gpui::white())
                                     .px(px(6.))
                                     .py(px(4.))
                                     .rounded(px(4.))
@@ -2392,7 +2557,7 @@ impl OnboardingWindow {
                                                 12.,
                                                 self.success_palette().2,
                                             ))
-                                            .child(copy("Copied to clipboard", 11., theme.gray_12)),
+                                            .child(copy(tr::onboarding::demo::copied_to_clipboard(), 11., theme.gray_12)),
                                     ),
                             )
                         }),
@@ -2405,7 +2570,11 @@ impl OnboardingWindow {
         let phase = self.demo_phase;
         let (labels, active) = match index {
             0 => (
-                ["Record", "Stop", "Share link"],
+                [
+                    tr::onboarding::demo::steps::record(),
+                    tr::onboarding::demo::steps::stop(),
+                    tr::onboarding::demo::steps::share_link(),
+                ],
                 if phase <= 5 {
                     0
                 } else if phase == 6 {
@@ -2415,7 +2584,11 @@ impl OnboardingWindow {
                 },
             ),
             1 => (
-                ["Record", "Edit", "Export"],
+                [
+                    tr::onboarding::demo::steps::record(),
+                    tr::onboarding::demo::steps::edit(),
+                    tr::onboarding::demo::export(),
+                ],
                 if phase < 7 {
                     0
                 } else if phase < 9 {
@@ -2425,7 +2598,11 @@ impl OnboardingWindow {
                 },
             ),
             _ => (
-                ["Select area", "Beautify", "Copy"],
+                [
+                    tr::onboarding::demo::steps::select_area(),
+                    tr::onboarding::demo::steps::beautify(),
+                    tr::onboarding::demo::copy(),
+                ],
                 if phase <= 5 {
                     0
                 } else if phase <= 8 {
@@ -2474,10 +2651,16 @@ impl OnboardingWindow {
 impl Render for OnboardingWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = Theme::for_window(window, cx, true);
+        if self.permissions_visible() {
+            self.sync_stage(window, cx);
+        }
+        if self.welcome {
+            self.tick_welcome(window, cx);
+        }
         let theme = self.theme;
+        let paper = stage::Paper::new(&theme);
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width);
-        let height = (f32::from(viewport.height) - ONBOARDING_HEADER_HEIGHT).max(0.);
         let content = match self.step {
             Step::Permissions => self.render_permissions(cx),
             Step::Overview => self.render_overview(),
@@ -2489,13 +2672,18 @@ impl Render for OnboardingWindow {
             Step::Faq => self.render_faq(cx),
         };
         let content = div().relative().min_h_full().w_full().child(content);
-        let content = if self.animated && !self.welcome {
+        let step_visible = !self.welcome || self.welcome_exiting;
+        let content = if self.animated && step_visible {
             let direction = self.transition_direction;
+            let delay = self.step_delay.as_secs_f32();
             content
                 .with_animation(
                     ("onboarding-step", self.step_revision),
-                    Animation::new(Duration::from_millis(500)).with_easing(ease),
-                    move |el, t| el.left(px(direction * 24. * (1. - t))).opacity(t),
+                    Animation::new(Duration::from_secs_f32(0.5 + delay)),
+                    move |el, t| {
+                        let t = ease(((t * (0.5 + delay) - delay) / 0.5).clamp(0., 1.));
+                        el.left(px(direction * 24. * (1. - t))).opacity(t)
+                    },
                 )
                 .into_any_element()
         } else {
@@ -2509,9 +2697,7 @@ impl Render for OnboardingWindow {
             .flex()
             .items_center()
             .justify_between()
-            .bg(theme.header_bg())
-            .border_b_1()
-            .border_color(theme.header_border())
+            .when(!self.welcome, |el| el.bg(paper.bg))
             .window_control_area(gpui::WindowControlArea::Drag);
         #[cfg(target_os = "windows")]
         let header = header.justify_end().child(ui::windows_caption_controls(
@@ -2551,54 +2737,61 @@ impl Render for OnboardingWindow {
                             .group_hover("onboarding-close", |el| el.visible()),
                     ),
             );
-        div()
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_hidden()
+            .when(step_visible, |el| {
+                el.bg(paper.bg).child(
+                    div()
+                        .relative()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .id("onboarding-scroll")
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .overflow_y_scroll()
+                                .child(content),
+                        )
+                        .child(self.render_navigation(cx)),
+                )
+            });
+        let root = div()
             .id("onboarding")
             .track_focus(&self.focus)
             .key_context("OnboardingWindow")
             .capture_key_down(cx.listener(Self::on_key))
+            .relative()
             .size_full()
-            .flex()
-            .flex_col()
             .overflow_hidden()
             .rounded(px(16.))
             .bg(theme.shell_bg())
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.body_text())
-            .child(header)
-            .child(
+            .text_color(theme.body_text());
+        if self.welcome {
+            let full_height = f32::from(viewport.height);
+            root.child(
                 div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_hidden()
-                    .when(!self.welcome, |el| {
-                        el.child(self.ambient(width, height, false))
-                    })
-                    .when(!self.welcome, |el| {
-                        el.child(
-                            div()
-                                .relative()
-                                .size_full()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .id("onboarding-scroll")
-                                        .flex_1()
-                                        .min_h_0()
-                                        .w_full()
-                                        .overflow_y_scroll()
-                                        .child(content),
-                                )
-                                .child(self.render_navigation(cx)),
-                        )
-                    })
-                    .when(self.welcome, |el| {
-                        el.child(self.render_welcome(width, height, cx))
-                    }),
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .bg(paper.bg)
+                    .child(div().h(px(ONBOARDING_HEADER_HEIGHT)).flex_shrink_0())
+                    .child(body),
             )
+            .child(self.render_welcome(width, full_height, cx))
+            .child(header.absolute().top_0().left_0().right_0())
+        } else {
+            root.flex().flex_col().child(header).child(body)
+        }
     }
 }
 

@@ -1,0 +1,149 @@
+# Strict expected failures for the decoder model tests
+# (cap-rendering decoder::model: `cargo test -p cap-rendering --lib decoder::model`).
+#
+# Format: the shared engine verification format (crates/verify-expect):
+#   [[xfail]]
+#   case = "<case id as printed by the suite, * globs allowed>"
+#   class = "<future | stale | grid-rounding | overread | resets | dropped | fallback | unidentified>"
+#   platforms = ["macos"]  (optional; absent = every platform)
+#   seeds = "<seed indices that fail, ranges allowed: 0 3 5-9>"  (optional; absent = any seed)
+#   reason = "<what is wrong>"
+#   link = "<PR or issue that fixes it; empty when no fix exists yet>"
+#
+# Every listed seed must still fail with that class: a seed that passes fails
+# the run with "remove this xfail", so fixes stay locked in. Any failure not
+# listed here fails the run. After a deliberate change, rewrite this file from
+# a run with `scripts/verify/bless.sh` (locally, or from a CI run's report
+# artifacts with `--run <id>`). Reasons and links of existing entries are
+# kept; review the difference.
+#
+# Entries below were recorded on origin/main 5705ee851. "NEW:" marks bugs the
+# model found that no open PR fixes.
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "future"
+seeds = "61"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "future"
+seeds = "28 53 59"
+flaky = true
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "28 53 59"
+flaky = true
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/late-start/random-seeks/playback"
+class = "grid-rounding"
+seeds = "0 6 9 11 16"
+reason = "Same seek-to-request grid rounding as the zero-start FFmpeg cases below: a seek can land on the frame on screen at the exact request time even though its rounded grid label is after the request. Newly covered by enabling late-start streams for FFmpeg; no future or stale answers remain"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
+class = "grid-rounding"
+seeds = "2 11-13 20 26"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "grid-rounding"
+seeds = "8 12 23 39 46 56 62 65 79 90 107 115 117 119 122 129 140-141 147-149 154 161 169 181 183 188 192 194-195 197 199-201 203 205-207 209 216 222-223 234-235 237 239 241 248 250 253 256 266 268 275 283 291 294"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "grid-rounding"
+seeds = "31 52 57 61 63 69 74 80 93 117 120 126 153 166 180 182 196 251 279 297"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "grid-rounding"
+seeds = "30 62-63 107 122 126 143 149 187 199"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/timeline/export"
+class = "grid-rounding"
+seeds = "16 26 32 75 95 102 133 145"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "grid-rounding"
+seeds = "6 41 56 61 66 72-73"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/playback"
+class = "grid-rounding"
+seeds = "19 29 42 51 65-66"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "grid-rounding"
+seeds = "1 7 15 17 21-22 25 33 35-36 45 47-48 55 64 70 82 86 90 100 103 114-115 121 126 144"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "grid-rounding"
+seeds = "2 4-5 9 11 13 18 23 27 29 31-32 36 41 48 50 59 62-63 70-73 76 81-82 84 88-91 95"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
+class = "grid-rounding"
+seeds = "3 12 16 20 34 46 58-59 64 77-78 86 117 137 144 160 168 196"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "grid-rounding"
+seeds = "23 30 46 114"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/sequential/playback"
+class = "grid-rounding"
+seeds = "25"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/timeline/export"
+class = "grid-rounding"
+seeds = "77"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/transition/playback"
+class = "grid-rounding"
+seeds = "13 16 20 34 48 62 70 75 77"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""

@@ -19,14 +19,15 @@
 //! Metrics are transcribed from the TSX with the Tailwind class quoted next to
 //! them, the same convention `main_window.rs` uses.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    Animation, AnimationExt as _, App, AppContext as _, Context, Entity, FontWeight, Global, Hsla,
-    ImageFormat, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    App, AppContext as _, Context, Entity, FontWeight, Global, Hsla, ImageFormat,
+    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, Pixels, Point, Render, SharedString, StatefulInteractiveElement as _,
     Styled, Window, div, img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
     rgb, svg,
@@ -36,12 +37,14 @@ use scap_targets::{
     bounds::{LogicalBounds, LogicalPosition, LogicalSize},
 };
 
+use crate::theme::LocaleFont as _;
 use crate::{
     app_windows,
     editor_canvas::{
         GuideAxis, NormRect, SNAP_PX, SnapGuide, build_snap_targets, snap_moving_rect,
     },
     main_window::{Mode, TargetType},
+    sign_in::SignIn,
     theme::Theme,
 };
 
@@ -79,12 +82,38 @@ fn overlay_display_is_active(
     cursor_display.map_or(only_overlay || window_hovered, |cursor| cursor == display)
 }
 
+/// Whether a new mic level should repaint an overlay: only when it drew the
+/// meter and the fill moves by a device pixel. The cluster's width bounds the
+/// meter's.
+fn overlay_meter_moved(drawn: Option<f32>, next: f32, scale: f32) -> bool {
+    drawn.is_some_and(|drawn| crate::ui::moves_a_device_pixel(drawn, next, CLUSTER_WIDTH * scale))
+}
+
 fn overlay_viewport_size(viewport: (f32, f32), previous: (f32, f32)) -> (f32, f32) {
     if viewport.0.is_finite() && viewport.1.is_finite() && viewport.0 > 0. && viewport.1 > 0. {
         viewport
     } else {
         previous
     }
+}
+
+pub(crate) fn capture_scale_factor(window: &Window) -> f32 {
+    #[cfg(target_os = "linux")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if HasWindowHandle::window_handle(window).is_ok_and(|handle| {
+            matches!(
+                handle.as_raw(),
+                RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)
+            )
+        }) {
+            // X11 capture bounds are physical pixels, even when scap calls them logical.
+            return window.scale_factor();
+        }
+    }
+    let _ = window;
+    1.
 }
 
 fn recording_devices_available(cx: &App) -> bool {
@@ -139,6 +168,16 @@ const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
 ];
 
 const SELECTION_HINT_CYCLE: Duration = Duration::from_millis(2800);
+
+/// The hint redraws on a 30 fps timer rather than every display refresh: it
+/// is a small illustration, but each frame repaints a full-screen overlay.
+const SELECTION_HINT_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+
+/// Where the hint is in its cycle, the way gpui's repeating `Animation`
+/// computes it: linear time since it first drew, wrapped to `0..1`.
+fn selection_hint_progress(elapsed: Duration) -> f32 {
+    (elapsed.as_secs_f32() / SELECTION_HINT_CYCLE.as_secs_f32()) % 1.
+}
 
 fn material_ease(progress: f32) -> f32 {
     let progress = progress.clamp(0., 1.);
@@ -222,8 +261,8 @@ pub struct HoveredWindow {
     pub id: WindowId,
     pub app_name: String,
     pub display_id: DisplayId,
-    /// Bounds relative to the display's top-left, in logical points -- exactly
-    /// what the overlay window's own coordinate space is. Carried as our own
+    /// Bounds relative to the display's top-left in capture coordinates;
+    /// X11 overlays convert these physical pixels to logical points. Carried as our own
     /// rect rather than `LogicalBounds` so the poll can compare frames for
     /// equality (`scap_targets`' bounds are not `PartialEq`).
     pub bounds: AreaRect,
@@ -367,26 +406,35 @@ impl TargetSelect {
                     })
                     .await;
 
-                let Ok((icon_wanted, active)) = this.update(cx, |this: &mut Self, cx| {
-                    let (display, window) = probe;
-                    this.microphone_fill =
-                        crate::ui::MicrophoneLevel::fill(crate::feeds::Feeds::global(cx).read(cx));
-                    let changed = this.cursor_display != display || this.hovered_window != window;
-                    this.cursor_display = display;
-                    this.hovered_window = window;
-                    if changed {
-                        cx.notify();
-                    }
+                let Ok((icon_wanted, active, changed, microphone_changed)) =
+                    this.update(cx, |this: &mut Self, cx| {
+                        let (display, window) = probe;
+                        let microphone_fill = crate::ui::MicrophoneLevel::capture_fill(cx);
+                        // The mic level stays out of `changed`: only the overlays
+                        // drawing the meter repaint for it, below.
+                        let changed =
+                            this.cursor_display != display || this.hovered_window != window;
+                        let microphone_changed = this.microphone_fill != microphone_fill;
+                        this.microphone_fill = microphone_fill;
+                        this.cursor_display = display;
+                        this.hovered_window = window;
+                        if changed {
+                            cx.notify();
+                        }
 
-                    (
-                        this.active_window()
-                            .map(|window| window.id.clone())
-                            .filter(|id| !this.icons.contains_key(&id.to_string())),
-                        this.active_window().cloned(),
-                    )
-                }) else {
+                        (
+                            this.active_window()
+                                .map(|window| window.id.clone())
+                                .filter(|id| !this.icons.contains_key(&id.to_string())),
+                            this.active_window().cloned(),
+                            changed,
+                            microphone_changed,
+                        )
+                    })
+                else {
                     return;
                 };
+                let fetched_icon = icon_wanted.is_some();
                 if let Some(id) = icon_wanted {
                     Self::fetch_icon(id, &this, cx).await;
                 }
@@ -399,8 +447,13 @@ impl TargetSelect {
 
                 // Repaint the overlays explicitly: none of them is the active
                 // window while the user hovers another app, and an inactive
-                // window only repaints when asked (the unit-2 finding).
-                cx.update(app_windows::refresh_target_overlays);
+                // window only repaints when asked (the unit-2 finding). A tick
+                // that changed nothing they draw has nothing to repaint.
+                if changed || fetched_icon {
+                    cx.update(app_windows::refresh_target_overlays);
+                } else if microphone_changed {
+                    cx.update(app_windows::refresh_microphone_overlays);
+                }
                 cx.background_executor().timer(POLL_INTERVAL).await;
             }
         }));
@@ -477,6 +530,15 @@ impl AreaRect {
             width,
             height,
         })
+    }
+
+    fn scaled(self, scale: f32) -> Self {
+        Self {
+            x: self.x * scale,
+            y: self.y * scale,
+            width: self.width * scale,
+            height: self.height * scale,
+        }
     }
 
     fn to_bounds(self) -> LogicalBounds {
@@ -583,6 +645,7 @@ pub struct OverlayWindow {
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
     display_size: (f32, f32),
+    capture_scale: f32,
     controls_work_area: AreaRect,
     /// Physical pixels, for the `1920x1080 · 60FPS` line.
     physical_size: Option<(u32, u32)>,
@@ -601,6 +664,14 @@ pub struct OverlayWindow {
     inline_camera_subscription: Option<gpui::Subscription>,
     empty_camera_state: crate::store::CameraWindowState,
     device_menu: Option<OverlayDeviceMenu>,
+    /// Cached off the store so the start pill does not re-read the settings
+    /// file every frame; refreshed whenever the shared sign-in reports.
+    signed_in: bool,
+    /// The mic fill the last render drew, `None` when it drew no meter.
+    drawn_microphone_fill: Cell<Option<f32>>,
+    /// When the area hint first drew since it was last hidden.
+    selection_hint_started: Option<Instant>,
+    selection_hint_redraw: Option<gpui::Task<()>>,
     _main_subscription: Option<gpui::Subscription>,
 }
 
@@ -608,6 +679,7 @@ pub struct OverlayWindow {
 enum OverlayDeviceChoice {
     Camera(Option<crate::devices::CameraOption>),
     Microphone(Option<crate::devices::MicrophoneOption>),
+    Access(crate::permissions::OSPermission),
 }
 
 struct OverlayDeviceMenu {
@@ -632,6 +704,14 @@ fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
         .collect()
 }
 
+/// Overlays are never the active window while the picker is up, and an
+/// inactive window may not present a bare notify, so every state an overlay
+/// draws asks for its repaint explicitly.
+fn repaint(window: &mut Window, cx: &mut Context<OverlayWindow>) {
+    cx.notify();
+    window.refresh();
+}
+
 impl OverlayWindow {
     pub fn new(
         display: &scap_targets::Display,
@@ -641,16 +721,46 @@ impl OverlayWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
-        cx.observe(&select, |_, _, cx| cx.notify()).detach();
+        cx.observe_in(&select, window, |_, _, window, cx| repaint(window, cx))
+            .detach();
+        let session = crate::session::RecordingSession::global(cx);
+        let mut drawn_phase = session.read(cx).phase;
+        cx.observe_in(&session, window, move |_, session, window, cx| {
+            let phase = session.read(cx).phase;
+            if phase != drawn_phase {
+                drawn_phase = phase;
+                repaint(window, cx);
+            }
+        })
+        .detach();
         let main = cx.global::<app_windows::AppWindows>().main;
         let main_subscription = main
             .update(cx, |_, _, cx| cx.entity())
             .ok()
-            .map(|main| cx.observe(&main, |_, _, cx| cx.notify()));
+            .map(|main| cx.observe_in(&main, window, |_, _, window, cx| repaint(window, cx)));
+        let media = crate::media_access::MediaAccess::global(cx);
+        media.update(cx, |access, cx| access.refresh(cx));
+        cx.observe_in(&media, window, |_, _, window, cx| repaint(window, cx))
+            .detach();
+        cx.observe_in(
+            &SignIn::global(cx),
+            window,
+            |this: &mut Self, _, window, cx| {
+                this.signed_in = crate::store::auth_snapshot().signed_in();
+                repaint(window, cx);
+            },
+        )
+        .detach();
 
+        let capture_scale = capture_scale_factor(window);
         let logical = display
             .logical_size()
-            .map(|size| (size.width() as f32, size.height() as f32))
+            .map(|size| {
+                (
+                    size.width() as f32 / capture_scale,
+                    size.height() as f32 / capture_scale,
+                )
+            })
             .unwrap_or((1920., 1080.));
 
         let controls_work_area = display
@@ -658,8 +768,8 @@ impl OverlayWindow {
             .logical_bounds()
             .zip(app_windows::display_work_area(Some(display), cx))
             .map(|(bounds, available)| AreaRect {
-                x: f32::from(available.origin.x) - bounds.position().x() as f32,
-                y: f32::from(available.origin.y) - bounds.position().y() as f32,
+                x: f32::from(available.origin.x) - bounds.position().x() as f32 / capture_scale,
+                y: f32::from(available.origin.y) - bounds.position().y() as f32 / capture_scale,
                 width: f32::from(available.size.width),
                 height: f32::from(available.size.height),
             })
@@ -679,6 +789,7 @@ impl OverlayWindow {
                 .name()
                 .unwrap_or_else(|| format!("Display {}", display.id())),
             display_size: logical,
+            capture_scale,
             controls_work_area,
             physical_size: display
                 .physical_size()
@@ -695,6 +806,10 @@ impl OverlayWindow {
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
             device_menu: None,
+            signed_in: crate::store::auth_snapshot().signed_in(),
+            drawn_microphone_fill: Cell::new(None),
+            selection_hint_started: None,
+            selection_hint_redraw: None,
             _main_subscription: main_subscription,
         }
     }
@@ -738,7 +853,7 @@ impl OverlayWindow {
         if self.recording_area {
             return self.crop.map(|crop| ScreenCaptureTarget::Area {
                 screen: self.display_id.clone(),
-                bounds: crop.to_bounds(),
+                bounds: crop.scaled(self.capture_scale).to_bounds(),
             });
         }
         let select = self.select.read(cx);
@@ -757,7 +872,7 @@ impl OverlayWindow {
             TargetType::Area => self.crop.filter(|crop| crop.is_valid_for(min)).map(|crop| {
                 ScreenCaptureTarget::Area {
                     screen: self.display_id.clone(),
-                    bounds: crop.to_bounds(),
+                    bounds: crop.scaled(self.capture_scale).to_bounds(),
                 }
             }),
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
@@ -771,6 +886,13 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
+        if self.needs_sign_in(self.select.read(cx).recording_mode, cx) {
+            self.signed_in = crate::store::auth_snapshot().signed_in();
+            if !self.signed_in {
+                self.start_sign_in(cx);
+                return;
+            }
+        }
         if let ScreenCaptureTarget::Window { id } = &target {
             let window = scap_targets::Window::from_id(id);
             let expected_title = crate::main_window::auto_window_title();
@@ -809,11 +931,33 @@ impl OverlayWindow {
         cx.defer(app_windows::dismiss_target_overlays);
     }
 
+    /// Instant mode uploads as it records, so it cannot start signed out
+    /// (`target-select-overlay.tsx`'s "Sign In To Use"). The editor's record
+    /// flow always records Studio whatever the pill says.
+    fn needs_sign_in(&self, mode: Mode, cx: &App) -> bool {
+        mode == Mode::Instant
+            && !self.signed_in
+            && crate::session::RecordingSession::global(cx)
+                .read(cx)
+                .editor_recording_target()
+                .is_none()
+    }
+
+    /// The overlays sit above every app, browser included, so they step aside
+    /// for the main window's sign-in prompt, and re-open for the same target
+    /// kind once signed in.
+    fn start_sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some(kind) = self.select.read(cx).mode else {
+            return;
+        };
+        cx.defer(move |cx: &mut App| app_windows::show_instant_sign_in(kind, cx));
+    }
+
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         self.theme.refresh(window, cx, false);
     }
 
-    fn sync_inline_camera(&mut self, cx: &mut Context<Self>) {
+    fn sync_inline_camera(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let camera = (self.select.read(cx).mode == Some(TargetType::CameraOnly))
             .then(|| app_windows::camera_preview_entity(cx))
             .flatten();
@@ -824,7 +968,7 @@ impl OverlayWindow {
         }
         self.inline_camera_subscription = camera
             .as_ref()
-            .map(|camera| cx.observe(camera, |_, _, cx| cx.notify()));
+            .map(|camera| cx.observe_in(camera, window, |_, _, window, cx| repaint(window, cx)));
         self.inline_camera = camera;
     }
 
@@ -842,6 +986,14 @@ impl OverlayWindow {
         });
     }
 
+    pub fn microphone_level_moved(&self, window: &Window, cx: &App) -> bool {
+        overlay_meter_moved(
+            self.drawn_microphone_fill.get(),
+            self.select.read(cx).microphone_fill,
+            window.scale_factor(),
+        )
+    }
+
     /// True when the cursor is on this overlay's display -- `data-over` in the
     /// display variant, `isActiveDisplay` in the area variant.
     fn is_active_display(&self, window: &Window, cx: &App) -> bool {
@@ -857,7 +1009,7 @@ impl OverlayWindow {
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
-        self.sync_inline_camera(cx);
+        self.sync_inline_camera(window, cx);
         let viewport = window.viewport_size();
         let display_size = overlay_viewport_size(
             (f32::from(viewport.width), f32::from(viewport.height)),
@@ -871,6 +1023,7 @@ impl Render for OverlayWindow {
             self.sync_area_camera(cx);
         }
         let mode = self.select.read(cx).mode;
+        self.drawn_microphone_fill.set(None);
 
         let root = div()
             .id("overlay-root")
@@ -924,6 +1077,7 @@ impl Render for OverlayWindow {
             .size_full()
             .relative()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
@@ -983,6 +1137,17 @@ impl OverlayWindow {
     fn apply_device_choice(&mut self, choice: OverlayDeviceChoice, cx: &mut Context<Self>) {
         self.device_menu = None;
         let main = cx.global::<app_windows::AppWindows>().main;
+        let needs_access = match &choice {
+            OverlayDeviceChoice::Camera(Some(_)) => Some(crate::permissions::OSPermission::Camera),
+            OverlayDeviceChoice::Microphone(Some(_)) => {
+                Some(crate::permissions::OSPermission::Microphone)
+            }
+            OverlayDeviceChoice::Access(permission) => Some(*permission),
+            _ => None,
+        };
+        if let Some(permission) = needs_access {
+            request_media_access(permission, cx);
+        }
         cx.defer(move |cx| {
             if !recording_devices_available(cx) {
                 return;
@@ -990,6 +1155,7 @@ impl OverlayWindow {
             if let Err(error) = main.update(cx, |view, _, cx| match choice {
                 OverlayDeviceChoice::Camera(camera) => view.set_camera_selection(camera, cx),
                 OverlayDeviceChoice::Microphone(mic) => view.set_microphone_selection(mic, cx),
+                OverlayDeviceChoice::Access(_) => {}
             }) {
                 tracing::warn!(%error, "could not update the recording device");
             }
@@ -1006,7 +1172,29 @@ impl OverlayWindow {
         if view.is_enumerating_devices() {
             return;
         }
-        let (items, choices) = if camera {
+        let permission = if camera {
+            crate::permissions::OSPermission::Camera
+        } else {
+            crate::permissions::OSPermission::Microphone
+        };
+        let access = crate::media_access::MediaAccess::global(cx);
+        let access_item = (!access.read(cx).allowed(permission)).then(|| {
+            let label = match (
+                camera,
+                access.read(cx).status(permission)
+                    == crate::permissions::OSPermissionStatus::Denied,
+            ) {
+                (true, true) => "Turn on camera access in Settings…",
+                (true, false) => "Allow camera access…",
+                (false, true) => "Turn on microphone access in Settings…",
+                (false, false) => "Allow microphone access…",
+            };
+            (
+                crate::ui::MenuItem::new(label, false),
+                OverlayDeviceChoice::Access(permission),
+            )
+        });
+        let (mut items, mut choices) = if camera {
             let mut items = vec![crate::ui::MenuItem::new(
                 "No Camera",
                 view.camera_selection().is_none(),
@@ -1037,6 +1225,10 @@ impl OverlayWindow {
             }
             (items, choices)
         };
+        if let Some((item, choice)) = access_item {
+            items.insert(0, item);
+            choices.insert(0, choice);
+        }
         self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = Some(OverlayDeviceMenu {
@@ -1053,13 +1245,31 @@ impl OverlayWindow {
             return div().into_any_element();
         };
         let selected = if camera {
-            view.camera_selection().map(|camera| camera.label.clone())
+            view.camera_selection()
+                .map(|camera| crate::main_window::camera_label(&camera.label))
         } else {
             view.microphone_selection().map(|mic| mic.name.clone())
         };
         let enabled = selected.is_some();
         let disabled = view.is_enumerating_devices() || !recording_devices_available(cx);
         let theme = self.theme;
+        let permission = if camera {
+            crate::permissions::OSPermission::Camera
+        } else {
+            crate::permissions::OSPermission::Microphone
+        };
+        let access = crate::media_access::MediaAccess::global(cx);
+        let access = access.read(cx);
+        let blocked = enabled && !access.allowed(permission);
+        let pill_label = if !blocked {
+            if enabled { "On" } else { "Off" }
+        } else if access.requesting(permission) {
+            "Asking…"
+        } else if access.status(permission) == crate::permissions::OSPermissionStatus::Denied {
+            "Allow in Settings"
+        } else {
+            "Allow"
+        };
         div()
             .id(if camera {
                 "overlay-camera"
@@ -1082,14 +1292,13 @@ impl OverlayWindow {
             .overflow_hidden()
             .when(disabled, |row| row.opacity(0.7))
             .when(!camera && enabled && !disabled, |row| {
+                let fill = self.select.read(cx).microphone_fill;
+                self.drawn_microphone_fill.set(Some(fill));
                 row.child(
-                    crate::ui::MicrophoneLevel::snapshot(
-                        self.select.read(cx).microphone_fill,
-                        theme.blue_9.into(),
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0(),
+                    crate::ui::MicrophoneLevel::snapshot(fill, theme.blue_9.into())
+                        .absolute()
+                        .top_0()
+                        .left_0(),
                 )
             })
             .child(
@@ -1128,24 +1337,30 @@ impl OverlayWindow {
                     .justify_center()
                     .rounded_full()
                     .text_size(px(11.))
-                    .bg(if enabled {
+                    .bg(if blocked {
+                        Hsla::from(theme.amber_3)
+                    } else if enabled {
                         Hsla::from(theme.blue_9)
                     } else {
                         Hsla::from(theme.gray_5)
                     })
-                    .text_color(if enabled {
+                    .text_color(if blocked {
+                        Hsla::from(theme.amber_11)
+                    } else if enabled {
                         gpui::white()
                     } else {
                         Hsla::from(theme.gray_11)
                     })
-                    .child(if enabled { "On" } else { "Off" })
+                    .child(pill_label)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         if disabled {
                             return;
                         }
-                        if enabled {
+                        if blocked {
+                            this.apply_device_choice(OverlayDeviceChoice::Access(permission), cx);
+                        } else if enabled {
                             this.apply_device_choice(
                                 if camera {
                                     OverlayDeviceChoice::Camera(None)
@@ -1323,7 +1538,7 @@ impl OverlayWindow {
         let Some(active) = active else {
             return div().size_full().into_any_element();
         };
-        let bounds = active.bounds;
+        let bounds = active.bounds.scaled(1. / self.capture_scale);
         let width = bounds.width;
         let height = bounds.height;
 
@@ -1375,12 +1590,10 @@ impl OverlayWindow {
                                     .font_weight(FontWeight::BOLD)
                                     .child(SharedString::from(active.app_name.clone())),
                             )
-                            .child(
-                                div()
-                                    .mb(px(8.))
-                                    .text_size(px(12.))
-                                    .child(format!("{}x{}", width as u32, height as u32)),
-                            ),
+                            .child(div().mb(px(8.)).text_size(px(12.)).child(format!(
+                                "{}x{}",
+                                active.bounds.width as u32, active.bounds.height as u32
+                            ))),
                     )
                     .child(self.render_controls_cluster(self.target(cx), false, cx)),
             )
@@ -1475,10 +1688,13 @@ impl OverlayWindow {
     /// region with eight handles, a size readout on top and the start cluster
     /// placed against the crop.
     fn render_area_variant(
-        &self,
-        window: &Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        // Taken so the hint restarts whenever a render leaves it out, as a
+        // gpui animation's element state would.
+        let hint_started = self.selection_hint_started.take();
         let interacting = self.drag.is_some();
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = self.recording_area || interacting || self.is_active_display(window, cx);
@@ -1568,7 +1784,7 @@ impl OverlayWindow {
             return root;
         }
         if crop.is_none() && !interacting {
-            root = root.child(self.render_selection_hint());
+            root = root.child(self.render_selection_hint(hint_started, window, cx));
         }
         root = root.child(self.render_area_toolbar(crop, valid));
         if crop.is_some() {
@@ -1702,13 +1918,36 @@ impl OverlayWindow {
             .collect()
     }
 
-    fn render_selection_hint(&self) -> impl IntoElement {
+    fn render_selection_hint(
+        &mut self,
+        started: Option<Instant>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let cursor_path = if cfg!(target_os = "windows") {
             "onboarding/cursor-windows.svg"
         } else {
             "onboarding/cursor-macos.svg"
         };
-        let animation = || Animation::new(SELECTION_HINT_CYCLE).repeat();
+        let started = started.unwrap_or_else(Instant::now);
+        self.selection_hint_started = Some(started);
+        // Reduced motion holds the first frame, as gpui's animations do.
+        let progress = if cx.reduce_motion() {
+            0.
+        } else {
+            if self.selection_hint_redraw.is_none() {
+                self.selection_hint_redraw = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(SELECTION_HINT_FRAME).await;
+                    this.update_in(cx, |this, window, cx| {
+                        this.selection_hint_redraw = None;
+                        repaint(window, cx);
+                    })
+                    .ok();
+                }));
+            }
+            selection_hint_progress(started.elapsed())
+        };
+        let drag = selection_drag_progress(progress);
         let selection = div()
             .absolute()
             .left(px(41.))
@@ -1720,55 +1959,37 @@ impl OverlayWindow {
                 linear_color_stop(gpui::hsla(0.55, 1., 0.72, 0.4), 0.),
                 linear_color_stop(gpui::hsla(0.62, 1., 0.59, 0.2), 1.),
             ))
-            .with_animation("area-selection-hint-box", animation(), |this, progress| {
-                let progress = selection_drag_progress(progress);
-                this.w(px(10. + 58. * progress)).h(px(8. + 44. * progress))
-            });
+            .w(px(10. + 58. * drag))
+            .h(px(8. + 44. * drag));
         let cursor = img(cursor_path)
             .absolute()
-            .left(px(41.))
-            .top(px(26.))
+            .left(px(41. + 68. * drag))
+            .top(px(26. + 52. * drag))
             .w(px(18.))
-            .h(px(26.))
-            .with_animation(
-                "area-selection-hint-cursor",
-                animation(),
-                |this, progress| {
-                    let progress = selection_drag_progress(progress);
-                    this.left(px(41. + 68. * progress))
-                        .top(px(26. + 52. * progress))
-                },
-            );
+            .h(px(26.));
+        let (scale, opacity) = if (0.1..0.12).contains(&progress) {
+            (
+                (progress - 0.1) / 0.02 * 0.2,
+                (progress - 0.1) / 0.02 * 0.95,
+            )
+        } else if (0.12..0.18).contains(&progress) {
+            (
+                0.2 + (progress - 0.12) / 0.06 * 0.65,
+                0.95 * (1. - (progress - 0.12) / 0.06),
+            )
+        } else {
+            (0., 0.)
+        };
+        let size = 20. * scale;
         let click = div()
             .absolute()
             .rounded_full()
             .border_2()
             .border_color(gpui::hsla(0., 0., 1., 0.85))
-            .with_animation(
-                "area-selection-hint-click",
-                animation(),
-                |this, progress| {
-                    let (scale, opacity) = if (0.1..0.12).contains(&progress) {
-                        (
-                            (progress - 0.1) / 0.02 * 0.2,
-                            (progress - 0.1) / 0.02 * 0.95,
-                        )
-                    } else if (0.12..0.18).contains(&progress) {
-                        (
-                            0.2 + (progress - 0.12) / 0.06 * 0.65,
-                            0.95 * (1. - (progress - 0.12) / 0.06),
-                        )
-                    } else {
-                        (0., 0.)
-                    };
-                    let drag = selection_drag_progress(progress);
-                    let size = 20. * scale;
-                    this.left(px(41. + 68. * drag + 9. - size / 2.))
-                        .top(px(26. + 52. * drag + 14.3 - size / 2.))
-                        .size(px(size))
-                        .opacity(opacity)
-                },
-            );
+            .left(px(41. + 68. * drag + 9. - size / 2.))
+            .top(px(26. + 52. * drag + 14.3 - size / 2.))
+            .size(px(size))
+            .opacity(opacity);
 
         div()
             .absolute()
@@ -2079,16 +2300,20 @@ impl OverlayWindow {
         } else {
             (theme.blue_10, theme.blue_11)
         };
+        let needs_sign_in = self.needs_sign_in(mode, cx);
         let label = match mode {
             Mode::Screenshot => "Take Screenshot",
+            _ if needs_sign_in => "Sign In To Use",
             _ => "Start Recording",
         };
         let icon = match mode {
+            Mode::Instant if needs_sign_in => "icons/user-round.svg",
             Mode::Instant => "icons/instant.svg",
             Mode::Studio => "icons/film-cut.svg",
             Mode::Screenshot => "icons/camera.svg",
         };
         let mode_label = match mode {
+            Mode::Instant if needs_sign_in => "Instant Mode — Sign in to record instantly",
             Mode::Instant => "Instant Mode — Record shareable link",
             Mode::Studio => "Studio Mode — Record and edit locally",
             Mode::Screenshot => "Screenshot Mode",
@@ -2408,6 +2633,27 @@ impl OverlayWindow {
     }
 }
 
+/// Ask for camera/mic access from the overlay. The macOS prompt floats above
+/// the overlays, but System Settings is an ordinary window they would cover,
+/// so a denied permission steps the picker aside before opening the pane.
+fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut App) {
+    let access = crate::media_access::MediaAccess::global(cx);
+    if access.read(cx).allowed(permission) {
+        return;
+    }
+    let denied =
+        access.read(cx).status(permission) == crate::permissions::OSPermissionStatus::Denied;
+    if denied {
+        cx.defer(move |cx| {
+            app_windows::dismiss_target_overlays(cx);
+            crate::media_access::MediaAccess::global(cx)
+                .update(cx, |access, cx| access.request(permission, cx));
+        });
+    } else {
+        access.update(cx, |access, cx| access.request(permission, cx));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2583,6 +2829,24 @@ mod tests {
     }
 
     #[test]
+    fn scaled_overlay_selections_preserve_the_physical_capture_region() {
+        let capture = rect(300., 240., 900., 600.);
+        for (scale, expected) in [
+            (1., rect(300., 240., 900., 600.)),
+            (1.5, rect(200., 160., 600., 400.)),
+            (2., rect(150., 120., 450., 300.)),
+        ] {
+            let overlay = capture.scaled(1. / scale);
+            assert_eq!(overlay, expected);
+            let bounds = overlay.scaled(scale).to_bounds();
+            assert_eq!(bounds.position().x(), 300.);
+            assert_eq!(bounds.position().y(), 240.);
+            assert_eq!(bounds.size().width(), 900.);
+            assert_eq!(bounds.size().height(), 600.);
+        }
+    }
+
+    #[test]
     fn moving_area_snaps_to_display_centres_and_edges() {
         let display = (1000., 800.);
         let (centered, center_guides) = snap_area_rect(rect(446., 180., 100., 120.), display);
@@ -2621,6 +2885,42 @@ mod tests {
         let (unsnapped, guides) = snap_area_point((490., 390.), display);
         assert_eq!(unsnapped, (490., 390.));
         assert!(guides.is_empty());
+    }
+
+    #[test]
+    fn only_an_overlay_drawing_the_meter_repaints_for_the_level() {
+        assert!(!overlay_meter_moved(None, 0.8, 2.));
+        assert!(overlay_meter_moved(Some(0.), 0.8, 2.));
+        assert!(overlay_meter_moved(
+            Some(0.5),
+            0.5 + 1. / (CLUSTER_WIDTH * 2.),
+            2.
+        ));
+        assert!(!overlay_meter_moved(
+            Some(0.5),
+            0.5 + 0.4 / (CLUSTER_WIDTH * 2.),
+            2.
+        ));
+        assert!(!overlay_meter_moved(Some(0.), 0., 1.));
+    }
+
+    #[test]
+    fn selection_hint_progress_repeats_like_a_gpui_animation() {
+        let at = |ms| selection_hint_progress(Duration::from_millis(ms));
+        assert_eq!(at(0), 0.);
+        assert!((at(1400) - 0.5).abs() < 1e-4);
+        assert!((at(2800 + 700) - 0.25).abs() < 1e-4);
+        assert!((at(5 * 2800 + 1400) - 0.5).abs() < 1e-3);
+        assert!(at(2799) < 1.);
+    }
+
+    #[test]
+    fn selection_hint_paces_to_thirty_frames_a_second() {
+        let frames = SELECTION_HINT_CYCLE.as_secs_f32() / SELECTION_HINT_FRAME.as_secs_f32();
+        assert!((83.9..84.1).contains(&frames), "{frames}");
+        // The click ring (`0.1..0.18` of the cycle) still gets several frames.
+        let ring = 0.08 * SELECTION_HINT_CYCLE.as_secs_f32() / SELECTION_HINT_FRAME.as_secs_f32();
+        assert!(ring >= 6., "{ring}");
     }
 
     #[test]

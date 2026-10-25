@@ -141,11 +141,24 @@ impl AudioMuxer for Mp4Muxer {
 
 pub struct OggMuxer(OggFile);
 
+/// `write_behind` moves file writes off the caller (an async runtime worker)
+/// onto a dedicated writer thread. Only macOS recordings opt in.
+#[derive(Default)]
+pub struct OggMuxerConfig {
+    pub write_behind: bool,
+}
+
+fn warn_inline_fallback(result: std::io::Result<()>) {
+    if let Err(error) = result {
+        warn!(%error, "Output write-behind unavailable, muxing inline");
+    }
+}
+
 impl Muxer for OggMuxer {
-    type Config = ();
+    type Config = OggMuxerConfig;
 
     async fn setup(
-        _: Self::Config,
+        config: Self::Config,
         output_path: PathBuf,
         _: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
@@ -158,10 +171,13 @@ impl Muxer for OggMuxer {
         let audio_config =
             audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
 
-        Ok(Self(
-            OggFile::init(output_path, |o| OpusEncoder::init(audio_config, o))
-                .map_err(|e| anyhow!("Failed to initialize Opus encoder: {e}"))?,
-        ))
+        let mut file = OggFile::init(output_path, |o| OpusEncoder::init(audio_config, o))
+            .map_err(|e| anyhow!("Failed to initialize Opus encoder: {e}"))?;
+        if config.write_behind {
+            warn_inline_fallback(file.enable_write_behind());
+        }
+
+        Ok(Self(file))
     }
 
     fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -186,6 +202,8 @@ pub struct FragmentedAudioMuxer {
 #[derive(Default)]
 pub struct FragmentedAudioMuxerConfig {
     pub shared_pause_state: Option<SharedPauseState>,
+    /// See [`OggMuxerConfig::write_behind`].
+    pub write_behind: bool,
 }
 
 impl Muxer for FragmentedAudioMuxer {
@@ -205,9 +223,14 @@ impl Muxer for FragmentedAudioMuxer {
         let audio_config =
             audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
 
+        let mut encoder = FragmentedAudioFile::init(output_path, audio_config)
+            .map_err(|e| anyhow!("Failed to initialize fragmented audio encoder: {e}"))?;
+        if config.write_behind {
+            warn_inline_fallback(encoder.enable_write_behind());
+        }
+
         Ok(Self {
-            encoder: FragmentedAudioFile::init(output_path, audio_config)
-                .map_err(|e| anyhow!("Failed to initialize fragmented audio encoder: {e}"))?,
+            encoder,
             pause: config.shared_pause_state,
         })
     }
@@ -444,6 +467,7 @@ struct SegmentedEncoderState {
 }
 
 pub struct SegmentedVideoMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -458,6 +482,7 @@ pub struct SegmentedVideoMuxer {
 }
 
 pub struct SegmentedVideoMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
@@ -468,6 +493,7 @@ pub struct SegmentedVideoMuxerConfig {
 impl Default for SegmentedVideoMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
@@ -502,6 +528,7 @@ impl Muxer for SegmentedVideoMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         Ok(Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -665,8 +692,12 @@ impl SegmentedVideoMuxer {
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            self.timed_fragments,
+        )?;
         if let Some(tx) = &self.segment_tx {
             encoder.set_segment_callback(tx.clone());
         }
@@ -817,6 +848,8 @@ pub struct DashSegmentedAudioMuxerConfig {
     pub segment_duration: Duration,
     pub shared_pause_state: Option<SharedPauseState>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    /// See [`OggMuxerConfig::write_behind`].
+    pub write_behind: bool,
 }
 
 impl Default for DashSegmentedAudioMuxerConfig {
@@ -825,6 +858,7 @@ impl Default for DashSegmentedAudioMuxerConfig {
             segment_duration: Duration::from_secs(3),
             shared_pause_state: None,
             segment_tx: None,
+            write_behind: false,
         }
     }
 }
@@ -854,6 +888,9 @@ impl Muxer for DashSegmentedAudioMuxer {
             },
         )
         .map_err(|e| anyhow!("Failed to initialize DASH audio segment encoder: {e}"))?;
+        if config.write_behind {
+            warn_inline_fallback(encoder.enable_write_behind());
+        }
 
         if let Some(tx) = config.segment_tx {
             encoder.set_segment_callback(tx);
@@ -898,6 +935,76 @@ mod tests {
     };
     use cap_timestamp::Timestamp;
     use std::time::Instant;
+
+    mod write_behind_opt_in {
+        use super::super::{
+            DashSegmentedAudioMuxer, DashSegmentedAudioMuxerConfig, FragmentedAudioMuxer,
+            FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig,
+        };
+        use crate::{Muxer, TaskPool};
+        use cap_media_info::AudioInfo;
+        use std::sync::{Arc, atomic::AtomicBool};
+
+        fn audio_info() -> AudioInfo {
+            AudioInfo::new_raw(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                48_000,
+                1,
+            )
+        }
+
+        async fn setup<M: Muxer>(config: M::Config, path: std::path::PathBuf) -> M {
+            M::setup(
+                config,
+                path,
+                None,
+                Some(audio_info()),
+                Arc::new(AtomicBool::new(false)),
+                &mut TaskPool::default(),
+            )
+            .await
+            .unwrap()
+        }
+
+        #[test]
+        fn audio_muxers_write_inline_unless_the_call_site_opts_in() {
+            assert!(!FragmentedAudioMuxerConfig::default().write_behind);
+            assert!(!DashSegmentedAudioMuxerConfig::default().write_behind);
+            assert!(!OggMuxerConfig::default().write_behind);
+        }
+
+        #[tokio::test]
+        async fn audio_muxers_honour_the_write_behind_flag() {
+            ffmpeg::init().unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            for write_behind in [false, true] {
+                let dir = directory.path().join(write_behind.to_string());
+                let fragmented = setup::<FragmentedAudioMuxer>(
+                    FragmentedAudioMuxerConfig {
+                        shared_pause_state: None,
+                        write_behind,
+                    },
+                    dir.join("audio.m4a"),
+                )
+                .await;
+                assert_eq!(fragmented.encoder.is_write_behind(), write_behind);
+
+                let dash = setup::<DashSegmentedAudioMuxer>(
+                    DashSegmentedAudioMuxerConfig {
+                        write_behind,
+                        ..Default::default()
+                    },
+                    dir.join("audio"),
+                )
+                .await;
+                assert_eq!(dash.encoder.is_write_behind(), write_behind);
+
+                let ogg =
+                    setup::<OggMuxer>(OggMuxerConfig { write_behind }, dir.join("audio.ogg")).await;
+                assert_eq!(ogg.0.is_write_behind(), write_behind);
+            }
+        }
+    }
 
     #[test]
     fn segmented_encoder_preserves_frames_when_a_full_queue_recovers() {
