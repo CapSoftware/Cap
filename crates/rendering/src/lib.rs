@@ -2595,36 +2595,44 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     }
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
-    let candidates = wgpu_adapter_candidates(&instance, force_software_adapter).await;
-    adapter_phase.finish(if candidates.is_empty() {
-        "none"
+    let preferred = if force_software_adapter {
+        None
     } else {
-        "found"
+        instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .ok()
+    };
+    adapter_phase.finish(if preferred.is_some() {
+        "preferred"
+    } else {
+        "none"
     });
-    if candidates.is_empty() {
-        return Err(RenderingError::NoAdapter);
-    }
 
-    // A driver can list an adapter it cannot make a device on (a GL context
-    // without compute shaders, a broken install), so the next one is tried.
     let device_phase = readiness::Phase::start("wgpu.device");
     let mut last_error = None;
     let mut created = None;
-    for adapter in candidates {
-        let info = adapter.get_info();
-        match request_rendering_device(&adapter).await {
-            Ok((device, queue)) => {
-                created = Some((adapter, device, queue));
-                break;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    adapter_name = info.name,
-                    adapter_backend = ?info.backend,
-                    %error,
-                    "Could not create a rendering device; trying the next adapter"
-                );
-                last_error = Some(error);
+    if let Some(adapter) = preferred {
+        match try_rendering_device(adapter).await {
+            Ok(found) => created = Some(found),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    // A driver can list an adapter it cannot make a device on (a GL context
+    // without compute shaders, a broken install). Only then are the others
+    // enumerated, hardware first, then the fallback adapter.
+    if created.is_none() {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter).await {
+            match try_rendering_device(adapter).await {
+                Ok(found) => {
+                    created = Some(found);
+                    break;
+                }
+                Err(error) => last_error = Some(error),
             }
         }
     }
@@ -2661,40 +2669,20 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     })
 }
 
-/// Adapters to make the rendering device on, best first: the one wgpu
-/// prefers, the rest with hardware ahead of software, then the fallback.
+// Identical cards report identical `AdapterInfo` (wgpu 25 has no bus id), so
+// the preferred adapter is not filtered out: one more failed attempt on it is
+// cheaper than skipping a working twin.
 #[cfg(not(target_arch = "wasm32"))]
-async fn wgpu_adapter_candidates(
+async fn other_wgpu_adapters(
     instance: &wgpu::Instance,
     force_software_adapter: bool,
 ) -> Vec<wgpu::Adapter> {
-    let mut candidates: Vec<wgpu::Adapter> = Vec::new();
-    fn push(adapter: wgpu::Adapter, candidates: &mut Vec<wgpu::Adapter>) {
-        let info = adapter.get_info();
-        if !candidates
-            .iter()
-            .any(|known| same_wgpu_adapter(&known.get_info(), &info))
-        {
-            candidates.push(adapter);
-        }
-    }
-    if !force_software_adapter {
-        if let Ok(preferred) = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-        {
-            push(preferred, &mut candidates);
-        }
-        let mut others = instance.enumerate_adapters(wgpu::Backends::all());
-        others.sort_by_key(|adapter| is_software_wgpu_adapter(&adapter.get_info()));
-        for adapter in others {
-            push(adapter, &mut candidates);
-        }
-    }
+    let mut adapters = if force_software_adapter {
+        Vec::new()
+    } else {
+        instance.enumerate_adapters(wgpu::Backends::all())
+    };
+    adapters.sort_by_key(|adapter| is_software_wgpu_adapter(&adapter.get_info()));
     if let Ok(fallback) = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
@@ -2703,13 +2691,28 @@ async fn wgpu_adapter_candidates(
         })
         .await
     {
-        push(fallback, &mut candidates);
+        adapters.push(fallback);
     }
-    candidates
+    adapters
 }
 
-fn same_wgpu_adapter(a: &wgpu::AdapterInfo, b: &wgpu::AdapterInfo) -> bool {
-    a.backend == b.backend && a.vendor == b.vendor && a.device == b.device && a.name == b.name
+#[cfg(not(target_arch = "wasm32"))]
+async fn try_rendering_device(
+    adapter: wgpu::Adapter,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+    let info = adapter.get_info();
+    match request_rendering_device(&adapter).await {
+        Ok((device, queue)) => Ok((adapter, device, queue)),
+        Err(error) => {
+            tracing::warn!(
+                adapter_name = info.name,
+                adapter_backend = ?info.backend,
+                %error,
+                "Could not create a rendering device; trying the next adapter"
+            );
+            Err(error)
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
