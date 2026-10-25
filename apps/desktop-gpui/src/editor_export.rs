@@ -1007,7 +1007,8 @@ impl EditorWindow {
                         cx.notify();
                     });
                 }
-                Err(_) => {
+                Err(error) => {
+                    tracing::error!(%error, "editor export task ended without a result");
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.phase = ExportPhase::Failed;
@@ -1317,12 +1318,14 @@ impl EditorWindow {
                                 show_upload_failure(&this, cx, &error, true);
                             }
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            tracing::error!(%error, "share upload task ended without a result");
                             show_upload_failure(&this, cx, "Failed to upload recording", true);
                         }
                     }
                 }
                 Ok(Err(error)) => {
+                    tracing::error!(error, "share export failed");
                     let cancelled = !is_resource_stop(&error)
                         && (error == "Export cancelled" || cancel.load(Ordering::Relaxed));
                     let _ = this.update(cx, |this, cx| {
@@ -1340,7 +1343,8 @@ impl EditorWindow {
                         platform::alert_dialog("Export failed", &error);
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    tracing::error!(%error, "share export task ended without a result");
                     show_upload_failure(&this, cx, "Export task failed", false);
                 }
             }
@@ -2831,6 +2835,7 @@ fn show_upload_failure(
     message: &str,
     dialog: bool,
 ) {
+    tracing::error!(error = message, "share upload failed");
     let message = message.to_string();
     let _ = this.update(cx, |this, cx| {
         if let Some(ui) = this.export.as_mut() {
