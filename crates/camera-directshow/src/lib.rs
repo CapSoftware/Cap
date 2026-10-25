@@ -8,7 +8,12 @@ use std::{
     ops::Deref,
     os::windows::ffi::OsStringExt,
     ptr::{self, null, null_mut},
-    sync::OnceLock,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel},
+    },
+    thread::{self, JoinHandle},
     time::Duration,
 };
 use tracing::*;
@@ -460,7 +465,8 @@ impl VideoInputDevice {
                 .SetFormat(&**format)
                 .map_err(StartCapturingError::Other)?;
 
-            let sink_filter = SinkFilter::new(format.clone(), callback);
+            let (sink_filter, callback_worker) = SinkFilter::new(format.clone(), callback)
+                .map_err(StartCapturingError::CallbackWorker)?;
 
             let input_sink_pin = sink_filter
                 .get_pin(0)
@@ -515,6 +521,7 @@ impl VideoInputDevice {
                 graph_builder,
                 output_capture_pin: bound.output_pin,
                 input_sink_pin,
+                callback_worker,
             })
         }
     }
@@ -525,6 +532,7 @@ pub struct CaptureHandle {
     graph_builder: IGraphBuilder,
     output_capture_pin: IPin,
     input_sink_pin: IPin,
+    callback_worker: CallbackWorker,
 }
 
 impl CaptureHandle {
@@ -536,6 +544,8 @@ impl CaptureHandle {
             let _ = self.graph_builder.Disconnect(&self.output_capture_pin);
             let _ = self.graph_builder.Disconnect(&self.input_sink_pin);
         }
+
+        drop(self.callback_worker);
 
         Ok(())
     }
@@ -553,6 +563,8 @@ pub enum StartCapturingError {
     ConfigureGraph(windows_core::Error),
     #[error("Run: {0}")]
     Run(windows_core::Error),
+    #[error("CallbackWorker: {0}")]
+    CallbackWorker(std::io::Error),
     #[error("{0}")]
     Other(windows_core::Error),
 }
@@ -628,13 +640,22 @@ pub struct SinkFilter {
 }
 
 impl SinkFilter {
-    pub fn new(desired_media_type: AMMediaType, callback: SinkCallback) -> ComObject<Self> {
+    pub(crate) fn new(
+        desired_media_type: AMMediaType,
+        callback: SinkCallback,
+    ) -> std::io::Result<(ComObject<Self>, CallbackWorker)> {
+        let (callback_tx, callback_rx) = sync_channel(CALLBACK_QUEUE_DEPTH);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let callback_worker =
+            CallbackWorker::spawn(callback, callback_rx, Arc::new(AtomicBool::new(false)))?;
+
         let this = SinkFilter {
             state: RefCell::new(State_Stopped),
             owning_graph: RefCell::new(None),
             input_pin: SinkInputPin {
                 desired_media_type,
-                callback: RefCell::new(callback),
+                callback_tx,
+                dropped,
                 current_media_type: Default::default(),
                 connected_pin: Default::default(),
                 owner: Default::default(),
@@ -646,7 +667,7 @@ impl SinkFilter {
         // SAFETY: SinkFilter always implements IBaseFilter
         *this.input_pin.owner.borrow_mut() = Some(this.cast::<IBaseFilter>().unwrap());
 
-        this
+        Ok((this, callback_worker))
     }
 
     fn no_of_pins(&self) -> u32 {
@@ -814,7 +835,64 @@ pub struct CallbackData<'a> {
     pub perf_counter: i64,
 }
 
-pub type SinkCallback = Box<dyn FnMut(CallbackData)>;
+pub type SinkCallback = Box<dyn FnMut(CallbackData) + Send>;
+
+const CALLBACK_QUEUE_DEPTH: usize = 4;
+
+struct OwnedCallbackData {
+    sample: IMediaSample,
+    media_type: AMMediaType,
+    timestamp: Duration,
+    perf_counter: i64,
+}
+
+unsafe impl Send for OwnedCallbackData {}
+
+struct CallbackWorker {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl CallbackWorker {
+    fn spawn(
+        mut callback: SinkCallback,
+        samples: Receiver<OwnedCallbackData>,
+        stop: Arc<AtomicBool>,
+    ) -> std::io::Result<Self> {
+        let worker_stop = stop.clone();
+        let handle = thread::Builder::new()
+            .name("dshow-camera-callback".to_string())
+            .spawn(move || {
+                let _ = initialize_directshow();
+                while !worker_stop.load(Ordering::Acquire) {
+                    match samples.recv_timeout(Duration::from_millis(100)) {
+                        Ok(data) => callback(CallbackData {
+                            sample: &data.sample,
+                            media_type: &data.media_type,
+                            timestamp: data.timestamp,
+                            perf_counter: data.perf_counter,
+                        }),
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })?;
+
+        Ok(Self {
+            stop,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for CallbackWorker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 #[implement(IPin, IMemInputPin)]
 struct SinkInputPin {
@@ -823,7 +901,8 @@ struct SinkInputPin {
     current_media_type: RefCell<AMMediaType>,
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<IBaseFilter>>,
-    callback: RefCell<SinkCallback>,
+    callback_tx: SyncSender<OwnedCallbackData>,
+    dropped: Arc<AtomicU64>,
 }
 
 // impl SinkInputPin {
@@ -1029,7 +1108,7 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             }
         }
 
-        let media_type = self.current_media_type.borrow();
+        let media_type = self.current_media_type.borrow().clone();
 
         let length = unsafe { psample.GetActualDataLength() };
 
@@ -1046,12 +1125,19 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
 
         unsafe { psample.GetTime(&mut start_time, &mut end_time) }?;
 
-        (self.callback.borrow_mut())(CallbackData {
-            sample: psample,
-            media_type: &media_type,
+        let data = OwnedCallbackData {
+            sample: psample.clone(),
+            media_type,
             timestamp: Duration::from_micros(start_time as u64 / 10),
             perf_counter,
-        });
+        };
+
+        if let Err(TrySendError::Full(_)) = self.callback_tx.try_send(data) {
+            let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped == 1 || dropped.is_multiple_of(100) {
+                tracing::warn!(dropped, "DirectShow camera callback queue full");
+            }
+        }
 
         Ok(())
     }

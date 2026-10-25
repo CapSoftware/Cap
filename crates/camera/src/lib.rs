@@ -230,6 +230,15 @@ impl CapturedFrame {
     pub fn native(&self) -> &NativeCapturedFrame {
         &self.native
     }
+
+    #[cfg(windows)]
+    #[doc(hidden)]
+    pub fn from_windows_frame(frame: cap_camera_windows::Frame, timestamp: Duration) -> Self {
+        Self {
+            native: NativeCapturedFrame::from_frame(frame),
+            timestamp,
+        }
+    }
 }
 
 impl CameraInfo {

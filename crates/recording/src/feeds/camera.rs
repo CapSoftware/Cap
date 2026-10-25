@@ -1172,40 +1172,46 @@ async fn setup_camera(
                 .senders
                 .load(std::sync::atomic::Ordering::Relaxed)
                 > 0
-                && let Ok(bytes) = frame.native().bytes()
             {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
                 use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
-                let data_len = bytes.len();
-                if let Ok(buffer) = unsafe { MFCreateMemoryBuffer(data_len as u32) } {
-                    let buffer_ready = {
-                        if let Ok(mut lock) = buffer.lock_for_write() {
-                            lock.copy_from_slice(&bytes);
-                            true
-                        } else {
-                            false
-                        }
-                    };
+                let buffer = if let Some(buffer) = frame.native().media_buffer() {
+                    #[allow(clippy::arc_with_non_send_sync)]
+                    Some(std::sync::Arc::new(std::sync::Mutex::new(buffer)))
+                } else if let Ok(bytes) = frame.native().bytes() {
+                    let data_len = bytes.len();
+                    unsafe { MFCreateMemoryBuffer(data_len as u32) }
+                        .ok()
+                        .and_then(|buffer| {
+                            buffer
+                                .lock_for_write()
+                                .ok()
+                                .map(|mut lock| lock.copy_from_slice(&bytes))
+                                .map(|()| buffer)
+                        })
+                        .and_then(|buffer| {
+                            unsafe { buffer.SetCurrentLength(data_len as u32) }.ok()?;
+                            #[allow(clippy::arc_with_non_send_sync)]
+                            Some(std::sync::Arc::new(std::sync::Mutex::new(buffer)))
+                        })
+                } else {
+                    None
+                };
 
-                    if buffer_ready {
-                        let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
-
-                        #[allow(clippy::arc_with_non_send_sync)]
-                        let buffer = std::sync::Arc::new(std::sync::Mutex::new(buffer));
-                        hand_native_frame_to_feed(
-                            &native_recipient,
-                            &native_ingress,
-                            NativeCameraFrame {
-                                buffer,
-                                pixel_format: frame.native().pixel_format,
-                                width: frame.native().width as u32,
-                                height: frame.native().height as u32,
-                                is_bottom_up: frame.native().is_bottom_up,
-                                timestamp,
-                            },
-                        );
-                    }
+                if let Some(buffer) = buffer {
+                    hand_native_frame_to_feed(
+                        &native_recipient,
+                        &native_ingress,
+                        NativeCameraFrame {
+                            buffer,
+                            pixel_format: frame.native().pixel_format,
+                            width: frame.native().width as u32,
+                            height: frame.native().height as u32,
+                            is_bottom_up: frame.native().is_bottom_up,
+                            timestamp,
+                        },
+                    );
                 }
             }
 

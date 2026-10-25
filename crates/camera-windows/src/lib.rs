@@ -236,8 +236,10 @@ impl VideoDeviceInfo {
             .max_by_key(|(w, h)| (*w as u64) * (*h as u64))
     }
 
-    pub fn find_best_format(&self, preference: &FormatPreference) -> Option<VideoFormat> {
-        let formats = self.formats();
+    fn best_format_in(
+        formats: &[VideoFormat],
+        preference: &FormatPreference,
+    ) -> Option<VideoFormat> {
         if formats.is_empty() {
             return None;
         }
@@ -267,11 +269,19 @@ impl VideoDeviceInfo {
             format_priority + resolution_score + fps_score
         };
 
-        formats.into_iter().max_by_key(score_format)
+        formats
+            .iter()
+            .max_by_key(|format| score_format(format))
+            .cloned()
+    }
+
+    pub fn find_best_format(&self, preference: &FormatPreference) -> Option<VideoFormat> {
+        Self::best_format_in(&self.formats(), preference)
     }
 
     pub fn find_format_with_fallback(&self, preference: &FormatPreference) -> Option<VideoFormat> {
-        if let Some(format) = self.find_best_format(preference) {
+        let formats = self.formats();
+        if let Some(format) = Self::best_format_in(&formats, preference) {
             return Some(format);
         }
 
@@ -284,7 +294,6 @@ impl VideoDeviceInfo {
             PixelFormat::YUV420P,
         ];
 
-        let formats = self.formats();
         for fallback_pixel_format in fallback_formats {
             if let Some(format) = formats
                 .iter()
@@ -319,7 +328,7 @@ impl VideoDeviceInfo {
     pub fn start_capturing(
         self,
         format: &VideoFormatInner,
-        mut callback: impl FnMut(Frame) + 'static,
+        mut callback: impl FnMut(Frame) + Send + 'static,
     ) -> Result<CaptureHandle, StartCapturingError> {
         let res = match (self.inner, &format) {
             (
@@ -327,6 +336,10 @@ impl VideoDeviceInfo {
                 VideoFormatInner::MediaFoundation(mf_format),
             ) => {
                 let format = VideoFormat::new_mf(mf_format.clone())?;
+                let width = format.width() as usize;
+                let height = format.height() as usize;
+                let is_bottom_up = format.is_bottom_up;
+                let pixel_format = format.pixel_format;
 
                 let handle = device.start_capturing(
                     mf_format,
@@ -340,10 +353,10 @@ impl VideoDeviceInfo {
 
                             callback(Frame {
                                 inner: FrameInner::MediaFoundation(buffer),
-                                width: format.width() as usize,
-                                height: format.height() as usize,
-                                is_bottom_up: format.is_bottom_up,
-                                pixel_format: format.pixel_format,
+                                width,
+                                height,
+                                is_bottom_up,
+                                pixel_format,
                                 timestamp: data.timestamp,
                                 perf_counter: data.perf_counter,
                             })
@@ -474,6 +487,41 @@ impl Frame {
                 Ok(FrameBytes::DirectShow(slice))
             }
             FrameInner::MediaFoundation(buffer) => Ok(FrameBytes::MediaFoundation(buffer.lock()?)),
+        }
+    }
+
+    pub fn media_buffer(&self) -> Option<IMFMediaBuffer> {
+        match &self.inner {
+            FrameInner::MediaFoundation(buffer) => Some(buffer.clone()),
+            FrameInner::DirectShow(_) => None,
+        }
+    }
+
+    pub fn directshow_sample(&self) -> Option<IMediaSample> {
+        match &self.inner {
+            FrameInner::DirectShow(sample) => Some(sample.clone()),
+            FrameInner::MediaFoundation(_) => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn from_media_foundation(
+        buffer: IMFMediaBuffer,
+        pixel_format: PixelFormat,
+        width: usize,
+        height: usize,
+        is_bottom_up: bool,
+        timestamp: Duration,
+        perf_counter: i64,
+    ) -> Self {
+        Self {
+            pixel_format,
+            width,
+            height,
+            is_bottom_up,
+            timestamp,
+            perf_counter,
+            inner: FrameInner::MediaFoundation(buffer),
         }
     }
 }

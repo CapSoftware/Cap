@@ -2,7 +2,7 @@ use cap_camera::{CapturedFrame, NativeFrameFormat};
 use ffmpeg::{Packet, format::Pixel, frame::Video as FFVideo};
 use std::cell::RefCell;
 
-use crate::CapturedFrameExt;
+use crate::{CONVERSION_STATS, CapturedFrameExt};
 
 #[derive(thiserror::Error, Debug)]
 pub enum AsFFmpegError {
@@ -77,8 +77,9 @@ impl CapturedFrameExt for CapturedFrame {
         let native = self.native();
         let format = native.format;
         let bytes = native.bytes.as_slice();
+        let started = std::time::Instant::now();
 
-        match fourcc_str(format.fourcc).as_str() {
+        let frame = match fourcc_str(format.fourcc).as_str() {
             "YUYV" => copy_packed(bytes, format, Pixel::YUYV422, 2),
             "UYVY" => copy_packed(bytes, format, Pixel::UYVY422, 2),
             "RGB3" => copy_packed(bytes, format, Pixel::RGB24, 3),
@@ -88,7 +89,10 @@ impl CapturedFrameExt for CapturedFrame {
             "YV12" => copy_yuv420(bytes, format, true),
             "MJPG" | "JPEG" => decode_mjpeg(bytes),
             other => Err(AsFFmpegError::UnsupportedFormat(other.to_string())),
-        }
+        }?;
+
+        CONVERSION_STATS.record_copy(started.elapsed().as_nanos() as u64);
+        Ok(frame)
     }
 }
 
