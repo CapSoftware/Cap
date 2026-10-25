@@ -41,6 +41,24 @@ The builder reuses the exact DEB payload, changes the package-format marker, and
 
 On Omarchy, screen capture uses the installed Hyprland desktop portal and PipeWire. Package installation alone does not verify recording, playback, export, or device access; these require tests in the target desktop session.
 
+## AUR
+
+`.github/workflows/publish-aur.yml` publishes each stable release to the AUR as `cap-bin`, installable with `yay -S cap-bin` or `paru -S cap-bin`. When a `cap-v{x.y.z}` GitHub release is published, it downloads the `linux-deb` asset listed in the release's `DOWNLOADS_JSON` and runs the builder with that URL:
+
+```sh
+bash scripts/build-linux-arch-package.sh Cap_0.6.1_amd64.deb ./aur https://cdn.crabnebula.app/asset/<asset-id>
+```
+
+Given a download URL, the builder also writes the `PKGBUILD` it used and its `.SRCINFO` to the output directory. The `PKGBUILD` downloads the versioned DEB from that URL, so AUR builds produce the same package as the release. The workflow checks that the DEB holds the tagged version, then pushes both files to `ssh://aur@aur.archlinux.org/cap-bin.git`. It skips the push when the AUR already has a newer version or the same files.
+
+One-time setup:
+
+1. Create an AUR account for Cap and add a dedicated SSH public key to it, for example from `ssh-keygen -t ed25519 -f cap-aur -C cap-aur`.
+2. Store the private key as the `AUR_SSH_PRIVATE_KEY` repository secret. Without it, the workflow builds the package and uploads the `PKGBUILD` and `.SRCINFO` as an artifact, but does not push.
+3. Run `publish-aur` from `main` with the latest release tag, such as `cap-v0.6.1`. The first push creates `cap-bin` with that account as its maintainer.
+
+A release event runs the workflow file from the tagged commit. For a tag that predates the workflow, such as a promoted nightly from before it was added, run it from `main` with that tag.
+
 ## CLI camera in Instant mode
 
 On Linux, `cap record start --mode instant --camera DEVICE` composites the camera directly into the recorded screen or window. The CLI uses an unmirrored square at the bottom right, sized to 30% of the shorter screen edge with a 2% margin. Camera images are center-cropped without stretching. If camera frames stop arriving, screen recording continues without a stale camera image.
