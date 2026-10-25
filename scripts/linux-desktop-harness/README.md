@@ -55,7 +55,7 @@ leads every session with a Shift tap.
 screenshot mode does, with Cap focused as after a click, and allows it when
 the portal asks (GNOME Shell's question is answered from the Shell, so it needs
 `GNOME_UNSAFE=1`; elsewhere the permission is granted up front because the GTK
-portal's dialog aborts in the container). It checks a PNG was saved.
+portal's dialog aborts in the container). It checks a PNG of the display's size (`SCREEN`, 1920x1080) was saved.
 `SCENARIO=wallpaper` records a clip, opens it in the editor and imports the
 desktop's wallpaper as its background (`CAP_GPUI_AUTO_DESKTOP_BACKGROUND=1`).
 GNOME keeps its default JPEG XL wallpaper; `WALLPAPER=swaybg` starts swaybg

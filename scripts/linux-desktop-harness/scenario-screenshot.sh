@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# A screenshot of the display, taken the way the screenshot mode takes one
-# (CAP_GPUI_AUTO_RECORD=screenshot), allowing it when the desktop portal asks.
-# Checks a PNG of the display's size was saved. Prints key=value results to
-# $HARNESS_OUT/result.txt.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -75,8 +71,8 @@ data = open(sys.argv[1], "rb").read(24)
 if data[:8] == b"\x89PNG\r\n\x1a\n":
     print(*struct.unpack(">II", data[16:24]))' "$shot")
 echo "screenshot: ${shot:-none} ${size:-}" >>"$out/actions.log"
-result screenshot_taken "$([[ -n $shot ]] && echo yes || echo no)"
-result screenshot_size "${size// /x}"
+result screenshot_taken "$([[ -n $size ]] && echo yes || echo no)"
+result screenshot_size "$([[ ${size// /x} == "${SCREEN:-1920x1080}" ]] && echo yes || echo "${size// /x}")"
 result capture_failed "$(grep -ac 'screenshot capture failed' "$out/cap.log")"
 if [[ -z $shot ]]; then
   find "$HOME" /tmp -newer "$out/profile/store" -iname "Screenshot*.png" -printf "portal file: %s bytes %p\n" 2>/dev/null >>"$out/actions.log"

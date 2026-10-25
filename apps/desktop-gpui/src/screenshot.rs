@@ -50,10 +50,8 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
                 tracing::info!("the desktop allows Cap's screenshots");
                 cx.update(|cx| capture(target, cx));
             }
-            Err(error) => {
-                tracing::error!("screenshot capture failed: {error:#}");
-                cx.update(|cx| app_windows::screenshot_finished(None, cx));
-            }
+            // The picker is still up, so the user can try again.
+            Err(error) => tracing::error!("screenshot capture failed: {error:#}"),
         })
         .detach();
         return;
