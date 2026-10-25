@@ -26,7 +26,15 @@ Before=graphical-session.target
 UNIT
 systemctl --user daemon-reload
 systemctl --user start cap-harness-session.target
-gsettings set org.gnome.shell enabled-extensions "['ubuntu-appindicators@ubuntu.com']"
+# GNOME_TRAY=0 runs GNOME as Fedora ships it: no AppIndicator extension, so
+# no tray for the recording Stop control.
+if [[ ${GNOME_TRAY:-1} == 0 ]]; then
+  gsettings set org.gnome.shell enabled-extensions "[]"
+  gsettings set org.gnome.shell disabled-extensions "['ubuntu-appindicators@ubuntu.com']"
+  systemctl --user set-environment GNOME_SHELL_SESSION_MODE=user
+else
+  gsettings set org.gnome.shell enabled-extensions "['ubuntu-appindicators@ubuntu.com']"
+fi
 # The virtual pointer starts at the top-left corner; the hot corner would open
 # the overview under every injected click.
 gsettings set org.gnome.desktop.interface enable-hot-corners false

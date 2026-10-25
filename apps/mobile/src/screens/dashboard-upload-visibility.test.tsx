@@ -1,5 +1,9 @@
 import { Video } from "@cap/web-domain";
-import React, { type ReactElement, type ReactNode } from "react";
+import React, {
+	type ComponentProps,
+	type ReactElement,
+	type ReactNode,
+} from "react";
 import { ActionSheetIOS, Alert } from "react-native";
 import TestRenderer, {
 	act,
@@ -8,7 +12,9 @@ import TestRenderer, {
 } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MobileCapSummary } from "@/api/mobile";
+import type { useAuth } from "@/auth/AuthContext";
 import { CapSettingsSheet } from "@/caps/CapSettingsSheet";
+import type { OrgSwitcher } from "@/components/OrgSwitcher";
 import CapsScreen from "../../app/(tabs)";
 import UploadScreen from "../../app/(tabs)/upload";
 
@@ -16,7 +22,7 @@ type AuthStub = {
 	status: "signedIn" | "signedOut";
 	apiKey: string;
 	bootstrap: {
-		activeOrganizationId: string;
+		activeOrganizationId: string | null;
 		spaces?: Array<{
 			id: string;
 			name: string;
@@ -31,7 +37,7 @@ type AuthStub = {
 			email: string;
 			name: string | null;
 		};
-	};
+	} | null;
 	client: {
 		createFolder: (input: {
 			color?: string;
@@ -82,6 +88,7 @@ type AuthStub = {
 		) => Promise<unknown>;
 	};
 	refresh: () => Promise<void>;
+	setActiveOrganization: ReturnType<typeof useAuth>["setActiveOrganization"];
 };
 
 type HostProps = {
@@ -91,7 +98,9 @@ type HostProps = {
 
 type JsonNode = ReactTestRendererJSON | ReactTestRendererJSON[] | string | null;
 
-const createAuth = (): AuthStub => ({
+const createAuth = (): AuthStub & {
+	bootstrap: NonNullable<AuthStub["bootstrap"]>;
+} => ({
 	status: "signedIn",
 	apiKey: "api-key",
 	bootstrap: {
@@ -142,6 +151,7 @@ const createAuth = (): AuthStub => ({
 		),
 	},
 	refresh: () => Promise.resolve(),
+	setActiveOrganization: () => Promise.resolve(),
 });
 
 const createDeferred = <T,>() => {
@@ -496,7 +506,8 @@ vi.mock("@/components/CapCard", async () => {
 vi.mock("@/components/OrgSwitcher", async () => {
 	const React = await import("react");
 	return {
-		OrgSwitcher: () => React.createElement("OrgSwitcher"),
+		OrgSwitcher: (props: ComponentProps<typeof OrgSwitcher>) =>
+			React.createElement("OrgSwitcher", props),
 	};
 });
 
@@ -2240,6 +2251,112 @@ describe("upload and dashboard visibility", () => {
 			importAction.props.onPress();
 		});
 		expect(push).toHaveBeenCalledWith("/upload");
+	});
+
+	it("reloads My Caps after switching organizations with the same API client", async () => {
+		const auth = createAuth();
+		const emptyList = auth.client.listCaps;
+		const requestedOrganizations: Array<string | null> = [];
+		auth.client.listCaps = vi.fn(async () => {
+			const organizationId = auth.bootstrap.activeOrganizationId;
+			requestedOrganizations.push(organizationId);
+			return {
+				...(await emptyList()),
+				caps: [{ id: organizationId, title: organizationId, upload: null }],
+			};
+		});
+		auth.setActiveOrganization = vi.fn<AuthStub["setActiveOrganization"]>(
+			async (organizationId) => {
+				auth.bootstrap = {
+					...auth.bootstrap,
+					activeOrganizationId: organizationId,
+				};
+			},
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(<CapsScreen />);
+		try {
+			expect(
+				renderer.root
+					.findAll((node) => String(node.type) === "CapCard")
+					.map((card) => card.props.cap.title),
+			).toEqual(["org_123"]);
+			const switcher = renderer.root.find(
+				(node) => String(node.type) === "OrgSwitcher",
+			);
+			const onChange: ComponentProps<typeof OrgSwitcher>["onChange"] =
+				switcher.props.onChange;
+			await act(async () => {
+				await onChange("org_456");
+				renderer.update(<CapsScreen />);
+			});
+
+			expect(auth.setActiveOrganization).toHaveBeenCalledWith("org_456");
+			expect(requestedOrganizations).toEqual(["org_123", "org_456"]);
+			expect(
+				renderer.root
+					.findAll((node) => String(node.type) === "CapCard")
+					.map((card) => card.props.cap.title),
+			).toEqual(["org_456"]);
+		} finally {
+			await act(async () => {
+				renderer.unmount();
+			});
+		}
+	});
+
+	it("keeps the library when bootstrap refreshes the same organization", async () => {
+		const auth = createAuth();
+		auth.client.listCaps = vi.fn(auth.client.listCaps);
+		authState.value = auth;
+		const renderer = await renderComponent(<CapsScreen />);
+		try {
+			await act(async () => {
+				authState.value = { ...auth, bootstrap: { ...auth.bootstrap } };
+				renderer.update(<CapsScreen />);
+			});
+			expect(auth.client.listCaps).toHaveBeenCalledTimes(1);
+		} finally {
+			await act(async () => {
+				renderer.unmount();
+			});
+		}
+	});
+
+	it("loads a personal library with no active organization", async () => {
+		const auth = createAuth();
+		auth.bootstrap.activeOrganizationId = null;
+		auth.client.listCaps = vi.fn(auth.client.listCaps);
+		authState.value = auth;
+		const renderer = await renderComponent(<CapsScreen />);
+		try {
+			expect(auth.client.listCaps).toHaveBeenCalledTimes(1);
+			expect(getTextNodes(renderer.toJSON())).toContain("My Caps");
+		} finally {
+			await act(async () => {
+				renderer.unmount();
+			});
+		}
+	});
+
+	it("waits for the initial bootstrap before loading the library", async () => {
+		const auth = createAuth();
+		auth.client.listCaps = vi.fn(auth.client.listCaps);
+		authState.value = { ...auth, bootstrap: null };
+		const renderer = await renderComponent(<CapsScreen />);
+		try {
+			expect(auth.client.listCaps).not.toHaveBeenCalled();
+			await act(async () => {
+				authState.value = auth;
+				renderer.update(<CapsScreen />);
+			});
+			expect(auth.client.listCaps).toHaveBeenCalledTimes(1);
+			expect(getTextNodes(renderer.toJSON())).toContain("My Caps");
+		} finally {
+			await act(async () => {
+				renderer.unmount();
+			});
+		}
 	});
 
 	it("switches from My Caps into an available space", async () => {
