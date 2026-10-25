@@ -204,8 +204,20 @@ jobs:
             bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
             "$RUNNER_TEMP/out/hyprland" LAUNCH=dock
 
+      # A GPU without a Vulkan driver renders through wgpu's GL backend, whose
+      # surfaces have no Mailbox present mode. Hiding the Vulkan drivers puts
+      # Cap there; showing its hidden windows again must not panic.
+      - name: Hyprland on OpenGL (no Vulkan driver)
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-gl" LAUNCH=dock VK_ICD_FILENAMES=/nonexistent.json
+          grep -q 'Selected GPU adapter: .*(Gl)' "$RUNNER_TEMP/out/hyprland-gl/cap.log"
+
       - name: Check results
-        run: bash scripts/linux-desktop-harness/check-results.sh "$RUNNER_TEMP/out/hyprland"
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh \
+            "$RUNNER_TEMP/out/hyprland" "$RUNNER_TEMP/out/hyprland-gl"
 
       - name: Upload logs
         if: always()
