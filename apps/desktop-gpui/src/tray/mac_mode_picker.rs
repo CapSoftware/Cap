@@ -13,10 +13,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSColor, NSEvent, NSEventTrackingRunLoopMode,
-    NSEventType, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightSemibold,
-    NSForegroundColorAttributeName, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem,
-    NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSAppearance, NSAppearanceCustomization, NSBitmapImageRep, NSColor, NSEvent,
+    NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName, NSFontManager,
+    NSFontTraitMask, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSImageScaling,
+    NSImageView, NSMenu, NSMenuItem, NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions,
+    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView,
 };
 use objc2_foundation::{
     MainThreadMarker, NSData, NSDictionary, NSPoint, NSRect, NSRunLoop, NSSize, NSString, NSTimer,
@@ -36,7 +38,7 @@ const PICKER_MODES: [(Mode, TrayItem); 3] = [
 const FLASH_INTERVAL: f64 = 0.06;
 /// Temporarily disabled while the picker keeps the menu open and updates the
 /// capture rows in place.
-const FLASH_ON_PICK: bool = false;
+const FLASH_ON_PICK: bool = true;
 
 const PICKER_TITLE: &str = "Recording Mode";
 const PICKER_W: f64 = 300.0;
@@ -45,8 +47,8 @@ const PILL_W: f64 = 38.0;
 const PILL_H: f64 = 29.0;
 const PILL_GAP: f64 = 4.0;
 const CAPSULE_PAD: f64 = 3.0;
-const RIGHT_INSET: f64 = 5.0;
-const TITLE_INSET: f64 = 8.5;
+const RIGHT_INSET: f64 = 30.0;
+const TITLE_INSET: f64 = 17.0;
 const LINE_GAP: f64 = 2.0;
 const SYMBOL_SIZE: f64 = 17.0;
 const PILL_RADIUS: f64 = 14.0;
@@ -68,6 +70,7 @@ struct PickerIvars {
     tag_base: isize,
     capsule: RefCell<Option<Retained<CALayer>>>,
     pills: RefCell<Vec<Retained<CALayer>>>,
+    selection: RefCell<Option<Retained<NSVisualEffectView>>>,
     icons: RefCell<Vec<Retained<NSImageView>>>,
 }
 
@@ -152,6 +155,7 @@ impl ModePickerView {
             tag_base,
             capsule: RefCell::new(None),
             pills: RefCell::new(Vec::new()),
+            selection: RefCell::new(None),
             icons: RefCell::new(Vec::new()),
         });
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PICKER_W, PICKER_H));
@@ -175,13 +179,30 @@ impl ModePickerView {
                 .push(make_layer(PILL_RADIUS));
         }
 
+        let selection = NSVisualEffectView::new(mtm);
+        selection.setMaterial(NSVisualEffectMaterial::Selection);
+        selection.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
+        selection.setState(NSVisualEffectState::Active);
+        selection.setWantsLayer(true);
+        if let Some(layer) = selection.layer() {
+            layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+            layer.setCornerRadius(PILL_RADIUS);
+        }
+        this.addSubview(&selection);
+        *this.ivars().selection.borrow_mut() = Some(selection);
+
         for (mode, _) in PICKER_MODES.iter() {
             let view = NSImageView::new(mtm);
             if let Some(bytes) = mode_picker_icon(*mode)
-                && let Some(image) =
-                    NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes))
+                && let Some(rep) = NSBitmapImageRep::initWithData(
+                    NSBitmapImageRep::alloc(),
+                    &NSData::with_bytes(&bytes),
+                )
             {
-                image.setSize(NSSize::new(SYMBOL_SIZE, SYMBOL_SIZE));
+                let size = NSSize::new(SYMBOL_SIZE, SYMBOL_SIZE);
+                rep.setSize(size);
+                let image = NSImage::initWithSize(NSImage::alloc(), size);
+                image.addRepresentation(&rep);
                 image.setTemplate(true);
                 view.setImage(Some(&image));
             }
@@ -281,11 +302,16 @@ impl ModePickerView {
         let white = NSColor::whiteColor();
         let flash = self.ivars().flash.get();
         let icons = self.ivars().icons.borrow();
+        if let Some(selection) = self.ivars().selection.borrow().as_ref() {
+            let r = self.pill_rect(selected);
+            selection.setFrame(r);
+            selection.setHidden(flash);
+        }
         for (i, pill) in self.ivars().pills.borrow().iter().enumerate() {
             let is_sel = i == selected;
             let is_hover = focused == Some(i) && !is_sel;
-            let fill = if is_sel {
-                if flash { accent.clone() } else { white.clone() }
+            let fill = if is_sel && flash {
+                accent.clone()
             } else if is_hover {
                 label.colorWithAlphaComponent(0.14)
             } else {
@@ -327,8 +353,17 @@ impl ModePickerView {
             .convertFont_toHaveTrait(&sub_font, NSFontTraitMask::ItalicFontMask);
         }
 
-        let label = NSColor::labelColor();
-        let secondary = NSColor::secondaryLabelColor();
+        let flash = self.ivars().flash.get();
+        let label = if flash {
+            NSColor::controlAccentColor()
+        } else {
+            NSColor::labelColor()
+        };
+        let secondary = if flash {
+            NSColor::controlAccentColor()
+        } else {
+            NSColor::secondaryLabelColor()
+        };
         let title = NSString::from_str(PICKER_TITLE);
         let subtitle = NSString::from_str(mode_name(PICKER_MODES[shown].0));
         let title_attrs = NSDictionary::from_slices(
@@ -455,26 +490,6 @@ pub(super) fn stop_flash() {
         }
     });
     FLASH_STEP.with(|step| step.set(0));
-}
-
-/// Pull the live picker back to `mode` after a refresh driven by another
-/// surface (hotkey, mode-select window) changed it under the open menu.
-pub(super) fn select_mode(mode: Mode) {
-    let Some(index) = PICKER_MODES
-        .iter()
-        .position(|(candidate, _)| *candidate == mode)
-    else {
-        return;
-    };
-    PICKER.with(|p| {
-        let p = p.borrow();
-        let Some((_, view)) = p.as_ref() else {
-            return;
-        };
-        view.ivars().selected.set(index);
-        view.ivars().focused.set(Some(index));
-        view.refresh();
-    });
 }
 
 /// Appends the mode picker row to `menu` and registers one action per pill, so a click

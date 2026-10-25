@@ -991,7 +991,7 @@ mod mac {
     };
     use objc2_foundation::{MainThreadMarker, NSData, NSRunLoop, NSString, NSTimer};
 
-    use super::mac_mode_picker::{append_mode_picker, install_key_hook, select_mode, stop_flash};
+    use super::mac_mode_picker::{append_mode_picker, install_key_hook, stop_flash};
     use super::{
         Accelerator, Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem,
         current_menu_entries, handle_item, mode_icon, mode_submenu, row_symbol, scan_previous,
@@ -1544,14 +1544,6 @@ mod mac {
             }
             let block = block2::RcBlock::new(|_timer: NonNull<NSTimer>| {
                 let held = current_option();
-                let mode = Mode::from_store();
-                if CURRENT_MODE.get() != Some(mode) {
-                    apply(mode, held);
-                    set_status_mode(mode);
-                    select_mode(mode);
-                    OPTION_HELD.set(held);
-                    return;
-                }
                 if OPTION_HELD.replace(held) != held
                     && let Some(mode) = CURRENT_MODE.get()
                 {
@@ -1859,10 +1851,6 @@ mod mac {
         if !cx.global::<Tray>().recording {
             let tray = cx.global::<Tray>();
             set_button_image(tray, mode_icon(mode));
-        }
-        if MENU_OPEN.with(Cell::get) {
-            apply(mode, current_option());
-            select_mode(mode);
         }
         rebuild(cx);
     }
