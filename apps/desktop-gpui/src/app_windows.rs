@@ -3647,6 +3647,9 @@ fn begin_retained_capture_restore(cx: &mut App) {
                 Err(error) => {
                     if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
                         lease.restoration_error = Some(error.clone());
+                        // A later retry only brings the windows back; it does
+                        // not start a recording nobody is asking for any more.
+                        lease.visible_fallback = None;
                     }
                     tracing::error!(%error, "Recording UI restoration or Stop cleanup is unconfirmed");
                     RecordingSession::global(cx).update(cx, |session, cx| {
