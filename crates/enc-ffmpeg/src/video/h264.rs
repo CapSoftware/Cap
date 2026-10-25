@@ -782,6 +782,8 @@ fn open_video_encoder_inner(
         if let Some(frames) = &hw_upload.vaapi {
             unsafe { frames.attach(encoder.as_mut_ptr()) };
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = hw_upload;
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
         encoder.set_colorspace(color::Space::BT709);
