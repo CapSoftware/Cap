@@ -31,6 +31,10 @@ pub fn waveform_peaks<'a>(slices: impl IntoIterator<Item = &'a [f32]>, channels:
                 let (group, rest) = slice.split_at(block_samples * WAVEFORM_PEAK_LANES);
                 push_waveform_peak_lanes(&mut peaks, group, block_samples);
                 slice = rest;
+            } else if count == 0 && slice.len() >= block_samples * 2 {
+                let (group, rest) = slice.split_at(block_samples * 2);
+                push_waveform_peak_pair(&mut peaks, group, block_samples);
+                slice = rest;
             } else {
                 let (window, rest) = slice.split_at((block_samples - count).min(slice.len()));
                 sum = window.iter().fold(sum, |sum, sample| sum + sample.abs());
@@ -55,6 +59,18 @@ pub fn waveform_peaks<'a>(slices: impl IntoIterator<Item = &'a [f32]>, channels:
         };
     }
     peaks
+}
+
+fn push_waveform_peak_pair(peaks: &mut Vec<f32>, group: &[f32], block_samples: usize) {
+    let (first, second) = group.split_at(block_samples);
+    let mut first_sum = 0.0_f32;
+    let mut second_sum = 0.0_f32;
+    for index in 0..block_samples {
+        first_sum += first[index].abs();
+        second_sum += second[index].abs();
+    }
+    peaks.push(first_sum / block_samples as f32);
+    peaks.push(second_sum / block_samples as f32);
 }
 
 fn push_waveform_peak_lanes(peaks: &mut Vec<f32>, group: &[f32], block_samples: usize) {
@@ -1270,6 +1286,49 @@ mod tests {
                 expected.to_bits(),
                 "{channels} {block_len} at {index}"
             );
+        }
+    }
+
+    #[test]
+    fn waveform_pairs_match_sequential_bits_at_window_and_block_edges() {
+        for channels in [0, 1, 2, 6] {
+            let window = 4_800 * usize::from(channels.max(1));
+            for length in [
+                2 * window - 1,
+                2 * window,
+                2 * window + 1,
+                3 * window + 7,
+                6 * window + 17,
+            ] {
+                for nonfinite in [false, true] {
+                    let mut source = xorshift_samples(length);
+                    if nonfinite {
+                        for (index, value) in [
+                            (0, -0.0),
+                            (window - 1, f32::from_bits(0x7fc0_0123)),
+                            (window, f32::INFINITY),
+                            (window + 1, f32::NEG_INFINITY),
+                        ] {
+                            source[index] = value;
+                        }
+                    }
+                    let expected = sequential_waveform_peaks(&source, channels);
+                    for block in [
+                        2 * window,
+                        2 * window + 1,
+                        6 * window,
+                        32_768 * usize::from(channels.max(1)),
+                    ] {
+                        let slices: Vec<_> = source.chunks(block).collect();
+                        assert_peak_bits(
+                            &waveform_peaks(slices.iter().copied(), channels),
+                            &expected,
+                            channels,
+                            block,
+                        );
+                    }
+                }
+            }
         }
     }
 
