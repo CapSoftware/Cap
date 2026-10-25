@@ -97,8 +97,6 @@ pub fn prewarm_fonts() {
 
 /// The first `AVAssetReader` a process starts takes 80-90 ms in
 /// `startReading` on an M4; every later one, on any file, takes a few ms.
-/// Opening a decoder on `path` and dropping it pays that once, ahead of the
-/// first editor's first frame.
 #[cfg(target_os = "macos")]
 pub fn prewarm_video_decoder(
     path: &std::path::Path,

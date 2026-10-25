@@ -1437,7 +1437,7 @@ Editor-specific deviations:
 | **The timeline's height is fixed** | The strip sits at the default 260px with the `MIN_TIMELINE_HEIGHT` floor expressed but its 16px drag handle inert, so the player/timeline split cannot be resized. Everything else in the strip — including editing — is real; see [Timeline editing](#timeline-editing). |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
-| **No prewarm** | `PendingEditorInstances::start_prewarm` runs *before* the Tauri window is built so decoders warm up in parallel with the webview. There is no webview to race here, so the instance is built once, after the window exists. |
+| **No instance prewarm** | `PendingEditorInstances::start_prewarm` runs *before* the Tauri window is built so decoders warm up in parallel with the webview. There is no webview to race here, so the instance is built once, after the window exists. On macOS, a Studio recording that stops into the editor instead starts a throwaway decoder on the newest finished studio recording while the new one finalizes (`warm_video_decoder_for_editor`), because the first `AVAssetReader` a process starts is slow. |
 
 ## The timeline
 

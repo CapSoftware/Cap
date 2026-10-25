@@ -392,10 +392,8 @@ pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
         .collect()
 }
 
-/// The display track of the newest finished studio recording that has one,
-/// however many screenshots or Instant recordings are newer. A recording
-/// still finalizing is skipped. Metas are loaded newest first and only until
-/// it is found.
+/// Not `recent_media()`: its `RECENT_MEDIA_LIMIT` cap can hide the newest
+/// studio recording behind newer screenshots and Instant recordings.
 #[cfg(target_os = "macos")]
 pub(crate) fn newest_studio_display_path() -> Option<PathBuf> {
     newest_studio_display_path_in(&known_recordings_dirs())
