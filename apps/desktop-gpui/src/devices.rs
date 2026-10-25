@@ -832,7 +832,15 @@ pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
     candidates.into_iter().next().map(|(window, _)| window)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
+    match scap_targets::WindowImpl::topmost_x11_snapshot_at_cursor() {
+        Some(found) => found.map(|snapshot| snapshot.window),
+        None => Window::get_topmost_at_cursor(),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
     Window::get_topmost_at_cursor()
 }
@@ -880,6 +888,11 @@ pub fn list_windows() -> Vec<WindowOption> {
 /// `collect_windows_with_thumbnails` (`thumbnails/mod.rs:107-137`), which needs
 /// the handle for both the ScreenCaptureKit filter and `Window::app_icon()`.
 pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
+    #[cfg(target_os = "linux")]
+    if let Some(targets) = linux_window_targets_from_snapshot() {
+        return targets;
+    }
+
     Window::list()
         .into_iter()
         .filter_map(|window| {
@@ -940,6 +953,40 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
             ))
         })
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_targets_from_snapshot() -> Option<Vec<(WindowOption, Window)>> {
+    let snapshots = scap_targets::WindowImpl::list_x11_snapshots()?;
+    Some(
+        snapshots
+            .into_iter()
+            .filter_map(|snapshot| {
+                let size = snapshot.logical_size();
+                let position = snapshot.display_relative_origin();
+                let refresh_rate = snapshot.refresh_rate();
+                let id = snapshot.window.id();
+                if snapshot.name.trim().is_empty() {
+                    return None;
+                }
+                let app = snapshot.owner_name?;
+                if app == "Window Server" {
+                    return None;
+                }
+                Some((
+                    WindowOption {
+                        id,
+                        label: snapshot.name,
+                        app,
+                        size: Some((size.width() as u32, size.height() as u32)),
+                        position,
+                        refresh_rate: Some(refresh_rate),
+                    },
+                    snapshot.window,
+                ))
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
