@@ -75,7 +75,9 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use layers::{BackgroundTextureCache, clean_background_path, new_font_system};
+pub use layers::{
+    BackgroundTextureCache, clean_background_path, last_caption_center, new_font_system,
+};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
