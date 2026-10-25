@@ -1449,9 +1449,11 @@ mod mac {
         NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Option)
     }
 
-    /// Retarget the four capture rows for `mode` and the Option key. AppKit
-    /// only lets us swap these by setting the tag, so both actions are already
-    /// in `Tray::actions` and no menu items are created or removed here.
+    /// Retarget the four capture rows for `mode` and the Option key. Both
+    /// actions are already in `Tray::actions`, so swapping is only a tag
+    /// change. Native AppKit alternate items pair on a shared key equivalent
+    /// and different modifier masks; these rows need a different accelerator
+    /// per intent, so they cannot be a native pair.
     pub(super) fn apply(mode: Mode, option: bool) {
         CURRENT_MODE.set(Some(mode));
         let intent = intent_for(mode, option);
