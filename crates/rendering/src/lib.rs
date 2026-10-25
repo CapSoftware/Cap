@@ -2595,67 +2595,127 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     }
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
-    let hardware_adapter = if force_software_adapter {
-        None
+    let candidates = wgpu_adapter_candidates(&instance, force_software_adapter).await;
+    adapter_phase.finish(if candidates.is_empty() {
+        "none"
     } else {
-        instance
+        "found"
+    });
+    if candidates.is_empty() {
+        return Err(RenderingError::NoAdapter);
+    }
+
+    // A driver can list an adapter it cannot make a device on (a GL context
+    // without compute shaders, a broken install), so the next one is tried.
+    let device_phase = readiness::Phase::start("wgpu.device");
+    let mut last_error = None;
+    let mut created = None;
+    for adapter in candidates {
+        let info = adapter.get_info();
+        match request_rendering_device(&adapter).await {
+            Ok((device, queue)) => {
+                created = Some((adapter, device, queue));
+                break;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    adapter_name = info.name,
+                    adapter_backend = ?info.backend,
+                    %error,
+                    "Could not create a rendering device; trying the next adapter"
+                );
+                last_error = Some(error);
+            }
+        }
+    }
+    let Some((adapter, device, queue)) = created else {
+        device_phase.finish("failed");
+        return Err(last_error.map_or(RenderingError::NoAdapter, Into::into));
+    };
+    device_phase.finish("returned");
+
+    let adapter_info = adapter.get_info();
+    let is_software_adapter = is_software_wgpu_adapter(&adapter_info);
+    if is_software_adapter {
+        tracing::warn!(
+            adapter_name = adapter_info.name,
+            adapter_backend = ?adapter_info.backend,
+            adapter_device_type = ?adapter_info.device_type,
+            "Using software adapter (CPU rendering - performance may be reduced)"
+        );
+    } else {
+        tracing::info!(
+            adapter_name = adapter_info.name,
+            adapter_backend = ?adapter_info.backend,
+            adapter_device_type = ?adapter_info.device_type,
+            "Using hardware GPU adapter"
+        );
+    }
+    log_uncaptured_errors(&device, "cap-rendering-device");
+    Ok(SharedWgpuDevice {
+        instance,
+        adapter,
+        device,
+        queue,
+        is_software_adapter,
+    })
+}
+
+/// Adapters to make the rendering device on, best first: the one wgpu
+/// prefers, the rest with hardware ahead of software, then the fallback.
+#[cfg(not(target_arch = "wasm32"))]
+async fn wgpu_adapter_candidates(
+    instance: &wgpu::Instance,
+    force_software_adapter: bool,
+) -> Vec<wgpu::Adapter> {
+    let mut candidates: Vec<wgpu::Adapter> = Vec::new();
+    fn push(adapter: wgpu::Adapter, candidates: &mut Vec<wgpu::Adapter>) {
+        let info = adapter.get_info();
+        if !candidates
+            .iter()
+            .any(|known| same_wgpu_adapter(&known.get_info(), &info))
+        {
+            candidates.push(adapter);
+        }
+    }
+    if !force_software_adapter {
+        if let Ok(preferred) = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
             .await
-            .ok()
-    };
-
-    let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
-        let adapter_info = adapter.get_info();
-        let is_software = is_software_wgpu_adapter(&adapter_info);
-
-        if is_software {
-            tracing::warn!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Hardware adapter behaves like a software renderer"
-            );
-        } else {
-            tracing::info!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Using hardware GPU adapter"
-            );
+        {
+            push(preferred, &mut candidates);
         }
+        let mut others = instance.enumerate_adapters(wgpu::Backends::all());
+        others.sort_by_key(|adapter| is_software_wgpu_adapter(&adapter.get_info()));
+        for adapter in others {
+            push(adapter, &mut candidates);
+        }
+    }
+    if let Ok(fallback) = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: true,
+            compatible_surface: None,
+        })
+        .await
+    {
+        push(fallback, &mut candidates);
+    }
+    candidates
+}
 
-        (adapter, is_software)
-    } else {
-        tracing::warn!("No hardware GPU adapter found, attempting software fallback");
-        let software_adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: true,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|_| RenderingError::NoAdapter)?;
+fn same_wgpu_adapter(a: &wgpu::AdapterInfo, b: &wgpu::AdapterInfo) -> bool {
+    a.backend == b.backend && a.vendor == b.vendor && a.device == b.device && a.name == b.name
+}
 
-        let adapter_info = software_adapter.get_info();
-        tracing::info!(
-            adapter_name = adapter_info.name,
-            adapter_backend = ?adapter_info.backend,
-            adapter_device_type = ?adapter_info.device_type,
-            "Using software adapter (CPU rendering - performance may be reduced)"
-        );
-        (software_adapter, true)
-    };
-
-    adapter_phase.finish(if is_software_adapter {
-        "software"
-    } else {
-        "hardware"
-    });
-
+#[cfg(not(target_arch = "wasm32"))]
+async fn request_rendering_device(
+    adapter: &wgpu::Adapter,
+) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
     let mut required_features = wgpu::Features::empty();
     if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
         required_features |= wgpu::Features::PIPELINE_CACHE;
@@ -2666,24 +2726,13 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     {
         required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
     }
-
-    let device_descriptor = wgpu::DeviceDescriptor {
-        label: Some("cap-rendering-device"),
-        required_features,
-        ..Default::default()
-    };
-
-    let device_phase = readiness::Phase::start("wgpu.device");
-    let (device, queue) = adapter.request_device(&device_descriptor).await?;
-    device_phase.finish("returned");
-    log_uncaptured_errors(&device, "cap-rendering-device");
-    Ok(SharedWgpuDevice {
-        instance,
-        adapter,
-        device,
-        queue,
-        is_software_adapter,
-    })
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("cap-rendering-device"),
+            required_features,
+            ..Default::default()
+        })
+        .await
 }
 
 /// wgpu panics on an error nothing captured. After a device is lost (a driver
