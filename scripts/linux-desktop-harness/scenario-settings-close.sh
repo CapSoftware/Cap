@@ -13,9 +13,15 @@ eval "$(systemctl --user show-environment | grep -E "^(WAYLAND_DISPLAY|XDG_SESSI
 
 : >"$out/result.txt"
 result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
+# Prints yes or no; prints nothing when GNOME could not be asked.
 settings_shown() {
-  gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval \
-    "global.display.list_all_windows().some(w => w.get_title() === 'Cap Settings')" 2>/dev/null | grep -q "'true'"
+  local reply
+  reply=$(gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval \
+    "global.display.list_all_windows().some(w => w.get_title() === 'Cap Settings')" 2>/dev/null)
+  case "$reply" in
+    "(true, 'true')") echo yes ;;
+    "(true, 'false')") echo no ;;
+  esac
 }
 wait_log() {
   for _ in $(seq $(($2 * 4))); do
@@ -42,7 +48,8 @@ result settings_opened yes
 gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
   --method org.gnome.Shell.Eval 'Main.overview.hide()' >/dev/null 2>&1
 sleep 3
-settings_shown && result settings_shown yes || result settings_shown no
+before=$(settings_shown)
+result settings_shown "${before:-unknown}"
 bash "$here/shot.sh" "$out/settings.png" >>"$out/actions.log" 2>&1 || true
 if [[ -n "${PROBE_CLICK:-}" ]]; then
   click "^Cap.Settings$" $PROBE_CLICK
@@ -53,6 +60,14 @@ fi
 click "^Cap.Settings$" 1 0 -24 24
 sleep 2
 bash "$here/shot.sh" "$out/after-click.png" >>"$out/actions.log" 2>&1 || true
-if settings_shown; then result settings_closed no; else result settings_closed yes; fi
+after=$(settings_shown)
 pid=$(cat "$XDG_RUNTIME_DIR/cap.pid" 2>/dev/null)
-if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then result cap_alive yes; else result cap_alive no; fi
+alive=no
+[[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && alive=yes
+result cap_alive "$alive"
+# Closed means: seen before the click, seen gone after it, and Cap still up.
+if [[ $before == yes && $after == no && $alive == yes ]]; then
+  result settings_closed yes
+else
+  result settings_closed no
+fi

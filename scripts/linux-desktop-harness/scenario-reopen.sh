@@ -31,11 +31,12 @@ export CAP_LAUNCH_PREFIX="systemd-run --user --scope --quiet --unit=app-gnome-Ca
 bash "$here/launch-cap.sh" second >/dev/null
 second=$(cat "$XDG_RUNTIME_DIR/second.pid")
 for _ in $(seq 40); do kill -0 "$second" 2>/dev/null || break; sleep 0.25; done
-if grep -q "Requested the existing Cap GPUI controls" "$out/second.log"; then
+pid=$(cat "$XDG_RUNTIME_DIR/cap.pid" 2>/dev/null)
+if grep -q "Requested the existing Cap GPUI controls" "$out/second.log" \
+  && [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
   result reopen_forwarded yes
 else
   result reopen_forwarded no
   grep -h "reopen\|activation" "$out/second.log" | tail -2 >>"$out/actions.log"
 fi
-pid=$(cat "$XDG_RUNTIME_DIR/cap.pid" 2>/dev/null)
 if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then result cap_alive yes; else result cap_alive no; fi
