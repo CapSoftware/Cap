@@ -49,6 +49,8 @@ mod installer;
 mod jpeg_thumbnail;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
+#[cfg(target_os = "linux")]
+mod linux_portal_id;
 mod library;
 mod main_window;
 mod media_access;
@@ -318,6 +320,12 @@ fn main() {
         }
     }
 
+    let runtime = app_runtime();
+    // Before gpui exists: its appearance read is a portal call, and the
+    // portals only take an app id before the first one.
+    #[cfg(target_os = "linux")]
+    runtime.block_on(linux_portal_id::register());
+
     let app = gpui_platform::application().with_assets(Assets);
     // `RunEvent::Reopen`: the dock icon clicked while the app runs. Must be
     // registered on the builder -- gpui exposes it nowhere else -- with the
@@ -329,7 +337,6 @@ fn main() {
             crate::deeplink::submit_deep_link(&url);
         }
     });
-    let runtime = app_runtime();
     let runtime_handle = runtime.handle().clone();
 
     app.run(move |cx: &mut App| {
