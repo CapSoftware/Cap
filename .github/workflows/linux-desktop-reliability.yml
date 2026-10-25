@@ -279,3 +279,58 @@ jobs:
           name: linux-desktop-reliability-appimage-nixos
           path: ${{ runner.temp }}/out
           if-no-files-found: ignore
+
+  niri:
+    name: Record on niri
+    needs: desktops
+    # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
+    # modifier (GitHub #2941). It refuses software rendering, so this builds
+    # the release with only that check removed and runs it on vkms.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Virtual display devices
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+          sudo modprobe vkms
+          ls -la /dev/dri
+
+      - name: Build niri
+        run: |
+          cd scripts/linux-desktop-harness
+          sudo docker build -q -f arch.Dockerfile -t cap-harness-arch . >/dev/null
+          sudo docker build -q -f niri-software.Dockerfile -t cap-harness-arch-niri . >/dev/null
+
+      # The runner's Hyper-V display (card1, Virtual-1) is a second output; with
+      # two, the screen-share dialog waits for a pick the harness never makes.
+      - name: niri (DMA-BUF screencast, tray Stop control)
+        run: |
+          chmod +x "$RUNNER_TEMP/build/cap-gpui"
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            HARNESS_IMAGE=cap-harness-arch-niri \
+            bash scripts/linux-desktop-harness/run-desktop.sh niri "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/niri" LAUNCH=dock NIRI_RENDER_DEVICE=vkms NIRI_OUTPUTS_OFF=Virtual-1 \
+            GSK_RENDERER=cairo
+
+      - name: Check results
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh "$RUNNER_TEMP/out/niri"
+          grep -q "negotiated DMA-BUF frames" "$RUNNER_TEMP/out/niri/cap.log"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-niri
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+

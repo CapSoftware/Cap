@@ -1,4 +1,5 @@
 use super::cadence::FrameCadenceGate;
+use super::linux_dmabuf_import;
 use super::linux_shm::{self, ShmSegment};
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
@@ -309,6 +310,9 @@ struct PipewireCaptureState {
     rate_limited: Arc<AtomicU64>,
     capture_clock: Instant,
     cadence_gate: FrameCadenceGate,
+    /// Reads frames with a GPU-tiled modifier; `None` without a usable EGL.
+    importer: Option<linux_dmabuf_import::DmaBufImporter>,
+    imported: Vec<u8>,
 }
 
 impl PipewireCaptureState {
@@ -535,6 +539,18 @@ fn capture_pipewire_node(
         .connect_fd(input.fd, None)
         .context("connect to PipeWire remote")?;
 
+    let importer = match linux_dmabuf_import::DmaBufImporter::new() {
+        Ok(importer) => Some(importer),
+        Err(error) => {
+            tracing::info!(%error, "no GPU import for tiled DMA-BUF screencasts");
+            None
+        }
+    };
+    let imported_params = importer
+        .as_ref()
+        .map(|importer| pipewire_imported_format_params(input.fps, importer))
+        .unwrap_or_default();
+
     let state = PipewireCaptureState {
         format: Default::default(),
         scaler: None,
@@ -549,6 +565,8 @@ fn capture_pipewire_node(
         rate_limited: rate_limited.clone(),
         capture_clock: started,
         cadence_gate: FrameCadenceGate::new(1_000_000_000 / i64::from(input.fps.max(1))),
+        importer,
+        imported: Vec::new(),
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -606,10 +624,14 @@ fn capture_pipewire_node(
 
     // Shared memory first, so compositors that offer it (GNOME, KDE, wlroots)
     // keep negotiating it; LINEAR DMA-BUFs for those that share nothing else.
-    let param_bytes = [
+    // Shared memory, then LINEAR DMA-BUFs, both read on the CPU; then the
+    // tiled modifiers a GPU can import, for compositors that cannot render
+    // LINEAR. PipeWire takes the first offer the producer can meet.
+    let mut param_bytes = vec![
         pipewire_format_param(input.fps)?,
         pipewire_dmabuf_format_param(input.fps)?,
     ];
+    param_bytes.extend(imported_params);
     let mut params = param_bytes
         .iter()
         .map(|bytes| {
@@ -855,8 +877,25 @@ fn process_pipewire_frame(
         return Ok(None);
     }
 
-    let Some(raw_frame) = frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
-    else {
+    let modifier = state.format.modifier();
+    let tiled = datas[0].type_() == spa::buffer::DataType::DmaBuf
+        && modifier != linux_dmabuf_import::DRM_FORMAT_MOD_LINEAR
+        && modifier != linux_dmabuf_import::DRM_FORMAT_MOD_INVALID;
+    let raw_frame = if tiled {
+        let Some(importer) = state.importer.as_mut() else {
+            bail!("PipeWire screen capture sent a tiled DMA-BUF Cap cannot import");
+        };
+        imported_pipewire_frame(
+            &datas[0],
+            state.format,
+            state.crop_bounds,
+            importer,
+            &mut state.imported,
+        )?
+    } else {
+        frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
+    };
+    let Some(raw_frame) = raw_frame else {
         return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
     };
     let frame = prepare_pipewire_frame(raw_frame, &mut state.scaler, state.video_info)?;
@@ -994,6 +1033,61 @@ fn frame_from_pipewire_data(
     Ok(Some(frame))
 }
 
+/// A frame with a GPU-tiled modifier, read back through EGL as RGBA.
+fn imported_pipewire_frame(
+    data: &spa::buffer::Data,
+    format: spa::param::video::VideoInfoRaw,
+    crop_bounds: Option<CropBounds>,
+    importer: &mut linux_dmabuf_import::DmaBufImporter,
+    scratch: &mut Vec<u8>,
+) -> anyhow::Result<Option<ffmpeg::frame::Video>> {
+    if data
+        .chunk()
+        .flags()
+        .contains(spa::buffer::ChunkFlags::CORRUPTED)
+    {
+        return Ok(None);
+    }
+    let fourcc = linux_dmabuf_import::drm_fourcc(format.format()).ok_or_else(|| {
+        anyhow!(
+            "Unsupported tiled PipeWire screen capture format: {:?}",
+            format.format()
+        )
+    })?;
+    let size = format.size();
+    let (width, height) = (size.width as usize, size.height as usize);
+    if width == 0 || height == 0 {
+        bail!("PipeWire screen capture stream did not provide frame dimensions");
+    }
+    let stride = u32::try_from(data.chunk().stride())
+        .map_err(|_| anyhow!("PipeWire screen capture frame used a negative stride"))?;
+    scratch.resize(width * height * 4, 0);
+    importer.read_rgba(
+        data.fd() as i32,
+        fourcc,
+        format.modifier(),
+        size.width,
+        size.height,
+        data.chunk().offset(),
+        stride,
+        scratch,
+    )?;
+    let (crop_x, crop_y, crop_width, crop_height) = pipewire_crop(width, height, crop_bounds)?;
+    let mut frame = ffmpeg::frame::Video::new(
+        ffmpeg::format::Pixel::RGBA,
+        crop_width as u32,
+        crop_height as u32,
+    );
+    let target_stride = frame.stride(0);
+    let row_bytes = crop_width * 4;
+    for y in 0..crop_height {
+        let source = ((crop_y + y) * width + crop_x) * 4;
+        frame.data_mut(0)[y * target_stride..y * target_stride + row_bytes]
+            .copy_from_slice(&scratch[source..source + row_bytes]);
+    }
+    Ok(Some(frame))
+}
+
 fn pipewire_crop(
     source_width: usize,
     source_height: usize,
@@ -1119,8 +1213,37 @@ fn pipewire_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
 /// The offer for compositors that share only DMA-BUFs with a mandatory
 /// modifier (niri 26.04): LINEAR, so the frames can be read on the CPU.
 fn pipewire_dmabuf_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
+    use spa::param::video::VideoFormat;
+    pipewire_dmabuf_format_param_for(
+        fps,
+        &[
+            VideoFormat::BGRx,
+            VideoFormat::BGRA,
+            VideoFormat::RGBx,
+            VideoFormat::RGBA,
+        ],
+        &[linux_dmabuf_import::DRM_FORMAT_MOD_LINEAR as i64],
+    )
+}
+
+/// A DMA-BUF offer for `formats` with `modifiers`. More than one modifier
+/// lets the producer choose (DONT_FIXATE), as the PipeWire DMA-BUF protocol
+/// asks.
+fn pipewire_dmabuf_format_param_for(
+    fps: u32,
+    formats: &[spa::param::video::VideoFormat],
+    modifiers: &[i64],
+) -> anyhow::Result<Vec<u8>> {
     let fps = fps.max(1);
-    let linear = 0i64;
+    let (Some(first_format), Some(first_modifier)) = (formats.first(), modifiers.first()) else {
+        bail!("a DMA-BUF offer needs a format and a modifier");
+    };
+    let mut modifier_flags = spa::pod::PropertyFlags::MANDATORY;
+    if modifiers.len() > 1 {
+        modifier_flags = spa::pod::PropertyFlags::from_bits_retain(
+            modifier_flags.bits() | spa::sys::SPA_POD_PROP_FLAG_DONT_FIXATE,
+        );
+    }
     let object = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamFormat,
         spa::param::ParamType::EnumFormat,
@@ -1134,25 +1257,27 @@ fn pipewire_dmabuf_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
             Id,
             spa::param::format::MediaSubtype::Raw
         ),
-        spa::pod::property!(
-            spa::param::format::FormatProperties::VideoFormat,
-            Choice,
-            Enum,
-            Id,
-            spa::param::video::VideoFormat::BGRx,
-            spa::param::video::VideoFormat::BGRx,
-            spa::param::video::VideoFormat::BGRA,
-            spa::param::video::VideoFormat::RGBx,
-            spa::param::video::VideoFormat::RGBA
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::VideoFormat.as_raw(),
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Id(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: spa::utils::Id(first_format.as_raw()),
+                    alternatives: formats
+                        .iter()
+                        .map(|format| spa::utils::Id(format.as_raw()))
+                        .collect(),
+                },
+            ))),
         ),
         spa::pod::Property {
             key: spa::param::format::FormatProperties::VideoModifier.as_raw(),
-            flags: spa::pod::PropertyFlags::MANDATORY,
+            flags: modifier_flags,
             value: spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
                 spa::utils::ChoiceFlags::empty(),
                 spa::utils::ChoiceEnum::Enum {
-                    default: linear,
-                    alternatives: vec![linear],
+                    default: *first_modifier,
+                    alternatives: modifiers.to_vec(),
                 },
             ))),
         },
@@ -1188,6 +1313,31 @@ fn pipewire_dmabuf_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
         )
     );
     serialize_pod(object, "PipeWire DMA-BUF format parameter")
+}
+
+/// Offers for the GPU-tiled modifiers this machine can import, one per
+/// format: what a compositor that cannot render LINEAR (niri on NVIDIA)
+/// shares.
+fn pipewire_imported_format_params(
+    fps: u32,
+    importer: &linux_dmabuf_import::DmaBufImporter,
+) -> Vec<Vec<u8>> {
+    use spa::param::video::VideoFormat;
+    [VideoFormat::BGRx, VideoFormat::BGRA]
+        .into_iter()
+        .filter_map(|format| {
+            let fourcc = linux_dmabuf_import::drm_fourcc(format)?;
+            let modifiers = importer
+                .modifiers(fourcc)
+                .into_iter()
+                .filter(|modifier| *modifier != linux_dmabuf_import::DRM_FORMAT_MOD_LINEAR)
+                .map(|modifier| modifier as i64)
+                .collect::<Vec<_>>();
+            (!modifiers.is_empty())
+                .then(|| pipewire_dmabuf_format_param_for(fps, &[format], &modifiers).ok())
+                .flatten()
+        })
+        .collect()
 }
 
 pub struct SystemAudioSourceConfig {
