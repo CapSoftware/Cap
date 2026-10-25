@@ -163,6 +163,7 @@ unsafe fn rgba_to_nv12_avx2(
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn rgba_nv12_bounds_ok(
     src_len: usize,
     src_stride: usize,
