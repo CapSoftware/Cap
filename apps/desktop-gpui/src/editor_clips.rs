@@ -464,7 +464,11 @@ impl EditorWindow {
         if self.clips.open {
             self.close_clips(window, cx);
         } else {
-            edits::ensure_timeline(&mut self.project, &self.clip_display_durations);
+            let durations = self
+                .summary()
+                .map(|summary| summary.clip_display_durations.clone())
+                .unwrap_or_default();
+            edits::ensure_timeline(&mut self.project, &durations);
             self.clips.open = true;
         }
         cx.notify();
