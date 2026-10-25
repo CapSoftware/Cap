@@ -181,6 +181,9 @@ const ROW_ICON_SOURCES: &[(&str, &[u8])] = &[
 
 /// `Entry::Item`'s `icon` size, and the raster size of every row glyph.
 const ROW_ICON_SIZE: u32 = 32;
+/// The mode picker draws its icons at `SYMBOL_SIZE` points; rasterise at 4x so
+/// the downsample stays sharp on Retina displays.
+const PICKER_ICON_SIZE: u32 = 128;
 
 /// An SVG rendered to a `size`×`size` PNG, scaled to fit and centred -- the
 /// conversion `cap_mode_icon_png` makes at 90 for the palette, shared with the
@@ -209,6 +212,16 @@ fn menu_icon(name: &str) -> Option<Vec<u8>> {
             .collect()
     });
     ICONS.get(name).cloned()
+}
+
+/// The Cap icon for a mode, rasterised for the picker's image views.
+fn mode_picker_icon(mode: Mode) -> Option<Vec<u8>> {
+    let source = match mode {
+        Mode::Instant => include_bytes!("../assets/icons/instant.svg") as &[u8],
+        Mode::Studio => include_bytes!("../assets/icons/film-cut.svg") as &[u8],
+        Mode::Screenshot => include_bytes!("../assets/icons/screenshot.svg") as &[u8],
+    };
+    svg_icon_png(source, PICKER_ICON_SIZE)
 }
 
 /// The SF Symbol the macOS menu draws for an action row, keyed by its action;
@@ -563,7 +576,10 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     for target in [TargetType::Display, TargetType::Window, TargetType::Area] {
         entries.push(capture_entry(target, mode));
     }
-    if mode != Mode::Screenshot {
+    // macOS keeps the row in the menu and removes/inserts it in place; the
+    // other platforms rebuild on a mode change and only need it in recording
+    // modes. Keeping it on macOS also lets a dynamic mode switch add it back.
+    if cfg!(target_os = "macos") || mode != Mode::Screenshot {
         entries.push(Entry::icon_item(
             tr::tray::take_screenshot(),
             TrayItem::TakeScreenshot,
@@ -1022,6 +1038,8 @@ mod mac {
         static ROWS: RefCell<Vec<ActionRow>> = const { RefCell::new(Vec::new()) };
         static TAKE_SCREENSHOT: RefCell<Option<Retained<NSMenuItem>>> =
             const { RefCell::new(None) };
+        static TAKE_SCREENSHOT_ANCHOR: RefCell<Option<Retained<NSMenuItem>>> =
+            const { RefCell::new(None) };
         static STATUS_ITEM: RefCell<Option<Retained<NSStatusItem>>> = const { RefCell::new(None) };
     }
 
@@ -1328,6 +1346,8 @@ mod mac {
         menu.removeAllItems();
         ROWS.with(|rows| rows.borrow_mut().clear());
         TAKE_SCREENSHOT.with(|item| *item.borrow_mut() = None);
+        TAKE_SCREENSHOT_ANCHOR.with(|item| *item.borrow_mut() = None);
+        let mut last_capture = None;
 
         for entry in entries {
             if let Entry::ModePicker { mode } = entry {
@@ -1369,6 +1389,7 @@ mod mac {
                         screenshot_accelerator,
                     });
                 });
+                last_capture = Some(menu_item.clone());
                 menu.addItem(&menu_item);
                 continue;
             }
@@ -1382,6 +1403,9 @@ mod mac {
                 }
             ) {
                 TAKE_SCREENSHOT.with(|item| *item.borrow_mut() = Some(menu_item.clone()));
+                TAKE_SCREENSHOT_ANCHOR.with(|anchor| {
+                    *anchor.borrow_mut() = last_capture.clone();
+                });
             }
             menu.addItem(&menu_item);
         }
@@ -1454,10 +1478,34 @@ mod mac {
                 set_row_image(&row.item, item);
             }
         });
-        TAKE_SCREENSHOT.with(|item| {
-            if let Some(item) = item.borrow().as_ref() {
-                item.setHidden(mode == Mode::Screenshot);
-            }
+        TAKE_SCREENSHOT.with(|slot| {
+            let slot = slot.borrow();
+            let Some(item) = slot.as_ref() else {
+                return;
+            };
+            TAKE_SCREENSHOT_ANCHOR.with(|anchor| {
+                let anchor = anchor.borrow();
+                let menu = unsafe { item.menu() }
+                    .or_else(|| anchor.as_ref().and_then(|item| unsafe { item.menu() }));
+                let Some(menu) = menu else {
+                    return;
+                };
+                let index = menu.indexOfItem(item);
+                if mode == Mode::Screenshot {
+                    if index >= 0 {
+                        menu.removeItemAtIndex(index);
+                    }
+                    return;
+                }
+                if index < 0 {
+                    let at = anchor
+                        .as_ref()
+                        .map(|item| menu.indexOfItem(item))
+                        .filter(|index| *index >= 0)
+                        .map_or(menu.numberOfItems(), |index| index + 1);
+                    menu.insertItem_atIndex(item, at);
+                }
+            });
         });
     }
 
@@ -1494,6 +1542,14 @@ mod mac {
             }
             let block = block2::RcBlock::new(|_timer: NonNull<NSTimer>| {
                 let held = current_option();
+                let mode = Mode::from_store();
+                if CURRENT_MODE.get() != Some(mode) {
+                    apply(mode, held);
+                    set_status_mode(mode);
+                    select_mode(mode);
+                    OPTION_HELD.set(held);
+                    return;
+                }
                 if OPTION_HELD.replace(held) != held
                     && let Some(mode) = CURRENT_MODE.get()
                 {
@@ -2215,7 +2271,9 @@ mod tests {
                 "Screenshot Window",
             ]
         );
-        assert!(!titles.iter().any(|title| title == "Take a Screenshot"));
+        if !cfg!(target_os = "macos") {
+            assert!(!titles.iter().any(|title| title == "Take a Screenshot"));
+        }
     }
 
     #[test]
@@ -2397,7 +2455,13 @@ mod tests {
         };
         assert!(has(Mode::Studio));
         assert!(has(Mode::Instant));
-        assert!(!has(Mode::Screenshot));
+        if cfg!(target_os = "macos") {
+            // Kept in the model and removed from the live menu in screenshot
+            // mode, so it can be inserted again when the mode changes.
+            assert!(has(Mode::Screenshot));
+        } else {
+            assert!(!has(Mode::Screenshot));
+        }
     }
 
     #[test]

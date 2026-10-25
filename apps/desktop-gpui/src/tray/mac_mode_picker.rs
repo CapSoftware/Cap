@@ -24,20 +24,19 @@ use objc2_foundation::{
 use objc2_quartz_core::{CALayer, CATransaction, kCACornerCurveContinuous};
 
 use super::mac::{post, set_status_mode};
-use super::{TrayItem, menu_icon, mode_name};
+use super::{TrayItem, mode_name, mode_picker_icon};
 use crate::main_window::Mode;
 
-const PICKER_MODES: [(Mode, TrayItem, &str); 3] = [
-    (Mode::Instant, TrayItem::ModeInstant, "mode-instant"),
-    (Mode::Studio, TrayItem::ModeStudio, "mode-studio"),
-    (
-        Mode::Screenshot,
-        TrayItem::ModeScreenshot,
-        "mode-screenshot",
-    ),
+const PICKER_MODES: [(Mode, TrayItem); 3] = [
+    (Mode::Instant, TrayItem::ModeInstant),
+    (Mode::Studio, TrayItem::ModeStudio),
+    (Mode::Screenshot, TrayItem::ModeScreenshot),
 ];
 
 const FLASH_INTERVAL: f64 = 0.06;
+/// Temporarily disabled while the picker keeps the menu open and updates the
+/// capture rows in place.
+const FLASH_ON_PICK: bool = false;
 
 const PICKER_TITLE: &str = "Recording Mode";
 const PICKER_W: f64 = 300.0;
@@ -46,8 +45,8 @@ const PILL_W: f64 = 38.0;
 const PILL_H: f64 = 29.0;
 const PILL_GAP: f64 = 4.0;
 const CAPSULE_PAD: f64 = 3.0;
-const RIGHT_INSET: f64 = 10.0;
-const TITLE_INSET: f64 = 17.0;
+const RIGHT_INSET: f64 = 5.0;
+const TITLE_INSET: f64 = 8.5;
 const LINE_GAP: f64 = 2.0;
 const SYMBOL_SIZE: f64 = 17.0;
 const PILL_RADIUS: f64 = 14.0;
@@ -176,9 +175,9 @@ impl ModePickerView {
                 .push(make_layer(PILL_RADIUS));
         }
 
-        for (_, _, icon) in PICKER_MODES.iter() {
+        for (mode, _) in PICKER_MODES.iter() {
             let view = NSImageView::new(mtm);
-            if let Some(bytes) = menu_icon(icon)
+            if let Some(bytes) = mode_picker_icon(*mode)
                 && let Some(image) =
                     NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes))
             {
@@ -286,7 +285,7 @@ impl ModePickerView {
             let is_sel = i == selected;
             let is_hover = focused == Some(i) && !is_sel;
             let fill = if is_sel {
-                if flash { white.clone() } else { accent.clone() }
+                if flash { accent.clone() } else { white.clone() }
             } else if is_hover {
                 label.colorWithAlphaComponent(0.14)
             } else {
@@ -300,7 +299,7 @@ impl ModePickerView {
             if let Some(icon) = icons.get(i) {
                 icon.setFrame(r);
                 let tint = if is_sel {
-                    if flash { accent.clone() } else { white.clone() }
+                    if flash { white.clone() } else { accent.clone() }
                 } else {
                     label.clone()
                 };
@@ -369,12 +368,16 @@ impl ModePickerView {
         let mode = PICKER_MODES[i].0;
         self.ivars().selected.set(i);
         self.ivars().focused.set(Some(i));
-        self.ivars().flash.set(true);
         self.refresh();
         post(self.ivars().tag_base + i as isize);
         super::mac::apply(mode, super::mac::current_option());
         set_status_mode(mode);
 
+        if !FLASH_ON_PICK {
+            return;
+        }
+        self.ivars().flash.set(true);
+        self.refresh();
         let block = RcBlock::new(|_timer: NonNull<NSTimer>| {
             flash_step();
         });
@@ -459,7 +462,7 @@ pub(super) fn stop_flash() {
 pub(super) fn select_mode(mode: Mode) {
     let Some(index) = PICKER_MODES
         .iter()
-        .position(|(candidate, _, _)| *candidate == mode)
+        .position(|(candidate, _)| *candidate == mode)
     else {
         return;
     };
@@ -483,11 +486,11 @@ pub(super) fn append_mode_picker(
     mtm: MainThreadMarker,
 ) -> Retained<NSMenuItem> {
     let tag_base = actions.len() as isize;
-    actions.extend(PICKER_MODES.iter().map(|(_, item, _)| item.clone()));
+    actions.extend(PICKER_MODES.iter().map(|(_, item)| item.clone()));
 
     let index = PICKER_MODES
         .iter()
-        .position(|(m, _, _)| *m == selected)
+        .position(|(m, _)| *m == selected)
         .unwrap_or(0);
     let view = ModePickerView::new(mtm, index, tag_base);
 
