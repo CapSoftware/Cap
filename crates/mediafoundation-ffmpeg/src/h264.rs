@@ -27,8 +27,6 @@ impl Default for MuxerConfig {
     }
 }
 
-/// Writes Media Foundation H.264 samples into an mp4/mov output. Production callers are the
-/// Windows MP4 hardware paths in `recording::output_pipeline::win` (studio and camera).
 pub struct H264StreamMuxer {
     stream_index: usize,
     time_base: ffmpeg::Rational,
@@ -173,7 +171,6 @@ impl H264StreamMuxer {
     }
 }
 
-/// Media Foundation sample times are in 100 ns ticks.
 pub const MF_TIMEBASE: ffmpeg::Rational = ffmpeg::Rational(1, 10_000_000);
 
 pub fn sample_to_packet(
@@ -217,9 +214,9 @@ pub fn sample_to_packet(
     Ok(packet)
 }
 
-/// Some Media Foundation encoders leave `MFSampleExtension_CleanPoint` unset. The DASH muxer
-/// splits segments on keyframes, so fall back to the bitstream: an IDR NAL (type 5) after an
-/// Annex B start code.
+// Some Media Foundation encoders leave `MFSampleExtension_CleanPoint` unset. The DASH muxer
+// splits segments on keyframes, so fall back to the bitstream: an IDR NAL (type 5) after an
+// Annex B start code.
 fn contains_idr_nal(data: &[u8]) -> bool {
     let mut index = 0;
     while index + 3 < data.len() {

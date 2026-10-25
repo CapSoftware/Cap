@@ -323,6 +323,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         pixel_format: Some(pixel_format),
                         encoder_preferences: encoder_preferences.clone(),
                         disk_space_callback: None,
+                        prefer_texture_input: false,
                         segment_tx: None,
                     })
                     .await
@@ -376,6 +377,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 pixel_format: Some(screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi()),
                 encoder_preferences: EncoderPreferences::new(),
                 disk_space_callback: None,
+                prefer_texture_input: mf_texture_input_enabled(),
                 segment_tx,
             })
             .await
