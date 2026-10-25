@@ -99,6 +99,7 @@ impl PillAccessibilityElement {
 struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
+    pressed: Cell<Option<usize>>,
     flash: Cell<bool>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
@@ -177,10 +178,15 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            // Commit and update the visuals in the same event: a release
-            // outside the menu never reaches this view, which used to leave
-            // the subtitle showing a mode that was never applied.
-            if let Some(i) = self.pill_at(event) {
+            // Only remember the press. The selection and the commit happen
+            // together on mouse-up, so a release that never reaches this view
+            // cannot leave the picker showing an unapplied mode.
+            self.ivars().pressed.set(self.pill_at(event));
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            if let Some(i) = self.ivars().pressed.take() {
                 self.choose(i);
             }
         }
@@ -198,6 +204,7 @@ impl ModePickerView {
         let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
             selected: Cell::new(selected),
             focused: Cell::new(None),
+            pressed: Cell::new(None),
             flash: Cell::new(false),
             tag_base,
             capsule: RefCell::new(None),

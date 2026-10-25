@@ -263,40 +263,48 @@ fn busy_alert(cx: &mut App) {
     .detach();
 }
 
-/// `CAP_GPUI_AUTO_UPDATE=<state>`: skip the network check and put the menu
-/// into a fixed update state for verification.
-///
-/// States: `checking`, `downloading:<version>[:<fraction>]`, `ready:<version>`,
-/// `installing:<version>`, `installed:<version>`.
-fn harness_status() -> Option<UpdateStatus> {
+/// `CAP_GPUI_AUTO_UPDATE=<version>` (debug builds only): skip the network
+/// check and play a fake download of a newer version, then stop at Ready
+/// without installing anything.
+#[cfg(debug_assertions)]
+fn harness_update_version() -> Option<Version> {
     let value = std::env::var("CAP_GPUI_AUTO_UPDATE").ok()?;
-    let mut parts = value.split(':');
-    let state = parts.next()?;
-    let version = |parts: &mut std::str::Split<'_, char>| {
-        parts.next().and_then(|value| Version::parse(value).ok())
-    };
-    match state {
-        "checking" => Some(UpdateStatus::Checking),
-        "downloading" => {
-            let version = version(&mut parts)?;
-            let fraction = parts.next().and_then(|value| value.parse::<f32>().ok());
-            Some(UpdateStatus::Downloading { version, fraction })
-        }
-        "ready" => Some(UpdateStatus::Ready {
-            version: version(&mut parts)?,
-        }),
-        "installing" => Some(UpdateStatus::Installing {
-            version: version(&mut parts)?,
-        }),
-        "installed" => Some(UpdateStatus::Installed {
-            version: version(&mut parts)?,
-            executable: PathBuf::from("/Applications/Cap.app"),
-        }),
-        _ => {
-            tracing::warn!(value, "CAP_GPUI_AUTO_UPDATE: unknown state");
-            None
-        }
+    let version = Version::parse(&value).ok()?;
+    if current_version().is_ok_and(|current| version > current) {
+        Some(version)
+    } else {
+        tracing::warn!(
+            version = %version,
+            "CAP_GPUI_AUTO_UPDATE must be newer than the running version"
+        );
+        None
     }
+}
+
+#[cfg(debug_assertions)]
+fn simulate_update(version: Version, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(400))
+            .await;
+        cx.update(|cx| set_status(UpdateStatus::Checking, cx));
+        for step in 0..=10u8 {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            cx.update(|cx| {
+                set_status(
+                    UpdateStatus::Downloading {
+                        version: version.clone(),
+                        fraction: Some(step as f32 / 10.0),
+                    },
+                    cx,
+                );
+            });
+        }
+        cx.update(|cx| set_status(UpdateStatus::Ready { version }, cx));
+    })
+    .detach();
 }
 
 pub(crate) fn schedule_startup_check(cx: &mut App) {
@@ -311,8 +319,9 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         download_epoch: 0,
     });
 
-    if let Some(status) = harness_status() {
-        set_status(status, cx);
+    #[cfg(debug_assertions)]
+    if let Some(version) = harness_update_version() {
+        simulate_update(version, cx);
         return;
     }
 

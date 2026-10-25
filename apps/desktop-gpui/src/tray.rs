@@ -1569,7 +1569,7 @@ mod mac {
                     menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
                 }
                 if *item == Some(TrayItem::Quit) {
-                    menu_item.setKeyEquivalent(&NSString::from_str("Q"));
+                    menu_item.setKeyEquivalent(&NSString::from_str("q"));
                     menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
                 }
                 // Previous's rows are photo thumbnails; every other iconed row
