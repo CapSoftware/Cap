@@ -190,6 +190,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-rs = "0.2.4"
+mimalloc = "0.1"
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
@@ -201,6 +202,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
