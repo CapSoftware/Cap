@@ -209,6 +209,7 @@ fn shared_device(runtime: &tokio::runtime::Runtime) -> Option<(wgpu::Device, wgp
                         tracing::warn!("camera blur device unavailable: {error}");
                     })
                     .ok()?;
+                cap_rendering::log_uncaptured_errors(&device, "camera-preview-blur");
                 Some((device, queue))
             })
         })
@@ -354,6 +355,9 @@ impl Worker {
         Ok(&self.imported.last().expect("just pushed").1)
     }
 }
+
+#[cfg(test)]
+mod bench;
 
 #[cfg(test)]
 mod tests {

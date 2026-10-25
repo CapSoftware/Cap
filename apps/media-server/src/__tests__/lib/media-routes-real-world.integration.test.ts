@@ -43,6 +43,7 @@ let tempDir = "";
 
 const uploadedArtifacts = new Map<string, Uint8Array>();
 const uploadFailures = new Map<string, number>();
+const uploadGates = new Map<string, () => Promise<void> | void>();
 const uploadRequests: string[] = [];
 const fixtureReads: string[] = [];
 const webhookPhases: JobProgress["phase"][] = [];
@@ -442,6 +443,7 @@ beforeAll(async () => {
 
 			if (request.method === "PUT" && url.pathname.startsWith("/uploads/")) {
 				uploadRequests.push(url.pathname);
+				await uploadGates.get(url.pathname)?.();
 				const failureStatus = uploadFailures.get(url.pathname);
 				if (failureStatus) {
 					return new Response("Storage unavailable", { status: failureStatus });
@@ -490,6 +492,7 @@ beforeEach(() => {
 	});
 	uploadedArtifacts.clear();
 	uploadFailures.clear();
+	uploadGates.clear();
 	uploadRequests.length = 0;
 	fixtureReads.length = 0;
 	webhookPhases.length = 0;
@@ -687,6 +690,101 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
+	test("uploads mux previews only after the recording output is verified", async () => {
+		const body = {
+			...fencedMuxRequest("mux-previews"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("complete");
+			expect(uploadRequests[0]).toBe("/uploads/mux-previews.mp4");
+			expect([...uploadRequests].sort()).toEqual([
+				"/uploads/mux-previews.gif",
+				"/uploads/mux-previews.jpg",
+				"/uploads/mux-previews.mp4",
+			]);
+			expect(
+				uploadedBytes("/uploads/mux-previews.jpg").byteLength,
+			).toBeGreaterThan(0);
+			expect(
+				uploadedBytes("/uploads/mux-previews.gif").byteLength,
+			).toBeGreaterThan(0);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("uploads the thumbnail and preview GIF together and keeps one when the other fails", async () => {
+		let gifStarted: () => void = () => {};
+		const gifRequested = new Promise<void>((resolve) => {
+			gifStarted = resolve;
+		});
+		uploadGates.set("/uploads/mux-previews-together.jpg", () =>
+			Promise.race([
+				gifRequested,
+				new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+			]),
+		);
+		uploadGates.set("/uploads/mux-previews-together.gif", () => gifStarted());
+		uploadFailures.set("/uploads/mux-previews-together.jpg", 403);
+		const body = {
+			...fencedMuxRequest("mux-previews-together"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews-together.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews-together.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const started = Date.now();
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("complete");
+			expect(uploadRequests[0]).toBe("/uploads/mux-previews-together.mp4");
+			expect([...uploadRequests].sort()).toEqual([
+				"/uploads/mux-previews-together.gif",
+				"/uploads/mux-previews-together.jpg",
+				"/uploads/mux-previews-together.mp4",
+			]);
+			// The thumbnail is held until the GIF upload starts, so a sequential upload would wait out the 5 s gate.
+			expect(Date.now() - started).toBeLessThan(4_500);
+			expect(
+				uploadedBytes("/uploads/mux-previews-together.gif").byteLength,
+			).toBeGreaterThan(0);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("skips mux previews when the recording output upload fails", async () => {
+		uploadFailures.set("/uploads/mux-previews-failed.mp4", 403);
+		const body = {
+			...fencedMuxRequest("mux-previews-failed"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews-failed.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews-failed.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(uploadRequests).toEqual(["/uploads/mux-previews-failed.mp4"]);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
 	test("runs optional audio correction on the local verified file after publication and retains success if it fails", async () => {
 		let observed: () => void = () => {};
 		const observations: Record<string, unknown>[] = [];
@@ -806,7 +904,50 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
-	test("refuses a local output changed between full decode and byte binding", async () => {
+	test("stops the output hash before cleanup when the decode check fails first", async () => {
+		let hashAborted = false;
+		let hashSettled = false;
+		const hashing = spyOn(
+			recordingVerification,
+			"hashRecordingFile",
+		).mockImplementation(
+			(_path, signal) =>
+				new Promise<string>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => {
+						hashAborted = true;
+						setTimeout(() => {
+							hashSettled = true;
+							reject(new Error("Hash stopped"));
+						}, 50);
+					});
+				}),
+		);
+		const verifying = spyOn(
+			recordingVerification,
+			"verifyRemuxedRecording",
+		).mockRejectedValue(new Error("Recording decoder failed to start"));
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest(
+					"/video/mux-segments",
+					fencedMuxRequest("hash-after-failed-decode"),
+				),
+			);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(hashAborted).toBe(true);
+			expect(hashSettled).toBe(true);
+		} finally {
+			hashing.mockRestore();
+			verifying.mockRestore();
+			if (jobId) deleteJob(jobId);
+		}
+	}, 30_000);
+
+	// Hashing now overlaps the decode check, so whichever check reads the changed bytes first refuses it.
+	test("refuses a local output changed while it is decoded and hashed", async () => {
 		const originalHash = recordingVerification.hashRecordingFile;
 		const hashing = spyOn(
 			recordingVerification,
@@ -830,8 +971,8 @@ describe("media routes real-world integration tests", () => {
 			jobId = ((await response.json()) as { jobId: string }).jobId;
 			const job = await waitForTerminalJob(jobId);
 			expect(job.phase).toBe("error");
-			expect(job.error).toContain(
-				"Local recording changed during verification",
+			expect(job.error).toMatch(
+				/Local recording changed during verification|does not preserve the source/,
 			);
 			expect(job.errorCode).toBe("output-invalid");
 			expect(job.recordingVerification).toBeUndefined();
@@ -871,6 +1012,31 @@ describe("media routes real-world integration tests", () => {
 					expect(job.recordingVerification?.sourceProof?.sourcePreserved).toBe(
 						true,
 					);
+			} finally {
+				deleteJob(jobId);
+			}
+		},
+		30_000,
+	);
+
+	test.each(["corrupt", "corrupt-audio"] as const)(
+		"never completes a multipart output whose source fails verification (%s)",
+		async (fault) => {
+			sourceFault = fault;
+			const body = multipartMuxRequest(`multipart-unverified-${fault}`);
+			const response = await app.fetch(
+				mediaPostRequest("/video/mux-segments", body),
+			);
+			expect(response.status).toBe(200);
+			const { jobId } = (await response.json()) as { jobId: string };
+			try {
+				const job = await waitForTerminalJob(jobId);
+				expect(job.phase).toBe("error");
+				expect(job.recordingVerification).toBeUndefined();
+				const actions = multipartCallbacks.map(({ action }) => action);
+				// Parts may already be uploaded while the check runs, but the object is never created.
+				expect(actions).not.toContain("complete");
+				expect(actions.at(-1)).toBe("abort");
 			} finally {
 				deleteJob(jobId);
 			}
@@ -925,6 +1091,28 @@ describe("media routes real-world integration tests", () => {
 			expect(job.errorCode).toBe("output-invalid");
 			expect(job.recordingVerification).toBeUndefined();
 			expect(uploadConditions).toEqual(["*"]);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("skips mux previews when the uploaded recording fails its remote check", async () => {
+		corruptRecordingReadback = true;
+		const body = {
+			...fencedMuxRequest("mux-previews-corrupt"),
+			thumbnailPresignedUrl: uploadUrl("mux-previews-corrupt.jpg"),
+			previewGifPresignedUrl: uploadUrl("mux-previews-corrupt.gif"),
+		};
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", body),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(job.errorCode).toBe("output-invalid");
+			expect(uploadRequests).toEqual(["/uploads/mux-previews-corrupt.mp4"]);
 		} finally {
 			deleteJob(jobId);
 		}
@@ -1162,6 +1350,81 @@ describe("media routes real-world integration tests", () => {
 		},
 		30_000,
 	);
+
+	test("recovers a saved output after preview failure without overwriting it", async () => {
+		const thumbnail = spyOn(mediaVideo, "generateThumbnail").mockRejectedValue(
+			new Error("Thumbnail decode interrupted"),
+		);
+		const jobs: string[] = [];
+		try {
+			const body = {
+				videoId: "saved-loom-output",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("saved-output.mp4"),
+				thumbnailPresignedUrl: uploadUrl("saved-output.jpg"),
+				inputExtension: ".mp4",
+				maxImportBytes: 10 * 1024 ** 3,
+			};
+			const first = await app.fetch(mediaPostRequest("/video/process", body));
+			const firstJobId = ((await first.json()) as { jobId: string }).jobId;
+			jobs.push(firstJobId);
+			expect((await waitForTerminalJob(firstJobId)).phase).toBe("error");
+			const original = Uint8Array.from(
+				uploadedBytes("/uploads/saved-output.mp4"),
+			);
+			const second = await app.fetch(
+				mediaPostRequest("/video/process", {
+					...body,
+					existingOutput: {
+						url: uploadUrl("saved-output.mp4"),
+						objectIdentity: objectIdentity(original),
+						fileSize: original.byteLength,
+					},
+				}),
+			);
+			expect(second.status).toBe(200);
+			const secondJobId = ((await second.json()) as { jobId: string }).jobId;
+			jobs.push(secondJobId);
+			expect((await waitForTerminalJob(secondJobId)).phase).toBe("complete");
+			expect(uploadRequests.filter((path) => path.endsWith(".mp4"))).toEqual([
+				"/uploads/saved-output.mp4",
+			]);
+			expect(uploadedBytes("/uploads/saved-output.mp4")).toEqual(original);
+		} finally {
+			thumbnail.mockRestore();
+			for (const jobId of jobs) deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("holds a saved output whose storage identity changed without overwriting it", async () => {
+		const original = new Uint8Array(
+			await Bun.file(TEST_VIDEO_WITH_AUDIO).arrayBuffer(),
+		);
+		uploadedArtifacts.set("/uploads/changed-output.mp4", original);
+		const response = await app.fetch(
+			mediaPostRequest("/video/process", {
+				videoId: "changed-output",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("changed-output.mp4"),
+				maxImportBytes: 10 * 1024 ** 3,
+				existingOutput: {
+					url: uploadUrl("changed-output.mp4"),
+					objectIdentity: '"previous-identity"',
+					fileSize: original.byteLength,
+				},
+			}),
+		);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			expect((await waitForTerminalJob(jobId)).phase).toBe("error");
+			expect(uploadRequests).toHaveLength(0);
+			expect(uploadedBytes("/uploads/changed-output.mp4")).toEqual(original);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
 
 	test("still fails processing when the video output cannot be uploaded", async () => {
 		uploadFailures.set("/uploads/failed-output.mp4", 403);
@@ -1416,6 +1679,34 @@ describe("media routes real-world integration tests", () => {
 			expect(permanentFixtureFailures).toBe(3);
 			expect(slowFixtureCancellations).toBe(1);
 			expect(uploadedArtifacts.has("/uploads/failed-segment-output.mp4")).toBe(
+				false,
+			);
+		} finally {
+			deleteJob(data.jobId);
+		}
+	}, 90000);
+
+	test("cancels the other init download when one fails, before the job reports failure", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", {
+				videoId: "failed-init-mux-video",
+				userId: "failed-init-mux-user",
+				outputPresignedUrl: uploadUrl("failed-init-output.mp4"),
+				videoInitUrl: `${baseUrl}/fixtures/slow-segment.m4s`,
+				videoSegmentUrls: [fixtureUrl("test-no-audio.mp4")],
+				audioInitUrl: `${baseUrl}/fixtures/permanent-unavailable.m4s`,
+				audioSegmentUrls: [fixtureUrl("test-no-audio.mp4")],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(data.jobId);
+		try {
+			expect(job.phase).toBe("error");
+			expect(job.error).toContain("503");
+			expect(slowFixtureCancellations).toBe(1);
+			expect(uploadedArtifacts.has("/uploads/failed-init-output.mp4")).toBe(
 				false,
 			);
 		} finally {

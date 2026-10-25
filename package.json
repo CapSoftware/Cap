@@ -18,7 +18,7 @@
 		"dev": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --filter=!@cap/status --env-mode=loose --ui tui",
 		"dev:desktop": "bun run --cwd apps/desktop dev",
 		"dev:extension": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/chrome-extension --env-mode=loose --ui tui",
-		"dev:manual": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --filter=!@cap/status --no-cache --concurrency 1",
+		"dev:manual": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --filter=!@cap/status --concurrency 1",
 		"dev:mobile": "bun run docker:up && trap 'bun run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
 		"dev:mobile:physical": "bun run docker:up && trap 'bun run docker:stop' EXIT && CAP_MOBILE_DEVICE=physical CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
 		"dev:web": "bun run dev --filter=!@cap/desktop --filter=!@cap/mobile",
@@ -67,11 +67,11 @@
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
 	},
-	"packageManager": "bun@1.4.0",
+	"packageManager": "bun@1.4.4",
 	"name": "cap",
 	"engines": {
-		"node": ">=20",
-		"bun": "1.4.0"
+		"node": ">=24",
+		"bun": "1.4.4"
 	},
 	"overrides": {
 		"react-native-worklets": "0.7.4"

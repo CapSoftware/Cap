@@ -122,6 +122,8 @@ test("dependency verification handles overlapping patches without changing the c
 	writeFileSync(path.join(upstream, "renderer.rs"), "base\n");
 	writeFileSync(path.join(upstream, "windows.rs"), "base\n");
 	writeFileSync(path.join(upstream, "frames.rs"), "base\n");
+	writeFileSync(path.join(upstream, "atlas.rs"), "base\n");
+	writeFileSync(path.join(upstream, "visibility.rs"), "base\n");
 	commit();
 	const base = git(upstream, "rev-parse", "HEAD").trim();
 	const patch = (name) => {
@@ -142,6 +144,10 @@ test("dependency verification handles overlapping patches without changing the c
 	patch("zed-linux.patch");
 	writeFileSync(path.join(upstream, "frames.rs"), "paced frames\n");
 	patch("zed-idle-frames.patch");
+	writeFileSync(path.join(upstream, "atlas.rs"), "streaming images\n");
+	patch("zed-streaming-image.patch");
+	writeFileSync(path.join(upstream, "visibility.rs"), "withheld first map\n");
+	patch("zed-wayland-visibility.patch");
 	const script = path.join(cap, "scripts/prepare-gpui-dependency.sh");
 	writeFileSync(
 		script,
@@ -164,6 +170,14 @@ test("dependency verification handles overlapping patches without changing the c
 		assert.equal(
 			readFileSync(path.join(zed, "frames.rs"), "utf8"),
 			"paced frames\n",
+		);
+		assert.equal(
+			readFileSync(path.join(zed, "atlas.rs"), "utf8"),
+			"streaming images\n",
+		);
+		assert.equal(
+			readFileSync(path.join(zed, "visibility.rs"), "utf8"),
+			"withheld first map\n",
 		);
 	});
 

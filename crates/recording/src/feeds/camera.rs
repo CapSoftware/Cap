@@ -25,7 +25,7 @@ use tokio::{sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
 
 use crate::ffmpeg::FFmpegVideoFrame;
-use crate::output_pipeline::NativeCameraFrame;
+use crate::output_pipeline::{NativeCameraFrame, VideoFrame};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
@@ -111,6 +111,22 @@ impl<T> FanoutTarget<T> for CountedSender<T> {
         if let Some(dropped) = &self.dropped {
             dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+    }
+}
+
+trait FanoutFrame {
+    fn share(&self) -> Self;
+}
+
+impl FanoutFrame for FFmpegVideoFrame {
+    fn share(&self) -> Self {
+        self.duplicate().unwrap_or_else(|| self.clone())
+    }
+}
+
+impl FanoutFrame for NativeCameraFrame {
+    fn share(&self) -> Self {
+        self.clone()
     }
 }
 
@@ -1619,7 +1635,7 @@ impl FanoutDrops<'_> {
     }
 }
 
-fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
+fn send_frame_to_camera_senders<T: FanoutFrame, S: FanoutTarget<T>>(
     senders: &mut Vec<S>,
     frame: T,
     frame_num: u64,
@@ -1639,7 +1655,8 @@ fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
         );
     }
 
-    // The last sender with room takes the frame itself instead of a clone.
+    // The last sender with room takes the frame itself; the others share its
+    // pixel storage.
     let last_ready_sender = senders
         .iter()
         .rposition(|sender| !sender.channel().is_full());
@@ -1665,7 +1682,7 @@ fn send_frame_to_camera_senders<T: Clone, S: FanoutTarget<T>>(
             let Some(frame) = frame.as_ref() else {
                 break;
             };
-            sender.channel().try_send(frame.clone())
+            sender.channel().try_send(frame.share())
         };
 
         match send_result {
@@ -2759,6 +2776,12 @@ mod ingress_tests {
 
     type Output = (flume::Receiver<u32>, Arc<AtomicU64>);
 
+    impl FanoutFrame for u32 {
+        fn share(&self) -> Self {
+            *self
+        }
+    }
+
     struct Fanout {
         senders: Vec<CountedSender<u32>>,
         total: u64,
@@ -2859,6 +2882,58 @@ mod ingress_tests {
             .collect();
         assert_eq!(counts, [(4, 6), (10, 0), (2, 8)]);
         assert_eq!(fanout.total, 14);
+    }
+
+    #[test]
+    fn camera_fanout_delivers_identical_pixels_without_copying() {
+        let mut inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 64, 48);
+        for plane in 0..inner.planes() {
+            for (index, byte) in inner.data_mut(plane).iter_mut().enumerate() {
+                *byte = (index * 7 + plane * 31) as u8;
+            }
+        }
+        inner.set_pts(Some(1234));
+        let expected: Vec<_> = (0..inner.planes())
+            .map(|plane| (inner.stride(plane), inner.data(plane).to_vec()))
+            .collect();
+        let pixels = inner.data(0).as_ptr();
+        let captured_at = std::time::Instant::now();
+        let (mut senders, receivers): (Vec<_>, Vec<_>) = (0..3).map(|_| flume::bounded(1)).unzip();
+        let mut total = 0;
+        let mut log = DropLog::default();
+
+        send_frame_to_camera_senders(
+            &mut senders,
+            FFmpegVideoFrame {
+                inner,
+                timestamp: Timestamp::Instant(captured_at),
+            },
+            0,
+            "Camera",
+            FanoutDrops {
+                total: &mut total,
+                log: &mut log,
+            },
+        );
+
+        let frames: Vec<FFmpegVideoFrame> = receivers
+            .iter()
+            .map(|rx| rx.try_recv().expect("fanned-out frame"))
+            .collect();
+        for frame in &frames {
+            assert_eq!(frame.inner.data(0).as_ptr(), pixels);
+            assert_eq!(frame.inner.format(), ffmpeg::format::Pixel::NV12);
+            assert_eq!((frame.inner.width(), frame.inner.height()), (64, 48));
+            assert_eq!(frame.inner.pts(), Some(1234));
+            assert!(matches!(frame.timestamp, Timestamp::Instant(value) if value == captured_at));
+            for (plane, (stride, bytes)) in expected.iter().enumerate() {
+                assert_eq!(frame.inner.stride(plane), *stride);
+                assert_eq!(frame.inner.data(plane), bytes.as_slice());
+            }
+        }
+        let buffer = unsafe { (*frames[0].inner.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 3);
+        assert_eq!(total, 0);
     }
 
     /// Consumers draining concurrently with the fan-out: every frame is
