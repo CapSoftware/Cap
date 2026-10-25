@@ -99,6 +99,7 @@ impl PillAccessibilityElement {
 struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
+    pressed: Cell<Option<usize>>,
     flash: Cell<bool>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
@@ -177,7 +178,9 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            if let Some(i) = self.pill_at(event) {
+            let pressed = self.pill_at(event);
+            self.ivars().pressed.set(pressed);
+            if let Some(i) = pressed {
                 // Update the subtitle immediately so the old name never flashes.
                 self.ivars().focused.set(Some(i));
                 self.ivars().selected.set(i);
@@ -186,8 +189,11 @@ define_class!(
         }
 
         #[unsafe(method(mouseUp:))]
-        fn mouse_up(&self, event: &NSEvent) {
-            if let Some(i) = self.pill_at(event) {
+        fn mouse_up(&self, _event: &NSEvent) {
+            // Commit the pill that was pressed, even if the pointer left the
+            // capsule before release, so the shown subtitle and the applied
+            // mode cannot drift apart.
+            if let Some(i) = self.ivars().pressed.take() {
                 self.choose(i);
             }
         }
@@ -205,6 +211,7 @@ impl ModePickerView {
         let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
             selected: Cell::new(selected),
             focused: Cell::new(None),
+            pressed: Cell::new(None),
             flash: Cell::new(false),
             tag_base,
             capsule: RefCell::new(None),
