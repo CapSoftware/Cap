@@ -379,6 +379,10 @@ impl Default for ClipsState {
 }
 
 impl ClipsState {
+    pub(crate) fn has_open_menu(&self) -> bool {
+        self.import_menu.is_some()
+    }
+
     pub(crate) fn is_importing(&self) -> bool {
         self.importing
     }

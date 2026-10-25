@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button } from "@cap/ui/button";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
 import { type CSSProperties, type ReactNode, useId, useState } from "react";
