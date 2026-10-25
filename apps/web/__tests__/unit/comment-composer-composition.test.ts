@@ -7,13 +7,13 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newComment } from "@/actions/videos/new-comment";
+import { Toolbar } from "@/app/s/[videoId]/_components/Toolbar";
 import CommentInput from "@/app/s/[videoId]/_components/tabs/Activity/CommentInput";
 import { TimelineComposer } from "@/app/s/[videoId]/_components/timeline/TimelineComposer";
 import {
 	TimelineProvider,
 	useTimelineActions,
 } from "@/app/s/[videoId]/_components/timeline/TimelineProvider";
-import { Toolbar } from "@/app/s/[videoId]/_components/Toolbar";
 
 vi.mock("@/actions/videos/new-comment", () => ({ newComment: vi.fn() }));
 vi.mock("@/app/Layout/AuthContext", () => ({
@@ -30,8 +30,9 @@ vi.mock("@/app/s/[videoId]/_components/timeline/TimelineBranch", () => ({
 	MicGlyph: () => null,
 }));
 vi.mock("@cap/ui", async () => {
-	const { Button } =
-		await import("../../../../packages/ui/src/components/Button");
+	const { Button } = await import(
+		"../../../../packages/ui/src/components/Button"
+	);
 	return { Button };
 });
 
