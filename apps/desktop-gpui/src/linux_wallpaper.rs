@@ -56,7 +56,6 @@ fn sources(current_desktop: &str) -> Vec<Source> {
     sources
 }
 
-/// The file the desktop currently shows, when it can be found.
 pub fn current() -> Option<PathBuf> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     let config = std::env::var_os("XDG_CONFIG_HOME")
@@ -89,17 +88,21 @@ pub fn current() -> Option<PathBuf> {
     None
 }
 
-/// A picture file for what a desktop names: itself, the largest picture of a
-/// Plasma wallpaper package, or the largest one a GNOME slideshow lists.
 fn resolve(path: &Path) -> Option<PathBuf> {
     if path.is_dir() {
         return wallpaper_package_image(path);
     }
-    if path.extension().is_some_and(|extension| extension == "xml") {
+    if is_xml(path) {
+        // One step only: a slideshow that names another slideshow, or
+        // itself, is not followed.
         let xml = std::fs::read_to_string(path).ok()?;
-        return slideshow_image(&xml).and_then(|image| resolve(&image));
+        return slideshow_image(&xml).filter(|image| image.is_file() && !is_xml(image));
     }
     path.is_file().then(|| path.to_path_buf())
+}
+
+fn is_xml(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "xml")
 }
 
 /// Runs a desktop's settings tool for one value. Two seconds at most: the
@@ -164,7 +167,6 @@ fn gvariant_string(printed: &str) -> Option<String> {
     Some(value)
 }
 
-/// A `file://` URI's path, or a plain absolute path as it is.
 fn file_uri_path(value: &str) -> Option<PathBuf> {
     let value = value.trim();
     if value.starts_with('/') {
@@ -226,8 +228,6 @@ fn plasma_image(appletsrc: &str) -> Option<PathBuf> {
     None
 }
 
-/// The largest picture in a Plasma wallpaper package
-/// (`contents/images/<width>x<height>.<ext>`).
 fn wallpaper_package_image(package: &Path) -> Option<PathBuf> {
     let images = std::fs::read_dir(package.join("contents/images")).ok()?;
     images
@@ -243,7 +243,6 @@ fn wallpaper_package_image(package: &Path) -> Option<PathBuf> {
         })
 }
 
-/// The largest `<size>` picture of a GNOME slideshow, else its first `<file>`.
 fn slideshow_image(xml: &str) -> Option<PathBuf> {
     let mut best: Option<(u64, &str)> = None;
     for part in xml.split("<size").skip(1) {
@@ -266,11 +265,47 @@ fn slideshow_image(xml: &str) -> Option<PathBuf> {
         }
     }
     if let Some((_, path)) = best {
-        return Some(PathBuf::from(path));
+        return Some(PathBuf::from(xml_text(path)));
     }
     let (_, rest) = xml.split_once("<file>")?;
     let (path, _) = rest.split_once("</file>")?;
-    Some(PathBuf::from(path.trim()))
+    Some(PathBuf::from(xml_text(path.trim())))
+}
+
+fn xml_text(text: &str) -> String {
+    let mut decoded = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        decoded.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let entity = rest.find(';').map(|end| (&rest[1..end], end));
+        let character = entity.and_then(|(name, _)| match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => name
+                .strip_prefix("#x")
+                .or_else(|| name.strip_prefix("#X"))
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| name.strip_prefix('#').map(str::parse::<u32>))
+                .and_then(Result::ok)
+                .and_then(char::from_u32),
+        });
+        match (character, entity) {
+            (Some(character), Some((_, end))) => {
+                decoded.push(character);
+                rest = &rest[end + 1..];
+            }
+            _ => {
+                decoded.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    decoded.push_str(rest);
+    decoded
 }
 
 fn xfce() -> Option<PathBuf> {
@@ -294,18 +329,27 @@ fn cosmic(config: &Path) -> Option<PathBuf> {
     cosmic_image(&text)
 }
 
-/// `source: Path("/a/b.jpg")` in COSMIC's background entry.
 fn cosmic_image(entry: &str) -> Option<PathBuf> {
     let (_, rest) = entry.split_once("Path(\"")?;
     let (path, _) = rest.split_once("\")")?;
     Some(PathBuf::from(path))
 }
 
-/// The picture a running swaybg draws (`-i`/`--image`), as Omarchy runs it.
+/// The picture swaybg draws, as Omarchy runs it. Only a swaybg of this user,
+/// on this Wayland display when both name one: another session's swaybg
+/// shows another session's wallpaper.
 fn swaybg() -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata("/proc/self").ok()?.uid();
+    let display = std::env::var_os("WAYLAND_DISPLAY");
     for entry in std::fs::read_dir("/proc").ok()?.filter_map(Result::ok) {
         let dir = entry.path();
         if std::fs::read_to_string(dir.join("comm")).is_ok_and(|comm| comm.trim() == "swaybg")
+            && std::fs::metadata(&dir).is_ok_and(|metadata| metadata.uid() == uid)
+            && same_display(
+                display.as_deref(),
+                std::fs::read(dir.join("environ")).ok().as_deref(),
+            )
             && let Ok(cmdline) = std::fs::read(dir.join("cmdline"))
             && let Some(image) = swaybg_image(&cmdline)
         {
@@ -318,6 +362,19 @@ fn swaybg() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn same_display(ours: Option<&std::ffi::OsStr>, environ: Option<&[u8]>) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let theirs = environ.and_then(|environ| {
+        environ
+            .split(|byte| *byte == 0)
+            .find_map(|variable| variable.strip_prefix(b"WAYLAND_DISPLAY="))
+    });
+    match (ours, theirs) {
+        (Some(ours), Some(theirs)) => ours.as_bytes() == theirs,
+        _ => true,
+    }
 }
 
 fn swaybg_image(cmdline: &[u8]) -> Option<PathBuf> {
@@ -335,7 +392,6 @@ fn swaybg_image(cmdline: &[u8]) -> Option<PathBuf> {
     None
 }
 
-/// `swww query`: `eDP-1: 1920x1080, scale: 1, currently displaying: image: /a/b.png`.
 fn swww_image(query: &str) -> Option<PathBuf> {
     query.lines().find_map(|line| {
         let (_, path) = line.split_once("image: ")?;
@@ -344,7 +400,6 @@ fn swww_image(query: &str) -> Option<PathBuf> {
     })
 }
 
-/// `hyprctl hyprpaper listactive`: `eDP-1 = /a/b.png`.
 fn hyprpaper_image(listed: &str) -> Option<PathBuf> {
     listed.lines().find_map(|line| {
         let (_, path) = line.split_once(" = ")?;
@@ -469,6 +524,35 @@ Image=/home/a/second.png
             Some(PathBuf::from("/a/day.jpg"))
         );
         assert_eq!(resolve(&root.path().join("missing.png")), None);
+
+        // A slideshow naming itself or another slideshow stops there.
+        let looping = root.path().join("loop.xml");
+        std::fs::write(
+            &looping,
+            format!("<static><file>{}</file></static>", looping.display()),
+        )
+        .unwrap();
+        assert_eq!(resolve(&looping), None);
+    }
+
+    #[test]
+    fn slideshow_paths_decode_xml_text() {
+        assert_eq!(
+            slideshow_image("<static><file>/a/Sea &amp; Sky &#233;t&#xE9;.jpg</file></static>"),
+            Some(PathBuf::from("/a/Sea & Sky été.jpg"))
+        );
+        assert_eq!(xml_text("&lt;&gt;&quot;&apos;"), "<>\"'");
+        assert_eq!(xml_text("AT&T &bogus; 5 & 6"), "AT&T &bogus; 5 & 6");
+    }
+
+    #[test]
+    fn swaybg_is_only_read_on_this_wayland_display() {
+        let ours = Some(std::ffi::OsStr::new("wayland-1"));
+        assert!(same_display(ours, Some(b"HOME=/h\0WAYLAND_DISPLAY=wayland-1\0")));
+        assert!(!same_display(ours, Some(b"WAYLAND_DISPLAY=wayland-0\0")));
+        assert!(same_display(ours, Some(b"HOME=/h\0")));
+        assert!(same_display(ours, None));
+        assert!(same_display(None, Some(b"WAYLAND_DISPLAY=wayland-0\0")));
     }
 
     #[test]
