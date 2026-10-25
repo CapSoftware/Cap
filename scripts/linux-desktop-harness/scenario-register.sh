@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Cap launched from a shell, which gives the portals no app id, names itself
-# so.cap.Cap through the host portal registry. Launches Cap ROUNDS times
+# so.cap.Cap through the host portal registry. Other apps' entries are written
+# and looked up first, as on a desktop in use: the portal then can miss a
+# just-written entry ("App info not found"). Launches Cap ROUNDS times
 # (default 4), first with its desktop entry removed (Cap writes it) and then
 # with the entry in place, and counts the launches that registered. Prints
 # key=value results to $HARNESS_OUT/result.txt.
@@ -34,6 +36,19 @@ launch() {
   done
   [[ $line == "registered Cap's app id"* ]] && echo yes || echo no
 }
+
+register() {
+  gdbus call --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop \
+    --method org.freedesktop.host.portal.Registry.Register "$1" '{}' >/dev/null 2>&1
+}
+mkdir -p "$(dirname "$entry")"
+register so.cap.Missing
+for n in 1 2 3; do
+  printf '[Desktop Entry]\nType=Application\nName=Other %s\nExec=env true\nNoDisplay=true\n' "$n" \
+    >"$(dirname "$entry")/so.cap.Other$n.desktop"
+  register "so.cap.Other$n"
+  sleep 1
+done
 
 fresh=0 again=0
 for n in $(seq "$rounds"); do
