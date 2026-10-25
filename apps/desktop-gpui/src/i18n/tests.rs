@@ -126,6 +126,14 @@ fn english_matches_the_literals_it_replaced() {
             "Open File button".into(),
         ),
         (
+            tr::settings::general::app::open_file::open(),
+            "Open the file".into(),
+        ),
+        (
+            tr::settings::general::app::open_file::show_in_folder(),
+            "Show in folder".into(),
+        ),
+        (
             tr::settings::general::recording::description(),
             "Behaviour while you record and after you stop.".into(),
         ),

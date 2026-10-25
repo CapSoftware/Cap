@@ -107,6 +107,8 @@ label = "Notificaciones del sistema"
 [settings.general.app.open_file]
 description = "Elige si «Abrir archivo» abre una exportación o la muestra en su carpeta."
 label = "Botón «Abrir archivo»"
+open = "Abrir archivo"
+show_in_folder = "Mostrar en la carpeta"
 
 [settings.general.recording]
 description = "Comportamiento durante la grabación y al detenerla."

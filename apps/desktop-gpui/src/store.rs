@@ -711,7 +711,7 @@ macro_rules! settings_enum {
     (
         $(#[$meta:meta])*
         $name:ident {
-            $($variant:ident = $json:literal, $label:literal;)+
+            $($variant:ident = $json:literal, $label:expr;)+
         }
         default = $default:ident
     ) => {
@@ -765,8 +765,8 @@ settings_enum! {
 
 settings_enum! {
     OpenFileBehaviour {
-        OpenFile = "openFile", "Open the file";
-        ShowInFolder = "showInFolder", "Show in folder";
+        OpenFile = "openFile", crate::i18n::tr::settings::general::app::open_file::open();
+        ShowInFolder = "showInFolder", crate::i18n::tr::settings::general::app::open_file::show_in_folder();
     }
     default = OpenFile
 }

@@ -107,6 +107,8 @@ label = "Systemmitteilungen"
 [settings.general.app.open_file]
 description = "Legen Sie fest, ob „Datei öffnen“ einen Export öffnet oder im Ordner anzeigt."
 label = "Schaltfläche „Datei öffnen“"
+open = "Datei öffnen"
+show_in_folder = "Im Ordner anzeigen"
 
 [settings.general.recording]
 description = "Verhalten während und nach der Aufnahme."

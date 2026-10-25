@@ -107,6 +107,8 @@ label = "सिस्टम सूचनाएँ"
 [settings.general.app.open_file]
 description = "चुनें कि फ़ाइल खोलें बटन एक्सपोर्ट को खोले या उसे उसके फ़ोल्डर में दिखाए।"
 label = "फ़ाइल खोलें बटन"
+open = "फ़ाइल खोलें"
+show_in_folder = "फ़ोल्डर में दिखाएँ"
 
 [settings.general.recording]
 description = "रिकॉर्ड करते समय और रोकने के बाद का व्यवहार।"

@@ -107,6 +107,8 @@ label = "系统通知"
 [settings.general.app.open_file]
 description = "选择“打开文件”是打开导出的文件，还是在所在文件夹中显示它。"
 label = "“打开文件”按钮"
+open = "打开文件"
+show_in_folder = "在文件夹中显示"
 
 [settings.general.recording]
 description = "录制期间及停止录制后的行为。"
