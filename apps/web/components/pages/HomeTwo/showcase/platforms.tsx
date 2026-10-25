@@ -139,14 +139,14 @@ export const PlatformsSection = () => {
 						/>
 						<ArrowUpRight className="size-4 text-[rgba(17,17,17,0.4)] transition-colors group-hover:text-[#111111]" />
 					</span>
-					<span className="mt-8 block">
+					<div className="mt-8">
 						<h3 className="block text-[18px] font-normal tracking-[-0.02em] text-[#111111]">
 							Chrome extension
 						</h3>
 						<span className="mt-1 block text-[14.5px] text-[rgba(17,17,17,0.64)]">
 							Record a tab or your whole screen without leaving the browser.
 						</span>
-					</span>
+					</div>
 				</Link>
 				<Link
 					href="/docs"
@@ -155,12 +155,12 @@ export const PlatformsSection = () => {
 						"group transition-shadow duration-200 hover:shadow-[0_0_0_1px_rgba(17,17,17,0.12)]",
 					)}
 				>
-					<span className="flex items-start justify-between">
+					<div className="flex items-start justify-between">
 						<h3 className="block text-[18px] font-normal tracking-[-0.02em] text-[#111111]">
 							Built for developers
 						</h3>
 						<ArrowUpRight className="size-4 text-[rgba(17,17,17,0.4)] transition-colors group-hover:text-[#111111]" />
-					</span>
+					</div>
 					<span className="mt-1 block text-[14.5px] text-[rgba(17,17,17,0.64)]">
 						Record, export, and publish from the terminal, the API, or the MCP
 						server.

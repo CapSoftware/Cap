@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { BODY_TEXT, H_SECTION } from "../theme";
 import { type Detail, DetailIcon, type Tone, toneVars } from "./layout";
 
-/** Text on one side, one visual on the other. */
 export const SplitSection = ({
 	anchor,
 	title,
@@ -17,7 +16,6 @@ export const SplitSection = ({
 }: {
 	tone?: Tone;
 	badge?: ReactNode;
-	/** Scroll target id. */
 	anchor?: string;
 	title: ReactNode;
 	lede: ReactNode;
@@ -60,12 +58,12 @@ export const SplitSection = ({
 							{item.icon ? (
 								<DetailIcon className="-mt-0.5">{item.icon}</DetailIcon>
 							) : null}
-							<span>
+							<div>
 								<h3 className="m-0 inline text-[length:inherit] font-medium leading-[inherit] tracking-normal text-[#111111]">
 									{item.lead}
 								</h3>{" "}
 								{item.body}
-							</span>
+							</div>
 						</li>
 					))}
 				</ul>
