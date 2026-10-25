@@ -210,6 +210,19 @@ jobs:
             grep -qx main_raised=yes "$RUNNER_TEMP/out/gnome-raise-$window/result.txt"
           done
 
+      - name: GNOME 50 editor background image from the portal file chooser
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: pick-background
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-pick-background" GNOME_UNSAFE=1 LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-pick-background/result.txt"
+          for line in recorded=yes editor_opened=yes chooser_opened=yes background_chosen=yes cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-pick-background/result.txt"
+          done
+
       - name: Check results
         run: |
           bash scripts/linux-desktop-harness/check-results.sh \

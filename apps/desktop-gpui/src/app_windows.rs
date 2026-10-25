@@ -5800,6 +5800,8 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
+    let pick_background =
+        std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
     if tab.is_none()
         && select.is_none()
         && canvas.is_none()
@@ -5808,6 +5810,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && camera3d.is_none()
         && add_track.is_none()
         && !generate_zoom
+        && !pick_background
     {
         return;
     }
@@ -5839,6 +5842,14 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     if generate_zoom {
         handle
             .update(cx, |view, window, cx| view.generate_auto_zoom(window, cx))
+            .ok();
+    }
+
+    if pick_background {
+        handle
+            .update(cx, |view, window, cx| {
+                view.pick_background_image(window, cx)
+            })
             .ok();
     }
 
