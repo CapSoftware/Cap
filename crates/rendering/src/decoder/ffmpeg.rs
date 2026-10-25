@@ -2013,6 +2013,17 @@ mod cache_tests {
     }
 
     #[test]
+    fn cache_hits_keep_the_borrowed_storage_identity() {
+        let mut converter = FrameConverter::new();
+        let (mut cached, output) = decoded_packed(&mut converter, format::Pixel::NV12, 1);
+        let identity = output.frame.storage_identity();
+        drop(output);
+
+        let repeated = cached.produce(&mut converter).frame;
+        assert!(identity.matches(&repeated.storage_identity()));
+    }
+
+    #[test]
     fn renderer_held_frame_is_not_recycled() {
         let mut converter = FrameConverter::new();
         let (cached, output) = decoded_packed(&mut converter, format::Pixel::RGBA, 7);
