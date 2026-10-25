@@ -85,7 +85,7 @@ view_all_recordings = "Voir tous les enregistrements"
 view_all_screenshots = "Voir toutes les captures d'écran"
 
 [tray.mode]
-instant = "Instantané"
+instant = "Instant"
 screenshot = "Capture d'écran"
 studio = "Studio"
 

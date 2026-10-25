@@ -85,9 +85,9 @@ view_all_recordings = "सभी रिकॉर्डिंग देखें"
 view_all_screenshots = "सभी स्क्रीनशॉट देखें"
 
 [tray.mode]
-instant = "तुरंत"
+instant = "Instant"
 screenshot = "स्क्रीनशॉट"
-studio = "स्टूडियो"
+studio = "Studio"
 
 [settings.nav]
 automations = "ऑटोमेशन"

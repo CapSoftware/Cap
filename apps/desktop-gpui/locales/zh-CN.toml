@@ -85,9 +85,9 @@ view_all_recordings = "查看所有录制"
 view_all_screenshots = "查看所有截图"
 
 [tray.mode]
-instant = "即时"
+instant = "Instant"
 screenshot = "截图"
-studio = "工作室"
+studio = "Studio"
 
 [settings.nav]
 automations = "自动化"

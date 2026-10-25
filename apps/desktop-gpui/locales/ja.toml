@@ -85,9 +85,9 @@ view_all_recordings = "すべての録画を表示"
 view_all_screenshots = "すべてのスクリーンショットを表示"
 
 [tray.mode]
-instant = "インスタント"
+instant = "Instant"
 screenshot = "スクリーンショット"
-studio = "スタジオ"
+studio = "Studio"
 
 [settings.nav]
 automations = "オートメーション"

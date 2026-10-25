@@ -85,7 +85,7 @@ view_all_recordings = "Alle Aufnahmen anzeigen"
 view_all_screenshots = "Alle Bildschirmfotos anzeigen"
 
 [tray.mode]
-instant = "Sofort"
+instant = "Instant"
 screenshot = "Bildschirmfoto"
 studio = "Studio"
 

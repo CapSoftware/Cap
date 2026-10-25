@@ -85,9 +85,9 @@ view_all_recordings = "Ver todas las grabaciones"
 view_all_screenshots = "Ver todas las capturas de pantalla"
 
 [tray.mode]
-instant = "Instantáneo"
+instant = "Instant"
 screenshot = "Captura de pantalla"
-studio = "Estudio"
+studio = "Studio"
 
 [settings.nav]
 automations = "Automatizaciones"

@@ -459,9 +459,9 @@ fn previous_submenu(previous: &[PreviousItem]) -> Entry {
 
 fn mode_name(mode: Mode) -> &'static str {
     match mode {
-        Mode::Studio => tr::tray::mode::studio(),
-        Mode::Instant => tr::tray::mode::instant(),
-        Mode::Screenshot => tr::tray::mode::screenshot(),
+        Mode::Studio => tr::main::mode::name::studio(),
+        Mode::Instant => tr::main::mode::name::instant(),
+        Mode::Screenshot => tr::main::mode::name::screenshot(),
     }
 }
 
