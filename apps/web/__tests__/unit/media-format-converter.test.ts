@@ -91,7 +91,9 @@ it.each(["clip.mov", "clip.MOV", "clip.MoV"])(
 		await vi.waitFor(() =>
 			expect(container.querySelector("input[type=file]")).not.toBeNull(),
 		);
-		const input = container.querySelector("input[type=file]") as HTMLInputElement;
+		const input = container.querySelector(
+			"input[type=file]",
+		) as HTMLInputElement;
 		Object.defineProperty(input, "files", {
 			value: [new File([bytes], fileName, { type: "video/quicktime" })],
 		});
@@ -118,11 +120,11 @@ it.each(["clip.mov", "clip.MOV", "clip.MoV"])(
 		expect(metadata.durationInSeconds).toBeGreaterThan(0);
 		expect(container.textContent).toContain("Download MP4");
 		let downloadedName: string | undefined;
-		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-			function (this: HTMLAnchorElement) {
-				downloadedName = this.download;
-			},
-		);
+		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+			this: HTMLAnchorElement,
+		) {
+			downloadedName = this.download;
+		});
 		const download = Array.from(container.querySelectorAll("button")).find(
 			(button) => button.textContent === "Download MP4",
 		);
