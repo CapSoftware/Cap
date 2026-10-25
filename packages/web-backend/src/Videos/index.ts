@@ -12,7 +12,7 @@ import {
 	Video,
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect, Exit, Option } from "effect";
+import { Array as Arr, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
@@ -253,20 +253,23 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						.from(Db.videos)
 						.where(Dz.inArray(Db.videos.id, [...new Set(videoIds)])),
 				);
-				const videosById = new Map(rows.map((video) => [video.id, video]));
-				const videoExits = yield* Effect.forEach(
-					videoIds,
-					(videoId) => {
-						const video = videosById.get(videoId);
-						if (!video)
-							return Effect.succeed(
-								Exit.succeed(Option.none<(typeof rows)[number]>()),
-							);
-						return policy
-							.canViewLoaded(video, Option.fromNullable(video.password))
-							.pipe(Effect.as(Option.some(video)), Effect.exit);
-					},
-					{ concurrency: 10 },
+				const policyExits = yield* policy.canViewLoadedBulk(
+					rows.map(
+						(video) => [video, Option.fromNullable(video.password)] as const,
+					),
+				);
+				const resultsById = new Map(
+					Arr.zipWith(
+						rows,
+						policyExits,
+						(video, exit) =>
+							[video.id, Exit.map(exit, () => Option.some(video))] as const,
+					),
+				);
+				const videoExits = videoIds.map(
+					(videoId) =>
+						resultsById.get(videoId) ??
+						Exit.succeed(Option.none<(typeof rows)[number]>()),
 				);
 				const analyticsVideos = videoExits.flatMap((exit) => {
 					if (!Exit.isSuccess(exit) || Option.isNone(exit.value)) return [];
