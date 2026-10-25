@@ -22,12 +22,13 @@ use windows::{
         },
         Media::MediaFoundation::{
             self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
-            IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
-            MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NO_WAIT,
-            MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE,
-            MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-            MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_PIXEL_ASPECT_RATIO,
-            MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
+            IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_EVENTS_AVAILABLE,
+            MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_TYPE_NOT_SET,
+            MF_EVENT_FLAG_NO_WAIT, MF_EVENT_FLAG_NONE, MF_EVENT_TYPE,
+            MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+            MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MAX_KEYFRAME_SPACING,
+            MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+            MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
             MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
             MFCreateSample, MFMediaType_Video, MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE,
             MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_COMMAND_FLUSH,
@@ -40,12 +41,11 @@ use windows::{
     core::{Error, Interface},
 };
 
-/// DASH segments are cut on keyframes; 2 s matches the software encoder's GOP.
-const MUXED_KEYFRAME_INTERVAL_SECS: u32 = 2;
 const MAX_CONSECUTIVE_EMPTY_SAMPLES: u8 = 20;
 const MAX_INPUT_WITHOUT_OUTPUT: u32 = 30;
 const MAX_PROCESS_INPUT_FAILURES: u32 = 5;
 const ENCODER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+const ENCODER_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 /// How long `get_frame` may park before we treat the gap as an upstream stall
 /// (recording paused or capture starved) rather than a hung hardware encoder,
 /// and rebase the output-timeout clock. Must stay below
@@ -218,16 +218,11 @@ pub enum EncoderRuntimeError {
         process_failures: u32,
         frames_encoded: u64,
     },
-    #[error("Media Foundation encoder did not confirm drain completion")]
-    DrainIncomplete,
 }
 
 impl EncoderRuntimeError {
     pub fn should_fallback(&self) -> bool {
-        match self {
-            EncoderRuntimeError::Windows(_) | EncoderRuntimeError::DrainIncomplete => false,
-            EncoderRuntimeError::EncoderUnhealthy { .. } => true,
-        }
+        matches!(self, EncoderRuntimeError::EncoderUnhealthy { .. })
     }
 }
 
@@ -250,10 +245,16 @@ impl H264Encoder {
         bitrate: u32,
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
+        try_all_devices: bool,
+        keyframe_interval_secs: Option<u32>,
+        bt709: bool,
     ) -> Result<Self, NewVideoEncoderError> {
-        let devices =
+        let mut devices =
             EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
                 .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?;
+        if !try_all_devices {
+            devices.truncate(1);
+        }
 
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
@@ -264,6 +265,9 @@ impl H264Encoder {
             frame_rate,
         )
         .map_err(NewVideoEncoderError::VideoProcessor)?;
+        if bt709 {
+            video_processor.set_bt709_color_space(format);
+        }
 
         let mut device_manager_reset_token: u32 = 0;
         let media_device_manager = {
@@ -330,10 +334,12 @@ impl H264Encoder {
                 output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                 output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
                 output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
-                output_type.SetUINT32(
-                    &MF_MT_MAX_KEYFRAME_SPACING,
-                    frame_rate.saturating_mul(MUXED_KEYFRAME_INTERVAL_SECS),
-                )?;
+                if let Some(interval_secs) = keyframe_interval_secs {
+                    output_type.SetUINT32(
+                        &MF_MT_MAX_KEYFRAME_SPACING,
+                        frame_rate.saturating_mul(interval_secs),
+                    )?;
+                }
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,
@@ -345,6 +351,9 @@ impl H264Encoder {
                 output_type
                     .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
                 output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                if bt709 {
+                    set_bt709_attributes(&output_type)?;
+                }
                 transform.SetOutputType(output_stream_id, &output_type, 0)?;
                 transform.GetOutputCurrentType(output_stream_id)
             })()
@@ -364,6 +373,9 @@ impl H264Encoder {
                     let attributes: IMFAttributes = input_type.cast()?;
                     input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                     input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+                    if bt709 {
+                        set_bt709_attributes(&input_type)?;
+                    }
                     MFSetAttributeSize(
                         &attributes,
                         &MF_MT_FRAME_SIZE,
@@ -544,6 +556,35 @@ impl H264Encoder {
             bitrate,
             MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
             true,
+            false,
+            None,
+            false,
+        )
+    }
+
+    // The fragmented DASH path needs BT.709 output and a GOP aligned with its segment duration,
+    // and hybrid GPUs need the MFT search, so this differs from the MP4/camera constructors.
+    pub fn new_with_scaled_output_and_bitrate_trying_devices(
+        d3d_device: &ID3D11Device,
+        format: DXGI_FORMAT,
+        input_resolution: SizeInt32,
+        output_resolution: SizeInt32,
+        frame_rate: u32,
+        bitrate: u32,
+        keyframe_interval_secs: u32,
+    ) -> Result<Self, NewVideoEncoderError> {
+        Self::new_with_scaled_output_with_flags(
+            d3d_device,
+            format,
+            input_resolution,
+            output_resolution,
+            frame_rate,
+            bitrate,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
+            true,
+            true,
+            Some(keyframe_interval_secs),
+            true,
         )
     }
 
@@ -568,6 +609,9 @@ impl H264Encoder {
                 bitrate_multipler,
             ),
             MFT_ENUM_FLAG_TRANSCODE_ONLY,
+            false,
+            false,
+            None,
             false,
         )
     }
@@ -614,9 +658,8 @@ impl H264Encoder {
         &self.output_type
     }
 
-    /// SPS/PPS in Annex B, as the encoder exposes them on its output type. The DASH `init.mp4` is
-    /// written before the first sample, so a caller muxing compressed samples must have this up
-    /// front.
+    // The DASH init segment is written before the first sample, so callers muxing compressed
+    // samples need the SPS/PPS up front.
     pub fn sequence_header(&self) -> Option<Vec<u8>> {
         let attributes: IMFAttributes = self.output_type.cast().ok()?;
         let size = unsafe { attributes.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER) }.ok()?;
@@ -785,22 +828,32 @@ impl H264Encoder {
                 }
             }
 
+            let _ = self
+                .transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
             let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
 
-            let drain_deadline = Instant::now() + Duration::from_millis(250);
+            let drain_deadline = Instant::now() + ENCODER_DRAIN_TIMEOUT;
             let mut drain_complete = false;
             let mut drained = 0u64;
             while Instant::now() < drain_deadline {
                 let event = match self.event_generator.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
                     Ok(event) => event,
-                    Err(_) => {
+                    Err(error) if error.code() == MF_E_NO_EVENTS_AVAILABLE => {
                         std::thread::sleep(Duration::from_millis(1));
                         continue;
+                    }
+                    Err(error) => {
+                        warn!(%error, "Media Foundation encoder drain event failed");
+                        break;
                     }
                 };
                 let event_type = match event.GetType() {
                     Ok(event_type) => event_type,
-                    Err(_) => break,
+                    Err(error) => {
+                        warn!(%error, "Media Foundation encoder drain event type failed");
+                        break;
+                    }
                 };
 
                 match MF_EVENT_TYPE(event_type as i32) {
@@ -825,8 +878,8 @@ impl H264Encoder {
                             }
                             Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {}
                             Err(error) => {
-                                let _ = self.cleanup_encoder();
-                                return Err(error.into());
+                                warn!(%error, "Media Foundation encoder drain output failed");
+                                break;
                             }
                         }
                     }
@@ -841,12 +894,12 @@ impl H264Encoder {
                 debug!(drained, "Drained Media Foundation samples before shutdown");
             }
             if !drain_complete {
-                let _ = self.cleanup_encoder();
-                return Err(EncoderRuntimeError::DrainIncomplete);
+                warn!(
+                    drained,
+                    "Media Foundation encoder did not confirm drain before the deadline; finishing stop without the remaining output"
+                );
             }
 
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0)?;
             self.transform
@@ -872,4 +925,19 @@ impl H264Encoder {
 fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
     let frame_rate_factor = (fps as f32 - 30.0).max(0.0) / 2.0 + 30.0;
     (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
+}
+
+fn set_bt709_attributes(media_type: &IMFMediaType) -> windows::core::Result<()> {
+    use MediaFoundation::{
+        MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
+        MF_MT_YUV_MATRIX, MFNominalRange_16_235, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
+        MFVideoTransferMatrix_BT709,
+    };
+
+    unsafe {
+        media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+    }
 }

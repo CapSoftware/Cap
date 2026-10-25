@@ -1,17 +1,28 @@
 use ffmpeg::format::Pixel;
 use scap_direct3d::{MappedFrame, PixelFormat, ReadbackError};
 use std::ffi::c_void;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 pub type AsFFmpegError = ReadbackError;
 
-/// Readback deadline. The default polls within it; `CAP_READBACK_BLOCKING` opts into an
-/// unbounded `Map` when the copy is known to finish quickly.
-const READBACK_BUDGET: Duration = Duration::from_millis(8);
+fn readback_budget() -> Option<Duration> {
+    static BUDGET: OnceLock<Option<Duration>> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("CAP_READBACK_BUDGET_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|millis| *millis > 0)
+            .map(|millis| Duration::from_millis(millis.min(60_000)))
+    })
+}
 
 impl super::AsFFmpeg for scap_direct3d::Frame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-        let mapped = self.map_readback(READBACK_BUDGET)?;
+        let mapped = match readback_budget() {
+            Some(budget) => self.map_readback_with_budget(budget)?,
+            None => self.map_readback()?,
+        };
         let format = mapped.pixel_format().as_ffmpeg();
         wrap_mapped_frame(mapped, format)
     }
@@ -21,9 +32,8 @@ unsafe extern "C" fn release_mapped_frame(opaque: *mut c_void, _data: *mut u8) {
     drop(unsafe { Box::from_raw(opaque.cast::<MappedFrame>()) });
 }
 
-/// Wraps the mapped staging texture into an `AVFrame` whose backing `AVBufferRef` owns the mapping.
-/// The pixels are never copied: the encoder reads the staging texture directly, and the last frame
-/// reference unmaps it and returns it to the pool.
+// The AVBufferRef owns the mapping, so releasing the last frame reference unmaps the texture and
+// returns it to the pool without ever copying the pixels.
 fn wrap_mapped_frame(
     mapped: MappedFrame,
     format: Pixel,

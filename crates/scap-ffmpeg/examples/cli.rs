@@ -228,7 +228,7 @@ pub async fn main() {
                 callback_drops.load(Ordering::Relaxed)
             );
             println!("old (blocking two-transfer path): {old}");
-            println!("new (ring + probe/block zero copy): {new}");
+            println!("new (ring + zero copy): {new}");
             println!(
                 "{{\"old\":{},\"new\":{},\"source_frames\":{frames_seen},\"frame_bytes\":{frame_bytes}}}",
                 old.json(),

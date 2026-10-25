@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 
-use crate::base::PacketSink;
 use crate::video::h264::{
     DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
     QueueFrameError as EncodeError,
@@ -65,6 +64,16 @@ pub struct EncoderFallback {
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
 const STREAM_TIME_BASE: ffmpeg::Rational = ffmpeg::Rational(1, 10_000_000);
+
+#[derive(Debug, Clone)]
+pub struct DiskSpaceWarning {
+    pub available_mb: u64,
+    pub threshold_mb: u64,
+    pub path: String,
+    pub is_critical: bool,
+}
+
+pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
 
 /// Shared so a write-behind muxer can install the callback without waiting
 /// for the writer thread, which may be blocked on storage.
@@ -546,6 +555,10 @@ impl SegmentedVideoEncoder {
         Ok(instance)
     }
 
+    pub fn set_disk_space_callback(&mut self, callback: DiskSpaceCallback) {
+        self.disk_space_callback = Some(callback);
+    }
+
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
         *self
             .segment_tx
@@ -739,6 +752,14 @@ impl SegmentedVideoEncoder {
 
     pub fn current_encoder_mut(&mut self) -> Option<&mut H264Encoder> {
         Some(&mut self.encoder)
+    }
+
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
+    }
+
+    pub fn segment_duration(&self) -> Duration {
+        self.segment_duration
     }
 
     pub fn current_index(&self) -> u32 {
@@ -1071,9 +1092,6 @@ impl SegmentMux {
     }
 }
 
-/// Muxes externally encoded H.264 access units into the same DASH segments as
-/// [`SegmentedVideoEncoder`], for encoders that cannot hand over raw frames (the Windows Media
-/// Foundation encoder takes D3D11 textures and emits compressed samples).
 pub struct SegmentedPacketMuxer {
     mux: MuxSink<SegmentMux>,
     stream_index: usize,
@@ -1083,8 +1101,8 @@ pub struct SegmentedPacketMuxer {
 }
 
 impl SegmentedPacketMuxer {
-    /// `extradata` must be the H.264 sequence header (SPS/PPS) in Annex B; `init.mp4` is written
-    /// during construction and cannot carry a codec configuration discovered later.
+    // `extradata` must be the H.264 sequence header (SPS/PPS) in Annex B because `init.mp4` is
+    // written during construction and cannot carry a codec configuration discovered later.
     pub fn new(
         base_path: PathBuf,
         video_config: VideoInfo,
@@ -1118,6 +1136,10 @@ impl SegmentedPacketMuxer {
             (*codecpar).height = stream_size.1 as i32;
             (*codecpar).bit_rate = i64::from(bitrate);
             (*codecpar).format = ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NV12 as i32;
+            (*codecpar).color_range = ffmpeg::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+            (*codecpar).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*codecpar).color_trc = ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+            (*codecpar).color_space = ffmpeg::ffi::AVColorSpace::AVCOL_SPC_BT709;
 
             let stream_ptr = stream.as_mut_ptr();
             (*stream_ptr).avg_frame_rate = ffmpeg::ffi::AVRational {
@@ -1324,6 +1346,25 @@ mod tests {
         let (declared_width, declared_height) =
             unsafe { ((*parameters.as_ptr()).width, (*parameters.as_ptr()).height) };
         assert_eq!((declared_width, declared_height), (320, 240));
+        let (color_range, color_space, color_primaries, color_trc) = unsafe {
+            let raw = parameters.as_ptr();
+            (
+                (*raw).color_range,
+                (*raw).color_space,
+                (*raw).color_primaries,
+                (*raw).color_trc,
+            )
+        };
+        assert_eq!(color_range, ffmpeg::ffi::AVColorRange::AVCOL_RANGE_MPEG);
+        assert_eq!(color_space, ffmpeg::ffi::AVColorSpace::AVCOL_SPC_BT709);
+        assert_eq!(
+            color_primaries,
+            ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709
+        );
+        assert_eq!(
+            color_trc,
+            ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709
+        );
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
