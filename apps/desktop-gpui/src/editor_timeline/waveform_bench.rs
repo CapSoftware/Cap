@@ -182,26 +182,33 @@ fn edge(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
 }
 
 fn distance_to_edge(path: &gpui::Path<Pixels>, point: (f64, f64)) -> f64 {
-    path.vertices
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .flat_map(|triangle| {
-            [(0, 1), (1, 2), (2, 0)].map(|(a, b)| {
-                let a = triangle[a].xy_position;
-                let b = triangle[b].xy_position;
-                let a = (f64::from(f32::from(a.x)), f64::from(f32::from(a.y)));
-                let b = (f64::from(f32::from(b.x)), f64::from(f32::from(b.y)));
-                let delta = (b.0 - a.0, b.1 - a.1);
-                let length_squared = delta.0 * delta.0 + delta.1 * delta.1;
-                let t = if length_squared > 0. {
-                    (((point.0 - a.0) * delta.0 + (point.1 - a.1) * delta.1) / length_squared)
-                        .clamp(0., 1.)
-                } else {
-                    0.
-                };
-                (point.0 - a.0 - t * delta.0).hypot(point.1 - a.1 - t * delta.1)
-            })
+    let mut edges = std::collections::HashMap::new();
+    for triangle in path.vertices.as_chunks::<3>().0 {
+        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+            let [a, b] = [a, b].map(|i| {
+                let p = triangle[i].xy_position;
+                (f32::from(p.x).to_bits(), f32::from(p.y).to_bits())
+            });
+            *edges
+                .entry(if a <= b { (a, b) } else { (b, a) })
+                .or_insert(0) += 1;
+        }
+    }
+    edges
+        .into_iter()
+        .filter(|(_, count)| *count == 1)
+        .map(|(edge, _)| {
+            let [a, b] = [edge.0, edge.1]
+                .map(|(x, y)| (f64::from(f32::from_bits(x)), f64::from(f32::from_bits(y))));
+            let delta = (b.0 - a.0, b.1 - a.1);
+            let length_squared = delta.0 * delta.0 + delta.1 * delta.1;
+            let t = if length_squared > 0. {
+                (((point.0 - a.0) * delta.0 + (point.1 - a.1) * delta.1) / length_squared)
+                    .clamp(0., 1.)
+            } else {
+                0.
+            };
+            (point.0 - a.0 - t * delta.0).hypot(point.1 - a.1 - t * delta.1)
         })
         .fold(f64::INFINITY, f64::min)
 }

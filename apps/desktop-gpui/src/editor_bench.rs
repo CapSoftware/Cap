@@ -54,7 +54,10 @@ impl Scenario {
         match self {
             Self::Zoom => {
                 view.stop_for_measurement(cx);
-                view.bench_zoom_to(view.total_duration(), cx);
+                view.bench_zoom_to(
+                    crate::editor_timeline::zoom_out_limit(view.total_duration()),
+                    cx,
+                );
             }
             Self::Tick => {
                 if !view.playing {
@@ -117,7 +120,8 @@ impl Scenario {
         match self {
             Self::Zoom => {
                 let progress = iteration as f64 / (WARMUP_FRAMES + MEASURED_FRAMES - 1) as f64;
-                let seconds = view.total_duration() * (3.0 / view.total_duration()).powf(progress);
+                let widest = crate::editor_timeline::zoom_out_limit(view.total_duration());
+                let seconds = widest * (3.0 / widest).powf(progress);
                 view.bench_zoom_to(seconds, cx);
             }
             Self::Tick | Self::TickZoomedOut | Self::Follow | Self::TickFields => {
