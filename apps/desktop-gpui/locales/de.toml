@@ -99,7 +99,10 @@ system_default = "Systemstandard ({language})"
 title = "Sprache"
 
 [settings.general.appearance]
+dark = "Dunkel"
 description = "Passen Sie Cap an das Design Ihres Systems an oder wählen Sie ein festes Erscheinungsbild."
+light = "Hell"
+system = "System"
 title = "Erscheinungsbild"
 
 [settings.general.app]
