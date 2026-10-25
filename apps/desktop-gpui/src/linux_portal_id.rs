@@ -60,15 +60,28 @@ fn application_dirs(
 }
 
 /// A hidden entry for [`PORTAL_APP_ID`]: the portal needs one to accept the
-/// id, and GNOME names the app from it in the shortcut dialog.
+/// id, and GNOME names the app from it in the shortcut dialog. GLib, which
+/// the portal loads it with, looks the program up before expanding `%%`, so
+/// `env` is the program and Cap's path its argument.
 pub fn desktop_entry(exec: &Path) -> String {
-    let exec = exec
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
     format!(
-        "[Desktop Entry]\nType=Application\nName=Cap\nIcon=Cap\nExec=\"{exec}\"\nNoDisplay=true\nStartupWMClass=Cap\n"
+        "[Desktop Entry]\nType=Application\nName=Cap\nIcon=Cap\nExec=env {}\nNoDisplay=true\nStartupWMClass=Cap\n",
+        exec_argument(&exec.to_string_lossy())
     )
+}
+
+/// One quoted `Exec` argument. Inside quotes `"`, `` ` ``, `$` and `\` take a
+/// backslash; the string escape then doubles every backslash, and `%` (a
+/// field code anywhere in the line) becomes `%%`.
+fn exec_argument(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    for c in value.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    format!("\"{}\"", quoted.replace('\\', "\\\\").replace('%', "%%"))
 }
 
 /// Finds or writes the `.desktop` file for [`PORTAL_APP_ID`], returning
@@ -177,11 +190,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(user, root.path().join("home/.local/share/applications"));
-        let exec = Path::new("/opt/Cap \"beta\".AppImage");
+        let exec = Path::new(r#"/opt/100% Cap/"beta" $HOME `x`\.AppImage"#);
         assert!(ensure_desktop_entry(&user, &dirs, exec));
         let entry = std::fs::read_to_string(user.join("so.cap.Cap.desktop")).unwrap();
         assert!(entry.contains("NoDisplay=true"));
-        assert!(entry.contains("Exec=\"/opt/Cap \\\"beta\\\".AppImage\""));
+        assert!(entry.contains(
+            r#"Exec=env "/opt/100%% Cap/\\"beta\\" \\$HOME \\`x\\`\\\\.AppImage""#
+        ));
 
         // An entry a package installed wins: nothing is written for the user.
         let packaged = tempfile::tempdir().unwrap();
