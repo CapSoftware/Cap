@@ -17,7 +17,6 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 
-/// First argument of the dialog process; handled before anything else starts.
 pub const ARG: &str = "--cap-linux-dialog";
 
 const ACCEPTED: i32 = 0;
@@ -32,7 +31,6 @@ pub struct Request {
     pub cancel: Option<String>,
 }
 
-/// Whether `zenity` is on `PATH`, which is what `rfd` will run.
 pub fn zenity_available() -> bool {
     std::env::var_os("PATH").is_some_and(|path| zenity_on(&path))
 }
@@ -71,8 +69,6 @@ pub fn show(request: &Request) -> Option<bool> {
     }
 }
 
-/// The dialog process: `Some(exit status)` when this process was started with
-/// [`ARG`], `None` for a normal launch.
 pub fn run_from_args() -> Option<i32> {
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() != Some(ARG) {
