@@ -8,13 +8,13 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { AssemblyAI } from "assemblyai";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
 	ASSEMBLYAI_SPEECH_MODELS,
 	ASSEMBLYAI_SUPPORTED_LANGUAGES,
+	createAssemblyAIClient,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
 import {
@@ -433,9 +433,7 @@ async function processNextLiveChunk(options: {
 		// ffmpeg — the binary doesn't exist in the serverless runtime.
 		const audioBuffer = await downloadConcatenatedSegmentsToBuffer(segmentUrls);
 
-		const client = new AssemblyAI({
-			apiKey: serverEnv().ASSEMBLY_API_KEY as string,
-		});
+		const client = createAssemblyAIClient();
 		const language = (
 			ASSEMBLYAI_SUPPORTED_LANGUAGES as readonly string[]
 		).includes(options.language)

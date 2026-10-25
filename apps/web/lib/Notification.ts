@@ -110,7 +110,11 @@ export async function createNotification(
 
 			const recipientId = parentComment?.authorId;
 			if (!recipientId) return;
-			if (recipientId === videoResult.ownerId) return;
+			if (
+				recipientId === videoResult.ownerId ||
+				recipientId === notification.authorId
+			)
+				return;
 
 			const [recipientUser] = await db()
 				.select({

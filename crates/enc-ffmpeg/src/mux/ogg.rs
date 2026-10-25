@@ -1,12 +1,25 @@
 use ffmpeg::{format, frame};
 use std::{path::PathBuf, time::Duration};
 
+use super::write_behind::{AUDIO_BUDGET_BYTES, MuxSink, MuxTarget};
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
 
 pub struct OggFile {
     encoder: OpusEncoder,
-    output: format::context::Output,
+    output: MuxSink<OggOutput>,
     finished: bool,
+}
+
+struct OggOutput(format::context::Output);
+
+impl MuxTarget for OggOutput {
+    fn output(&self) -> &format::context::Output {
+        &self.0
+    }
+
+    fn output_mut(&mut self) -> &mut format::context::Output {
+        &mut self.0
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -32,9 +45,16 @@ impl OggFile {
 
         Ok(Self {
             encoder,
-            output,
+            output: MuxSink::Direct(OggOutput(output)),
             finished: false,
         })
+    }
+
+    /// Hands encoded packets to a dedicated writer thread so a stalled
+    /// output volume no longer blocks the caller. Bytes on disk and their
+    /// order are unchanged.
+    pub fn enable_write_behind(&mut self) -> std::io::Result<()> {
+        self.output.enable_write_behind("ogg", AUDIO_BUDGET_BYTES)
     }
 
     pub fn encoder(&self) -> &OpusEncoder {
@@ -46,7 +66,15 @@ impl OggFile {
         frame: frame::Audio,
         timestamp: Duration,
     ) -> Result<(), ffmpeg::Error> {
-        self.encoder.queue_frame(frame, timestamp, &mut self.output)
+        if self.finished && self.output.is_write_behind() {
+            return Err(ffmpeg::Error::Exit);
+        }
+        self.encoder
+            .queue_frame_to(frame, timestamp, &mut self.output)
+    }
+
+    pub fn is_write_behind(&self) -> bool {
+        self.output.is_write_behind()
     }
 
     pub fn finish(&mut self) -> Result<Result<(), ffmpeg::Error>, FinishError> {
@@ -56,10 +84,15 @@ impl OggFile {
 
         self.finished = true;
 
-        let flush_result = self.encoder.flush(&mut self.output);
-        self.output
-            .write_trailer()
-            .map_err(FinishError::WriteTrailerFailed)?;
+        let encoder = &mut self.encoder;
+        let (flush_result, trailer_result) = self
+            .output
+            .finish(
+                |output| encoder.flush_to(output),
+                |output: &mut OggOutput, flush_result| (flush_result, output.0.write_trailer()),
+            )
+            .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
+        trailer_result.map_err(FinishError::WriteTrailerFailed)?;
 
         Ok(flush_result)
     }
@@ -79,6 +112,15 @@ mod tests {
     use ffmpeg::ChannelLayout;
 
     fn write_recording(path: std::path::PathBuf, input_rate: u32, total_samples: usize) {
+        write_recording_with(path, input_rate, total_samples, false);
+    }
+
+    fn write_recording_with(
+        path: std::path::PathBuf,
+        input_rate: u32,
+        total_samples: usize,
+        write_behind: bool,
+    ) {
         let info = AudioInfo::new_raw(
             format::Sample::F32(format::sample::Type::Packed),
             input_rate,
@@ -86,6 +128,9 @@ mod tests {
         );
 
         let mut file = OggFile::init(path, OpusEncoder::factory(info)).unwrap();
+        if write_behind {
+            file.enable_write_behind().unwrap();
+        }
 
         let chunk = 1024usize;
         let mut written = 0usize;
@@ -139,6 +184,36 @@ mod tests {
         assert!(
             (duration - 5.0).abs() < 0.2,
             "expected ~5s of audio, probed {duration}s"
+        );
+    }
+
+    #[test]
+    fn write_behind_output_has_the_same_duration_and_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let inline = dir.path().join("inline.ogg");
+        let behind = dir.path().join("behind.ogg");
+
+        write_recording_with(inline.clone(), 48_000, 48_000 * 5, false);
+        write_recording_with(behind.clone(), 48_000, 48_000 * 5, true);
+
+        assert_eq!(
+            std::fs::metadata(&inline).unwrap().len(),
+            std::fs::metadata(&behind).unwrap().len()
+        );
+        assert!((probed_duration_secs(&behind) - probed_duration_secs(&inline)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sustained_44k1_input_keeps_its_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio-input.ogg");
+
+        write_recording(path.clone(), 44_100, 44_100 * 5);
+
+        let duration = probed_duration_secs(&path);
+        assert!(
+            (duration - 5.0).abs() < 0.02,
+            "expected 5s of audio, probed {duration}s"
         );
     }
 

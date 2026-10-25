@@ -110,14 +110,18 @@ S3_PUBLIC_URL=https://s3.yourdomain.com
 
 See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
 
+For single-owner instances behind an authenticating reverse proxy, see
+[trusted-proxy authentication](docs/trusted-proxy-auth.md) for the required shared
+secret, proxy hardening, and how to trigger sign-in without a built-in login button.
+
 ## Local Development
 
 Cap is a Turborepo monorepo with Rust, TypeScript, Tauri, SolidStart, Next.js, Drizzle, MySQL, Tailwind CSS, and shared media crates.
 
 Requirements:
 
-- Node.js 20 or newer
-- Bun 1.4.0
+- Node.js 24 or newer
+- Bun 1.4.4
 - Rust 1.88 or newer
 - Docker for MySQL, MinIO, and local services
 

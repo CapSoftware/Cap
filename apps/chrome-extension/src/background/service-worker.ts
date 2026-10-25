@@ -1267,7 +1267,9 @@ const forwardToOffscreen = (type: OffscreenRequest["type"]) =>
 	sendOffscreen({ target: "offscreen", type } as OffscreenRequest);
 
 const syncRecordingStatus = async () => {
+	const initialStatus = recordingStatus;
 	const hasDocument = await hasOffscreenDocument();
+	if (recordingStatus !== initialStatus) return recordingStatus;
 	if (!hasDocument) {
 		if (
 			isActiveRecordingStatus(recordingStatus) ||
@@ -1292,6 +1294,7 @@ const syncRecordingStatus = async () => {
 		{ target: "offscreen", type: "get-recording-status" },
 		{ createIfMissing: false },
 	);
+	if (recordingStatus !== initialStatus) return recordingStatus;
 	if (response.ok && response.status) {
 		if (
 			recordingStatus.phase === "creating" &&

@@ -913,6 +913,12 @@ impl RecordingSession {
 
     fn activate(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
         tracing::info!(dir = %active.project_dir.display(), "recording started");
+        if let Some(video_id) = active.instant_video_id().map(str::to_owned) {
+            cx.background_spawn(async move {
+                crate::upload::instant_cleanup::started(&video_id);
+            })
+            .detach();
+        }
         let project_dir = active.project_dir.clone();
         let done = active.done_fut();
         self.active = Some(active);
@@ -945,16 +951,28 @@ impl RecordingSession {
 
     fn discard_stale_start(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
         let previous = self.discarding.take();
+        let video_id = active.instant_video_id().map(str::to_owned);
         self.discarding = Some(gpui_tokio::Tokio::spawn(cx, async move {
+            use crate::upload::instant_cleanup::{self, CleanupReason};
+            if let Some(video_id) = &video_id {
+                instant_cleanup::abandon(video_id, CleanupReason::StartCancelled, None);
+            }
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
             #[cfg(target_os = "linux")]
             let discarded = active.cancel_preserving().await;
             #[cfg(not(target_os = "linux"))]
-            let discarded = active.cancel_and_delete().await;
-            if let Err(error) = discarded {
-                tracing::warn!(%error, "discarding a cancelled recording start failed");
+            let discarded = active.discard_cancelled_start().await;
+            match discarded {
+                Ok(()) => {
+                    if let Some(video_id) = &video_id {
+                        instant_cleanup::resolved(video_id);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "discarding a cancelled recording start failed");
+                }
             }
         }));
     }
@@ -1057,11 +1075,6 @@ impl RecordingSession {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
-        if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
-            self.countdown_remaining = None;
-            self.finish(cx);
-            return;
-        }
         #[cfg(target_os = "linux")]
         if matches!(self.phase, Phase::Starting | Phase::Stopping)
             && let Some(attempt) = self.instant_attempt.clone()
@@ -1072,6 +1085,10 @@ impl RecordingSession {
                 cx.notify();
                 return;
             }
+            self.countdown_remaining = None;
+            self.abort_start_cue();
+            self.discard_primed(cx);
+            self.phase = Phase::Stopping;
             self.stop_requested = true;
             let generation = self.recording_generation;
             let task =
@@ -1079,10 +1096,11 @@ impl RecordingSession {
             cx.spawn(async move |this, cx| {
                 let result = task.await;
                 this.update(cx, |this, cx| {
-                    if this.recording_generation != generation || this.phase != Phase::Starting || this.active.is_some() { return; }
+                    if this.recording_generation != generation || this.phase != Phase::Stopping || this.active.is_some() { return; }
                     if matches!(result, Ok(cap_recording::instant_recording::InstantQuiescence::Joined)) {
                         this.finish(cx);
                     } else {
+                        this.phase = Phase::Starting;
                         this.stop_requested = false;
                         this.clean_control.uncertain = true;
                         this.error = Some("Capture cleanup is unconfirmed. Local files are preserved; use Ctrl+Shift+F9 to retry Stop.".into());
@@ -1091,6 +1109,11 @@ impl RecordingSession {
                 }).ok();
             }).detach();
             cx.notify();
+            return;
+        }
+        if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
+            self.countdown_remaining = None;
+            self.finish(cx);
             return;
         }
         #[cfg(target_os = "linux")]
@@ -1967,6 +1990,55 @@ fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> b
 #[cfg(test)]
 mod countdown_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn countdown_stop_cancels_an_unpolled_instant_start() {
+        for countdown in [1, 0] {
+            let runtime = tokio::runtime::Handle::current();
+            gpui_platform::headless().run(move |cx| {
+                gpui_tokio::init_from_handle(cx, runtime);
+                let session = RecordingSession::init(cx);
+                let attempt = recording::InstantAttempt::new();
+                let gate = cap_recording::RecordingStartGate::new();
+                let (cue_abort, _) = futures_util::future::AbortHandle::new_pair();
+                session.update(cx, |session, cx| {
+                    session.phase = Phase::Starting;
+                    session.countdown_remaining = Some(countdown);
+                    session.countdown_cue_abort = Some(cue_abort.clone());
+                    session.start_gate = Some(gate.clone());
+                    session.instant_attempt = Some(attempt.clone());
+                    session.stop(cx);
+                    assert_eq!(session.countdown_remaining, None);
+                });
+                assert!(cue_abort.is_aborted());
+                assert!(!gate.is_armed());
+                assert_eq!(
+                    attempt.quiescence(),
+                    cap_recording::instant_recording::InstantQuiescence::Joined
+                );
+                session.update(cx, |session, cx| session.stop(cx));
+                cx.spawn(async move |cx| {
+                    for _ in 0..500 {
+                        if session.read_with(cx, |session, _| session.phase) == Phase::Idle {
+                            break;
+                        }
+                        cx.background_executor()
+                            .timer(Duration::from_millis(10))
+                            .await;
+                    }
+                    cx.update(|cx| {
+                        cx.quit();
+                        let session = session.read(cx);
+                        assert_eq!(session.phase, Phase::Idle);
+                        assert!(session.error.is_none());
+                        assert!(session.start_gate.is_none());
+                    });
+                })
+                .detach();
+            });
+        }
+    }
 
     #[test]
     fn countdown_ticks_until_the_final_step_before_start() {

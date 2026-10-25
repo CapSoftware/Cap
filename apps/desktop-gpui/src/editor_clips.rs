@@ -1936,6 +1936,7 @@ impl PreparedMp4Import {
             start_time: Some(0.0),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         });
         Ok(Self {
             target,

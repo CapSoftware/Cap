@@ -34,6 +34,7 @@ import {
 	uploadFileToStorage,
 	uploadToS3,
 } from "../../lib/media-video";
+import { ensureTempDir, getTempDir } from "../../lib/temp-files";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = join(FIXTURES_DIR, "test-with-audio.mp4");
@@ -511,6 +512,78 @@ describe("generatePreviewGif integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test.each([false, true])(
+		"rejects cancelled video processing with remuxOnly=%s",
+		async (remuxOnly) => {
+			const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+			const controller = new AbortController();
+			const reason = new Error("Recording worker lease expired");
+			controller.abort(reason);
+			const outcome = await processVideo(
+				TEST_VIDEO_WITH_AUDIO,
+				metadata,
+				{ remuxOnly },
+				undefined,
+				controller.signal,
+			).then(
+				(output) => {
+					tempFiles.push(output.path);
+					return output;
+				},
+				(error: unknown) => error,
+			);
+			expect(outcome).toBe(reason);
+		},
+	);
+
+	test("rejects cancellation during video processing setup", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const controller = new AbortController();
+		const reason = new Error("Recording worker lease expired");
+		const processing = processVideo(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata,
+			{},
+			undefined,
+			controller.signal,
+		);
+		queueMicrotask(() => controller.abort(reason));
+		const outcome = await processing.then(
+			(output) => {
+				tempFiles.push(output.path);
+				return output;
+			},
+			(error: unknown) => error,
+		);
+		expect(outcome).toBe(reason);
+	});
+
+	test("rejects cancellation during video progress and removes the output", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const controller = new AbortController();
+		const reason = new Error("Recording worker lease expired");
+		await ensureTempDir();
+		const existingFiles = new Set(readdirSync(getTempDir()));
+		const outcome = await processVideo(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata,
+			{ remuxOnly: true },
+			() => controller.abort(reason),
+			controller.signal,
+		).then(
+			(output) => {
+				tempFiles.push(output.path);
+				return output;
+			},
+			(error: unknown) => error,
+		);
+		expect(controller.signal.aborted).toBe(true);
+		expect(outcome).toBe(reason);
+		expect(
+			readdirSync(getTempDir()).filter((name) => !existingFiles.has(name)),
+		).toEqual([]);
+	});
+
 	test.each(["libvpx", "libvpx-vp9"])(
 		"preserves the playable ending of sparse %s screen recordings",
 		async (codec) => {

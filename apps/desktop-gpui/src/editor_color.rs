@@ -35,7 +35,7 @@
 //! Nine 216x122 tiles are generated once, on first paint, and cached for the
 //! process: the catalogue is static, so nothing can invalidate them.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use cap_gpui_kernels::texture::{Filter, Overlay};
 use cap_project::{ColorCorrection, ProjectConfiguration};
@@ -505,16 +505,15 @@ impl EditorWindow {
         });
     }
 
-    /// The tile grid's images, generated once per process.
-    fn preset_image(&self, index: usize) -> Option<Arc<RenderImage>> {
+    fn preset_image(index: usize) -> Option<Arc<RenderImage>> {
         let preset = COLOR_CORRECTION_PRESETS.get(index)?;
-        let mut cache = self.sidebar.grade_previews.borrow_mut();
-        if let Some(image) = cache.get(preset.id) {
-            return Some(image.clone());
-        }
-        let image = preset_preview(preset, PREVIEW_WIDTH, PREVIEW_HEIGHT);
-        cache.insert(preset.id, image.clone());
-        Some(image)
+        static PREVIEWS: [OnceLock<Arc<RenderImage>>; COLOR_CORRECTION_PRESETS.len()] =
+            [const { OnceLock::new() }; COLOR_CORRECTION_PRESETS.len()];
+        Some(
+            PREVIEWS[index]
+                .get_or_init(|| preset_preview(preset, PREVIEW_WIDTH, PREVIEW_HEIGHT))
+                .clone(),
+        )
     }
 
     /// The whole section: the preset grid, Grain, the screen-only "Apply to
@@ -577,7 +576,7 @@ impl EditorWindow {
                                 .h(px(60.75))
                                 .rounded(px(6.))
                                 .overflow_hidden()
-                                .children(self.preset_image(index).map(|image| {
+                                .children(Self::preset_image(index).map(|image| {
                                     img(image).size_full().object_fit(gpui::ObjectFit::Fill)
                                 })),
                         )
@@ -678,6 +677,24 @@ mod tests {
         SCENE_ANGLE, SCENE_STOPS, apply_filter, apply_filters, composite_overlay, gradient_color,
         gradient_position, overlay_blend, vignette_alpha,
     };
+
+    #[test]
+    fn cached_previews_preserve_pixels_and_share_images() {
+        for (index, preset) in COLOR_CORRECTION_PRESETS.iter().enumerate() {
+            let image = EditorWindow::preset_image(index).unwrap();
+            let expected = preset_preview(preset, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+            assert_eq!(image.as_bytes(0), expected.as_bytes(0));
+            assert!(Arc::ptr_eq(
+                &image,
+                &EditorWindow::preset_image(index).unwrap(),
+            ));
+            let id = image.id;
+            drop(image);
+            assert_eq!(EditorWindow::preset_image(index).unwrap().id, id);
+        }
+        assert!(EditorWindow::preset_image(COLOR_CORRECTION_PRESETS.len()).is_none());
+        assert!(EditorWindow::preset_image(usize::MAX).is_none());
+    }
 
     #[test]
     fn the_catalogue_matches_the_source() {
