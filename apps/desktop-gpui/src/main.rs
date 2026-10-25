@@ -292,6 +292,7 @@ fn main() {
     crash_capture::install(&diagnostics::logs_dir());
 
     single_instance::acquire();
+    crash_capture::begin_session(&diagnostics::logs_dir());
     if cfg!(debug_assertions) {
         store::mark_handoff_session();
     }

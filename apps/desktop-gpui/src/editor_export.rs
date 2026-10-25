@@ -1325,9 +1325,13 @@ impl EditorWindow {
                     }
                 }
                 Ok(Err(error)) => {
-                    tracing::error!(error, "share export failed");
                     let cancelled = !is_resource_stop(&error)
                         && (error == "Export cancelled" || cancel.load(Ordering::Relaxed));
+                    if cancelled {
+                        tracing::info!(error, "share export cancelled");
+                    } else {
+                        tracing::error!(error, "share export failed");
+                    }
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             if cancelled {

@@ -32,11 +32,15 @@ const PREVIOUS_STDERR_FILE: &str = "cap-gpui.log.stderr-previous";
 const SESSION_FILE: &str = "cap-gpui.session";
 /// A crash loop must not fill the disk.
 const MAX_CRASH_FILE_BYTES: u64 = 512 * 1024;
+/// A native library that keeps complaining must not either; the upload only
+/// carries the tail.
+const MAX_STDERR_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 static CRASH_LOG: OnceLock<File> = OnceLock::new();
 static SESSION_MARKER: OnceLock<PathBuf> = OnceLock::new();
 
 /// Call once, right after logging starts and before any other thread work.
+/// The session itself starts in [`begin_session`].
 pub fn install(logs_dir: &Path) {
     let _ = std::fs::create_dir_all(logs_dir);
     let crash_path = logs_dir.join(CRASH_FILE);
@@ -53,16 +57,18 @@ pub fn install(logs_dir: &Path) {
         }
         Err(error) => tracing::warn!(%error, "could not open the crash record file"),
     }
-    let owns_session = report_previous_session(logs_dir);
     install_panic_hook();
     native::install();
-    // A second instance hands off and exits; the running one keeps its files.
-    if owns_session {
-        capture_stderr(logs_dir);
-    }
 }
 
-/// Clears the session marker; call from the app's quit path.
+/// Call once this process holds the single-instance lock: a second launch
+/// hands off and exits before it can touch the running instance's marker or
+/// stderr file, so whatever marker is left belongs to a session that is gone.
+pub fn begin_session(logs_dir: &Path) {
+    report_previous_session(logs_dir);
+    capture_stderr(logs_dir);
+}
+
 pub fn mark_clean_exit() {
     if let Some(marker) = SESSION_MARKER.get() {
         let _ = std::fs::remove_file(marker);
@@ -79,22 +85,14 @@ fn record(text: &str) {
     }
 }
 
-/// False when another running Cap owns the session marker.
-fn report_previous_session(logs_dir: &Path) -> bool {
+fn report_previous_session(logs_dir: &Path) {
     let marker = logs_dir.join(SESSION_FILE);
-    let previous = std::fs::read_to_string(&marker).ok();
-    match classify_previous(previous.as_deref(), std::process::id(), process_alive) {
-        // Another Cap is running and owns the marker: this launch is a second
-        // instance about to hand off and exit, and must not overwrite it.
-        Previous::Running => return false,
-        Previous::Unclean(previous) => {
-            tracing::error!(previous = %previous, "the previous Cap session ended without a clean quit");
-            record(&format!(
-                "{} previous session ended without a clean quit: {previous}\n",
-                now()
-            ));
-        }
-        Previous::None => {}
+    if let Some(previous) = previous_session(std::fs::read_to_string(&marker).ok().as_deref()) {
+        tracing::error!(previous = %previous, "the previous Cap session ended without a clean quit");
+        record(&format!(
+            "{} previous session ended without a clean quit: {previous}\n",
+            now()
+        ));
     }
     let contents = format!(
         "pid={} started={} version={}\n",
@@ -105,65 +103,14 @@ fn report_previous_session(logs_dir: &Path) -> bool {
     if std::fs::write(&marker, contents).is_ok() {
         let _ = SESSION_MARKER.set(marker);
     }
-    true
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Previous {
-    None,
-    Running,
-    Unclean(String),
-}
-
-fn classify_previous(marker: Option<&str>, own_pid: u32, alive: impl Fn(u32) -> bool) -> Previous {
-    let Some(marker) = marker.map(str::trim).filter(|marker| !marker.is_empty()) else {
-        return Previous::None;
-    };
-    let pid = marker
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("pid="))
-        .and_then(|pid| pid.parse::<u32>().ok());
-    match pid {
-        Some(pid) if pid != own_pid && alive(pid) => Previous::Running,
-        _ => Previous::Unclean(marker.to_string()),
-    }
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    // Signal 0 checks existence; EPERM still means the process is there.
-    unsafe { libc::kill(pid, 0) == 0 || *libc_errno() == libc::EPERM }
-}
-
-#[cfg(target_os = "linux")]
-unsafe fn libc_errno() -> *mut libc::c_int {
-    unsafe { libc::__errno_location() }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn libc_errno() -> *mut libc::c_int {
-    unsafe { libc::__error() }
-}
-
-#[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, STILL_ACTIVE},
-        System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
-    };
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut code = 0u32;
-        let alive = GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
-        CloseHandle(handle);
-        alive
-    }
+/// The marker a session left behind, which only a clean quit removes.
+fn previous_session(marker: Option<&str>) -> Option<String> {
+    marker
+        .map(str::trim)
+        .filter(|marker| !marker.is_empty())
+        .map(str::to_owned)
 }
 
 fn install_panic_hook() {
@@ -211,10 +158,30 @@ fn capture_stderr(logs_dir: &Path) {
     if path.exists() {
         let _ = std::fs::rename(&path, logs_dir.join(PREVIOUS_STDERR_FILE));
     }
-    let Ok(file) = File::create(&path) else {
+    // Append mode, so writes land at the end again after a trim.
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
     native::redirect_stderr(file);
+    let _ = std::thread::Builder::new()
+        .name("cap-stderr-limit".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                trim_if_over(&path, MAX_STDERR_FILE_BYTES);
+            }
+        });
+}
+
+fn trim_if_over(path: &Path, max: u64) -> bool {
+    if !std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > max) {
+        return false;
+    }
+    OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_len(0))
+        .is_ok()
 }
 
 #[cfg(unix)]
@@ -434,7 +401,25 @@ mod native {
         }
     }
 
+    unsafe extern "C" {
+        fn _open_osfhandle(handle: isize, flags: i32) -> i32;
+        fn _dup2(from: i32, to: i32) -> i32;
+    }
+
+    const O_APPEND: i32 = 0x0008;
+
+    /// Rust and `GetStdHandle` callers follow the standard handle; native
+    /// libraries writing `fprintf(stderr, ...)` go through the C runtime's
+    /// descriptor 2, which needs its own redirect.
     pub fn redirect_stderr(file: File) {
+        if let Ok(crt) = file.try_clone() {
+            unsafe {
+                let descriptor = _open_osfhandle(crt.into_raw_handle() as isize, O_APPEND);
+                if descriptor >= 0 {
+                    _dup2(descriptor, 2);
+                }
+            }
+        }
         unsafe {
             SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle() as HANDLE);
         }
@@ -541,30 +526,38 @@ mod native {
 
 #[cfg(test)]
 mod marker_tests {
-    use super::{Previous, classify_previous};
+    use super::{previous_session, trim_if_over};
+    use std::io::Write as _;
 
     #[test]
-    fn a_marker_left_behind_is_an_unclean_end_unless_its_process_still_runs() {
+    fn any_marker_left_behind_is_an_unclean_end() {
         let marker = "pid=41 started=2026-10-25T00:00:00.000Z version=0.6.1";
-        assert_eq!(classify_previous(None, 7, |_| false), Previous::None);
-        assert_eq!(classify_previous(Some(" \n"), 7, |_| false), Previous::None);
+        assert_eq!(previous_session(None), None);
+        assert_eq!(previous_session(Some(" \n")), None);
+        assert_eq!(previous_session(Some(marker)), Some(marker.into()));
         assert_eq!(
-            classify_previous(Some(marker), 7, |_| false),
-            Previous::Unclean(marker.into())
+            previous_session(Some(&format!("{marker}\n"))),
+            Some(marker.into())
         );
-        assert_eq!(
-            classify_previous(Some(marker), 7, |pid| pid == 41),
-            Previous::Running
-        );
-        // A reused pid that is now this process is still a dead session.
-        assert_eq!(
-            classify_previous(Some(marker), 41, |_| true),
-            Previous::Unclean(marker.into())
-        );
-        assert_eq!(
-            classify_previous(Some("garbage"), 7, |_| true),
-            Previous::Unclean("garbage".into())
-        );
+    }
+
+    /// The writer keeps its handle open across a trim and must keep writing
+    /// at the new end, not at its old offset.
+    #[test]
+    fn stderr_trims_once_over_the_limit_and_keeps_appending() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(super::STDERR_FILE);
+        let mut writer = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writer.write_all(&[b'x'; 64]).unwrap();
+        assert!(!trim_if_over(&path, 100));
+        writer.write_all(&[b'x'; 64]).unwrap();
+        assert!(trim_if_over(&path, 100));
+        writer.write_all(b"after the trim\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after the trim\n");
     }
 }
 
@@ -577,12 +570,13 @@ mod process_tests {
     const CHILD: &str = "CAP_CRASH_CAPTURE_CHILD";
     const LOGS: &str = "CAP_CRASH_CAPTURE_LOGS";
 
-    /// In the child: install the handlers, then die the way `kind` says.
     fn child(kind: &str) -> bool {
         if std::env::var(CHILD).as_deref() != Ok(kind) {
             return false;
         }
-        super::install(Path::new(&std::env::var(LOGS).unwrap()));
+        let logs = std::env::var(LOGS).unwrap();
+        super::install(Path::new(&logs));
+        super::begin_session(Path::new(&logs));
         match kind {
             "fault" => unsafe { std::ptr::write_volatile(std::ptr::null_mut::<u8>(), 1) },
             "overflow" => {
@@ -595,6 +589,21 @@ mod process_tests {
                 std::hint::black_box(recurse(0));
             }
             "panic" => panic!("crash capture test panic"),
+            "native-stderr" => {
+                let line = b"written by native code\n";
+                #[cfg(unix)]
+                unsafe {
+                    libc::write(2, line.as_ptr().cast(), line.len());
+                }
+                #[cfg(windows)]
+                unsafe {
+                    unsafe extern "C" {
+                        fn _write(descriptor: i32, buffer: *const u8, count: u32) -> i32;
+                    }
+                    _write(2, line.as_ptr(), line.len() as u32);
+                }
+                std::process::exit(0);
+            }
             _ => {}
         }
         true
@@ -603,6 +612,7 @@ mod process_tests {
     struct Died {
         crashes: String,
         stderr: String,
+        captured_stderr: String,
         success: bool,
     }
 
@@ -620,6 +630,7 @@ mod process_tests {
         Died {
             crashes: read(super::CRASH_FILE),
             stderr: read(super::STDERR_FILE) + &String::from_utf8_lossy(&status.stderr),
+            captured_stderr: read(super::STDERR_FILE),
             success: status.status.success(),
         }
     }
@@ -645,6 +656,24 @@ mod process_tests {
             died.crashes.contains("unhandled exception 0xc0000005"),
             "{}",
             died.crashes
+        );
+    }
+
+    /// What a native library prints through the C runtime's stderr.
+    #[test]
+    fn native_stderr_writes_reach_the_captured_file() {
+        if child("native-stderr") {
+            return;
+        }
+        let died = run(
+            "crash_capture::process_tests::native_stderr_writes_reach_the_captured_file",
+            "native-stderr",
+        );
+        assert!(died.success);
+        assert!(
+            died.captured_stderr.contains("written by native code"),
+            "{}",
+            died.stderr
         );
     }
 
