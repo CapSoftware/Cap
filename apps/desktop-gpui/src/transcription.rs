@@ -1791,20 +1791,62 @@ pub fn transcribe_blocking(
     }
 
     transcribe_project_with(project_path, |audio_path| {
-        let _guard = lock_transcription_worker_slot();
-        if is_parakeet_model(model) {
-            tracing::info!("Using Parakeet TDT engine");
-            let result = process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref());
-            schedule_parakeet_release();
-            result
-        } else {
-            tracing::info!("Using Whisper engine");
-            let hints = transcription_hints();
-            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-            let result = process_with_whisper(audio_path, context, language, &hints);
-            release_whisper_context_after_transcription();
-            result
+        transcribe_audio_with_model(audio_path, model, language)
+    })
+}
+
+fn transcribe_audio_with_model(
+    audio_path: &Path,
+    model: &str,
+    language: &str,
+) -> Result<Vec<CaptionSegment>, String> {
+    let model_file = model_path(model);
+    let _guard = lock_transcription_worker_slot();
+    if is_parakeet_model(model) {
+        tracing::info!("Using Parakeet TDT engine");
+        let result = process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref());
+        schedule_parakeet_release();
+        result
+    } else {
+        tracing::info!("Using Whisper engine");
+        let hints = transcription_hints();
+        let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+        let result = process_with_whisper(audio_path, context, language, &hints);
+        release_whisper_context_after_transcription();
+        result
+    }
+}
+
+pub fn prepare_filler_captions_blocking(
+    project_path: &Path,
+    model: &str,
+    language: &str,
+    existing: Option<Vec<CaptionSegment>>,
+) -> Result<Vec<CaptionSegment>, String> {
+    if existing.is_none() && !model_files_present(model) {
+        return Err("Download a transcription model before removing filler words.".into());
+    }
+    transcribe_project_with(project_path, |audio_path| {
+        let mut segments = match existing {
+            Some(segments) => segments,
+            None => transcribe_audio_with_model(audio_path, model, language)?,
+        };
+        let mut reader = hound::WavReader::open(audio_path)
+            .map_err(|error| format!("Failed to open cleanup audio: {error}"))?;
+        let spec = reader.spec();
+        if spec.channels != 1
+            || spec.sample_rate != WHISPER_SAMPLE_RATE
+            || spec.bits_per_sample != 16
+        {
+            return Err("Expected 16 kHz mono PCM audio for filler timing.".into());
         }
+        let samples = reader
+            .samples::<i16>()
+            .map(|sample| sample.map(|sample| f32::from(sample) / 32768.0))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read cleanup audio: {error}"))?;
+        crate::editor_filler::refine_word_ends(&mut segments, &samples, spec.sample_rate)?;
+        Ok(segments)
     })
 }
 

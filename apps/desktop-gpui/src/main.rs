@@ -32,6 +32,7 @@ mod editor_color;
 mod editor_crop;
 mod editor_edits;
 mod editor_export;
+mod editor_filler;
 mod editor_hover_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
