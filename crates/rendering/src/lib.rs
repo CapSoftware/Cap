@@ -2674,6 +2674,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let device_phase = readiness::Phase::start("wgpu.device");
     let (device, queue) = adapter.request_device(&device_descriptor).await?;
     device_phase.finish("returned");
+    log_uncaptured_errors(&device, "cap-rendering-device");
     Ok(SharedWgpuDevice {
         instance,
         adapter,
@@ -2681,6 +2682,33 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
         queue,
         is_software_adapter,
     })
+}
+
+/// wgpu panics on an error nothing captured. After a device is lost (a driver
+/// reset, sleep, a GPU switch) every call on it fails validation, so that
+/// default ended the app at the next frame or export. Log those errors
+/// instead, at most a few per second; the operation that hit them fails on
+/// its own (a readback that cannot map, a frame that never presents) and the
+/// next device request gets a new device.
+pub fn log_uncaptured_errors(device: &wgpu::Device, label: &'static str) {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    let last = Mutex::new(None::<std::time::Instant>);
+    let suppressed = AtomicU64::new(0);
+    device.on_uncaptured_error(Box::new(move |error| {
+        let now = std::time::Instant::now();
+        let mut last = last.lock().unwrap_or_else(|error| error.into_inner());
+        if last.is_some_and(|last| now.duration_since(last) < MIN_INTERVAL) {
+            suppressed.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        *last = Some(now);
+        let suppressed = suppressed.swap(0, Ordering::Relaxed);
+        tracing::error!(device = label, suppressed, %error, "uncaptured wgpu error");
+    }));
 }
 
 #[derive(Clone, Debug)]
