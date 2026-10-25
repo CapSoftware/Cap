@@ -69,6 +69,8 @@ struct GpuImporter {
     texture: Option<glow::Texture>,
     /// The kernel driver of the GPU's render node (`amdgpu`, `nvidia`, ...).
     driver: Option<String>,
+    /// The GPU's render node, which identifies it between recordings.
+    node: Option<String>,
 }
 
 // The EGL context is made current on whichever single thread uses the
@@ -83,6 +85,17 @@ pub(super) struct DmaBufImporter {
     gpus: Vec<GpuImporter>,
     supported: Vec<std::collections::HashMap<u32, Vec<u64>>>,
     last: usize,
+    remembered: bool,
+}
+
+/// The render node of the GPU that last read a screencast frame, kept for the
+/// rest of the session.
+static LAST_IMPORT_NODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn remembered_gpu(nodes: &[Option<&str>], remembered: Option<&str>) -> usize {
+    remembered
+        .and_then(|remembered| nodes.iter().position(|node| *node == Some(remembered)))
+        .unwrap_or(0)
 }
 
 impl DmaBufImporter {
@@ -103,10 +116,23 @@ impl DmaBufImporter {
             return Err(last_error.unwrap_or_else(|| anyhow!("EGL lists no devices")));
         }
         let supported = gpus.iter().map(|_| Default::default()).collect();
+        // Several GPUs of one vendor can't be told apart by the frame's
+        // exporter; the one that read the previous recording is tried first.
+        let last = remembered_gpu(
+            &gpus
+                .iter()
+                .map(|gpu| gpu.node.as_deref())
+                .collect::<Vec<_>>(),
+            LAST_IMPORT_NODE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref(),
+        );
         Ok(Self {
             gpus,
             supported,
-            last: 0,
+            last,
+            remembered: false,
         })
     }
 
@@ -159,6 +185,13 @@ impl DmaBufImporter {
             match self.gpus[gpu].read_rgba(fd, fourcc, modifier, width, height, offset, stride, out)
             {
                 Ok(()) => {
+                    if self.last != gpu || !self.remembered {
+                        *LAST_IMPORT_NODE
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            self.gpus[gpu].node.clone();
+                        self.remembered = true;
+                    }
                     self.last = gpu;
                     return Ok(());
                 }
@@ -218,15 +251,15 @@ impl GpuImporter {
                 let driver = render_node_driver(&node);
                 let extensions = device_string(device, egl::EXTENSIONS).unwrap_or_default();
                 // Opening a device no EGL vendor can drive only logs errors.
-                drivable(driver.as_deref(), &extensions).then_some((device, driver))
+                drivable(driver.as_deref(), &extensions).then_some((device, driver, Some(node)))
             })
             .collect::<Vec<_>>();
         let candidates = if gpus.is_empty() {
-            devices.iter().map(|&device| (device, None)).collect()
+            devices.iter().map(|&device| (device, None, None)).collect()
         } else {
             gpus
         };
-        let Some((device, driver)) = candidates.get(index).cloned() else {
+        let Some((device, driver, node)) = candidates.get(index).cloned() else {
             return Ok(None);
         };
         let raw =
@@ -283,6 +316,7 @@ impl GpuImporter {
             framebuffer: None,
             texture: None,
             driver,
+            node,
         };
         importer.make_current()?;
         importer.release();
@@ -539,6 +573,19 @@ mod tests {
         ));
         assert!(drivable(Some("amdgpu"), "EGL_EXT_device_drm"));
         assert!(drivable(None, ""));
+    }
+
+    #[test]
+    fn the_gpu_that_read_the_last_recording_is_tried_first() {
+        let nodes = [
+            Some("/dev/dri/renderD128"),
+            Some("/dev/dri/renderD129"),
+            Some("/dev/dri/renderD131"),
+        ];
+        assert_eq!(remembered_gpu(&nodes, Some("/dev/dri/renderD131")), 2);
+        assert_eq!(remembered_gpu(&nodes, None), 0);
+        // A GPU that has gone since (unplugged, driver reloaded) is ignored.
+        assert_eq!(remembered_gpu(&nodes, Some("/dev/dri/renderD130")), 0);
     }
 
     #[test]
