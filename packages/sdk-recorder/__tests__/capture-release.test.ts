@@ -98,7 +98,9 @@ test.each(["recording", "paused", "upload failure"] as const)(
 					return Response.json({ uploadId: "upload" });
 				}
 				if (input.endsWith("/presign-part")) {
-					return Response.json({ presignedUrl: "https://fixture.invalid/part" });
+					return Response.json({
+						presignedUrl: "https://fixture.invalid/part",
+					});
 				}
 				if (input === "https://fixture.invalid/part") {
 					uploaded = await new Response(init?.body).text();
