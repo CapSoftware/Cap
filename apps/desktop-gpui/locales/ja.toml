@@ -99,7 +99,10 @@ system_default = "システムのデフォルト（{language}）"
 title = "言語"
 
 [settings.general.appearance]
+dark = "ダーク"
 description = "Capの外観をシステムのテーマに合わせるか、固定の外観を選択します。"
+light = "ライト"
+system = "システム"
 title = "外観"
 
 [settings.general.app]
