@@ -133,7 +133,6 @@ export function withStartupNotify(entry) {
 	);
 }
 
-/** Marks every Cap desktop entry under `root` for startup notification. */
 export async function notifyStartupInDesktopEntries(root, entries) {
 	const changed = [];
 	for (const entry of entries) {

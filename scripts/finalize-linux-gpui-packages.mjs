@@ -22,7 +22,6 @@ import {
 
 const DESKTOP_ENTRY = "usr/share/applications/Cap.desktop";
 
-/** `md5sums` with the line for each of `files` recomputed from `root`. */
 export async function withUpdatedChecksums(md5sums, root, files) {
 	const lines = md5sums.split("\n");
 	for (const file of files) {

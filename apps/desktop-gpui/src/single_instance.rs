@@ -912,6 +912,20 @@ fn send_linux_reopen_with_token(
     Ok(())
 }
 
+/// Whether the running Cap hung up without acknowledging: how an instance from
+/// before activation tokens rejects their frame, and how a current one fails
+/// before it queues anything. A timeout may come after the actions were
+/// queued, so resending then could run them twice.
+#[cfg(target_os = "linux")]
+fn closed_without_queueing(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+    )
+}
+
 #[cfg(target_os = "linux")]
 fn forward_linux_reopen(path: &Path, pid: u32) -> std::io::Result<()> {
     let actions = linux_reopen_action_payload(std::env::args().skip(1))?;
@@ -928,7 +942,7 @@ fn forward_linux_reopen(path: &Path, pid: u32) -> std::io::Result<()> {
                 tracing::info!("forwarding the launcher's activation token");
             }
             let result = match send_linux_reopen_with_token(address.clone(), owner, &actions, token.as_deref()) {
-                Err(error) if token.is_some() => {
+                Err(error) if token.is_some() && closed_without_queueing(&error) => {
                     tracing::info!(%error, "the running Cap refused the activation token; reopening without it");
                     send_linux_reopen(address, owner, &actions)
                 }
@@ -2520,6 +2534,43 @@ mod linux_reopen_tests {
         let mut payload = (raw.len() as u32).to_be_bytes().to_vec();
         payload.extend_from_slice(raw);
         payload
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_hang_up_resends_the_request_without_its_token() {
+        use std::io::{Read, Write};
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let reply = |server: Box<dyn FnOnce(std::os::unix::net::UnixStream) + Send>| {
+            let (mut client, server_end) = std::os::unix::net::UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+                .unwrap();
+            let serving = std::thread::spawn(move || server(server_end));
+            write_linux_reopen_request(&mut client, owner, &[], Some("token")).unwrap();
+            let mut ack = [0];
+            let error = client.read_exact(&mut ack).unwrap_err();
+            serving.join().unwrap();
+            error
+        };
+
+        // An instance from before activation tokens reads the frame, fails to
+        // parse it and hangs up.
+        let rejected = reply(Box::new(|mut stream| {
+            let mut frame = [0; 8];
+            stream.read_exact(&mut frame).unwrap();
+            drop(stream);
+        }));
+        assert!(closed_without_queueing(&rejected), "{rejected:?}");
+
+        // One that queued the actions but has not acknowledged them yet.
+        let slow = reply(Box::new(|mut stream| {
+            let mut frame = [0; 8];
+            stream.read_exact(&mut frame).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = stream.write_all(&[1]);
+        }));
+        assert!(!closed_without_queueing(&slow), "{slow:?}");
     }
 
     /// A relaunch from a launcher brings an activation token, which the
