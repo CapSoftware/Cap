@@ -4,12 +4,6 @@ import { classNames } from "@cap/utils/helpers";
 import type { ReactNode } from "react";
 import { INVOICE, InvoicePage, PRESENTER, Webcam } from "./subjects";
 
-/**
- * The Cap share page (apps/web/app/s/[videoId]) rebuilt at a fixed 1200px
- * width: header with title, owner and the blue Share button, the player in
- * its white card on the grey page, the Player/Timeline toggle and reaction
- * bar, and the Comments / Summary / Transcript sidebar.
- */
 export const SHARE_W = 1200;
 export const SHARE_URL = "Cap.so/s/m4k8x2qz";
 export const CAP_TITLE = "Sending an invoice in Ledgerly";
@@ -53,7 +47,6 @@ export const stamp = (seconds: number) =>
 const clock = (seconds: number) =>
 	`${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
-/** What the recording looks like inside the player. */
 export const RecordingFrame = ({
 	playing,
 	pageScale,
@@ -224,7 +217,6 @@ export const SharePage = ({
 	playing: boolean;
 	views: number;
 	sidebar: ReactNode;
-	/** Reactions rising off the bar: emoji and 0..1 progress. */
 	floating?: { emoji: string; k: number; x: number }[];
 	pressed?: string;
 }) => (

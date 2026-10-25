@@ -87,7 +87,6 @@ export const sampleAt = (samples: number[][], ms: number, sampleMs = 4) => {
 	return a.map((v, n) => v + ((b[n] ?? v) - v) * k);
 };
 
-/** Minimum-jerk easing, the shape of a real hand moving a mouse. */
 export const minJerk = (s: number) => {
 	const x = Math.min(1, Math.max(0, s));
 	return x * x * x * (10 - 15 * x + 6 * x * x);
@@ -95,7 +94,6 @@ export const minJerk = (s: number) => {
 
 export type Waypoint = { at: number; x: number; y: number; hold?: number };
 
-/** A recorded-looking raw mouse path through timed waypoints. */
 export const rawPath = (points: Waypoint[]) => (ms: number) => {
 	const first = points[0];
 	if (!first) return [0, 0];
@@ -111,11 +109,9 @@ export const rawPath = (points: Waypoint[]) => (ms: number) => {
 	return [prev.x, prev.y];
 };
 
-/** 0..1 through a click press, for the cursor's shrink and release. */
 export const clickShrink = (ms: number, downAt: number) => {
 	const t = ms - downAt;
 	if (t < -CLICK.ms || t > CLICK.ms * 2) return 1;
-	// Shrinks into the press, springs back out on release.
 	const k =
 		t < 0 ? 1 + t / CLICK.ms : t < CLICK.ms ? 0 : (t - CLICK.ms) / CLICK.ms;
 	const eased = Math.min(1, Math.max(0, k));

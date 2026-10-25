@@ -9,7 +9,6 @@ import { Avatar, RecordingFrame } from "./share";
 
 export { CANVAS };
 
-/** Warm surface for this section only, holding the player and the AI panel. */
 const SURFACE = { x: 70, y: 34, w: 900, h: 470 } as const;
 const PLAYER = { x: 32, y: 32, w: 520 } as const;
 const PANEL = { x: 572, y: 32, w: 296, h: 406 } as const;
@@ -57,7 +56,6 @@ const Surface = ({ children }: { children: ReactNode }) => (
 	</div>
 );
 
-/** The share page's player card: title, owner, video and its timeline. */
 const Player = ({
 	seconds,
 	playing,
@@ -69,7 +67,6 @@ const Player = ({
 	seconds: number;
 	playing: boolean;
 	title: ReactNode;
-	/** How many chapters have landed, drawn as markers on the timeline. */
 	ticks?: number;
 	caption?: string;
 	chapter?: string;
@@ -138,7 +135,6 @@ const Player = ({
 	);
 };
 
-/** The AI side of the share page, in its own card next to the player. */
 const Panel = ({
 	heading,
 	status,
@@ -194,8 +190,6 @@ const Typed = ({ text, k }: { text: string; k: number }) => {
 	);
 };
 
-// Summary: the raw file name turns into a real title, then the summary
-// writes itself underneath.
 const SummaryView = ({ t, playing }: { t: number; playing: boolean }) => {
 	const titleK = seg(t, 500, 1300);
 	const bodyK = Math.min(1, Math.max(0, (t - 1400) / 3400));
@@ -232,7 +226,6 @@ const SummaryView = ({ t, playing }: { t: number; playing: boolean }) => {
 	);
 };
 
-// Chapters: markers land on the timeline, then a click jumps to one.
 const ChaptersView = ({ t, playing }: { t: number; playing: boolean }) => {
 	const shown = Math.min(
 		CHAPTERS.length,
@@ -296,7 +289,6 @@ const ChaptersView = ({ t, playing }: { t: number; playing: boolean }) => {
 	);
 };
 
-// Transcript: the line being spoken lights up and shows as a caption.
 const TranscriptView = ({ t, playing }: { t: number; playing: boolean }) => {
 	const seconds = Math.min(23.5, 1.5 + t / 260);
 	const current = LINES.findLastIndex(([at]) => at <= seconds);

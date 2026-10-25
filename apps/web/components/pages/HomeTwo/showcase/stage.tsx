@@ -21,8 +21,6 @@ type StageName =
 	| "ownership"
 	| "agents";
 
-// Each animated stage is its own chunk, fetched only when the section gets
-// close to the viewport, so none of it is in the initial page load.
 const STAGES: Record<StageName, ComponentType> = {
 	instant: lazy(() =>
 		import("./instant").then((m) => ({ default: m.InstantStage })),

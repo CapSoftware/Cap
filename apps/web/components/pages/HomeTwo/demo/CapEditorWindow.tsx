@@ -64,7 +64,6 @@ const WALLPAPERS = [
 ].map((city) => ({
 	id: city,
 	thumb: `/backgrounds/thumbs/${city}.webp`,
-	// 1280px copies: the editor stage never draws them wider than that.
 	full: `/backgrounds/landing/${city}.webp`,
 }));
 

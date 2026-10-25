@@ -7,13 +7,10 @@ export const CANVAS = { w: 640, h: 520 } as const;
 
 const INK = "#F43F5E";
 
-/** The window as it sits on screen before the capture. */
 const WIN = { x: 55, y: 96, scale: 0.78 } as const;
 
-/** The part of the invoice that gets captured, in page pixels. */
 const CROP = { x: 364, y: 277, w: 304, h: 133 } as const;
 
-/** Where the capture lands, on its background card. */
 const PAD = 34;
 const IMG = { x: 84, y: 172, w: 472 } as const;
 const SCALE_OUT = IMG.w / CROP.w;
@@ -25,7 +22,6 @@ const CARD = {
 	h: IMG_H + PAD * 2,
 };
 
-/** Page coordinates to stage coordinates, once the capture has landed. */
 const at = (px: number, py: number) => ({
 	x: IMG.x + (px - CROP.x) * SCALE_OUT,
 	y: IMG.y + (py - CROP.y) * SCALE_OUT,
@@ -99,7 +95,6 @@ const Arrow = ({
 	);
 };
 
-/** A rounded box that draws itself clockwise from the top left. */
 const Box = ({
 	x,
 	y,
@@ -231,7 +226,6 @@ const ScreenshotView = ({ t }: { t: number; playing: boolean }) => {
 					? "text"
 					: null;
 
-	// The capture flies from the selection to its spot on the card.
 	const crop = {
 		x: lerp(SEL.x, IMG.x, lift),
 		y: lerp(SEL.y, IMG.y, lift),
@@ -258,7 +252,6 @@ const ScreenshotView = ({ t }: { t: number; playing: boolean }) => {
 
 	return (
 		<div className="absolute inset-0 overflow-hidden">
-			{/* The window on screen, before the capture. */}
 			<div
 				className="absolute overflow-hidden rounded-[10px] shadow-[0_0_0_1px_rgba(0,0,0,0.08),0_18px_44px_-20px_rgba(17,24,39,0.45)]"
 				style={{
@@ -317,7 +310,6 @@ const ScreenshotView = ({ t }: { t: number; playing: boolean }) => {
 			) : null}
 			{t < 450 ? <Crosshair x={SEL.x} y={SEL.y} /> : null}
 
-			{/* The background card the capture lands on. */}
 			<div
 				className="absolute overflow-hidden"
 				style={{
@@ -333,7 +325,6 @@ const ScreenshotView = ({ t }: { t: number; playing: boolean }) => {
 				}}
 			/>
 
-			{/* The capture itself. */}
 			{t >= 1420 ? (
 				<div
 					className="absolute overflow-hidden bg-white"

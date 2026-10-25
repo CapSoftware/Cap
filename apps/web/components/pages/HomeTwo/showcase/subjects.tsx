@@ -11,14 +11,8 @@ export { PRESENTER };
 
 import { useVideo } from "../scenes/engine";
 
-/**
- * The thing being recorded in every demo: a small, real looking invoicing app.
- * Fixed 680x425 layout so scenes can aim the cursor, zooms and masks at exact
- * coordinates (see INVOICE_SPOTS).
- */
 export const INVOICE = { w: 680, h: 425 } as const;
 
-/** Rects in page pixels (top left corner, size). */
 export const INVOICE_SPOTS = {
 	send: { x: 524, y: 360, w: 128, h: 34 },
 	email: { x: 326, y: 140, w: 160, h: 20 },
@@ -50,10 +44,6 @@ const Field = ({
 	</div>
 );
 
-/**
- * A browser window's top bar in the visitor's OS: traffic lights and a
- * centred address on macOS, an address bar and caption buttons on Windows.
- */
 export const BrowserBar = ({
 	url,
 	className,
@@ -115,7 +105,6 @@ export const BrowserBar = ({
 	);
 };
 
-/** An app window's title bar with the visitor's OS window controls. */
 export const AppBar = ({
 	children,
 	className,
@@ -150,7 +139,6 @@ export const InvoicePage = ({
 	emailStyle,
 	chrome = true,
 }: {
-	/** 0..1 how far the button has flipped to its sent state. */
 	sent?: number;
 	press?: number;
 	emailStyle?: CSSProperties;
@@ -345,7 +333,6 @@ export const Ripple = ({
 }: {
 	x: number;
 	y: number;
-	/** 0..1 through the ripple, nothing drawn outside that range. */
 	k: number;
 	color?: string;
 }) =>
@@ -364,7 +351,6 @@ export const Ripple = ({
 		/>
 	);
 
-/** 1280px copies of the editor wallpapers (~60 KB each), sized for the stages. */
 export const WALLPAPERS = {
 	sf: "/backgrounds/landing/sf.webp",
 	santorini: "/backgrounds/landing/santorini.webp",
@@ -375,7 +361,6 @@ export const WALLPAPERS = {
 	rome: "/backgrounds/landing/rome.webp",
 } as const;
 
-/** 112px thumbnails for swatches, so a picker never pulls the full images. */
 export const thumbOf = (src: string) => src.replace(/\.webp$/, "-thumb.webp");
 
 export const Wallpaper = ({
@@ -391,7 +376,6 @@ export const Wallpaper = ({
 	/>
 );
 
-/** A label chip in the corner of an output frame, like the editor's own. */
 export const FrameChip = ({
 	children,
 	className,

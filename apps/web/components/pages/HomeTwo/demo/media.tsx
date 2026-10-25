@@ -8,10 +8,6 @@ export const SceneMediaProvider = SceneMediaContext.Provider;
 
 export const useSceneMedia = () => useContext(SceneMediaContext);
 
-/**
- * An 8 second 960x600 talking-head loop cut from a real Cap camera track:
- * AV1 (~100 KB) where supported, H.264 (~160 KB) otherwise, no audio.
- */
 export const PRESENTER = {
 	av1: "/videos/landing/presenter.webm",
 	mp4: "/videos/landing/presenter.mp4",

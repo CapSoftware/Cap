@@ -5,7 +5,6 @@ import {
 	Source_Serif_4,
 } from "next/font/google";
 
-// Variable: one file covers 400 and 500 instead of two ~50 KB statics.
 export const htSans = Instrument_Sans({
 	subsets: ["latin"],
 	display: "swap",
