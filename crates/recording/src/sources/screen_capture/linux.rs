@@ -778,15 +778,27 @@ impl DmaBufMapping {
                 .context("map the PipeWire screen capture DMA-BUF");
         }
         let mapping = Self { fd, pointer, len };
-        mapping.sync(DMA_BUF_SYNC_READ);
+        mapping
+            .sync(DMA_BUF_SYNC_READ)
+            .context("sync the PipeWire screen capture DMA-BUF for reading")?;
         Ok(mapping)
     }
 
-    /// Best effort: a buffer that is not a real DMA-BUF (memfd) has no sync.
-    fn sync(&self, flags: u64) {
+    /// The kernel's DMA-BUF read fence. A buffer that is not a DMA-BUF (a
+    /// memfd standing in for one) has none and answers ENOTTY.
+    fn sync(&self, flags: u64) -> std::io::Result<()> {
         let sync = flags;
-        unsafe {
-            libc::ioctl(self.fd, DMA_BUF_IOCTL_SYNC, &sync as *const u64);
+        loop {
+            let result = unsafe { libc::ioctl(self.fd, DMA_BUF_IOCTL_SYNC, &sync as *const u64) };
+            if result == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR | libc::EAGAIN) => continue,
+                Some(libc::ENOTTY) => return Ok(()),
+                _ => return Err(error),
+            }
         }
     }
 
@@ -797,7 +809,9 @@ impl DmaBufMapping {
 
 impl Drop for DmaBufMapping {
     fn drop(&mut self) {
-        self.sync(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END);
+        if let Err(error) = self.sync(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END) {
+            tracing::warn!(%error, "ending the PipeWire screen capture DMA-BUF read failed");
+        }
         unsafe {
             libc::munmap(self.pointer, self.len);
         }
