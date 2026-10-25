@@ -24,7 +24,10 @@ vi.mock("@/app/s/[videoId]/_components/tabs/SummaryEditor", () => ({
 	SummaryEditor: () => null,
 }));
 
+import SummaryChapters from "@/app/s/[videoId]/_components/SummaryChapters";
 import { Summary } from "@/app/s/[videoId]/_components/tabs/Summary";
+
+type Chapter = { title: string; start: number };
 
 let container: HTMLDivElement;
 let root: Root;
@@ -42,9 +45,10 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-const renderChapters = (chapters: { title: string; start: number }[]) => {
-	act(() => {
-		root.render(
+const chapterViews: [string, (chapters: Chapter[]) => React.ReactElement][] = [
+	[
+		"Summary tab",
+		(chapters) =>
 			React.createElement(Summary, {
 				videoId: "vid" as never,
 				ownerIsPro: true,
@@ -54,14 +58,35 @@ const renderChapters = (chapters: { title: string; start: number }[]) => {
 					aiGenerationStatus: "COMPLETE",
 				},
 			}),
-		);
-	});
-	return Array.from(container.querySelectorAll("button"))
-		.map((button) => button.textContent ?? "")
-		.filter((text) => /\d:\d\d/.test(text));
-};
+	],
+	[
+		"SummaryChapters",
+		(chapters) =>
+			React.createElement(SummaryChapters, {
+				isSummaryDisabled: false,
+				areChaptersDisabled: false,
+				handleSeek: () => {},
+				aiData: {
+					title: null,
+					summary: "A summary",
+					chapters,
+					aiGenerationStatus: "COMPLETE",
+				},
+				aiLoading: false,
+			}),
+	],
+];
 
-describe("Summary chapter timestamps", () => {
+describe.each(chapterViews)("%s chapter timestamps", (_name, view) => {
+	const renderChapters = (chapters: Chapter[]) => {
+		act(() => {
+			root.render(view(chapters));
+		});
+		return Array.from(container.querySelectorAll("button"))
+			.map((button) => button.textContent ?? "")
+			.filter((text) => /\d:\d\d/.test(text));
+	};
+
 	it("rolls over into hours for chapters past the hour mark", () => {
 		const rendered = renderChapters([
 			{ title: "Intro", start: 0 },
