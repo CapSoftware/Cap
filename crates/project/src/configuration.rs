@@ -1502,6 +1502,17 @@ impl OverlayKeyframes {
         }
     }
 
+    /// Moves every key by `seconds`, for when the segment's start moves but
+    /// the animation should stay where it is in output time.
+    pub fn shift(&mut self, seconds: f64) {
+        for key in self.position.iter_mut().chain(&mut self.size) {
+            key.time += seconds;
+        }
+        for key in &mut self.opacity {
+            key.time += seconds;
+        }
+    }
+
     /// Removes every property's key at `time`.
     pub fn remove_at(&mut self, time: f64) {
         let keep = |t: f64| (t - time).abs() > OVERLAY_KEYFRAME_MATCH_SECS;
@@ -1649,7 +1660,9 @@ pub struct TextSegment {
     /// segment edges when `layout` is not `Overlay`.
     #[serde(default = "TextSegment::default_layout_transition")]
     pub layout_transition: f64,
-    #[serde(default)]
+    // `default` after `skip_serializing_if`: specta reads them in order, and
+    // this keeps the generated TypeScript field optional.
+    #[serde(skip_serializing_if = "OverlayKeyframes::is_empty", default)]
     pub keyframes: OverlayKeyframes,
 }
 
@@ -2160,7 +2173,9 @@ pub struct ImageSegment {
     pub flip_x: bool,
     pub flip_y: bool,
     pub lock_aspect: bool,
-    #[serde(default)]
+    // `default` after `skip_serializing_if`: specta reads them in order, and
+    // this keeps the generated TypeScript field optional.
+    #[serde(skip_serializing_if = "OverlayKeyframes::is_empty", default)]
     pub keyframes: OverlayKeyframes,
 }
 
@@ -4168,8 +4183,7 @@ mod tests {
                 "path": "", "name": "Image", "center": { "x": 0.5, "y": 0.5 },
                 "size": { "x": 0.3, "y": 0.3 }, "opacity": 1.0,
                 "rotation": 0.0, "rounding": 0.0, "flipX": false,
-                "flipY": false, "lockAspect": true,
-                "keyframes": { "position": [], "size": [], "opacity": [] }
+                "flipY": false, "lockAspect": true
             })
         );
         assert_eq!(

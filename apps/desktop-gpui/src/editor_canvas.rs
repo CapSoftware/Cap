@@ -708,7 +708,7 @@ impl EditorWindow {
             for (index, segment) in timeline.image_segments.iter().enumerate() {
                 if exclude == CanvasSelection::Image(index)
                     || !segment.is_active_at(t)
-                    || segment.opacity <= 0.
+                    || segment.opacity_at(t) <= 0.
                 {
                     continue;
                 }
@@ -1188,7 +1188,8 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.image_segments.get(index))
                 .is_some_and(|segment| {
-                    segment.is_active_at(self.preview_or_playhead()) && segment.opacity > 0.
+                    let now = self.preview_or_playhead();
+                    segment.is_active_at(now) && segment.opacity_at(now) > 0.
                 })
         {
             return false;
@@ -1607,7 +1608,7 @@ impl EditorWindow {
                                 .filter(|(_, segment)| {
                                     segment.track == track.track
                                         && segment.is_active_at(time)
-                                        && segment.opacity > 0.
+                                        && segment.opacity_at(time) > 0.
                                 })
                         {
                             if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {

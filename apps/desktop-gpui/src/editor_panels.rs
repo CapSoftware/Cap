@@ -5997,7 +5997,8 @@ impl EditorWindow {
                     ui::ButtonVariant::Gray,
                     ui::ButtonSize::Sm,
                 )
-                .label("◆ Add keyframe")
+                .icon("icons/diamond.svg")
+                .label("Add keyframe")
                 .disabled(!inside)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let now = this.preview_or_playhead();
@@ -6055,9 +6056,20 @@ impl EditorWindow {
                         .child(
                             div()
                                 .id(SharedString::from(format!("keyframe-{key}-{n}")))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(3.))
                                 .cursor_pointer()
+                                .child(svg().path("icons/diamond.svg").size(px(9.)).text_color(
+                                    Hsla::from(if current {
+                                        theme.editor.card
+                                    } else {
+                                        theme.editor.text_2
+                                    }),
+                                ))
                                 .child(SharedString::from(format!(
-                                    "◆ {}:{:04.1}",
+                                    "{}:{:04.1}",
                                     (time / 60.).floor() as u32,
                                     time % 60.
                                 )))
@@ -6072,7 +6084,13 @@ impl EditorWindow {
                                 .cursor_pointer()
                                 .opacity(0.6)
                                 .hover(|x| x.opacity(1.))
-                                .child("×")
+                                .child(svg().path("icons/x.svg").size(px(10.)).text_color(
+                                    Hsla::from(if current {
+                                        theme.editor.card
+                                    } else {
+                                        theme.editor.text_2
+                                    }),
+                                ))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.keyframe_action(
                                         target,
