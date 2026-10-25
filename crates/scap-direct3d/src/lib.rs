@@ -973,34 +973,23 @@ impl Frame {
         &self.d3d_context
     }
 
-    /// Copies the frame into a staging texture and maps it, blocking until the GPU copy is done.
-    /// Use [`Self::map_readback`] on latency-sensitive paths.
     pub fn as_buffer(&self) -> Result<FrameBuffer<'_>, ReadbackError> {
-        let lease = self.staging_pool.acquire(self.width, self.height)?;
-        self.copy_into_staging(&lease);
-        let mapped = self.map_staging(lease, None)?;
-
         Ok(FrameBuffer {
-            mapped,
+            mapped: self.map_readback()?,
             frame: std::marker::PhantomData,
         })
     }
 
-    /// Copies the frame into a staging texture and maps it within `budget`. The default polls
-    /// `DO_NOT_WAIT` until the copy completes or the budget expires; the caller can reuse the
-    /// previous frame on `NotReady`. Set `CAP_READBACK_BLOCKING` to block in `Map` instead, which is
-    /// faster when the copy consistently finishes quickly but removes the deadline.
-    pub fn map_readback(&self, budget: Duration) -> Result<MappedFrame, ReadbackError> {
-        let blocking = std::env::var_os("CAP_READBACK_BLOCKING").is_some();
+    pub fn map_readback(&self) -> Result<MappedFrame, ReadbackError> {
         let lease = self.staging_pool.acquire(self.width, self.height)?;
         self.copy_into_staging(&lease);
+        self.map_staging(lease, None)
+    }
 
-        if blocking {
-            return self.map_staging_hybrid(lease);
-        }
-
-        let deadline = Instant::now().checked_add(budget);
-        self.map_staging(lease, deadline)
+    pub fn map_readback_with_budget(&self, budget: Duration) -> Result<MappedFrame, ReadbackError> {
+        let lease = self.staging_pool.acquire(self.width, self.height)?;
+        self.copy_into_staging(&lease);
+        self.map_staging(lease, Some(Instant::now() + budget))
     }
 
     fn copy_into_staging(&self, lease: &StagingLease) {
@@ -1094,34 +1083,6 @@ impl Frame {
             height: self.height,
             pixel_format: self.pixel_format,
         }
-    }
-
-    fn map_staging_hybrid(&self, lease: StagingLease) -> Result<MappedFrame, ReadbackError> {
-        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-
-        match unsafe {
-            self.d3d_context.Map(
-                &lease.texture,
-                0,
-                D3D11_MAP_READ,
-                D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
-                Some(&mut mapped_resource),
-            )
-        } {
-            Ok(()) => {}
-            Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING => unsafe {
-                self.d3d_context.Map(
-                    &lease.texture,
-                    0,
-                    D3D11_MAP_READ,
-                    0,
-                    Some(&mut mapped_resource),
-                )?;
-            },
-            Err(error) => return Err(error.into()),
-        }
-
-        Ok(self.mapped_frame(lease, mapped_resource))
     }
 }
 

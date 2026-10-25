@@ -22,7 +22,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, Ordering},
         mpsc::{RecvTimeoutError, SyncSender, sync_channel},
     },
     thread::JoinHandle,
@@ -35,6 +35,14 @@ use windows::{
 };
 
 const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+// The texture path stays opt-in until it has been validated on more hardware; a runtime MF
+// failure also disables it for the rest of the process.
+static TEXTURE_INPUT_DISABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn mf_texture_input_enabled() -> bool {
+    !TEXTURE_INPUT_DISABLED.load(Ordering::Relaxed)
+        && std::env::var("CAP_MF_TEXTURE_INPUT").is_ok_and(|value| value != "0")
+}
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
@@ -248,6 +256,7 @@ pub struct WindowsFragmentedM4SMuxer {
     d3d_device: Option<ID3D11Device>,
     pixel_format: Option<DXGI_FORMAT>,
     encoder_preferences: EncoderPreferences,
+    prefer_texture_input: bool,
     state: Option<EncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
@@ -266,6 +275,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub d3d_device: Option<ID3D11Device>,
     pub pixel_format: Option<DXGI_FORMAT>,
     pub encoder_preferences: EncoderPreferences,
+    pub prefer_texture_input: bool,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
@@ -281,6 +291,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             d3d_device: None,
             pixel_format: None,
             encoder_preferences: EncoderPreferences::new(),
+            prefer_texture_input: false,
             segment_tx: None,
         }
     }
@@ -321,6 +332,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             d3d_device: config.d3d_device,
             pixel_format: config.pixel_format,
             encoder_preferences: config.encoder_preferences,
+            prefer_texture_input: config.prefer_texture_input,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(
@@ -629,6 +641,10 @@ impl WindowsFragmentedM4SMuxer {
     }
 
     fn start_media_foundation_encoder(&mut self) -> anyhow::Result<bool> {
+        if !self.prefer_texture_input {
+            return Ok(false);
+        }
+
         let (Some(d3d_device), Some(pixel_format)) = (self.d3d_device.clone(), self.pixel_format)
         else {
             return Ok(false);
@@ -688,14 +704,16 @@ impl WindowsFragmentedM4SMuxer {
                             bpp,
                         );
 
-                        let encoder = H264Encoder::new_with_scaled_output_and_bitrate(
-                            &d3d_device,
-                            pixel_format,
-                            input_size,
-                            output_size,
-                            frame_rate,
-                            bitrate,
-                        )?;
+                        let encoder =
+                            H264Encoder::new_with_scaled_output_and_bitrate_trying_devices(
+                                &d3d_device,
+                                pixel_format,
+                                input_size,
+                                output_size,
+                                frame_rate,
+                                bitrate,
+                                2,
+                            )?;
                         encoder.validate().map_err(|error| anyhow!("{error}"))?;
                         let extradata = encoder.sequence_header().ok_or_else(|| {
                             anyhow!("no H.264 sequence header before the first frame")
@@ -806,11 +824,10 @@ impl WindowsFragmentedM4SMuxer {
                         Ok(())
                     }
                     Err(error) => {
-                        if error.should_fallback() {
-                            encoder_preferences.force_software_only();
-                        }
-                        error!(
-                            "Media Foundation encoder stopped; the rest of the video stream is dropped: {error}"
+                        TEXTURE_INPUT_DISABLED.store(true, Ordering::Relaxed);
+                        encoder_preferences.force_software_only();
+                        warn!(
+                            "Media Foundation encoder stopped; finalizing the segments written so far and using FFmpeg for the next recording: {error}"
                         );
                         health_tx.emit(super::core::PipelineHealthEvent::MuxerCrashed {
                             reason: format!("Media Foundation encoder stopped: {error}"),
