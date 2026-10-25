@@ -12,8 +12,8 @@
 //! use, and desktops that have zenity keep it.
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, IntoElement, Render, Styled as _,
-    Window, WindowBounds, WindowOptions, div, point, px, size,
+    App, AppContext as _, Bounds, Context, IntoElement, Render, Styled as _, Window, WindowBounds,
+    WindowOptions, div, point, px, size,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,12 +34,13 @@ pub struct Request {
 
 /// Whether `zenity` is on `PATH`, which is what `rfd` will run.
 pub fn zenity_available() -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| {
-            let candidate = dir.join("zenity");
-            std::fs::metadata(&candidate)
-                .is_ok_and(|metadata| metadata.is_file() && is_executable(&metadata))
-        })
+    std::env::var_os("PATH").is_some_and(|path| zenity_on(&path))
+}
+
+fn zenity_on(path: &std::ffi::OsStr) -> bool {
+    std::env::split_paths(path).any(|dir| {
+        std::fs::metadata(dir.join("zenity"))
+            .is_ok_and(|metadata| metadata.is_file() && is_executable(&metadata))
     })
 }
 
@@ -186,15 +187,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let zenity = dir.path().join("zenity");
         std::fs::write(&zenity, "#!/bin/sh\n").unwrap();
+        let empty = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([empty.path(), dir.path()]).unwrap();
         let found = |mode: u32| {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&zenity, std::fs::Permissions::from_mode(mode)).unwrap();
-            std::env::split_paths(dir.path().as_os_str()).any(|dir| {
-                let metadata = std::fs::metadata(dir.join("zenity")).unwrap();
-                metadata.is_file() && is_executable(&metadata)
-            })
+            zenity_on(&path)
         };
         assert!(found(0o755));
         assert!(!found(0o644));
+        assert!(!zenity_on(empty.path().as_os_str()));
     }
 }
