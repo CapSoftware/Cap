@@ -2113,6 +2113,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         text_size_version: _,
         text_anim_version: _,
         markers: _,
+        track_names: _,
     } = project;
     let timeline = timeline.as_ref().map(|timeline| {
         let TimelineConfiguration {
