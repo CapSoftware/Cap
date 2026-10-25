@@ -76,6 +76,7 @@ interface ProbeOutput {
 export interface SourceCodecs {
 	video: string | null;
 	audio: string | null;
+	duration: number | null;
 }
 
 export async function probeCodecs(
@@ -91,7 +92,7 @@ export async function probeCodecs(
 				"error",
 				...inputArgs,
 				"-show_entries",
-				"stream=codec_type,codec_name",
+				"stream=codec_type,codec_name:format=duration",
 				"-of",
 				"json",
 				input,
@@ -101,6 +102,7 @@ export async function probeCodecs(
 		),
 	) as ProbeOutput;
 	const streams = output.streams ?? [];
+	const duration = Number(output.format?.duration);
 	return {
 		video:
 			streams.find((stream) => stream.codec_type === "video")?.codec_name ??
@@ -108,6 +110,7 @@ export async function probeCodecs(
 		audio:
 			streams.find((stream) => stream.codec_type === "audio")?.codec_name ??
 			null,
+		duration: Number.isFinite(duration) && duration > 0 ? duration : null,
 	};
 }
 
@@ -184,7 +187,9 @@ export async function probeOutput(
 
 export type ImportContainer = "mp4" | "webm";
 
-export function chooseContainer(codecs: SourceCodecs): ImportContainer | null {
+export function chooseContainer(
+	codecs: Pick<SourceCodecs, "video" | "audio">,
+): ImportContainer | null {
 	if (
 		codecs.video === "h264" &&
 		(codecs.audio === null || codecs.audio === "aac")
@@ -228,6 +233,55 @@ export function buildRemuxArgs(
 		...(container === "mp4"
 			? ["-movflags", "+faststart", "-f", "mp4"]
 			: ["-f", "webm"]),
+		"-y",
+		output,
+	];
+}
+
+export function buildAudioOnlyArgs(
+	inputArgs: string[],
+	input: string,
+	output: string,
+	audioCodec: string,
+	duration: number | null,
+): string[] {
+	return [
+		"ffmpeg",
+		"-hide_banner",
+		"-nostdin",
+		"-loglevel",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		`color=c=black:s=1280x720:r=30${duration ? `:d=${duration.toFixed(3)}` : ""}`,
+		...inputArgs,
+		"-i",
+		input,
+		"-map",
+		"0:v:0",
+		"-map",
+		"1:a:0",
+		"-shortest",
+		"-dn",
+		"-sn",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"ultrafast",
+		"-tune",
+		"stillimage",
+		"-pix_fmt",
+		"yuv420p",
+		"-threads",
+		"2",
+		...(audioCodec === "aac"
+			? ["-c:a", "copy"]
+			: ["-c:a", "aac", "-b:a", "128k"]),
+		"-movflags",
+		"+faststart",
+		"-f",
+		"mp4",
 		"-y",
 		output,
 	];
