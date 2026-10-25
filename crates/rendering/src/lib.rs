@@ -907,6 +907,7 @@ pub async fn render_video_to_channel(
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
     frame_windows: Option<FrameWindows>,
+    owned_frames: bool,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
     validate_timeline(project, render_segments.len())?;
@@ -980,6 +981,9 @@ pub async fn render_video_to_channel(
 
     let mut frame_renderer = FrameRenderer::new(constants);
     frame_renderer.use_export_deadlines();
+    if owned_frames {
+        frame_renderer.deliver_owned_frames();
+    }
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -2670,6 +2674,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let device_phase = readiness::Phase::start("wgpu.device");
     let (device, queue) = adapter.request_device(&device_descriptor).await?;
     device_phase.finish("returned");
+    log_uncaptured_errors(&device, "cap-rendering-device");
     Ok(SharedWgpuDevice {
         instance,
         adapter,
@@ -2677,6 +2682,33 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
         queue,
         is_software_adapter,
     })
+}
+
+/// wgpu panics on an error nothing captured. After a device is lost (a driver
+/// reset, sleep, a GPU switch) every call on it fails validation, so that
+/// default ended the app at the next frame or export. Log those errors
+/// instead, at most a few per second; the operation that hit them fails on
+/// its own (a readback that cannot map, a frame that never presents) and the
+/// next device request gets a new device.
+pub fn log_uncaptured_errors(device: &wgpu::Device, label: &'static str) {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    let last = Mutex::new(None::<std::time::Instant>);
+    let suppressed = AtomicU64::new(0);
+    device.on_uncaptured_error(Box::new(move |error| {
+        let now = std::time::Instant::now();
+        let mut last = last.lock().unwrap_or_else(|error| error.into_inner());
+        if last.is_some_and(|last| now.duration_since(last) < MIN_INTERVAL) {
+            suppressed.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        *last = Some(now);
+        let suppressed = suppressed.swap(0, Ordering::Relaxed);
+        tracing::error!(device = label, suppressed, %error, "uncaptured wgpu error");
+    }));
 }
 
 #[derive(Clone, Debug)]
@@ -6756,6 +6788,7 @@ mod export_order_tests {
                 XY::new(SIZE, SIZE),
                 &recordings,
                 None,
+                false,
             );
             let collect = async {
                 let mut order = Vec::new();
@@ -7239,6 +7272,7 @@ pub struct FrameRenderer<'a> {
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
     export_deadlines: bool,
+    owned_frames: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -7257,6 +7291,7 @@ impl<'a> FrameRenderer<'a> {
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
             export_deadlines: false,
+            owned_frames: false,
         }
     }
 
@@ -7265,6 +7300,13 @@ impl<'a> FrameRenderer<'a> {
     /// failed readback costs the export a frame.
     pub(crate) fn use_export_deadlines(&mut self) {
         self.export_deadlines = true;
+    }
+
+    /// Frames are delivered with no other owner: the readback does not keep
+    /// a clone for recycling, so the consumer can take the buffer by value
+    /// instead of copying it out of a shared `Arc`.
+    pub(crate) fn deliver_owned_frames(&mut self) {
+        self.owned_frames = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -7315,6 +7357,7 @@ impl<'a> FrameRenderer<'a> {
         let session = self.session.get_or_insert_with(|| {
             RenderSession::new(&self.constants.device, width, height)
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
         });
         session.update_texture_size(&self.constants.device, width, height);
     }
@@ -7363,6 +7406,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
@@ -7441,6 +7485,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7613,6 +7658,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7751,6 +7797,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7837,6 +7884,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -8030,6 +8078,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.1,
                 )
                 .with_export_deadlines(self.export_deadlines)
+                .with_recycle_readback_frames(!self.owned_frames)
             });
 
             session.update_texture_size(
