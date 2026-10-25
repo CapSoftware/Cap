@@ -50,9 +50,10 @@ pub enum HotkeyAction {
     ScreenshotWindow,
     ScreenshotArea,
     OcrArea,
+    ScrollingCaptureWindow,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 14] = [
+const ACTION_KEYS: [(&str, HotkeyAction); 15] = [
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
     ("stopRecording", HotkeyAction::StopRecording),
@@ -76,6 +77,10 @@ const ACTION_KEYS: [(&str, HotkeyAction); 14] = [
     ("screenshotWindow", HotkeyAction::ScreenshotWindow),
     ("screenshotArea", HotkeyAction::ScreenshotArea),
     ("ocrArea", HotkeyAction::OcrArea),
+    (
+        "scrollingCaptureWindow",
+        HotkeyAction::ScrollingCaptureWindow,
+    ),
 ];
 
 impl HotkeyAction {
@@ -935,6 +940,22 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             tracing::warn!("OCR text capture is not supported on this platform");
         }
+        HotkeyAction::ScrollingCaptureWindow => {
+            #[cfg(target_os = "linux")]
+            tracing::warn!("scrolling capture is not supported on Linux");
+
+            #[cfg(any(windows, target_os = "macos"))]
+            match crate::devices::topmost_foreign_window_at_cursor() {
+                Some(window) => crate::scrolling_capture::capture_scrolling_window(
+                    ScreenCaptureTarget::Window { id: window.id() },
+                    cx,
+                ),
+                None => tracing::warn!("no window under the cursor for scrolling capture"),
+            }
+
+            #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+            tracing::warn!("scrolling capture is not supported on this platform");
+        }
     }
 }
 
@@ -1239,6 +1260,7 @@ mod tests {
             "screenshotWindow",
             "screenshotArea",
             "ocrArea",
+            "scrollingCaptureWindow",
         ] {
             assert!(
                 HotkeyAction::from_store_key(key).is_some(),

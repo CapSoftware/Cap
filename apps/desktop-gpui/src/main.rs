@@ -75,6 +75,8 @@ mod screenshot_crop;
 mod screenshot_editor;
 mod screenshot_export;
 mod script_text;
+#[cfg(any(not(target_os = "linux"), test))]
+mod scrolling_capture;
 mod session;
 mod settings_pages;
 mod settings_window;

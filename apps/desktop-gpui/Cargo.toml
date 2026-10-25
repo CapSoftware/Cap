@@ -198,6 +198,7 @@ windows = { version = "0.61.3", features = [
     "Media_Ocr",
     "Storage_Streams",
     "Win32_System_WinRT",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

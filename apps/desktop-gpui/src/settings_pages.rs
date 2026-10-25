@@ -937,6 +937,8 @@ const SCREENSHOT_SHORTCUTS: &[&str] = &[
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     "ocrArea",
     "screenshotWindow",
+    #[cfg(not(target_os = "linux"))]
+    "scrollingCaptureWindow",
     "screenshotDisplay",
 ];
 
@@ -1049,6 +1051,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "screenshotArea" => "Screenshot an area",
         "ocrArea" => "Copy text from an area",
         "screenshotWindow" => "Screenshot a window",
+        "scrollingCaptureWindow" => "Scrolling capture of a window",
         "screenshotDisplay" => "Screenshot the display",
         "startStudioRecording" => "Start Studio recording",
         "startInstantRecording" => "Start Instant recording",
@@ -1103,6 +1106,9 @@ fn shortcut_effect(
         "screenshotArea" => format!("select an area and {screenshot}"),
         "ocrArea" => "select an area and copy the text in it to your clipboard".into(),
         "screenshotWindow" => format!("capture the window under your pointer and {screenshot}"),
+        "scrollingCaptureWindow" => {
+            format!("scroll-capture the window under your pointer and {screenshot}")
+        }
         "screenshotDisplay" => format!("capture the display under your pointer and {screenshot}"),
         "startStudioRecording" => {
             format!("record your selected screen or window in Studio mode{studio_stop}")
@@ -8200,6 +8206,7 @@ mod tests {
         assert_eq!(
             shown.len(),
             13 + usize::from(cfg!(any(target_os = "macos", target_os = "windows")))
+                + usize::from(!cfg!(target_os = "linux"))
         );
         let settings = store::GeneralSettings::default();
         for action in &shown {
