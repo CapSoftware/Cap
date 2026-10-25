@@ -15,13 +15,15 @@
 //!   is where Rust reports a stack overflow and native libraries complain;
 //! - a session marker, so the next launch logs that the previous one ended
 //!   without a clean quit (a kill, an out-of-memory kill, or a crash no
-//!   handler could see).
+//!   handler could see), and whether camera background blur was running when
+//!   it did.
 
 use std::{
     fs::{File, OpenOptions},
     io::Write as _,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
 /// Appended to; read by `cap_utils::log_upload` under the log prefix.
@@ -37,7 +39,15 @@ const MAX_CRASH_FILE_BYTES: u64 = 512 * 1024;
 const MAX_STDERR_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 static CRASH_LOG: OnceLock<File> = OnceLock::new();
-static SESSION_MARKER: OnceLock<PathBuf> = OnceLock::new();
+static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+
+/// How the previous session ended, when it did not quit cleanly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UncleanEnd {
+    /// A camera background blur session was alive, or ended within
+    /// [`BLUR_DISARM_LINGER`], when the process died.
+    pub blur_active: bool,
+}
 
 /// Call once, right after logging starts and before any other thread work.
 /// The session itself starts in [`begin_session`].
@@ -64,15 +74,108 @@ pub fn install(logs_dir: &Path) {
 /// Call once this process holds the single-instance lock: a second launch
 /// hands off and exits before it can touch the running instance's marker or
 /// stderr file, so whatever marker is left belongs to a session that is gone.
-pub fn begin_session(logs_dir: &Path) {
-    report_previous_session(logs_dir);
+pub fn begin_session(logs_dir: &Path) -> Option<UncleanEnd> {
+    let previous = report_previous_session(logs_dir);
     capture_stderr(logs_dir);
+    previous.map(|marker| UncleanEnd {
+        blur_active: marker_has_blur(&marker),
+    })
 }
 
 pub fn mark_clean_exit() {
-    if let Some(marker) = SESSION_MARKER.get() {
-        let _ = std::fs::remove_file(marker);
+    if let Some(session) = lock_session().take() {
+        let _ = std::fs::remove_file(&session.path);
     }
+}
+
+/// How long the marker keeps saying blur is active after the last blur
+/// session ends. D3D12, DirectML and driver faults have been seen ending the
+/// process tens of seconds after blur teardown, and disarming at once would
+/// miss exactly those (the Tauri app's crash sentinel uses the same window).
+const BLUR_DISARM_LINGER: Duration = Duration::from_secs(120);
+
+/// Marks a camera background blur session as alive, for
+/// `cap_camera_effects::set_blur_session_observer`. Nestable.
+pub fn enter_blur_session() {
+    if let Some(session) = lock_session().as_mut() {
+        session.enter_blur();
+    }
+}
+
+/// Ends one blur session; the marker disarms once [`BLUR_DISARM_LINGER`]
+/// passes with no blur session alive.
+pub fn exit_blur_session() {
+    let Some(generation) = lock_session().as_mut().and_then(Session::exit_blur) else {
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("cap-blur-disarm".into())
+        .spawn(move || {
+            std::thread::sleep(BLUR_DISARM_LINGER);
+            if let Some(session) = lock_session().as_mut() {
+                session.disarm_blur(generation);
+            }
+        });
+}
+
+fn lock_session() -> std::sync::MutexGuard<'static, Option<Session>> {
+    SESSION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+struct Session {
+    path: PathBuf,
+    header: String,
+    blur_depth: u32,
+    /// Bumped on every enter and exit, so a scheduled disarm can tell that
+    /// blur ran again after it was scheduled.
+    blur_generation: u64,
+    blur_armed: bool,
+}
+
+impl Session {
+    fn create(path: PathBuf, header: String) -> Option<Self> {
+        let session = Self {
+            path,
+            header,
+            blur_depth: 0,
+            blur_generation: 0,
+            blur_armed: false,
+        };
+        session.write().then_some(session)
+    }
+
+    fn write(&self) -> bool {
+        let blur = if self.blur_armed { " blur=1" } else { "" };
+        std::fs::write(&self.path, format!("{}{blur}\n", self.header)).is_ok()
+    }
+
+    fn enter_blur(&mut self) {
+        self.blur_depth += 1;
+        self.blur_generation = self.blur_generation.wrapping_add(1);
+        if !self.blur_armed {
+            self.blur_armed = true;
+            self.write();
+        }
+    }
+
+    fn exit_blur(&mut self) -> Option<u64> {
+        self.blur_depth = self.blur_depth.saturating_sub(1);
+        self.blur_generation = self.blur_generation.wrapping_add(1);
+        (self.blur_depth == 0 && self.blur_armed).then_some(self.blur_generation)
+    }
+
+    fn disarm_blur(&mut self, generation: u64) {
+        if self.blur_generation == generation && self.blur_depth == 0 && self.blur_armed {
+            self.blur_armed = false;
+            self.write();
+        }
+    }
+}
+
+fn marker_has_blur(marker: &str) -> bool {
+    marker.split_whitespace().any(|field| field == "blur=1")
 }
 
 fn now() -> String {
@@ -85,24 +188,24 @@ fn record(text: &str) {
     }
 }
 
-fn report_previous_session(logs_dir: &Path) {
+fn report_previous_session(logs_dir: &Path) -> Option<String> {
     let marker = logs_dir.join(SESSION_FILE);
-    if let Some(previous) = previous_session(std::fs::read_to_string(&marker).ok().as_deref()) {
+    let previous = previous_session(std::fs::read_to_string(&marker).ok().as_deref());
+    if let Some(previous) = &previous {
         tracing::error!(previous = %previous, "the previous Cap session ended without a clean quit");
         record(&format!(
             "{} previous session ended without a clean quit: {previous}\n",
             now()
         ));
     }
-    let contents = format!(
-        "pid={} started={} version={}\n",
+    let header = format!(
+        "pid={} started={} version={}",
         std::process::id(),
         now(),
         env!("CARGO_PKG_VERSION")
     );
-    if std::fs::write(&marker, contents).is_ok() {
-        let _ = SESSION_MARKER.set(marker);
-    }
+    *lock_session() = Session::create(marker, header);
+    previous
 }
 
 /// The marker a session left behind, which only a clean quit removes.
@@ -526,7 +629,7 @@ mod native {
 
 #[cfg(test)]
 mod marker_tests {
-    use super::{previous_session, trim_if_over};
+    use super::{Session, marker_has_blur, previous_session, trim_if_over};
     use std::io::Write as _;
 
     #[test]
@@ -539,6 +642,46 @@ mod marker_tests {
             previous_session(Some(&format!("{marker}\n"))),
             Some(marker.into())
         );
+    }
+
+    #[test]
+    fn the_marker_says_blur_while_a_session_lives_and_until_the_linger_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(super::SESSION_FILE);
+        let header = "pid=41 started=2026-10-25T00:00:00.000Z version=0.6.1".to_string();
+        let mut session = Session::create(path.clone(), header).unwrap();
+        let blur = || marker_has_blur(&std::fs::read_to_string(&path).unwrap());
+        assert!(!blur());
+
+        // The camera preview and the editor overlap.
+        session.enter_blur();
+        session.enter_blur();
+        assert!(blur());
+        assert_eq!(session.exit_blur(), None);
+        let generation = session
+            .exit_blur()
+            .expect("the last session schedules a disarm");
+        assert!(blur(), "stays armed through the linger");
+
+        // Blur started again before the disarm ran: the stale disarm does nothing.
+        session.enter_blur();
+        session.disarm_blur(generation);
+        assert!(blur());
+        let generation = session.exit_blur().unwrap();
+        session.disarm_blur(generation);
+        assert!(!blur());
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("pid=41 started=")
+        );
+    }
+
+    #[test]
+    fn only_an_armed_marker_reads_as_blur() {
+        assert!(marker_has_blur("pid=1 started=x version=0.6.2 blur=1"));
+        assert!(!marker_has_blur("pid=1 started=x version=0.6.2"));
+        assert!(!marker_has_blur("pid=1 started=x version=0.6.2 blur=10"));
     }
 
     /// The writer keeps its handle open across a trim and must keep writing
@@ -589,6 +732,10 @@ mod process_tests {
                 std::hint::black_box(recurse(0));
             }
             "panic" => panic!("crash capture test panic"),
+            "blur-fault" => {
+                super::enter_blur_session();
+                unsafe { std::ptr::write_volatile(std::ptr::null_mut::<u8>(), 1) }
+            }
             "native-stderr" => {
                 let line = b"written by native code\n";
                 #[cfg(unix)]
@@ -613,6 +760,7 @@ mod process_tests {
         crashes: String,
         stderr: String,
         captured_stderr: String,
+        session: String,
         success: bool,
     }
 
@@ -631,6 +779,7 @@ mod process_tests {
             crashes: read(super::CRASH_FILE),
             stderr: read(super::STDERR_FILE) + &String::from_utf8_lossy(&status.stderr),
             captured_stderr: read(super::STDERR_FILE),
+            session: read(super::SESSION_FILE),
             success: status.status.success(),
         }
     }
@@ -657,6 +806,21 @@ mod process_tests {
             "{}",
             died.crashes
         );
+    }
+
+    /// What the next launch reads to keep blur off after a blur crash.
+    #[test]
+    fn a_crash_during_blur_is_blamed_on_blur_next_launch() {
+        if child("blur-fault") {
+            return;
+        }
+        let died = run(
+            "crash_capture::process_tests::a_crash_during_blur_is_blamed_on_blur_next_launch",
+            "blur-fault",
+        );
+        assert!(!died.success);
+        let marker = super::previous_session(Some(&died.session)).expect("an unclean marker");
+        assert!(super::marker_has_blur(&marker), "{marker}");
     }
 
     /// What a native library prints through the C runtime's stderr.
