@@ -1562,6 +1562,16 @@ mod mac {
                     menu_item.setKeyEquivalent(&NSString::from_str(","));
                     menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
                 }
+                if *item == Some(TrayItem::Quit) {
+                    // Lowercase: an uppercase equivalent implies Shift, which
+                    // rendered this as ⇧⌘Q.
+                    menu_item.setKeyEquivalent(&NSString::from_str("q"));
+                    menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+                }
+                if *item == Some(TrayItem::Quit) {
+                    menu_item.setKeyEquivalent(&NSString::from_str("Q"));
+                    menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+                }
                 // Previous's rows are photo thumbnails; every other iconed row
                 // is an SF Symbol, template-tinted by the menu. Windows draws
                 // `icon`'s raster instead.

@@ -99,7 +99,6 @@ impl PillAccessibilityElement {
 struct PickerIvars {
     selected: Cell<usize>,
     focused: Cell<Option<usize>>,
-    pressed: Cell<Option<usize>>,
     flash: Cell<bool>,
     /// `actions` index of the first pill; pill `i` posts `tag_base + i`.
     tag_base: isize,
@@ -112,7 +111,7 @@ struct PickerIvars {
 
 impl Drop for PickerIvars {
     fn drop(&mut self) {
-        tracing::debug!("mode picker view deallocated");
+        tracing::info!("mode picker view deallocated");
     }
 }
 
@@ -178,22 +177,10 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            let pressed = self.pill_at(event);
-            self.ivars().pressed.set(pressed);
-            if let Some(i) = pressed {
-                // Update the subtitle immediately so the old name never flashes.
-                self.ivars().focused.set(Some(i));
-                self.ivars().selected.set(i);
-                self.refresh();
-            }
-        }
-
-        #[unsafe(method(mouseUp:))]
-        fn mouse_up(&self, _event: &NSEvent) {
-            // Commit the pill that was pressed, even if the pointer left the
-            // capsule before release, so the shown subtitle and the applied
-            // mode cannot drift apart.
-            if let Some(i) = self.ivars().pressed.take() {
+            // Commit and update the visuals in the same event: a release
+            // outside the menu never reaches this view, which used to leave
+            // the subtitle showing a mode that was never applied.
+            if let Some(i) = self.pill_at(event) {
                 self.choose(i);
             }
         }
@@ -211,7 +198,6 @@ impl ModePickerView {
         let this = mtm.alloc::<Self>().set_ivars(PickerIvars {
             selected: Cell::new(selected),
             focused: Cell::new(None),
-            pressed: Cell::new(None),
             flash: Cell::new(false),
             tag_base,
             capsule: RefCell::new(None),
