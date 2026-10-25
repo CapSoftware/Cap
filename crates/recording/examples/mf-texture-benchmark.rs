@@ -96,14 +96,19 @@ mod windows_bench {
 
     fn check_pixels(frame: &ffmpeg::frame::Video, index: usize) -> anyhow::Result<()> {
         let index = index % 8;
-        let red = ((1000 / 8 + index * 13) % 256) as f64;
-        let green = ((500 / 8 + index * 7) % 256) as f64;
-        let blue = ((1000 / 16 + 500 / 16 + index * 5) % 256) as f64;
+        // Sample inside the decoded frame, centred in a 16px pattern cell so
+        // block edges and chroma subsampling don't blur the reading.
+        let sample = |limit: usize, preferred: usize| (preferred.min(limit / 2) / 16) * 16 + 4;
+        let x = sample(frame.width() as usize, 1000);
+        let y = sample(frame.height() as usize, 500);
+        let red = ((x / 8 + index * 13) % 256) as f64;
+        let green = ((y / 8 + index * 7) % 256) as f64;
+        let blue = ((x / 16 + y / 16 + index * 5) % 256) as f64;
         let expected = 16.0 + (0.2126 * red + 0.7152 * green + 0.0722 * blue) * 219.0 / 255.0;
-        let actual = frame.data(0)[500 * frame.stride(0) + 1000] as f64;
+        let actual = frame.data(0)[y * frame.stride(0) + x] as f64;
         if (expected - actual).abs() > 4.0 {
             return Err(anyhow!(
-                "frame {index}: expected BT.709 luma {expected:.2}, got {actual}"
+                "frame {index}: expected BT.709 luma {expected:.2} at ({x}, {y}), got {actual}"
             ));
         }
         Ok(())

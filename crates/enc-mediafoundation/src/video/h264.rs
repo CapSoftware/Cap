@@ -260,7 +260,8 @@ impl H264Encoder {
             .cast::<IDXGIDevice>()
             .and_then(|device| unsafe { device.GetAdapter()?.GetDesc() })
             .map_err(NewVideoEncoderError::DeviceManager)?;
-        let is_amd = adapter.VendorId == 0x1002;
+        // Match `cap_frame_converter::GpuVendor::from_id`: AMD reports either PCI ID.
+        let is_amd = matches!(adapter.VendorId, 0x1002 | 0x1022);
 
         let transform =
             EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
@@ -579,19 +580,23 @@ impl H264Encoder {
             let mut should_exit = false;
             let mut drain_started: Option<Instant> = None;
             while !should_exit {
-                if drain_started
-                    .is_some_and(|started| started.elapsed() > ENCODER_OPERATION_TIMEOUT)
-                {
-                    let _ = self.cleanup_encoder();
-                    return Err(EncoderRuntimeError::EncoderUnhealthy {
-                        reason: EncoderFailureReason::Timeout,
-                        inputs_without_output: health_monitor.inputs_without_output,
-                        process_failures: health_monitor.consecutive_process_failures,
-                        frames_encoded: health_monitor.total_frames_encoded,
-                    });
+                if let Some(started) = drain_started {
+                    // A slow drain only costs the tail frames; never fail the
+                    // recording over it. Fall through to the normal shutdown.
+                    if started.elapsed() > ENCODER_OPERATION_TIMEOUT {
+                        tracing::warn!(
+                            frames_encoded = health_monitor.total_frames_encoded,
+                            "MediaFoundation H264 drain did not complete within {:?}; finishing stop without remaining output",
+                            ENCODER_OPERATION_TIMEOUT
+                        );
+                        break;
+                    }
                 }
+                // While draining, the drain deadline above is the only timeout;
+                // the health check would otherwise count pre-stop idle time.
                 let health_status = health_monitor.check_health();
-                if !health_status.is_healthy
+                if drain_started.is_none()
+                    && !health_status.is_healthy
                     && let Some(reason) = health_status.failure_reason
                 {
                     let _ = self.cleanup_encoder();
@@ -683,6 +688,10 @@ impl H264Encoder {
                                 .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
                             self.transform
                                 .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+                            // `get_frame` may have parked through a long pause
+                            // before reporting stop; that idle time is not an
+                            // encoder stall, so rebase the timeout clock.
+                            health_monitor.notify_input_stall_recovered();
                             drain_started = Some(Instant::now());
                             should_exit = false;
                         }
