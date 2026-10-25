@@ -506,7 +506,50 @@ impl Muxer for WindowsMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::reference_video_frame;
+    use super::{MjpegDecoder, NativeCameraFrame, camera_frame_to_ffmpeg, reference_video_frame};
+    use cap_camera_windows::PixelFormat;
+    use cap_mediafoundation_utils::IMFMediaBufferExt;
+    use cap_timestamp::Timestamp;
+    use std::sync::{Arc, Mutex};
+    use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
+
+    #[test]
+    fn native_nv12_frame_converts_without_copying() {
+        cap_mediafoundation_utils::thread_init();
+
+        let width = 80;
+        let height = 48;
+        let stride = 80;
+        let len = stride * height + stride * (height / 2);
+        let buffer = unsafe { MFCreateMemoryBuffer(len as u32) }.expect("buffer");
+        {
+            let mut lock = buffer.lock_for_write().expect("write lock");
+            for (index, byte) in lock.iter_mut().enumerate() {
+                *byte = (index * 13) as u8;
+            }
+        }
+        unsafe { buffer.SetCurrentLength(len as u32) }.expect("length");
+
+        let base_ptr = {
+            let lock = buffer.lock().expect("read lock");
+            lock.as_ptr()
+        };
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let frame = NativeCameraFrame {
+            buffer: Arc::new(Mutex::new(buffer)),
+            pixel_format: PixelFormat::NV12,
+            width: width as u32,
+            height: height as u32,
+            is_bottom_up: false,
+            timestamp: Timestamp::Instant(std::time::Instant::now()),
+        };
+        let mut decoder = MjpegDecoder::default();
+        let converted = camera_frame_to_ffmpeg(&frame, &mut decoder).expect("conversion");
+
+        assert_eq!(converted.format(), ffmpeg::format::Pixel::NV12);
+        assert_eq!(converted.data(0).as_ptr(), base_ptr);
+    }
 
     #[test]
     fn retained_software_frame_shares_pixels_and_survives_original() {
@@ -1355,6 +1398,21 @@ pub(crate) fn camera_frame_to_ffmpeg(
 
     if frame.pixel_format == cap_camera_windows::PixelFormat::MJPEG {
         return decode_mjpeg_frame(frame, mjpeg_decoder);
+    }
+
+    if frame.pixel_format != cap_camera_windows::PixelFormat::UYVY422
+        && frame.pixel_format != cap_camera_windows::PixelFormat::NV21
+        && let Ok(buffer) = frame.buffer.lock()
+        && let Some(frame) = cap_camera_ffmpeg::media_buffer_as_ffmpeg(
+            &buffer,
+            frame.pixel_format,
+            frame.width as usize,
+            frame.height as usize,
+            frame.is_bottom_up,
+        )
+    {
+        cap_camera_ffmpeg::CONVERSION_STATS.record_zero_copy();
+        return Ok(frame);
     }
 
     let ffmpeg_format = match frame.pixel_format {

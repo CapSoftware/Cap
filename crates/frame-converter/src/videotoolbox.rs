@@ -1,4 +1,5 @@
 use crate::{ConversionConfig, ConvertError, ConverterBackend, FrameConverter};
+use cidre::{arc, cf, cv, os, vt};
 use ffmpeg::{format::Pixel, frame};
 use parking_lot::Mutex;
 use std::{
@@ -7,106 +8,82 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-type CFAllocatorRef = *const c_void;
-type CFDictionaryRef = *const c_void;
 type CVPixelBufferRef = *mut c_void;
-type VTPixelTransferSessionRef = *mut c_void;
-type OSStatus = i32;
-
-const K_CV_RETURN_SUCCESS: i32 = 0;
-
-const K_CV_PIXEL_FORMAT_TYPE_422_YP_CB_YP_CR8: u32 = 0x79757679;
-const K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE: u32 = 0x34323076;
-const K_CV_PIXEL_FORMAT_TYPE_2VUY: u32 = 0x32767579;
-const K_CV_PIXEL_FORMAT_TYPE_32_BGRA: u32 = 0x42475241;
-const K_CV_PIXEL_FORMAT_TYPE_32_ARGB: u32 = 0x00000020;
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFRelease(cf: *const c_void);
-}
 
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
-    fn CVPixelBufferCreate(
-        allocator: CFAllocatorRef,
-        width: usize,
-        height: usize,
-        pixel_format_type: u32,
-        pixel_buffer_attributes: CFDictionaryRef,
-        pixel_buffer_out: *mut CVPixelBufferRef,
-    ) -> i32;
-
-    fn CVPixelBufferCreateWithBytes(
-        allocator: CFAllocatorRef,
-        width: usize,
-        height: usize,
-        pixel_format_type: u32,
-        base_address: *mut c_void,
-        bytes_per_row: usize,
-        release_callback: *const c_void,
-        release_ref_con: *const c_void,
-        pixel_buffer_attributes: CFDictionaryRef,
-        pixel_buffer_out: *mut CVPixelBufferRef,
-    ) -> i32;
-
-    fn CVPixelBufferRelease(pixel_buffer: CVPixelBufferRef);
-
-    fn CVPixelBufferLockBaseAddress(pixel_buffer: CVPixelBufferRef, lock_flags: u64) -> i32;
-    fn CVPixelBufferUnlockBaseAddress(pixel_buffer: CVPixelBufferRef, lock_flags: u64) -> i32;
-
-    fn CVPixelBufferGetBaseAddressOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> *mut u8;
-    fn CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> usize;
-    fn CVPixelBufferGetHeightOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> usize;
-    fn CVPixelBufferGetPlaneCount(pixel_buffer: CVPixelBufferRef) -> usize;
-    fn CVPixelBufferGetBaseAddress(pixel_buffer: CVPixelBufferRef) -> *mut u8;
-    fn CVPixelBufferGetBytesPerRow(pixel_buffer: CVPixelBufferRef) -> usize;
-    fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetBaseAddress(pixel_buffer: &cv::PixelBuf) -> *mut u8;
+    fn CVPixelBufferGetBytesPerRow(pixel_buffer: &cv::PixelBuf) -> usize;
+    fn CVPixelBufferGetHeight(pixel_buffer: &cv::PixelBuf) -> usize;
 }
 
-#[link(name = "VideoToolbox", kind = "framework")]
-unsafe extern "C" {
-    fn VTPixelTransferSessionCreate(
-        allocator: CFAllocatorRef,
-        pixel_transfer_session_out: *mut VTPixelTransferSessionRef,
-    ) -> OSStatus;
-
-    fn VTPixelTransferSessionInvalidate(session: VTPixelTransferSessionRef);
-
-    fn VTPixelTransferSessionTransferImage(
-        session: VTPixelTransferSessionRef,
-        source_buffer: CVPixelBufferRef,
-        destination_buffer: CVPixelBufferRef,
-    ) -> OSStatus;
+fn pixel_to_cv_format(pixel: Pixel) -> Option<cv::PixelFormat> {
+    Some(match pixel {
+        Pixel::YUYV422 => cv::PixelFormat(os::Type::from_be_bytes(*b"yuvs")),
+        Pixel::UYVY422 => cv::PixelFormat::_2VUY,
+        Pixel::NV12 => cv::PixelFormat::_420V,
+        Pixel::BGRA => cv::PixelFormat::_32_BGRA,
+        Pixel::ARGB => cv::PixelFormat::_32_ARGB,
+        _ => return None,
+    })
 }
 
-fn pixel_to_cv_format(pixel: Pixel) -> Option<u32> {
-    match pixel {
-        Pixel::YUYV422 => Some(K_CV_PIXEL_FORMAT_TYPE_422_YP_CB_YP_CR8),
-        Pixel::UYVY422 => Some(K_CV_PIXEL_FORMAT_TYPE_2VUY),
-        Pixel::NV12 => Some(K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE),
-        Pixel::BGRA => Some(K_CV_PIXEL_FORMAT_TYPE_32_BGRA),
-        Pixel::ARGB => Some(K_CV_PIXEL_FORMAT_TYPE_32_ARGB),
-        _ => None,
-    }
-}
-
-struct SessionHandle(VTPixelTransferSessionRef);
+struct SessionHandle(arc::R<vt::PixelTransferSession>);
 
 unsafe impl Send for SessionHandle {}
+unsafe impl Sync for SessionHandle {}
+
+struct PoolHandle(arc::R<cv::PixelBufPool>);
+
+unsafe impl Send for PoolHandle {}
+unsafe impl Sync for PoolHandle {}
 
 pub struct VideoToolboxConverter {
     session: Mutex<SessionHandle>,
+    pool: Option<PoolHandle>,
     input_format: Pixel,
-    input_cv_format: u32,
+    input_cv_format: cv::PixelFormat,
     output_format: Pixel,
-    output_cv_format: u32,
+    output_cv_format: cv::PixelFormat,
     input_width: u32,
     input_height: u32,
     output_width: u32,
     output_height: u32,
     conversion_count: AtomicU64,
     verified_hardware: AtomicBool,
+}
+
+extern "C" fn noop_release(_: *mut c_void, _: *const *const c_void) {}
+
+fn create_pool(
+    width: u32,
+    height: u32,
+    format: cv::PixelFormat,
+) -> Result<PoolHandle, ConvertError> {
+    let width = cf::Number::from_usize(width as usize);
+    let height = cf::Number::from_usize(height as usize);
+    let io_surface = cf::Dictionary::new();
+    let attrs = cf::DictionaryOf::<cf::String, cf::Type>::with_keys_values(
+        &[
+            cv::pixel_buffer::keys::pixel_format(),
+            cv::pixel_buffer::keys::width(),
+            cv::pixel_buffer::keys::height(),
+            cv::pixel_buffer::keys::io_surf_props(),
+        ],
+        &[
+            format.as_ref(),
+            width.as_type_ref(),
+            height.as_type_ref(),
+            io_surface.as_type_ref(),
+        ],
+    )
+    .ok_or_else(|| {
+        ConvertError::HardwareUnavailable("VideoToolbox pixel buffer pool attributes".to_string())
+    })?;
+
+    cv::PixelBufPool::new(None, Some(&**attrs))
+        .map(PoolHandle)
+        .map_err(|error| ConvertError::HardwareUnavailable(format!("CVPixelBufferPool: {error}")))
 }
 
 impl VideoToolboxConverter {
@@ -119,20 +96,18 @@ impl VideoToolboxConverter {
             ConvertError::UnsupportedFormat(config.input_format, config.output_format),
         )?;
 
-        let mut session: VTPixelTransferSessionRef = ptr::null_mut();
-        let status = unsafe { VTPixelTransferSessionCreate(ptr::null(), &mut session) };
+        let mut session = vt::PixelTransferSession::new().map_err(|error| {
+            ConvertError::HardwareUnavailable(format!("VTPixelTransferSessionCreate: {error}"))
+        })?;
+        let _ = session.set_realtime(true);
 
-        if status != 0 {
-            return Err(ConvertError::HardwareUnavailable(format!(
-                "VTPixelTransferSessionCreate failed with status: {status}"
-            )));
-        }
-
-        if session.is_null() {
-            return Err(ConvertError::HardwareUnavailable(
-                "VTPixelTransferSessionCreate returned null session".to_string(),
-            ));
-        }
+        let pool = match create_pool(config.output_width, config.output_height, output_cv_format) {
+            Ok(pool) => Some(pool),
+            Err(error) => {
+                tracing::debug!("VideoToolbox pixel buffer pool unavailable: {error}");
+                None
+            }
+        };
 
         tracing::debug!(
             "VideoToolbox converter initialized: {:?} {}x{} -> {:?} {}x{}",
@@ -146,6 +121,7 @@ impl VideoToolboxConverter {
 
         Ok(Self {
             session: Mutex::new(SessionHandle(session)),
+            pool,
             input_format: config.input_format,
             input_cv_format,
             output_format: config.output_format,
@@ -162,119 +138,100 @@ impl VideoToolboxConverter {
     fn create_input_pixel_buffer(
         &self,
         input: &frame::Video,
-    ) -> Result<CVPixelBufferRef, ConvertError> {
-        let mut pixel_buffer: CVPixelBufferRef = ptr::null_mut();
-
+    ) -> Result<arc::R<cv::PixelBuf>, ConvertError> {
         let base_address = input.data(0).as_ptr() as *mut c_void;
         let bytes_per_row = input.stride(0);
 
-        let status = unsafe {
-            CVPixelBufferCreateWithBytes(
-                ptr::null(),
-                self.input_width as usize,
-                self.input_height as usize,
-                self.input_cv_format,
-                base_address,
-                bytes_per_row,
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                &mut pixel_buffer,
-            )
-        };
-
-        if status != K_CV_RETURN_SUCCESS {
-            return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreateWithBytes failed: {status}"
-            )));
-        }
-
-        Ok(pixel_buffer)
+        cv::PixelBuf::with_bytes(
+            self.input_width as usize,
+            self.input_height as usize,
+            base_address,
+            bytes_per_row,
+            noop_release,
+            ptr::null_mut(),
+            self.input_cv_format,
+            None,
+        )
+        .map_err(|error| {
+            ConvertError::ConversionFailed(format!("CVPixelBufferCreateWithBytes: {error}"))
+        })
     }
 
-    fn create_output_pixel_buffer(&self) -> Result<CVPixelBufferRef, ConvertError> {
-        let mut pixel_buffer: CVPixelBufferRef = ptr::null_mut();
-
-        let status = unsafe {
-            CVPixelBufferCreate(
-                ptr::null(),
-                self.output_width as usize,
-                self.output_height as usize,
-                self.output_cv_format,
-                ptr::null(),
-                &mut pixel_buffer,
-            )
-        };
-
-        if status != K_CV_RETURN_SUCCESS {
-            return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreate failed: {status}"
-            )));
+    fn create_output_pixel_buffer(&self) -> Result<arc::R<cv::PixelBuf>, ConvertError> {
+        if let Some(pool) = &self.pool
+            && let Ok(buffer) = pool.0.pixel_buf()
+        {
+            return Ok(buffer);
         }
 
-        Ok(pixel_buffer)
+        cv::PixelBuf::new(
+            self.output_width as usize,
+            self.output_height as usize,
+            self.output_cv_format,
+            None,
+        )
+        .map_err(|error| ConvertError::ConversionFailed(format!("CVPixelBufferCreate: {error}")))
     }
 
     fn copy_output_to_frame(
         &self,
-        pixel_buffer: CVPixelBufferRef,
+        pixel_buffer: &mut cv::PixelBuf,
         output: &mut frame::Video,
     ) -> Result<(), ConvertError> {
-        unsafe {
-            let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, 0);
-            if lock_status != K_CV_RETURN_SUCCESS {
-                return Err(ConvertError::ConversionFailed(format!(
-                    "CVPixelBufferLockBaseAddress failed: {lock_status}"
-                )));
-            }
-        }
+        unsafe { pixel_buffer.lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY) }
+            .result()
+            .map_err(|error| {
+                ConvertError::ConversionFailed(format!("CVPixelBufferLockBaseAddress: {error}"))
+            })?;
 
         unsafe {
-            let plane_count = CVPixelBufferGetPlaneCount(pixel_buffer);
+            let plane_count = pixel_buffer.plane_count();
 
             if plane_count == 0 {
                 let src_ptr = CVPixelBufferGetBaseAddress(pixel_buffer);
                 let src_stride = CVPixelBufferGetBytesPerRow(pixel_buffer);
                 let height = CVPixelBufferGetHeight(pixel_buffer);
                 let dst_stride = output.stride(0);
-
-                let dst_data = output.data_mut(0);
-                let dst_ptr = dst_data.as_mut_ptr();
+                let dst_ptr = output.data_mut(0).as_mut_ptr();
 
                 if src_stride == dst_stride {
                     ptr::copy_nonoverlapping(src_ptr, dst_ptr, height * src_stride);
                 } else {
                     let copy_len = src_stride.min(dst_stride);
                     for row in 0..height {
-                        let src_row = src_ptr.add(row * src_stride);
-                        let dst_row = dst_ptr.add(row * dst_stride);
-                        ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                        ptr::copy_nonoverlapping(
+                            src_ptr.add(row * src_stride),
+                            dst_ptr.add(row * dst_stride),
+                            copy_len,
+                        );
                     }
                 }
             } else {
                 for plane in 0..plane_count {
-                    let src_ptr = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane);
-                    let src_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane);
-                    let height = CVPixelBufferGetHeightOfPlane(pixel_buffer, plane);
+                    let src_ptr = pixel_buffer.plane_base_address(plane);
+                    let src_stride = pixel_buffer.plane_bytes_per_row(plane);
+                    let height = pixel_buffer.plane_height(plane);
                     let dst_stride = output.stride(plane);
-
-                    let dst_data = output.data_mut(plane);
-                    let dst_ptr = dst_data.as_mut_ptr();
+                    let dst_ptr = output.data_mut(plane).as_mut_ptr();
 
                     if src_stride == dst_stride {
                         ptr::copy_nonoverlapping(src_ptr, dst_ptr, height * src_stride);
                     } else {
                         let copy_len = src_stride.min(dst_stride);
                         for row in 0..height {
-                            let src_row = src_ptr.add(row * src_stride);
-                            let dst_row = dst_ptr.add(row * dst_stride);
-                            ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                            ptr::copy_nonoverlapping(
+                                src_ptr.add(row * src_stride),
+                                dst_ptr.add(row * dst_stride),
+                                copy_len,
+                            );
                         }
                     }
                 }
             }
+        }
 
-            CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
+        unsafe {
+            let _ = pixel_buffer.unlock_lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY);
         }
 
         Ok(())
@@ -283,12 +240,9 @@ impl VideoToolboxConverter {
 
 impl Drop for VideoToolboxConverter {
     fn drop(&mut self) {
-        let session = self.session.get_mut().0;
-        if !session.is_null() {
-            unsafe {
-                VTPixelTransferSessionInvalidate(session);
-                CFRelease(session as *const c_void);
-            }
+        self.session.get_mut().0.invalidate();
+        if let Some(pool) = &self.pool {
+            pool.0.flush(cv::PixelBufPoolFlushFlags::EXCESS_BUFFERS);
         }
     }
 }
@@ -317,25 +271,17 @@ impl FrameConverter for VideoToolboxConverter {
         }
 
         let input_buffer = self.create_input_pixel_buffer(&input)?;
-        let output_buffer = self.create_output_pixel_buffer()?;
+        let mut output_buffer = self.create_output_pixel_buffer()?;
 
-        let status = {
-            let session_guard = self.session.lock();
-            unsafe {
-                VTPixelTransferSessionTransferImage(session_guard.0, input_buffer, output_buffer)
-            }
-        };
+        let status = self
+            .session
+            .lock()
+            .0
+            .transfer(&input_buffer, &output_buffer);
 
-        unsafe {
-            CVPixelBufferRelease(input_buffer);
-        }
-
-        if status != 0 {
-            unsafe {
-                CVPixelBufferRelease(output_buffer);
-            }
+        if let Err(error) = status {
             return Err(ConvertError::ConversionFailed(format!(
-                "VTPixelTransferSessionTransferImage failed: {status}"
+                "VTPixelTransferSessionTransferImage: {error}"
             )));
         }
 
@@ -345,12 +291,8 @@ impl FrameConverter for VideoToolboxConverter {
             );
         }
 
-        self.copy_output_to_frame(output_buffer, output)?;
+        self.copy_output_to_frame(&mut output_buffer, output)?;
         output.set_pts(input.pts());
-
-        unsafe {
-            CVPixelBufferRelease(output_buffer);
-        }
 
         Ok(())
     }

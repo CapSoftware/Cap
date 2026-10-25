@@ -1458,6 +1458,7 @@ dependencies = [
  "cap-camera",
  "cap-camera-avfoundation",
  "cap-camera-windows",
+ "cap-mediafoundation-utils",
  "cidre",
  "ffmpeg-next",
  "thiserror 1.0.69",
@@ -1472,7 +1473,6 @@ name = "cap-camera-mediafoundation"
 version = "0.1.0"
 dependencies = [
  "cap-mediafoundation-utils",
- "parking_lot",
  "thiserror 1.0.69",
  "tracing",
  "windows 0.60.0",
@@ -1763,6 +1763,7 @@ name = "cap-frame-converter"
 version = "0.1.0"
 dependencies = [
  "cap-media-info",
+ "cidre",
  "crossbeam-channel",
  "ffmpeg-next",
  "flume 0.11.1",
