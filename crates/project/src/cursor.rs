@@ -198,7 +198,7 @@ impl CursorEvents {
             }
 
             for event in &mut self.moves[segments[i].range.clone()] {
-                event.cursor_id = replacement.clone();
+                event.cursor_id.clone_from(&replacement);
             }
             segments[i].id = replacement;
         }
@@ -215,7 +215,7 @@ impl CursorEvents {
                 segment_index += 1;
             }
 
-            click.cursor_id = segments[segment_index].id.clone();
+            click.cursor_id.clone_from(&segments[segment_index].id);
         }
     }
 
@@ -593,6 +593,44 @@ mod tests {
             cursor_num: 0,
             down: true,
             time_ms,
+        }
+    }
+
+    #[test]
+    fn stabilization_preserves_event_fields_when_replacing_different_length_ids() {
+        for (pointer, other) in [
+            (String::from("0"), "1".into()),
+            ("123".into(), "4".into()),
+            ("a".into(), "🖱".into()),
+            ("".into(), "old".into()),
+            ("pointer".into(), "x".repeat(65_536)),
+        ] {
+            let pointers = HashSet::from([pointer.clone()]);
+            let mut events = CursorEvents {
+                moves: vec![
+                    move_event(0.0, &pointer),
+                    move_event(200.0, &other),
+                    move_event(300.0, &other),
+                    move_event(400.0, &pointer),
+                ],
+                clicks: vec![click_event(250.0, &other), click_event(1500.0, &pointer)],
+            };
+            events.moves[1].x = f64::from_bits(0x7ff8_0000_0000_1234);
+            events.moves[2].y = -0.0;
+            events.moves[1].active_modifiers = vec!["LShift".into()];
+            events.clicks[0].active_modifiers = vec!["LMeta".into()];
+            let mut expected = events.clone();
+            for event in &mut expected.moves {
+                event.cursor_id = pointer.clone();
+            }
+            for event in &mut expected.clicks {
+                event.cursor_id = pointer.clone();
+            }
+            events.stabilize_short_lived_cursor_shapes(Some(&pointers), 1_000.0);
+            assert_eq!(
+                bincode::serde::encode_to_vec(&events, bincode::config::standard()).unwrap(),
+                bincode::serde::encode_to_vec(&expected, bincode::config::standard()).unwrap()
+            );
         }
     }
 
