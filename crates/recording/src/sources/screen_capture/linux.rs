@@ -536,7 +536,7 @@ fn capture_pipewire_node(
         .connect_fd(input.fd, None)
         .context("connect to PipeWire remote")?;
 
-    let importer = match linux_dmabuf_import::DmaBufImporter::new() {
+    let mut importer = match linux_dmabuf_import::DmaBufImporter::new() {
         Ok(importer) => Some(importer),
         Err(error) => {
             tracing::info!(%error, "no GPU import for tiled DMA-BUF screencasts");
@@ -544,7 +544,7 @@ fn capture_pipewire_node(
         }
     };
     let imported_params = importer
-        .as_ref()
+        .as_mut()
         .map(|importer| pipewire_imported_format_params(input.fps, importer))
         .unwrap_or_default();
 
@@ -1060,7 +1060,7 @@ fn imported_pipewire_frame(
         .map_err(|_| anyhow!("PipeWire screen capture frame used a negative stride"))?;
     scratch.resize(width * height * 4, 0);
     importer.read_rgba(
-        data.fd() as i32,
+        data.fd(),
         fourcc,
         format.modifier(),
         size.width,
@@ -1317,7 +1317,7 @@ fn pipewire_dmabuf_format_param_for(
 /// shares.
 fn pipewire_imported_format_params(
     fps: u32,
-    importer: &linux_dmabuf_import::DmaBufImporter,
+    importer: &mut linux_dmabuf_import::DmaBufImporter,
 ) -> Vec<Vec<u8>> {
     use spa::param::video::VideoFormat;
     [VideoFormat::BGRx, VideoFormat::BGRA]
