@@ -685,6 +685,7 @@ fn nv12_convert_row_scalar(
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn nv12_convert_span_at(
     y_data: &[u8],
@@ -704,6 +705,7 @@ fn nv12_convert_span_at(
     nv12_convert_span(y_row, uv_row, output_row, matrix);
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn nv12_convert_span(y_row: &[u8], uv_row: &[u8], output_row: &mut [u8], matrix: YuvMatrix) {
     for ((luma, chroma), pixels) in y_row
         .chunks(2)
@@ -723,6 +725,21 @@ fn nv12_convert_span(y_row: &[u8], uv_row: &[u8], output_row: &mut [u8], matrix:
                 255,
             ]);
         }
+    }
+    // `chunks_mut(8)` yields pairs only, so an odd width leaves its last pixel.
+    if !y_row.len().is_multiple_of(2) {
+        let col = y_row.len() - 1;
+        let chroma = &uv_row[col..col + 2];
+        let d = i32::from(chroma[0]) - 128;
+        let e = i32::from(chroma[1]) - 128;
+        let [red, green, blue] = matrix.chroma_contributions(d, e);
+        let c = 298 * (i32::from(y_row[col]) - 16);
+        output_row[col * 4..col * 4 + 4].copy_from_slice(&[
+            clamp_u8((c + red) >> 8),
+            clamp_u8((c + green) >> 8),
+            clamp_u8((c + blue) >> 8),
+            255,
+        ]);
     }
 }
 
@@ -1119,6 +1136,7 @@ fn yuv420p_convert_row_scalar(
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn yuv420p_convert_span_at(
     y_data: &[u8],
@@ -1141,6 +1159,7 @@ fn yuv420p_convert_span_at(
     yuv420p_convert_span(y_row, u_row, v_row, output_row, matrix);
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn yuv420p_convert_span(
     y_row: &[u8],
     u_row: &[u8],
@@ -1167,6 +1186,20 @@ fn yuv420p_convert_span(
                 255,
             ]);
         }
+    }
+    // `chunks_mut(8)` yields pairs only, so an odd width leaves its last pixel.
+    if !y_row.len().is_multiple_of(2) {
+        let col = y_row.len() - 1;
+        let d = i32::from(u_row[col / 2]) - 128;
+        let e = i32::from(v_row[col / 2]) - 128;
+        let [red, green, blue] = matrix.chroma_contributions(d, e);
+        let c = 298 * (i32::from(y_row[col]) - 16);
+        output_row[col * 4..col * 4 + 4].copy_from_slice(&[
+            clamp_u8((c + red) >> 8),
+            clamp_u8((c + green) >> 8),
+            clamp_u8((c + blue) >> 8),
+            255,
+        ]);
     }
 }
 
