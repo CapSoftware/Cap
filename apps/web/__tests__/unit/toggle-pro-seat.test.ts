@@ -30,7 +30,7 @@ const lockRows = vi.fn();
 const updates: { table: unknown; value: Record<string, unknown> }[] = [];
 
 type SelectQuery = Promise<unknown[]> & {
-	from(): SelectQuery;
+	from(table: unknown): SelectQuery;
 	innerJoin(): SelectQuery;
 	where(): SelectQuery;
 	limit(): SelectQuery;
@@ -38,15 +38,19 @@ type SelectQuery = Promise<unknown[]> & {
 };
 
 function selectQuery() {
+	let source: unknown;
 	const query: SelectQuery = Object.assign(
 		Promise.resolve(mocks.selectResults.shift() ?? []),
 		{
-			from: () => query,
+			from: (table: unknown) => {
+				source = table;
+				return query;
+			},
 			innerJoin: () => query,
 			where: () => query,
 			limit: () => query,
 			for: (mode: string) => {
-				lockRows(mode);
+				lockRows(mode, source);
 				return query;
 			},
 		},
@@ -96,6 +100,7 @@ async function turnSeatOff(
 ) {
 	mocks.selectResults = [
 		[{ id: "member", userId: "teammate", hasProSeat: true }],
+		[{ id: "teammate" }],
 		remainingSeats,
 	];
 	await toggle(false);
@@ -151,14 +156,15 @@ describe("toggleProSeat", () => {
 			expect(memberIsPro()).toBe(true);
 		});
 
-		it("locks the member and the remaining seats inside the transaction", async () => {
+		it("locks the member row and then the user row inside the transaction", async () => {
 			await turnSeatOff([{ stripeSubscriptionId: "sub_other" }]);
 
 			expect(database.transaction).toHaveBeenCalledTimes(1);
-			expect(database.select).toHaveBeenCalledTimes(2);
-			expect(lockRows).toHaveBeenCalledTimes(2);
-			expect(lockRows).toHaveBeenNthCalledWith(1, "update");
-			expect(lockRows).toHaveBeenNthCalledWith(2, "update");
+			expect(database.select).toHaveBeenCalledTimes(3);
+			expect(lockRows.mock.calls).toEqual([
+				["update", tables.organizationMembers],
+				["update", tables.users],
+			]);
 		});
 
 		it("does nothing when the seat is already off", async () => {

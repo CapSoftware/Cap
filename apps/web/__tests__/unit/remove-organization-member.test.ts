@@ -99,6 +99,7 @@ async function removeSeat(
 			},
 		],
 		[],
+		[{ id: "teammate" }],
 		remainingSeats,
 	];
 	const { removeOrganizationMember } = await import(

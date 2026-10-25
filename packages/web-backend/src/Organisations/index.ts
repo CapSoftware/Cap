@@ -270,10 +270,15 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.delete(Db.organizations)
 							.where(Dz.eq(Db.organizations.id, id));
 
-						for (const member of memberRows) {
-							if (member.hasProSeat) {
-								await releaseProSeatSubscription(tx, member.userId);
-							}
+						const proSeatUserIds = [
+							...new Set(
+								memberRows
+									.filter((member) => member.hasProSeat)
+									.map((member) => member.userId),
+							),
+						].sort();
+						for (const proSeatUserId of proSeatUserIds) {
+							await releaseProSeatSubscription(tx, proSeatUserId);
 						}
 
 						for (const affectedUserId of affectedUserIds) {

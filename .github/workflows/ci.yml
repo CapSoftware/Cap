@@ -130,6 +130,7 @@ jobs:
           __tests__/unit/embed-video-playback-chrome.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
+          __tests__/unit/invite-decline-pro-seat.test.ts
           __tests__/unit/invite-decline.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
