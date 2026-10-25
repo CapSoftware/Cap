@@ -2574,10 +2574,11 @@ impl EditorWindow {
             SidebarTab::Captions => self.render_captions_tab(cx),
         };
 
+        // Block, not a flex column: its one child lays out the same, without
+        // the extra layout pass a flex column spends sizing it on every rebuild.
         div()
             .id("sidebar-scroll")
-            .flex()
-            .flex_col()
+            .block()
             .flex_1()
             .min_h_0()
             .overflow_x_hidden()

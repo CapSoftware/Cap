@@ -289,6 +289,11 @@ fn frame_seconds(frame: u32) -> f64 {
     frame as f64 / EDITOR_PREVIEW_FPS as f64
 }
 
+/// The new end of a timeline that an edit shortened past the playhead.
+fn playhead_past_end(playhead: f64, total: f64) -> Option<f64> {
+    (total > 0.0 && playhead > total).then_some(total)
+}
+
 /// Where a seek leaves the playhead. Paused, the engine echoes the seek back
 /// as `playhead_changed(frame)`; storing the frame's own time makes that echo
 /// a no-op instead of a second whole-editor rebuild for every scrub step.
@@ -2292,6 +2297,12 @@ impl EditorWindow {
         self.timeline.waveform_paths = waveform_paths;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
+            // Deleting or trimming the clip under the playhead shortens the
+            // timeline past it; bring the playhead back to the new end the way
+            // `setPlayhead` clamps it (`ED/context.ts:2424`).
+            if let Some(end) = playhead_past_end(self.playhead, self.total) {
+                self.apply_seek(end);
+            }
         }
     }
 
@@ -7106,10 +7117,7 @@ impl EditorWindow {
 
     fn open_recording_bundle(&mut self, cx: &mut Context<Self>) {
         self.set_selection(None, cx);
-        crate::library::open_recording_folder(
-            &self.project_path,
-            crate::library::RecordingMode::Studio,
-        );
+        crate::library::reveal_path(&self.project_path, cx);
     }
 
     fn delete_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -12277,6 +12285,17 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 0.6.1 log: the user deleted the clip under the playhead, the
+    /// timeline shrank to before it, and every preview request past the new
+    /// end found no segment. The playhead goes back to the end instead.
+    #[test]
+    fn a_shortened_timeline_brings_the_playhead_back_to_its_end() {
+        assert_eq!(playhead_past_end(10.0, 4.0), Some(4.0));
+        assert_eq!(playhead_past_end(2.0, 4.0), None);
+        assert_eq!(playhead_past_end(4.0, 4.0), None);
+        assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
 
     #[cfg(target_os = "linux")]
     mod boundary_navigation {

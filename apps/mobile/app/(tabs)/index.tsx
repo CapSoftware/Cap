@@ -321,6 +321,7 @@ export default function CapsScreen() {
 	const auth = useAuth();
 	const authStatus = auth.status;
 	const apiClient = auth.client;
+	const activeOrganizationId = auth.bootstrap?.activeOrganizationId;
 	const libraryRevision = useRecordingUploadLibraryRevision();
 	const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
 	const [folder, setFolder] = useState<MobileFolder | null>(null);
@@ -387,8 +388,9 @@ export default function CapsScreen() {
 
 	useFocusEffect(
 		useCallback(() => {
+			if (activeOrganizationId === undefined) return;
 			void load(libraryRevision === 0);
-		}, [libraryRevision, load]),
+		}, [activeOrganizationId, libraryRevision, load]),
 	);
 
 	const loadMore = useCallback(async () => {
