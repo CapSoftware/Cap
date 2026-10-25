@@ -979,6 +979,58 @@ mod tests {
     }
 
     #[test]
+    fn repeated_borrowed_frame_skips_the_second_upload() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping borrowed-frame skip test");
+            return;
+        };
+
+        let width = 4u32;
+        let height = 4u32;
+        let mut backing = ::ffmpeg::frame::Video::new(::ffmpeg::format::Pixel::NV12, width, height);
+        backing.data_mut(0).fill(235);
+        backing.data_mut(1).fill(128);
+        let backing = Arc::new(backing);
+        let y_stride = backing.stride(0) as u32;
+        let uv_stride = backing.stride(1) as u32;
+
+        let prepare = |layer: &mut DisplayLayer, recording_time: f32| {
+            let frame = DecodedFrame::new_nv12_with_ffmpeg_frame(
+                Arc::clone(&backing),
+                width,
+                height,
+                y_stride,
+                uv_stride,
+            );
+            let frames = DecodedSegmentFrames {
+                screen_size: XY::new(width, height),
+                screen_frame: Some(frame),
+                camera_frame: None,
+                segment_time: recording_time,
+                recording_time,
+                segment_has_camera: false,
+            };
+            let (ready, _, _) = layer.prepare(
+                &device,
+                &queue,
+                &frames,
+                XY::new(width, height),
+                CompositeVideoFrameUniforms::default(),
+            );
+            assert!(ready, "borrowed NV12 frame not ready at {recording_time}");
+        };
+
+        let mut layer = DisplayLayer::new_with_options(&device, false);
+        prepare(&mut layer, 0.0);
+        assert_eq!(layer.current_texture, 1);
+        prepare(&mut layer, 0.5);
+        assert_eq!(
+            layer.current_texture, 1,
+            "a repeated borrowed frame must not be converted again"
+        );
+    }
+
+    #[test]
     fn nv12_prepare_with_encoder_writes_the_display_texture_directly() {
         let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter available, skipping display NV12 encoder test");

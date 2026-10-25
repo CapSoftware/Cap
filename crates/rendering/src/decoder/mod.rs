@@ -149,8 +149,8 @@ pub struct DecodedFrame {
     y_stride: u32,
     uv_stride: u32,
     // Borrowed decoded planes: the cache owns the AVFrame instead of copying
-    // its planes into `data`. The empty `data` Arc stays as the per-frame
-    // storage identity that layers use to skip redundant uploads.
+    // its planes into `data`. Layers use the backing as the per-frame storage
+    // identity so re-requesting the same decoded frame skips the upload.
     ffmpeg_backing: Option<Arc<::ffmpeg::frame::Video>>,
     storage_epoch: u64,
     #[cfg(target_os = "macos")]
@@ -242,6 +242,7 @@ pub(crate) struct DecodedFrameStorageIdentity {
     // Pooled frames reuse allocations, so their epoch is the identity and no
     // Weak may pin the buffer against reuse.
     data: Option<Weak<Vec<u8>>>,
+    ffmpeg_backing: Option<Weak<::ffmpeg::frame::Video>>,
     width: u32,
     height: u32,
     format: PixelFormat,
@@ -257,7 +258,13 @@ impl DecodedFrameStorageIdentity {
             (None, None) => true,
             _ => false,
         };
+        let same_ffmpeg_backing = match (&self.ffmpeg_backing, &other.ffmpeg_backing) {
+            (Some(backing), Some(other_backing)) => backing.ptr_eq(other_backing),
+            (None, None) => true,
+            _ => false,
+        };
         same_storage
+            && same_ffmpeg_backing
             && self.width == other.width
             && self.height == other.height
             && self.format == other.format
@@ -721,7 +728,11 @@ impl DecodedFrame {
 
     pub(crate) fn storage_identity(&self) -> DecodedFrameStorageIdentity {
         DecodedFrameStorageIdentity {
-            data: (self.storage_epoch == 0).then(|| Arc::downgrade(&self.data)),
+            // Borrowed planes have no `data` allocation of their own: reuse of
+            // the same AVFrame must match through `ffmpeg_backing` instead.
+            data: (self.storage_epoch == 0 && self.ffmpeg_backing.is_none())
+                .then(|| Arc::downgrade(&self.data)),
+            ffmpeg_backing: self.ffmpeg_backing.as_ref().map(Arc::downgrade),
             width: self.width,
             height: self.height,
             format: self.format,
@@ -2039,6 +2050,61 @@ mod tests {
             !original
                 .storage_identity()
                 .matches(&distinct.storage_identity())
+        );
+    }
+
+    #[test]
+    fn ffmpeg_backed_storage_identity_follows_the_shared_planes() {
+        let width = 4;
+        let height = 4;
+        let backing = Arc::new(::ffmpeg::frame::Video::new(
+            ::ffmpeg::format::Pixel::NV12,
+            width,
+            height,
+        ));
+        let y_stride = backing.stride(0) as u32;
+        let uv_stride = backing.stride(1) as u32;
+        let first = DecodedFrame::new_nv12_with_ffmpeg_frame(
+            Arc::clone(&backing),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        );
+        let repeated = DecodedFrame::new_nv12_with_ffmpeg_frame(
+            Arc::clone(&backing),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        );
+        let distinct = DecodedFrame::new_nv12_with_ffmpeg_frame(
+            Arc::new(::ffmpeg::frame::Video::new(
+                ::ffmpeg::format::Pixel::NV12,
+                width,
+                height,
+            )),
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        );
+
+        assert!(
+            first
+                .storage_identity()
+                .matches(&repeated.storage_identity())
+        );
+        assert!(
+            !first
+                .storage_identity()
+                .matches(&distinct.storage_identity())
+        );
+        assert!(
+            !first.storage_identity().matches(
+                &DecodedFrame::new_nv12(vec![0; 24], width, height, y_stride, uv_stride)
+                    .storage_identity()
+            )
         );
     }
 
