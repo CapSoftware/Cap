@@ -1,11 +1,3 @@
-//! Shared caption word normalization and segmentation.
-//!
-//! Single source of truth for how transcribed words are cleaned up and grouped
-//! into on-screen caption segments. This used to be copy-pasted across the
-//! Tauri captions pipeline (`apps/desktop/src-tauri/src/captions.rs`), the gpui
-//! transcription pipeline (`apps/desktop-gpui/src/transcription.rs`),
-//! `caption_timing`, and `editor_window`, and the copies drifted apart.
-
 use crate::CaptionWord;
 
 /// Whisper/Parakeet sometimes stretch a trailing word's end across a following
@@ -87,8 +79,6 @@ pub fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
         )
 }
 
-/// Drops empty tokens, attaches punctuation-only tokens to the previous word,
-/// and clamps inflated trailing word durations.
 pub fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
     let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
 
@@ -137,12 +127,12 @@ pub fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWo
     text
 }
 
-/// Groups normalized words into caption segments of at most
-/// [`MAX_CAPTION_WORDS_PER_SEGMENT`] words, aiming for
-/// [`TARGET_CAPTION_WORDS_PER_SEGMENT`]. The boundary word may move past the
-/// target to avoid ending on a weak word, and a trailing fragment shorter than
-/// [`MIN_FINAL_CAPTION_WORDS`] merges into the previous segment when it starts
-/// with a weak word.
+/// Groups normalized words into caption segments aiming for
+/// [`TARGET_CAPTION_WORDS_PER_SEGMENT`] words. The boundary word may move past
+/// the target, up to [`MAX_CAPTION_WORDS_PER_SEGMENT`], to avoid ending on a
+/// weak word, and a trailing fragment shorter than [`MIN_FINAL_CAPTION_WORDS`]
+/// merges into the previous segment when it starts with a weak word, which can
+/// put the merged segment over the max.
 pub fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
     let mut chunks = Vec::new();
     let mut start = 0;

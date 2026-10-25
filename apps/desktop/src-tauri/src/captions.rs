@@ -74,11 +74,15 @@ lazy_static::lazy_static! {
 }
 
 const WHISPER_SAMPLE_RATE: u32 = 16000;
-
-use cap_project::caption_words::{
-    caption_text_from_words, caption_word_chunks, normalize_caption_words,
-    MAX_CAPTION_WORD_DURATION,
-};
+const TARGET_CAPTION_WORDS_PER_SEGMENT: usize = 6;
+const MAX_CAPTION_WORDS_PER_SEGMENT: usize = 8;
+const MIN_FINAL_CAPTION_WORDS: usize = 3;
+// Whisper/Parakeet sometimes stretch a trailing word's end across a following
+// silence (e.g. a 16s "seconds."), which leaves the rendered caption stuck on
+// screen and duplicates the word across timeline cuts once projected. Real
+// spoken words never approach this, so cap each word's duration to keep timing
+// tied to speech rather than silence.
+const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 struct CachedParakeetContext {
@@ -763,6 +767,154 @@ fn is_special_token(token_text: &str) -> bool {
     }
 
     is_special
+}
+
+fn caption_token_attaches_to_previous(text: &str) -> bool {
+    let Some(first_char) = text.trim().chars().next() else {
+        return false;
+    };
+
+    caption_char_attaches_to_previous(first_char)
+}
+
+fn caption_char_attaches_to_previous(value: char) -> bool {
+    matches!(
+        value,
+        ',' | '.'
+            | '!'
+            | '?'
+            | ';'
+            | ':'
+            | '%'
+            | ')'
+            | ']'
+            | '}'
+            | '\''
+            | '’'
+            | '、'
+            | '。'
+            | '！'
+            | '？'
+            | '；'
+            | '：'
+            | '，'
+    )
+}
+
+fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
+    let normalized = word
+        .text
+        .trim()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+
+    normalized.len() <= 1
+        || matches!(
+            normalized.as_str(),
+            "an" | "as"
+                | "at"
+                | "be"
+                | "by"
+                | "do"
+                | "he"
+                | "if"
+                | "in"
+                | "is"
+                | "it"
+                | "me"
+                | "my"
+                | "of"
+                | "on"
+                | "or"
+                | "so"
+                | "to"
+                | "up"
+                | "we"
+        )
+}
+
+fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
+    let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
+
+    for word in words {
+        let text = word.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        if caption_token_attaches_to_previous(text)
+            && let Some(previous) = normalized.last_mut()
+        {
+            previous.text.push_str(text);
+            previous.end = word.end;
+        } else {
+            normalized.push(CaptionWord {
+                text: text.to_string(),
+                start: word.start,
+                end: word.end,
+            });
+        }
+    }
+
+    for word in &mut normalized {
+        word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
+    }
+
+    normalized
+}
+
+fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
+    let mut text = String::new();
+
+    for word in words {
+        let word_text = word.text.trim();
+        if word_text.is_empty() {
+            continue;
+        }
+
+        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
+            text.push(' ');
+        }
+        text.push_str(word_text);
+    }
+
+    text
+}
+
+fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while start < words.len() {
+        let remaining = words.len() - start;
+        if remaining <= TARGET_CAPTION_WORDS_PER_SEGMENT {
+            chunks.push(&words[start..]);
+            break;
+        }
+
+        let mut end = (start + TARGET_CAPTION_WORDS_PER_SEGMENT).min(words.len());
+        while end < words.len()
+            && caption_boundary_word_is_weak(&words[end - 1])
+            && end - start < MAX_CAPTION_WORDS_PER_SEGMENT
+        {
+            end += 1;
+        }
+
+        let remaining_after = words.len() - end;
+        if remaining_after > 0
+            && remaining_after < MIN_FINAL_CAPTION_WORDS
+            && caption_boundary_word_is_weak(&words[end])
+        {
+            end = words.len();
+        }
+
+        chunks.push(&words[start..end]);
+        start = end;
+    }
+
+    chunks
 }
 
 fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
