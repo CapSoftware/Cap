@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
+import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	authApiKeys,
@@ -35,7 +36,19 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 			if (now > v.resetAt) requestCounts.delete(k);
 		}
 		if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
-			requestCounts.clear();
+			for (const [k, v] of requestCounts) {
+				if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
+				if (v.count < RATE_LIMIT_MAX_REQUESTS) requestCounts.delete(k);
+			}
+			if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
+				const byExpiry = [...requestCounts.entries()].sort(
+					(a, b) => a[1].resetAt - b[1].resetAt,
+				);
+				for (const [k] of byExpiry) {
+					if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
+					requestCounts.delete(k);
+				}
+			}
 		}
 	}
 
@@ -81,7 +94,7 @@ async function getAuth(c: Context) {
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
 		if (user && isBlockedAccountEmail(user.email)) user = undefined;
-	} else {
+	} else if (!isCrossSiteCookieWrite(c.req.raw)) {
 		user = await getCurrentUser();
 	}
 

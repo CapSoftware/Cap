@@ -20,9 +20,9 @@ export const getSharePlaybackUrl = (video: SharePlaybackVideo) =>
 			updatedAt: video.updatedAt.toISOString(),
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(loadedVideo);
-		return yield* bucket.getSignedObjectUrl(
-			`${video.owner.id}/${video.id}/result.mp4`,
-		);
+		const source = Video.Video.getSource(loadedVideo);
+		if (!(source instanceof Video.Mp4Source)) return null;
+		return yield* bucket.getSignedObjectUrl(source.getFileKey());
 	})
 		.pipe(runPromise)
 		.catch(() => null);

@@ -199,6 +199,10 @@ impl ProjectHistory {
     pub fn resume(&mut self, config: &ProjectConfiguration) {
         self.paused = self.paused.saturating_sub(1);
         if self.paused == 0 && std::mem::take(&mut self.dirty) {
+            let current = &self.entries[self.entries.len() - self.count - 1];
+            if serializes_equal(current, config) {
+                return;
+            }
             self.record(config);
         }
     }
@@ -235,6 +239,34 @@ impl ProjectHistory {
     fn depth(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// Compares the JSON the two configs save as, stopping at the first differing
+/// byte. Building two `serde_json::Value` trees instead took ~14 ms on every
+/// drag release in a captioned 20 minute project.
+fn serializes_equal(before: &ProjectConfiguration, after: &ProjectConfiguration) -> bool {
+    struct Unmatched<'a>(&'a [u8]);
+
+    impl std::io::Write for Unmatched<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let rest = self
+                .0
+                .strip_prefix(bytes)
+                .ok_or(std::io::ErrorKind::InvalidData)?;
+            self.0 = rest;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let Ok(before) = serde_json::to_vec(before) else {
+        return false;
+    };
+    let mut unmatched = Unmatched(&before);
+    serde_json::to_writer(&mut unmatched, after).is_ok() && unmatched.0.is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +470,6 @@ pub fn trim_start_bounds(
 }
 
 /// `SegmentHandle position="end"`'s setup (`TL/MaskTrack.tsx:499-508`):
-/// `minValue = start + minDuration`, `maxValue = max(minValue, nextStart)`.
 pub fn trim_end_bounds(
     segments: &[Segment],
     lane: u32,
@@ -447,11 +478,11 @@ pub fn trim_end_bounds(
     total: f64,
 ) -> DragBounds {
     let (_, next_start) = neighbours(segments, lane, index, total);
-    let min = segments[index].start + min_duration;
-    DragBounds {
-        min,
-        max: min.max(next_start),
-    }
+    let max = next_start.max(segments[index].end);
+    let min = (segments[index].start + min_duration)
+        .min(segments[index].end)
+        .min(max);
+    DragBounds { min, max }
 }
 
 pub fn audio_trim_start_bounds(segment: &AudioTrackSegment, bounds: DragBounds) -> DragBounds {
@@ -515,7 +546,7 @@ pub trait TrackSegmentOps: Clone {
     /// time, end: segment.end}`.
     fn split_tail(&self, at: f64) -> Self {
         let mut tail = self.clone();
-        tail.set_start(self.start() + at);
+        tail.trim_start_to(self.start() + at);
         tail
     }
 
@@ -587,7 +618,39 @@ pub fn fit_camera3d_motion(segment: &mut Camera3DSegment) {
         }
     }
 }
-impl_track_segment!(MaskSegment, lane: track);
+
+impl TrackSegmentOps for MaskSegment {
+    fn start(&self) -> f64 {
+        self.start
+    }
+    fn end(&self) -> f64 {
+        self.end
+    }
+    fn set_start(&mut self, value: f64) {
+        self.start = value;
+    }
+    fn set_end(&mut self, value: f64) {
+        self.end = value;
+    }
+    fn trim_start_to(&mut self, value: f64) {
+        let shift = self.start - value;
+        // Off-segment keys still anchor interpolation at the trimmed edges.
+        for time in self
+            .keyframes
+            .position
+            .iter_mut()
+            .chain(&mut self.keyframes.size)
+            .map(|key| &mut key.time)
+            .chain(self.keyframes.intensity.iter_mut().map(|key| &mut key.time))
+        {
+            *time += shift;
+        }
+        self.start = value;
+    }
+    fn lane(&self) -> u32 {
+        self.track
+    }
+}
 impl_track_segment!(TextSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
 impl_track_segment!(cap_project::ImageSegment, lane: track);
@@ -733,15 +796,52 @@ fn descending_indices(indices: &[usize], length: usize) -> Vec<usize> {
     sorted
 }
 
-/// Splice out every listed index, highest first.
 fn delete_indices<T>(segments: &mut Vec<T>, indices: &[usize]) -> bool {
+    if let &[index] = indices {
+        if index >= segments.len() {
+            return false;
+        }
+        segments.remove(index);
+        return true;
+    }
+
     let sorted = descending_indices(indices, segments.len());
     if sorted.is_empty() {
         return false;
     }
-    for index in sorted {
-        segments.remove(index);
+    if sorted.len() == 1 {
+        segments.remove(sorted[0]);
+        return true;
     }
+    let first = sorted[sorted.len() - 1];
+    let last = sorted[0];
+    if last - first == sorted.len() - 1 {
+        if last == segments.len() - 1 {
+            segments.truncate(first);
+        } else {
+            segments.drain(first..=last).for_each(drop);
+        }
+        return true;
+    }
+    if sorted.len() == 2 && last == segments.len() - 1 {
+        segments.truncate(last);
+        segments.remove(first);
+        return true;
+    }
+
+    let mut sorted = sorted.into_iter().rev();
+    let mut next = sorted.next();
+    let mut index = first;
+    segments
+        .extract_if(first..=last, |_| {
+            let delete = next == Some(index);
+            if delete {
+                next = sorted.next();
+            }
+            index += 1;
+            delete
+        })
+        .for_each(drop);
     true
 }
 
@@ -1280,7 +1380,6 @@ fn ripple_relative_keyframes<T>(
     keyframes: &mut Vec<T>,
     old_start: f64,
     new_start: f64,
-    new_end: f64,
     cut_start: f64,
     cut_end: f64,
     shift: f64,
@@ -1297,7 +1396,7 @@ fn ripple_relative_keyframes<T>(
         } else {
             absolute
         };
-        *value = (mapped - new_start).clamp(0.0, new_end - new_start);
+        *value = mapped - new_start;
         true
     });
 }
@@ -1309,6 +1408,14 @@ fn ripple_delete_mask_track(
     shift: f64,
 ) {
     segments.retain_mut(|segment| {
+        if segment.end <= cut_start {
+            return true;
+        }
+        if segment.start >= cut_end {
+            segment.start -= shift;
+            segment.end -= shift;
+            return true;
+        }
         let old_start = segment.start;
         let Some((new_start, new_end)) =
             ripple_deleted_bounds(old_start, segment.end, cut_start, cut_end, shift)
@@ -1319,7 +1426,6 @@ fn ripple_delete_mask_track(
             &mut segment.keyframes.position,
             old_start,
             new_start,
-            new_end,
             cut_start,
             cut_end,
             shift,
@@ -1329,7 +1435,6 @@ fn ripple_delete_mask_track(
             &mut segment.keyframes.size,
             old_start,
             new_start,
-            new_end,
             cut_start,
             cut_end,
             shift,
@@ -1339,7 +1444,6 @@ fn ripple_delete_mask_track(
             &mut segment.keyframes.intensity,
             old_start,
             new_start,
-            new_end,
             cut_start,
             cut_end,
             shift,
@@ -2979,12 +3083,125 @@ mod tests {
     }
 
     #[test]
+    fn a_drag_returning_to_its_start_keeps_undo_and_redo_unchanged() {
+        let initial = ProjectConfiguration::default();
+        let mut moved = initial.clone();
+        moved.background.padding += 1.0;
+        let mut future = initial.clone();
+        future.background.padding += 2.0;
+        let mut history = ProjectHistory::new(initial.clone());
+        history.pause();
+        history.record(&moved);
+        history.record(&initial);
+        history.resume(&initial);
+        assert_eq!(history.depth(), 1);
+        assert!(!history.can_undo());
+
+        history.record(&future);
+        history.undo();
+        history.pause();
+        history.record(&moved);
+        history.record(&initial);
+        history.resume(&initial);
+        assert!(history.can_redo());
+        assert_eq!(
+            history.redo().unwrap().background.padding,
+            future.background.padding
+        );
+    }
+
+    #[test]
     fn the_stack_is_capped_at_a_hundred_entries() {
         let mut history = ProjectHistory::new(with_zoom_count(0));
         for count in 0..200 {
             history.record(&with_zoom_count(count % 5));
         }
         assert_eq!(history.depth(), HISTORY_LIMIT);
+    }
+
+    /// A 20 minute recording cut into 30 clips, with 40 zooms and 400
+    /// eight-word captions.
+    fn long_captioned_project() -> ProjectConfiguration {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": (0..30).map(|index| serde_json::json!({
+                    "timescale": 1.0, "start": index as f64 * 40.0, "end": index as f64 * 40.0 + 38.0
+                })).collect::<Vec<_>>(),
+                "zoomSegments": (0..40).map(|index| serde_json::json!({
+                    "start": index as f64 * 28.0, "end": index as f64 * 28.0 + 3.0, "amount": 1.5, "mode": "auto"
+                })).collect::<Vec<_>>()
+            }
+        }));
+        let segments = (0..400)
+            .map(|index| {
+                let start = index as f32 * 3.0;
+                cap_project::CaptionSegment {
+                    id: format!("caption-{index}"),
+                    start,
+                    end: start + 2.8,
+                    text: "the quick brown fox jumps over the dog".into(),
+                    words: (0..8)
+                        .map(|word| cap_project::CaptionWord {
+                            text: "word".into(),
+                            start: start + word as f32 * 0.35,
+                            end: start + word as f32 * 0.35 + 0.3,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        project.captions = Some(cap_project::CaptionsData {
+            segments,
+            source_timed: true,
+            ..Default::default()
+        });
+        cap_project::synchronize_captions(&mut project, &[1200.0]);
+        project
+    }
+
+    fn resume_after_drag(initial: &ProjectConfiguration, end: &ProjectConfiguration) -> usize {
+        let mut history = ProjectHistory::new(initial.clone());
+        history.pause();
+        history.record(end);
+        history.resume(end);
+        history.depth()
+    }
+
+    #[test]
+    fn a_drag_records_a_change_in_the_last_serialized_field() {
+        let initial = long_captioned_project();
+        let mut changed = initial.clone();
+        changed.text_anim_version += 1;
+        assert_eq!(resume_after_drag(&initial, &changed), 2);
+        assert_eq!(resume_after_drag(&initial, &initial), 1);
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -p cap-desktop-gpui --bin cap-gpui history_resume_benchmark -- --ignored --nocapture"]
+    fn history_resume_benchmark() {
+        let initial = long_captioned_project();
+        let mut padding = initial.clone();
+        padding.background.padding += 1.0;
+        let mut caption = initial.clone();
+        caption.timeline.as_mut().unwrap().caption_segments[200].text = "edited".into();
+        for (label, end) in [
+            ("padding", &padding),
+            ("caption", &caption),
+            ("unchanged", &initial),
+        ] {
+            let mut samples = (0..50)
+                .map(|_| {
+                    let mut history = ProjectHistory::new(initial.clone());
+                    history.pause();
+                    history.record(end);
+                    let start = std::time::Instant::now();
+                    history.resume(end);
+                    start.elapsed()
+                })
+                .collect::<Vec<_>>();
+            samples.sort();
+            println!("{label}: median {:?}", samples[samples.len() / 2]);
+        }
     }
 
     // -- Hit testing --------------------------------------------------------
@@ -3169,6 +3386,58 @@ mod tests {
         assert_eq!(bounds.min, 0.);
         assert_eq!(bounds.max, 0., "pinned, not inverted");
         assert_eq!(bounds.clamp(4.), 0.);
+    }
+
+    #[test]
+    fn zoom_end_resize_cannot_cross_a_neighbour_when_zoomed_out() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.zoom_segments[1].start = 6.;
+        let model = TimelineModel::build(&project, false, false);
+        let zoom = segments(&model, TrackKind::Zoom);
+        let floor = min_segment_duration(TrackKind::Zoom, 0.2);
+        let bounds = trim_end_bounds(&zoom, 0, 0, floor, 30.);
+
+        assert_eq!(bounds, DragBounds { min: 5., max: 6. });
+        let timeline = project.timeline.as_mut().unwrap();
+        set_segment_end(timeline, TrackKind::Zoom, 0, bounds.clamp(4.));
+        assert_eq!(timeline.zoom_segments[0].end, 5.);
+        for requested_end in [5.5, 12.] {
+            set_segment_end(timeline, TrackKind::Zoom, 0, bounds.clamp(requested_end));
+            assert!(timeline.zoom_segments[0].end <= timeline.zoom_segments[1].start);
+        }
+    }
+
+    #[test]
+    fn zoom_end_resize_cannot_cross_the_timeline_end_when_zoomed_out() {
+        let mut project = zoom_fixture();
+        let model = TimelineModel::build(&project, false, false);
+        let zoom = segments(&model, TrackKind::Zoom);
+        let floor = min_segment_duration(TrackKind::Zoom, 0.5);
+        let bounds = trim_end_bounds(&zoom, 0, 1, floor, 30.);
+
+        assert_eq!(bounds, DragBounds { min: 24., max: 30. });
+        let timeline = project.timeline.as_mut().unwrap();
+        for requested_end in [23., 28., 40.] {
+            set_segment_end(timeline, TrackKind::Zoom, 1, bounds.clamp(requested_end));
+            assert!(timeline.zoom_segments[1].end <= timeline.duration());
+        }
+    }
+
+    #[test]
+    fn zoom_end_resize_preserves_a_range_left_beyond_a_shortened_timeline() {
+        let mut project = zoom_fixture();
+        project.timeline.as_mut().unwrap().segments[0].end = 10.;
+        let model = TimelineModel::build(&project, false, false);
+        let zoom = segments(&model, TrackKind::Zoom);
+        let floor = min_segment_duration(TrackKind::Zoom, 0.2);
+        let bounds = trim_end_bounds(&zoom, 0, 1, floor, 10.);
+
+        for requested_end in [8., 22., 30.] {
+            let end = bounds.clamp(requested_end);
+            assert!(end >= zoom[1].start);
+            assert!(end <= zoom[1].end);
+        }
     }
 
     // -- Clip trim ----------------------------------------------------------
@@ -3768,6 +4037,126 @@ mod tests {
         assert_eq!(tail.fade_out, 0.6);
     }
 
+    fn animated_mask() -> MaskSegment {
+        let mut mask = default_mask_segment(2.0, 10.0, 1);
+        mask.keyframes = serde_json::from_value(serde_json::json!({
+            "position": [
+                { "time": 0.0, "x": 0.2, "y": 0.3 },
+                { "time": 4.0, "x": 0.5, "y": 0.6 },
+                { "time": 8.0, "x": 0.8, "y": 0.9 }
+            ],
+            "size": [
+                { "time": 0.0, "x": 0.2, "y": 0.3 },
+                { "time": 4.0, "x": 0.4, "y": 0.5 },
+                { "time": 8.0, "x": 0.6, "y": 0.7 }
+            ],
+            "intensity": [
+                { "time": 0.0, "value": 0.2 },
+                { "time": 4.0, "value": 0.5 },
+                { "time": 8.0, "value": 0.8 }
+            ]
+        }))
+        .unwrap();
+        mask
+    }
+
+    fn mask_keyframe_times(mask: &MaskSegment) -> Vec<f64> {
+        mask.keyframes
+            .position
+            .iter()
+            .chain(&mask.keyframes.size)
+            .map(|key| key.time)
+            .chain(mask.keyframes.intensity.iter().map(|key| key.time))
+            .collect()
+    }
+
+    #[test]
+    fn mask_keyframes_keep_their_absolute_times_after_a_split() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        let original = animated_mask();
+        timeline.mask_segments.push(original.clone());
+
+        assert!(split_segment(timeline, TrackKind::Mask, 0, 3.0));
+
+        let head = &timeline.mask_segments[0];
+        let tail = &timeline.mask_segments[1];
+        assert_eq!((head.start, head.end), (2.0, 5.0));
+        assert_eq!((tail.start, tail.end), (5.0, 10.0));
+        assert_eq!(head.track, 1);
+        assert_eq!(tail.track, 1);
+        assert_eq!(
+            serde_json::to_value(&head.keyframes).unwrap(),
+            serde_json::to_value(&original.keyframes).unwrap()
+        );
+        assert_eq!(mask_keyframe_times(tail), [-3.0, 1.0, 5.0].repeat(3));
+    }
+
+    #[test]
+    fn mask_keyframes_keep_their_absolute_times_when_trimming_the_start() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.mask_segments.push(animated_mask());
+
+        for start in [5.0, 7.0, 1.0, 2.0] {
+            assert!(set_segment_start(timeline, TrackKind::Mask, 0, start));
+            let mask = &timeline.mask_segments[0];
+            let absolute_times = mask_keyframe_times(mask)
+                .into_iter()
+                .map(|time| mask.start + time)
+                .collect::<Vec<_>>();
+            assert_eq!(absolute_times, [2.0, 6.0, 10.0].repeat(3));
+        }
+        assert!(!set_segment_start(timeline, TrackKind::Mask, 0, 2.0));
+        assert!(move_segment(timeline, TrackKind::Mask, 0, 4.0, 12.0));
+        assert!(set_segment_end(timeline, TrackKind::Mask, 0, 11.0));
+        assert_eq!(
+            serde_json::to_value(&timeline.mask_segments[0].keyframes).unwrap(),
+            serde_json::to_value(&animated_mask().keyframes).unwrap()
+        );
+    }
+
+    #[test]
+    fn mask_keyframes_outside_the_segment_survive_an_unrelated_ripple_delete() {
+        for (cut_start, cut_end, expected_bounds) in
+            [(0.0, 3.0, (2.0, 6.0)), (12.0, 14.0, (5.0, 9.0))]
+        {
+            let mut mask = animated_mask();
+            mask.start = 5.0;
+            mask.end = 9.0;
+            mask.keyframes.position[0].time = -3.0;
+            mask.keyframes.size[0].time = -3.0;
+            mask.keyframes.intensity[0].time = -3.0;
+            let original = serde_json::to_value(&mask.keyframes).unwrap();
+            let mut project = zoom_fixture();
+            let timeline = project.timeline.as_mut().unwrap();
+            timeline.mask_segments.push(mask);
+
+            ripple_delete_output_tracks(timeline, cut_start, cut_end, cut_end - cut_start);
+
+            assert_eq!(
+                serde_json::to_value(&timeline.mask_segments[0].keyframes).unwrap(),
+                original
+            );
+            let mask = &timeline.mask_segments[0];
+            assert_eq!((mask.start, mask.end), expected_bounds);
+        }
+    }
+
+    #[test]
+    fn mask_keyframes_before_an_overlapping_ripple_delete_keep_their_times() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.mask_segments.push(animated_mask());
+        assert!(set_segment_start(timeline, TrackKind::Mask, 0, 5.0));
+
+        ripple_delete_output_tracks(timeline, 8.0, 9.0, 1.0);
+
+        let mask = &timeline.mask_segments[0];
+        assert_eq!((mask.start, mask.end), (5.0, 9.0));
+        assert_eq!(mask_keyframe_times(mask), [-3.0, 1.0, 4.0].repeat(3));
+    }
+
     // -- Split snapping -----------------------------------------------------
 
     #[test]
@@ -3827,6 +4216,82 @@ mod tests {
     }
 
     // -- Delete -------------------------------------------------------------
+
+    #[test]
+    fn selections_preserve_survivors_and_report_changes() {
+        for length in 0..=8 {
+            for mask in 0..(1 << length) {
+                let source: Vec<usize> = (0..length).collect();
+                let selected: Vec<usize> = (0..length)
+                    .rev()
+                    .filter(|index| mask & (1 << index) != 0)
+                    .collect();
+                let expected: Vec<usize> = source
+                    .iter()
+                    .copied()
+                    .filter(|index| !selected.contains(index))
+                    .collect();
+                let indices: Vec<usize> = selected
+                    .iter()
+                    .copied()
+                    .chain(selected.iter().copied())
+                    .chain([length, usize::MAX])
+                    .collect();
+                for indices in [&selected[..], &indices[..]] {
+                    let mut actual = source.clone();
+                    assert_eq!(delete_indices(&mut actual, indices), !selected.is_empty());
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_copy_values_are_dropped_exactly_once() {
+        use std::{cell::RefCell, rc::Rc};
+
+        struct Tracked {
+            index: usize,
+            drops: Rc<RefCell<Vec<usize>>>,
+        }
+
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.drops.borrow_mut()[self.index] += 1;
+            }
+        }
+
+        for indices in [
+            &[4, 1, 4, usize::MAX][..],
+            &[1, 3][..],
+            &[2][..],
+            &[2, 2][..],
+            &[0, 1, 2, 3, 4][..],
+        ] {
+            let drops = Rc::new(RefCell::new(vec![0; 5]));
+            let mut values: Vec<Tracked> = (0..5)
+                .map(|index| Tracked {
+                    index,
+                    drops: drops.clone(),
+                })
+                .collect();
+            assert!(delete_indices(&mut values, indices));
+            assert_eq!(
+                *drops.borrow(),
+                (0..5)
+                    .map(|index| usize::from(indices.contains(&index)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                values.iter().map(|value| value.index).collect::<Vec<_>>(),
+                (0..5)
+                    .filter(|index| !indices.contains(index))
+                    .collect::<Vec<_>>()
+            );
+            drop(values);
+            assert_eq!(*drops.borrow(), vec![1; 5]);
+        }
+    }
 
     #[test]
     fn deleting_several_indices_removes_exactly_them() {

@@ -3,6 +3,7 @@ use crate::{
     output_pipeline::{
         HealthSender, PipelineHealthEvent, emit_health,
         frame_pacing::{FramePacer, Paced},
+        mjpeg::MjpegDecoder,
     },
     screen_capture,
 };
@@ -960,6 +961,7 @@ impl Muxer for WindowsCameraMuxer {
                         let mut last_frame: Option<NativeCameraFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
+                        let mut mjpeg_decoder = MjpegDecoder::default();
 
                         loop {
                             let ts = match pacer.next(&video_rx, &pause_flag) {
@@ -976,7 +978,7 @@ impl Muxer for WindowsCameraMuxer {
 
                             let normalized_ts = normalize_camera_timestamp(ts, &mut first_timestamp);
 
-                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame) {
+                            let ffmpeg_frame = match camera_frame_to_ffmpeg(&frame, &mut mjpeg_decoder) {
                                 Ok(f) => f,
                                 Err(e) => {
                                     error!("Failed to convert camera frame: {e}");
@@ -1345,11 +1347,14 @@ fn convert_uyvy_to_yuyv(
     dst
 }
 
-pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+pub(crate) fn camera_frame_to_ffmpeg(
+    frame: &NativeCameraFrame,
+    mjpeg_decoder: &mut MjpegDecoder,
+) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     if frame.pixel_format == cap_camera_windows::PixelFormat::MJPEG {
-        return decode_mjpeg_frame(frame);
+        return decode_mjpeg_frame(frame, mjpeg_decoder);
     }
 
     let ffmpeg_format = match frame.pixel_format {
@@ -1625,7 +1630,10 @@ fn copy_plane(
     }
 }
 
-fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {
+fn decode_mjpeg_frame(
+    frame: &NativeCameraFrame,
+    mjpeg_decoder: &mut MjpegDecoder,
+) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
     let buffer_guard = frame
@@ -1637,26 +1645,7 @@ fn decode_mjpeg_frame(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
 
-    let codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::MJPEG)
-        .ok_or_else(|| anyhow!("MJPEG codec not found"))?;
-
-    let decoder_context = ffmpeg::codec::context::Context::new_with_codec(codec);
-    let mut decoder = decoder_context
-        .decoder()
-        .video()
-        .map_err(|e| anyhow!("Failed to create MJPEG decoder: {e}"))?;
-
-    let packet = ffmpeg::Packet::copy(data);
-    decoder
-        .send_packet(&packet)
-        .map_err(|e| anyhow!("Failed to send MJPEG packet: {e}"))?;
-
-    let mut decoded_frame = ffmpeg::frame::Video::empty();
-    decoder
-        .receive_frame(&mut decoded_frame)
-        .map_err(|e| anyhow!("Failed to decode MJPEG frame: {e}"))?;
-
-    Ok(decoded_frame)
+    mjpeg_decoder.decode(data)
 }
 
 fn flip_buffer_size(

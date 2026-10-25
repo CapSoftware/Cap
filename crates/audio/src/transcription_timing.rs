@@ -105,7 +105,7 @@ pub fn append_transcription_audio(
     let mut count = 0_u32;
     let mut start = 0;
     for (end, starting) in boundaries {
-        if count > 0 {
+        if count > 1 {
             for sample in &mut sums[start..end] {
                 *sample /= count as f32;
             }
@@ -316,6 +316,47 @@ mod tests {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_source_intervals_preserve_special_samples_and_existing_output() {
+        let values = [
+            0.0,
+            -0.0,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc0_1234),
+            f32::from_bits(0x7f80_1234),
+        ];
+        for channels in [1, 2, 6] {
+            let samples: Vec<_> = values.into_iter().cycle().take(20 * channels).collect();
+            for offset in [-3.0, -1.25, 0.0, 0.5, 2.0] {
+                let take = take(
+                    10.0,
+                    vec![
+                        source(samples.clone(), channels, offset),
+                        source(samples.clone(), channels, -6.0),
+                    ],
+                );
+                let mut actual = vec![-0.0, f32::from_bits(0x7fc0_4321)];
+                let prefix = bits(&actual);
+                append_transcription_audio(&mut actual, &take, 4).unwrap();
+                assert_eq!(bits(&actual[..2]), prefix);
+                let expected = reference(&take, 4);
+                assert_eq!(actual.len() - 2, expected.len());
+                for (actual, expected) in actual[2..].iter().zip(expected) {
+                    if expected.is_nan() {
+                        assert!(actual.is_nan());
+                    } else {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
                     }
                 }
             }

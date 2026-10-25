@@ -541,18 +541,14 @@ fn linux_reopen_address(
         .parent()
         .ok_or_else(|| std::io::Error::other("The instance directory is missing"))?
         .canonicalize()?;
+    // Only what every launch of this user's Cap sees alike. A terminal and
+    // GNOME's app grid pass different session variables (DISPLAY,
+    // XDG_SESSION_ID), and hashing those sent a relaunch to a socket nobody
+    // listened on. The owner's pid, start time and boot id already make the
+    // name unique, and the peer credentials check keeps it to this user.
     let mut scope = std::collections::hash_map::DefaultHasher::new();
     directory.hash(&mut scope);
     owner.hash(&mut scope);
-    for name in [
-        "XDG_RUNTIME_DIR",
-        "XDG_SESSION_ID",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "WAYLAND_DISPLAY",
-        "DISPLAY",
-    ] {
-        std::env::var_os(name).hash(&mut scope);
-    }
     std::os::unix::net::SocketAddr::from_abstract_name(format!(
         "cap-gpui-reopen-{:016x}",
         scope.finish()
@@ -2657,6 +2653,48 @@ mod linux_reopen_tests {
         let error = send_linux_reopen(address, owner, &[]).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
         assert!(fixture.children[0].try_wait().unwrap().is_none());
+    }
+
+    /// A terminal launch and an app-grid launch carry different session
+    /// variables; both must find the same running instance.
+    #[test]
+    fn launches_with_different_session_variables_find_the_same_instance() {
+        const CHILD: &str = "CAP_REOPEN_ADDRESS_CHILD";
+        const OWNER: &str = "CAP_REOPEN_ADDRESS_OWNER";
+        let name = |address: std::os::unix::net::SocketAddr| {
+            String::from_utf8_lossy(address.as_abstract_name().unwrap()).into_owned()
+        };
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let owner: u32 = std::env::var(OWNER).unwrap().parse().unwrap();
+            let owner = linux_instance_identity(owner).unwrap();
+            let path = std::path::Path::new(&directory).join("cap-gpui.pid");
+            println!(
+                "ADDRESS {}",
+                name(linux_reopen_address(&path, owner).unwrap())
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let here =
+            name(linux_reopen_address(&directory.path().join("cap-gpui.pid"), owner).unwrap());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "single_instance::linux_reopen_tests::launches_with_different_session_variables_find_the_same_instance",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, directory.path())
+            .env(OWNER, std::process::id().to_string())
+            .env_remove("DISPLAY")
+            .env_remove("XDG_SESSION_ID")
+            .env("WAYLAND_DISPLAY", "wayland-9")
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/elsewhere")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(&format!("ADDRESS {here}")), "{stdout}");
     }
 
     #[test]
