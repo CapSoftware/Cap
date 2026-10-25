@@ -85,9 +85,9 @@ view_all_recordings = "查看所有录制"
 view_all_screenshots = "查看所有截图"
 
 [tray.mode]
-instant = "Instant"
+instant = "即时"
 screenshot = "截图"
-studio = "Studio"
+studio = "工作室"
 
 [settings.nav]
 automations = "自动化"
@@ -600,6 +600,7 @@ tagline = "人人可用的开源屏幕分享应用。"
 badge_progress = "v{version} · {percent}%"
 badge_version = "v{version}"
 check = "检查更新"
+download = "下载更新…"
 checking = "正在检查更新…"
 downloading = "正在下载更新…"
 restart = "重新启动以更新…"

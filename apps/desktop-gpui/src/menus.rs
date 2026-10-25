@@ -73,6 +73,7 @@ impl UpdateRow {
         let title = match status {
             UpdateStatus::Idle => tr::menu::update::check(),
             UpdateStatus::Checking => tr::menu::update::checking(),
+            UpdateStatus::Downloading { fraction: None, .. } => tr::menu::update::download(),
             UpdateStatus::Downloading { .. } | UpdateStatus::Installing { .. } => {
                 tr::menu::update::downloading()
             }
@@ -85,7 +86,10 @@ impl UpdateRow {
             enabled: !matches!(
                 status,
                 UpdateStatus::Checking
-                    | UpdateStatus::Downloading { .. }
+                    | UpdateStatus::Downloading {
+                        fraction: Some(_),
+                        ..
+                    }
                     | UpdateStatus::Installing { .. }
             ),
             badge: update_menu_badge(status),
@@ -1330,10 +1334,10 @@ mod tests {
 
         let cold = UpdateRow::of(&downloading(None));
         let warm = UpdateRow::of(&downloading(Some(0.42)));
-        assert_eq!(cold.title, "Downloading update…");
-        assert!(!cold.enabled);
+        assert_eq!(cold.title, "Download update…");
+        assert!(cold.enabled);
+        assert_eq!(warm.title, "Downloading update…");
         assert!(!warm.enabled);
-        assert_eq!(warm.title, cold.title);
 
         let ready = UpdateRow::of(&UpdateStatus::Ready {
             version: version.clone(),
@@ -1349,7 +1353,7 @@ mod tests {
         let installing = UpdateRow::of(&UpdateStatus::Installing {
             version: version.clone(),
         });
-        assert_eq!(installing.title, cold.title);
+        assert_eq!(installing.title, "Downloading update…");
         assert!(!installing.enabled);
     }
 

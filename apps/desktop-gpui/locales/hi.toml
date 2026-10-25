@@ -85,9 +85,9 @@ view_all_recordings = "सभी रिकॉर्डिंग देखें"
 view_all_screenshots = "सभी स्क्रीनशॉट देखें"
 
 [tray.mode]
-instant = "Instant"
+instant = "तुरंत"
 screenshot = "स्क्रीनशॉट"
-studio = "Studio"
+studio = "स्टूडियो"
 
 [settings.nav]
 automations = "ऑटोमेशन"
@@ -600,6 +600,7 @@ tagline = "सबके लिए ओपन सोर्स स्क्री�
 badge_progress = "v{version} · {percent}%"
 badge_version = "v{version}"
 check = "अपडेट जाँचें"
+download = "अपडेट डाउनलोड करें…"
 checking = "अपडेट जाँच रहे हैं…"
 downloading = "अपडेट डाउनलोड हो रहा है…"
 restart = "अपडेट करने के लिए फिर से शुरू करें…"

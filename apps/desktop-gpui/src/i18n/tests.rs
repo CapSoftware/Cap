@@ -54,6 +54,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::help::system_status(), "System Status".into()),
         (tr::menu::help::discord(), "Join Discord Community".into()),
         (tr::menu::update::check(), "Check for Update".into()),
+        (tr::menu::update::download(), "Download update…".into()),
         (tr::menu::update::checking(), "Checking for Update…".into()),
         (
             tr::menu::update::downloading(),

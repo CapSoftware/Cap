@@ -85,9 +85,9 @@ view_all_recordings = "すべての録画を表示"
 view_all_screenshots = "すべてのスクリーンショットを表示"
 
 [tray.mode]
-instant = "Instant"
+instant = "インスタント"
 screenshot = "スクリーンショット"
-studio = "Studio"
+studio = "スタジオ"
 
 [settings.nav]
 automations = "オートメーション"
@@ -600,6 +600,7 @@ tagline = "誰もが使えるオープンソースの画面共有アプリ。"
 badge_progress = "v{version} · {percent}%"
 badge_version = "v{version}"
 check = "アップデートを確認"
+download = "アップデートをダウンロード…"
 checking = "アップデートを確認中…"
 downloading = "アップデートをダウンロード中…"
 restart = "アップデートのために再起動…"

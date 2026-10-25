@@ -85,7 +85,7 @@ view_all_recordings = "Alle Aufnahmen anzeigen"
 view_all_screenshots = "Alle Bildschirmfotos anzeigen"
 
 [tray.mode]
-instant = "Instant"
+instant = "Sofort"
 screenshot = "Bildschirmfoto"
 studio = "Studio"
 
@@ -600,6 +600,7 @@ tagline = "Die Open-Source-App zum Teilen des Bildschirms für alle."
 badge_progress = "v{version} · {percent} %"
 badge_version = "v{version}"
 check = "Nach Updates suchen"
+download = "Update herunterladen…"
 checking = "Suche nach Updates…"
 downloading = "Update wird geladen…"
 restart = "Zum Aktualisieren neu starten…"

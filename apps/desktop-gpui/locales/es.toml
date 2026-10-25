@@ -85,9 +85,9 @@ view_all_recordings = "Ver todas las grabaciones"
 view_all_screenshots = "Ver todas las capturas de pantalla"
 
 [tray.mode]
-instant = "Instant"
+instant = "Instantáneo"
 screenshot = "Captura de pantalla"
-studio = "Studio"
+studio = "Estudio"
 
 [settings.nav]
 automations = "Automatizaciones"
@@ -600,6 +600,7 @@ tagline = "La app de código abierto para compartir pantalla, para todo el mundo
 badge_progress = "v{version} · {percent} %"
 badge_version = "v{version}"
 check = "Buscar actualizaciones"
+download = "Descargar actualización…"
 checking = "Buscando actualizaciones…"
 downloading = "Descargando actualización…"
 restart = "Reiniciar para actualizar…"
