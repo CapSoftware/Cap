@@ -481,6 +481,148 @@ impl TargetSelect {
     }
 }
 
+/// The aspect ratios the area toolbar cycles through, `None` first for a free
+/// selection. The 0.6.0 picker offered the same set (`COMMON_RATIOS`).
+const AREA_RATIOS: [Option<(u32, u32)>; 9] = [
+    None,
+    Some((16, 9)),
+    Some((4, 3)),
+    Some((1, 1)),
+    Some((9, 16)),
+    Some((16, 10)),
+    Some((21, 9)),
+    Some((3, 2)),
+    Some((2, 1)),
+];
+
+const AREA_SELECTION_STORE: &str = "gpui_area_selection";
+
+fn stored_area_ratio() -> Option<(u32, u32)> {
+    let section = crate::store::store_section(AREA_SELECTION_STORE);
+    let ratio = section.get("aspectRatio")?.as_array()?;
+    let [width, height] = ratio.as_slice() else {
+        return None;
+    };
+    let ratio = (width.as_u64()? as u32, height.as_u64()? as u32);
+    AREA_RATIOS.contains(&Some(ratio)).then_some(ratio)
+}
+
+fn store_area_ratio(ratio: Option<(u32, u32)>) {
+    crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+        section.insert(
+            "aspectRatio".into(),
+            ratio.map_or(serde_json::Value::Null, |(width, height)| {
+                serde_json::json!([width, height])
+            }),
+        );
+        true
+    });
+}
+
+fn next_area_ratio(current: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    let index = AREA_RATIOS
+        .iter()
+        .position(|ratio| *ratio == current)
+        .unwrap_or(0);
+    AREA_RATIOS[(index + 1) % AREA_RATIOS.len()]
+}
+
+fn ratio_value((width, height): (u32, u32)) -> f32 {
+    width as f32 / height.max(1) as f32
+}
+
+/// An area at `ratio` (width over height) spanning from the fixed `anchor`
+/// towards `pointer`: the longer span wins, and the area shrinks to stay on
+/// the display.
+fn area_from_anchor_with_ratio(
+    anchor: (f32, f32),
+    pointer: (f32, f32),
+    ratio: f32,
+    display: (f32, f32),
+) -> AreaRect {
+    let (dx, dy) = (pointer.0 - anchor.0, pointer.1 - anchor.1);
+    let (mut width, mut height) = (dx.abs(), dy.abs());
+    if width / ratio >= height {
+        height = width / ratio;
+    } else {
+        width = height * ratio;
+    }
+    let room_x = if dx >= 0. { display.0 - anchor.0 } else { anchor.0 };
+    let room_y = if dy >= 0. { display.1 - anchor.1 } else { anchor.1 };
+    let fit = [1., room_x / width.max(f32::EPSILON), room_y / height.max(f32::EPSILON)]
+        .into_iter()
+        .fold(f32::INFINITY, f32::min)
+        .max(0.);
+    width *= fit;
+    height *= fit;
+    AreaRect {
+        x: if dx >= 0. { anchor.0 } else { anchor.0 - width },
+        y: if dy >= 0. { anchor.1 } else { anchor.1 - height },
+        width,
+        height,
+    }
+}
+
+/// An edge-handle resize at `ratio`: the opposite edge stays put, the dragged
+/// span follows the pointer, and the other span grows around the area's
+/// centre line, shrinking to stay on the display.
+fn area_edge_resize_with_ratio(
+    handle: AreaHandle,
+    start: AreaRect,
+    pointer: (f32, f32),
+    ratio: f32,
+    display: (f32, f32),
+) -> AreaRect {
+    let horizontal = handle.east() || handle.west();
+    let (center_x, center_y) = (start.x + start.width / 2., start.y + start.height / 2.);
+    if horizontal {
+        let anchor = if handle.west() { start.right() } else { start.x };
+        let mut width = (pointer.0 - anchor).abs();
+        let room_x = if handle.west() { anchor } else { display.0 - anchor };
+        let room_y = 2. * center_y.min(display.1 - center_y);
+        width = width.min(room_x).min(room_y * ratio).max(0.);
+        let height = width / ratio;
+        AreaRect {
+            x: if handle.west() { anchor - width } else { anchor },
+            y: center_y - height / 2.,
+            width,
+            height,
+        }
+    } else {
+        let anchor = if handle.north() { start.bottom() } else { start.y };
+        let mut height = (pointer.1 - anchor).abs();
+        let room_y = if handle.north() { anchor } else { display.1 - anchor };
+        let room_x = 2. * center_x.min(display.0 - center_x);
+        height = height.min(room_y).min(room_x / ratio).max(0.);
+        let width = height * ratio;
+        AreaRect {
+            x: center_x - width / 2.,
+            y: if handle.north() { anchor - height } else { anchor },
+            width,
+            height,
+        }
+    }
+}
+
+/// An existing area brought to `ratio` around its centre, keeping its width
+/// unless that would not fit the display.
+fn area_with_ratio(area: AreaRect, ratio: f32, display: (f32, f32)) -> AreaRect {
+    let (center_x, center_y) = (area.x + area.width / 2., area.y + area.height / 2.);
+    let mut width = area.width.min(display.0);
+    let mut height = width / ratio;
+    if height > display.1 {
+        height = display.1;
+        width = height * ratio;
+    }
+    AreaRect {
+        x: center_x - width / 2.,
+        y: center_y - height / 2.,
+        width,
+        height,
+    }
+    .clamped(display)
+}
+
 /// A rectangle in the overlay's own coordinate space: display-relative logical
 /// points, which is also what `ScreenCaptureTarget::Area` wants.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -654,6 +796,8 @@ pub struct OverlayWindow {
     crop: Option<AreaRect>,
     drag: Option<AreaDrag>,
     snap_guides: Vec<SnapGuide>,
+    /// The aspect ratio a drawn or resized area keeps, `None` for free.
+    area_ratio: Option<(u32, u32)>,
     recording_area: bool,
     /// The mode menu the start pill's caret drops down -- `menuModes()`
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
@@ -799,6 +943,7 @@ impl OverlayWindow {
             crop: None,
             drag: None,
             snap_guides: Vec::new(),
+            area_ratio: stored_area_ratio(),
             recording_area: false,
             mode_menu: None,
             countdown_menu: None,
@@ -1786,7 +1931,7 @@ impl OverlayWindow {
         if crop.is_none() && !interacting {
             root = root.child(self.render_selection_hint(hint_started, window, cx));
         }
-        root = root.child(self.render_area_toolbar(crop, valid));
+        root = root.child(self.render_area_toolbar(crop, valid, cx));
         if crop.is_some() {
             root.child(self.render_area_controls(crop, valid, cx))
         } else {
@@ -2033,21 +2178,52 @@ impl OverlayWindow {
     }
 
     /// The floating readout: `top-12 left-1/2 -translate-x-1/2` over the
-    /// liquid-glass surface, `min-w-28 px-2 text-base tabular-nums`. The
-    /// aspect-ratio, reset, fill and lock controls that share this bar in the
-    /// TSX are deferred (README).
-    fn render_area_toolbar(&self, crop: Option<AreaRect>, valid: bool) -> impl IntoElement {
+    /// liquid-glass surface, `min-w-28 px-2 text-base tabular-nums`, and the
+    /// aspect-ratio control beside it. The reset, fill and lock controls that
+    /// share this bar in the TSX are deferred (README).
+    fn render_area_toolbar(
+        &self,
+        crop: Option<AreaRect>,
+        valid: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let label = match crop.filter(|_| valid) {
             Some(crop) => format!("{} × {}", crop.width.round(), crop.height.round()),
             None => "Draw an area".to_string(),
         };
+        let ratio_label = match self.area_ratio {
+            Some((width, height)) => format!("{width}:{height}"),
+            None => "Free".to_string(),
+        };
+        let ratio = div()
+            .id("area-aspect-ratio")
+            .h(px(36.))
+            .min_w(px(56.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .cursor_pointer()
+            .text_size(px(14.))
+            .font_weight(FontWeight::MEDIUM)
+            .bg(self.theme.gray_3)
+            .hover({
+                let hover = self.theme.gray_4;
+                move |style| style.bg(hover)
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.set_area_ratio(next_area_ratio(this.area_ratio), cx);
+            }))
+            .child(ratio_label);
 
         div()
             .absolute()
             // `top-12` on macOS, centred by hand: gpui has no translate.
             .top(px(48.))
-            .left(px((self.display_size.0 - 200.) / 2.))
-            .w(px(200.))
+            .left(px((self.display_size.0 - 280.) / 2.))
+            .w(px(280.))
             .flex()
             .justify_center()
             .child(
@@ -2070,8 +2246,21 @@ impl OverlayWindow {
                             // that the window root carries Medium.
                             .font_weight(FontWeight::NORMAL)
                             .child(label),
-                    ),
+                    )
+                    .child(ratio),
             )
+    }
+
+    /// Locks drawn and resized areas to `ratio`, reshaping the current one
+    /// around its centre, and remembers the choice for the next picker.
+    fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
+        self.area_ratio = ratio;
+        if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
+            self.crop = Some(area_with_ratio(crop, ratio_value(ratio), self.display_size));
+            self.sync_area_camera(cx);
+        }
+        store_area_ratio(ratio);
+        cx.notify();
     }
 
     /// The controls cluster, placed against the crop the way `controlsStyle`
@@ -2545,8 +2734,25 @@ impl OverlayWindow {
         let x = f32::from(position.x).clamp(0., self.display_size.0);
         let y = f32::from(position.y).clamp(0., self.display_size.1);
 
-        let (next, guides) = match drag {
-            AreaDrag::Draw { anchor } => {
+        let ratio = self.area_ratio.map(ratio_value);
+        let (next, guides) = match (drag, ratio) {
+            (AreaDrag::Draw { anchor }, Some(ratio)) => (
+                area_from_anchor_with_ratio(*anchor, (x, y), ratio, self.display_size),
+                Vec::new(),
+            ),
+            (AreaDrag::Resize { handle, start }, Some(ratio)) => (
+                if handle.east() != handle.west() && handle.north() != handle.south() {
+                    let anchor = (
+                        if handle.west() { start.right() } else { start.x },
+                        if handle.north() { start.bottom() } else { start.y },
+                    );
+                    area_from_anchor_with_ratio(anchor, (x, y), ratio, self.display_size)
+                } else {
+                    area_edge_resize_with_ratio(*handle, *start, (x, y), ratio, self.display_size)
+                },
+                Vec::new(),
+            ),
+            (AreaDrag::Draw { anchor }, None) => {
                 let ((x, y), guides) = snap_area_point((x, y), self.display_size);
                 (
                     AreaRect {
@@ -2558,7 +2764,7 @@ impl OverlayWindow {
                     guides,
                 )
             }
-            AreaDrag::Move { grab, start } => snap_area_rect(
+            (AreaDrag::Move { grab, start }, _) => snap_area_rect(
                 AreaRect {
                     x: start.x + (x - grab.0),
                     y: start.y + (y - grab.1),
@@ -2566,7 +2772,7 @@ impl OverlayWindow {
                 },
                 self.display_size,
             ),
-            AreaDrag::Resize { handle, start } => {
+            (AreaDrag::Resize { handle, start }, None) => {
                 let mut left = start.x;
                 let mut top = start.y;
                 let mut right = start.right();
@@ -2657,6 +2863,82 @@ fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ratio_of(area: AreaRect) -> f32 {
+        area.width / area.height
+    }
+
+    fn inside(area: AreaRect, display: (f32, f32)) -> bool {
+        area.x >= -0.01
+            && area.y >= -0.01
+            && area.right() <= display.0 + 0.01
+            && area.bottom() <= display.1 + 0.01
+    }
+
+    /// A 0.6.1 report: the 0.6.0 picker could hold an area at 16:9, and the
+    /// new one could not. Drawing with a ratio keeps it from any direction.
+    #[test]
+    fn a_drawn_area_keeps_the_chosen_aspect_ratio() {
+        let display = (1920., 1080.);
+        let ratio = ratio_value((16, 9));
+        for pointer in [(900., 300.), (100., 900.), (1500., 1000.), (120., 140.)] {
+            let area = area_from_anchor_with_ratio((800., 500.), pointer, ratio, display);
+            assert!((ratio_of(area) - ratio).abs() < 0.001, "{pointer:?}: {area:?}");
+            assert!(inside(area, display), "{pointer:?}: {area:?}");
+        }
+        // The longer span wins: a wide drag sets the width.
+        let wide = area_from_anchor_with_ratio((100., 100.), (900., 300.), ratio, display);
+        assert_eq!((wide.x, wide.y, wide.width), (100., 100., 800.));
+        assert!((wide.height - 450.).abs() < 0.01);
+        // A drag that would leave the display shrinks to fit instead.
+        let edge = area_from_anchor_with_ratio((1800., 100.), (1900., 1000.), ratio, display);
+        assert!(inside(edge, display) && (ratio_of(edge) - ratio).abs() < 0.001);
+    }
+
+    #[test]
+    fn resizing_an_area_keeps_the_chosen_aspect_ratio() {
+        let display = (1920., 1080.);
+        let ratio = ratio_value((1, 1));
+        let start = AreaRect { x: 400., y: 300., width: 400., height: 400. };
+        for handle in AreaHandle::ALL {
+            for pointer in [(1000., 900.), (100., 50.), (650., 520.)] {
+                let area = if handle.east() != handle.west() && handle.north() != handle.south() {
+                    let anchor = (
+                        if handle.west() { start.right() } else { start.x },
+                        if handle.north() { start.bottom() } else { start.y },
+                    );
+                    area_from_anchor_with_ratio(anchor, pointer, ratio, display)
+                } else {
+                    area_edge_resize_with_ratio(handle, start, pointer, ratio, display)
+                };
+                assert!(
+                    area.height == 0. || (ratio_of(area) - ratio).abs() < 0.001,
+                    "{handle:?} {pointer:?}: {area:?}"
+                );
+                assert!(inside(area, display), "{handle:?} {pointer:?}: {area:?}");
+            }
+        }
+        // An east edge drag keeps the west edge and the centre line.
+        let east = area_edge_resize_with_ratio(AreaHandle::East, start, (1000., 0.), ratio, display);
+        assert_eq!((east.x, east.width), (400., 600.));
+        assert_eq!(east.y + east.height / 2., 500.);
+    }
+
+    #[test]
+    fn choosing_a_ratio_reshapes_the_area_around_its_centre() {
+        let display = (1920., 1080.);
+        let area = area_with_ratio(
+            AreaRect { x: 100., y: 300., width: 800., height: 200. },
+            ratio_value((16, 9)),
+            display,
+        );
+        assert_eq!((area.x, area.width), (100., 800.));
+        assert!((area.height - 450.).abs() < 0.01);
+        assert!((area.y + area.height / 2. - 400.).abs() < 0.01);
+        assert!(inside(area, display));
+        assert_eq!(next_area_ratio(None), Some((16, 9)));
+        assert_eq!(next_area_ratio(Some((2, 1))), None);
+    }
 
     #[test]
     fn a_single_overlay_remains_interactive_without_a_global_cursor_probe() {

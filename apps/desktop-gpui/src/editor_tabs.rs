@@ -454,6 +454,54 @@ pub enum CaptionSlider {
     Size,
     BackgroundOpacity,
     FadeDuration,
+    /// Manual placement, as a percentage of the frame width.
+    ManualX,
+    /// Manual placement, as a percentage of the frame height.
+    ManualY,
+}
+
+/// Where a preset places the caption's centre, as fractions of the frame
+/// (`captionPositionCenter`, `CaptionsTab.tsx:362-378`). Manual placement
+/// starts here, so switching to it does not move the captions.
+pub fn caption_position_center(position: &str) -> (f32, f32) {
+    match position {
+        "top-left" => (0.05, 0.08),
+        "top-center" | "top" => (0.5, 0.08),
+        "top-right" => (0.95, 0.08),
+        "bottom-left" => (0.05, 0.85),
+        "bottom-right" => (0.95, 0.85),
+        _ => (0.5, 0.85),
+    }
+}
+
+/// The manual caption centre: the stored one, else the preset's.
+pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
+    settings
+        .manual_position
+        .map_or_else(|| caption_position_center(&settings.position), |xy| (xy.x, xy.y))
+}
+
+/// Moves the manual caption centre, given as percentages of the frame.
+pub fn set_caption_manual_center(settings: &mut CaptionSettings, x: Option<f32>, y: Option<f32>) {
+    let (current_x, current_y) = caption_manual_center(settings);
+    let fraction = |value: f32| (value / 100.).clamp(0., 1.);
+    settings.position = "manual".to_string();
+    settings.manual_position = Some(cap_project::XY::new(
+        x.map_or(current_x, fraction),
+        y.map_or(current_y, fraction),
+    ));
+}
+
+/// Switching the caption position. Entering Manual from a preset seeds the
+/// manual centre from that preset (`updateCaptionPosition`,
+/// `CaptionsTab.tsx:380-394`); without it Manual drew bottom-centre and had
+/// nothing to adjust.
+pub fn set_caption_position(settings: &mut CaptionSettings, position: &str) {
+    if position == "manual" && settings.position != "manual" {
+        let (x, y) = caption_position_center(&settings.position);
+        settings.manual_position = Some(cap_project::XY::new(x, y));
+    }
+    settings.position = position.to_string();
 }
 
 impl CaptionSlider {
@@ -463,6 +511,7 @@ impl CaptionSlider {
             Self::BackgroundOpacity => (0., 100., 1.),
             // `value={[getSetting("fadeDuration") * 100]}` over 0..50.
             Self::FadeDuration => (0., 50., 1.),
+            Self::ManualX | Self::ManualY => (0., 100., 1.),
         }
     }
 
@@ -472,6 +521,8 @@ impl CaptionSlider {
             Self::Size => settings.size as f32,
             Self::BackgroundOpacity => settings.background_opacity as f32,
             Self::FadeDuration => settings.fade_duration * 100.,
+            Self::ManualX => caption_manual_center(&settings).0 * 100.,
+            Self::ManualY => caption_manual_center(&settings).1 * 100.,
         }
     }
 }
@@ -894,9 +945,8 @@ impl EditorWindow {
                 let Some((value, _)) = CAPTION_POSITIONS.get(index) else {
                     return;
                 };
-                let value = value.to_string();
                 self.set_caption_setting("caption-position", window, cx, move |settings| {
-                    settings.position = value
+                    set_caption_position(settings, value)
                 });
             }
             SidebarMenu::CaptionAnimation => {
@@ -1087,6 +1137,8 @@ impl EditorWindow {
             CaptionSlider::Size => settings.size = value.round() as u32,
             CaptionSlider::BackgroundOpacity => settings.background_opacity = value.round() as u32,
             CaptionSlider::FadeDuration => settings.fade_duration = value / 100.,
+            CaptionSlider::ManualX => set_caption_manual_center(settings, Some(value), None),
+            CaptionSlider::ManualY => set_caption_manual_center(settings, None, Some(value)),
         });
     }
 
@@ -2847,6 +2899,30 @@ impl EditorWindow {
                     cx,
                 )),
             )
+            .children((settings.position == "manual").then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(
+                        self.slider_field(
+                            "Horizontal Position",
+                            SliderKey::Caption(CaptionSlider::ManualX),
+                            "%",
+                            cx,
+                        )
+                        .into_any_element(),
+                    )
+                    .child(
+                        self.slider_field(
+                            "Vertical Position",
+                            SliderKey::Caption(CaptionSlider::ManualY),
+                            "%",
+                            cx,
+                        )
+                        .into_any_element(),
+                    )
+            }))
             .child(
                 ui::Field::section(&theme, "Animation").child(
                     div()
@@ -3476,6 +3552,56 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 0.6.1 report: with the caption position set to Manual, the captions
+    /// stayed bottom-centre and nothing could move them. Manual now starts
+    /// where the preset drew them and the sliders move it.
+    #[test]
+    fn manual_caption_position_starts_at_the_preset_and_moves() {
+        let mut settings = CaptionSettings {
+            position: "top-center".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_position(&mut settings, "manual");
+        assert_eq!(settings.position, "manual");
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.5, 0.08))
+        );
+
+        set_caption_manual_center(&mut settings, Some(20.), None);
+        set_caption_manual_center(&mut settings, None, Some(130.));
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.2, 1.0))
+        );
+        let mut project = ProjectConfiguration::default();
+        project.captions = Some(CaptionsData {
+            settings: settings.clone(),
+            ..CaptionsData::default()
+        });
+        assert_eq!(CaptionSlider::ManualX.read(&project), 20.);
+        assert_eq!(CaptionSlider::ManualY.read(&project), 100.);
+
+        // Picking Manual again keeps the adjusted spot.
+        set_caption_position(&mut settings, "manual");
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.2, 1.0))
+        );
+
+        // A slider on a preset switches it to Manual from the preset's spot.
+        let mut preset = CaptionSettings {
+            position: "bottom-right".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_manual_center(&mut preset, None, Some(50.));
+        assert_eq!(preset.position, "manual");
+        assert_eq!(
+            preset.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.95, 0.5))
+        );
+    }
 
     #[test]
     fn every_tab_slider_has_the_range_its_call_site_declares() {
