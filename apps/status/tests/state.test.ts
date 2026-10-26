@@ -66,6 +66,32 @@ describe("monitor state", () => {
 		expect(state.services.website.status).toBe("unknown");
 	});
 
+	test("treats malformed and far-future observations as stale", () => {
+		expect(isStale("not-a-timestamp", start)).toBe(true);
+		expect(
+			isStale(new Date(start + 2 * CHECK_INTERVAL_MS).toISOString(), start),
+		).toBe(true);
+		expect(
+			isStale(new Date(start + CHECK_INTERVAL_MS - 1).toISOString(), start),
+		).toBe(false);
+	});
+
+	test("replaces an invalid or future service checkpoint with a real sample", () => {
+		for (const invalidTimestamp of [
+			"invalid",
+			new Date(start + 20 * CHECK_INTERVAL_MS).toISOString(),
+		]) {
+			const state = emptyState();
+			applyResult(state, "website", good, start);
+			state.services.website.checkedAt = invalidTimestamp;
+			applyResult(state, "website", bad, start + CHECK_INTERVAL_MS);
+			expect(state.services.website.checkedAt).toBe(
+				new Date(start + CHECK_INTERVAL_MS).toISOString(),
+			);
+			expect(state.services.website.days[0].outage).toBe(1);
+		}
+	});
+
 	test("marks old observations unknown without erasing the incident or history", () => {
 		const state = emptyState();
 		applyResult(state, "website", bad, start);
