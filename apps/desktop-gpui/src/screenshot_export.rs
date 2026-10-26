@@ -216,6 +216,15 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
     }
 
     let bounds = export_bounds(&scaled, (width, height));
+    // Nothing paints past the frame, so draw in the frame's own pixels first,
+    // keeping the output byte-identical to the frame-sized pass.
+    let fits_frame = bounds.min_x == 0.
+        && bounds.min_y == 0.
+        && bounds.width == width
+        && bounds.height == height;
+    if fits_frame {
+        draw_annotations_onto(&mut canvas, width, height, &scaled);
+    }
     let mut out = vec![0u8; bounds.width as usize * bounds.height as usize * 4];
     if !has_no_visible_background(&config.background.source) {
         out.fill(255);
@@ -231,11 +240,13 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         (width, height),
         offset,
     );
-    for annotation in &mut scaled {
-        annotation.x += offset.0 as f64;
-        annotation.y += offset.1 as f64;
+    if !fits_frame {
+        for annotation in &mut scaled {
+            annotation.x += offset.0 as f64;
+            annotation.y += offset.1 as f64;
+        }
+        draw_annotations_onto(&mut out, bounds.width, bounds.height, &scaled);
     }
-    draw_annotations_onto(&mut out, bounds.width, bounds.height, &scaled);
 
     Composited {
         rgba: out,
@@ -1242,6 +1253,49 @@ mod tests {
         let out = composite(&raw, &config);
         assert_eq!((out.width, out.height), (100, 100));
         assert_eq!(out.rgba, expected);
+    }
+
+    #[test]
+    fn composite_keeps_translucent_in_frame_exports_byte_identical() {
+        let rgba = (0..64u32 * 64)
+            .flat_map(|i| {
+                [
+                    (i * 7) as u8,
+                    (i * 13) as u8,
+                    (i * 29) as u8,
+                    (i % 256) as u8,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let raw = RawFrame {
+            rgba,
+            width: 64,
+            height: 64,
+            base_width: 64,
+            base_height: 64,
+        };
+        for visible in [true, false] {
+            let mut config = ProjectConfiguration::default();
+            config.background.source = BackgroundSource::Color {
+                value: [10, 20, 30],
+                alpha: if visible { 255 } else { 0 },
+            };
+            let mut rectangle = annotation(AnnotationType::Rectangle, 10., 10., 30., 20.);
+            rectangle.stroke_width = 3.;
+            rectangle.stroke_color = "#ff0000".into();
+            rectangle.fill_color = "#00ff00".into();
+            rectangle.opacity = 0.5;
+            config.annotations.push(rectangle);
+
+            let mut canvas = raw.rgba.clone();
+            draw_annotations_onto(&mut canvas, 64, 64, &config.annotations);
+            let mut expected = vec![if visible { 255 } else { 0 }; 64 * 64 * 4];
+            pixels::blit_over_offset(&mut expected, (64, 64), &canvas, (64, 64), (0, 0));
+
+            let out = composite(&raw, &config);
+            assert_eq!((out.width, out.height), (64, 64));
+            assert_eq!(out.rgba, expected);
+        }
     }
 
     #[test]
