@@ -86,6 +86,36 @@ struct LoadedScreenshot {
     config_tx: tokio::sync::watch::Sender<ConfigUpdate>,
     export_tx: tokio::sync::mpsc::Sender<ExportRequest>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AnnotationLayout {
+    frame_size: (u32, u32),
+    transform: annotations::ImageTransform,
+    crop: [u32; 4],
+}
+
+fn annotation_layout(image_size: (u32, u32), project: &ProjectConfiguration) -> AnnotationLayout {
+    let options = RenderOptions {
+        screen_size: cap_project::XY::new(image_size.0, image_size.1),
+        camera_size: None,
+        preserve_screen_alpha: true,
+    };
+    let (width, height) = ProjectUniforms::get_base_size(&options, project);
+    let frame_size =
+        ProjectUniforms::get_output_size(&options, project, cap_project::XY::new(width, height));
+    let crop = ProjectUniforms::get_crop(&options, project);
+    AnnotationLayout {
+        frame_size,
+        transform: annotations::calculate_image_transform(
+            (f64::from(frame_size.0), f64::from(frame_size.1)),
+            (f64::from(image_size.0), f64::from(image_size.1)),
+            project.background.padding,
+            project.background.crop.as_ref(),
+            project.aspect_ratio.as_ref(),
+        ),
+        crop: [crop.position.x, crop.position.y, crop.size.x, crop.size.y],
+    }
+}
 /// The checkerboard tile: 24 cells of 10px, so it repeats seamlessly.
 const CHECKER_TILE: u32 = 240;
 const CHECKER_CELL: u32 = 10;
@@ -922,8 +952,7 @@ pub struct ScreenshotEditorWindow {
     /// `originalImageSize` -- the source PNG's dimensions, which the crop
     /// button gates on and the frame-space transform needs.
     pub(crate) image_size: Option<(u32, u32)>,
-    /// `prevState` in the resize effect (`context.tsx:465-472`).
-    previous_transform: Option<((f32, f32), annotations::ImageTransform)>,
+    annotation_layout: Option<AnnotationLayout>,
     /// `isRenderReady`: the skeleton stands in until the first frame lands.
     ready: bool,
     pending_save: Rc<RefCell<PendingConfigSave>>,
@@ -1005,7 +1034,7 @@ impl ScreenshotEditorWindow {
             mask_frame_revision: 0,
             frame_size: (1., 1.),
             image_size: None,
-            previous_transform: None,
+            annotation_layout: None,
             ready: false,
             pending_save: Rc::new(RefCell::new(PendingConfigSave::default())),
             save_task: None,
@@ -1095,13 +1124,18 @@ impl ScreenshotEditorWindow {
         self.bg_tab = BgTab::for_source(&config.background.source);
         self.border_body
             .set_open(config.background.border.as_ref().is_some_and(|b| b.enabled));
-        self.history = ProjectHistory::new(config.clone());
         self.project = config;
-        self.render_gate = RenderInputGate::published(&mut self.project);
         self.image_size = Some(image_size);
+        self.set_annotation_layout(annotation_layout(image_size, &self.project), window);
+        let masks_changed = self.clamp_masks();
+        self.history = ProjectHistory::new(self.project.clone());
+        self.render_gate = RenderInputGate::published(&mut self.project);
         self.config_tx = Some(config_tx);
         self.export_tx = Some(export_tx);
         self.pending_save.borrow_mut().path = Some(self.bundle.clone());
+        if masks_changed {
+            self.schedule_save(window, cx);
+        }
         if self.bg_tab == BgTab::Wallpaper {
             self.ensure_wallpapers(cx);
         }
@@ -1125,12 +1159,17 @@ impl ScreenshotEditorWindow {
         &mut self,
         image: Arc<RenderImage>,
         size: (u32, u32),
+        revision: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = (size.0.max(1) as f32, size.1.max(1) as f32);
-        self.rescale_annotations_for(next);
-        self.frame_size = next;
+        if revision != self.revision
+            || self
+                .annotation_layout
+                .is_some_and(|layout| layout.frame_size != size)
+        {
+            return;
+        }
         self.mask_frame_revision = self
             .mask_frame_revision
             .checked_add(1)
@@ -1138,12 +1177,6 @@ impl ScreenshotEditorWindow {
         self.ready = true;
         if let Some(previous) = self.frame.replace(image) {
             let _ = window.drop_image(previous);
-        }
-        // The content rect moves with the frame, so every mask is re-clipped
-        // into it (`AnnotationLayer.tsx:88-141`) before the overlays resample.
-        if self.clamp_masks() {
-            self.publish();
-            self.schedule_save(window, cx);
         }
         self.refresh_mask_overlays(window, cx);
         cx.notify();
@@ -1153,34 +1186,16 @@ impl ScreenshotEditorWindow {
         self.pending_save.clone()
     }
 
-    /// The context's resize effect (`context.tsx:474-547`): a frame that has
-    /// changed size by more than a pixel moves every annotation across from
-    /// the old content rect to the new one.
-    fn rescale_annotations_for(&mut self, frame_size: (f32, f32)) {
-        let Some(image_size) = self.image_size else {
-            return;
-        };
-        let changed = self
-            .previous_transform
-            .as_ref()
-            .is_none_or(|(previous, _)| {
-                (frame_size.0 - previous.0).abs() > 1. || (frame_size.1 - previous.1).abs() > 1.
-            });
-        if !changed {
-            return;
+    fn set_annotation_layout(&mut self, layout: AnnotationLayout, window: &mut Window) {
+        if self.annotation_layout != Some(layout) {
+            // Old pixels cannot be shown under annotations or masks in the new coordinate space.
+            if let Some(frame) = self.frame.take() {
+                let _ = window.drop_image(frame);
+            }
+            self.annotation_state.invalidate_geometry();
         }
-
-        let current = annotations::calculate_image_transform(
-            (frame_size.0 as f64, frame_size.1 as f64),
-            (image_size.0 as f64, image_size.1 as f64),
-            self.project.background.padding,
-            self.project.background.crop.as_ref(),
-            self.project.aspect_ratio.as_ref(),
-        );
-        if let Some((_, previous)) = self.previous_transform {
-            annotations::rescale_annotations(&mut self.project.annotations, &previous, &current);
-        }
-        self.previous_transform = Some((frame_size, current));
+        self.frame_size = (layout.frame_size.0 as f32, layout.frame_size.1 as f32);
+        self.annotation_layout = Some(layout);
     }
 
     /// Every project edit funnels through here: mutate, record one history
@@ -1196,6 +1211,19 @@ impl ScreenshotEditorWindow {
     ) {
         if !change(&mut self.project) {
             return;
+        }
+        if let Some(image_size) = self.image_size {
+            let next = annotation_layout(image_size, &self.project);
+            if let Some(previous) = self.annotation_layout
+                && previous.transform != next.transform
+            {
+                annotations::rescale_annotations(
+                    &mut self.project.annotations,
+                    &previous.transform,
+                    &next.transform,
+                );
+            }
+            self.set_annotation_layout(next, window);
         }
         // Padding, crop and aspect all move the content rect underneath the
         // masks; the clamp rides along in the same history entry.
@@ -1257,6 +1285,10 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) {
         self.project = config;
+        self.annotation_state.invalidate_geometry();
+        if let Some(image_size) = self.image_size {
+            self.set_annotation_layout(annotation_layout(image_size, &self.project), window);
+        }
         self.bg_tab = BgTab::for_source(&self.project.background.source);
         if let Some(id) = &self.selected_annotation
             && !self
@@ -4008,7 +4040,10 @@ impl ScreenshotEditorWindow {
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let geometry = self.preview_geometry();
-        let frame = self.frame.clone();
+        let frame = self
+            .frame
+            .clone()
+            .filter(|_| self.annotation_preview_ready());
         let checker = self.checker.clone();
         let area_cell = self.preview_area.clone();
         let viewport_cell = self.viewport.clone();
@@ -4884,7 +4919,7 @@ pub fn load_screenshot_project(
             );
             if handle
                 .update(cx, |view, window, cx| {
-                    view.frame_arrived(image, size, window, cx)
+                    view.frame_arrived(image, size, revision, window, cx)
                 })
                 .is_err()
             {
@@ -4908,6 +4943,304 @@ fn aspect_eq(a: &Option<cap_project::AspectRatio>, b: &Option<cap_project::Aspec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    mod annotation_geometry {
+        use super::*;
+
+        struct Fixture {
+            editor: Entity<ScreenshotEditorWindow>,
+            bundle: tempfile::TempDir,
+            _config_rx: tokio::sync::watch::Receiver<ConfigUpdate>,
+        }
+
+        fn config() -> ProjectConfiguration {
+            let mut config = new_screenshot_config();
+            config.background.padding = 0.;
+            config.background.crop = None;
+            config.aspect_ratio = None;
+            let mut annotation = arrow("shape", 4.);
+            annotation.annotation_type = cap_project::AnnotationType::Rectangle;
+            annotation.x = 100.;
+            annotation.y = 100.;
+            annotation.width = 50.;
+            annotation.height = 30.;
+            config.annotations.push(annotation);
+            config
+        }
+
+        fn frame(size: (u32, u32)) -> Arc<RenderImage> {
+            Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+                image::RgbaImage::new(size.0, size.1)
+            )]))
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+            config: ProjectConfiguration,
+            size: (u32, u32),
+        ) -> (Fixture, &mut gpui::VisualTestContext) {
+            let bundle = tempfile::tempdir().unwrap();
+            let path = bundle.path().to_path_buf();
+            let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
+                revision: 0,
+                config: config.clone(),
+            });
+            let (export_tx, _export_rx) = tokio::sync::mpsc::channel(1);
+            let (editor, cx) = cx.add_window_view(move |window, cx| {
+                let mut editor = ScreenshotEditorWindow::new(path, window, cx);
+                editor.set_loaded(
+                    "Geometry test".into(),
+                    LoadedScreenshot {
+                        config,
+                        image_size: (800, 600),
+                        config_tx,
+                        export_tx,
+                    },
+                    window,
+                    cx,
+                );
+                editor.frame_arrived(frame(size), size, 0, window, cx);
+                editor
+            });
+            (
+                Fixture {
+                    editor,
+                    bundle,
+                    _config_rx: config_rx,
+                },
+                cx,
+            )
+        }
+
+        fn assert_rect(config: &ProjectConfiguration, expected: (f64, f64, f64, f64)) {
+            assert_eq!(config.annotations.len(), 1);
+            let annotation = &config.annotations[0];
+            for (actual, expected) in [
+                (annotation.x, expected.0),
+                (annotation.y, expected.1),
+                (annotation.width, expected.2),
+                (annotation.height, expected.3),
+            ] {
+                assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
+            }
+        }
+
+        #[gpui::test]
+        fn aspect_edit_records_geometry_before_the_frame_arrives(cx: &mut gpui::TestAppContext) {
+            let (fixture, cx) = fixture(cx, config(), (800, 600));
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.choose_aspect(3, window, cx);
+                assert_rect(&editor.project, (100., 200., 50., 30.));
+                assert_rect(
+                    editor.pending_save.borrow().config.as_ref().unwrap(),
+                    (100., 200., 50., 30.),
+                );
+                editor.frame_arrived(frame((800, 800)), (800, 800), editor.revision, window, cx);
+                assert_rect(&editor.project, (100., 200., 50., 30.));
+                editor.undo(window, cx);
+                assert_rect(&editor.project, (100., 100., 50., 30.));
+                editor.frame_arrived(frame((800, 600)), (800, 600), editor.revision, window, cx);
+                assert_rect(&editor.project, (100., 100., 50., 30.));
+                editor.redo(window, cx);
+                assert_rect(&editor.project, (100., 200., 50., 30.));
+            });
+        }
+
+        #[gpui::test]
+        fn annotation_only_undo_keeps_the_layout_snapshot(cx: &mut gpui::TestAppContext) {
+            let (fixture, cx) = fixture(cx, config(), (800, 600));
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.choose_aspect(3, window, cx);
+                editor.frame_arrived(frame((800, 800)), (800, 800), editor.revision, window, cx);
+                editor.edit_project(
+                    |project| {
+                        project.annotations[0].stroke_width = 8.;
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                editor.undo(window, cx);
+                assert_rect(&editor.project, (100., 200., 50., 30.));
+                assert_eq!(editor.project.annotations[0].stroke_width, 4.);
+            });
+        }
+
+        #[gpui::test]
+        fn saved_annotations_match_the_preview_after_reopening(cx: &mut gpui::TestAppContext) {
+            let saved = {
+                let (fixture, cx) = fixture(cx, config(), (800, 600));
+                fixture.editor.update_in(cx, |editor, window, cx| {
+                    editor.choose_aspect(3, window, cx);
+                    editor.frame_arrived(
+                        frame((800, 800)),
+                        (800, 800),
+                        editor.revision,
+                        window,
+                        cx,
+                    );
+                    editor.pending_save.borrow_mut().flush();
+                });
+                ProjectConfiguration::load(fixture.bundle.path()).unwrap()
+            };
+            assert_rect(&saved, (100., 200., 50., 30.));
+            let (reopened, cx) = fixture(cx, saved, (800, 800));
+            reopened.editor.read_with(cx, |editor, _| {
+                assert_rect(&editor.project, (100., 200., 50., 30.));
+            });
+        }
+
+        #[gpui::test]
+        fn crop_and_padding_keep_masks_in_the_same_history_entry(cx: &mut gpui::TestAppContext) {
+            let mut initial = config();
+            let mask = &mut initial.annotations[0];
+            mask.annotation_type = cap_project::AnnotationType::Mask;
+            mask.mask_type = Some(cap_project::MaskType::Blur);
+            mask.mask_level = Some(10.);
+            mask.x = 760.;
+            mask.y = 560.;
+            mask.width = 30.;
+            mask.height = 30.;
+            let (fixture, cx) = fixture(cx, initial, (800, 600));
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.edit_project(
+                    |project| {
+                        project.background.padding = 100.;
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                assert_rect(&editor.project, (1080., 800., 30., 30.));
+                editor.frame_arrived(
+                    frame((1440, 1080)),
+                    (1440, 1080),
+                    editor.revision,
+                    window,
+                    cx,
+                );
+                editor.undo(window, cx);
+                assert_rect(&editor.project, (760., 560., 30., 30.));
+                editor.edit_project(
+                    |project| {
+                        project.background.crop = Some(cap_project::Crop {
+                            position: cap_project::XY::new(100, 50),
+                            size: cap_project::XY::new(400, 300),
+                        });
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                assert_rect(&editor.project, (380., 280., 15., 15.));
+                editor.undo(window, cx);
+                assert_rect(&editor.project, (760., 560., 30., 30.));
+            });
+        }
+
+        #[gpui::test]
+        fn stale_frames_cannot_restore_an_old_coordinate_space(cx: &mut gpui::TestAppContext) {
+            let (fixture, cx) = fixture(cx, config(), (800, 600));
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.choose_aspect(3, window, cx);
+                let square_revision = editor.revision;
+                assert!(editor.frame.is_none());
+                editor.choose_aspect(0, window, cx);
+                let auto_revision = editor.revision;
+                assert!(auto_revision > square_revision);
+                editor.frame_arrived(frame((800, 800)), (800, 800), square_revision, window, cx);
+                assert!(editor.frame.is_none());
+                assert_eq!(editor.frame_size, (800., 600.));
+                assert_rect(&editor.project, (100., 100., 50., 30.));
+                editor.frame_arrived(frame((800, 600)), (800, 600), auto_revision, window, cx);
+                let current = editor.frame.clone().unwrap();
+                editor.frame_arrived(frame((800, 800)), (800, 800), square_revision, window, cx);
+                assert!(Arc::ptr_eq(editor.frame.as_ref().unwrap(), &current));
+                assert_rect(&editor.project, (100., 100., 50., 30.));
+            });
+        }
+
+        #[gpui::test]
+        fn moving_a_crop_with_unchanged_size_invalidates_the_old_preview(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let mut initial = config();
+            initial.background.crop = Some(cap_project::Crop {
+                position: cap_project::XY::new(0, 0),
+                size: cap_project::XY::new(400, 300),
+            });
+            let (fixture, cx) = fixture(cx, initial, (400, 300));
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                editor.edit_project(
+                    |project| {
+                        project.background.crop.as_mut().unwrap().position.x = 100;
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(editor.frame_size, (400., 300.));
+                assert!(editor.frame.is_none());
+                assert_rect(&editor.project, (100., 100., 50., 30.));
+                editor.frame_arrived(frame((400, 300)), (400, 300), 0, window, cx);
+                assert!(editor.frame.is_none());
+                editor.frame_arrived(frame((400, 300)), (400, 300), editor.revision, window, cx);
+                assert!(editor.frame.is_some());
+            });
+        }
+
+        #[gpui::test]
+        fn geometry_preview_waits_for_the_current_mask_overlays(cx: &mut gpui::TestAppContext) {
+            let mut initial = config();
+            initial.annotations[0].annotation_type = cap_project::AnnotationType::Mask;
+            initial.annotations[0].mask_type = Some(cap_project::MaskType::Blur);
+            initial.annotations[0].mask_level = Some(10.);
+            let (fixture, cx) = fixture(cx, initial, (800, 600));
+            cx.run_until_parked();
+            fixture.editor.update_in(cx, |editor, window, cx| {
+                assert!(editor.annotation_preview_ready());
+                editor.choose_aspect(3, window, cx);
+                assert!(!editor.annotation_preview_ready());
+                editor.frame_arrived(frame((800, 800)), (800, 800), editor.revision, window, cx);
+                assert!(editor.frame.is_some());
+                assert!(!editor.annotation_preview_ready());
+            });
+            cx.run_until_parked();
+            fixture.editor.read_with(cx, |editor, _| {
+                assert!(editor.annotation_preview_ready());
+                assert_rect(&editor.project, (100., 200., 50., 30.));
+            });
+        }
+    }
+
+    #[test]
+    fn annotation_layout_uses_the_renderers_aligned_preview_dimensions() {
+        let mut config = new_screenshot_config();
+        config.background.padding = 0.;
+        assert_eq!(
+            annotation_layout((801, 601), &config).frame_size,
+            (804, 602)
+        );
+        config.background.padding = 25.;
+        assert_eq!(
+            annotation_layout((801, 601), &config).frame_size,
+            (964, 722)
+        );
+        config.background.crop = Some(cap_project::Crop {
+            position: cap_project::XY::new(13, 17),
+            size: cap_project::XY::new(403, 301),
+        });
+        assert_eq!(
+            annotation_layout((801, 601), &config).frame_size,
+            (484, 362)
+        );
+        config.aspect_ratio = Some(cap_project::AspectRatio::Square);
+        assert_eq!(
+            annotation_layout((801, 601), &config).frame_size,
+            (484, 484)
+        );
+    }
 
     #[test]
     fn background_preview_jpeg_scaling_starts_above_the_size_boundary() {
