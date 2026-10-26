@@ -3030,7 +3030,14 @@ mod stub {
             .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
-        None
+        #[cfg(target_os = "linux")]
+        {
+            crate::linux_wallpaper::current()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
     }
     pub fn set_activation_policy(_regular: bool) -> bool {
         false

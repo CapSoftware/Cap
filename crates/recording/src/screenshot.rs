@@ -1174,6 +1174,31 @@ pub fn uses_wayland_portal() -> bool {
     prefers_wayland_portal()
 }
 
+/// Asks the screenshot portal for one screenshot and throws it away. Before
+/// an app's first non-interactive screenshot the portal asks the user whether
+/// to allow it, and GNOME Shell only shows that question for the focused app,
+/// so this runs while Cap's picker still has focus, before it hides for the
+/// real capture.
+#[cfg(target_os = "linux")]
+pub async fn request_wayland_screenshot_permission() -> anyhow::Result<()> {
+    let screenshot = ashpd::desktop::screenshot::Screenshot::request()
+        .interactive(false)
+        .send()
+        .await
+        .context("Request Wayland screenshot from desktop portal")?
+        .response()
+        .context("The desktop did not allow Cap to take screenshots")?;
+    let uri = screenshot.uri();
+    if is_local_wayland_screenshot_uri(uri.scheme(), uri.host_str())
+        && let Ok(path) = uri.to_file_path()
+        && std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && let Err(error) = std::fs::remove_file(&path)
+    {
+        tracing::warn!(path = %path.display(), %error, "Could not remove the permission screenshot");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 async fn capture_screenshot_wayland(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
     let display_id = wayland_screenshot_display_id(target)?;
@@ -1832,8 +1857,149 @@ fn screenshot_scaler_builds() -> u64 {
     SCREENSHOT_SCALER.with(|slot| slot.borrow().builds)
 }
 
+/// Returns `None` when the geometry is unusable or SSSE3 is unavailable, so the
+/// caller can fall back to swscale.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn bgrx_plane_to_rgb24(
+    src: &[u8],
+    src_stride: usize,
+    width: usize,
+    height: usize,
+) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let row_bytes = width.checked_mul(4)?;
+    let dst_stride = width.checked_mul(3)?;
+    if src_stride < row_bytes {
+        return None;
+    }
+    let src_needed = (height - 1)
+        .checked_mul(src_stride)?
+        .checked_add(row_bytes)?;
+    if src.len() < src_needed {
+        return None;
+    }
+    if !std::is_x86_feature_detected!("ssse3") {
+        return None;
+    }
+    let dst_len = height.checked_mul(dst_stride)?;
+    let mut dst = vec![0u8; dst_len];
+    // SAFETY: the checks above keep every source row's `width * 4` bytes and every
+    // destination row's `width * 3` bytes inside the two buffers, and SSSE3 is present.
+    unsafe { bgrx_plane_to_rgb24_ssse3(src, src_stride, &mut dst, width, height) };
+    Some(dst)
+}
+
+/// # Safety
+///
+/// `src` holds at least `(height - 1) * src_stride + width * 4` bytes, `src_stride >= width * 4`,
+/// and `dst` holds `height * width * 3` bytes. Those products do not overflow. SSSE3 is enabled.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[target_feature(enable = "ssse3")]
+unsafe fn bgrx_plane_to_rgb24_ssse3(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        // B,G,R,x → R,G,B. The control bytes with the high bit set zero the hole
+        // after each group of four pixels (12 RGB bytes in a 16-byte register).
+        let mask = _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1);
+        let dst_stride = width * 3;
+        for y in 0..height {
+            let srow = src.as_ptr().add(y * src_stride);
+            let drow = dst.as_mut_ptr().add(y * dst_stride);
+            let simd = width & !15;
+            let mut x = 0;
+            while x < simd {
+                let s0 = _mm_shuffle_epi8(_mm_loadu_si128(srow.add(x * 4) as *const __m128i), mask);
+                let s1 = _mm_shuffle_epi8(
+                    _mm_loadu_si128(srow.add(x * 4 + 16) as *const __m128i),
+                    mask,
+                );
+                let s2 = _mm_shuffle_epi8(
+                    _mm_loadu_si128(srow.add(x * 4 + 32) as *const __m128i),
+                    mask,
+                );
+                let s3 = _mm_shuffle_epi8(
+                    _mm_loadu_si128(srow.add(x * 4 + 48) as *const __m128i),
+                    mask,
+                );
+                // Each shuffle leaves a 4-byte hole. Slide the next group's bytes
+                // into that hole so the store is 16 packed RGB bytes, not 12.
+                let out = drow.add(x * 3);
+                let out0 = _mm_or_si128(s0, _mm_slli_si128(s1, 12));
+                let out1 = _mm_or_si128(_mm_srli_si128(s1, 4), _mm_slli_si128(s2, 8));
+                let out2 = _mm_or_si128(_mm_srli_si128(s2, 8), _mm_slli_si128(s3, 4));
+                _mm_storeu_si128(out as *mut __m128i, out0);
+                _mm_storeu_si128(out.add(16) as *mut __m128i, out1);
+                _mm_storeu_si128(out.add(32) as *mut __m128i, out2);
+                x += 16;
+            }
+            for i in simd..width {
+                let s = srow.add(i * 4);
+                let d = drow.add(i * 3);
+                *d = *s.add(2);
+                *d.add(1) = *s.add(1);
+                *d.add(2) = *s;
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn try_convert_bgrx_screenshot_ssse3(
+    frame: &ffmpeg::frame::Video,
+) -> anyhow::Result<Option<RgbImage>> {
+    if !matches!(
+        frame.format(),
+        ffmpeg::format::Pixel::BGRZ | ffmpeg::format::Pixel::BGRA
+    ) {
+        return Ok(None);
+    }
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    if width == 0 || height == 0 {
+        return Ok(None);
+    }
+    // `Video::stride` casts linesize to usize. A bottom-up (negative) stride would
+    // wrap and `data()` would build a slice past the plane, so read the sign first.
+    // SAFETY: `frame` points at a live AVFrame for this call.
+    let (linesize, data_ptr) = unsafe {
+        let raw = frame.as_ptr();
+        ((*raw).linesize[0], (*raw).data[0])
+    };
+    if linesize <= 0 || data_ptr.is_null() {
+        return Ok(None);
+    }
+    let src_stride = linesize as usize;
+    if src_stride.checked_mul(height).is_none() {
+        return Ok(None);
+    }
+    let Some(rgb) = bgrx_plane_to_rgb24(frame.data(0), src_stride, width, height) else {
+        return Ok(None);
+    };
+    RgbImage::from_raw(frame.width(), frame.height(), rgb)
+        .map(Some)
+        .ok_or_else(|| anyhow!("Failed to create image buffer"))
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if let Some(image) = try_convert_bgrx_screenshot_ssse3(frame)? {
+        return Ok(image);
+    }
+    convert_ffmpeg_frame_via_swscale(frame)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn convert_ffmpeg_frame_via_swscale(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
     let width = frame.width() as usize;
     let height = frame.height() as usize;
     let row_bytes = width
@@ -2599,7 +2765,8 @@ mod screenshot_pixel_tests {
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod screenshot_swscale_cache_tests {
     use super::{
-        clear_screenshot_scaler_cache, convert_ffmpeg_frame_to_image, screenshot_scaler_builds,
+        clear_screenshot_scaler_cache, convert_ffmpeg_frame_to_image,
+        convert_ffmpeg_frame_via_swscale, screenshot_scaler_builds,
     };
     use anyhow::Context;
     use image::RgbImage;
@@ -2653,6 +2820,26 @@ mod screenshot_swscale_cache_tests {
         rgb
     }
 
+    fn bgrx_ssse3_screenshot() -> bool {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            std::is_x86_feature_detected!("ssse3")
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            false
+        }
+    }
+
+    fn assert_scaler_builds(when_swscale: u64) {
+        let builds = screenshot_scaler_builds();
+        if bgrx_ssse3_screenshot() {
+            assert_eq!(builds, 0);
+        } else {
+            assert_eq!(builds, when_swscale);
+        }
+    }
+
     /// The pre-cache conversion: a new swscale context and a row pack every call.
     fn uncached_packed_rgb(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
         let mut scaler = ffmpeg::software::scaling::context::Context::get(
@@ -2687,7 +2874,7 @@ mod screenshot_swscale_cache_tests {
     }
 
     #[test]
-    fn bgrx_screenshot_reuses_scaler_and_matches_channel_swap() {
+    fn bgrx_screenshot_matches_channel_swap() {
         ffmpeg::init().expect("ffmpeg");
         clear_screenshot_scaler_cache();
 
@@ -2700,10 +2887,10 @@ mod screenshot_swscale_cache_tests {
                 .expect("aligned reference")
                 .as_raw()
         );
-        assert_eq!(screenshot_scaler_builds(), 1);
+        assert_scaler_builds(1);
         let again = convert_ffmpeg_frame_to_image(&aligned).expect("aligned reuse");
         assert_eq!(again.as_raw(), image.as_raw());
-        assert_eq!(screenshot_scaler_builds(), 1);
+        assert_scaler_builds(1);
 
         let mut aligned_changed = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 3840, 2);
         shift_bgrx_pixels(&mut aligned_changed, 17);
@@ -2716,7 +2903,7 @@ mod screenshot_swscale_cache_tests {
                 .as_raw()
         );
         assert_ne!(aligned_changed_image.as_raw(), image.as_raw());
-        assert_eq!(screenshot_scaler_builds(), 1);
+        assert_scaler_builds(1);
 
         let padded = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 17, 3);
         let padded_image = convert_ffmpeg_frame_to_image(&padded).expect("padded convert");
@@ -2727,9 +2914,9 @@ mod screenshot_swscale_cache_tests {
                 .expect("padded reference")
                 .as_raw()
         );
-        assert_eq!(screenshot_scaler_builds(), 2);
+        assert_scaler_builds(2);
         convert_ffmpeg_frame_to_image(&padded).expect("padded reuse");
-        assert_eq!(screenshot_scaler_builds(), 2);
+        assert_scaler_builds(2);
 
         let mut padded_changed = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 17, 3);
         shift_bgrx_pixels(&mut padded_changed, 17);
@@ -2742,15 +2929,15 @@ mod screenshot_swscale_cache_tests {
                 .as_raw()
         );
         assert_ne!(padded_changed_image.as_raw(), padded_image.as_raw());
-        assert_eq!(screenshot_scaler_builds(), 2);
+        assert_scaler_builds(2);
 
         let bgra = filled_bgrx(ffmpeg::format::Pixel::BGRA, 32, 2);
         let bgra_image = convert_ffmpeg_frame_to_image(&bgra).expect("bgra convert");
         assert_eq!(bgra_image.as_raw(), expected_bgrx_rgb(&bgra).as_slice());
-        assert_eq!(screenshot_scaler_builds(), 3);
+        assert_scaler_builds(3);
 
         convert_ffmpeg_frame_to_image(&aligned).expect("return to aligned");
-        assert_eq!(screenshot_scaler_builds(), 4);
+        assert_scaler_builds(4);
 
         let tiny = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 1, 1);
         let tiny_image = convert_ffmpeg_frame_to_image(&tiny).expect("tiny convert");
@@ -2758,6 +2945,55 @@ mod screenshot_swscale_cache_tests {
             tiny_image.as_raw(),
             &[tiny.data(0)[2], tiny.data(0)[1], tiny.data(0)[0]]
         );
+    }
+
+    #[test]
+    fn rgbz_screenshot_keeps_byte_order_and_uses_swscale() {
+        ffmpeg::init().expect("ffmpeg");
+        clear_screenshot_scaler_cache();
+        let frame = filled_bgrx(ffmpeg::format::Pixel::RGBZ, 32, 2);
+        let image = convert_ffmpeg_frame_to_image(&frame).expect("rgbz convert");
+        assert_eq!(screenshot_scaler_builds(), 1);
+        let src = frame.data(0);
+        assert_eq!(image.as_raw()[..3], [src[0], src[1], src[2]]);
+        assert_eq!(
+            image.as_raw(),
+            uncached_packed_rgb(&frame)
+                .expect("rgbz reference")
+                .as_raw()
+        );
+        convert_ffmpeg_frame_to_image(&frame).expect("rgbz reuse");
+        assert_eq!(screenshot_scaler_builds(), 1);
+    }
+
+    #[test]
+    fn bgrx_fast_path_leaves_swscale_cache_intact() {
+        ffmpeg::init().expect("ffmpeg");
+        clear_screenshot_scaler_cache();
+        let rgba = filled_bgrx(ffmpeg::format::Pixel::RGBA, 64, 2);
+        let first = convert_ffmpeg_frame_to_image(&rgba).expect("rgba convert");
+        assert_eq!(screenshot_scaler_builds(), 1);
+        assert_eq!(
+            first.as_raw(),
+            uncached_packed_rgb(&rgba).expect("rgba reference").as_raw()
+        );
+
+        let bgrz = filled_bgrx(ffmpeg::format::Pixel::BGRZ, 64, 2);
+        let bgrz_image = convert_ffmpeg_frame_to_image(&bgrz).expect("bgrz convert");
+        assert_eq!(bgrz_image.as_raw(), expected_bgrx_rgb(&bgrz).as_slice());
+        if bgrx_ssse3_screenshot() {
+            assert_eq!(screenshot_scaler_builds(), 1);
+        } else {
+            assert_eq!(screenshot_scaler_builds(), 2);
+        }
+
+        let again = convert_ffmpeg_frame_to_image(&rgba).expect("rgba reuse");
+        assert_eq!(again.as_raw(), first.as_raw());
+        if bgrx_ssse3_screenshot() {
+            assert_eq!(screenshot_scaler_builds(), 1);
+        } else {
+            assert_eq!(screenshot_scaler_builds(), 3);
+        }
     }
 
     fn thread_cpu_time() -> Duration {
@@ -2794,59 +3030,189 @@ mod screenshot_swscale_cache_tests {
         for _ in 0..runs {
             let cpu_start = thread_cpu_time();
             let start = Instant::now();
-            let image = convert(frame);
+            let image = convert(std::hint::black_box(frame));
+            std::hint::black_box(&image);
             let elapsed = start.elapsed();
             let cpu_elapsed = thread_cpu_time().saturating_sub(cpu_start);
-            std::hint::black_box(image);
             wall.push(elapsed);
             cpu.push(cpu_elapsed);
         }
         (wall, cpu)
     }
 
+    fn host_model() -> String {
+        let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") else {
+            return "unknown".to_string();
+        };
+        cpuinfo
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("model name")?;
+                Some(rest.trim_start_matches(['\t', ':', ' ']).to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
     #[test]
     #[ignore = "manual 4K BGRZ screenshot conversion benchmark"]
     fn bench_bgrz_screenshot_conversion() {
         ffmpeg::init().expect("ffmpeg");
-        const WARMUP: usize = 5;
-        const RUNS: usize = 30;
-        for (width, height) in [(3840, 2160), (1920, 1080)] {
+        const WARMUP: usize = 10;
+        const RUNS: usize = 51;
+        println!(
+            "host={} ssse3_path={} warmup={WARMUP} runs={RUNS} profile=release opt-level=s lto=thin codegen-units=1",
+            host_model(),
+            bgrx_ssse3_screenshot()
+        );
+        for (width, height) in [(3840, 2160), (1920, 1080), (1366, 768)] {
             let frame = filled_bgrx(ffmpeg::format::Pixel::BGRZ, width, height);
-            let baseline = uncached_packed_rgb(&frame).expect("baseline");
+            let scalar = expected_bgrx_rgb(&frame);
+            let uncached = uncached_packed_rgb(&frame).expect("uncached");
             clear_screenshot_scaler_cache();
-            let cached = convert_ffmpeg_frame_to_image(&frame).expect("cached");
-            assert_eq!(baseline.as_raw(), cached.as_raw());
+            let swscale = convert_ffmpeg_frame_via_swscale(&frame).expect("swscale");
+            let screenshot = convert_ffmpeg_frame_to_image(&frame).expect("screenshot");
+            assert_eq!(scalar.as_slice(), swscale.as_raw());
+            assert_eq!(swscale.as_raw(), screenshot.as_raw());
+            assert_eq!(uncached.as_raw(), screenshot.as_raw());
 
             for _ in 0..WARMUP {
-                std::hint::black_box(uncached_packed_rgb(&frame).expect("warmup baseline"));
+                std::hint::black_box(uncached_packed_rgb(&frame).expect("warmup uncached"));
             }
-            let (mut base_wall, mut base_cpu) = time_convert(&frame, RUNS, |frame| {
-                uncached_packed_rgb(frame).expect("baseline")
+            let (mut uncached_wall, mut uncached_cpu) = time_convert(&frame, RUNS, |frame| {
+                uncached_packed_rgb(frame).expect("uncached")
             });
+
             clear_screenshot_scaler_cache();
             for _ in 0..WARMUP {
-                std::hint::black_box(convert_ffmpeg_frame_to_image(&frame).expect("warmup cached"));
+                std::hint::black_box(
+                    convert_ffmpeg_frame_via_swscale(&frame).expect("warmup swscale"),
+                );
+            }
+            let (mut swscale_wall, mut swscale_cpu) = time_convert(&frame, RUNS, |frame| {
+                convert_ffmpeg_frame_via_swscale(frame).expect("swscale")
+            });
+
+            for _ in 0..WARMUP {
+                std::hint::black_box(
+                    convert_ffmpeg_frame_to_image(&frame).expect("warmup screenshot"),
+                );
             }
             let builds_before = screenshot_scaler_builds();
-            let (mut new_wall, mut new_cpu) = time_convert(&frame, RUNS, |frame| {
-                convert_ffmpeg_frame_to_image(frame).expect("cached")
+            let (mut screenshot_wall, mut screenshot_cpu) = time_convert(&frame, RUNS, |frame| {
+                convert_ffmpeg_frame_to_image(frame).expect("screenshot")
             });
-            let builds_after = screenshot_scaler_builds();
+            let builds_during = screenshot_scaler_builds() - builds_before;
 
-            let (base_wall_min, base_wall_med, base_wall_mean) = summarize(&mut base_wall);
-            let (base_cpu_min, base_cpu_med, base_cpu_mean) = summarize(&mut base_cpu);
-            let (new_wall_min, new_wall_med, new_wall_mean) = summarize(&mut new_wall);
-            let (new_cpu_min, new_cpu_med, new_cpu_mean) = summarize(&mut new_cpu);
+            let (uncached_wall_min, uncached_wall_med, uncached_wall_mean) =
+                summarize(&mut uncached_wall);
+            let (uncached_cpu_min, uncached_cpu_med, uncached_cpu_mean) =
+                summarize(&mut uncached_cpu);
+            let (swscale_wall_min, swscale_wall_med, swscale_wall_mean) =
+                summarize(&mut swscale_wall);
+            let (swscale_cpu_min, swscale_cpu_med, swscale_cpu_mean) = summarize(&mut swscale_cpu);
+            let (screenshot_wall_min, screenshot_wall_med, screenshot_wall_mean) =
+                summarize(&mut screenshot_wall);
+            let (screenshot_cpu_min, screenshot_cpu_med, screenshot_cpu_mean) =
+                summarize(&mut screenshot_cpu);
             println!(
-                "size={width}x{height} warmup={WARMUP} runs={RUNS} scaler_builds_during_timed_runs={}",
-                builds_after - builds_before
+                "size={width}x{height} screenshot_scaler_builds_during_timed_runs={builds_during}"
             );
             println!(
-                "baseline wall min={base_wall_min:?} median={base_wall_med:?} mean={base_wall_mean:?} cpu min={base_cpu_min:?} median={base_cpu_med:?} mean={base_cpu_mean:?}"
+                "swscale_uncached wall min={uncached_wall_min:?} median={uncached_wall_med:?} mean={uncached_wall_mean:?} cpu min={uncached_cpu_min:?} median={uncached_cpu_med:?} mean={uncached_cpu_mean:?}"
             );
             println!(
-                "cached   wall min={new_wall_min:?} median={new_wall_med:?} mean={new_wall_mean:?} cpu min={new_cpu_min:?} median={new_cpu_med:?} mean={new_cpu_mean:?}"
+                "swscale_cached   wall min={swscale_wall_min:?} median={swscale_wall_med:?} mean={swscale_wall_mean:?} cpu min={swscale_cpu_min:?} median={swscale_cpu_med:?} mean={swscale_cpu_mean:?}"
+            );
+            println!(
+                "screenshot       wall min={screenshot_wall_min:?} median={screenshot_wall_med:?} mean={screenshot_wall_mean:?} cpu min={screenshot_cpu_min:?} median={screenshot_cpu_med:?} mean={screenshot_cpu_mean:?}"
             );
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod bgrx_ssse3_tests {
+    use super::bgrx_plane_to_rgb24;
+
+    fn scalar_bgrx(src: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
+        let mut rgb = vec![0u8; width * height * 3];
+        for (src_row, dst_row) in src
+            .chunks(stride)
+            .zip(rgb.chunks_mut(width * 3))
+            .take(height)
+        {
+            for (src_px, dst_px) in src_row
+                .chunks_exact(4)
+                .take(width)
+                .zip(dst_row.chunks_exact_mut(3))
+            {
+                dst_px[0] = src_px[2];
+                dst_px[1] = src_px[1];
+                dst_px[2] = src_px[0];
+            }
+        }
+        rgb
+    }
+
+    fn fill_bgrx(width: usize, height: usize, stride: usize) -> Vec<u8> {
+        let mut src = vec![0x5Au8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let i = y * stride + x * 4;
+                src[i] = x.wrapping_mul(3).wrapping_add(y) as u8;
+                src[i + 1] = x.wrapping_mul(5).wrapping_add(7) as u8;
+                src[i + 2] = x.wrapping_mul(11).wrapping_add(y.wrapping_mul(2)) as u8;
+                src[i + 3] = 0xA5;
+            }
+        }
+        src
+    }
+
+    #[test]
+    fn rejects_empty_and_short_planes() {
+        assert!(bgrx_plane_to_rgb24(&[], 0, 0, 1).is_none());
+        assert!(bgrx_plane_to_rgb24(&[0; 4], 4, 1, 0).is_none());
+        assert!(bgrx_plane_to_rgb24(&[0; 3], 3, 1, 1).is_none());
+        assert!(bgrx_plane_to_rgb24(&[0; 4], 8, 1, 2).is_none());
+    }
+
+    #[test]
+    fn matches_scalar_reference_including_tails_and_padding() {
+        if !std::is_x86_feature_detected!("ssse3") {
+            eprintln!("ssse3 unavailable, skipping bgrx plane check");
+            return;
+        }
+        let widths = [
+            1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 47, 48, 63, 64, 127, 128, 191, 192, 1366,
+            1919, 1920, 3839, 3840,
+        ];
+        for width in widths {
+            for height in [1usize, 2, 3] {
+                for pad in [0usize, 3, 17] {
+                    if width >= 1366 && !(height == 2 && pad == 0) {
+                        continue;
+                    }
+                    let stride = width * 4 + pad;
+                    let src = fill_bgrx(width, height, stride);
+                    let got = bgrx_plane_to_rgb24(&src, stride, width, height)
+                        .expect("ssse3 plane conversion");
+                    let expected = scalar_bgrx(&src, stride, width, height);
+                    assert_eq!(got, expected, "w={width} h={height} pad={pad}");
+                }
+            }
+        }
+
+        let stride = 80;
+        let width = 16;
+        let height = 2;
+        let mut exact = fill_bgrx(width, height, stride);
+        exact.truncate((height - 1) * stride + width * 4);
+        let got = bgrx_plane_to_rgb24(&exact, stride, width, height).expect("exact tail");
+        assert_eq!(got, scalar_bgrx(&exact, stride, width, height));
+
+        let mut unaligned = vec![0x5Au8; 1 + stride * height];
+        unaligned[1..].copy_from_slice(&fill_bgrx(width, height, stride));
+        let got = bgrx_plane_to_rgb24(&unaligned[1..], stride, width, height).expect("unaligned");
+        assert_eq!(got, scalar_bgrx(&unaligned[1..], stride, width, height));
     }
 }

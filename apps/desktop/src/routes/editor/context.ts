@@ -1799,13 +1799,19 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: undefined,
 			);
 
-			const totalDuration = () =>
-				project.timeline
-					? clipTimelineDuration(
-							project.timeline.segments,
-							project.timeline.transitions ?? [],
-						) + totalHeldDuration(holdWindows(project.timeline.textSegments))
-					: props.editorInstance.recordingDuration;
+			const totalDuration = () => {
+				if (!project.timeline) return props.editorInstance.recordingDuration;
+				const clipsEnd = clipTimelineDuration(
+					project.timeline.segments,
+					project.timeline.transitions ?? [],
+				);
+				return (
+					clipsEnd +
+					totalHeldDuration(
+						holdWindows(project.timeline.textSegments, clipsEnd),
+					)
+				);
+			};
 
 			type State = {
 				zoom: number;

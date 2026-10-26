@@ -15,6 +15,22 @@ use std::{
 };
 
 pub const PORTAL_APP_ID: &str = "so.cap.Cap";
+
+static REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether Cap's windows take [`PORTAL_APP_ID`]: only after this launch
+/// registered it, and only on GNOME, the one desktop that matches windows to
+/// it. Elsewhere the windows keep their usual id, which window rules may name.
+pub fn windows_use_portal_app_id() -> bool {
+    REGISTERED.load(std::sync::atomic::Ordering::Acquire)
+        && is_gnome(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
+}
+
+fn is_gnome(current_desktop: &str) -> bool {
+    current_desktop
+        .split(':')
+        .any(|desktop| desktop.eq_ignore_ascii_case("gnome"))
+}
 const PACKAGED_APP_ID: &str = "Cap";
 
 /// The app id xdg-desktop-portal reads from a launcher's systemd unit:
@@ -84,23 +100,42 @@ fn exec_argument(value: &str) -> String {
     format!("\"{}\"", quoted.replace('\\', "\\\\").replace('%', "%%"))
 }
 
-/// Finds or writes the `.desktop` file for [`PORTAL_APP_ID`], returning
-/// whether one exists afterwards.
-pub fn ensure_desktop_entry(user_dir: &Path, dirs: &[PathBuf], exec: &Path) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+pub enum DesktopEntry {
+    Found,
+    Written,
+    Unavailable,
+}
+
+/// Finds or writes the `.desktop` file for [`PORTAL_APP_ID`].
+pub fn ensure_desktop_entry(user_dir: &Path, dirs: &[PathBuf], exec: &Path) -> DesktopEntry {
     let file = format!("{PORTAL_APP_ID}.desktop");
     if dirs.iter().any(|dir| dir.join(&file).is_file()) {
-        return true;
+        return DesktopEntry::Found;
     }
     let path = user_dir.join(&file);
     let written =
         std::fs::create_dir_all(user_dir).and_then(|()| std::fs::write(&path, desktop_entry(exec)));
     match written {
-        Ok(()) => true,
+        Ok(()) => DesktopEntry::Written,
         Err(error) => {
             tracing::info!(path = %path.display(), %error, "could not write the portal app id's desktop entry");
-            false
+            DesktopEntry::Unavailable
         }
     }
+}
+
+/// The portal can look an entry up before its index has seen the new file and
+/// answer "App info not found". Delays before each retry of a new entry.
+const NEW_ENTRY_RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_millis(50),
+    Duration::from_millis(150),
+    Duration::from_millis(400),
+    Duration::from_millis(1000),
+];
+
+fn app_info_not_found(error: &str) -> bool {
+    error.contains("App info not found")
 }
 
 /// Registers [`PORTAL_APP_ID`] when the portal has no app id for Cap. Must
@@ -132,19 +167,52 @@ pub async fn register() {
     ) else {
         return;
     };
-    if !ensure_desktop_entry(&user_dir, &dirs, &exec) {
+    let entry = ensure_desktop_entry(&user_dir, &dirs, &exec);
+    if entry == DesktopEntry::Unavailable {
         return;
     }
     let Ok(app_id) = ashpd::AppID::try_from(PORTAL_APP_ID) else {
         return;
     };
-    match tokio::time::timeout(Duration::from_secs(3), ashpd::register_host_app(app_id)).await {
-        Ok(Ok(())) => tracing::info!(
-            app_id = PORTAL_APP_ID,
-            "registered Cap's app id with the portals"
-        ),
-        Ok(Err(error)) => tracing::info!(%error, "the portals did not take Cap's app id"),
-        Err(_) => tracing::info!("the portal registry did not answer"),
+    let mut retries = match entry {
+        DesktopEntry::Written => NEW_ENTRY_RETRY_DELAYS.as_slice(),
+        _ => &[],
+    }
+    .iter();
+    let mut attempt = 1;
+    loop {
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            ashpd::register_host_app(app_id.clone()),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                REGISTERED.store(true, std::sync::atomic::Ordering::Release);
+                tracing::info!(
+                    app_id = PORTAL_APP_ID,
+                    attempt,
+                    "registered Cap's app id with the portals"
+                );
+                return;
+            }
+            Ok(Err(error)) => {
+                let error = error.to_string();
+                if app_info_not_found(&error)
+                    && let Some(delay) = retries.next()
+                {
+                    tokio::time::sleep(*delay).await;
+                    attempt += 1;
+                    continue;
+                }
+                tracing::info!(%error, attempt, "the portals did not take Cap's app id");
+                return;
+            }
+            Err(_) => {
+                tracing::info!("the portal registry did not answer");
+                return;
+            }
+        }
     }
 }
 
@@ -191,7 +259,8 @@ mod tests {
         .unwrap();
         assert_eq!(user, root.path().join("home/.local/share/applications"));
         let exec = Path::new(r#"/opt/100% Cap/"beta" $HOME `x`\.AppImage"#);
-        assert!(ensure_desktop_entry(&user, &dirs, exec));
+        assert_eq!(ensure_desktop_entry(&user, &dirs, exec), DesktopEntry::Written);
+        assert_eq!(ensure_desktop_entry(&user, &dirs, exec), DesktopEntry::Found);
         let entry = std::fs::read_to_string(user.join("so.cap.Cap.desktop")).unwrap();
         assert!(entry.contains("NoDisplay=true"));
         assert!(entry.contains(
@@ -209,11 +278,35 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(ensure_desktop_entry(&user, &dirs, exec));
+        assert_eq!(ensure_desktop_entry(&user, &dirs, exec), DesktopEntry::Found);
         assert!(!user.join("so.cap.Cap.desktop").exists());
 
         // Without a home there is nowhere safe to write.
         assert!(application_dirs(None, None, None).is_none());
         assert!(application_dirs(Some("relative".into()), None, None).is_none());
+    }
+
+    #[test]
+    fn windows_follow_the_portal_id_only_on_gnome() {
+        assert!(is_gnome("ubuntu:GNOME"));
+        assert!(is_gnome("GNOME"));
+        assert!(is_gnome("GNOME-Classic:GNOME"));
+        assert!(!is_gnome("KDE"));
+        assert!(!is_gnome("Hyprland"));
+        assert!(!is_gnome("niri"));
+        assert!(!is_gnome(""));
+    }
+
+    #[test]
+    fn only_a_missing_entry_is_retried() {
+        assert!(app_info_not_found(
+            "ZBus Error: org.freedesktop.portal.Error.Failed: Could not register app ID: App info not found for 'so.cap.Cap'"
+        ));
+        assert!(!app_info_not_found(
+            "ZBus Error: org.freedesktop.portal.Error.Failed: Could not register app ID: Connection already associated with an application ID"
+        ));
+        assert!(!app_info_not_found(
+            "ZBus Error: org.freedesktop.DBus.Error.UnknownMethod: No such interface"
+        ));
     }
 }

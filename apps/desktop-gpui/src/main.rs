@@ -50,7 +50,11 @@ mod jpeg_thumbnail;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
+mod linux_display;
+#[cfg(target_os = "linux")]
 mod linux_portal_id;
+#[cfg(target_os = "linux")]
+mod linux_wallpaper;
 mod library;
 mod main_window;
 mod media_access;
@@ -291,6 +295,17 @@ fn main() {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    let stale_wayland_display = linux_display::stale_wayland_display();
+    #[cfg(target_os = "linux")]
+    if stale_wayland_display.is_some() {
+        // gpui and screen capture both choose Wayland from this variable; drop
+        // it before logging starts threads.
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+        }
+    }
+
     // The AppImage CLI launcher re-enters the AppImage with `--cap-cli`; hand
     // it to the bundled CLI before logging, single-instance or the GUI start.
     #[cfg(target_os = "linux")]
@@ -309,6 +324,13 @@ fn main() {
 
     let _log_guard = init_logging();
     crash_capture::install(&diagnostics::logs_dir());
+    #[cfg(target_os = "linux")]
+    if let Some(wayland_display) = stale_wayland_display {
+        tracing::warn!(
+            wayland_display = %wayland_display.to_string_lossy(),
+            "WAYLAND_DISPLAY names no running compositor; using the X display"
+        );
+    }
 
     single_instance::acquire();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
@@ -414,7 +436,7 @@ fn main() {
                         ..Default::default()
                     }),
                     #[cfg(target_os = "linux")]
-                    app_id: Some(crate::app_windows::APP_ID.into()),
+                    app_id: Some(crate::app_windows::app_id().into()),
                     #[cfg(target_os = "linux")]
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]

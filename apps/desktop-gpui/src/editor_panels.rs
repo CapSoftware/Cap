@@ -6230,12 +6230,19 @@ impl EditorWindow {
     }
 }
 
-/// `formatTime` -- the `M:SS` clock the timing cards print.
+/// `formatTime` -- the `M:SS` clock the timing cards print, as `H:MM:SS` from
+/// an hour on.
 fn format_time(seconds: f64) -> String {
     let seconds = seconds.max(0.);
+    let hours = (seconds / 3600.).floor() as u32;
+    let seconds = seconds - f64::from(hours) * 3600.;
     let minutes = (seconds / 60.).floor() as u32;
     let rest = seconds - f64::from(minutes) * 60.;
-    format!("{minutes}:{rest:04.1}")
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{rest:04.1}")
+    } else {
+        format!("{minutes}:{rest:04.1}")
+    }
 }
 
 impl EditorWindow {
@@ -8420,6 +8427,9 @@ mod tests {
         assert_eq!(format_time(0.), "0:00.0");
         assert_eq!(format_time(9.25), "0:09.2");
         assert_eq!(format_time(75.5), "1:15.5");
+        assert_eq!(format_time(3599.5), "59:59.5");
+        assert_eq!(format_time(3600.), "1:00:00.0");
+        assert_eq!(format_time(3905.5), "1:05:05.5");
     }
 
     // -- Text presets ------------------------------------------------------

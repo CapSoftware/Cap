@@ -919,6 +919,95 @@ async function keyframeAlignedGroups(
 	);
 }
 
+const CHUNK_DECODE_BASE_ARGS = [
+	"-hide_banner",
+	"-nostdin",
+	"-copyts",
+	"-v",
+	"error",
+	"-xerror",
+	"-err_detect",
+	"explode+crccheck",
+	"-filter_threads",
+	"1",
+	"-filter_complex_threads",
+	"1",
+];
+
+function videoChunkDecodeArgs(path: string, threads: string) {
+	return [
+		...CHUNK_DECODE_BASE_ARGS,
+		"-threads",
+		threads,
+		"-protocol_whitelist",
+		"file",
+		"-f",
+		"mov",
+		"-i",
+		path,
+		"-map",
+		"0:v:0",
+		"-fps_mode",
+		"passthrough",
+		"-enc_time_base:v",
+		"-1",
+		"-c:v",
+		"wrapped_avframe",
+		"-bsf:v",
+		"setts=pts=N:dts=N:duration=1",
+		"-max_interleave_delta",
+		"1",
+		"-f",
+		"framecrc",
+		"pipe:1",
+	];
+}
+
+// Frame lines of whole fragments that were decoded during the recording, as one chunk of this decoder
+// would print them; the caller has matched each fragment's content identity to this recording's source.
+export interface PreverifiedVideoRun {
+	segments: number;
+	lines: string[];
+}
+
+// Decodes one run of fragments exactly as a chunk of the final verification would. Returns null when the
+// run cannot stand alone or the decoder complains, so the final verification decodes those fragments itself.
+export async function decodePreverifiedRun(
+	init: string,
+	segments: string[],
+	directory: string,
+	signal?: AbortSignal,
+): Promise<string[] | null> {
+	const first = segments[0];
+	if (!first || !(await decodesCleanlyFromStart(init, first, signal)))
+		return null;
+	const chunkPath = join(directory, "preverify-run.mp4");
+	await concatFiles([init, ...segments], chunkPath, signal);
+	const decoder = registerSubprocess(
+		await spawnRecordingDecoder(videoChunkDecodeArgs(chunkPath, "2"), 0),
+	);
+	const kill = () => {
+		if (decoder.exitCode === null) decoder.kill("SIGKILL");
+	};
+	signal?.addEventListener("abort", kill, { once: true });
+	const lines: string[] = [];
+	try {
+		const [exit, , stderr] = await Promise.all([
+			decoder.exited,
+			collectDecoderLines(decoder.stdout, lines, () => {}),
+			readDecoderErrors(decoder.stderr, chunkPath),
+		]);
+		signal?.throwIfAborted();
+		if (exit !== 0 || stderr.error || decoder.signalCode) return null;
+		return lines.some((line) => !line.startsWith("#")) ? lines : null;
+	} finally {
+		signal?.removeEventListener("abort", kill);
+		kill();
+		unregisterSubprocess(decoder);
+		await rm(chunkPath, { force: true });
+	}
+}
+
 // Decodes the packet-proven video as independent runs of whole fragments in
 // parallel, then replays their frame lines through the same parser and evidence
 // checks as one decode. Any decoder complaint falls back to the single decode,
@@ -929,13 +1018,33 @@ async function decodePacketProvenChunks(
 	chunkCount: number,
 	options: RecordingVerificationOptions,
 	packetProof: Awaited<ReturnType<typeof proveRecordingPackets>>,
+	preverified: PreverifiedVideoRun[] = [],
 ): Promise<RecordingVerificationResult> {
-	const groups = await keyframeAlignedGroups(
-		source,
-		chunkCount,
-		options.abortSignal,
-	);
-	if (groups.length < 2)
+	const cached = [...preverified];
+	let covered = cached.reduce((total, run) => total + run.segments, 0);
+	if (covered > source.segments.length)
+		throw new ChunkedDecodeUnavailable("preverified runs exceed the source");
+	// The fragments after the cached runs are decoded from their first one, so it has to decode on its own.
+	while (
+		cached.length > 0 &&
+		covered < source.segments.length &&
+		!(await decodesCleanlyFromStart(
+			source.init,
+			source.segments[covered],
+			options.abortSignal,
+		))
+	)
+		covered -= cached.pop()?.segments ?? 0;
+	const remaining = source.segments.slice(covered);
+	const groups =
+		remaining.length === 0
+			? []
+			: await keyframeAlignedGroups(
+					{ init: source.init, segments: remaining },
+					chunkCount,
+					options.abortSignal,
+				);
+	if (cached.length === 0 && groups.length < 2)
 		throw new ChunkedDecodeUnavailable("no cleanly decodable fragment runs");
 	const directory = dirname(outputPath);
 	const chunkPaths = groups.map((_, index) =>
@@ -949,24 +1058,11 @@ async function decodePacketProvenChunks(
 			1,
 			Math.floor(
 				(configuredThreads > 0 ? configuredThreads : availableParallelism()) /
-					groups.length,
+					Math.max(1, groups.length),
 			),
 		),
 	);
-	const base = [
-		"-hide_banner",
-		"-nostdin",
-		"-copyts",
-		"-v",
-		"error",
-		"-xerror",
-		"-err_detect",
-		"explode+crccheck",
-		"-filter_threads",
-		"1",
-		"-filter_complex_threads",
-		"1",
-	];
+	const base = CHUNK_DECODE_BASE_ARGS;
 	const decoders: Awaited<ReturnType<typeof spawnRecordingDecoder>>[] = [];
 	const outputs: string[][] = [];
 	const readers: Promise<unknown>[] = [];
@@ -1028,32 +1124,7 @@ async function decodePacketProvenChunks(
 			),
 		);
 		const jobs = [
-			...chunkPaths.map((path) => [
-				...base,
-				"-threads",
-				threads,
-				"-protocol_whitelist",
-				"file",
-				"-f",
-				"mov",
-				"-i",
-				path,
-				"-map",
-				"0:v:0",
-				"-fps_mode",
-				"passthrough",
-				"-enc_time_base:v",
-				"-1",
-				"-c:v",
-				"wrapped_avframe",
-				"-bsf:v",
-				"setts=pts=N:dts=N:duration=1",
-				"-max_interleave_delta",
-				"1",
-				"-f",
-				"framecrc",
-				"pipe:1",
-			]),
+			...chunkPaths.map((path) => videoChunkDecodeArgs(path, threads)),
 			...(packetProof.hasAudio
 				? [
 						[
@@ -1132,8 +1203,11 @@ async function decodePacketProvenChunks(
 				);
 		}
 		const streams = new Map<number, DecodedStream>();
-		const videoOutputs = outputs.slice(0, chunkPaths.length);
-		const videoMetadata = metadataOf(videoOutputs[0]);
+		const videoOutputs = [
+			...cached.map((run) => run.lines),
+			...outputs.slice(0, chunkPaths.length),
+		];
+		const videoMetadata = metadataOf(videoOutputs[0] ?? []);
 		let offset = 0;
 		for (const [index, lines] of videoOutputs.entries()) {
 			const metadata = metadataOf(lines);
@@ -1207,6 +1281,7 @@ export async function verifyRemuxedRecording(
 		"requireAudio" | "abortSignal" | "timeoutMs" | "onProgress"
 	>,
 	videoChunks?: RecordingVideoChunkSource,
+	preverified: PreverifiedVideoRun[] = [],
 ): Promise<RecordingVerificationResult & { sourcePreserved: true }> {
 	const signal = AbortSignal.any([
 		...(options.abortSignal ? [options.abortSignal] : []),
@@ -1247,8 +1322,8 @@ export async function verifyRemuxedRecording(
 	let result: RecordingVerificationResult | undefined;
 	if (
 		videoChunks &&
-		chunkCount > 1 &&
-		videoChunks.segments.length >= chunkCount * 2
+		(preverified.length > 0 ||
+			(chunkCount > 1 && videoChunks.segments.length >= chunkCount * 2))
 	) {
 		try {
 			result = await decodePacketProvenChunks(
@@ -1257,6 +1332,7 @@ export async function verifyRemuxedRecording(
 				chunkCount,
 				decodeOptions,
 				proof,
+				preverified,
 			);
 		} catch (error) {
 			signal.throwIfAborted();
