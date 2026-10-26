@@ -659,6 +659,13 @@ fn handle_key(event: &NSEvent) -> bool {
         let Some((item, view)) = p.as_ref() else {
             return false;
         };
+        // Up/down leave the row, so drop hover/focus whether or not the menu
+        // considers the row highlighted (mouse hover may not highlight it).
+        // Return false so the menu still moves the highlight.
+        if matches!(event.keyCode(), 125 | 126) {
+            view.clear_focus();
+            return false;
+        }
         if !item.isHighlighted() {
             return false;
         }
