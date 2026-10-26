@@ -281,6 +281,19 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot/result.txt"
           done
 
+      - name: GNOME 50 screenshot from a terminal launch (Cap names itself so.cap.Cap)
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: screenshot
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-screenshot-terminal" LAUNCH=terminal PRELAUNCH=1 GNOME_UNSAFE=1
+          cat "$RUNNER_TEMP/out/gnome-screenshot-terminal/result.txt" "$RUNNER_TEMP/out/gnome-screenshot-terminal/actions.log"
+          for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-screenshot-terminal/result.txt"
+          done
+
       - name: GNOME 50 area recording (portal stream cropped to the area)
         env:
           DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
