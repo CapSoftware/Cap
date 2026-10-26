@@ -1,4 +1,3 @@
-import { inArray, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = vi.fn();
@@ -53,15 +52,15 @@ vi.mock("@cap/env", () => ({
 }));
 
 vi.mock("drizzle-orm", () => ({
-	and: vi.fn((...conditions: unknown[]) => conditions),
+	and: vi.fn((...conditions: unknown[]) => ({ and: conditions })),
 	asc: vi.fn((value: unknown) => value),
 	eq: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	gte: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	inArray: vi.fn((left: unknown, right: unknown) => ({ left, right })),
 	isNotNull: vi.fn((value: unknown) => value),
-	isNull: vi.fn((value: unknown) => value),
+	isNull: vi.fn((value: unknown) => ({ isNull: value })),
 	lte: vi.fn((left: unknown, right: unknown) => ({ left, right })),
-	or: vi.fn((...conditions: unknown[]) => conditions),
+	or: vi.fn((...conditions: unknown[]) => ({ or: conditions })),
 	sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
 		strings,
 		values,
@@ -133,6 +132,28 @@ function makeUpdateChain(affectedRows: number) {
 	chain.set.mockReturnValue(chain);
 	chain.where.mockResolvedValue([{ affectedRows }]);
 	return chain;
+}
+
+type Condition =
+	| string
+	| Condition[]
+	| { [key: string]: Condition }
+	| null
+	| undefined;
+
+function normalizeCondition(node: unknown): { and: Condition[] } & Condition {
+	const visit = (value: unknown): Condition => {
+		if (Array.isArray(value)) return value.map(visit);
+		if (value && typeof value === "object") {
+			if ("strings" in value)
+				return `sql:${(value.strings as TemplateStringsArray).join("?")}`;
+			return Object.fromEntries(
+				Object.entries(value).map(([key, entry]) => [key, visit(entry)]),
+			);
+		}
+		return value as Condition;
+	};
+	return visit(node) as { and: Condition[] } & Condition;
 }
 
 const now = new Date("2026-07-20T15:00:00.000Z");
@@ -396,7 +417,7 @@ describe("recoverStalledVideoPipeline", () => {
 		expect(result.ai.statuses).toEqual({ started: 1 });
 	});
 
-	it("selects only entitled AI candidates in SQL so ineligible videos cannot fill the batch", async () => {
+	it("filters AI candidates by entitlement and the transcribe-on-view rule inside the query", async () => {
 		const chains = [
 			makeSelectChain([]),
 			makeSelectChain([]),
@@ -412,38 +433,30 @@ describe("recoverStalledVideoPipeline", () => {
 		expect(chains[2]?.limit).toHaveBeenCalledWith(
 			STALLED_AI_RECOVERY_BATCH_SIZE,
 		);
-		expect(inArray).toHaveBeenCalledWith("users.stripeSubscriptionStatus", [
-			"active",
-			"trialing",
-			"complete",
-			"paid",
-			"past_due",
-		]);
-		const sqlText = vi
-			.mocked(sql)
-			.mock.calls.map(([strings]) =>
-				(strings as TemplateStringsArray).join("?"),
-			);
-		expect(sqlText).toContain("COALESCE(?, '') <> ''");
-	});
-
-	it("never starts AI for transcribe-on-view videos but still resumes AI a view started", async () => {
-		const chains = [
-			makeSelectChain([]),
-			makeSelectChain([]),
-			makeSelectChain([]),
-		];
-		let dbCall = 0;
-		mockDb.mockImplementation(() => chains[dbCall++]);
-
-		const { recoverStalledVideoPipeline } = await import(
-			"@/lib/video-pipeline-recovery"
-		);
-		await recoverStalledVideoPipeline({ now, concurrency: 1 });
-
-		const aiWhere = JSON.stringify(chains[2]?.where.mock.calls[0]?.[0]);
-		expect(aiWhere).toContain("$.transcribeOnView') IS NULL");
-		expect(aiWhere).toContain('"QUEUED","PROCESSING"');
+		const aiWhere = normalizeCondition(chains[2]?.where.mock.calls[0]?.[0]);
+		expect(aiWhere.and).toContainEqual({
+			or: [
+				{
+					and: [
+						{ isNull: "sql:JSON_EXTRACT(?, '$.aiGenerationStatus')" },
+						"sql:JSON_EXTRACT(?, '$.transcribeOnView') IS NULL",
+					],
+				},
+				{
+					left: "sql:JSON_UNQUOTE(JSON_EXTRACT(?, '$.aiGenerationStatus'))",
+					right: ["QUEUED", "PROCESSING"],
+				},
+			],
+		});
+		expect(aiWhere.and).toContainEqual({
+			or: [
+				"sql:COALESCE(?, '') <> ''",
+				{
+					left: "users.stripeSubscriptionStatus",
+					right: ["active", "trialing", "complete", "paid", "past_due"],
+				},
+			],
+		});
 	});
 
 	it("still drops ineligible rows if the database returns them", async () => {
