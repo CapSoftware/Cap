@@ -13,6 +13,9 @@ result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
 
 device=/dev/video42
 sudo modprobe v4l2loopback video_nr=42 card_label="Cap Test Camera" exclusive_caps=1 || exit 2
+# udev applies its own mode to the new node after modprobe returns; let it
+# finish first so it cannot reset the chmod below.
+sudo udevadm settle --timeout=10
 sudo chmod 666 "$device"
 ffmpeg -hide_banner -loglevel error -nostdin -re -f lavfi -i testsrc2=size=1280x720:rate=30 -pix_fmt yuyv422 \
   -f v4l2 "$device" >"$out/feeder.log" 2>&1 &
