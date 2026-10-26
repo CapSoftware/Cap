@@ -712,29 +712,94 @@ mod mac {
     /// Ordering a window front re-enters gpui's window callbacks, so call it
     /// from a task, never from inside an update.
     pub fn show_about_panel(name: &str, version: &str) {
-        use objc2::{class, msg_send};
-        use objc2_foundation::{NSArray, NSString};
+        use objc2::ClassType;
+        use objc2_app_kit::{
+            NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion,
+            NSAboutPanelOptionCredits, NSApplication,
+        };
+        use objc2_foundation::{MainThreadMarker, NSDictionary, NSString};
+
+        let Some(main_thread) = MainThreadMarker::new() else {
+            tracing::error!("The About panel must be shown from the main thread");
+            return;
+        };
+        let name_value = NSString::from_str(name);
+        let version_value = NSString::from_str(version);
+        let credits = about_credits();
+
+        let keys = unsafe {
+            [
+                NSAboutPanelOptionApplicationName,
+                NSAboutPanelOptionApplicationVersion,
+                NSAboutPanelOptionCredits,
+            ]
+        };
+        let values: [&AnyObject; 3] = [
+            name_value.as_super(),
+            version_value.as_super(),
+            credits.as_super(),
+        ];
+        let options = NSDictionary::from_slices(&keys, &values);
 
         unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            if app.is_null() {
-                return;
-            }
-            let values = NSArray::from_retained_slice(&[
-                NSString::from_str(name),
-                NSString::from_str(version),
-            ]);
-            let keys = NSArray::from_retained_slice(&[
-                NSString::from_str("ApplicationName"),
-                NSString::from_str("ApplicationVersion"),
-            ]);
-            let options: *mut AnyObject = msg_send![
-                class!(NSDictionary),
-                dictionaryWithObjects: &*values,
-                forKeys: &*keys,
-            ];
-            let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
+            NSApplication::sharedApplication(main_thread)
+                .orderFrontStandardAboutPanelWithOptions(&options);
         }
+    }
+
+    const ABOUT_CREDITS: &[(&str, Option<&str>)] = &[
+        ("Copyright \u{a9} 2023-present Cap Software, Inc.", None),
+        (
+            "Licensed under AGPL-3.0",
+            Some("https://github.com/CapSoftware/Cap/blob/main/LICENSE"),
+        ),
+        ("Website", Some("https://cap.so")),
+        ("Documentation", Some("https://cap.so/docs")),
+        ("Help Center", Some("https://help.cap.so/")),
+        ("Discord Community", Some("https://cap.link/discord")),
+        ("GitHub", Some("https://github.com/CapSoftware/Cap")),
+        (
+            "Report an Issue",
+            Some("https://github.com/CapSoftware/Cap/issues"),
+        ),
+    ];
+
+    fn about_credits() -> Retained<objc2_foundation::NSMutableAttributedString> {
+        use objc2::{AnyThread, ClassType};
+        use objc2_app_kit::{
+            NSLinkAttributeName, NSMutableParagraphStyle, NSParagraphStyleAttributeName,
+            NSTextAlignment,
+        };
+        use objc2_foundation::{
+            NSAttributedString, NSDictionary, NSMutableAttributedString, NSString, NSURL,
+        };
+
+        let style = NSMutableParagraphStyle::new();
+        style.setAlignment(NSTextAlignment::Center);
+        let paragraph: &AnyObject = style.as_super();
+
+        let credits = NSMutableAttributedString::from_nsstring(&NSString::from_str(""));
+        for (text, link) in ABOUT_CREDITS {
+            let line_text = NSString::from_str(&format!("{text}\n"));
+            let link = link.and_then(|url| NSURL::URLWithString(&NSString::from_str(url)));
+
+            let mut keys: Vec<&NSString> = vec![unsafe { NSParagraphStyleAttributeName }];
+            let mut values: Vec<&AnyObject> = vec![paragraph];
+            if let Some(link) = link.as_deref() {
+                keys.push(unsafe { NSLinkAttributeName });
+                values.push(link.as_super());
+            }
+            let attributes = NSDictionary::from_slices(&keys, &values);
+            let line = unsafe {
+                NSAttributedString::initWithString_attributes(
+                    NSAttributedString::alloc(),
+                    &line_text,
+                    Some(&attributes),
+                )
+            };
+            credits.appendAttributedString(&line);
+        }
+        credits
     }
 
     pub fn patch_standard_application_menu() {
