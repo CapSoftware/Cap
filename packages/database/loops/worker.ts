@@ -173,15 +173,22 @@ function unchangedUntil(
 	customerCopy: CustomerCopy,
 	now: Date,
 ) {
-	if (!source || identityChanged(job, source) || needsStripeCustomer(source))
+	try {
+		if (!source || identityChanged(job, source) || needsStripeCustomer(source))
+			return null;
+		const { localProfile, hash } = syncFingerprint(
+			job,
+			source,
+			config,
+			customerCopy,
+		);
+		return job.profileHash === hash
+			? nextProfileCheck(localProfile, now)
+			: null;
+	} catch {
+		// The per-job path hits the same error and defers only this job.
 		return null;
-	const { localProfile, hash } = syncFingerprint(
-		job,
-		source,
-		config,
-		customerCopy,
-	);
-	return job.profileHash === hash ? nextProfileCheck(localProfile, now) : null;
+	}
 }
 
 export function loopsRuntimeConfig(env: NodeJS.ProcessEnv): LoopsRuntimeConfig {
