@@ -582,6 +582,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.spawn(async move |cx| {
         while thumbnails.recv_async().await.is_ok() {
             cx.update(|cx| {
+                crate::tray::refresh_previous(cx);
                 refresh_library_after_delete(cx);
                 crate::menus::recheck_pending_quit(cx);
             });
@@ -1460,6 +1461,7 @@ pub fn open_onboarding(cx: &mut App) {
     .detach();
     hide_main_and_park_camera_preview(cx);
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
 }
 
 pub fn onboarding_finished(cx: &mut App) {
@@ -1470,6 +1472,7 @@ pub fn onboarding_finished(cx: &mut App) {
             .ok();
     }
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     show_main_window(cx);
 }
 
@@ -1486,6 +1489,7 @@ pub fn onboarding_closed(cx: &mut App) {
     crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
+    crate::menus::refresh(cx);
     if !crate::store::should_show_onboarding() {
         show_main_window(cx);
     }
@@ -4888,6 +4892,8 @@ fn open_editor_window(
         return None;
     }
 
+    cx.add_recent_document(&project_path);
+
     if let Some(window_id) = cx
         .global::<AppWindows>()
         .editors
@@ -6864,6 +6870,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         return;
     };
     let key = editor_key(&bundle);
+
+    cx.add_recent_document(&bundle);
 
     if let Some(handle) = cx
         .global::<AppWindows>()

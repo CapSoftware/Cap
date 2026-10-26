@@ -24,9 +24,17 @@ quit = "Cap से बाहर निकलें"
 services = "सेवाएँ"
 settings = "सेटिंग्स…"
 
+[menu.about]
+licensed = "AGPL-3.0 के अंतर्गत लाइसेंस प्राप्त"
+website = "वेबसाइट"
+commit = "कमिट"
+
 [menu.file]
 close_window = "विंडो बंद करें"
 title = "फ़ाइल"
+open_file = "फ़ाइल खोलें…"
+open_recent = "हाल ही में खोलें"
+import_media = "मीडिया इम्पोर्ट करें…"
 
 [menu.edit]
 copy = "कॉपी करें"
@@ -49,12 +57,22 @@ zoom = "ज़ूम करें"
 
 [menu.help]
 title = "सहायता"
+feedback = "प्रतिक्रिया दें…"
+changelog = "चेंजलॉग"
+dashboard = "डैशबोर्ड"
+documentation = "दस्तावेज़ीकरण"
+faq = "सामान्य प्रश्न"
+self_hosting = "सेल्फ-होस्टिंग"
+help_center = "सहायता केंद्र"
+system_status = "सिस्टम स्थिति"
+discord = "Discord समुदाय से जुड़ें"
 
 [tray]
 import_media = "मीडिया इम्पोर्ट करें..."
 no_recent_items = "कोई हालिया आइटम नहीं"
 open_main_window = "मुख्य विंडो खोलें"
 previous = "हाल के आइटम"
+recording_mode = "रिकॉर्डिंग मोड"
 quit = "Cap से बाहर निकलें"
 record_area = "क्षेत्र रिकॉर्ड करें"
 record_display = "डिस्प्ले रिकॉर्ड करें"
@@ -586,3 +604,19 @@ click_or_press = "यहाँ क्लिक करें, या दबाए
 get_started = "शुरू करें"
 space_key = "स्पेस"
 tagline = "सबके लिए ओपन सोर्स स्क्रीन शेयरिंग ऐप।"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "अपडेट जाँचें"
+download = "अपडेट डाउनलोड करें…"
+checking = "अपडेट जाँच रहे हैं…"
+downloading = "अपडेट डाउनलोड हो रहा है…"
+restart = "अपडेट करने के लिए फिर से शुरू करें…"
+
+[settings.general.updates.download_policy]
+auto = "स्वचालित"
+description = "चुनें कि Cap अपडेट स्वचालित रूप से डाउनलोड करे या नहीं।"
+label = "अपडेट डाउनलोड"
+manual = "पहले पूछें"
+never = "कभी नहीं"

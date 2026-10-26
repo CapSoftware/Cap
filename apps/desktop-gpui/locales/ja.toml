@@ -24,9 +24,17 @@ quit = "Capを終了"
 services = "サービス"
 settings = "設定…"
 
+[menu.about]
+licensed = "AGPL-3.0ライセンス"
+website = "ウェブサイト"
+commit = "コミット"
+
 [menu.file]
 close_window = "ウィンドウを閉じる"
 title = "ファイル"
+open_file = "ファイルを開く…"
+open_recent = "最近使った項目を開く"
+import_media = "メディアを読み込む…"
 
 [menu.edit]
 copy = "コピー"
@@ -49,12 +57,22 @@ zoom = "拡大/縮小"
 
 [menu.help]
 title = "ヘルプ"
+feedback = "フィードバックを送る…"
+changelog = "変更履歴"
+dashboard = "ダッシュボード"
+documentation = "ドキュメント"
+faq = "FAQ"
+self_hosting = "セルフホスティング"
+help_center = "ヘルプセンター"
+system_status = "システムステータス"
+discord = "Discordコミュニティに参加"
 
 [tray]
 import_media = "メディアを読み込む..."
 no_recent_items = "最近の項目はありません"
 open_main_window = "メインウィンドウを開く"
 previous = "最近の項目"
+recording_mode = "録画モード"
 quit = "Capを終了"
 record_area = "範囲を録画"
 record_display = "ディスプレイを録画"
@@ -586,3 +604,19 @@ click_or_press = "ここをクリックするか、次のキーを押す:"
 get_started = "はじめる"
 space_key = "スペース"
 tagline = "誰もが使えるオープンソースの画面共有アプリ。"
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "アップデートを確認"
+download = "アップデートをダウンロード…"
+checking = "アップデートを確認中…"
+downloading = "アップデートをダウンロード中…"
+restart = "アップデートのために再起動…"
+
+[settings.general.updates.download_policy]
+auto = "自動"
+description = "Cap がアップデートを自動でダウンロードするか選択します。"
+label = "アップデートのダウンロード"
+manual = "確認してから"
+never = "しない"

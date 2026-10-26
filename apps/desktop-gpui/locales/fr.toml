@@ -24,9 +24,17 @@ quit = "Quitter Cap"
 services = "Services"
 settings = "Paramètres…"
 
+[menu.about]
+licensed = "Sous licence AGPL-3.0"
+website = "Site web"
+commit = "Commit"
+
 [menu.file]
 close_window = "Fermer la fenêtre"
 title = "Fichier"
+open_file = "Ouvrir un fichier…"
+open_recent = "Ouvrir récent"
+import_media = "Importer des médias…"
 
 [menu.edit]
 copy = "Copier"
@@ -49,12 +57,22 @@ zoom = "Réduire/agrandir"
 
 [menu.help]
 title = "Aide"
+feedback = "Donner son avis…"
+changelog = "Journal des modifications"
+dashboard = "Tableau de bord"
+documentation = "Documentation"
+faq = "FAQ"
+self_hosting = "Auto-hébergement"
+help_center = "Centre d'aide"
+system_status = "État du système"
+discord = "Rejoindre la communauté Discord"
 
 [tray]
 import_media = "Importer des médias..."
 no_recent_items = "Aucun élément récent"
 open_main_window = "Ouvrir la fenêtre principale"
 previous = "Récents"
+recording_mode = "Mode d'enregistrement"
 quit = "Quitter Cap"
 record_area = "Enregistrer une zone"
 record_display = "Enregistrer l'écran"
@@ -586,3 +604,19 @@ click_or_press = "Cliquez ici ou appuyez sur"
 get_started = "Commencer"
 space_key = "Espace"
 tagline = "L'app open source de partage d'écran pour tout le monde."
+
+[menu.update]
+badge_progress = "v{version} · {percent} %"
+badge_version = "v{version}"
+check = "Rechercher des mises à jour"
+download = "Télécharger la mise à jour…"
+checking = "Recherche de mises à jour…"
+downloading = "Téléchargement de la mise à jour…"
+restart = "Redémarrer pour mettre à jour…"
+
+[settings.general.updates.download_policy]
+auto = "Automatique"
+description = "Choisissez si Cap télécharge les mises à jour automatiquement."
+label = "Téléchargements de mises à jour"
+manual = "Demander d'abord"
+never = "Jamais"

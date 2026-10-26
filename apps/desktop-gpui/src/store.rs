@@ -846,6 +846,15 @@ settings_enum! {
 }
 
 settings_enum! {
+    UpdateDownloadPolicy {
+        Manual = "manual", "Manual";
+        Auto = "auto", "Auto";
+        Never = "never", "Never";
+    }
+    default = Manual
+}
+
+settings_enum! {
     EditorPreviewQuality {
         Quarter = "quarter", "Quarter";
         Half = "half", "Half";
@@ -1031,6 +1040,7 @@ pub struct GeneralSettings {
     pub default_project_name_template: Option<String>,
     pub excluded_windows: Vec<WindowExclusion>,
     pub update_channel: UpdateChannel,
+    pub update_download_policy: UpdateDownloadPolicy,
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
@@ -1097,7 +1107,7 @@ pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIso
     set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
 }
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
-/// the section the tray's Select Mode submenu reads and writes.
+/// the section the tray's mode picker reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1381,6 +1391,7 @@ impl GeneralSettings {
                 })
                 .unwrap_or_else(default_excluded_windows),
             update_channel: enum_at(general, "updateChannel"),
+            update_download_policy: enum_at(general, "updateDownloadPolicy"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),

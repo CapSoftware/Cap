@@ -38,7 +38,7 @@ use crate::{
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
-        SettingsEnum, StudioQuality, UpdateChannel, WindowExclusion,
+        SettingsEnum, StudioQuality, UpdateChannel, UpdateDownloadPolicy, WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -1849,7 +1849,10 @@ impl Render for SettingsWindow {
         // the frame to the app; without this the window had no way to close.
         #[cfg(target_os = "linux")]
         let shell = shell.when(
-            matches!(window.window_decorations(), gpui::Decorations::Client { .. }),
+            matches!(
+                window.window_decorations(),
+                gpui::Decorations::Client { .. }
+            ),
             |shell| shell.child(linux_close_button(theme)),
         );
 
@@ -2074,6 +2077,7 @@ impl SettingsWindow {
         let theme = self.theme;
         let (update_label, update_ready) = match crate::updates::status(cx) {
             crate::updates::UpdateStatus::Idle => ("Check for updates".to_string(), false),
+            crate::updates::UpdateStatus::Checking => ("Checking for updates…".to_string(), false),
             crate::updates::UpdateStatus::Downloading {
                 version,
                 fraction: Some(fraction),
@@ -4388,6 +4392,7 @@ impl SettingsWindow {
     fn render_updates(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let current = self.settings.update_channel;
+        let current_policy = self.settings.update_download_policy;
         let description = UPDATE_CHANNEL_DESCRIPTIONS
             .iter()
             .find(|(channel, _)| *channel == current)
@@ -4400,6 +4405,67 @@ impl SettingsWindow {
             .gap(px(12.))
             .px(px(16.))
             .py(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_start()
+                    .gap(px(16.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .child(tr::settings::general::updates::download_policy::label()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(theme.settings_muted())
+                                    .child(
+                                        tr::settings::general::updates::download_policy::description(),
+                                    ),
+                            ),
+                    )
+                    .child(self.segmented_raw(
+                        "update-download-policy",
+                        vec![
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::auto(),
+                                current_policy == UpdateDownloadPolicy::Auto,
+                            ),
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::manual(),
+                                current_policy == UpdateDownloadPolicy::Manual,
+                            ),
+                            ui::SegmentOption::new(
+                                tr::settings::general::updates::download_policy::never(),
+                                current_policy == UpdateDownloadPolicy::Never,
+                            ),
+                        ],
+                        cx,
+                        |this, index, cx| {
+                            let value = match index {
+                                0 => UpdateDownloadPolicy::Auto,
+                                1 => UpdateDownloadPolicy::Manual,
+                                _ => UpdateDownloadPolicy::Never,
+                            };
+                            if this.settings.update_download_policy == value {
+                                return;
+                            }
+                            this.settings.update_download_policy = value;
+                            this.write_enum("updateDownloadPolicy", value, cx);
+                            crate::updates::update_download_policy_changed(value, cx);
+                        },
+                    )),
+            )
+            .child(div().h(px(1.)).bg(theme.settings_border()))
             .child(
                 div()
                     .flex()

@@ -24,9 +24,17 @@ quit = "Quit Cap"
 services = "Services"
 settings = "Settings…"
 
+[menu.about]
+licensed = "Licensed under AGPL-3.0"
+website = "Website"
+commit = "Commit"
+
 [menu.file]
 close_window = "Close Window"
 title = "File"
+open_file = "Open File…"
+open_recent = "Open Recent"
+import_media = "Import Media…"
 
 [menu.edit]
 copy = "Copy"
@@ -49,12 +57,22 @@ zoom = "Zoom"
 
 [menu.help]
 title = "Help"
+feedback = "Give Feedback…"
+changelog = "Changelog"
+dashboard = "Dashboard"
+documentation = "Documentation"
+faq = "FAQ"
+self_hosting = "Self-hosting"
+help_center = "Help Center"
+system_status = "System Status"
+discord = "Join Discord Community"
 
 [tray]
 import_media = "Import Media..."
 no_recent_items = "No recent items"
 open_main_window = "Open Main Window"
 previous = { text = "Previous", context = "Submenu listing the most recent recordings and screenshots." }
+recording_mode = "Recording Mode"
 quit = "Quit Cap"
 record_area = "Record Area"
 record_display = "Record Display"
@@ -588,3 +606,19 @@ click_or_press = "Click here, or press"
 get_started = "Get Started"
 space_key = "Space"
 tagline = "The open source screen sharing app for everyone."
+
+[menu.update]
+badge_progress = "v{version} · {percent}%"
+badge_version = "v{version}"
+check = "Check for Update"
+download = "Download update…"
+checking = "Checking for Update…"
+downloading = "Downloading update…"
+restart = "Restart to update…"
+
+[settings.general.updates.download_policy]
+auto = "Auto"
+description = "Choose whether Cap downloads updates automatically."
+label = "Update downloads"
+manual = "Ask first"
+never = "Never"

@@ -1112,7 +1112,7 @@ impl MainWindow {
         Self {
             theme,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
-            // and the tray's Select Mode submenu writes the same key, so the
+            // and the tray's mode picker writes the same key, so the
             // window has to start where the store left it rather than at a
             // hardcoded Instant.
             mode: Mode::from_store(),
@@ -1916,7 +1916,7 @@ impl MainWindow {
         // `RecordingSettingsStore::set_mode` plus the two tray refreshes it
         // triggers (`handle_mode_selection`). Every mode affordance -- the
         // pill, the info panel, the mode select window and the tray's own
-        // Select Mode submenu -- reaches this method, so this is the one place
+        // mode picker -- reaches this method, so this is the one place
         // the setting is written.
         // Written inline, like every other store write in this app (and like
         // `RecordingSettingsStore::set_mode` itself): a background write would
