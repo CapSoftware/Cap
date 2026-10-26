@@ -1,4 +1,4 @@
-//! The mode picker row: a title and subtitle on the left, a capsule of pills on the right.
+//! The mode picker row: the current mode's heading on the left, a capsule of pills on the right.
 //!
 //! Layers (`CALayer`) draw the capsule and pills because only they have continuous
 //! corners; icons are image views above them, and `drawRect:` draws just the text.
@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSAccessibility, NSAccessibilityElement, NSAccessibilityRadioButtonRole,
     NSAccessibilityRadioGroupRole, NSAppearanceCustomization, NSAutoresizingMaskOptions,
     NSBitmapImageRep, NSColor, NSEvent, NSEventTrackingRunLoopMode, NSEventType, NSFont,
-    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightSemibold,
+    NSFontAttributeName, NSFontManager, NSFontTraitMask, NSFontWeightMedium,
     NSForegroundColorAttributeName, NSImage, NSImageScaling, NSImageView, NSMenu, NSMenuItem,
     NSStringDrawing, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
 };
@@ -40,18 +40,21 @@ const PICKER_MODES: [(Mode, TrayItem); 3] = [
 const FLASH_INTERVAL: f64 = 0.08;
 const FLASH_ON_PICK: bool = true;
 
-const PICKER_W: f64 = 300.0;
+const PICKER_MIN_W: f64 = 300.0;
+/// Clear space between the widest heading and the capsule.
+const HEADING_GAP: f64 = 12.0;
 const PICKER_H: f64 = 41.0;
-const PILL_W: f64 = 38.0;
+const PILL_W: f64 = 42.0;
 const PILL_H: f64 = 29.0;
 const PILL_GAP: f64 = 4.0;
 const CAPSULE_PAD: f64 = 3.0;
 const RIGHT_INSET: f64 = 12.0;
-const TITLE_INSET: f64 = 16.0;
-const LINE_GAP: f64 = 2.0;
+const TITLE_INSET: f64 = 18.0;
 const SYMBOL_SIZE: f64 = 17.0;
 const PILL_RADIUS: f64 = 14.0;
 const CAPSULE_RADIUS: f64 = 17.0;
+/// Optical nudge for a pill's glyph, left of its centred position.
+const STUDIO_ICON_NUDGE: f64 = -1.0;
 
 thread_local! {
     /// The live picker and its menu item, read by the key hook. Set on every rebuild.
@@ -149,6 +152,17 @@ define_class!(
             self.hover_from_pointer();
         }
 
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            unsafe {
+                let _: () = msg_send![super(self), updateTrackingAreas];
+            }
+            if let Some(area) = self.ivars().tracking.borrow_mut().take() {
+                self.removeTrackingArea(&area);
+            }
+            self.install_tracking_area();
+        }
+
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
         fn view_did_change_effective_appearance(&self) {
             unsafe {
@@ -214,7 +228,10 @@ impl ModePickerView {
             tracking: RefCell::new(None),
             accessibility_children: RefCell::new(Vec::new()),
         });
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(PICKER_W, PICKER_H));
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(picker_width(), PICKER_H),
+        );
         // Initialise first; everything below touches the live view.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
 
@@ -278,9 +295,6 @@ impl ModePickerView {
     }
 
     fn install_tracking_area(&self) {
-        if self.ivars().tracking.borrow().is_some() {
-            return;
-        }
         let options = NSTrackingAreaOptions::MouseMoved
             | NSTrackingAreaOptions::MouseEnteredAndExited
             | NSTrackingAreaOptions::ActiveAlways
@@ -315,8 +329,7 @@ impl ModePickerView {
     // -- geometry ----------------------------------------------------------
 
     fn capsule_rect(&self) -> NSRect {
-        let n = PICKER_MODES.len() as f64;
-        let w = n * PILL_W + (n - 1.0) * PILL_GAP + 2.0 * CAPSULE_PAD;
+        let w = capsule_width();
         let h = PILL_H + 2.0 * CAPSULE_PAD;
         let bounds = self.bounds();
         NSRect::new(
@@ -337,6 +350,14 @@ impl ModePickerView {
             ),
             NSSize::new(PILL_W, PILL_H),
         )
+    }
+
+    fn icon_rect(&self, i: usize) -> NSRect {
+        let mut r = self.pill_rect(i);
+        if PICKER_MODES[i].0 == Mode::Studio {
+            r.origin.x += STUDIO_ICON_NUDGE;
+        }
+        r
     }
 
     fn pill_at(&self, event: &NSEvent) -> Option<usize> {
@@ -430,7 +451,7 @@ impl ModePickerView {
             pill.setBackgroundColor(Some(&color));
 
             if let Some(icon) = icons.get(i) {
-                icon.setFrame(r);
+                icon.setFrame(self.icon_rect(i));
                 let tint = if is_sel {
                     if flash { white.clone() } else { accent.clone() }
                 } else {
@@ -449,44 +470,24 @@ impl ModePickerView {
         let focused = self.ivars().focused.get();
         let shown = focused.unwrap_or(selected);
 
-        let menu_size = NSFont::menuFontOfSize(0.0).pointSize();
-        let title_font =
-            NSFont::systemFontOfSize_weight(menu_size, unsafe { NSFontWeightSemibold });
-        let mut sub_font = NSFont::systemFontOfSize(menu_size - 2.0);
+        let mut font = heading_font();
         if shown != selected {
-            sub_font = NSFontManager::sharedFontManager(
-                MainThreadMarker::new().expect("draw runs on the main thread"),
-            )
-            .convertFont_toHaveTrait(&sub_font, NSFontTraitMask::ItalicFontMask);
+            font = italic(&font);
         }
 
-        let label = NSColor::labelColor();
         let secondary = NSColor::secondaryLabelColor();
-        let title = NSString::from_str(tr::tray::recording_mode());
         let subtitle = NSString::from_str(mode_heading(PICKER_MODES[shown].0));
-        let title_attrs = NSDictionary::from_slices(
+        let attrs = NSDictionary::from_slices(
             &[unsafe { NSFontAttributeName }, unsafe {
                 NSForegroundColorAttributeName
             }],
-            &[&*title_font as &AnyObject, &*label as &AnyObject],
-        );
-        let sub_attrs = NSDictionary::from_slices(
-            &[unsafe { NSFontAttributeName }, unsafe {
-                NSForegroundColorAttributeName
-            }],
-            &[&*sub_font as &AnyObject, &*secondary as &AnyObject],
+            &[&*font as &AnyObject, &*secondary as &AnyObject],
         );
 
-        let ts = unsafe { title.sizeWithAttributes(Some(&title_attrs)) };
-        let ss = unsafe { subtitle.sizeWithAttributes(Some(&sub_attrs)) };
-        let base_y = (self.bounds().size.height - (ts.height + ss.height + LINE_GAP)) / 2.0;
+        let size = unsafe { subtitle.sizeWithAttributes(Some(&attrs)) };
+        let y = (self.bounds().size.height - size.height) / 2.0;
         unsafe {
-            subtitle
-                .drawAtPoint_withAttributes(NSPoint::new(TITLE_INSET, base_y), Some(&sub_attrs));
-            title.drawAtPoint_withAttributes(
-                NSPoint::new(TITLE_INSET, base_y + ss.height + LINE_GAP),
-                Some(&title_attrs),
-            );
+            subtitle.drawAtPoint_withAttributes(NSPoint::new(TITLE_INSET, y), Some(&attrs));
         }
     }
 
@@ -538,6 +539,7 @@ impl ModePickerView {
 
     fn fit_to_width(&self, width: f64) {
         let frame = self.frame();
+        let width = width.max(picker_width());
         if width > frame.size.width + 1.0 {
             self.setFrameSize(NSSize::new(width, frame.size.height));
             self.refresh();
@@ -618,6 +620,46 @@ pub(super) fn stop_flash() {
             view.set_flash(false);
         }
     });
+}
+
+fn capsule_width() -> f64 {
+    let n = PICKER_MODES.len() as f64;
+    n * PILL_W + (n - 1.0) * PILL_GAP + 2.0 * CAPSULE_PAD
+}
+
+fn heading_font() -> Retained<NSFont> {
+    let menu_size = NSFont::menuFontOfSize(0.0).pointSize();
+    NSFont::systemFontOfSize_weight(menu_size, unsafe { NSFontWeightMedium })
+}
+
+fn italic(font: &NSFont) -> Retained<NSFont> {
+    NSFontManager::sharedFontManager(MainThreadMarker::new().expect("main thread"))
+        .convertFont_toHaveTrait(font, NSFontTraitMask::ItalicFontMask)
+}
+
+/// The picker is as wide as the widest heading needs, so a long translation
+/// (German "Bildschirmfoto-Modus") cannot run past the capsule. Every mode is
+/// measured both upright and italic, because hovering a pill draws the heading
+/// italic and italic glyphs can be wider; sizing for upright alone let the
+/// hovered heading overflow, and the width shift when the hover changed.
+fn picker_width() -> f64 {
+    let upright = heading_font();
+    let slanted = italic(&upright);
+    let widest = PICKER_MODES
+        .iter()
+        .flat_map(|(mode, _)| {
+            let text = NSString::from_str(mode_heading(*mode));
+            [&upright, &slanted].map(|font| {
+                let attrs = NSDictionary::from_slices(
+                    &[unsafe { NSFontAttributeName }],
+                    &[&**font as &AnyObject],
+                );
+                unsafe { text.sizeWithAttributes(Some(&attrs)) }.width
+            })
+        })
+        .fold(0.0_f64, f64::max);
+    let needed = TITLE_INSET + widest + HEADING_GAP + capsule_width() + RIGHT_INSET;
+    needed.max(PICKER_MIN_W)
 }
 
 /// Appends the mode picker row to `menu` and registers one action per pill, so a click
