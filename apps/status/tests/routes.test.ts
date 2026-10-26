@@ -189,15 +189,23 @@ describe("scheduler → storage → public API", () => {
 	});
 
 	test("does not let a future global checkpoint suppress monitoring indefinitely", async () => {
-		const now = Date.now();
+		const futureCheckpoint = new Date(
+			Date.now() + 30 * CHECK_INTERVAL_MS,
+		).toISOString();
 		values.set(
 			STATE_KEY,
 			JSON.stringify({
 				...emptyState(),
-				checkedAt: new Date(now + 30 * CHECK_INTERVAL_MS).toISOString(),
+				checkedAt: futureCheckpoint,
 			}),
 		);
-		expect((await collect(authorizedRequest())).status).toBe(200);
+		const response = await collect(authorizedRequest());
+		expect(response.status).toBe(200);
+		const result = await response.json();
+		const persisted = JSON.parse(values.get(STATE_KEY) ?? "null");
+		expect(persisted.checkedAt).toBe(result.checkedAt);
+		expect(persisted.checkedAt).not.toBe(futureCheckpoint);
+		expect(Date.parse(persisted.checkedAt)).toBeLessThanOrEqual(Date.now());
 		expect(probeCalls).toBe(6);
 	});
 
