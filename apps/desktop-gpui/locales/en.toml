@@ -588,3 +588,521 @@ click_or_press = "Click here, or press"
 get_started = "Get Started"
 space_key = "Space"
 tagline = "The open source screen sharing app for everyone."
+
+# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
+
+[editor.audio.library]
+add_hint = "Add audio, music or other sounds to your video"
+add_title = "Add audio"
+change_hint = "Pick a different track for this segment"
+change_title = "Change audio"
+done = "Done"
+import = "Import file"
+
+[editor.color]
+apply_to_cursor = "Apply to cursor"
+fine_tune = "Fine-tune colors"
+title = "Color Correction"
+
+[editor.color.preset.cinematic]
+description = "Teal shadows and orange highlights with light grain"
+name = "Cinematic"
+
+[editor.color.preset.dreamy]
+description = "Soft, airy pastels with lifted blacks"
+name = "Dreamy"
+
+[editor.color.preset.frost]
+description = "Cool, crisp tones with muted color"
+name = "Frost"
+
+[editor.color.preset.golden]
+description = "Warm golden-hour glow"
+name = "Golden"
+
+[editor.color.preset.midnight]
+description = "Dark, moody teal with subdued color"
+name = "Midnight"
+
+[editor.color.preset.noir]
+description = "High-contrast black and white with heavy grain"
+name = "Noir"
+
+[editor.color.preset.none]
+description = "Original colors, no grade applied"
+name = "None"
+
+[editor.color.preset.vintage]
+description = "Faded warm film look with soft contrast"
+name = "Vintage"
+
+[editor.color.preset.vivid]
+description = "Punchy saturation and contrast boost"
+name = "Vivid"
+
+[editor.color.slider]
+contrast = "Contrast"
+exposure = "Exposure"
+fade = "Fade"
+grain = "Grain"
+saturation = "Saturation"
+split_tone = "Split Tone"
+strength = "Strength"
+temperature = "Temperature"
+tint = "Tint"
+vignette = "Vignette"
+
+[editor.crop]
+aspect_ratio = "Aspect ratio"
+center = "Center"
+dimensions = "Size"
+editing_style = { text = "Editing Style {number} only", context = "{number} is the style segment's position, starting at 1." }
+editing_style_override = { text = "Editing Style {number} only · Saving enables its background override", context = "{number} is the style segment's position, starting at 1." }
+free = "Free"
+full = "Full"
+hint = { text = "Drag to move · Arrow keys nudge · Hold {key} to skip snapping", context = "{key} is drawn as a Shift key badge; keep it where the sentence needs it." }
+loading_frame = "Loading frame…"
+position = "Position"
+preview = "Preview"
+rendering_preview = "Rendering preview…"
+snap_to_ratios = "Snap to ratios"
+style_changed = "This Style changed while cropping. Cancel and reopen Crop."
+title = "Crop"
+
+[editor.panel]
+delete = "Delete"
+done = "Done"
+duration = "Duration"
+edge_in = "In"
+edge_out = "Out"
+enabled = "Enabled"
+fade_duration = "Fade Duration"
+flip_horizontally = "Flip horizontally"
+flip_vertically = "Flip vertically"
+name = "Name"
+opacity = "Opacity"
+
+[editor.panel.audio]
+change = "Change"
+change_hint = "Tap to change track"
+fade_in = "Fade In"
+fade_out = "Fade Out"
+fallback_name = "Audio"
+title = "Audio {number}"
+volume = "Volume"
+
+[editor.panel.camera3d]
+already_still = "Already a still shot"
+amount = "Amount"
+angles = "Angles"
+auto_scene = "Auto scene"
+auto_scene_tooltip = "Rebuilds every 3D shot on the track"
+bokeh = "Bokeh"
+camera = "Camera"
+delete_tooltip = "Delete this shot"
+depth_blur = "Depth blur"
+distance = "Distance"
+drag_to_orbit = "Drag to orbit"
+ease_in = "Ease in"
+ease_out = "Ease out"
+end_same_as_start = "End · same as start"
+fine_tune = "Fine-tune"
+focus = "Focus"
+header = { text = "3D shot · {look} · {duration}s", context = "{look} is the shot's look name; {duration} is seconds with one decimal, such as 4.0." }
+hold_opening = "Hold the opening pose for the whole shot"
+lens = "Lens"
+look_title = "Look"
+motion_style = "Motion style"
+moves = "Moves"
+nothing_to_swap = "Nothing to swap on a still shot"
+play_shot = "Play shot"
+play_shot_tooltip = "Play this shot"
+pose_end = { text = "End · {time}", context = "{time} is a clock such as 0:04.0." }
+pose_start = { text = "Start · {time}", context = "{time} is a clock such as 0:04.0." }
+reset_camera = "Reset camera"
+roll = "Roll"
+rotate_x = "Rotate X"
+rotate_y = "Rotate Y"
+shift_x = "Shift X"
+shift_y = "Shift Y"
+shots = { one = "{count} shot", other = "{count} shots", context = "How many shots a ready-made 3D sequence lays out." }
+still_shot = "Still shot"
+swap = "Swap start and end"
+timing_advanced = "Timing & advanced"
+timing_summary = { text = "{easing} · Lens {fov}", context = "{easing} is the motion style name; {fov} is the lens angle in degrees, a whole number." }
+
+[editor.panel.camera3d.blur]
+angle = "Angle"
+falloff = "Falloff"
+focus_size = "Focus size"
+focus_x = "Focus X"
+focus_y = "Focus Y"
+position = "Position"
+scan = "Scan"
+strength = "Strength"
+
+[editor.panel.camera3d.easing]
+ease_in = "Ease in"
+ease_out = "Ease out"
+linear = "Linear"
+smooth = "Smooth"
+
+[editor.panel.camera3d.focus_mode]
+directional = "Directional"
+radial = "Radial"
+tilt_shift = "Tilt shift"
+
+[editor.panel.camera3d.look]
+center = "Center"
+close_up = "Close up"
+drift_down = "Drift down"
+glide_across = "Glide across"
+low_angle = "Low angle"
+perspective = "Perspective"
+pull_back = "Pull back"
+rising_sweep = "Rising sweep"
+slide_by = "Slide by"
+spotlight = "Spotlight"
+tilt_away = "Tilt away"
+top_down = "Top down"
+unfold = "Unfold"
+
+[editor.panel.camera3d.sequence]
+product_tour = "Product tour"
+punch_in = "Punch in"
+showcase = "Showcase"
+
+[editor.panel.camera3d.shot]
+custom = "Custom move"
+still = "Still shot"
+
+[editor.panel.caption]
+title = "Caption {number}"
+
+[editor.panel.font]
+system_mono = "System Mono"
+system_sans = "System Sans"
+system_serif = "System Serif"
+
+[editor.panel.font_weight]
+black = "Black"
+bold = "Bold"
+custom = { text = "Custom ({weight})", context = "{weight} is a numeric font weight such as 450." }
+extra_bold = "Extra Bold"
+light = "Light"
+medium = "Medium"
+regular = "Regular"
+semibold = "Semibold"
+
+[editor.panel.image]
+arrange = "Arrange on canvas"
+arrange_help = "Drag the image to move it. Pull a corner to resize, or use the rotation control below to turn it."
+center = "Center on canvas"
+lock_aspect = "Lock aspect ratio"
+missing = "Image file is missing. Replace it to restore this segment while keeping its timing and transforms."
+replace = "Replace image"
+rotation = "Rotation"
+rounding = "Rounding"
+
+[editor.panel.keyboard]
+title = "Keyboard {number}"
+
+[editor.panel.mask]
+blur = "Blur"
+effect = "Effect"
+highlight = "Highlight"
+outside_darkness = "Outside Darkness"
+pixel_size = "Pixel Size"
+pixelate = "Pixelate"
+sensitive = "Sensitive"
+title = "Mask {number}"
+
+[editor.panel.scene]
+camera_layout = "Camera Layout"
+camera_position = "Camera Position"
+camera_zoom = "Camera Zoom"
+screen_position = "Screen Position"
+screen_zoom = "Screen Zoom"
+transition = "Transition"
+
+[editor.panel.scene.description]
+camera_only = "Shows only the camera feed"
+default = "Shows both screen and camera"
+floating = "Screen and camera float side by side as rounded cards over the background"
+hide_camera = "Shows only the screen recording"
+split_screen = "Screen and camera side by side (auto-stacks in portrait)"
+
+[editor.panel.scene.mode]
+camera_only = "Camera Only"
+default = "Default"
+floating = "Floating"
+hide_camera = "Hide Camera"
+split_screen = "Split Screen"
+
+[editor.panel.style]
+camera_only_background = "Camera Only background"
+camera_only_help = "Use a Camera Only scene. Padding reveals the background around the camera."
+camera_only_padding = "Camera Only padding"
+crop_height = "Height"
+crop_left = "Left"
+crop_title = "Screen crop (source pixels)"
+crop_top = "Top"
+crop_width = "Width"
+edit_background = "Edit Background & frame"
+edit_camera = "Edit Camera"
+edit_cursor = "Edit Cursor"
+help = "Overrides apply only during this segment. Enable a group to copy its global settings."
+reset_crop = "Reset crop"
+
+[editor.panel.text_animation]
+bounce = "Bounce"
+fade = "Fade"
+letters = "Letters"
+none = "None"
+pop = "Pop"
+slide_down = "Slide down"
+slide_left = "Slide left"
+slide_right = "Slide right"
+slide_up = "Slide up"
+tracking = "Tracking"
+typewriter = "Typewriter"
+wipe = "Wipe"
+words = "Words"
+zoom = "Zoom"
+
+[editor.panel.text_background]
+box_shape = "Box"
+highlight = "Highlight"
+none = "None"
+pill = "Pill"
+
+[editor.panel.text_layout]
+fullscreen = "Fullscreen"
+overlay = "Overlay"
+
+[editor.panel.text_preset.group]
+all = "All"
+callouts = "Callouts"
+code = "Code"
+lower_thirds = "Lower thirds"
+statements = "Statements"
+titles = "Titles"
+
+[editor.panel.text_preset.name]
+caption = "Caption"
+cinematic = "Cinematic"
+code = "Code"
+gradient = "Gradient"
+headline = "Headline"
+highlight = "Highlight"
+kicker = "Kicker"
+label = "Label"
+lower_third = "Lower third"
+name_tag = "Name tag"
+neon = "Neon"
+quote = "Quote"
+stat = "Big stat"
+sticker = "Sticker"
+title = "Title"
+typewriter = "Typewriter"
+
+[editor.panel.text_preset.sample]
+caption = "Recorded with Cap"
+cinematic = "Chapter one"
+gradient = "Beautiful text"
+headline = "Ship faster"
+highlight = "the important part"
+kicker = "New feature"
+label = "Pro tip"
+name_tag = { text = "Richie · Founder", context = "Richie is a person's name and stays as it is." }
+neon = "Glow up"
+quote = "“Make it feel effortless”"
+sticker = "Boom!"
+title = { text = "Introducing Cap", context = "Sample text a new text segment takes when this preset is applied. Cap is the product name." }
+typewriter = "typing it out…"
+
+[editor.panel.text_segment]
+animation = "Animation"
+background = "Background"
+color = "Color"
+font = "Font"
+font_size = "Size"
+fullscreen_help = "Pauses the video while the text is shown, then resumes where it left off."
+glow = "Glow"
+gradient = "Gradient"
+layout = "Layout"
+letter_spacing = "Letter spacing"
+line_height = "Line height"
+look = "Look"
+outline = "Outline"
+screen_transition = "Screen transition"
+shadow = "Shadow"
+style = "Style"
+title = "Text {number}"
+
+[editor.panel.timing]
+end = "End"
+start = "Start"
+title = "Timing"
+to = { text = "to", context = "Sits between the start and end time boxes." }
+
+[editor.panel.zoom]
+amount = "Zoom Amount"
+auto = "Auto"
+auto_help = "Automatic zoom follows your cursor around the screen."
+auto_locked = "Auto mode needs cursor capture. Enable \"Custom cursor capture (Studio)\" in Settings → General."
+how_it_works = "How does it work?"
+manual = "Manual"
+manual_help = "Manual zoom stays on a fixed spot you pick below."
+mixed = "Mixed"
+mode = "Zoom Mode"
+positions_mixed = "Segments zoom into different spots. Drag to move them all to the same one."
+title = { text = "Zoom {number}", context = "{number} is the segment's position on the track, starting at 1." }
+
+[editor.sidebar]
+desktop_import_failed = { text = "Couldn't import your desktop wallpaper", context = "Alert title. The alert body is a technical error message in English." }
+importing_image = "Importing image…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "Add a colour"
+colours = "Colours"
+delete = "Delete"
+delete_failed = "Could not delete this gradient. Try again."
+fine_tune = "Fine-tune"
+limit_reached = { one = "You can save up to {count} gradient. Delete one to add another.", other = "You can save up to {count} gradients. Delete one to add another." }
+motion = "Motion"
+name_placeholder = "Name this gradient"
+name_required = "Enter a name for this gradient."
+presets = "Presets"
+randomize = "Randomize"
+remember_failed = "Could not remember your animated gradient settings."
+remove_colour = "Remove colour"
+reset_tooltip = "Reset fine-tune settings"
+save_failed = "Could not save this gradient. Try again."
+save_tooltip = "Save the current gradient"
+saved = "Saved"
+still = { text = "Still", context = "Motion speed readout when the speed is zero." }
+
+[editor.sidebar.animated_gradient.control]
+contrast = "Contrast"
+curvature = "Curvature"
+detail = "Detail"
+direction = "Direction"
+exposure = "Exposure"
+flow_scale = "Flow Scale"
+flow_strength = "Flow Strength"
+grain_amount = "Grain Amount"
+grain_size = "Grain Size"
+highlights = "Highlights"
+motion_speed = "Motion Speed"
+relief = "Relief"
+ripple_size = "Ripple Size"
+shading = "Shading"
+vibrance = "Vibrance"
+
+[editor.sidebar.animated_gradient.group]
+animation = "Animation"
+colour = "Colour"
+flow = "Flow"
+lighting = "Lighting"
+texture = "Texture"
+
+[editor.sidebar.background]
+title = "Background"
+
+[editor.sidebar.border]
+color = "Border Color"
+opacity = "Border Opacity"
+title = "Border"
+width = "Border Width"
+
+[editor.sidebar.corner]
+rounded = "Rounded"
+squircle = "Squircle"
+title = "Corner Style"
+
+[editor.sidebar.cursor]
+circle = "Circle"
+click_ripple = "Click Ripple"
+color = "Color"
+default = "Default"
+description_circle = "Replaces all cursor shapes with a circle."
+description_default = "Keeps the cursor shapes and appearance from your recording."
+description_macos = "Classic macOS appearance. Custom cursors keep their recorded shape."
+description_tahoe = "macOS Tahoe appearance. Custom cursors keep their recorded shape."
+description_windows = "Windows appearance. Custom cursors keep their recorded shape."
+duration = "Duration"
+recorded = "Recorded cursors"
+recorded_tooltip = "Recorded with this cursor"
+ripple_size = "Size"
+strength = "Strength"
+
+[editor.sidebar.desktop]
+import = "Import desktop background"
+importing = "Importing..."
+prompt = "Use the wallpaper from your desktop"
+reimport = "Re-import"
+
+[editor.sidebar.gradient]
+angle = "Angle"
+from = "From"
+grain_scale = "Grain Scale"
+noise = "Noise"
+to = "To"
+
+[editor.sidebar.image]
+prompt = "Click to select or drag and drop image"
+
+[editor.sidebar.layout]
+background_blur = "Background Blur"
+custom_position = "Custom screen position (dragged on canvas)"
+motion_blur = "Motion Blur"
+padding = "Padding"
+rounded_corners = "Rounded Corners"
+title = "Layout"
+
+[editor.sidebar.notch]
+description = "Draws a MacBook notch over the recording. Recordings made on a Mac with a notch use their own measurements; otherwise start from the size below and adjust to match."
+height = "Notch Height"
+position = "Notch Position"
+title = "MacBook notch"
+width = "Notch Width"
+
+[editor.sidebar.shadow]
+advanced = "Advanced shadow settings"
+blur = "Blur"
+opacity = "Opacity"
+shadow_size = "Size"
+title = "Shadow"
+
+[editor.sidebar.source]
+animated = "Animated"
+color = "Color"
+desktop = "Desktop"
+gradient = "Gradient"
+image = "Image"
+none = "None"
+wallpaper = "Wallpaper"
+
+[editor.sidebar.style_group]
+back = "Back to Style"
+background = "Background & frame"
+camera = "Camera"
+cursor = "Cursor"
+editing_note = "Editing this segment only. Global settings are unchanged."
+title = { text = "Style {number} · {group}", context = "{number} is the style segment's position, starting at 1; {group} is Background & frame, Camera or Cursor." }
+
+[editor.sidebar.tab]
+audio = "Audio"
+background = "Background"
+camera = "Camera"
+captions = "Captions"
+cursor = "Cursor"
+keyboard = "Keyboard"
+
+[editor.sidebar.wallpaper_theme]
+blue = "Blue"
+cities = "Cities"
+dark = "Dark"
+orange = "Orange"
+purple = "Purple"

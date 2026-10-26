@@ -586,3 +586,521 @@ click_or_press = "यहाँ क्लिक करें, या दबाए
 get_started = "शुरू करें"
 space_key = "स्पेस"
 tagline = "सबके लिए ओपन सोर्स स्क्रीन शेयरिंग ऐप।"
+
+# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
+
+[editor.audio.library]
+add_hint = "अपने वीडियो में ऑडियो, संगीत या दूसरी आवाज़ें जोड़ें"
+add_title = "ऑडियो जोड़ें"
+change_hint = "इस सेगमेंट के लिए कोई दूसरा ट्रैक चुनें"
+change_title = "ऑडियो बदलें"
+done = "हो गया"
+import = "फ़ाइल इंपोर्ट करें"
+
+[editor.color]
+apply_to_cursor = "कर्सर पर लागू करें"
+fine_tune = "रंग बारीकी से सेट करें"
+title = "कलर करेक्शन"
+
+[editor.color.preset.cinematic]
+description = "हल्के ग्रेन के साथ टील छाया और नारंगी हाइलाइट्स"
+name = "सिनेमैटिक"
+
+[editor.color.preset.dreamy]
+description = "उठे हुए काले रंग के साथ हल्के, मुलायम पेस्टल"
+name = "ड्रीमी"
+
+[editor.color.preset.frost]
+description = "हल्के रंगों के साथ ठंडे, साफ़ टोन"
+name = "फ़्रॉस्ट"
+
+[editor.color.preset.golden]
+description = "गोल्डन आवर की गर्म चमक"
+name = "सुनहरा"
+
+[editor.color.preset.midnight]
+description = "हल्के रंगों के साथ गहरा, मूडी टील"
+name = "मिडनाइट"
+
+[editor.color.preset.noir]
+description = "ज़्यादा ग्रेन के साथ हाई-कंट्रास्ट ब्लैक एंड व्हाइट"
+name = "नॉयर"
+
+[editor.color.preset.none]
+description = "असली रंग, कोई ग्रेड नहीं"
+name = "कोई नहीं"
+
+[editor.color.preset.vintage]
+description = "हल्के कंट्रास्ट के साथ फीका गर्म फ़िल्म लुक"
+name = "विंटेज"
+
+[editor.color.preset.vivid]
+description = "दमदार सैचुरेशन और ज़्यादा कंट्रास्ट"
+name = "चटकीला"
+
+[editor.color.slider]
+contrast = "कंट्रास्ट"
+exposure = "एक्सपोज़र"
+fade = "फ़ेड"
+grain = "ग्रेन"
+saturation = "सैचुरेशन"
+split_tone = "स्प्लिट टोन"
+strength = "तीव्रता"
+temperature = "टेम्परेचर"
+tint = "टिंट"
+vignette = "विनेट"
+
+[editor.crop]
+aspect_ratio = "आस्पेक्ट रेशियो"
+center = "बीच में"
+dimensions = "आकार"
+editing_style = "सिर्फ़ स्टाइल {number} एडिट हो रही है"
+editing_style_override = "सिर्फ़ स्टाइल {number} एडिट हो रही है · सेव करने पर इसका बैकग्राउंड ओवरराइड चालू हो जाएगा"
+free = "फ़्री"
+full = "पूरा"
+hint = "खिसकाने के लिए ड्रैग करें · तीर कुंजियों से थोड़ा खिसकाएँ · स्नैप रोकने के लिए {key} दबाए रखें"
+loading_frame = "फ़्रेम लोड हो रहा है…"
+position = "पोज़िशन"
+preview = "प्रीव्यू"
+rendering_preview = "प्रीव्यू रेंडर हो रहा है…"
+snap_to_ratios = "रेशियो पर स्नैप करें"
+style_changed = "क्रॉप करते समय यह स्टाइल बदल गई। रद्द करें और क्रॉप फिर से खोलें।"
+title = "क्रॉप"
+
+[editor.panel]
+delete = "हटाएँ"
+done = "हो गया"
+duration = "अवधि"
+edge_in = "इन"
+edge_out = "आउट"
+enabled = "चालू"
+fade_duration = "फ़ेड अवधि"
+flip_horizontally = "क्षैतिज रूप से पलटें"
+flip_vertically = "लंबवत रूप से पलटें"
+name = "नाम"
+opacity = "अपारदर्शिता"
+
+[editor.panel.audio]
+change = "बदलें"
+change_hint = "ट्रैक बदलने के लिए टैप करें"
+fade_in = "फ़ेड इन"
+fade_out = "फ़ेड आउट"
+fallback_name = "ऑडियो"
+title = "ऑडियो {number}"
+volume = "वॉल्यूम"
+
+[editor.panel.camera3d]
+already_still = "पहले से स्थिर शॉट है"
+amount = "मात्रा"
+angles = "एंगल"
+auto_scene = "ऑटो सीन"
+auto_scene_tooltip = "ट्रैक के सभी 3D शॉट फिर से बनाता है"
+bokeh = "बोकेह"
+camera = "कैमरा"
+delete_tooltip = "यह शॉट हटाएँ"
+depth_blur = "डेप्थ ब्लर"
+distance = "दूरी"
+drag_to_orbit = "घुमाने के लिए ड्रैग करें"
+ease_in = "ईज़ इन"
+ease_out = "ईज़ आउट"
+end_same_as_start = "अंत · शुरुआत जैसा"
+fine_tune = "बारीकी से सेट करें"
+focus = "फ़ोकस"
+header = "3D शॉट · {look} · {duration}s"
+hold_opening = "पूरे शॉट में शुरुआती पोज़ बनाए रखें"
+lens = "लेंस"
+look_title = "लुक"
+motion_style = "मोशन स्टाइल"
+moves = "मूव"
+nothing_to_swap = "स्थिर शॉट में बदलने को कुछ नहीं है"
+play_shot = "चलाएँ"
+play_shot_tooltip = "यह शॉट चलाएँ"
+pose_end = "अंत · {time}"
+pose_start = "शुरू · {time}"
+reset_camera = "कैमरा रीसेट करें"
+roll = "रोल"
+rotate_x = "घुमाव X"
+rotate_y = "घुमाव Y"
+shift_x = "शिफ़्ट X"
+shift_y = "शिफ़्ट Y"
+shots = { one = "{count} शॉट", other = "{count} शॉट" }
+still_shot = "स्थिर शॉट"
+swap = "शुरुआत और अंत बदलें"
+timing_advanced = "टाइमिंग और एडवांस्ड"
+timing_summary = "{easing} · लेंस {fov}"
+
+[editor.panel.camera3d.blur]
+angle = "कोण"
+falloff = "फ़ॉलऑफ़"
+focus_size = "फ़ोकस आकार"
+focus_x = "फ़ोकस X"
+focus_y = "फ़ोकस Y"
+position = "पोज़िशन"
+scan = "स्कैन"
+strength = "तीव्रता"
+
+[editor.panel.camera3d.easing]
+ease_in = "ईज़ इन"
+ease_out = "ईज़ आउट"
+linear = "लीनियर"
+smooth = "स्मूद"
+
+[editor.panel.camera3d.focus_mode]
+directional = "दिशात्मक"
+radial = "रेडियल"
+tilt_shift = "टिल्ट शिफ़्ट"
+
+[editor.panel.camera3d.look]
+center = "केंद्र"
+close_up = "क्लोज़-अप"
+drift_down = "नीचे बहाव"
+glide_across = "आर-पार ग्लाइड"
+low_angle = "लो एंगल"
+perspective = "पर्सपेक्टिव"
+pull_back = "पीछे खींचें"
+rising_sweep = "उठता स्वीप"
+slide_by = "स्लाइड बाय"
+spotlight = "स्पॉटलाइट"
+tilt_away = "झुककर दूर"
+top_down = "ऊपर से"
+unfold = "खुलना"
+
+[editor.panel.camera3d.sequence]
+product_tour = "प्रोडक्ट टूर"
+punch_in = "पंच इन"
+showcase = "शोकेस"
+
+[editor.panel.camera3d.shot]
+custom = "कस्टम मूव"
+still = "स्थिर शॉट"
+
+[editor.panel.caption]
+title = "कैप्शन {number}"
+
+[editor.panel.font]
+system_mono = "सिस्टम Mono"
+system_sans = "सिस्टम Sans"
+system_serif = "सिस्टम Serif"
+
+[editor.panel.font_weight]
+black = "ब्लैक"
+bold = "बोल्ड"
+custom = "कस्टम ({weight})"
+extra_bold = "एक्स्ट्रा बोल्ड"
+light = "लाइट"
+medium = "मीडियम"
+regular = "रेगुलर"
+semibold = "सेमीबोल्ड"
+
+[editor.panel.image]
+arrange = "कैनवास पर व्यवस्थित करें"
+arrange_help = "इमेज को खिसकाने के लिए ड्रैग करें। आकार बदलने के लिए कोना खींचें, या घुमाने के लिए नीचे दिए गए रोटेशन कंट्रोल का इस्तेमाल करें।"
+center = "कैनवास के बीच में रखें"
+lock_aspect = "आस्पेक्ट रेशियो लॉक करें"
+missing = "इमेज फ़ाइल नहीं मिली। इसे बदलें, ताकि यह सेगमेंट अपनी टाइमिंग और बदलावों के साथ वापस आ जाए।"
+replace = "इमेज बदलें"
+rotation = "रोटेशन"
+rounding = "गोलाई"
+
+[editor.panel.keyboard]
+title = "कीबोर्ड {number}"
+
+[editor.panel.mask]
+blur = "ब्लर"
+effect = "इफ़ेक्ट"
+highlight = "हाइलाइट"
+outside_darkness = "बाहरी अंधेरा"
+pixel_size = "पिक्सल आकार"
+pixelate = "पिक्सलेट"
+sensitive = "संवेदनशील"
+title = "मास्क {number}"
+
+[editor.panel.scene]
+camera_layout = "कैमरा लेआउट"
+camera_position = "कैमरा पोज़िशन"
+camera_zoom = "कैमरा ज़ूम"
+screen_position = "स्क्रीन पोज़िशन"
+screen_zoom = "स्क्रीन ज़ूम"
+transition = "ट्रांज़िशन"
+
+[editor.panel.scene.description]
+camera_only = "सिर्फ़ कैमरा फ़ीड दिखाता है"
+default = "स्क्रीन और कैमरा दोनों दिखाता है"
+floating = "स्क्रीन और कैमरा बैकग्राउंड के ऊपर गोल कोनों वाले कार्ड की तरह साथ-साथ तैरते हैं"
+hide_camera = "सिर्फ़ स्क्रीन रिकॉर्डिंग दिखाता है"
+split_screen = "स्क्रीन और कैमरा साथ-साथ (पोर्ट्रेट में अपने आप ऊपर-नीचे)"
+
+[editor.panel.scene.mode]
+camera_only = "सिर्फ़ कैमरा"
+default = "डिफ़ॉल्ट"
+floating = "फ़्लोटिंग"
+hide_camera = "कैमरा छिपाएँ"
+split_screen = "स्प्लिट स्क्रीन"
+
+[editor.panel.style]
+camera_only_background = "सिर्फ़ कैमरा बैकग्राउंड"
+camera_only_help = "सिर्फ़ कैमरा वाला सीन इस्तेमाल करें। पैडिंग से कैमरे के आस-पास बैकग्राउंड दिखता है।"
+camera_only_padding = "सिर्फ़ कैमरा पैडिंग"
+crop_height = "ऊँचाई"
+crop_left = "बाएँ"
+crop_title = "स्क्रीन क्रॉप (सोर्स पिक्सल)"
+crop_top = "ऊपर"
+crop_width = "चौड़ाई"
+edit_background = "बैकग्राउंड और फ़्रेम एडिट करें"
+edit_camera = "कैमरा एडिट करें"
+edit_cursor = "कर्सर एडिट करें"
+help = "बदलाव सिर्फ़ इस सेगमेंट के दौरान लागू होते हैं। किसी ग्रुप की ग्लोबल सेटिंग्स कॉपी करने के लिए उसे चालू करें।"
+reset_crop = "क्रॉप रीसेट करें"
+
+[editor.panel.text_animation]
+bounce = "बाउंस"
+fade = "फ़ेड"
+letters = "अक्षर"
+none = "कोई नहीं"
+pop = "पॉप"
+slide_down = "नीचे स्लाइड"
+slide_left = "बाएँ स्लाइड"
+slide_right = "दाएँ स्लाइड"
+slide_up = "ऊपर स्लाइड"
+tracking = "ट्रैकिंग"
+typewriter = "टाइपराइटर"
+wipe = "वाइप"
+words = "शब्द"
+zoom = "ज़ूम"
+
+[editor.panel.text_background]
+box_shape = "बॉक्स"
+highlight = "हाइलाइट"
+none = "कोई नहीं"
+pill = "पिल"
+
+[editor.panel.text_layout]
+fullscreen = "फ़ुलस्क्रीन"
+overlay = "ओवरले"
+
+[editor.panel.text_preset.group]
+all = "सभी"
+callouts = "कॉलआउट"
+code = "कोड"
+lower_thirds = "लोअर थर्ड"
+statements = "स्टेटमेंट"
+titles = "टाइटल"
+
+[editor.panel.text_preset.name]
+caption = "कैप्शन"
+cinematic = "सिनेमैटिक"
+code = "कोड"
+gradient = "ग्रेडिएंट"
+headline = "हेडलाइन"
+highlight = "हाइलाइट"
+kicker = "किकर"
+label = "लेबल"
+lower_third = "लोअर थर्ड"
+name_tag = "नेम टैग"
+neon = "नियॉन"
+quote = "कोट"
+stat = "बड़ा आंकड़ा"
+sticker = "स्टिकर"
+title = "टाइटल"
+typewriter = "टाइपराइटर"
+
+[editor.panel.text_preset.sample]
+caption = "Cap से रिकॉर्ड किया गया"
+cinematic = "पहला अध्याय"
+gradient = "सुंदर टेक्स्ट"
+headline = "तेज़ी से शिप करें"
+highlight = "ज़रूरी हिस्सा"
+kicker = "नया फ़ीचर"
+label = "प्रो टिप"
+name_tag = "Richie · संस्थापक"
+neon = "चमक उठो"
+quote = "“इसे सहज बनाइए”"
+sticker = "धमाका!"
+title = "पेश है Cap"
+typewriter = "टाइप हो रहा है…"
+
+[editor.panel.text_segment]
+animation = "एनिमेशन"
+background = "बैकग्राउंड"
+color = "रंग"
+font = "फ़ॉन्ट"
+font_size = "आकार"
+fullscreen_help = "टेक्स्ट दिखने तक वीडियो रुका रहता है, फिर वहीं से दोबारा चलता है।"
+glow = "चमक"
+gradient = "ग्रेडिएंट"
+layout = "लेआउट"
+letter_spacing = "अक्षर अंतर"
+line_height = "लाइन ऊँचाई"
+look = "लुक"
+outline = "आउटलाइन"
+screen_transition = "स्क्रीन ट्रांज़िशन"
+shadow = "छाया"
+style = "स्टाइल"
+title = "टेक्स्ट {number}"
+
+[editor.panel.timing]
+end = "अंत"
+start = "शुरू"
+title = "टाइमिंग"
+to = "से"
+
+[editor.panel.zoom]
+amount = "ज़ूम मात्रा"
+auto = "ऑटो"
+auto_help = "ऑटोमैटिक ज़ूम स्क्रीन पर आपके कर्सर के साथ चलता है।"
+auto_locked = "ऑटो मोड के लिए कर्सर कैप्चर ज़रूरी है। सेटिंग्स → सामान्य में \"कर्सर को अलग से कैप्चर करें (Studio)\" चालू करें।"
+how_it_works = "यह कैसे काम करता है?"
+manual = "मैनुअल"
+manual_help = "मैनुअल ज़ूम नीचे चुनी गई एक तय जगह पर रहता है।"
+mixed = "मिश्रित"
+mode = "ज़ूम मोड"
+positions_mixed = "सेगमेंट अलग-अलग जगहों पर ज़ूम करते हैं। सभी को एक ही जगह ले जाने के लिए ड्रैग करें।"
+title = "ज़ूम {number}"
+
+[editor.sidebar]
+desktop_import_failed = "आपका डेस्कटॉप वॉलपेपर इंपोर्ट नहीं हो सका"
+importing_image = "इमेज इंपोर्ट हो रही है…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "रंग जोड़ें"
+colours = "रंग"
+delete = "हटाएँ"
+delete_failed = "यह ग्रेडिएंट हटाया नहीं जा सका। फिर से कोशिश करें।"
+fine_tune = "बारीकी से सेट करें"
+limit_reached = { one = "आप ज़्यादा से ज़्यादा {count} ग्रेडिएंट सेव कर सकते हैं। नया जोड़ने के लिए एक हटाएँ।", other = "आप ज़्यादा से ज़्यादा {count} ग्रेडिएंट सेव कर सकते हैं। नया जोड़ने के लिए एक हटाएँ।" }
+motion = "मोशन"
+name_placeholder = "इस ग्रेडिएंट का नाम रखें"
+name_required = "इस ग्रेडिएंट का नाम लिखें।"
+presets = "प्रीसेट"
+randomize = "रैंडम"
+remember_failed = "आपकी एनिमेटेड ग्रेडिएंट सेटिंग्स याद नहीं रखी जा सकीं।"
+remove_colour = "रंग हटाएँ"
+reset_tooltip = "बारीक सेटिंग्स रीसेट करें"
+save_failed = "यह ग्रेडिएंट सेव नहीं हो सका। फिर से कोशिश करें।"
+save_tooltip = "मौजूदा ग्रेडिएंट सेव करें"
+saved = "सेव किए गए"
+still = "स्थिर"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "कंट्रास्ट"
+curvature = "वक्रता"
+detail = "डिटेल"
+direction = "दिशा"
+exposure = "एक्सपोज़र"
+flow_scale = "फ़्लो स्केल"
+flow_strength = "फ़्लो की ताकत"
+grain_amount = "ग्रेन मात्रा"
+grain_size = "ग्रेन आकार"
+highlights = "हाइलाइट्स"
+motion_speed = "मोशन स्पीड"
+relief = "उभार"
+ripple_size = "रिपल आकार"
+shading = "शेडिंग"
+vibrance = "वाइब्रेंस"
+
+[editor.sidebar.animated_gradient.group]
+animation = "एनिमेशन"
+colour = "रंग"
+flow = "फ़्लो"
+lighting = "लाइटिंग"
+texture = "टेक्सचर"
+
+[editor.sidebar.background]
+title = "बैकग्राउंड"
+
+[editor.sidebar.border]
+color = "बॉर्डर रंग"
+opacity = "बॉर्डर अपारदर्शिता"
+title = "बॉर्डर"
+width = "बॉर्डर चौड़ाई"
+
+[editor.sidebar.corner]
+rounded = "गोल"
+squircle = "स्क्वर्कल"
+title = "कोने की स्टाइल"
+
+[editor.sidebar.cursor]
+circle = "गोला"
+click_ripple = "क्लिक रिपल"
+color = "रंग"
+default = "डिफ़ॉल्ट"
+description_circle = "सभी कर्सर आकारों को गोले से बदल देता है।"
+description_default = "आपकी रिकॉर्डिंग के कर्सर का आकार और रूप वैसा ही रखता है।"
+description_macos = "क्लासिक macOS रूप। कस्टम कर्सर का रिकॉर्ड किया गया आकार बना रहता है।"
+description_tahoe = "macOS Tahoe रूप। कस्टम कर्सर का रिकॉर्ड किया गया आकार बना रहता है।"
+description_windows = "Windows रूप। कस्टम कर्सर का रिकॉर्ड किया गया आकार बना रहता है।"
+duration = "अवधि"
+recorded = "रिकॉर्ड किए गए कर्सर"
+recorded_tooltip = "इस कर्सर से रिकॉर्ड किया गया"
+ripple_size = "आकार"
+strength = "तीव्रता"
+
+[editor.sidebar.desktop]
+import = "डेस्कटॉप बैकग्राउंड इंपोर्ट करें"
+importing = "इंपोर्ट हो रहा है..."
+prompt = "अपने डेस्कटॉप का वॉलपेपर इस्तेमाल करें"
+reimport = "फिर से इंपोर्ट करें"
+
+[editor.sidebar.gradient]
+angle = "कोण"
+from = "से"
+grain_scale = "ग्रेन स्केल"
+noise = "नॉइज़"
+to = "तक"
+
+[editor.sidebar.image]
+prompt = "चुनने के लिए क्लिक करें या इमेज ड्रैग करके छोड़ें"
+
+[editor.sidebar.layout]
+background_blur = "बैकग्राउंड ब्लर"
+custom_position = "कस्टम स्क्रीन पोज़िशन (कैनवास पर ड्रैग की गई)"
+motion_blur = "मोशन ब्लर"
+padding = "पैडिंग"
+rounded_corners = "गोल कोने"
+title = "लेआउट"
+
+[editor.sidebar.notch]
+description = "रिकॉर्डिंग के ऊपर MacBook नॉच बनाता है। नॉच वाले Mac पर बनी रिकॉर्डिंग अपने माप इस्तेमाल करती हैं; वरना नीचे दिए आकार से शुरू करें और मिलान होने तक बदलें।"
+height = "नॉच ऊँचाई"
+position = "नॉच पोज़िशन"
+title = "MacBook नॉच"
+width = "नॉच चौड़ाई"
+
+[editor.sidebar.shadow]
+advanced = "छाया की एडवांस्ड सेटिंग्स"
+blur = "ब्लर"
+opacity = "अपारदर्शिता"
+shadow_size = "आकार"
+title = "छाया"
+
+[editor.sidebar.source]
+animated = "एनिमेटेड"
+color = "रंग"
+desktop = "डेस्कटॉप"
+gradient = "ग्रेडिएंट"
+image = "इमेज"
+none = "कोई नहीं"
+wallpaper = "वॉलपेपर"
+
+[editor.sidebar.style_group]
+back = "स्टाइल पर वापस जाएँ"
+background = "बैकग्राउंड और फ़्रेम"
+camera = "कैमरा"
+cursor = "कर्सर"
+editing_note = "सिर्फ़ यह सेगमेंट एडिट हो रहा है। ग्लोबल सेटिंग्स नहीं बदलतीं।"
+title = "स्टाइल {number} · {group}"
+
+[editor.sidebar.tab]
+audio = "ऑडियो"
+background = "बैकग्राउंड"
+camera = "कैमरा"
+captions = "कैप्शन"
+cursor = "कर्सर"
+keyboard = "कीबोर्ड"
+
+[editor.sidebar.wallpaper_theme]
+blue = "नीला"
+cities = "शहर"
+dark = "डार्क"
+orange = "नारंगी"
+purple = "बैंगनी"

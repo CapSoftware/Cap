@@ -586,3 +586,521 @@ click_or_press = "Hier klicken oder drücken:"
 get_started = "Los geht’s"
 space_key = "Leertaste"
 tagline = "Die Open-Source-App zum Teilen des Bildschirms für alle."
+
+# Editor sidebar, segment panels, colour correction, audio library and crop dialog.
+
+[editor.audio.library]
+add_hint = "Fügen Sie Ihrem Video Audio, Musik oder andere Klänge hinzu"
+add_title = "Audio hinzufügen"
+change_hint = "Wählen Sie einen anderen Track für dieses Segment"
+change_title = "Audio ändern"
+done = "Fertig"
+import = "Datei importieren"
+
+[editor.color]
+apply_to_cursor = "Auf Cursor anwenden"
+fine_tune = "Farben feinabstimmen"
+title = "Farbkorrektur"
+
+[editor.color.preset.cinematic]
+description = "Petrolfarbene Schatten und orange Lichter mit leichter Körnung"
+name = "Kino"
+
+[editor.color.preset.dreamy]
+description = "Weiche, luftige Pastelltöne mit angehobenem Schwarz"
+name = "Verträumt"
+
+[editor.color.preset.frost]
+description = "Kühle, klare Töne mit gedämpften Farben"
+name = "Frost"
+
+[editor.color.preset.golden]
+description = "Warmes Licht der goldenen Stunde"
+name = "Golden"
+
+[editor.color.preset.midnight]
+description = "Dunkles, stimmungsvolles Petrol mit gedämpften Farben"
+name = "Mitternacht"
+
+[editor.color.preset.noir]
+description = "Kontrastreiches Schwarzweiß mit starker Körnung"
+name = "Noir"
+
+[editor.color.preset.none]
+description = "Originalfarben, keine Korrektur"
+name = "Keine"
+
+[editor.color.preset.vintage]
+description = "Verblasster, warmer Filmlook mit weichem Kontrast"
+name = "Vintage"
+
+[editor.color.preset.vivid]
+description = "Kräftige Sättigung und mehr Kontrast"
+name = "Lebendig"
+
+[editor.color.slider]
+contrast = "Kontrast"
+exposure = "Belichtung"
+fade = "Verblassen"
+grain = "Körnung"
+saturation = "Sättigung"
+split_tone = "Teiltonung"
+strength = "Stärke"
+temperature = "Temperatur"
+tint = "Tönung"
+vignette = "Vignette"
+
+[editor.crop]
+aspect_ratio = "Seitenverhältnis"
+center = "Zentrieren"
+dimensions = "Größe"
+editing_style = "Nur Stil {number} wird bearbeitet"
+editing_style_override = "Nur Stil {number} wird bearbeitet · Speichern aktiviert seinen eigenen Hintergrund"
+free = "Frei"
+full = "Voll"
+hint = "Ziehen zum Verschieben · Pfeiltasten zum Feinjustieren · {key} halten, um nicht einzurasten"
+loading_frame = "Bild wird geladen…"
+position = "Position"
+preview = "Vorschau"
+rendering_preview = "Vorschau wird gerendert…"
+snap_to_ratios = "An Verhältnissen ausrichten"
+style_changed = "Dieser Stil wurde beim Zuschneiden geändert. Brechen Sie ab und öffnen Sie Zuschneiden erneut."
+title = "Zuschneiden"
+
+[editor.panel]
+delete = "Löschen"
+done = "Fertig"
+duration = "Dauer"
+edge_in = "Ein"
+edge_out = "Aus"
+enabled = "Aktiviert"
+fade_duration = "Ausblenddauer"
+flip_horizontally = "Horizontal spiegeln"
+flip_vertically = "Vertikal spiegeln"
+name = "Name"
+opacity = "Deckkraft"
+
+[editor.panel.audio]
+change = "Ändern"
+change_hint = "Tippen, um den Track zu ändern"
+fade_in = "Einblenden"
+fade_out = "Ausblenden"
+fallback_name = "Audio"
+title = "Audio {number}"
+volume = "Lautstärke"
+
+[editor.panel.camera3d]
+already_still = "Bereits eine feste Einstellung"
+amount = "Stärke"
+angles = "Winkel"
+auto_scene = "Auto-Szene"
+auto_scene_tooltip = "Erstellt alle 3D-Einstellungen der Spur neu"
+bokeh = "Bokeh"
+camera = "Kamera"
+delete_tooltip = "Diese Einstellung löschen"
+depth_blur = "Tiefenunschärfe"
+distance = "Abstand"
+drag_to_orbit = "Ziehen zum Kreisen"
+ease_in = "Einblenden"
+ease_out = "Ausblenden"
+end_same_as_start = "Ende · wie Start"
+fine_tune = "Feinabstimmung"
+focus = "Fokus"
+header = "3D-Einstellung · {look} · {duration} s"
+hold_opening = "Die Startpose für die ganze Einstellung halten"
+lens = "Objektiv"
+look_title = "Look"
+motion_style = "Bewegungsstil"
+moves = "Fahrten"
+nothing_to_swap = "Bei einer festen Einstellung gibt es nichts zu tauschen"
+play_shot = "Abspielen"
+play_shot_tooltip = "Diese Einstellung abspielen"
+pose_end = "Ende · {time}"
+pose_start = "Start · {time}"
+reset_camera = "Kamera zurücksetzen"
+roll = "Rollen"
+rotate_x = "Drehung X"
+rotate_y = "Drehung Y"
+shift_x = "Versatz X"
+shift_y = "Versatz Y"
+shots = { one = "{count} Einstellung", other = "{count} Einstellungen" }
+still_shot = "Feste Einstellung"
+swap = "Start und Ende tauschen"
+timing_advanced = "Timing & Erweitert"
+timing_summary = "{easing} · Objektiv {fov}"
+
+[editor.panel.camera3d.blur]
+angle = "Winkel"
+falloff = "Verlauf"
+focus_size = "Fokusgröße"
+focus_x = "Fokus X"
+focus_y = "Fokus Y"
+position = "Position"
+scan = "Scan"
+strength = "Stärke"
+
+[editor.panel.camera3d.easing]
+ease_in = "Beschleunigen"
+ease_out = "Abbremsen"
+linear = "Linear"
+smooth = "Weich"
+
+[editor.panel.camera3d.focus_mode]
+directional = "Gerichtet"
+radial = "Radial"
+tilt_shift = "Tilt-Shift"
+
+[editor.panel.camera3d.look]
+center = "Mitte"
+close_up = "Nahaufnahme"
+drift_down = "Absinken"
+glide_across = "Seitwärts gleiten"
+low_angle = "Untersicht"
+perspective = "Perspektive"
+pull_back = "Rückzug"
+rising_sweep = "Aufschwung"
+slide_by = "Vorbeigleiten"
+spotlight = "Spotlight"
+tilt_away = "Wegkippen"
+top_down = "Draufsicht"
+unfold = "Aufklappen"
+
+[editor.panel.camera3d.sequence]
+product_tour = "Produkttour"
+punch_in = "Heranzoomen"
+showcase = "Showcase"
+
+[editor.panel.camera3d.shot]
+custom = "Eigene Fahrt"
+still = "Feste Einstellung"
+
+[editor.panel.caption]
+title = "Untertitel {number}"
+
+[editor.panel.font]
+system_mono = "System-Mono"
+system_sans = "System-Sans"
+system_serif = "System-Serif"
+
+[editor.panel.font_weight]
+black = "Schwarz"
+bold = "Fett"
+custom = "Benutzerdefiniert ({weight})"
+extra_bold = "Extrafett"
+light = "Leicht"
+medium = "Mittel"
+regular = "Normal"
+semibold = "Halbfett"
+
+[editor.panel.image]
+arrange = "Auf der Leinwand anordnen"
+arrange_help = "Ziehen Sie das Bild, um es zu verschieben. Ziehen Sie an einer Ecke, um die Größe zu ändern, oder drehen Sie es mit der Drehung unten."
+center = "Auf der Leinwand zentrieren"
+lock_aspect = "Seitenverhältnis sperren"
+missing = "Die Bilddatei fehlt. Ersetzen Sie sie, um dieses Segment mit seinem Timing und seinen Transformationen wiederherzustellen."
+replace = "Bild ersetzen"
+rotation = "Drehung"
+rounding = "Rundung"
+
+[editor.panel.keyboard]
+title = "Tastatur {number}"
+
+[editor.panel.mask]
+blur = "Unschärfe"
+effect = "Effekt"
+highlight = "Hervorheben"
+outside_darkness = "Abdunklung außen"
+pixel_size = "Pixelgröße"
+pixelate = "Verpixeln"
+sensitive = "Vertraulich"
+title = "Maske {number}"
+
+[editor.panel.scene]
+camera_layout = "Kamera-Layout"
+camera_position = "Kameraposition"
+camera_zoom = "Kamera-Zoom"
+screen_position = "Bildschirmposition"
+screen_zoom = "Bildschirm-Zoom"
+transition = "Übergang"
+
+[editor.panel.scene.description]
+camera_only = "Zeigt nur das Kamerabild"
+default = "Zeigt Bildschirm und Kamera"
+floating = "Bildschirm und Kamera schweben nebeneinander als abgerundete Karten über dem Hintergrund"
+hide_camera = "Zeigt nur die Bildschirmaufnahme"
+split_screen = "Bildschirm und Kamera nebeneinander (im Hochformat automatisch übereinander)"
+
+[editor.panel.scene.mode]
+camera_only = "Nur Kamera"
+default = "Standard"
+floating = "Schwebend"
+hide_camera = "Kamera aus"
+split_screen = "Geteilt"
+
+[editor.panel.style]
+camera_only_background = "Hintergrund für Nur Kamera"
+camera_only_help = "Verwenden Sie eine Szene „Nur Kamera“. Der Rand zeigt den Hintergrund um die Kamera."
+camera_only_padding = "Rand für Nur Kamera"
+crop_height = "Höhe"
+crop_left = "Links"
+crop_title = "Bildschirmzuschnitt (Quellpixel)"
+crop_top = "Oben"
+crop_width = "Breite"
+edit_background = "Hintergrund & Rahmen bearbeiten"
+edit_camera = "Kamera bearbeiten"
+edit_cursor = "Cursor bearbeiten"
+help = "Überschreibungen gelten nur während dieses Segments. Aktivieren Sie eine Gruppe, um ihre globalen Einstellungen zu übernehmen."
+reset_crop = "Zuschnitt zurücksetzen"
+
+[editor.panel.text_animation]
+bounce = "Sprung"
+fade = "Blende"
+letters = "Buchstaben"
+none = "Keine"
+pop = "Pop"
+slide_down = "Nach unten"
+slide_left = "Nach links"
+slide_right = "Nach rechts"
+slide_up = "Nach oben"
+tracking = "Laufweite"
+typewriter = "Schreibmaschine"
+wipe = "Wischen"
+words = "Wörter"
+zoom = "Zoom"
+
+[editor.panel.text_background]
+box_shape = "Box"
+highlight = "Marker"
+none = "Kein"
+pill = "Pille"
+
+[editor.panel.text_layout]
+fullscreen = "Vollbild"
+overlay = "Overlay"
+
+[editor.panel.text_preset.group]
+all = "Alle"
+callouts = "Hinweise"
+code = "Code"
+lower_thirds = "Bauchbinden"
+statements = "Aussagen"
+titles = "Titel"
+
+[editor.panel.text_preset.name]
+caption = "Beschriftung"
+cinematic = "Kino"
+code = "Code"
+gradient = "Verlauf"
+headline = "Schlagzeile"
+highlight = "Marker"
+kicker = "Dachzeile"
+label = "Label"
+lower_third = "Bauchbinde"
+name_tag = "Namensschild"
+neon = "Neon"
+quote = "Zitat"
+stat = "Große Zahl"
+sticker = "Sticker"
+title = "Titel"
+typewriter = "Schreibmaschine"
+
+[editor.panel.text_preset.sample]
+caption = "Mit Cap aufgenommen"
+cinematic = "Kapitel eins"
+gradient = "Schöner Text"
+headline = "Schneller liefern"
+highlight = "das Wichtigste"
+kicker = "Neue Funktion"
+label = "Profi-Tipp"
+name_tag = "Richie · Gründer"
+neon = "Glanzauftritt"
+quote = "„Mühelos soll es wirken“"
+sticker = "Bumm!"
+title = "Das ist Cap"
+typewriter = "wird getippt…"
+
+[editor.panel.text_segment]
+animation = "Animation"
+background = "Hintergrund"
+color = "Farbe"
+font = "Schrift"
+font_size = "Größe"
+fullscreen_help = "Hält das Video an, solange der Text angezeigt wird, und setzt es danach an derselben Stelle fort."
+glow = "Leuchten"
+gradient = "Verlauf"
+layout = "Layout"
+letter_spacing = "Zeichenabstand"
+line_height = "Zeilenhöhe"
+look = "Aussehen"
+outline = "Kontur"
+screen_transition = "Bildschirmübergang"
+shadow = "Schatten"
+style = "Stil"
+title = "Text {number}"
+
+[editor.panel.timing]
+end = "Ende"
+start = "Start"
+title = "Timing"
+to = "bis"
+
+[editor.panel.zoom]
+amount = "Zoomstärke"
+auto = "Auto"
+auto_help = "Der automatische Zoom folgt Ihrem Cursor über den Bildschirm."
+auto_locked = "Der Auto-Modus braucht die Cursor-Erfassung. Aktivieren Sie „Separate Cursor-Erfassung (Studio)“ unter Einstellungen → Allgemein."
+how_it_works = "Wie funktioniert das?"
+manual = "Manuell"
+manual_help = "Der manuelle Zoom bleibt auf der Stelle, die Sie unten wählen."
+mixed = "Gemischt"
+mode = "Zoom-Modus"
+positions_mixed = "Die Segmente zoomen auf unterschiedliche Stellen. Ziehen Sie, um alle auf dieselbe Stelle zu setzen."
+title = "Zoom {number}"
+
+[editor.sidebar]
+desktop_import_failed = "Ihr Desktop-Hintergrundbild konnte nicht importiert werden"
+importing_image = "Bild wird importiert…"
+
+[editor.sidebar.animated_gradient]
+add_colour = "Farbe hinzufügen"
+colours = "Farben"
+delete = "Löschen"
+delete_failed = "Dieser Verlauf konnte nicht gelöscht werden. Versuchen Sie es erneut."
+fine_tune = "Feinabstimmung"
+limit_reached = { one = "Sie können bis zu {count} Verlauf speichern. Löschen Sie einen, um einen weiteren hinzuzufügen.", other = "Sie können bis zu {count} Verläufe speichern. Löschen Sie einen, um einen weiteren hinzuzufügen." }
+motion = "Bewegung"
+name_placeholder = "Name für diesen Verlauf"
+name_required = "Geben Sie einen Namen für diesen Verlauf ein."
+presets = "Vorlagen"
+randomize = "Zufällig"
+remember_failed = "Ihre Einstellungen für animierte Verläufe konnten nicht gespeichert werden."
+remove_colour = "Farbe entfernen"
+reset_tooltip = "Feinabstimmung zurücksetzen"
+save_failed = "Dieser Verlauf konnte nicht gespeichert werden. Versuchen Sie es erneut."
+save_tooltip = "Aktuellen Verlauf speichern"
+saved = "Gespeichert"
+still = "Still"
+
+[editor.sidebar.animated_gradient.control]
+contrast = "Kontrast"
+curvature = "Krümmung"
+detail = "Detail"
+direction = "Richtung"
+exposure = "Belichtung"
+flow_scale = "Flussgröße"
+flow_strength = "Flussstärke"
+grain_amount = "Körnungsmenge"
+grain_size = "Körnungsgröße"
+highlights = "Lichter"
+motion_speed = "Bewegungstempo"
+relief = "Relief"
+ripple_size = "Wellengröße"
+shading = "Schattierung"
+vibrance = "Dynamik"
+
+[editor.sidebar.animated_gradient.group]
+animation = "Animation"
+colour = "Farbe"
+flow = "Fluss"
+lighting = "Licht"
+texture = "Textur"
+
+[editor.sidebar.background]
+title = "Hintergrund"
+
+[editor.sidebar.border]
+color = "Rahmenfarbe"
+opacity = "Rahmendeckkraft"
+title = "Rahmen"
+width = "Rahmenbreite"
+
+[editor.sidebar.corner]
+rounded = "Abgerundet"
+squircle = "Squircle"
+title = "Eckenstil"
+
+[editor.sidebar.cursor]
+circle = "Kreis"
+click_ripple = "Klickwelle"
+color = "Farbe"
+default = "Standard"
+description_circle = "Ersetzt alle Cursorformen durch einen Kreis."
+description_default = "Behält die Cursorformen und das Aussehen aus Ihrer Aufnahme bei."
+description_macos = "Klassisches macOS-Aussehen. Eigene Cursor behalten ihre aufgenommene Form."
+description_tahoe = "macOS-Tahoe-Aussehen. Eigene Cursor behalten ihre aufgenommene Form."
+description_windows = "Windows-Aussehen. Eigene Cursor behalten ihre aufgenommene Form."
+duration = "Dauer"
+recorded = "Aufgenommene Cursor"
+recorded_tooltip = "Mit diesem Cursor aufgenommen"
+ripple_size = "Größe"
+strength = "Stärke"
+
+[editor.sidebar.desktop]
+import = "Desktop-Hintergrund importieren"
+importing = "Wird importiert..."
+prompt = "Das Hintergrundbild Ihres Desktops verwenden"
+reimport = "Neu importieren"
+
+[editor.sidebar.gradient]
+angle = "Winkel"
+from = "Von"
+grain_scale = "Körnungsgröße"
+noise = "Rauschen"
+to = "Bis"
+
+[editor.sidebar.image]
+prompt = "Klicken zum Auswählen oder Bild hierher ziehen"
+
+[editor.sidebar.layout]
+background_blur = "Hintergrundunschärfe"
+custom_position = "Eigene Bildschirmposition (auf der Leinwand verschoben)"
+motion_blur = "Bewegungsunschärfe"
+padding = "Rand"
+rounded_corners = "Abgerundete Ecken"
+title = "Layout"
+
+[editor.sidebar.notch]
+description = "Zeichnet eine MacBook-Notch über die Aufnahme. Aufnahmen auf einem Mac mit Notch verwenden ihre eigenen Maße; andernfalls beginnen Sie mit der Größe unten und passen sie an."
+height = "Notch-Höhe"
+position = "Notch-Position"
+title = "MacBook-Notch"
+width = "Notch-Breite"
+
+[editor.sidebar.shadow]
+advanced = "Erweiterte Schatteneinstellungen"
+blur = "Unschärfe"
+opacity = "Deckkraft"
+shadow_size = "Größe"
+title = "Schatten"
+
+[editor.sidebar.source]
+animated = "Animiert"
+color = "Farbe"
+desktop = "Desktop"
+gradient = "Verlauf"
+image = "Bild"
+none = "Keiner"
+wallpaper = "Hintergrund"
+
+[editor.sidebar.style_group]
+back = "Zurück zum Stil"
+background = "Hintergrund & Rahmen"
+camera = "Kamera"
+cursor = "Cursor"
+editing_note = "Nur dieses Segment wird bearbeitet. Die globalen Einstellungen bleiben unverändert."
+title = "Stil {number} · {group}"
+
+[editor.sidebar.tab]
+audio = "Audio"
+background = "Hintergrund"
+camera = "Kamera"
+captions = "Untertitel"
+cursor = "Cursor"
+keyboard = "Tastatur"
+
+[editor.sidebar.wallpaper_theme]
+blue = "Blau"
+cities = "Städte"
+dark = "Dunkel"
+orange = "Orange"
+purple = "Lila"
