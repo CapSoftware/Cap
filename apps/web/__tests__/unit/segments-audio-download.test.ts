@@ -58,11 +58,21 @@ describe("segment audio output errors", () => {
 		).rejects.toThrow("Segment audio exceeds 8 bytes");
 	});
 
-	it("rejects a declared oversized segment without downloading it", async () => {
+	it("cancels an oversized declared segment without reading the response", async () => {
+		let cancelled = false;
+		let read = false;
 		const fetchImpl = (async () =>
-			new Response("unused", {
-				headers: { "Content-Length": "201326593" },
-			})) as typeof fetch;
+			new Response(
+				new ReadableStream({
+					pull() {
+						read = true;
+					},
+					cancel() {
+						cancelled = true;
+					},
+				}),
+				{ headers: { "Content-Length": "201326593" } },
+			)) as typeof fetch;
 		await expect(
 			downloadConcatenatedSegments(
 				["oversized"],
@@ -70,6 +80,7 @@ describe("segment audio output errors", () => {
 				{ fetchImpl },
 			),
 		).rejects.toThrow("Segment audio exceeds 201326592 bytes");
+		expect(cancelled).toBe(true);
 	});
 
 	it("preserves segment order and correct byte totals across parallel downloads", async () => {
