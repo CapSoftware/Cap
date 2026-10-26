@@ -586,3 +586,670 @@ click_or_press = "Hier klicken oder drücken:"
 get_started = "Los geht’s"
 space_key = "Leertaste"
 tagline = "Die Open-Source-App zum Teilen des Bildschirms für alle."
+
+[editor.canvas]
+camera = "Kamera"
+camera_follows_zoom = "Die Kameragröße folgt dem Zoom — zum Verschieben ziehen"
+edit_zoom = "Zoom bearbeiten"
+image = "Bild"
+mask = "Maske"
+screen = "Bildschirm"
+screen_locked = "Der Bildschirm ist gesperrt, solange ein Zoom aktiv ist"
+text_item = "Text"
+
+[editor.clips]
+append_error = "Clip konnte nicht hinzugefügt werden: {message}"
+append_error_title = "Aufnahmefehler"
+back = "Zurück zum Editor"
+cap_filter = "Cap-Aufnahme"
+clip = "Clip {number}"
+empty_description = "Nehmen Sie einen Clip auf oder importieren Sie einen, dann erscheint er hier."
+empty_title = "Noch keine Clips"
+import = "Importieren"
+import_error = "Clip konnte nicht importiert werden: {message}"
+import_error_title = "Importfehler"
+import_existing = "Vorhandene Aufnahme"
+import_mp4 = "MP4-Video…"
+importing = "Import läuft…"
+mp4_filter = "MP4-Video"
+prepare_controls_failed = "Die Aufnahmesteuerung konnte nicht vorbereitet werden: {error}"
+record_new = "Neuen Clip aufnehmen"
+save_before_recording_failed = "Das aktuelle Projekt konnte vor der Aufnahme nicht gespeichert werden: {error}"
+split = "Teil {number}"
+title = "Clips"
+
+[editor.clips.error]
+cancelled = "Import abgebrochen"
+cannot_decode = "Video {path} kann nicht decodiert werden: {error}"
+in_use = "Import nicht möglich, solange diese Aufnahme verwendet wird: {error}"
+instant_source = "Instant-Aufnahmen können noch nicht in ein Projekt importiert werden"
+instant_target = "Aufnahmen im Instant-Modus können nicht bearbeitet werden"
+into_itself = "Eine Aufnahme kann nicht in sich selbst importiert werden"
+missing_video = "Videodatei fehlt: {path}"
+no_duration = "Das importierte Video hat keine gültige Dauer"
+not_a_project = "Wählen Sie einen Cap-Projektordner aus"
+source_empty = "Das Cap-Quellprojekt hat keine Aufnahmesegmente"
+source_failed = "Das Cap-Quellprojekt ist fehlgeschlagen: {error}"
+source_recording = "Das Cap-Quellprojekt wird noch aufgenommen"
+source_unimportable = "Das Cap-Quellprojekt hat keine importierbaren Aufnahmesegmente"
+unfinished_target = "Schließen Sie diese Aufnahme ab oder stellen Sie sie wieder her, bevor Sie einen Clip importieren"
+unsupported_video = "Nicht unterstützte Videodatei: {path}"
+
+[editor.export]
+back = "Zurück zum Editor"
+existing_link_description = "Durch erneutes Hochladen wird das Video unter diesem Link durch Ihre neueste Bearbeitung ersetzt. Alle mit dem Link sehen die aktualisierte Version."
+existing_link_title = "Bestehenden Link aktualisieren"
+failed = "Export fehlgeschlagen"
+fps = "{fps} FPS"
+frames = { one = "{rendered} / {count} Frame", other = "{rendered} / {count} Frames" }
+generating_preview = "Vorschau wird erstellt…"
+link_unavailable_cursor = "Exporte nur mit Cursor können nur als Datei oder in die Zwischenablage gespeichert werden."
+link_unavailable_transparent = "Transparente Exporte können nur als Datei oder in die Zwischenablage gespeichert werden."
+organization = "Organisation"
+preview = "Vorschau"
+preview_info = "Dies ist ein gerendertes Bild aus Ihrem Video. Passen Sie die Einstellungen an, um die Qualität des fertigen Exports zu sehen."
+preview_unavailable = "Vorschau nicht verfügbar"
+reupload = "Erneut hochladen"
+reupload_tooltip = "Ihre neueste Bearbeitung unter demselben Link hochladen"
+reupload_transparent = "Links zum Teilen benötigen einen Hintergrund ohne Transparenz"
+sign_in_required = "Sie müssen sich anmelden, um Aufnahmen zu teilen"
+task_failed = "Exportvorgang fehlgeschlagen"
+title = "Exportieren"
+upgrade_message = "Diese Funktion erfordert einen höheren Tarif"
+upgrade_title = "Upgrade erforderlich"
+upload_failed = "Aufnahme konnte nicht hochgeladen werden"
+
+[editor.export.advanced]
+bits_per_pixel = "Bits pro Pixel"
+cursor_only = "Nur Cursor exportieren"
+cursor_only_description = "Behält dieselbe Cursorbewegung und dieselben Klicks auf transparentem Hintergrund bei"
+custom_bitrate = "Benutzerdefinierte Bitrate aktiv"
+force_ffmpeg = "FFmpeg-Decoder erzwingen"
+force_ffmpeg_description = "Hardware-Decoder überspringen (automatischer Fallback aktiv)"
+title = "Erweitert"
+transparent_mov = "Exportiert als transparente MOV-Datei. Die Dateien sind groß und eignen sich am besten zum Compositing oder Bearbeiten."
+
+[editor.export.cta]
+cancel_sign_in = "Anmeldung abbrechen"
+clipboard = "In die Zwischenablage exportieren"
+create_link = "Link zum Teilen erstellen"
+file = "Als Datei exportieren"
+reupload = "Unter demselben Link erneut hochladen"
+sign_in = "Zum Teilen anmelden"
+
+[editor.export.destination]
+clipboard = "Zwischenablage"
+file = "Datei"
+link = "Link zum Teilen"
+
+[editor.export.done]
+copy_link = "Link kopieren"
+instant_hint = "Verwenden Sie für Ihre nächste Aufnahme den Instant-Modus, wenn Sie direkt nach dem Stoppen einen Link möchten."
+link_copied = "Link kopiert"
+open_file = "Datei öffnen"
+open_link = "Link öffnen"
+retry_copy = "Erneut kopieren"
+reuploaded = "Ihre neueste Bearbeitung ist unter demselben Link bereit"
+uploaded = "Ihr Cap wurde erfolgreich hochgeladen"
+
+[editor.export.estimate]
+gigabytes = "~{value} GB"
+gigabytes_range = "~{lower}–{upper} GB"
+hours = "~{value} Std."
+hours_range = "~{lower}–{upper} Std."
+megabytes = "~{value} MB"
+megabytes_range = "~{lower}–{upper} MB"
+minutes = "~{value} Min."
+minutes_range = "~{lower}–{upper} Min."
+seconds = "~{value} s"
+seconds_range = "~{lower}–{upper} s"
+under_megabyte = "< 1 MB"
+under_second = "< 1 s"
+
+[editor.export.optimize]
+description = "Kodiert per Software neu für deutlich kleinere Dateien (langsamer)"
+title = "Dateigröße optimieren"
+
+[editor.export.phase]
+clipboard_failed = "Export abgeschlossen; Kopieren in die Zwischenablage fehlgeschlagen"
+complete = "Export abgeschlossen"
+copied = "In die Zwischenablage kopiert"
+copying_to_clipboard = "Wird in die Zwischenablage kopiert"
+rendering_cursor = "Cursorspur wird gerendert"
+rendering_gif = "GIF wird gerendert"
+rendering_video = "Video wird gerendert"
+reupload_complete = "Erneutes Hochladen abgeschlossen"
+reuploading = "Wird erneut unter Ihrem Link hochgeladen"
+saving_to_file = "Wird als Datei gespeichert"
+starting = "Export wird vorbereitet"
+upload_complete = "Hochladen abgeschlossen"
+uploading = "Link zum Teilen wird erstellt"
+
+[editor.export.quality]
+larger = "Größere Datei"
+maximum = "Maximal"
+potato = "Kartoffel"
+smaller = "Kleinere Datei"
+social = "Social"
+web = "Web"
+
+[editor.export.resources]
+proceed = "Trotzdem fortfahren"
+title = "Exportressourcen prüfen"
+
+[editor.export.section]
+destination = "Ziel"
+format = "Format"
+frame_rate = "Bildrate"
+quality = "Qualität"
+resolution = "Auflösung"
+
+[editor.export.stats]
+calculating = "Wird berechnet…"
+duration = "Dauer"
+estimated_size = "Geschätzte Größe"
+export_time = "Exportdauer"
+output = "Ausgabe"
+output_value = "{width}×{height} · {fps} fps"
+refining_size = "Größe wird präzisiert…"
+refining_time = "Dauer wird präzisiert…"
+unavailable = "Nicht verfügbar"
+
+[editor.modal]
+cancel_export = "Export abbrechen"
+cancel_export_message = "Möchten Sie den Export wirklich abbrechen?"
+cancel_export_title = "Export abbrechen?"
+keep_exporting = "Weiter exportieren"
+recording_retained = "Aufnahme beibehalten"
+
+[editor.tabs.audio]
+isolation_balanced = "Ausgewogen"
+isolation_balanced_description = "Klarere Trennung mit natürlichen Stimmdetails."
+isolation_light = "Leicht"
+isolation_light_description = "Behält mehr von Ihrer ursprünglichen Stimme und dem Raumklang."
+isolation_strong = "Stark"
+isolation_strong_description = "Mehr Trennung für laute Umgebungen. Kann den Stimmklang verändern."
+mic_volume = "Mikrofonlautstärke"
+mute = "Audio stummschalten"
+stereo_mode = "Stereomodus des Mikrofons"
+studio_sound_description = "Reduziert Hintergrundgeräusche und gleicht die Lautstärke Ihrer Stimme aus."
+studio_sound_save_failed = "Die Standardeinstellung für Studio Sound konnte nicht gespeichert werden"
+system_volume = "Systemaudio-Lautstärke"
+title = "Audiosteuerung"
+use_for_new = "Für neue Aufnahmen verwenden"
+
+[editor.tabs.audio.stereo]
+mono_left = "Mono L"
+mono_right = "Mono R"
+stereo = "Stereo"
+
+[editor.tabs.camera]
+advanced_shadow = "Erweiterte Schatteneinstellungen"
+background = "Hintergrund"
+corner_style = "Eckenstil"
+custom_position = "Eigene Position (auf der Leinwand gezogen)"
+hide = "Kamera ausblenden"
+keep_size_during_zoom = "Originalgröße beim Zoomen beibehalten"
+mirror = "Kamera spiegeln"
+position = "Position"
+reset = "Zurücksetzen"
+rounded_corners = "Abgerundete Ecken"
+shadow = "Schatten"
+shadow_blur = "Unschärfe"
+shadow_opacity = "Deckkraft"
+shape_label = "Form"
+size_during_zoom = "Größe beim Zoomen"
+size_label = "Größe"
+title = "Kamera"
+
+[editor.tabs.camera.blur]
+heavy = "Starke Unschärfe"
+light = "Leichte Unschärfe"
+off = "Aus"
+remove = "Hintergrund entfernen"
+
+[editor.tabs.camera.shape]
+source = "Original"
+square = "Quadrat"
+
+[editor.tabs.captions]
+active_word_highlight = "Aktives Wort hervorheben"
+animation_section = "Animation"
+animation_style = "Animationsstil"
+background_color = "Hintergrundfarbe"
+background_opacity = "Hintergrunddeckkraft"
+background_settings = "Hintergrundeinstellungen"
+beta = "Beta"
+delete = "Löschen"
+deleting = "Wird gelöscht..."
+download = "Modell {model} herunterladen"
+download_note = "Einmaliger Download auf Ihr System. Alle Untertitel werden lokal gespeichert."
+downloading = "{model} wird heruntergeladen... {percent}%"
+fade_duration = "Einblenddauer"
+font_family = "Schriftart"
+font_settings = "Schrifteinstellungen"
+font_weight = "Schriftstärke"
+generate = "Untertitel erstellen"
+generate_failed = "Untertitel konnten nicht erstellt werden: {reason}"
+generating = "Wird erstellt..."
+highlight_color = "Hervorhebungsfarbe"
+highlight_note = "Dies ist die erste Version der Untertitel in Cap. Die Hervorhebung des aktiven Worts kann in manchen Situationen ungenau sein. Wir arbeiten an einer Lösung, die in kommenden Versionen erscheint."
+highlight_style = "Hervorhebungsstil"
+horizontal_position = "Horizontale Position"
+intel_unavailable = "Parakeet-Untertitelmodelle sind auf Intel-Macs nicht verfügbar. Whisper-Modelle bleiben verfügbar."
+keep_open = "Lassen Sie Cap geöffnet, während das Modell heruntergeladen wird. Nach einem Neuladen des Editors wird automatisch wieder verbunden."
+language_label = "Sprache"
+model_downloaded = "Modell {model} heruntergeladen"
+model_label = "Modell"
+position = "Position"
+regenerate = "Untertitel neu erstellen"
+size_label = "Größe"
+style = "Stil"
+text_color = "Textfarbe"
+title = "Untertitel"
+uppercase = "Großbuchstaben"
+vertical_position = "Vertikale Position"
+
+[editor.tabs.captions.animation]
+bounce = "Hüpfen"
+none = "Keine"
+pop = "Aufpoppen"
+
+[editor.tabs.captions.highlight]
+color = "Farbe"
+pill = "Pille"
+
+[editor.tabs.captions.language]
+ar = "Arabisch"
+auto = "Automatisch erkennen"
+bn = "Bengalisch"
+de = "Deutsch"
+en = "Englisch"
+es = "Spanisch"
+fa = "Persisch"
+fr = "Französisch"
+gu = "Gujarati"
+he = "Hebräisch"
+hi = "Hindi"
+it = "Italienisch"
+ja = "Japanisch"
+ko = "Koreanisch"
+mr = "Marathi"
+nl = "Niederländisch"
+pa = "Punjabi"
+pl = "Polnisch"
+pt = "Portugiesisch"
+ru = "Russisch"
+sk = "Slowakisch"
+ta = "Tamil"
+te = "Telugu"
+tr = "Türkisch"
+ur = "Urdu"
+zh = "Chinesisch"
+
+[editor.tabs.captions.model]
+high_accuracy = "Hohe Genauigkeit"
+high_accuracy_description = "Größerer Download, höhere Genauigkeit"
+medium = "Mittel"
+medium_description = "Langsamer, genauer"
+recommended = "Empfohlen"
+recommended_description = "Beste Balance für die meisten Aufnahmen"
+small = "Klein"
+small_description = "Kleinster Download"
+
+[editor.tabs.captions.preset]
+classic = "Klassisch"
+classic_description = "Klarer Text auf einem einfarbigen, abgerundeten Hintergrund."
+highlight = "Hervorgehoben"
+highlight_description = "Fette Großbuchstaben mit einer Pille hinter dem aktiven Wort."
+karaoke = "Karaoke"
+karaoke_description = "Wörter leuchten synchron zur Sprache auf."
+minimal = "Minimal"
+minimal_description = "Dezenter, umrandeter Text ohne Hintergrund."
+pop = "Pop"
+pop_description = "Verspielte Großbuchstaben, die mit einem kräftigen Akzent aufpoppen."
+
+[editor.tabs.corner]
+rounded = "Abgerundet"
+squircle = "Squircle"
+
+[editor.tabs.cursor]
+friction = "Reibung"
+hide_when_idle = "Bei Inaktivität ausblenden"
+inactivity_delay = "Verzögerung bei Inaktivität"
+mass = "Masse"
+movement_style = "Bewegungsstil des Cursors"
+show = "Cursor anzeigen"
+size_label = "Größe"
+smooth_movement = "Gleichmäßige Bewegung"
+style_label = "Cursorstil"
+svg_cursors = "Hochwertige SVG-Cursor"
+tension = "Spannung"
+tilt = "Neigung"
+
+[editor.tabs.cursor.style]
+fast = "Schnell"
+fast_description = "Zackig, eng folgend"
+mellow = "Sanft"
+mellow_description = "Ausgewogene, natürliche Bewegung"
+slow = "Langsam"
+slow_description = "Lange, gleitende Bewegung"
+smooth = "Weich"
+smooth_description = "Weiche, schwebende Bewegung"
+
+[editor.tabs.keyboard]
+animation = "Animation"
+background_color = "Hintergrundfarbe"
+background_opacity = "Hintergrunddeckkraft"
+background_settings = "Hintergrundeinstellungen"
+behavior = "Verhalten"
+beta = "Beta"
+changed_during_generation = "Die Zeitleiste oder die Tastatureinstellungen haben sich während der Erstellung geändert. Versuchen Sie es erneut."
+empty_description = "Klicken Sie auf „Tastatursegmente erstellen“, um Segmente aus aufgezeichneten Tastendrücken zu erstellen."
+empty_title = "Noch keine Tastatursegmente."
+fade_duration = "Einblenddauer"
+font_family = "Schriftart"
+font_settings = "Schrifteinstellungen"
+font_weight = "Schriftstärke"
+generate = "Tastatursegmente erstellen"
+generating = "Tastatursegmente werden erstellt..."
+grouping_threshold = "Gruppierungsschwelle"
+linger_duration = "Anzeigedauer"
+load_failed = "Aufnahmedaten konnten nicht geladen werden: {error}"
+no_presses = "Es wurden keine aufgezeichneten Tastendrücke gefunden."
+position = "Position"
+regenerate = "Tastatursegmente neu erstellen"
+show_modifiers = "Sondertasten-Modifikatoren anzeigen"
+show_special_keys = "Spezialtasten anzeigen"
+size_label = "Größe"
+text_color = "Textfarbe"
+timeline_unavailable = "Die Projektzeitleiste ist nicht verfügbar."
+timeline_unreadable = "Die Projektzeitleiste konnte nicht gelesen werden."
+title = "Tastatur anzeigen"
+uppercase = "Großbuchstaben"
+
+[editor.tabs.position]
+bottom_center = "Unten mittig"
+bottom_left = "Unten links"
+bottom_right = "Unten rechts"
+manual = "Manuell"
+top_center = "Oben mittig"
+top_left = "Oben links"
+top_right = "Oben rechts"
+
+[editor.tabs.sync]
+auto_description = "Cap hat diese Versätze automatisch berechnet, damit der Ton synchron zum Video bleibt. Passen Sie sie an, falls noch etwas nicht passt."
+auto_synced = "Automatisch synchronisiert"
+camera = "Kameraversatz"
+clip = "Clip {number}"
+description = "Feinjustieren Sie die Quellversätze, wenn Ton oder Kamera nicht mehr synchron zur Bildschirmaufnahme laufen."
+microphone = "Mikrofonversatz"
+system_audio = "Systemaudio-Versatz"
+title = "Synchronisierung"
+
+[editor.tabs.weight]
+bold = "Fett"
+medium = "Mittel"
+normal = "Normal"
+
+[editor.timeline]
+add_shot = "Einstellung hinzufügen"
+add_shot_with_look = "Einstellung hinzufügen · {look} · {seconds} s"
+paused = "Pausiert"
+
+[editor.timeline.empty]
+add_audio = "Audio hinzufügen"
+add_scene = "Szene hinzufügen"
+audio = "Fügen Sie Hintergrundmusik hinzu oder importieren Sie eigenes Audio"
+captions = "Keine Untertitel"
+keyboard = "Keine Tastaturereignisse"
+scene = "Wechseln Sie zwischen Layouts für Bildschirm und Kamera"
+
+[editor.timeline.picker]
+audio = "Fügen Sie Hintergrundmusik hinzu oder importieren Sie eigenes Audio."
+caption = "Transkribieren Sie Ihre Aufnahme automatisch in Untertitel auf dem Bildschirm."
+clip = "Ihr aufgenommenes Bildschirmmaterial."
+image = "Fügen Sie Ihrer Aufnahme ein Bild hinzu."
+keyboard = "Zeigen Sie beim Tippen Tastendrücke auf dem Bildschirm an."
+mask = "Verpixeln oder schwärzen Sie private Bereiche des Bildschirms."
+scene = "Wechseln Sie zwischen Layouts für Bildschirm und Kamera."
+scene_unavailable = "Nehmen Sie mit einer Kamera auf, um Szenen zu verwenden."
+style = "Ändern Sie Hintergrund-, Kamera- und Cursoreinstellungen im Zeitverlauf."
+text_overlay = "Fügen Sie der Leinwand eigene Texteinblendungen und Titel hinzu."
+three_d = "Neigen Sie die Szene in 3D-Perspektive."
+zoom = "Sanfte Zooms, die dem Geschehen folgen."
+
+[editor.timeline.remove]
+audio = "Die Audiospur entfernen."
+captions = "Die Untertitelspur entfernen."
+clip = "Die Clipspur entfernen."
+image = "Die Bildspur entfernen."
+keyboard = "Die Tastaturspur entfernen."
+mask = "Die Maskenspur entfernen."
+scene = "Die Szenenspur entfernen."
+style = "Die Stilspur entfernen."
+text_track = "Die Textspur entfernen."
+three_d = "Die 3D-Spur entfernen."
+zoom = "Die Zoomspur entfernen."
+
+[editor.timeline.scene]
+camera_only = "Nur Kamera"
+default = "Standard"
+floating = "Schwebend"
+hide_camera = "Kamera ausblenden"
+split_screen = "Geteilter Bildschirm"
+
+[editor.timeline.segment]
+audio = "Audio"
+automatic_zoom = "Automatischer Zoom"
+caption = "Untertitel"
+clip = "Clip"
+cursor_hidden = "Cursor ausgeblendet"
+highlight = "Hervorheben"
+label = "Beschriftung"
+manual_zoom = "Manueller Zoom"
+muted = "Stumm"
+numbered_clip = "Clip {number}"
+sensitive = "Vertraulich"
+
+[editor.timeline.track]
+audio = "Audio"
+captions = "Untertitel"
+clip = "Clip"
+image = "Bild"
+keyboard = "Tastatur"
+mask = "Maske"
+scene = "Szene"
+style = "Stil"
+text_track = "Text"
+video = "Video"
+zoom = "Zoom"
+
+[editor.window]
+audio_filter = "Audio"
+audio_segment_changed = "Dieses Audiosegment hat sich geändert. Wählen Sie es aus und wählen Sie erneut einen Ersatz."
+crop = "Zuschneiden"
+crop_tooltip = "Video zuschneiden"
+no_room_for_3d_shot = "Kein Platz für eine weitere 3D-Einstellung"
+redo = "Wiederholen"
+save_failed = "{path} konnte nicht gespeichert werden. Lassen Sie den Editor geöffnet und versuchen Sie es erneut: {error}"
+undo = "Rückgängig"
+
+[editor.window.add_track]
+button = "Spur hinzufügen"
+hide_3d = "Die 3D-Spur ausblenden."
+hint = "Wählen Sie eine Spur, die Sie Ihrer Zeitleiste hinzufügen möchten."
+
+[editor.window.aspect]
+auto = "Auto"
+classic = "Klassisch"
+classic_ratio = "Klassisch ⋅4:3"
+square = "Quadrat"
+square_ratio = "Quadrat ⋅1:1"
+tall = "Hoch"
+tall_ratio = "Hoch ⋅3:4"
+tooltip = "Seitenverhältnis"
+vertical = "Vertikal"
+vertical_ratio = "Vertikal ⋅9:16"
+wide = "Breit"
+wide_ratio = "Breit ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "Audiodatei konnte nicht kopiert werden: {error}"
+directory_failed = "Audioordner konnte nicht erstellt werden: {error}"
+no_extension = "Die Audiodatei hat keine Dateiendung"
+not_found = "Audiodatei nicht gefunden: {path}"
+unsupported = "Nicht unterstütztes Audioformat: .{extension}"
+
+[editor.window.busy]
+clip_import = "Warten Sie, bis der Clip-Import abgeschlossen ist, bevor Sie diese Aufnahme schließen oder löschen."
+export = "Warten Sie, bis der Export oder sein Abbruch abgeschlossen ist, bevor Sie diese Aufnahme schließen oder löschen."
+opening = "Warten Sie, bis die Aufnahme vollständig geöffnet ist, bevor Sie sie löschen."
+save_before_delete_failed = "Die Aufnahme konnte vor dem Löschen nicht gespeichert werden: {error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ Einstellung hinzufügen"
+auto_scene = "Automatische Szene"
+how_many = "Wie viele Einstellungen?"
+prompt = "Fügen Sie Ihrer Aufnahme filmische 3D-Einstellungen hinzu"
+
+[editor.window.clip_menu]
+audio = "AUDIO"
+cursor = "CURSOR"
+delete = "Clip löschen"
+delete_only_clip = "Der einzige Clip kann nicht gelöscht werden"
+hide_cursor = "Cursor ausblenden"
+hide_cursor_description = "Wird ausgeblendet, während dieser Clip läuft"
+keep_pitch = "Tonhöhe beibehalten"
+match_speed = "An Tempo anpassen"
+merge_next = "Mit nächstem Clip zusammenführen"
+merge_previous = "Mit vorherigem Clip zusammenführen"
+mute = "Stumm"
+mute_clip = "Clip stummschalten"
+mute_clip_description = "Den Ton dieses Clips stummschalten"
+rename = "Clip umbenennen"
+speed = "TEMPO"
+split = "Am Abspielkopf teilen"
+split_hint = "Bewegen Sie den Abspielkopf in diesen Clip"
+volume = "Lautstärke"
+
+[editor.window.frame]
+add_tooltip = "Rahmen hinzufügen"
+browser = "Browser"
+browser_description = "Browserfenster mit Adressleiste"
+button = "Rahmen"
+dark = "Dunkel"
+global = "Globaler Rahmen · Gilt überall, wo der Stil den Hintergrund übernimmt."
+heading = "Rahmen"
+light = "Hell"
+macbook_description = "Laptop-Rahmen um die Aufnahme"
+macos_description = "Fensterrahmen mit Ampel-Tasten"
+none = "Keiner"
+none_description = "Die Aufnahme unverändert zeigen"
+style_changed = "Dieser Stil hat sich geändert. Schließen und öffnen Sie den Rahmen erneut."
+style_only = "Nur Stil {index} · Globale Einstellungen bleiben unverändert."
+style_only_override = "Nur Stil {index} · Bearbeiten aktiviert die eigene Hintergrundeinstellung."
+theme = "Design"
+title = "Titel"
+url = "URL"
+window_title_placeholder = "Fenstertitel"
+windows_description = "Titelleiste mit Fenstersteuerung"
+
+[editor.window.header]
+captions = "Untertitel"
+delete_recording = "Aufnahme löschen"
+export = "Exportieren"
+open_bundle = "Aufnahmepaket öffnen"
+presets = "Vorlagen"
+
+[editor.window.image]
+changed = "Dieses Bild hat sich bei der Auswahl eines Ersatzes geändert. Wählen Sie es aus und versuchen Sie es erneut."
+filter = "Bilder"
+recording_unavailable = "Die Aufnahme ist für dieses Bild nicht mehr verfügbar. Öffnen Sie das Projekt erneut."
+
+[editor.window.open]
+damaged = "Die Videospuren dieser Aufnahme konnten nicht geöffnet werden. Das Paket scheint beschädigt zu sein."
+failed = "Diese Aufnahme konnte nicht geöffnet werden"
+media_failed = "Die Medien dieser Aufnahme konnten nicht gelesen werden: {error}"
+meta_failed = "Die Aufnahme-Metadaten konnten nicht geladen werden: {error}"
+no_segments = "Die Aufnahme hat keine Segmente. Möglicherweise muss sie zuerst wiederhergestellt werden."
+not_found = "Videopfad {path} nicht gefunden!"
+not_studio = "Nur Studio-Aufnahmen können bearbeitet werden"
+
+[editor.window.presets]
+apply = "Anwenden"
+create = "Erstellen"
+create_new = "Neue Vorlage erstellen"
+create_title = "Vorlage erstellen"
+default = "Standard"
+default_badge = "Standard"
+delete = "Löschen"
+delete_confirm = "Möchten Sie „{name}“ wirklich löschen?"
+delete_title = "Vorlage löschen"
+name_placeholder = "Name der Vorlage"
+none_saved = "Keine gespeicherten Vorlagen"
+rename = "Umbenennen"
+rename_title = "Vorlage umbenennen"
+save_settings = "Einstellungen in Vorlage speichern"
+set_default = "Als Standard festlegen"
+
+[editor.window.preview]
+full = "Voll"
+half = "Halb"
+label = "Vorschau"
+quarter = "Viertel"
+
+[editor.window.text_menu]
+copy_style = "Stil kopieren"
+copy_style_first = "Zuerst einen Stil kopieren"
+delete_segment = "Textsegment löschen"
+delete_segments = "Textsegmente löschen"
+paste_style = "Stil einfügen"
+paste_style_all = "Stil in alle ausgewählten einfügen"
+segments = { one = "{count} Textsegment", other = "{count} Textsegmente" }
+untitled = "Text"
+
+[editor.window.title]
+not_saved = "Titel nicht gespeichert"
+not_saved_message = "{error}\n\nIhr Titel ist noch im Editor. Versuchen Sie erneut, ihn zu speichern."
+read_failed = "Der Aufnahmetitel für {path} konnte nicht gelesen werden: {error}"
+save_failed = "Der Aufnahmetitel für {path} konnte nicht gespeichert werden: {error}"
+
+[editor.window.track]
+clear_all = "Alle entfernen"
+delete = "Löschen"
+
+[editor.window.transport]
+done_splitting = "Teilen beenden"
+play_pause = "Video abspielen/pausieren"
+split = "Teilen"
+split_tooltip = "Klicken Sie auf ein Segment, um es zu teilen. Esc zum Beenden."
+zoom_in = "Vergrößern"
+zoom_out = "Verkleinern"
+
+[editor.window.zoom_lane]
+generate = "Erstellen"
+generating = "Wird erstellt…"
+no_clicks = "Keine Klicks zum Zoomen gefunden. Ziehen Sie über die Spur, um einen hinzuzufügen."
+prompt = "Zooms automatisch hinzufügen"
+
+[ui]
+coming_soon = "Demnächst verfügbar"
+
+[ui.selection]
+audio = { one = "{count} Audiosegment ausgewählt", other = "{count} Audiosegmente ausgewählt" }
+caption = { one = "{count} Untertitelsegment ausgewählt", other = "{count} Untertitelsegmente ausgewählt" }
+delete = "Löschen"
+done = "Fertig"
+image = { one = "{count} Bildsegment ausgewählt", other = "{count} Bildsegmente ausgewählt" }
+keyboard = { one = "{count} Tastatursegment ausgewählt", other = "{count} Tastatursegmente ausgewählt" }
+mask = { one = "{count} Maskensegment ausgewählt", other = "{count} Maskensegmente ausgewählt" }
+scene = { one = "{count} Szenensegment ausgewählt", other = "{count} Szenensegmente ausgewählt" }
+segments = { one = "{count} Segment ausgewählt", other = "{count} Segmente ausgewählt" }
+select_all = "Alle auswählen"
+style = { one = "{count} Stilsegment ausgewählt", other = "{count} Stilsegmente ausgewählt" }
+text_segments = { one = "{count} Textsegment ausgewählt", other = "{count} Textsegmente ausgewählt" }
+three_d = { one = "{count} 3D-Segment ausgewählt", other = "{count} 3D-Segmente ausgewählt" }
+zoom = { one = "{count} ausgewählt", other = "{count} ausgewählt" }
+zoom_all = { one = "Alle {count} ausgewählt", other = "Alle {count} ausgewählt" }
+zoom_some = { one = "{count} von {total} ausgewählt", other = "{count} von {total} ausgewählt" }

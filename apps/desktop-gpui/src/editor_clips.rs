@@ -44,6 +44,7 @@ use crate::{
     editor_edits::{self as edits, TrackSegmentOps},
     editor_timeline::{clip_timeline_offsets, format_time},
     editor_window::EditorWindow,
+    i18n::tr,
     session::{Phase, RecordingSession},
     theme::Theme,
     ui,
@@ -64,7 +65,7 @@ pub(crate) fn format_clip_duration(seconds: f64) -> String {
 
 /// `clipLabel` (`:563`).
 pub(crate) fn clip_label(clip_index: usize) -> String {
-    format!("Clip {}", clip_index + 1)
+    tr::editor::clips::clip(clip_index + 1)
 }
 
 /// `segmentClipIndex` (`:565-567`). The `?? Math.min(index, ...)` fallback is
@@ -91,7 +92,7 @@ pub(crate) fn segment_label(segments: &[TimelineSegment], index: usize) -> Strin
     if split_number == 1 {
         clip_label(segment_clip_index(&segments[index]))
     } else {
-        format!("Split {}", split_number - 1)
+        tr::editor::clips::split(split_number - 1)
     }
 }
 
@@ -453,8 +454,8 @@ impl EditorWindow {
     ) -> impl IntoElement {
         ui::EditorButton::plain(&self.theme, "clips-pill")
             .left_icon("icons/clapperboard.svg")
-            .when(!compact, |button| button.label("Clips"))
-            .tooltip(&self.theme, "Clips")
+            .when(!compact, |button| button.label(tr::editor::clips::title()))
+            .tooltip(&self.theme, tr::editor::clips::title())
             .pressed(self.clips.open)
             .disabled(!self.project_ready())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
@@ -795,7 +796,7 @@ impl EditorWindow {
                     .flex_shrink_0()
                     .text_color(Hsla::from(theme.editor.text_2)),
             )
-            .child("Back to editor")
+            .child(tr::editor::clips::back())
             .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
     }
 
@@ -830,7 +831,7 @@ impl EditorWindow {
                                 ui::ButtonSize::Md,
                             )
                             .icon("icons/video.svg")
-                            .label("Record a new clip")
+                            .label(tr::editor::clips::record_new())
                             .height(px(40.))
                             .gap(px(8.))
                             .font_weight(FontWeight::MEDIUM)
@@ -858,9 +859,9 @@ impl EditorWindow {
                         )
                         .icon("icons/circle-plus.svg")
                         .label(if self.clips.importing {
-                            "Importing…"
+                            tr::editor::clips::importing()
                         } else {
-                            "Import"
+                            tr::editor::clips::import()
                         })
                         .height(px(40.))
                         .gap(px(8.))
@@ -891,7 +892,7 @@ impl EditorWindow {
                             .text_size(px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(Hsla::from(theme.gray_12))
-                            .child("Clips"),
+                            .child(tr::editor::clips::title()),
                     )
                     .children((recorded_clip_count > 0).then(|| {
                         div()
@@ -959,14 +960,14 @@ impl EditorWindow {
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.gray_12))
-                    .child("No clips yet"),
+                    .child(tr::editor::clips::empty_title()),
             )
             .child(
                 div()
                     .max_w(px(200.))
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.gray_10))
-                    .child("Record or import a clip and it will show up here."),
+                    .child(tr::editor::clips::empty_description()),
             )
     }
 
@@ -1287,14 +1288,14 @@ impl EditorWindow {
         self.pending_save().borrow_mut().flush();
         if let Err(error) = self.project.write(&self.project_path) {
             tracing::error!("failed to persist the project config before recording: {error}");
-            let message = format!("Could not save the current project before recording: {error}");
+            let message = tr::editor::clips::save_before_recording_failed(error);
             cx.spawn(async move |_, _| show_append_error(&message))
                 .detach();
             return false;
         }
         let main = cx.global::<app_windows::AppWindows>().main;
         if let Err(error) = main.update(cx, |view, _, _| view.cancel_deep_link_start()) {
-            let message = format!("Could not prepare the recording controls: {error}");
+            let message = tr::editor::clips::prepare_controls_failed(error);
             cx.spawn(async move |_, _| show_append_error(&message))
                 .detach();
             return false;
@@ -1460,16 +1461,21 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .text_color(Hsla::from(theme.gray_12))
                                 .child(
-                                    row("clips-import-existing", "Existing recording")
-                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    row(
+                                        "clips-import-existing",
+                                        tr::editor::clips::import_existing(),
+                                    )
+                                    .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             this.clips.import_menu = None;
                                             cx.notify();
                                             this.pick_existing_recording(window, cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                                 .child(
-                                    row("clips-import-mp4", "MP4 Video…")
+                                    row("clips-import-mp4", tr::editor::clips::import_mp4())
                                         .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.clips.import_menu = None;
@@ -1564,11 +1570,15 @@ impl EditorWindow {
             #[cfg(target_os = "macos")]
             let source = crate::platform::open_image_panel(&["mp4"]);
             #[cfg(target_os = "linux")]
-            let source =
-                crate::platform::open_file_panel_async(&[("MP4 Video", &["mp4"])], None, cx).await;
+            let source = crate::platform::open_file_panel_async(
+                &[(tr::editor::clips::mp4_filter(), &["mp4"])],
+                None,
+                cx,
+            )
+            .await;
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let source = rfd::FileDialog::new()
-                .add_filter("MP4 Video", &["mp4"])
+                .add_filter(tr::editor::clips::mp4_filter(), &["mp4"])
                 .pick_file();
             if let Some(source) = source {
                 this.update_in(cx, |this, window, cx| {
@@ -1887,20 +1897,20 @@ impl PreparedMp4Import {
         in_flight: crate::import::InFlightImport,
     ) -> Result<Self, String> {
         if cancelled.load(Ordering::Acquire) {
-            return Err("Import cancelled".to_string());
+            return Err(tr::editor::clips::error::cancelled().to_string());
         }
         let target = target.canonicalize().map_err(|error| error.to_string())?;
         let upload_lock = cap_recording::upload_resume::UploadLock::acquire(&target)
-            .map_err(|error| format!("Cannot import while this recording is in use: {error}"))?;
+            .map_err(tr::editor::clips::error::in_use)?;
         let original_meta =
             std::fs::read(target.join("recording-meta.json")).map_err(|error| error.to_string())?;
         let mut meta = RecordingMeta::load_for_project(&target)
             .map_err(|error| format!("Failed to load target project metadata: {error}"))?;
         let RecordingMetaInner::Studio(studio) = &meta.inner else {
-            return Err("Instant mode recordings cannot be edited".to_string());
+            return Err(tr::editor::clips::error::instant_target().to_string());
         };
         if !matches!(studio.status(), StudioRecordingStatus::Complete) {
-            return Err("Finish or recover this recording before importing a clip".to_string());
+            return Err(tr::editor::clips::error::unfinished_target().to_string());
         }
         let segments = ensure_multiple_segments(&mut meta)?.segments.clone();
         let fallback_timeline = if config.timeline.is_none() {
@@ -1910,7 +1920,7 @@ impl PreparedMp4Import {
             None
         };
         if cancelled.load(Ordering::Acquire) {
-            return Err("Import cancelled".to_string());
+            return Err(tr::editor::clips::error::cancelled().to_string());
         }
         let index = u32::try_from(segments.len()).map_err(|error| error.to_string())?;
         let (directory, relative) = unique_segment_dir(&target, index)?;
@@ -1929,7 +1939,7 @@ impl PreparedMp4Import {
         )?;
         let duration = get_video_duration_secs(&display_path)?;
         if !duration.is_finite() || duration <= 0.0 {
-            return Err("Imported video has no valid duration".to_string());
+            return Err(tr::editor::clips::error::no_duration().to_string());
         }
         let system_audio = sample_rate.map(|_| AudioMeta {
             path: format!("{relative}/audio.ogg").into(),
@@ -1975,7 +1985,7 @@ impl PreparedMp4Import {
         write_config: impl FnOnce(&ProjectConfiguration, &Path) -> std::io::Result<()>,
     ) -> Result<ProjectConfiguration, String> {
         if self.cancelled.load(Ordering::Acquire) {
-            return Err("Import cancelled".to_string());
+            return Err(tr::editor::clips::error::cancelled().to_string());
         }
         let meta_path = self.target.join("recording-meta.json");
         if std::fs::read(&meta_path).map_err(|error| error.to_string())? != self.original_meta {
@@ -2066,7 +2076,7 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     #[cfg(target_os = "linux")]
     {
         crate::platform::open_file_panel_async(
-            &[("Cap Recording", &["cap"])],
+            &[(tr::editor::clips::cap_filter(), &["cap"])],
             Some(crate::recording::recordings_dir()),
             _cx,
         )
@@ -2076,7 +2086,7 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     {
         rfd::FileDialog::new()
             .set_directory(crate::recording::recordings_dir())
-            .add_filter("Cap Recording", &["cap"])
+            .add_filter(tr::editor::clips::cap_filter(), &["cap"])
             .pick_file()
     }
 }
@@ -2085,8 +2095,8 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
 /// dialog this app uses where the webview has toasts.
 fn show_import_error(message: &str) {
     let _ = rfd::MessageDialog::new()
-        .set_title("Import Error")
-        .set_description(format!("Failed to import clip: {message}"))
+        .set_title(tr::editor::clips::import_error_title())
+        .set_description(tr::editor::clips::import_error(message))
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -2096,8 +2106,8 @@ fn show_import_error(message: &str) {
 /// stand-in.
 fn show_append_error(message: &str) {
     let _ = rfd::MessageDialog::new()
-        .set_title("Recording Error")
-        .set_description(format!("Failed to add clip: {message}"))
+        .set_title(tr::editor::clips::append_error_title())
+        .set_description(tr::editor::clips::append_error(message))
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -2422,7 +2432,7 @@ fn source_asset_path(
 /// single-segment studio bundle into the multi-segment shape imports extend.
 fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSegments, String> {
     let RecordingMetaInner::Studio(studio_meta) = &mut meta.inner else {
-        return Err("Instant mode recordings cannot be edited".to_string());
+        return Err(tr::editor::clips::error::instant_target().to_string());
     };
 
     if let StudioRecordingMeta::SingleSegment { segment } = studio_meta.as_ref() {
@@ -2759,19 +2769,20 @@ fn copy_video_meta(
     )?
     else {
         if required {
-            return Err(format!(
-                "Missing video file: {}",
-                source_project_path.join(source.path.as_str()).display()
+            return Err(tr::editor::clips::error::missing_video(
+                source_project_path.join(source.path.as_str()).display(),
             ));
         }
         return Ok(None);
     };
 
     let can_decode = probe_video_can_decode(&source_path)
-        .map_err(|e| format!("Cannot decode video {}: {e}", source_path.display()))?;
+        .map_err(|e| tr::editor::clips::error::cannot_decode(source_path.display(), e))?;
     if !can_decode {
         if required {
-            return Err(format!("Unsupported video file: {}", source_path.display()));
+            return Err(tr::editor::clips::error::unsupported_video(
+                source_path.display(),
+            ));
         }
         return Ok(None);
     }
@@ -3099,9 +3110,8 @@ fn get_source_video_duration_secs(
         VIDEO_IMPORT_EXTENSIONS,
     )?
     .ok_or_else(|| {
-        format!(
-            "Missing video file: {}",
-            source_meta.project_path.join(video.path.as_str()).display()
+        tr::editor::clips::error::missing_video(
+            source_meta.project_path.join(video.path.as_str()).display(),
         )
     })?;
     get_video_duration_secs(&source_path)
@@ -3294,31 +3304,31 @@ pub(crate) fn append_cap_project_to_editor(
     source_path: &Path,
 ) -> Result<usize, String> {
     if same_project_path(target_project_path, source_path) {
-        return Err("Cannot import a recording into itself".to_string());
+        return Err(tr::editor::clips::error::into_itself().to_string());
     }
     if !is_cap_project_path(source_path) {
-        return Err("Select a Cap project folder".to_string());
+        return Err(tr::editor::clips::error::not_a_project().to_string());
     }
 
     let source_meta = RecordingMeta::load_for_project(source_path)
         .map_err(|e| format!("Failed to load source project metadata: {e}"))?;
 
     let RecordingMetaInner::Studio(source_studio_meta) = &source_meta.inner else {
-        return Err("Instant recordings can't be imported into a project yet".to_string());
+        return Err(tr::editor::clips::error::instant_source().to_string());
     };
     match source_studio_meta.status() {
         StudioRecordingStatus::InProgress => {
-            return Err("Source Cap project is still recording".to_string());
+            return Err(tr::editor::clips::error::source_recording().to_string());
         }
         StudioRecordingStatus::Failed { error } => {
-            return Err(format!("Source Cap project failed: {error}"));
+            return Err(tr::editor::clips::error::source_failed(error));
         }
         StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux => {}
     }
 
     let source_segments = studio_segments_for_import(source_studio_meta);
     if source_segments.is_empty() {
-        return Err("Source Cap project has no recording segments".to_string());
+        return Err(tr::editor::clips::error::source_empty().to_string());
     }
 
     let source_timeline = source_timeline_segments_for_import(&source_meta, &source_segments)?;
@@ -3384,7 +3394,7 @@ pub(crate) fn append_cap_project_to_editor(
     };
 
     if copied_segments.is_empty() {
-        return Err("Source Cap project has no importable recording segments".to_string());
+        return Err(tr::editor::clips::error::source_unimportable().to_string());
     }
 
     {

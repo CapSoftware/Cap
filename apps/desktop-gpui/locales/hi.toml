@@ -586,3 +586,670 @@ click_or_press = "यहाँ क्लिक करें, या दबाए
 get_started = "शुरू करें"
 space_key = "स्पेस"
 tagline = "सबके लिए ओपन सोर्स स्क्रीन शेयरिंग ऐप।"
+
+[editor.canvas]
+camera = "कैमरा"
+camera_follows_zoom = "कैमरे का आकार ज़ूम के साथ बदलता है; हिलाने के लिए खींचें"
+edit_zoom = "ज़ूम संपादित करें"
+image = "इमेज"
+mask = "मास्क"
+screen = "स्क्रीन"
+screen_locked = "ज़ूम चालू रहने तक स्क्रीन लॉक रहती है"
+text_item = "टेक्स्ट"
+
+[editor.clips]
+append_error = "क्लिप नहीं जोड़ी जा सकी: {message}"
+append_error_title = "रिकॉर्डिंग त्रुटि"
+back = "एडिटर पर वापस जाएँ"
+cap_filter = "Cap रिकॉर्डिंग"
+clip = "क्लिप {number}"
+empty_description = "कोई क्लिप रिकॉर्ड या इम्पोर्ट करें, वह यहाँ दिखेगी।"
+empty_title = "अभी कोई क्लिप नहीं"
+import = "इम्पोर्ट करें"
+import_error = "क्लिप इम्पोर्ट नहीं हो सकी: {message}"
+import_error_title = "इम्पोर्ट त्रुटि"
+import_existing = "मौजूदा रिकॉर्डिंग"
+import_mp4 = "MP4 वीडियो…"
+importing = "इम्पोर्ट हो रहा है…"
+mp4_filter = "MP4 वीडियो"
+prepare_controls_failed = "रिकॉर्डिंग कंट्रोल तैयार नहीं हो सके: {error}"
+record_new = "नई क्लिप रिकॉर्ड करें"
+save_before_recording_failed = "रिकॉर्डिंग से पहले मौजूदा प्रोजेक्ट सेव नहीं हो सका: {error}"
+split = "हिस्सा {number}"
+title = "क्लिप"
+
+[editor.clips.error]
+cancelled = "इम्पोर्ट रद्द किया गया"
+cannot_decode = "वीडियो {path} डिकोड नहीं हो सका: {error}"
+in_use = "यह रिकॉर्डिंग उपयोग में होने पर इम्पोर्ट नहीं हो सकता: {error}"
+instant_source = "Instant रिकॉर्डिंग अभी किसी प्रोजेक्ट में इम्पोर्ट नहीं की जा सकतीं"
+instant_target = "Instant मोड की रिकॉर्डिंग संपादित नहीं की जा सकतीं"
+into_itself = "किसी रिकॉर्डिंग को उसी में इम्पोर्ट नहीं किया जा सकता"
+missing_video = "वीडियो फ़ाइल नहीं मिली: {path}"
+no_duration = "इम्पोर्ट किए गए वीडियो की कोई मान्य अवधि नहीं है"
+not_a_project = "कोई Cap प्रोजेक्ट फ़ोल्डर चुनें"
+source_empty = "स्रोत Cap प्रोजेक्ट में कोई रिकॉर्डिंग सेगमेंट नहीं है"
+source_failed = "स्रोत Cap प्रोजेक्ट विफल रहा: {error}"
+source_recording = "स्रोत Cap प्रोजेक्ट अभी भी रिकॉर्ड हो रहा है"
+source_unimportable = "स्रोत Cap प्रोजेक्ट में इम्पोर्ट करने लायक कोई रिकॉर्डिंग सेगमेंट नहीं है"
+unfinished_target = "क्लिप इम्पोर्ट करने से पहले इस रिकॉर्डिंग को पूरा या रिकवर करें"
+unsupported_video = "असमर्थित वीडियो फ़ाइल: {path}"
+
+[editor.export]
+back = "एडिटर पर वापस जाएँ"
+existing_link_description = "दोबारा अपलोड करने पर इस लिंक का वीडियो आपके नए संपादन से बदल जाता है। लिंक वाले सभी लोग अपडेट किया गया वर्ज़न देखेंगे।"
+existing_link_title = "अपना मौजूदा लिंक अपडेट करें"
+failed = "एक्सपोर्ट विफल रहा"
+fps = "{fps} FPS"
+frames = { one = "{rendered} / {count} फ़्रेम", other = "{rendered} / {count} फ़्रेम" }
+generating_preview = "प्रीव्यू बनाया जा रहा है…"
+link_unavailable_cursor = "केवल कर्सर वाले एक्सपोर्ट सिर्फ़ फ़ाइल या क्लिपबोर्ड में सेव किए जा सकते हैं।"
+link_unavailable_transparent = "पारदर्शी एक्सपोर्ट सिर्फ़ फ़ाइल या क्लिपबोर्ड में सेव किए जा सकते हैं।"
+organization = "संगठन"
+preview = "प्रीव्यू"
+preview_info = "यह आपके वीडियो का रेंडर किया गया फ़्रेम है। फ़ाइनल एक्सपोर्ट की क्वालिटी देखने के लिए सेटिंग्स बदलें।"
+preview_unavailable = "प्रीव्यू उपलब्ध नहीं है"
+reupload = "दोबारा अपलोड करें"
+reupload_tooltip = "अपना नया संपादन उसी लिंक पर अपलोड करें"
+reupload_transparent = "शेयर लिंक के लिए बिना पारदर्शिता वाला बैकग्राउंड चाहिए"
+sign_in_required = "रिकॉर्डिंग शेयर करने के लिए आपको साइन इन करना होगा"
+task_failed = "एक्सपोर्ट कार्य विफल रहा"
+title = "एक्सपोर्ट"
+upgrade_message = "इस सुविधा के लिए अपग्रेड किया गया प्लान चाहिए"
+upgrade_title = "अपग्रेड ज़रूरी है"
+upload_failed = "रिकॉर्डिंग अपलोड नहीं हो सकी"
+
+[editor.export.advanced]
+bits_per_pixel = "बिट्स प्रति पिक्सेल"
+cursor_only = "केवल कर्सर एक्सपोर्ट करें"
+cursor_only_description = "पारदर्शी बैकग्राउंड पर वही कर्सर मूवमेंट और क्लिक रखता है"
+custom_bitrate = "कस्टम बिटरेट इस्तेमाल हो रहा है"
+force_ffmpeg = "FFmpeg डिकोडर ज़बरदस्ती इस्तेमाल करें"
+force_ffmpeg_description = "हार्डवेयर डिकोडर छोड़ें (ऑटो-फ़ॉलबैक चालू)"
+title = "एडवांस्ड"
+transparent_mov = "पारदर्शी MOV के रूप में एक्सपोर्ट करता है। फ़ाइलें बड़ी होती हैं और कंपोज़िटिंग या एडिटिंग के लिए सबसे अच्छी हैं।"
+
+[editor.export.cta]
+cancel_sign_in = "साइन इन रद्द करें"
+clipboard = "क्लिपबोर्ड में एक्सपोर्ट करें"
+create_link = "शेयर करने लायक लिंक बनाएँ"
+file = "फ़ाइल में एक्सपोर्ट करें"
+reupload = "उसी लिंक पर दोबारा अपलोड करें"
+sign_in = "शेयर करने के लिए साइन इन करें"
+
+[editor.export.destination]
+clipboard = "क्लिपबोर्ड"
+file = "फ़ाइल"
+link = "शेयर लिंक"
+
+[editor.export.done]
+copy_link = "लिंक कॉपी करें"
+instant_hint = "अगर आप रोकते ही लिंक चाहते हैं, तो अगली रिकॉर्डिंग के लिए Instant मोड इस्तेमाल करें।"
+link_copied = "लिंक कॉपी हो गया"
+open_file = "फ़ाइल खोलें"
+open_link = "लिंक खोलें"
+retry_copy = "फिर से कॉपी करें"
+reuploaded = "आपका नया संपादन उसी लिंक पर तैयार है"
+uploaded = "आपका Cap सफलतापूर्वक अपलोड हो गया"
+
+[editor.export.estimate]
+gigabytes = "~{value} GB"
+gigabytes_range = "~{lower}–{upper} GB"
+hours = "~{value} घंटे"
+hours_range = "~{lower}–{upper} घंटे"
+megabytes = "~{value} MB"
+megabytes_range = "~{lower}–{upper} MB"
+minutes = "~{value} मिनट"
+minutes_range = "~{lower}–{upper} मिनट"
+seconds = "~{value} सेकंड"
+seconds_range = "~{lower}–{upper} सेकंड"
+under_megabyte = "< 1 MB"
+under_second = "< 1 सेकंड"
+
+[editor.export.optimize]
+description = "बहुत छोटी फ़ाइलों के लिए सॉफ़्टवेयर से दोबारा एनकोड करता है (धीमा)"
+title = "फ़ाइल साइज़ ऑप्टिमाइज़ करें"
+
+[editor.export.phase]
+clipboard_failed = "एक्सपोर्ट पूरा हुआ; क्लिपबोर्ड में कॉपी विफल रही"
+complete = "एक्सपोर्ट पूरा हुआ"
+copied = "क्लिपबोर्ड में कॉपी हो गया"
+copying_to_clipboard = "क्लिपबोर्ड में कॉपी हो रहा है"
+rendering_cursor = "कर्सर ट्रैक रेंडर हो रहा है"
+rendering_gif = "GIF रेंडर हो रहा है"
+rendering_video = "वीडियो रेंडर हो रहा है"
+reupload_complete = "दोबारा अपलोड पूरा हुआ"
+reuploading = "आपके लिंक पर दोबारा अपलोड हो रहा है"
+saving_to_file = "फ़ाइल में सेव हो रहा है"
+starting = "एक्सपोर्ट की तैयारी हो रही है"
+upload_complete = "अपलोड पूरा हुआ"
+uploading = "शेयर करने लायक लिंक बन रहा है"
+
+[editor.export.quality]
+larger = "बड़ी फ़ाइल"
+maximum = "अधिकतम"
+potato = "न्यूनतम"
+smaller = "छोटी फ़ाइल"
+social = "सोशल"
+web = "वेब"
+
+[editor.export.resources]
+proceed = "फिर भी जारी रखें"
+title = "एक्सपोर्ट संसाधन जाँचें"
+
+[editor.export.section]
+destination = "गंतव्य"
+format = "फ़ॉर्मेट"
+frame_rate = "फ़्रेम रेट"
+quality = "क्वालिटी"
+resolution = "रेज़ोल्यूशन"
+
+[editor.export.stats]
+calculating = "गणना हो रही है…"
+duration = "अवधि"
+estimated_size = "अनुमानित साइज़"
+export_time = "एक्सपोर्ट समय"
+output = "आउटपुट"
+output_value = "{width}×{height} · {fps} fps"
+refining_size = "साइज़ सटीक किया जा रहा है…"
+refining_time = "समय सटीक किया जा रहा है…"
+unavailable = "उपलब्ध नहीं"
+
+[editor.modal]
+cancel_export = "एक्सपोर्ट रद्द करें"
+cancel_export_message = "क्या आप वाकई एक्सपोर्ट रद्द करना चाहते हैं?"
+cancel_export_title = "एक्सपोर्ट रद्द करें?"
+keep_exporting = "एक्सपोर्ट जारी रखें"
+recording_retained = "रिकॉर्डिंग रखी गई"
+
+[editor.tabs.audio]
+isolation_balanced = "संतुलित"
+isolation_balanced_description = "आवाज़ के स्वाभाविक विवरण के साथ ज़्यादा साफ़ अलगाव।"
+isolation_light = "हल्का"
+isolation_light_description = "आपकी मूल आवाज़ और कमरे की ध्वनि ज़्यादा बनी रहती है।"
+isolation_strong = "मज़बूत"
+isolation_strong_description = "शोर वाली जगहों के लिए ज़्यादा अलगाव। आवाज़ का टेक्सचर बदल सकता है।"
+mic_volume = "माइक्रोफ़ोन वॉल्यूम"
+mute = "ऑडियो म्यूट करें"
+stereo_mode = "माइक्रोफ़ोन स्टीरियो मोड"
+studio_sound_description = "बैकग्राउंड शोर कम करता है और आपकी आवाज़ का स्तर संतुलित करता है।"
+studio_sound_save_failed = "Studio Sound का डिफ़ॉल्ट सेव नहीं हो सका"
+system_volume = "सिस्टम ऑडियो वॉल्यूम"
+title = "ऑडियो कंट्रोल"
+use_for_new = "नई रिकॉर्डिंग के लिए इस्तेमाल करें"
+
+[editor.tabs.audio.stereo]
+mono_left = "मोनो L"
+mono_right = "मोनो R"
+stereo = "स्टीरियो"
+
+[editor.tabs.camera]
+advanced_shadow = "एडवांस्ड शैडो सेटिंग्स"
+background = "बैकग्राउंड"
+corner_style = "कोने की स्टाइल"
+custom_position = "कस्टम स्थिति (कैनवस पर खींची गई)"
+hide = "कैमरा छिपाएँ"
+keep_size_during_zoom = "ज़ूम के दौरान मूल आकार बनाए रखें"
+mirror = "कैमरा मिरर करें"
+position = "स्थिति"
+reset = "रीसेट करें"
+rounded_corners = "गोल कोने"
+shadow = "शैडो"
+shadow_blur = "धुंधलापन"
+shadow_opacity = "अपारदर्शिता"
+shape_label = "आकृति"
+size_during_zoom = "ज़ूम के दौरान आकार"
+size_label = "आकार"
+title = "कैमरा"
+
+[editor.tabs.camera.blur]
+heavy = "ज़्यादा ब्लर"
+light = "हल्का ब्लर"
+off = "बंद"
+remove = "बैकग्राउंड हटाएँ"
+
+[editor.tabs.camera.shape]
+source = "मूल"
+square = "वर्ग"
+
+[editor.tabs.captions]
+active_word_highlight = "सक्रिय शब्द हाइलाइट करें"
+animation_section = "एनिमेशन"
+animation_style = "एनिमेशन स्टाइल"
+background_color = "बैकग्राउंड रंग"
+background_opacity = "बैकग्राउंड अपारदर्शिता"
+background_settings = "बैकग्राउंड सेटिंग्स"
+beta = "बीटा"
+delete = "हटाएँ"
+deleting = "हटाया जा रहा है..."
+download = "{model} मॉडल डाउनलोड करें"
+download_note = "आपके सिस्टम पर एक बार डाउनलोड। सभी कैप्शन लोकल रूप से सेव रहते हैं।"
+downloading = "{model} डाउनलोड हो रहा है... {percent}%"
+fade_duration = "फ़ेड अवधि"
+font_family = "फ़ॉन्ट"
+font_settings = "फ़ॉन्ट सेटिंग्स"
+font_weight = "फ़ॉन्ट वज़न"
+generate = "कैप्शन बनाएँ"
+generate_failed = "कैप्शन नहीं बन सके: {reason}"
+generating = "बनाया जा रहा है..."
+highlight_color = "हाइलाइट रंग"
+highlight_note = "यह Cap में कैप्शन का पहला वर्ज़न है। कुछ स्थितियों में सक्रिय शब्द की हाइलाइटिंग गलत हो सकती है। हम इसे ठीक करने पर काम कर रहे हैं और यह आने वाले वर्ज़न में जारी होगा।"
+highlight_style = "हाइलाइट स्टाइल"
+horizontal_position = "क्षैतिज स्थिति"
+intel_unavailable = "Parakeet कैप्शन मॉडल Intel Mac पर उपलब्ध नहीं हैं। Whisper मॉडल उपलब्ध रहेंगे।"
+keep_open = "मॉडल डाउनलोड होने तक Cap खुला रखें। एडिटर दोबारा लोड होने पर अपने आप फिर से कनेक्ट हो जाएगा।"
+language_label = "भाषा"
+model_downloaded = "{model} मॉडल डाउनलोड हो गया"
+model_label = "मॉडल"
+position = "स्थिति"
+regenerate = "कैप्शन दोबारा बनाएँ"
+size_label = "आकार"
+style = "स्टाइल"
+text_color = "टेक्स्ट रंग"
+title = "कैप्शन"
+uppercase = "बड़े अक्षर"
+vertical_position = "ऊर्ध्वाधर स्थिति"
+
+[editor.tabs.captions.animation]
+bounce = "बाउंस"
+none = "कोई नहीं"
+pop = "पॉप"
+
+[editor.tabs.captions.highlight]
+color = "रंग"
+pill = "पिल"
+
+[editor.tabs.captions.language]
+ar = "अरबी"
+auto = "अपने आप पहचानें"
+bn = "बांग्ला"
+de = "जर्मन"
+en = "अंग्रेज़ी"
+es = "स्पैनिश"
+fa = "फ़ारसी"
+fr = "फ़्रेंच"
+gu = "गुजराती"
+he = "हिब्रू"
+hi = "हिन्दी"
+it = "इतालवी"
+ja = "जापानी"
+ko = "कोरियाई"
+mr = "मराठी"
+nl = "डच"
+pa = "पंजाबी"
+pl = "पोलिश"
+pt = "पुर्तगाली"
+ru = "रूसी"
+sk = "स्लोवाक"
+ta = "तमिल"
+te = "तेलुगु"
+tr = "तुर्की"
+ur = "उर्दू"
+zh = "चीनी"
+
+[editor.tabs.captions.model]
+high_accuracy = "उच्च सटीकता"
+high_accuracy_description = "बड़ा डाउनलोड, ज़्यादा सटीकता"
+medium = "मध्यम"
+medium_description = "धीमा, ज़्यादा सटीक"
+recommended = "सुझाया गया"
+recommended_description = "ज़्यादातर रिकॉर्डिंग के लिए सबसे अच्छा संतुलन"
+small = "छोटा"
+small_description = "सबसे छोटा डाउनलोड"
+
+[editor.tabs.captions.preset]
+classic = "क्लासिक"
+classic_description = "ठोस गोल बैकग्राउंड पर साफ़ टेक्स्ट।"
+highlight = "हाइलाइट"
+highlight_description = "सक्रिय शब्द के पीछे पिल के साथ बोल्ड बड़े अक्षर।"
+karaoke = "कराओके"
+karaoke_description = "बोलने के साथ शब्द चमकते हैं।"
+minimal = "मिनिमल"
+minimal_description = "बिना बैकग्राउंड के हल्का आउटलाइन टेक्स्ट।"
+pop = "पॉप"
+pop_description = "चटक रंग के साथ उभरते मज़ेदार बड़े अक्षर।"
+
+[editor.tabs.corner]
+rounded = "गोल"
+squircle = "स्क्विर्कल"
+
+[editor.tabs.cursor]
+friction = "घर्षण"
+hide_when_idle = "निष्क्रिय होने पर छिपाएँ"
+inactivity_delay = "निष्क्रियता देरी"
+mass = "द्रव्यमान"
+movement_style = "कर्सर मूवमेंट स्टाइल"
+show = "कर्सर दिखाएँ"
+size_label = "आकार"
+smooth_movement = "स्मूथ मूवमेंट"
+style_label = "कर्सर स्टाइल"
+svg_cursors = "उच्च क्वालिटी SVG कर्सर"
+tension = "तनाव"
+tilt = "झुकाव"
+
+[editor.tabs.cursor.style]
+fast = "तेज़"
+fast_description = "फुर्तीला, करीब से फ़ॉलो करता है"
+mellow = "नरम"
+mellow_description = "संतुलित, स्वाभाविक मूवमेंट"
+slow = "धीमा"
+slow_description = "लंबा, बहता हुआ मूवमेंट"
+smooth = "स्मूथ"
+smooth_description = "मुलायम, तैरता हुआ मूवमेंट"
+
+[editor.tabs.keyboard]
+animation = "एनिमेशन"
+background_color = "बैकग्राउंड रंग"
+background_opacity = "बैकग्राउंड अपारदर्शिता"
+background_settings = "बैकग्राउंड सेटिंग्स"
+behavior = "व्यवहार"
+beta = "बीटा"
+changed_during_generation = "बनाते समय टाइमलाइन या कीबोर्ड सेटिंग्स बदल गईं। फिर से कोशिश करें।"
+empty_description = "रिकॉर्ड किए गए की-प्रेस से सेगमेंट बनाने के लिए \"कीबोर्ड सेगमेंट बनाएँ\" पर क्लिक करें।"
+empty_title = "अभी कोई कीबोर्ड सेगमेंट नहीं।"
+fade_duration = "फ़ेड अवधि"
+font_family = "फ़ॉन्ट"
+font_settings = "फ़ॉन्ट सेटिंग्स"
+font_weight = "फ़ॉन्ट वज़न"
+generate = "कीबोर्ड सेगमेंट बनाएँ"
+generating = "कीबोर्ड सेगमेंट बनाए जा रहे हैं..."
+grouping_threshold = "ग्रुपिंग सीमा"
+linger_duration = "दिखने की अवधि"
+load_failed = "रिकॉर्डिंग डेटा लोड नहीं हो सका: {error}"
+no_presses = "कोई रिकॉर्ड किया गया की-प्रेस नहीं मिला।"
+position = "स्थिति"
+regenerate = "कीबोर्ड सेगमेंट दोबारा बनाएँ"
+show_modifiers = "मॉडिफ़ायर दिखाएँ"
+show_special_keys = "विशेष कुंजियाँ दिखाएँ"
+size_label = "आकार"
+text_color = "टेक्स्ट रंग"
+timeline_unavailable = "प्रोजेक्ट टाइमलाइन उपलब्ध नहीं है।"
+timeline_unreadable = "प्रोजेक्ट टाइमलाइन पढ़ी नहीं जा सकी।"
+title = "कीबोर्ड दिखाएँ"
+uppercase = "बड़े अक्षर"
+
+[editor.tabs.position]
+bottom_center = "नीचे बीच में"
+bottom_left = "नीचे बाएँ"
+bottom_right = "नीचे दाएँ"
+manual = "मैन्युअल"
+top_center = "ऊपर बीच में"
+top_left = "ऊपर बाएँ"
+top_right = "ऊपर दाएँ"
+
+[editor.tabs.sync]
+auto_description = "ऑडियो को वीडियो के साथ सिंक रखने के लिए Cap ने ये ऑफ़सेट अपने आप निकाले हैं। अगर अब भी कुछ गड़बड़ लगे, तो इन्हें बदलें।"
+auto_synced = "अपने आप सिंक"
+camera = "कैमरा ऑफ़सेट"
+clip = "क्लिप {number}"
+description = "अगर ऑडियो या कैमरा स्क्रीन रिकॉर्डिंग से सिंक से बाहर हो जाए, तो स्रोत ऑफ़सेट को बारीकी से ठीक करें।"
+microphone = "माइक्रोफ़ोन ऑफ़सेट"
+system_audio = "सिस्टम ऑडियो ऑफ़सेट"
+title = "सिंक"
+
+[editor.tabs.weight]
+bold = "बोल्ड"
+medium = "मध्यम"
+normal = "सामान्य"
+
+[editor.timeline]
+add_shot = "शॉट जोड़ें"
+add_shot_with_look = "शॉट जोड़ें · {look} · {seconds} सेकंड"
+paused = "रुका हुआ"
+
+[editor.timeline.empty]
+add_audio = "ऑडियो जोड़ें"
+add_scene = "सीन जोड़ें"
+audio = "बैकग्राउंड म्यूज़िक जोड़ें या अपना ऑडियो इम्पोर्ट करें"
+captions = "कोई कैप्शन नहीं"
+keyboard = "कोई कीबोर्ड इवेंट नहीं"
+scene = "अपनी स्क्रीन और कैमरे के बीच लेआउट बदलें"
+
+[editor.timeline.picker]
+audio = "बैकग्राउंड म्यूज़िक जोड़ें या अपना ऑडियो इम्पोर्ट करें।"
+caption = "अपनी रिकॉर्डिंग को अपने आप ऑन-स्क्रीन सबटाइटल में बदलें।"
+clip = "आपकी रिकॉर्ड की गई स्क्रीन फ़ुटेज।"
+image = "अपनी रिकॉर्डिंग में इमेज जोड़ें।"
+keyboard = "टाइप करते समय स्क्रीन पर की-प्रेस दिखाएँ।"
+mask = "स्क्रीन के निजी हिस्सों को धुंधला या काला करें।"
+scene = "अपनी स्क्रीन और कैमरे के बीच लेआउट बदलें।"
+scene_unavailable = "सीन इस्तेमाल करने के लिए कैमरे के साथ रिकॉर्ड करें।"
+style = "समय के साथ बैकग्राउंड, कैमरा और कर्सर सेटिंग्स बदलें।"
+text_overlay = "कैनवस पर कस्टम टेक्स्ट ओवरले और टाइटल जोड़ें।"
+three_d = "सीन को 3D परिप्रेक्ष्य में झुकाएँ।"
+zoom = "स्मूथ ज़ूम-इन जो एक्शन के साथ चलते हैं।"
+
+[editor.timeline.remove]
+audio = "ऑडियो ट्रैक हटाएँ।"
+captions = "कैप्शन ट्रैक हटाएँ।"
+clip = "क्लिप ट्रैक हटाएँ।"
+image = "इमेज ट्रैक हटाएँ।"
+keyboard = "कीबोर्ड ट्रैक हटाएँ।"
+mask = "मास्क ट्रैक हटाएँ।"
+scene = "सीन ट्रैक हटाएँ।"
+style = "स्टाइल ट्रैक हटाएँ।"
+text_track = "टेक्स्ट ट्रैक हटाएँ।"
+three_d = "3D ट्रैक हटाएँ।"
+zoom = "ज़ूम ट्रैक हटाएँ।"
+
+[editor.timeline.scene]
+camera_only = "केवल कैमरा"
+default = "डिफ़ॉल्ट"
+floating = "फ़्लोटिंग"
+hide_camera = "कैमरा छिपाएँ"
+split_screen = "स्प्लिट स्क्रीन"
+
+[editor.timeline.segment]
+audio = "ऑडियो"
+automatic_zoom = "ऑटोमैटिक ज़ूम"
+caption = "कैप्शन"
+clip = "क्लिप"
+cursor_hidden = "कर्सर छिपा है"
+highlight = "हाइलाइट"
+label = "लेबल"
+manual_zoom = "मैन्युअल ज़ूम"
+muted = "म्यूट"
+numbered_clip = "क्लिप {number}"
+sensitive = "संवेदनशील"
+
+[editor.timeline.track]
+audio = "ऑडियो"
+captions = "कैप्शन"
+clip = "क्लिप"
+image = "इमेज"
+keyboard = "कीबोर्ड"
+mask = "मास्क"
+scene = "सीन"
+style = "स्टाइल"
+text_track = "टेक्स्ट"
+video = "वीडियो"
+zoom = "ज़ूम"
+
+[editor.window]
+audio_filter = "ऑडियो"
+audio_segment_changed = "यह ऑडियो सेगमेंट बदल गया है। इसे चुनें और फिर से बदलने के लिए फ़ाइल चुनें।"
+crop = "क्रॉप"
+crop_tooltip = "वीडियो क्रॉप करें"
+no_room_for_3d_shot = "एक और 3D शॉट के लिए जगह नहीं है"
+redo = "फिर से करें"
+save_failed = "{path} सेव नहीं हो सका। एडिटर खुला रखें और फिर से कोशिश करें: {error}"
+undo = "पूर्ववत करें"
+
+[editor.window.add_track]
+button = "ट्रैक जोड़ें"
+hide_3d = "3D ट्रैक छिपाएँ।"
+hint = "अपनी टाइमलाइन में जोड़ने के लिए एक ट्रैक चुनें।"
+
+[editor.window.aspect]
+auto = "ऑटो"
+classic = "क्लासिक"
+classic_ratio = "क्लासिक ⋅4:3"
+square = "वर्ग"
+square_ratio = "वर्ग ⋅1:1"
+tall = "लंबा"
+tall_ratio = "लंबा ⋅3:4"
+tooltip = "आस्पेक्ट रेशियो"
+vertical = "वर्टिकल"
+vertical_ratio = "वर्टिकल ⋅9:16"
+wide = "वाइड"
+wide_ratio = "वाइड ⋅16:9"
+
+[editor.window.audio_import]
+copy_failed = "ऑडियो फ़ाइल कॉपी नहीं हो सकी: {error}"
+directory_failed = "ऑडियो फ़ोल्डर नहीं बन सका: {error}"
+no_extension = "ऑडियो फ़ाइल का कोई एक्सटेंशन नहीं है"
+not_found = "ऑडियो फ़ाइल नहीं मिली: {path}"
+unsupported = "असमर्थित ऑडियो फ़ॉर्मेट: .{extension}"
+
+[editor.window.busy]
+clip_import = "इस रिकॉर्डिंग को बंद करने या हटाने से पहले क्लिप इम्पोर्ट पूरा होने दें।"
+export = "इस रिकॉर्डिंग को बंद करने या हटाने से पहले एक्सपोर्ट या उसका रद्द होना पूरा होने दें।"
+opening = "हटाने से पहले रिकॉर्डिंग को पूरी तरह खुलने दें।"
+save_before_delete_failed = "हटाने से पहले रिकॉर्डिंग सेव नहीं हो सकी: {error}"
+
+[editor.window.camera3d_lane]
+add_shot = "+ शॉट जोड़ें"
+auto_scene = "ऑटो सीन"
+how_many = "कितने शॉट?"
+prompt = "अपनी रिकॉर्डिंग में सिनेमैटिक 3D शॉट जोड़ें"
+
+[editor.window.clip_menu]
+audio = "ऑडियो"
+cursor = "कर्सर"
+delete = "क्लिप हटाएँ"
+delete_only_clip = "इकलौती क्लिप नहीं हटाई जा सकती"
+hide_cursor = "कर्सर छिपाएँ"
+hide_cursor_description = "यह क्लिप चलते समय फ़ेड हो जाता है"
+keep_pitch = "पिच बनाए रखें"
+match_speed = "स्पीड से मिलाएँ"
+merge_next = "अगली क्लिप से जोड़ें"
+merge_previous = "पिछली क्लिप से जोड़ें"
+mute = "म्यूट"
+mute_clip = "क्लिप म्यूट करें"
+mute_clip_description = "इस क्लिप का ऑडियो बंद करें"
+rename = "क्लिप का नाम बदलें"
+speed = "स्पीड"
+split = "प्लेहेड पर विभाजित करें"
+split_hint = "प्लेहेड को इस क्लिप के अंदर ले जाएँ"
+volume = "वॉल्यूम"
+
+[editor.window.frame]
+add_tooltip = "फ़्रेम जोड़ें"
+browser = "ब्राउज़र"
+browser_description = "एड्रेस बार के साथ ब्राउज़र फ़्रेम"
+button = "फ़्रेम"
+dark = "डार्क"
+global = "ग्लोबल फ़्रेम · जहाँ भी स्टाइल बैकग्राउंड लेती है, वहाँ लागू होता है।"
+heading = "फ़्रेम"
+light = "लाइट"
+macbook_description = "रिकॉर्डिंग के चारों ओर लैपटॉप बेज़ेल"
+macos_description = "ट्रैफ़िक लाइट बटन के साथ विंडो फ़्रेम"
+none = "कोई नहीं"
+none_description = "रिकॉर्डिंग को जैसी है वैसी दिखाएँ"
+style_changed = "यह स्टाइल बदल गई है। फ़्रेम बंद करके फिर से खोलें।"
+style_only = "सिर्फ़ स्टाइल {index} · ग्लोबल सेटिंग्स नहीं बदलतीं।"
+style_only_override = "सिर्फ़ स्टाइल {index} · बदलाव करने पर इसका अपना बैकग्राउंड चालू हो जाता है।"
+theme = "थीम"
+title = "टाइटल"
+url = "URL"
+window_title_placeholder = "विंडो टाइटल"
+windows_description = "विंडो कंट्रोल के साथ टाइटल बार"
+
+[editor.window.header]
+captions = "कैप्शन"
+delete_recording = "रिकॉर्डिंग हटाएँ"
+export = "एक्सपोर्ट"
+open_bundle = "रिकॉर्डिंग बंडल खोलें"
+presets = "प्रीसेट"
+
+[editor.window.image]
+changed = "बदलने के लिए चुनते समय यह इमेज बदल गई। इसे चुनें और फिर से कोशिश करें।"
+filter = "इमेज"
+recording_unavailable = "इस इमेज के लिए रिकॉर्डिंग अब उपलब्ध नहीं है। प्रोजेक्ट फिर से खोलें।"
+
+[editor.window.open]
+damaged = "इस रिकॉर्डिंग के वीडियो ट्रैक नहीं खुल सके। बंडल खराब लगता है।"
+failed = "यह रिकॉर्डिंग नहीं खुल सकी"
+media_failed = "इस रिकॉर्डिंग का मीडिया पढ़ा नहीं जा सका: {error}"
+meta_failed = "रिकॉर्डिंग मेटाडेटा लोड नहीं हो सका: {error}"
+no_segments = "रिकॉर्डिंग में कोई सेगमेंट नहीं है। हो सकता है पहले इसे रिकवर करना पड़े।"
+not_found = "वीडियो पाथ {path} नहीं मिला!"
+not_studio = "Studio के अलावा की रिकॉर्डिंग संपादित नहीं की जा सकतीं"
+
+[editor.window.presets]
+apply = "लागू करें"
+create = "बनाएँ"
+create_new = "नया प्रीसेट बनाएँ"
+create_title = "प्रीसेट बनाएँ"
+default = "डिफ़ॉल्ट"
+default_badge = "डिफ़ॉल्ट"
+delete = "हटाएँ"
+delete_confirm = "क्या आप वाकई \"{name}\" हटाना चाहते हैं?"
+delete_title = "प्रीसेट हटाएँ"
+name_placeholder = "प्रीसेट का नाम"
+none_saved = "कोई सेव किया गया प्रीसेट नहीं"
+rename = "नाम बदलें"
+rename_title = "प्रीसेट का नाम बदलें"
+save_settings = "सेटिंग्स को प्रीसेट में सेव करें"
+set_default = "डिफ़ॉल्ट बनाएँ"
+
+[editor.window.preview]
+full = "पूरा"
+half = "आधा"
+label = "प्रीव्यू"
+quarter = "चौथाई"
+
+[editor.window.text_menu]
+copy_style = "स्टाइल कॉपी करें"
+copy_style_first = "पहले कोई स्टाइल कॉपी करें"
+delete_segment = "टेक्स्ट सेगमेंट हटाएँ"
+delete_segments = "टेक्स्ट सेगमेंट हटाएँ"
+paste_style = "स्टाइल पेस्ट करें"
+paste_style_all = "सभी चुने गए पर स्टाइल पेस्ट करें"
+segments = { one = "{count} टेक्स्ट सेगमेंट", other = "{count} टेक्स्ट सेगमेंट" }
+untitled = "टेक्स्ट"
+
+[editor.window.title]
+not_saved = "टाइटल सेव नहीं हुआ"
+not_saved_message = "{error}\n\nआपका टाइटल अब भी एडिटर में है। इसे फिर से सेव करने की कोशिश करें।"
+read_failed = "{path} का रिकॉर्डिंग टाइटल पढ़ा नहीं जा सका: {error}"
+save_failed = "{path} का रिकॉर्डिंग टाइटल सेव नहीं हो सका: {error}"
+
+[editor.window.track]
+clear_all = "सब साफ़ करें"
+delete = "हटाएँ"
+
+[editor.window.transport]
+done_splitting = "विभाजन पूरा"
+play_pause = "वीडियो चलाएँ/रोकें"
+split = "विभाजित करें"
+split_tooltip = "विभाजित करने के लिए किसी सेगमेंट पर क्लिक करें। खत्म करने के लिए Esc दबाएँ।"
+zoom_in = "ज़ूम इन"
+zoom_out = "ज़ूम आउट"
+
+[editor.window.zoom_lane]
+generate = "बनाएँ"
+generating = "बनाया जा रहा है…"
+no_clicks = "ज़ूम करने के लिए कोई क्लिक नहीं मिला। जोड़ने के लिए लेन पर खींचें।"
+prompt = "ज़ूम अपने आप जोड़ें"
+
+[ui]
+coming_soon = "जल्द आ रहा है"
+
+[ui.selection]
+audio = { one = "{count} ऑडियो सेगमेंट चुना गया", other = "{count} ऑडियो सेगमेंट चुने गए" }
+caption = { one = "{count} कैप्शन सेगमेंट चुना गया", other = "{count} कैप्शन सेगमेंट चुने गए" }
+delete = "हटाएँ"
+done = "हो गया"
+image = { one = "{count} इमेज सेगमेंट चुना गया", other = "{count} इमेज सेगमेंट चुने गए" }
+keyboard = { one = "{count} कीबोर्ड सेगमेंट चुना गया", other = "{count} कीबोर्ड सेगमेंट चुने गए" }
+mask = { one = "{count} मास्क सेगमेंट चुना गया", other = "{count} मास्क सेगमेंट चुने गए" }
+scene = { one = "{count} सीन सेगमेंट चुना गया", other = "{count} सीन सेगमेंट चुने गए" }
+segments = { one = "{count} सेगमेंट चुना गया", other = "{count} सेगमेंट चुने गए" }
+select_all = "सभी चुनें"
+style = { one = "{count} स्टाइल सेगमेंट चुना गया", other = "{count} स्टाइल सेगमेंट चुने गए" }
+text_segments = { one = "{count} टेक्स्ट सेगमेंट चुना गया", other = "{count} टेक्स्ट सेगमेंट चुने गए" }
+three_d = { one = "{count} 3D सेगमेंट चुना गया", other = "{count} 3D सेगमेंट चुने गए" }
+zoom = { one = "{count} चुना गया", other = "{count} चुने गए" }
+zoom_all = { one = "{count} चुना गया", other = "सभी {count} चुने गए" }
+zoom_some = { one = "{total} में से {count} चुना गया", other = "{total} में से {count} चुने गए" }

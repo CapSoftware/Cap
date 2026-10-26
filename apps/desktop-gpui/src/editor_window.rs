@@ -67,6 +67,7 @@ use gpui::{
     div, point, prelude::FluentBuilder, px, svg,
 };
 
+use crate::i18n::tr;
 use crate::theme::LocaleFont as _;
 use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
@@ -379,7 +380,7 @@ pub struct ProjectSummary {
 /// Blocking; callers run it on the background executor.
 pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     if !path.exists() {
-        return Err(format!("Video path {} not found!", path.display()));
+        return Err(tr::editor::window::open::not_found(path.display()));
     }
 
     // Repairs tracks older recorders stamped at the wrong rate, and display
@@ -391,11 +392,11 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         Err(error) => tracing::warn!(?path, "Track heal check failed: {error:#}"),
     }
 
-    let meta = RecordingMeta::load_for_project(path)
-        .map_err(|error| format!("Failed to load recording meta: {error}"))?;
+    let meta =
+        RecordingMeta::load_for_project(path).map_err(tr::editor::window::open::meta_failed)?;
 
     let RecordingMetaInner::Studio(studio) = &meta.inner else {
-        return Err("Cannot edit non-studio recordings".to_string());
+        return Err(tr::editor::window::open::not_studio().to_string());
     };
 
     let (segment_count, has_camera, multiple_recording_segments) = match studio.as_ref() {
@@ -420,7 +421,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     };
 
     if segment_count == 0 {
-        return Err("Recording has no segments. It may need to be recovered first.".to_string());
+        return Err(tr::editor::window::open::no_segments().to_string());
     }
 
     // The panicking call, contained. `AssertUnwindSafe` because neither
@@ -430,10 +431,8 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     let recordings = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ProjectRecordingsMeta::new(&owned_path, studio.as_ref())
     }))
-    .map_err(|_| {
-        "This recording's video tracks could not be opened. The bundle looks damaged.".to_string()
-    })?
-    .map_err(|error| format!("Failed to read this recording's media: {error}"))?;
+    .map_err(|_| tr::editor::window::open::damaged().to_string())?
+    .map_err(tr::editor::window::open::media_failed)?;
     let recordings = Arc::new(recordings);
 
     // `RecordingMeta::project_config()` loads `project-config.json` (falling
@@ -507,9 +506,6 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         recording_clips: recordings.segments.len(),
     })
 }
-
-const NO_AUTO_ZOOM_CLICKS_MESSAGE: &str =
-    "No clicks found to zoom into. Drag across the lane to add one.";
 
 fn load_recording_clicks(
     project_path: &std::path::Path,
@@ -1455,7 +1451,9 @@ pub struct EditorWindow {
     /// `isGeneratingAutoZoom` / `sessionDismissedGenerateZoomPrompt`
     /// (`TL/ZoomTrack.tsx:60-65`).
     generating_auto_zoom: bool,
-    auto_zoom_message: Option<&'static str>,
+    auto_zoom_message: Option<fn() -> &'static str>,
+    /// The language the timeline model's placeholder labels were built in.
+    timeline_locale: crate::i18n::Locale,
     zoom_prompt_dismissed: bool,
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
@@ -1938,7 +1936,10 @@ impl EditorWindow {
                     return false;
                 }
                 cx.spawn(async move |_| {
-                    crate::platform::alert_dialog("Recording retained", &message);
+                    crate::platform::alert_dialog(
+                        tr::editor::modal::recording_retained(),
+                        &message,
+                    );
                 })
                 .detach();
                 return false;
@@ -1995,7 +1996,7 @@ impl EditorWindow {
         ));
         let preset_name_input = cx.new(|cx| {
             let mut input = ui::TextInputState::single_line(window, cx);
-            input.set_placeholder("Preset name");
+            input.set_placeholder(tr::editor::window::presets::name_placeholder());
             input
         });
         text_events.push(cx.subscribe_in(
@@ -2099,6 +2100,7 @@ impl EditorWindow {
             playback_tick: 0,
             generating_auto_zoom: false,
             auto_zoom_message: None,
+            timeline_locale: crate::i18n::current(),
             zoom_prompt_dismissed: false,
             hovering_generate_zoom: false,
             generating_keyboard: false,
@@ -2197,12 +2199,10 @@ impl EditorWindow {
 
     pub(crate) fn flush_pending_saves(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         self.commit_pretty_name(cx)?;
-        self.pending_save.borrow_mut().try_flush().map_err(|error| {
-            format!(
-                "Could not save {}. Keep the editor open and try again: {error}",
-                self.project_path.display()
-            )
-        })
+        self.pending_save
+            .borrow_mut()
+            .try_flush()
+            .map_err(|error| tr::editor::window::save_failed(self.project_path.display(), error))
     }
 
     /// Every lazily-created field's subscription lives here for the window's
@@ -4787,7 +4787,7 @@ impl EditorWindow {
             });
         let Some((preview, (start, end))) = ghost else {
             if kind == TrackKind::ThreeD {
-                self.show_notice(scenes::CAMERA3D_NO_ROOM, window, cx);
+                self.show_notice(tr::editor::window::no_room_for_3d_shot(), window, cx);
             }
             return;
         };
@@ -5560,11 +5560,7 @@ impl EditorWindow {
     fn close_stale_audio_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.audio_picker = None;
         self.audio_picker_request = None;
-        self.show_notice(
-            "This audio segment changed. Select it and choose a replacement again.",
-            window,
-            cx,
-        );
+        self.show_notice(tr::editor::window::audio_segment_changed(), window, cx);
     }
 
     pub(crate) fn add_library_track(
@@ -5677,7 +5673,7 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "linux")]
             let source = crate::platform::open_file_panel_async(
-                &[("Audio", AUDIO_IMPORT_EXTENSIONS)],
+                &[(tr::editor::window::audio_filter(), AUDIO_IMPORT_EXTENSIONS)],
                 None,
                 cx,
             )
@@ -5765,7 +5761,7 @@ impl EditorWindow {
                     });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
-                    this.auto_zoom_message = Some(NO_AUTO_ZOOM_CLICKS_MESSAGE);
+                    this.auto_zoom_message = Some(tr::editor::window::zoom_lane::no_clicks);
                     cx.notify();
                     return;
                 }
@@ -6583,6 +6579,23 @@ impl EditorWindow {
         self.theme.refresh(window, cx, false);
     }
 
+    fn auto_zoom_prompt(&self) -> &'static str {
+        self.auto_zoom_message
+            .unwrap_or(tr::editor::window::zoom_lane::prompt)()
+    }
+
+    /// Track, clip and segment placeholder names live in the timeline model,
+    /// so a language change rebuilds it.
+    fn sync_locale(&mut self) {
+        let locale = crate::i18n::current();
+        if self.timeline_locale != locale {
+            self.timeline_locale = locale;
+            if self.project_ready() {
+                self.rebuild_timeline();
+            }
+        }
+    }
+
     /// `NameEditor`'s commit (`Header.tsx:303-318`), verbatim.
     ///
     /// Return and Escape both call `blur()` there, and it is `onBlur` that
@@ -6603,8 +6616,8 @@ impl EditorWindow {
             tracing::error!(%error, "recording title was not saved");
             cx.spawn(async move |_, _| {
                 crate::platform::alert_dialog(
-                    "Title not saved",
-                    &format!("{error}\n\nYour title is still in the editor. Try saving it again."),
+                    tr::editor::window::title::not_saved(),
+                    &tr::editor::window::title::not_saved_message(error),
                 );
             })
             .detach();
@@ -6644,19 +6657,11 @@ impl EditorWindow {
         // history is `createStoreHistory` over the *project* store alone
         // (`ED/context.ts:1920-1930`), so a rename is not undoable there either.
         let path = self.project_path.clone();
-        let mut meta = RecordingMeta::load_for_project(&path).map_err(|error| {
-            format!(
-                "Could not read the recording title for {}: {error}",
-                path.display()
-            )
-        })?;
+        let mut meta = RecordingMeta::load_for_project(&path)
+            .map_err(|error| tr::editor::window::title::read_failed(path.display(), error))?;
         meta.pretty_name = draft.clone();
-        meta.save_for_project().map_err(|error| {
-            format!(
-                "Could not save the recording title for {}: {error}",
-                path.display()
-            )
-        })?;
+        meta.save_for_project()
+            .map_err(|error| tr::editor::window::title::save_failed(path.display(), error))?;
         if let LoadState::Ready(summary) = &mut self.state {
             summary.pretty_name = draft.clone();
         }
@@ -6912,7 +6917,14 @@ impl EditorWindow {
         ui::EditorButton::plain(&theme, id)
             .left_icon(icon)
             .disabled(!enabled)
-            .tooltip(&theme, if undo { "Undo" } else { "Redo" })
+            .tooltip(
+                &theme,
+                if undo {
+                    tr::editor::window::undo()
+                } else {
+                    tr::editor::window::redo()
+                },
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 if !(this.history.can_undo() || this.history.can_redo() || this.selection.is_some())
                 {
@@ -6933,31 +6945,47 @@ impl EditorWindow {
 
     fn aspect_ratio_label(aspect: Option<&cap_project::AspectRatio>) -> &'static str {
         match aspect {
-            None => "Auto",
-            Some(cap_project::AspectRatio::Wide) => "Wide",
-            Some(cap_project::AspectRatio::Vertical) => "Vertical",
-            Some(cap_project::AspectRatio::Square) => "Square",
-            Some(cap_project::AspectRatio::Classic) => "Classic",
-            Some(cap_project::AspectRatio::Tall) => "Tall",
+            None => tr::editor::window::aspect::auto(),
+            Some(cap_project::AspectRatio::Wide) => tr::editor::window::aspect::wide(),
+            Some(cap_project::AspectRatio::Vertical) => tr::editor::window::aspect::vertical(),
+            Some(cap_project::AspectRatio::Square) => tr::editor::window::aspect::square(),
+            Some(cap_project::AspectRatio::Classic) => tr::editor::window::aspect::classic(),
+            Some(cap_project::AspectRatio::Tall) => tr::editor::window::aspect::tall(),
         }
     }
 
     fn toolbar_menu_items(&self, kind: ToolbarMenu) -> Vec<ui::MenuItem> {
         match kind {
             ToolbarMenu::AspectRatio => {
-                const OPTIONS: &[(Option<cap_project::AspectRatio>, &str)] = &[
-                    (None, "Auto"),
-                    (Some(cap_project::AspectRatio::Wide), "Wide ⋅16:9"),
-                    (Some(cap_project::AspectRatio::Vertical), "Vertical ⋅9:16"),
-                    (Some(cap_project::AspectRatio::Square), "Square ⋅1:1"),
-                    (Some(cap_project::AspectRatio::Classic), "Classic ⋅4:3"),
-                    (Some(cap_project::AspectRatio::Tall), "Tall ⋅3:4"),
+                type Label = fn() -> &'static str;
+                const OPTIONS: &[(Option<cap_project::AspectRatio>, Label)] = &[
+                    (None, tr::editor::window::aspect::auto),
+                    (
+                        Some(cap_project::AspectRatio::Wide),
+                        tr::editor::window::aspect::wide_ratio,
+                    ),
+                    (
+                        Some(cap_project::AspectRatio::Vertical),
+                        tr::editor::window::aspect::vertical_ratio,
+                    ),
+                    (
+                        Some(cap_project::AspectRatio::Square),
+                        tr::editor::window::aspect::square_ratio,
+                    ),
+                    (
+                        Some(cap_project::AspectRatio::Classic),
+                        tr::editor::window::aspect::classic_ratio,
+                    ),
+                    (
+                        Some(cap_project::AspectRatio::Tall),
+                        tr::editor::window::aspect::tall_ratio,
+                    ),
                 ];
                 OPTIONS
                     .iter()
                     .map(|(value, label)| {
                         ui::MenuItem::new(
-                            *label,
+                            label(),
                             aspect_ratio_eq(value, &self.project.aspect_ratio),
                         )
                     })
@@ -7111,11 +7139,9 @@ impl EditorWindow {
             .as_ref()
             .is_some_and(|export| export.phase.is_busy())
         {
-            Some(
-                "Wait for the export or its cancellation to finish before closing or deleting this recording.",
-            )
+            Some(tr::editor::window::busy::export())
         } else if self.clips.is_importing() {
-            Some("Wait for the clip import to finish before closing or deleting this recording.")
+            Some(tr::editor::window::busy::clip_import())
         } else {
             None
         }
@@ -7124,7 +7150,7 @@ impl EditorWindow {
     pub(crate) fn deletion_blocked_reason(&self) -> Option<&'static str> {
         self.busy_reason().or((self.instance.is_none()
             && !matches!(self.state, LoadState::Failed(_)))
-        .then_some("Wait for the recording to finish opening before deleting it."))
+        .then(tr::editor::window::busy::opening))
     }
 
     pub(crate) fn prepare_for_deletion(
@@ -7137,7 +7163,7 @@ impl EditorWindow {
         self.pending_save
             .borrow_mut()
             .try_flush()
-            .map_err(|error| format!("Could not save the recording before deleting it: {error}"))?;
+            .map_err(tr::editor::window::busy::save_before_delete_failed)?;
         self.save_task = None;
         self.stop_playback(cx);
         self.export = None;
@@ -7701,14 +7727,20 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "linux")]
             let source = crate::platform::open_file_panel_async(
-                &[("Images", crate::import::OVERLAY_IMAGE_EXTENSIONS)],
+                &[(
+                    tr::editor::window::image::filter(),
+                    crate::import::OVERLAY_IMAGE_EXTENSIONS,
+                )],
                 None,
                 cx,
             )
             .await;
             #[cfg(not(target_os = "linux"))]
             let source = crate::import::pick_import_file(
-                &[("Images", crate::import::OVERLAY_IMAGE_EXTENSIONS)],
+                &[(
+                    tr::editor::window::image::filter(),
+                    crate::import::OVERLAY_IMAGE_EXTENSIONS,
+                )],
                 cx,
             )
             .await;
@@ -7731,14 +7763,23 @@ impl EditorWindow {
                 match imported {
                     Some(Ok(imported)) => {
                         if let Some((index, fingerprint)) = replace {
-                            if edits::replace_image_asset(&mut this.project, index, &fingerprint, imported.path, imported.name) {
+                            if edits::replace_image_asset(
+                                &mut this.project,
+                                index,
+                                &fingerprint,
+                                imported.path,
+                                imported.name,
+                            ) {
                                 this.project_changed(window, cx);
                                 this.refresh_image_asset_status();
                             } else {
-                                this.sidebar.image_import_error = Some("This image changed while choosing a replacement. Select it and try again.".into());
+                                this.sidebar.image_import_error =
+                                    Some(tr::editor::window::image::changed().into());
                                 cx.notify();
                             }
-                        } else { this.commit_image_import(lane, time, imported, window, cx); }
+                        } else {
+                            this.commit_image_import(lane, time, imported, window, cx);
+                        }
                     }
                     Some(Err(error)) => {
                         this.sidebar.image_import_error = Some(error);
@@ -7762,27 +7803,21 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
-            self.sidebar.image_import_error = Some(
-                "The recording is no longer available for this image. Please reopen the project."
-                    .into(),
-            );
+            self.sidebar.image_import_error =
+                Some(tr::editor::window::image::recording_unavailable().into());
             cx.notify();
             return;
         }
         let total = self.total_duration();
         if total <= 0.0 {
-            self.sidebar.image_import_error = Some(
-                "The recording is no longer available for this image. Please reopen the project."
-                    .into(),
-            );
+            self.sidebar.image_import_error =
+                Some(tr::editor::window::image::recording_unavailable().into());
             cx.notify();
             return;
         }
         let Some(timeline) = self.project.timeline.as_ref() else {
-            self.sidebar.image_import_error = Some(
-                "The recording is no longer available for this image. Please reopen the project."
-                    .into(),
-            );
+            self.sidebar.image_import_error =
+                Some(tr::editor::window::image::recording_unavailable().into());
             cx.notify();
             return;
         };
@@ -8120,25 +8155,25 @@ impl EditorWindow {
         let count = indices.len();
         let can_paste = self.text_style_clipboard.is_some();
         let title: SharedString = if count > 1 {
-            format!("{count} text segments").into()
+            tr::editor::window::text_menu::segments(count).into()
         } else {
             let content = segment.content.trim();
             if content.is_empty() {
-                "Text".into()
+                tr::editor::window::text_menu::untitled().into()
             } else {
                 content.to_string().into()
             }
         };
         let summary = crate::editor_clips::format_clip_duration(segment.end - segment.start);
         let paste_label: &'static str = if count > 1 {
-            "Paste style to all selected"
+            tr::editor::window::text_menu::paste_style_all()
         } else {
-            "Paste style"
+            tr::editor::window::text_menu::paste_style()
         };
         let delete_label: &'static str = if count > 1 {
-            "Delete text segments"
+            tr::editor::window::text_menu::delete_segments()
         } else {
-            "Delete text segment"
+            tr::editor::window::text_menu::delete_segment()
         };
         let divider = || div().h(px(1.)).bg(Hsla::from(theme.editor.line));
 
@@ -8203,7 +8238,7 @@ impl EditorWindow {
                             &theme,
                             "text-menu-copy-style",
                             "icons/copy.svg",
-                            "Copy style",
+                            tr::editor::window::text_menu::copy_style(),
                             ClipMenuTrailing::None,
                             true,
                             false,
@@ -8225,7 +8260,9 @@ impl EditorWindow {
                             if can_paste {
                                 ClipMenuTrailing::None
                             } else {
-                                ClipMenuTrailing::Hint("Copy a style first")
+                                ClipMenuTrailing::Hint(
+                                    tr::editor::window::text_menu::copy_style_first(),
+                                )
                             },
                             can_paste,
                             false,
@@ -8533,9 +8570,18 @@ impl EditorWindow {
             .map(|(_, input)| input);
         let speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
         let audio_modes = [
-            (ClipSpeedAudioMode::Mute, "Mute"),
-            (ClipSpeedAudioMode::MaintainPitch, "Keep pitch"),
-            (ClipSpeedAudioMode::MatchSpeed, "Match speed"),
+            (
+                ClipSpeedAudioMode::Mute,
+                tr::editor::window::clip_menu::mute(),
+            ),
+            (
+                ClipSpeedAudioMode::MaintainPitch,
+                tr::editor::window::clip_menu::keep_pitch(),
+            ),
+            (
+                ClipSpeedAudioMode::MatchSpeed,
+                tr::editor::window::clip_menu::match_speed(),
+            ),
         ];
         let chip = |id: SharedString, selected: bool, label: String| {
             div()
@@ -8630,7 +8676,10 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(clip_menu_section(&theme, "SPEED"))
+                    .child(clip_menu_section(
+                        &theme,
+                        tr::editor::window::clip_menu::speed(),
+                    ))
                     .child(chip_row().children(speeds.into_iter().map(|speed| {
                         let selected = (timescale - speed).abs() < 1e-6;
                         chip(
@@ -8650,9 +8699,12 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(clip_menu_section(&theme, "AUDIO"))
+                    .child(clip_menu_section(
+                        &theme,
+                        tr::editor::window::clip_menu::audio(),
+                    ))
                     .child(self.slider_field_disabled(
-                        "Volume",
+                        tr::editor::window::clip_menu::volume(),
                         crate::editor_sidebar::SliderKey::ClipVolume(index),
                         "%",
                         muted,
@@ -8663,8 +8715,8 @@ impl EditorWindow {
                             &theme,
                             "clip-menu-mute",
                             "icons/volume-x.svg",
-                            "Mute clip",
-                            "Silence this clip's audio",
+                            tr::editor::window::clip_menu::mute_clip(),
+                            tr::editor::window::clip_menu::mute_clip_description(),
                             muted,
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -8695,14 +8747,17 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(4.))
-                    .child(clip_menu_section(&theme, "CURSOR"))
+                    .child(clip_menu_section(
+                        &theme,
+                        tr::editor::window::clip_menu::cursor(),
+                    ))
                     .child(
                         clip_menu_toggle_row(
                             &theme,
                             "clip-menu-hide-cursor",
                             "icons/mouse-pointer-ban.svg",
-                            "Hide cursor",
-                            "Fades out while this clip plays",
+                            tr::editor::window::clip_menu::hide_cursor(),
+                            tr::editor::window::clip_menu::hide_cursor_description(),
                             cursor_hidden,
                         )
                         .on_click(cx.listener(
@@ -8723,11 +8778,11 @@ impl EditorWindow {
                             &theme,
                             "clip-menu-split",
                             "icons/scissors.svg",
-                            "Split at playhead",
+                            tr::editor::window::clip_menu::split(),
                             if can_split {
                                 ClipMenuTrailing::Kbd("C")
                             } else {
-                                ClipMenuTrailing::Hint("Move the playhead into this clip")
+                                ClipMenuTrailing::Hint(tr::editor::window::clip_menu::split_hint())
                             },
                             can_split,
                             false,
@@ -8743,7 +8798,7 @@ impl EditorWindow {
                             &theme,
                             "clip-menu-merge-previous",
                             "icons/arrow-left-to-line.svg",
-                            "Merge with previous clip",
+                            tr::editor::window::clip_menu::merge_previous(),
                             merge_previous.map_or(ClipMenuTrailing::None, |blocker| {
                                 ClipMenuTrailing::Hint(blocker.hint())
                             }),
@@ -8766,7 +8821,7 @@ impl EditorWindow {
                             &theme,
                             "clip-menu-merge-next",
                             "icons/arrow-right-to-line.svg",
-                            "Merge with next clip",
+                            tr::editor::window::clip_menu::merge_next(),
                             merge_next.map_or(ClipMenuTrailing::None, |blocker| {
                                 ClipMenuTrailing::Hint(blocker.hint())
                             }),
@@ -8792,7 +8847,7 @@ impl EditorWindow {
                             &theme,
                             "clip-menu-rename-row",
                             "icons/pencil.svg",
-                            "Rename clip",
+                            tr::editor::window::clip_menu::rename(),
                             ClipMenuTrailing::None,
                             true,
                             false,
@@ -8809,11 +8864,11 @@ impl EditorWindow {
                     &theme,
                     "clip-menu-delete",
                     "icons/trash.svg",
-                    "Delete clip",
+                    tr::editor::window::clip_menu::delete(),
                     if can_delete {
                         ClipMenuTrailing::Kbd("backspace")
                     } else {
-                        ClipMenuTrailing::Hint("Can't delete the only clip")
+                        ClipMenuTrailing::Hint(tr::editor::window::clip_menu::delete_only_clip())
                     },
                     can_delete,
                     true,
@@ -8855,16 +8910,16 @@ impl EditorWindow {
         let theme = self.theme;
         let scene_available = self.scene_available();
         let hint: SharedString = match menu.hovered {
-            None => "Choose a track to add to your timeline.".into(),
+            None => tr::editor::window::add_track::hint().into(),
             Some(kind) => {
                 if kind == TrackKind::Scene && !scene_available {
                     kind.picker_unavailable().into()
                 } else if kind == TrackKind::ThreeD && self.tracks.is_active(kind) {
                     // The 3D tile only shows and hides the lane; the shots on
                     // it survive either way.
-                    "Hide the 3D track.".into()
+                    tr::editor::window::add_track::hide_3d().into()
                 } else if !kind.supports_multiple() && self.tracks.is_active(kind) {
-                    format!("Remove the {} track.", kind.picker_label()).into()
+                    kind.picker_remove().into()
                 } else {
                     kind.picker_description().into()
                 }
@@ -9114,7 +9169,7 @@ impl EditorWindow {
 
         let mut rows: Vec<gpui::AnyElement> = vec![self.render_preset_row(
             PresetRow::Default,
-            "Default".into(),
+            tr::editor::window::presets::default().into(),
             store.default.is_none(),
             cx,
         )];
@@ -9127,7 +9182,7 @@ impl EditorWindow {
                     .h(px(32.))
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.editor.text_3))
-                    .child("No saved presets")
+                    .child(tr::editor::window::presets::none_saved())
                     .into_any_element(),
             );
         } else {
@@ -9207,7 +9262,11 @@ impl EditorWindow {
                                         .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
                                         .text_size(px(14.))
                                         .text_color(Hsla::from(theme.editor.text_1))
-                                        .child(div().flex_1().child("Create new preset"))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .child(tr::editor::window::presets::create_new()),
+                                        )
                                         .child(
                                             svg()
                                                 .path("icons/circle-plus.svg")
@@ -9275,7 +9334,7 @@ impl EditorWindow {
                         .text_size(px(11.))
                         .bg(Hsla::from(theme.editor.ctl))
                         .text_color(Hsla::from(theme.editor.text_2))
-                        .child("Default"),
+                        .child(tr::editor::window::presets::default_badge()),
                 )
             })
             .child(
@@ -9369,20 +9428,26 @@ impl EditorWindow {
             .bg(Hsla::from(theme.editor.card))
             .shadow(theme.editor.pop_shadow())
             .child(
-                menu_row("preset-apply".into(), "Apply", false).on_click(cx.listener(
-                    move |this, _, window, cx| match row {
-                        PresetRow::Default => this.apply_default_preset(window, cx),
-                        PresetRow::Saved(index) => this.apply_preset_at(index, window, cx),
-                    },
-                )),
+                menu_row(
+                    "preset-apply".into(),
+                    tr::editor::window::presets::apply(),
+                    false,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| match row {
+                    PresetRow::Default => this.apply_default_preset(window, cx),
+                    PresetRow::Saved(index) => this.apply_preset_at(index, window, cx),
+                })),
             )
             .when(row == PresetRow::Default, |this| {
                 this.child(
-                    menu_row("preset-clear-default".into(), "Set as default", false).on_click(
-                        cx.listener(move |this, _, _window, cx| {
-                            this.mutate_presets(cx, |store| store.clear_default());
-                        }),
-                    ),
+                    menu_row(
+                        "preset-clear-default".into(),
+                        tr::editor::window::presets::set_default(),
+                        false,
+                    )
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.mutate_presets(cx, |store| store.clear_default());
+                    })),
                 )
             })
             .when_some(
@@ -9392,29 +9457,49 @@ impl EditorWindow {
                 },
                 |this, index| {
                     this.child(
-                        menu_row("preset-save".into(), "Save settings to preset", false).on_click(
-                            cx.listener(move |this, _, _window, cx| {
+                        menu_row(
+                            "preset-save".into(),
+                            tr::editor::window::presets::save_settings(),
+                            false,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, _window, cx| {
                                 let config = crate::presets::preset_config(&this.project);
                                 this.mutate_presets(cx, |store| store.save_to(index, config));
-                            }),
-                        ),
+                            },
+                        )),
                     )
                     .child(
-                        menu_row("preset-default".into(), "Set as default", false).on_click(
-                            cx.listener(move |this, _, _window, cx| {
+                        menu_row(
+                            "preset-default".into(),
+                            tr::editor::window::presets::set_default(),
+                            false,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, _window, cx| {
                                 this.mutate_presets(cx, |store| store.set_default(index));
-                            }),
-                        ),
+                            },
+                        )),
                     )
                     .child(
-                        menu_row("preset-rename".into(), "Rename", false).on_click(cx.listener(
+                        menu_row(
+                            "preset-rename".into(),
+                            tr::editor::window::presets::rename(),
+                            false,
+                        )
+                        .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 this.open_preset_dialog(PresetDialog::Rename { index }, window, cx);
                             },
                         )),
                     )
                     .child(
-                        menu_row("preset-delete".into(), "Delete", true).on_click(cx.listener(
+                        menu_row(
+                            "preset-delete".into(),
+                            tr::editor::window::presets::delete(),
+                            true,
+                        )
+                        .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 this.open_preset_dialog(PresetDialog::Delete { index }, window, cx);
                             },
@@ -9431,24 +9516,40 @@ impl EditorWindow {
         let dialog = self.preset_dialog?;
         let theme = self.theme;
 
+        self.preset_name_input.update(cx, |input, _| {
+            input.set_placeholder(tr::editor::window::presets::name_placeholder())
+        });
         let (title, primary, danger) = match dialog {
-            PresetDialog::Create { .. } => ("Create Preset", "Create", false),
-            PresetDialog::Rename { .. } => ("Rename Preset", "Rename", false),
-            PresetDialog::Delete { .. } => ("Delete Preset", "Delete", true),
+            PresetDialog::Create { .. } => (
+                tr::editor::window::presets::create_title(),
+                tr::editor::window::presets::create(),
+                false,
+            ),
+            PresetDialog::Rename { .. } => (
+                tr::editor::window::presets::rename_title(),
+                tr::editor::window::presets::rename(),
+                false,
+            ),
+            PresetDialog::Delete { .. } => (
+                tr::editor::window::presets::delete_title(),
+                tr::editor::window::presets::delete(),
+                true,
+            ),
         };
 
         let body: gpui::AnyElement = match dialog {
             PresetDialog::Delete { index } => div()
                 .text_size(px(14.))
                 .text_color(Hsla::from(theme.editor.text_2))
-                .child(SharedString::from(format!(
-                    "Are you sure you want to delete \"{}\"?",
-                    crate::presets::PresetsStore::load()
-                        .presets
-                        .get(index)
-                        .map(|entry| entry.name.clone())
-                        .unwrap_or_default()
-                )))
+                .child(SharedString::from(
+                    tr::editor::window::presets::delete_confirm(
+                        crate::presets::PresetsStore::load()
+                            .presets
+                            .get(index)
+                            .map(|entry| entry.name.clone())
+                            .unwrap_or_default(),
+                    ),
+                ))
                 .into_any_element(),
             PresetDialog::Create { default } => div()
                 .flex()
@@ -9471,7 +9572,7 @@ impl EditorWindow {
                             div()
                                 .text_size(px(14.))
                                 .text_color(Hsla::from(theme.editor.text_1))
-                                .child("Set as default"),
+                                .child(tr::editor::window::presets::set_default()),
                         )
                         .child(
                             ui::Toggle::plain(&theme, "preset-default", default)
@@ -9557,7 +9658,7 @@ impl EditorWindow {
                                         ui::ButtonVariant::Gray,
                                         ui::ButtonSize::Md,
                                     )
-                                    .label("Cancel")
+                                    .label(tr::common::cancel())
                                     .on_click(cx.listener(
                                         |this, _, _window, cx| {
                                             this.preset_dialog = None;
@@ -9765,7 +9866,7 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "open-recording-bundle")
                             .left_icon("icons/folder.svg")
-                            .tooltip(&theme, "Open recording bundle")
+                            .tooltip(&theme, tr::editor::window::header::open_bundle())
                             .disabled(!self.visual_ready())
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.open_recording_bundle(cx);
@@ -9774,7 +9875,7 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "delete-recording")
                             .left_icon("icons/trash.svg")
-                            .tooltip(&theme, "Delete recording")
+                            .tooltip(&theme, tr::editor::window::header::delete_recording())
                             .disabled(!self.visual_ready())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.delete_recording(window, cx);
@@ -9797,8 +9898,10 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "presets")
                             .left_icon("icons/presets.svg")
-                            .when(!compact, |button| button.label("Presets"))
-                            .tooltip(&theme, "Presets")
+                            .when(!compact, |button| {
+                                button.label(tr::editor::window::header::presets())
+                            })
+                            .tooltip(&theme, tr::editor::window::header::presets())
                             .disabled(!self.project_ready())
                             .right_icon("icons/chevron-down.svg")
                             .pressed(self.presets_menu.is_some())
@@ -9809,10 +9912,13 @@ impl EditorWindow {
                     .child(self.render_clips_pill(compact, cx))
                     // `<Show when={hasTranscript()}>`: the button only exists
                     // once a transcript with words does.
-                    .children(
-                        has_captions
-                            .then(|| self.header_pill("icons/captions.svg", "Captions", compact)),
-                    )
+                    .children(has_captions.then(|| {
+                        self.header_pill(
+                            "icons/captions.svg",
+                            tr::editor::window::header::captions(),
+                            compact,
+                        )
+                    }))
                     .child(div().w(px(6.)).flex_none())
                     .when(self.sharing.is_some(), |group| {
                         group.child(self.render_reupload_button(cx))
@@ -9928,7 +10034,7 @@ impl EditorWindow {
                     .flex_shrink_0()
                     .text_color(gpui::white()),
             )
-            .child("Export")
+            .child(tr::editor::window::header::export())
             .when(self.project_ready(), |button| {
                 button.on_click(cx.listener(|this, _, window, cx| {
                     if this.project_ready() {
@@ -10088,7 +10194,7 @@ impl EditorWindow {
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(Hsla::from(theme.editor.text_2))
-                            .child("Preview"),
+                            .child(tr::editor::window::preview::label()),
                     )
                     .child(self.render_preview_quality(cx)),
             )
@@ -10115,7 +10221,7 @@ impl EditorWindow {
                                 .as_ref(),
                         ))
                     })
-                    .tooltip(&theme, "Aspect Ratio")
+                    .tooltip(&theme, tr::editor::window::aspect::tooltip())
                     .disabled(!self.project_ready())
                     .pressed(
                         self.toolbar_menu
@@ -10132,8 +10238,8 @@ impl EditorWindow {
                 ui::EditorButton::plain(&theme, "crop")
                     .text(&theme)
                     .left_icon("icons/crop.svg")
-                    .when(!narrow, |button| button.label("Crop"))
-                    .tooltip(&theme, "Crop Video")
+                    .when(!narrow, |button| button.label(tr::editor::window::crop()))
+                    .tooltip(&theme, tr::editor::window::crop_tooltip())
                     .disabled(!self.project_ready())
                     .pressed(self.crop.is_some())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -10192,7 +10298,17 @@ impl EditorWindow {
                                 .hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
                         }
                     })
-                    .child(quality.label())
+                    .child(match quality {
+                        crate::store::EditorPreviewQuality::Quarter => {
+                            tr::editor::window::preview::quarter()
+                        }
+                        crate::store::EditorPreviewQuality::Half => {
+                            tr::editor::window::preview::half()
+                        }
+                        crate::store::EditorPreviewQuality::Full => {
+                            tr::editor::window::preview::full()
+                        }
+                    })
                     .when(self.project_ready(), |button| {
                         button.on_click(cx.listener(move |this, _, _window, cx| {
                             this.set_preview_quality(quality, cx);
@@ -10271,7 +10387,7 @@ impl EditorWindow {
                     .text_size(px(15.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.editor.text_1))
-                    .child("This recording could not be opened"),
+                    .child(tr::editor::window::open::failed()),
             )
             .child(
                 div()
@@ -10300,9 +10416,9 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let (label, key) = if factor > 1. {
-            ("Zoom out", "-")
+            (tr::editor::window::transport::zoom_out(), "-")
         } else {
-            ("Zoom in", "+")
+            (tr::editor::window::transport::zoom_in(), "+")
         };
         let modifier = if cfg!(target_os = "macos") {
             "meta"
@@ -10471,9 +10587,12 @@ impl EditorWindow {
                                     .flex()
                                     .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                                     .tooltip(move |_window, cx| {
-                                        ui::Tooltip::new(&theme, "Play/Pause video")
-                                            .keys(["Space"])
-                                            .view(cx)
+                                        ui::Tooltip::new(
+                                            &theme,
+                                            tr::editor::window::transport::play_pause(),
+                                        )
+                                        .keys(["Space"])
+                                        .view(cx)
                                     })
                                     .child(
                                         ui::IconButton::new("transport-play", icon)
@@ -10513,9 +10632,12 @@ impl EditorWindow {
                             .id("transport-split-tooltip")
                             .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                             .tooltip(move |_, cx| {
-                                ui::Tooltip::new(&theme, "Click a segment to split. Esc to finish.")
-                                    .keys(["S"])
-                                    .view(cx)
+                                ui::Tooltip::new(
+                                    &theme,
+                                    tr::editor::window::transport::split_tooltip(),
+                                )
+                                .keys(["S"])
+                                .view(cx)
                             })
                             .child(
                                 ui::Button::plain(
@@ -10530,9 +10652,9 @@ impl EditorWindow {
                                 )
                                 .icon("icons/scissors.svg")
                                 .label(if self.split_mode {
-                                    "Done splitting"
+                                    tr::editor::window::transport::done_splitting()
                                 } else {
-                                    "Split"
+                                    tr::editor::window::transport::split()
                                 })
                                 .radius(px(7.))
                                 .disabled(!self.project_ready())
@@ -10848,7 +10970,12 @@ impl EditorWindow {
                             .flex_none()
                             .text_color(Hsla::from(theme.editor.card)),
                     )
-                    .child(div().flex_none().whitespace_nowrap().child("Add track"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .child(tr::editor::window::add_track::button()),
+                    )
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                         this.open_add_track(window, cx);
@@ -10986,14 +11113,16 @@ impl EditorWindow {
             // segments. The clip row has none.
             let delete_label = match kind {
                 TrackKind::Clip => None,
-                TrackKind::Caption | TrackKind::Keyboard => Some("Delete"),
+                TrackKind::Caption | TrackKind::Keyboard => {
+                    Some(tr::editor::window::track::delete())
+                }
                 TrackKind::Text
                 | TrackKind::Mask
                 | TrackKind::Audio
                 | TrackKind::Style
-                | TrackKind::Image => Some("Delete"),
+                | TrackKind::Image => Some(tr::editor::window::track::delete()),
                 TrackKind::Zoom | TrackKind::ThreeD | TrackKind::Scene => {
-                    (!model.segments(kind).is_empty()).then_some("Clear all")
+                    (!model.segments(kind).is_empty()).then(tr::editor::window::track::clear_all)
                 }
             };
             rows = rows.child(
@@ -11160,9 +11289,9 @@ impl EditorWindow {
                                             cx.notify();
                                         }
                                     }))
-                                    .child(div().min_w_0().truncate().child(
-                                        self.auto_zoom_message.unwrap_or("Add zooms automatically"),
-                                    ))
+                                    .child(
+                                        div().min_w_0().truncate().child(self.auto_zoom_prompt()),
+                                    )
                                     .child(
                                         ui::Button::plain(
                                             &theme,
@@ -11171,9 +11300,9 @@ impl EditorWindow {
                                             ui::ButtonSize::Sm,
                                         )
                                         .label(if generating {
-                                            "Generating…"
+                                            tr::editor::window::zoom_lane::generating()
                                         } else {
-                                            "Generate"
+                                            tr::editor::window::zoom_lane::generate()
                                         })
                                         .radius(px(7.))
                                         .disabled(generating)
@@ -11238,7 +11367,7 @@ impl EditorWindow {
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .child("Add cinematic 3D shots to your recording"),
+                                        .child(tr::editor::window::camera3d_lane::prompt()),
                                 )
                                 .child(
                                     ui::Button::plain(
@@ -11247,7 +11376,7 @@ impl EditorWindow {
                                         ui::ButtonVariant::Primary,
                                         ui::ButtonSize::Sm,
                                     )
-                                    .label("Auto scene")
+                                    .label(tr::editor::window::camera3d_lane::auto_scene())
                                     .radius(px(7.))
                                     .on_click(cx.listener(
                                         |this, _, _window, cx| {
@@ -11265,7 +11394,7 @@ impl EditorWindow {
                                         .min_w_0()
                                         .truncate()
                                         .text_color(Hsla::from(theme.editor.text_2))
-                                        .child("How many shots?"),
+                                        .child(tr::editor::window::camera3d_lane::how_many()),
                                 )
                                 .child(self.render_camera3d_count_pills("lane", 0, maximum, cx))
                                 .child(
@@ -11286,7 +11415,7 @@ impl EditorWindow {
                                     ui::ButtonVariant::Outline,
                                     ui::ButtonSize::Sm,
                                 )
-                                .label("+ Add shot")
+                                .label(tr::editor::window::camera3d_lane::add_shot())
                                 .radius(px(7.))
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
@@ -11566,6 +11695,7 @@ fn is_playback_shortcut(
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.sync_locale();
         let title_disabled = !self.visual_ready();
         if self.name_input.read(cx).is_disabled() != title_disabled {
             self.name_input
@@ -12111,12 +12241,14 @@ fn import_audio_file(
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
-        .ok_or_else(|| "Audio file has no extension".to_string())?;
+        .ok_or_else(|| tr::editor::window::audio_import::no_extension().to_string())?;
     if !AUDIO_IMPORT_EXTENSIONS.contains(&extension.as_str()) {
-        return Err(format!("Unsupported audio format: .{extension}"));
+        return Err(tr::editor::window::audio_import::unsupported(extension));
     }
     if !source.exists() {
-        return Err(format!("Audio file not found: {}", source.display()));
+        return Err(tr::editor::window::audio_import::not_found(
+            source.display(),
+        ));
     }
     let display_name = source
         .file_stem()
@@ -12125,14 +12257,14 @@ fn import_audio_file(
         .to_string();
     let audio_dir = project_path.join("assets").join("audio");
     std::fs::create_dir_all(&audio_dir)
-        .map_err(|error| format!("Failed to create audio directory: {error}"))?;
+        .map_err(tr::editor::window::audio_import::directory_failed)?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let dest_name = format!("{stamp}.{extension}");
     let dest = audio_dir.join(&dest_name);
-    std::fs::copy(source, &dest).map_err(|error| format!("Failed to copy audio file: {error}"))?;
+    std::fs::copy(source, &dest).map_err(tr::editor::window::audio_import::copy_failed)?;
     Ok(ImportedAudio {
         path: format!("assets/audio/{dest_name}"),
         name: display_name,
