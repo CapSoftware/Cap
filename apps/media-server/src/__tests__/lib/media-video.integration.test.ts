@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -780,10 +781,15 @@ describe("processVideo integration tests", () => {
 	test("skips the zero-length closing entry Loom adds to DASH timelines", async () => {
 		const originalFetch = globalThis.fetch;
 		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-zero-"));
+		const requestedUrls: string[] = [];
 
-		globalThis.fetch = (async () =>
-			new Response(
-				`<MPD mediaPresentationDuration="PT7.001S">
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL) => {
+				const url = input instanceof Request ? input.url : input.toString();
+				requestedUrls.push(url);
+				if (!new URL(url).pathname.endsWith(".mpd")) return new Response(url);
+				return new Response(
+					`<MPD mediaPresentationDuration="PT7.001S">
 					<Period id="0">
 						<AdaptationSet id="1" contentType="video">
 							<Representation id="1" bandwidth="500000" codecs="vp9" mimeType="video/webm" width="1280" height="720">
@@ -798,8 +804,11 @@ describe("processVideo integration tests", () => {
 						</AdaptationSet>
 					</Period>
 				</MPD>`,
-				{ status: 200, statusText: "OK" },
-			)) as unknown as typeof fetch;
+					{ status: 200, statusText: "OK" },
+				);
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
 
 		try {
 			const masterPath = await materializeMpdAsHlsPlaylist(
@@ -816,9 +825,32 @@ describe("processVideo integration tests", () => {
 				"utf8",
 			);
 
-			expect(videoPlaylist).toContain("loom-video-0.webm?Signature=s");
-			expect(videoPlaylist).toContain("loom-video-1.webm?Signature=s");
-			expect(videoPlaylist).not.toContain("loom-video-2.webm");
+			const segmentPaths = videoPlaylist
+				.split("\n")
+				.filter((line) => line && !line.startsWith("#"));
+			expect(segmentPaths).toHaveLength(2);
+			expect(
+				segmentPaths.map((path) =>
+					readFileSync(join(manifestDir, path), "utf8"),
+				),
+			).toEqual([
+				"https://luna.example/id/x/resource/dash/loom-video-0.webm?Signature=s",
+				"https://luna.example/id/x/resource/dash/loom-video-1.webm?Signature=s",
+			]);
+			const initializationPath = videoPlaylist.match(
+				/#EXT-X-MAP:URI="([^"]+)"/,
+			)?.[1];
+			expect(initializationPath).toBeDefined();
+			expect(
+				readFileSync(join(manifestDir, initializationPath ?? ""), "utf8"),
+			).toBe(
+				"https://luna.example/id/x/resource/dash/loom-video-init.webm?Signature=s",
+			);
+			expect(requestedUrls).toHaveLength(4);
+			expect(
+				requestedUrls.some((url) => url.includes("loom-video-2.webm")),
+			).toBe(false);
+			expect(videoPlaylist).not.toContain("https:");
 			expect(videoPlaylist.match(/#EXTINF:/g)?.length).toBe(2);
 			expect(videoPlaylist).toContain("#EXTINF:3.539000,");
 			expect(videoPlaylist).toContain("#EXTINF:3.479000,");
