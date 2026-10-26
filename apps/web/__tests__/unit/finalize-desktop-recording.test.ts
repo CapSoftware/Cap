@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 	checkpoint: vi.fn(),
 	saveCheckpoint: vi.fn(),
 	sourceUrls: vi.fn(),
+	preverifiedRunUrls: vi.fn(async (): Promise<string[]> => []),
 	observe: vi.fn(),
 	sleep: vi.fn(),
 	env: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock("@/lib/desktop-recording-jobs", () => ({
 vi.mock("@/lib/desktop-recording-source", () => ({
 	advanceDesktopRecordingSourceCommit: mocks.commitSource,
 	buildDesktopRecordingSourceUrls: mocks.sourceUrls,
+	buildPreverifiedRunUrls: mocks.preverifiedRunUrls,
 	getDesktopRecordingOutputKey: (
 		owner: string,
 		video: string,
@@ -171,6 +173,7 @@ function withCurrent(update: Partial<DesktopRecordingJob>) {
 
 beforeEach(() => {
 	mocks.stepMetadata.mockReturnValue({ stepId: "step_test", attempt: 4 });
+	mocks.preverifiedRunUrls.mockResolvedValue([]);
 	mocks.reserveBudget.mockResolvedValue(100_000_000);
 	mocks.storage.mockImplementation(() => storageAccess("test"));
 	mocks.multipartCreate.mockImplementation(() =>
@@ -1063,6 +1066,22 @@ describe("source commitment and media request compatibility", () => {
 			],
 		});
 	}
+
+	it("passes runs decoded during the recording to the media server only when there are any", async () => {
+		await startDesktopRecordingJob(fixture);
+		const plain = JSON.parse(String(mocks.fetch.mock.calls[0]?.[1]?.body));
+		expect(plain).not.toHaveProperty("preverifiedRunUrls");
+		mocks.fetch.mockClear();
+		withCurrent({ remoteJobId: null });
+		mocks.preverifiedRunUrls.mockResolvedValue([
+			"https://storage.test/run-1.json",
+		]);
+		await startDesktopRecordingJob(fixture);
+		expect(
+			JSON.parse(String(mocks.fetch.mock.calls[0]?.[1]?.body))
+				.preverifiedRunUrls,
+		).toEqual(["https://storage.test/run-1.json"]);
+	});
 
 	it("uploads a small Cap storage output with one PUT instead of multipart", async () => {
 		mocks.storage.mockImplementation(() => storageAccess("s3"));
