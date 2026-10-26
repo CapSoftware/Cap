@@ -16,6 +16,37 @@ const input = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("recording job completion reconciliation", () => {
+	it("does not follow redirects while sending media-server secrets", async () => {
+		const fetcher = vi.fn().mockImplementation(async (_url, options) => {
+			expect(options.redirect).toBe("error");
+			return Response.json({
+				jobId: "job",
+				videoId: "video",
+				phase: "complete",
+			});
+		});
+		vi.stubGlobal("fetch", fetcher);
+		await observeDesktopRecordingJob(input);
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		for (const [, options] of fetcher.mock.calls) {
+			expect(options.redirect).toBe("error");
+			expect(options.headers["x-media-server-secret"]).toBe("test-secret");
+		}
+	});
+
+	it("treats a redirected worker lookup as unavailable without forwarding secrets", async () => {
+		const fetcher = vi.fn().mockImplementation(async (_url, options) => {
+			expect(options.redirect).toBe("error");
+			throw new TypeError("redirect mode is set to error");
+		});
+		vi.stubGlobal("fetch", fetcher);
+		await expect(observeDesktopRecordingJob(input)).resolves.toEqual({
+			status: "unavailable",
+			delivered: false,
+		});
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not treat a replica-local 404 as worker death", async () => {
 		const fetcher = vi
 			.fn()
