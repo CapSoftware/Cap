@@ -574,13 +574,6 @@ fn language_picker_english() {
 }
 
 #[test]
-fn the_picker_shows_in_debug_builds() {
-    if cfg!(debug_assertions) {
-        assert!(picker_enabled());
-    }
-}
-
-#[test]
 fn system_tags_resolve_to_catalogs() {
     for (tag, expected) in [
         ("en-US", Some(Locale::En)),
@@ -619,21 +612,13 @@ fn traditional_chinese_falls_through_to_the_next_language() {
 }
 
 #[test]
-fn system_language_waits_for_the_picker() {
+fn system_default_follows_the_system_language_and_a_choice_overrides_it() {
     assert_eq!(
-        resolve_preference(Preference::System, false, || Locale::Ja),
-        Locale::En
-    );
-    assert_eq!(
-        resolve_preference(Preference::System, true, || Locale::Ja),
+        resolve_preference(Preference::System, || Locale::Ja),
         Locale::Ja
     );
     assert_eq!(
-        resolve_preference(Preference::Fixed(Locale::De), false, || Locale::Ja),
-        Locale::De
-    );
-    assert_eq!(
-        resolve_preference(Preference::Fixed(Locale::De), true, || Locale::Ja),
+        resolve_preference(Preference::Fixed(Locale::De), || Locale::Ja),
         Locale::De
     );
 }
