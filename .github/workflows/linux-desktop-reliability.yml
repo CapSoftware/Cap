@@ -408,9 +408,14 @@ jobs:
         run: |
           sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
-          sudo install -d -o "$(id -u)" -g "$(id -g)" "$RUNNER_TEMP/out/x11-camera"
-          bash scripts/linux-desktop-harness/x11-camera.sh "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" \
-            "$RUNNER_TEMP/out/x11-camera"
+          # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
+          # MJPEG (decoded before use).
+          for format in yuyv422 nv12 mjpeg; do
+            dir="$RUNNER_TEMP/out/x11-camera-$format"
+            sudo install -d -o "$(id -u)" -g "$(id -g)" "$dir"
+            CAMERA_FORMAT=$format bash scripts/linux-desktop-harness/x11-camera.sh \
+              "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/libs" "$dir"
+          done
 
       - name: Hyprland area recording
         run: |
