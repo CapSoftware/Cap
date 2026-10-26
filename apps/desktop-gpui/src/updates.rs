@@ -430,13 +430,13 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             if policy_now != policy {
                 let was_never = policy == UpdateDownloadPolicy::Never;
                 policy = policy_now;
-                delay = if policy == UpdateDownloadPolicy::Never {
-                    None
+                // Moving between Ask first and Auto keeps the schedule, so a
+                // switch before the first check does not cancel it.
+                if policy == UpdateDownloadPolicy::Never {
+                    delay = None;
                 } else if was_never {
-                    Some(first_check_delay(channel))
-                } else {
-                    next_check_delay(channel)
-                };
+                    delay = Some(first_check_delay(channel));
+                }
             }
 
             if signaled && request == PendingUpdateRequests::default() {
