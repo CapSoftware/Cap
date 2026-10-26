@@ -36,9 +36,7 @@ describe("public collections policy", () => {
 			"https://cap.so",
 		);
 		expect(url.pathname).toBe("/login");
-		expect(url.searchParams.getAll("next")).toEqual([
-			"/c/abc123?page=17",
-		]);
+		expect(url.searchParams.getAll("next")).toEqual(["/c/abc123?page=17"]);
 	});
 
 	it("resolves public folder before public space on id collisions", () => {
