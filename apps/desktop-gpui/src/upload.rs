@@ -1974,6 +1974,14 @@ struct PresignedPart {
 }
 
 trait PartTransport: Sync {
+    fn prefetch_presign(
+        &self,
+        _part_number: u32,
+        _cancel: &AtomicBool,
+    ) -> impl Future<Output = Option<Result<PresignedPart, AuthApiError>>> + Send {
+        std::future::ready(None)
+    }
+
     fn presign(
         &self,
         chunk: &PartChunk,
@@ -2002,6 +2010,25 @@ struct LivePartTransport<'a> {
 }
 
 impl PartTransport for LivePartTransport<'_> {
+    async fn prefetch_presign(
+        &self,
+        part_number: u32,
+        cancel: &AtomicBool,
+    ) -> Option<Result<PresignedPart, AuthApiError>> {
+        if self.is_drive || self.use_md5 {
+            return None;
+        }
+        Some(
+            checked_upload_step(cancel, || async {
+                let url =
+                    multipart_presign(&self.api, self.video_id, self.upload_id, part_number, None)
+                        .await?;
+                Ok(PresignedPart { url, md5: None })
+            })
+            .await,
+        )
+    }
+
     async fn presign(
         &self,
         chunk: &PartChunk,
@@ -2049,12 +2076,56 @@ async fn upload_part_chunk(
     total_size: u64,
     cancel: &AtomicBool,
 ) -> Result<UploadedPart, AuthApiError> {
+    upload_part_with_prefetch(transport, chunk, total_size, cancel, None, None, || {})
+        .await
+        .0
+}
+
+async fn upload_part_with_prefetch(
+    transport: &impl PartTransport,
+    chunk: &PartChunk,
+    total_size: u64,
+    cancel: &AtomicBool,
+    prefetched: Option<Result<PresignedPart, AuthApiError>>,
+    next_part: Option<u32>,
+    on_uploaded: impl FnOnce(),
+) -> (
+    Result<UploadedPart, AuthApiError>,
+    Option<Result<PresignedPart, AuthApiError>>,
+) {
     tokio::select! {
         biased;
-        () = wait_for_export_cancel(cancel) => Err(AuthApiError::Other("Export cancelled".into())),
+        () = wait_for_export_cancel(cancel) => (
+            Err(AuthApiError::Other("Export cancelled".into())),
+            None,
+        ),
         result = async {
-            let presigned = transport.presign(chunk, cancel).await?;
-            transport.put(&presigned, chunk, total_size, cancel).await
+            let presigned = match prefetched {
+                Some(result) => result,
+                None => transport.presign(chunk, cancel).await,
+            };
+            let presigned = match presigned {
+                Ok(presigned) => presigned,
+                Err(error) => return (Err(error), None),
+            };
+            let upload = async {
+                let result = transport.put(&presigned, chunk, total_size, cancel).await;
+                if result.is_ok() {
+                    on_uploaded();
+                }
+                result
+            };
+            let prefetch = async {
+                if let Some(next_part) = next_part
+                    && presigned.md5.is_none()
+                    && !is_google_drive_resumable_url(&presigned.url)
+                {
+                    transport.prefetch_presign(next_part, cancel).await
+                } else {
+                    None
+                }
+            };
+            tokio::join!(upload, prefetch)
         } => result,
     }
 }
@@ -2081,6 +2152,7 @@ async fn upload_file_parts(
     let mut offset = 0u64;
     let mut uploaded_bytes = 0u64;
     let mut part_number = 1u32;
+    let mut prefetched = None;
 
     while offset < file_size {
         if cancel.load(Ordering::Relaxed) {
@@ -2096,12 +2168,23 @@ async fn upload_file_parts(
             offset,
             bytes: chunk.into(),
         };
-        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
-            Ok(part) => {
+        let next_part = (offset + (size as u64) < file_size).then_some(part_number + 1);
+        let (result, next_presign) = upload_part_with_prefetch(
+            transport,
+            &chunk,
+            file_size,
+            cancel,
+            prefetched.take(),
+            next_part,
+            || {
                 uploaded_bytes += size as u64;
                 progress((uploaded_bytes as f64 / file_size as f64).min(0.99));
-                parts.push(part);
-            }
+            },
+        )
+        .await;
+        prefetched = next_presign;
+        match result {
+            Ok(part) => parts.push(part),
             Err(error) => {
                 check_export_cancelled(cancel)?;
                 tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
