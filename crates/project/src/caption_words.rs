@@ -1,5 +1,8 @@
 use crate::CaptionWord;
 
+#[cfg(test)]
+mod normalization_tests;
+
 /// Whisper/Parakeet sometimes stretch a trailing word's end across a following
 /// silence (e.g. a 16s "seconds."), which leaves the rendered caption stuck on
 /// screen and duplicates the word across timeline cuts once projected. Real
@@ -79,34 +82,33 @@ pub fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
         )
 }
 
-pub fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
-    let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
-
-    for word in words {
-        let text = word.text.trim();
-        if text.is_empty() {
-            continue;
+pub fn normalize_caption_words(mut words: Vec<CaptionWord>) -> Vec<CaptionWord> {
+    words.retain_mut(|word| {
+        let trimmed = word.text.trim();
+        if trimmed.is_empty() {
+            return false;
         }
-
-        if caption_token_attaches_to_previous(text)
-            && let Some(previous) = normalized.last_mut()
-        {
-            previous.text.push_str(text);
+        let start = word.text.len() - word.text.trim_start().len();
+        let end = start + trimmed.len();
+        word.text.truncate(end);
+        drop(word.text.drain(..start));
+        true
+    });
+    words.dedup_by(|word, previous| {
+        if caption_token_attaches_to_previous(&word.text) {
+            previous.text.push_str(&word.text);
             previous.end = word.end;
+            true
         } else {
-            normalized.push(CaptionWord {
-                text: text.to_string(),
-                start: word.start,
-                end: word.end,
-            });
+            false
         }
-    }
+    });
 
-    for word in &mut normalized {
+    for word in &mut words {
         word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
     }
 
-    normalized
+    words
 }
 
 pub fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
