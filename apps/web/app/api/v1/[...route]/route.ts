@@ -675,9 +675,12 @@ const getViewableCap = Effect.fn("Agent.getViewableCap")(function* (
 ) {
 	const principal = yield* Agent.AgentPrincipal;
 	const video = yield* getViewableVideo(videoId, verifiedPasswordHashes);
-	const [row] = yield* getCapRows(videoId);
+	const [[row], spaceRulesResult] = yield* Effect.all(
+		[getCapRows(videoId), getSpaceRules([videoId]).pipe(Effect.exit)],
+		{ concurrency: 2 },
+	);
 	if (!row) return yield* Effect.fail(new Video.NotFoundError());
-	const spaces = yield* getSpaceRules([videoId]);
+	const spaces = yield* spaceRulesResult;
 	const rules = rulesForRow(row, spaces);
 	return {
 		video,
