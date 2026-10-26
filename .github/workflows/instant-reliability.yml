@@ -6,8 +6,7 @@ name: Instant reliability (real app)
 # followed by Recover. Each case checks what reached the mock server and what
 # was left on disk, so a regression that loses a recording, deletes one with
 # media, or leaves an empty video behind fails here. The Linux job runs the
-# cases whose expectations hold there on Xvfb: Linux keeps a cancelled or
-# crashed start's files and video rather than deleting them.
+# same cases on Xvfb, recording another app's window.
 
 on:
   pull_request:
@@ -262,7 +261,8 @@ jobs:
             CAP_GPUI_AUTO_OVERLAY=window CAP_GPUI_AUTO_WINDOW=xmessage \
             dbus-run-session -- "$(cat "$RUNNER_TEMP/test-binary")" --ignored --test-threads=1 --nocapture \
             real_app_instant_recording_uploads_and_verifies real_app_recovered_recording_uploads \
-            real_app_start_cue_waits_for_a_slow_server_video
+            real_app_start_cue_waits_for_a_slow_server_video real_app_cancelled_start_deletes_its_video \
+            real_app_crashes_never_delete_a_recording_with_media
 
       - name: Upload sandboxes
         if: failure()
