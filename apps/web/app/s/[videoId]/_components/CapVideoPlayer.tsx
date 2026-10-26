@@ -515,6 +515,28 @@ export function CapVideoPlayer({
 				setVideoLoaded(false);
 				setHasError(false);
 				setShowPlayButton(false);
+				// Only a server-rendered source reaches here with a raw fallback. The
+				// playlist route can sign the same URL again within a second, so a
+				// retry that changes nothing moves on to the raw upload.
+				const stopRetrying = () => {
+					playbackToRestore.current = null;
+					setIsRefreshingInitialPlaybackSource(false);
+					if (
+						shouldFallbackToRawPlaybackSource(
+							"mp4",
+							rawFallbackSrc,
+							hasTriedRawFallback,
+						)
+					) {
+						setHasTriedRawFallback(true);
+						setPreferredSource("raw");
+						setVideoLoaded(false);
+						setHasError(false);
+						setShowPlayButton(false);
+						return;
+					}
+					setHasError(true);
+				};
 				void resolvedSrc
 					.refetch()
 					.then((result) => {
@@ -522,16 +544,10 @@ export function CapVideoPlayer({
 							!result.data ||
 							result.data.url === playbackToRestore.current?.sourceUrl
 						) {
-							playbackToRestore.current = null;
-							setIsRefreshingInitialPlaybackSource(false);
-							setHasError(true);
+							stopRetrying();
 						}
 					})
-					.catch(() => {
-						playbackToRestore.current = null;
-						setIsRefreshingInitialPlaybackSource(false);
-						setHasError(true);
-					})
+					.catch(stopRetrying)
 					.finally(() => {
 						initialPlaybackSourceRetryPending.current = false;
 					});

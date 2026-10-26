@@ -386,4 +386,37 @@ describe("share MP4 source rendered on the server", () => {
 			player.client.clear();
 		}
 	});
+	it("moves on to the raw fallback when the playlist retry returns the same URL", async () => {
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(response(SERVER_URL, 206, true))
+			.mockResolvedValueOnce(
+				new Response(null, {
+					status: 206,
+					headers: { "content-type": "video/mp4" },
+				}),
+			);
+		vi.stubGlobal("fetch", fetchImpl);
+		const { props, videoRef } = playerProps({
+			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+		});
+		const player = await hydratePlayer(props);
+		try {
+			await act(async () => {
+				videoRef.current?.dispatchEvent(new Event("error"));
+			});
+			await settleFetch(fetchImpl, 2);
+			expect(fetchImpl.mock.calls[0]?.[0]).toMatch(PLAYLIST_PROBE);
+			expect(fetchImpl.mock.calls[1]?.[0]).toMatch(RAW_PROBE);
+			await vi.waitFor(() => {
+				expect(videoRef.current?.getAttribute("src")).toMatch(RAW_PROBE);
+			});
+			expect(player.container.textContent).not.toContain(
+				"Could not load a playable video source",
+			);
+		} finally {
+			await act(async () => player.root?.unmount());
+			player.client.clear();
+		}
+	});
 });
