@@ -4541,14 +4541,11 @@ impl MainWindow {
         }
         match (kind, &self.library) {
             (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     if !self.matches_search(&row.item.pretty_name) {
                         continue;
                     }
-                    cards.push(
-                        self.render_recording_card(index, row, cx)
-                            .into_any_element(),
-                    );
+                    cards.push(self.render_recording_card(row, cx).into_any_element());
                 }
             }
             (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
@@ -4747,7 +4744,6 @@ impl MainWindow {
 
     fn render_recording_card(
         &self,
-        index: usize,
         row: &LibraryRow<RecordingItem>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -4767,10 +4763,10 @@ impl MainWindow {
                     .unwrap_or_else(|| upload.label().to_string())
             },
         );
-        let actions = self.render_recording_card_actions(index, item, cx);
+        let actions = self.render_recording_card_actions(item, cx);
 
         self.library_card(
-            ("library-recording", index),
+            gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
             "icons/square-play.svg",
             item.pretty_name.clone(),
@@ -4793,7 +4789,6 @@ impl MainWindow {
 
     fn render_recording_card_actions(
         &self,
-        index: usize,
         item: &RecordingItem,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -4811,7 +4806,7 @@ impl MainWindow {
         if item.opens_editor() {
             let editor = path.clone();
             row = row.child(self.library_action(
-                ("lib-rec-edit", index),
+                "lib-rec-edit",
                 "icons/edit.svg",
                 cx.listener(move |_, _, _window, cx| {
                     let editor = editor.clone();
@@ -4821,7 +4816,7 @@ impl MainWindow {
         }
         if let Some(url) = sharing {
             row = row.child(self.library_action(
-                ("lib-rec-link", index),
+                "lib-rec-link",
                 "icons/link.svg",
                 move |_, _, cx| cx.open_url(&url),
             ));
@@ -4833,7 +4828,7 @@ impl MainWindow {
         {
             let retry_path = path.clone();
             row = row.child(self.library_action(
-                ("lib-rec-retry", index),
+                "lib-rec-retry",
                 "icons/rotate-ccw.svg",
                 cx.listener(move |_, _, window, cx| {
                     let path = retry_path.clone();
@@ -4858,12 +4853,12 @@ impl MainWindow {
         }
         let folder = path.clone();
         row = row.child(self.library_action(
-            ("lib-rec-folder", index),
+            "lib-rec-folder",
             "icons/folder.svg",
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
         row.child(self.library_action(
-            ("lib-rec-delete", index),
+            "lib-rec-delete",
             "icons/trash.svg",
             cx.listener(move |this, _, window, cx| {
                 this.delete_library_recording(path.clone(), window, cx);

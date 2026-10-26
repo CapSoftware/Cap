@@ -2810,7 +2810,7 @@ impl SettingsWindow {
             // `not-last:border-b` counts the *rendered* rows, so the border
             // stops at the last visible one rather than the last matching one.
             items.push(
-                self.render_recording_row(index, row, index + 1 == visible, cx)
+                self.render_recording_row(row, index + 1 == visible, cx)
                     .into_any_element(),
             );
         }
@@ -2864,7 +2864,6 @@ impl SettingsWindow {
     /// w-full`, bordered from every row but the last.
     fn render_recording_row(
         &self,
-        index: usize,
         row: &RecordingRow,
         last: bool,
         cx: &mut Context<Self>,
@@ -2924,7 +2923,7 @@ impl SettingsWindow {
             );
 
         div()
-            .id(("recording-row", index))
+            .id(gpui::ElementId::Path(item.path.as_path().into()))
             .flex()
             .flex_row()
             .justify_between()
@@ -2943,7 +2942,7 @@ impl SettingsWindow {
                 }
             })
             .child(left)
-            .child(self.render_recording_actions(index, item, cx))
+            .child(self.render_recording_actions(item, cx))
             .when(opens_editor, |this| {
                 this.on_click(cx.listener(move |_this, _, _window, cx| {
                     let path = path.clone();
@@ -3049,7 +3048,6 @@ impl SettingsWindow {
     /// Reupload and Open link; both get Open recording bundle and Delete.
     fn render_recording_actions(
         &self,
-        index: usize,
         item: &RecordingItem,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -3064,7 +3062,7 @@ impl SettingsWindow {
         if mode == RecordingMode::Studio {
             if let Some(link) = sharing.clone() {
                 actions = actions.child(self.row_button(
-                    ("recording-link", index),
+                    "recording-link",
                     "icons/link.svg",
                     "Open link",
                     false,
@@ -3074,7 +3072,7 @@ impl SettingsWindow {
             }
             let editor_path = path.clone();
             actions = actions.child(self.row_button(
-                ("recording-edit", index),
+                "recording-edit",
                 "icons/edit.svg",
                 "Edit",
                 // `disabled={status === "InProgress"}`
@@ -3090,7 +3088,7 @@ impl SettingsWindow {
             let retry_path = path.clone();
             actions = actions.child(
                 self.row_button(
-                    ("recording-reupload", index),
+                    "recording-reupload",
                     "icons/rotate-ccw.svg",
                     "Retry upload",
                     !item
@@ -3121,7 +3119,7 @@ impl SettingsWindow {
             );
             if let Some(link) = sharing {
                 actions = actions.child(self.row_button(
-                    ("recording-instant-link", index),
+                    "recording-instant-link",
                     "icons/link.svg",
                     "Open link",
                     false,
@@ -3133,7 +3131,7 @@ impl SettingsWindow {
 
         let folder_path = path.clone();
         actions = actions.child(self.row_button(
-            ("recording-folder", index),
+            "recording-folder",
             "icons/folder.svg",
             "Open recording bundle",
             false,
@@ -3141,7 +3139,7 @@ impl SettingsWindow {
             move |_this, _window, cx| library::open_recording_folder(&folder_path, mode, cx),
         ));
         actions.child(self.row_button(
-            ("recording-delete", index),
+            "recording-delete",
             "icons/trash.svg",
             "Delete",
             false,
@@ -5349,3 +5347,6 @@ mod tests {
         assert_eq!(format_project_name("{nope}"), "{nope}");
     }
 }
+
+#[cfg(test)]
+mod recording_action_tests;
