@@ -96,6 +96,10 @@ real login activates.
   a screenshot, and checks the size, length and loudness of each result. It also
   checks the window picker offers the other app's window rather than one of
   Cap's own.
+- `x11-stale-wayland.sh <cap-gpui> <ffmpeg lib dir> <out-dir>` starts Cap on
+  Xvfb with `WAYLAND_DISPLAY` naming a socket nothing listens on, as a systemd
+  user environment keeps it after a Wayland session ends, and checks Cap falls
+  back to the X display instead of failing to start.
 
 - `niri-screencast/run.sh` records through Cap's PipeWire capture loop from a
   producer that negotiates and shares frames the way niri 26.04 does: a

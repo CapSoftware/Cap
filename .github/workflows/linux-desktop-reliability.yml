@@ -129,6 +129,13 @@ jobs:
           bash scripts/linux-desktop-harness/x11-capture.sh \
             apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib "$RUNNER_TEMP/out/x11-capture"
 
+      # A systemd user environment keeps WAYLAND_DISPLAY after a Wayland
+      # session ends.
+      - name: X11 launch with a stale WAYLAND_DISPLAY
+        run: |
+          bash scripts/linux-desktop-harness/x11-stale-wayland.sh \
+            apps/desktop-gpui/target/debug/cap-gpui target/native-deps/lib "$RUNNER_TEMP/out/x11-stale-wayland"
+
       - name: Fetch the Cap package for desktop integration
         run: |
           curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
