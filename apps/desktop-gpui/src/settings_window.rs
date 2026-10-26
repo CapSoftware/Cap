@@ -4421,50 +4421,6 @@ impl SettingsWindow {
                             .child(
                                 div()
                                     .text_size(px(13.))
-                                    .child(tr::settings::general::updates::channel::label()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .line_height(px(16.))
-                                    .text_color(theme.settings_muted())
-                                    .child(tr::settings::general::updates::channel::description()),
-                            ),
-                    )
-                    .child(self.segmented::<UpdateChannel>(
-                        "update-channel",
-                        current,
-                        cx,
-                        |this, value, cx| {
-                            if this.settings.update_channel == value {
-                                return;
-                            }
-                            this.settings.update_channel = value;
-                            this.write_enum("updateChannel", value, cx);
-                            crate::updates::update_channel_changed(
-                                this.settings.update_channel,
-                                cx,
-                            );
-                        },
-                    )),
-            )
-            .child(div().h(px(1.)).bg(theme.settings_border()))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_start()
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(px(13.))
                                     .child(tr::settings::general::updates::download_policy::label()),
                             )
                             .child(
@@ -4506,6 +4462,50 @@ impl SettingsWindow {
                             this.settings.update_download_policy = value;
                             this.write_enum("updateDownloadPolicy", value, cx);
                             crate::updates::update_download_policy_changed(value, cx);
+                        },
+                    )),
+            )
+            .child(div().h(px(1.)).bg(theme.settings_border()))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_start()
+                    .gap(px(16.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .child(tr::settings::general::updates::channel::label()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(theme.settings_muted())
+                                    .child(tr::settings::general::updates::channel::description()),
+                            ),
+                    )
+                    .child(self.segmented::<UpdateChannel>(
+                        "update-channel",
+                        current,
+                        cx,
+                        |this, value, cx| {
+                            if this.settings.update_channel == value {
+                                return;
+                            }
+                            this.settings.update_channel = value;
+                            this.write_enum("updateChannel", value, cx);
+                            crate::updates::update_channel_changed(
+                                this.settings.update_channel,
+                                cx,
+                            );
                         },
                     )),
             )
