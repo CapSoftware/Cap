@@ -723,6 +723,18 @@ async fn sweep(path: &Path, session: &str, now: i64, backend: &impl SweepBackend
     summary
 }
 
+/// Whether the sweep keeps an entry's server video while its folder holds
+/// media. A crashed start's folder may have recorded before the crash; on
+/// Linux a cancelled start that wrote media keeps it too
+/// (`ActiveRecording::discard_cancelled_start`), so its video must stay.
+fn guards_media(reason: CleanupReason) -> bool {
+    match reason {
+        CleanupReason::Interrupted => true,
+        CleanupReason::StartCancelled => cfg!(target_os = "linux"),
+        CleanupReason::StartFailed => false,
+    }
+}
+
 struct LiveSweep;
 
 impl SweepBackend for LiveSweep {
@@ -732,13 +744,13 @@ impl SweepBackend for LiveSweep {
 
     async fn protected(&self, entry: &Entry) -> bool {
         let video_id = entry.video_id.clone();
-        let interrupted = entry.effective_reason() == CleanupReason::Interrupted;
+        let guards_media = guards_media(entry.effective_reason());
         let start_project = entry.project_dir.clone();
         tokio::task::spawn_blocking(move || {
             locally_protected(
                 &crate::library::known_recordings_dirs(),
                 &video_id,
-                interrupted,
+                guards_media,
                 start_project.as_deref(),
             )
         })
@@ -1341,6 +1353,29 @@ mod tests {
             None,
         ));
         assert!(!locally_protected(&[recordings], "video", false, None));
+    }
+
+    #[test]
+    fn a_cancelled_start_guards_media_where_it_keeps_it() {
+        assert!(guards_media(CleanupReason::Interrupted));
+        assert!(!guards_media(CleanupReason::StartFailed));
+        assert_eq!(
+            guards_media(CleanupReason::StartCancelled),
+            cfg!(target_os = "linux")
+        );
+        let fixture = Fixture::new();
+        let recordings = fixture.recordings();
+        let project = write_project(&recordings, "cancelled.cap", "video", in_progress());
+        std::fs::write(project.join("content/display/segment_001.m4s"), b"media").unwrap();
+        assert_eq!(
+            locally_protected(
+                &[recordings],
+                "video",
+                guards_media(CleanupReason::StartCancelled),
+                Some(&project),
+            ),
+            cfg!(target_os = "linux")
+        );
     }
 
     #[cfg(unix)]

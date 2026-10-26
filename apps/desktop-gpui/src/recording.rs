@@ -1132,27 +1132,32 @@ impl ActiveRecording {
     /// delete and restart flows. Deleting a directory this app just created is
     /// app behavior, same as the Tauri delete button.
     pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
-        self.cancel_and_delete_with_query(None).await
+        self.cancel_and_delete_with_query(None, false).await
     }
 
     /// `cancel_and_delete` for a start that was superseded before it began,
     /// telling the server why its Instant video is deleted. On Linux a start
-    /// that already wrote media keeps it, as after a crash.
+    /// that wrote media by the time capture stopped keeps it, as after a crash.
     pub(crate) async fn discard_cancelled_start(self) -> anyhow::Result<()> {
         #[cfg(target_os = "linux")]
-        if !matches!(self.handle, Handle::Instant(_))
-            || crate::upload::instant_cleanup::project_holds_media(&self.project_dir)
-        {
+        if !matches!(self.handle, Handle::Instant(_)) {
             return self.cancel_preserving().await;
         }
         let query = crate::upload::instant_cleanup::delete_query(
             crate::upload::instant_cleanup::CleanupReason::StartCancelled,
             None,
         );
-        self.cancel_and_delete_with_query(query).await
+        self.cancel_and_delete_with_query(query, cfg!(target_os = "linux"))
+            .await
     }
 
-    async fn cancel_and_delete_with_query(self, query: Option<String>) -> anyhow::Result<()> {
+    /// `keep_media`: once capture has stopped, a folder holding media is kept
+    /// as a stopped recording with its server video instead of being deleted.
+    async fn cancel_and_delete_with_query(
+        self,
+        query: Option<String>,
+        keep_media: bool,
+    ) -> anyhow::Result<()> {
         if let Some(gate) = &self.start_gate {
             gate.arm();
         }
@@ -1206,6 +1211,26 @@ impl ActiveRecording {
             }
             return Err(error);
         }
+        #[cfg(target_os = "linux")]
+        if keep_media && crate::upload::instant_cleanup::project_holds_media(&self.project_dir) {
+            let mut upload = match self.instant_upload.as_ref() {
+                Some(upload) => Some(upload.lock().await),
+                None => None,
+            };
+            let upload = upload.as_deref_mut().and_then(Option::as_mut);
+            if let Some(upload) = upload {
+                upload.abort_segments().await;
+                return persist_preserved_instant_stop(
+                    &self.project_dir,
+                    Some(upload.metadata_lock()),
+                    true,
+                    Ok(()),
+                );
+            }
+            return persist_preserved_instant_stop(&self.project_dir, None, true, Ok(()));
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = keep_media;
         let mut upload = match self.instant_upload.as_ref() {
             Some(upload) => upload.lock().await.take(),
             None => None,
