@@ -473,6 +473,44 @@ mod tests {
         out
     }
 
+    fn assert_unpad_helpers(
+        data: &[u8],
+        width: usize,
+        stride: usize,
+        rows: usize,
+        expected: &[u8],
+    ) {
+        let row_bytes = width * 4;
+        assert_eq!(
+            unpad_rgba_to_bgra(data, width, stride, rows).unwrap(),
+            expected,
+            "dispatch width {width} stride {stride} rows {rows}"
+        );
+        assert_eq!(
+            unpad_rgba_to_bgra_scalar(data, width, stride, rows, row_bytes),
+            expected,
+            "scalar width {width} stride {stride} rows {rows}"
+        );
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("ssse3") {
+                let ssse3 =
+                    unsafe { unpad_rgba_to_bgra_ssse3(data, width, stride, rows, row_bytes) };
+                assert_eq!(
+                    ssse3, expected,
+                    "ssse3 width {width} stride {stride} rows {rows}"
+                );
+            }
+            if is_x86_feature_detected!("avx2") {
+                let avx2 = unsafe { unpad_rgba_to_bgra_avx2(data, width, stride, rows, row_bytes) };
+                assert_eq!(
+                    avx2, expected,
+                    "avx2 width {width} stride {stride} rows {rows}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn unpad_matches_an_independent_swap_across_tails_and_padding() {
         let widths = [1usize, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 1080, 1248];
@@ -487,12 +525,8 @@ mod tests {
                             data[row * stride + byte] = (row * 17 + byte * 3 + 1) as u8;
                         }
                     }
-                    let got = unpad_rgba_to_bgra(&data, width, stride, rows).unwrap();
-                    assert_eq!(
-                        got,
-                        swapped_copy(&data, width, stride, rows),
-                        "width {width} stride {stride} rows {rows}"
-                    );
+                    let expected = swapped_copy(&data, width, stride, rows);
+                    assert_unpad_helpers(&data, width, stride, rows, &expected);
                 }
             }
         }
