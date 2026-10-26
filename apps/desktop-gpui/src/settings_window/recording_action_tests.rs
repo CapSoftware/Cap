@@ -78,7 +78,6 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
-/// Settings' recordings list showing "first" above "second", drawn once.
 fn open_two_recordings(cx: &mut TestAppContext) -> (Entity<SettingsWindow>, VisualTestContext) {
     let window = cx.open_window(size(px(600.), px(300.)), |window, cx| RecordingActions {
         settings: cx.new(|cx| {
