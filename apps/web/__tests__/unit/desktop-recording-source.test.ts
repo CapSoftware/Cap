@@ -8,6 +8,7 @@ import type { DesktopRecordingSourceCheckpoint } from "@/lib/desktop-recording-s
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
 
 const mocks = vi.hoisted(() => ({
+	env: vi.fn((): Record<string, string | undefined> => ({})),
 	storage: vi.fn(),
 	pageSize: undefined as number | undefined,
 	treePageSize: undefined as number | undefined,
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: { getAccessForVideo: mocks.storage },
 }));
+vi.mock("@cap/env", () => ({ serverEnv: mocks.env }));
 vi.mock("@/lib/desktop-recording-source-checkpoint", async (importOriginal) => {
 	const actual =
 		await importOriginal<
@@ -45,6 +47,7 @@ vi.mock("@/lib/video-storage", () => ({
 import {
 	advanceDesktopRecordingSourceCommit,
 	buildDesktopRecordingSourceUrls,
+	buildPreverifiedRunUrls,
 	commitDesktopRecordingSource,
 	DesktopRecordingSourceError,
 	getDesktopRecordingOutputKey,
@@ -266,6 +269,9 @@ function storageFixture(
 		getInternalSignedObjectUrl: vi.fn((key: string) =>
 			checked(() => `https://storage.example/${key}?signed=1`),
 		),
+		getInternalPresignedPutUrl: vi.fn((key: string) =>
+			checked(() => `https://storage.example/${key}?put=1`),
+		),
 		multipart: {
 			create: vi.fn(
 				(key: string, options?: { Metadata?: Record<string, string> }) =>
@@ -486,6 +492,8 @@ function seedSegments(
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	vi.unstubAllGlobals();
+	mocks.env.mockReturnValue({});
 	mocks.pageSize = undefined;
 	mocks.treePageSize = undefined;
 });
@@ -2845,5 +2853,145 @@ describe("listed source commit on Cap's bucket", () => {
 				([key]) => key === `${prefix}/segments/video/segment_001.m4s`,
 			),
 		).toHaveLength(3);
+	});
+});
+
+describe("decoding prepared fragments during the recording", () => {
+	const mediaEnv = {
+		MEDIA_SERVER_URL: "https://media.test/",
+		MEDIA_SERVER_WEBHOOK_SECRET: "media-secret",
+	};
+
+	function stubMediaServer() {
+		const fetch = vi.fn(
+			async (_url: string | URL, _init?: RequestInit) =>
+				new Response(null, { status: 202 }),
+		);
+		vi.stubGlobal("fetch", fetch);
+		return fetch;
+	}
+
+	function requests(fetch: ReturnType<typeof stubMediaServer>) {
+		return fetch.mock.calls.map(([url, init]) => ({
+			url: String(url),
+			secret: (init as RequestInit).headers as Record<string, string>,
+			body: JSON.parse(String((init as RequestInit).body)) as {
+				videoId: string;
+				init: { url: string; objectIdentity: string; size: number };
+				segments: { url: string; objectIdentity: string; size: number }[];
+				resultUploadUrl: string;
+			},
+		}));
+	}
+
+	it("asks the media server to decode each contiguous run of prepared video", async () => {
+		mocks.env.mockReturnValue(mediaEnv);
+		const fetch = stubMediaServer();
+		const storage = listedStorage();
+		seedRecording(storage, 8, 3);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2, 3, 5, 6].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(5);
+		const sent = requests(fetch);
+		expect(sent).toHaveLength(2);
+		expect(
+			sent.every(
+				(request) =>
+					request.url === "https://media.test/video/preverify-segments",
+			),
+		).toBe(true);
+		expect(
+			sent.every(
+				(request) => request.secret["x-media-server-secret"] === "media-secret",
+			),
+		).toBe(true);
+		const [first, second] = sent
+			.map((request) => request.body)
+			.sort((left, right) => left.segments.length - right.segments.length)
+			.reverse();
+		expect(first?.segments).toHaveLength(3);
+		expect(second?.segments).toHaveLength(2);
+		expect(first?.init).toEqual({
+			url: expect.stringContaining("/segments/video/init.mp4"),
+			objectIdentity: storage.object(videoInitKey).identity,
+			size: storage.object(videoInitKey).size,
+		});
+		for (const segment of first?.segments ?? []) {
+			expect(segment.url).toContain("/.recording/sources/prepared/");
+		}
+		expect(first?.segments.map((segment) => segment.objectIdentity)).toEqual(
+			[1, 2, 3].map(
+				(index) =>
+					storage.object(
+						`${prefix}/segments/video/segment_${String(index).padStart(3, "0")}.m4s`,
+					).identity,
+			),
+		);
+		expect(first?.resultUploadUrl).toMatch(
+			/\/\.recording\/sources\/preverified\/000001-000003-[a-f0-9]{16}\.json\?put=1$/,
+		);
+	});
+
+	it.each([
+		[
+			"a custom bucket",
+			() =>
+				storageFixture("s3", true, { listing: true, copiesKeepIdentity: true }),
+			mediaEnv,
+		],
+		["Google Drive", () => storageFixture("googleDrive"), mediaEnv],
+		["no media server", () => listedStorage(), {}],
+	] as const)("does not ask for %s", async (_, makeStorage, env) => {
+		mocks.env.mockReturnValue(env);
+		const fetch = stubMediaServer();
+		const storage = makeStorage();
+		seedRecording(storage, 4, 0);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(2);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("still reports prepared fragments when the media server cannot be reached", async () => {
+		mocks.env.mockReturnValue(mediaEnv);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("offline");
+			}),
+		);
+		const storage = listedStorage();
+		seedRecording(storage, 4, 0);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(2);
+	});
+
+	it("signs every saved run for the final verification on Cap's bucket only", async () => {
+		const storage = listedStorage();
+		storage.seed(
+			`${prefix}/.recording/sources/preverified/000001-000003-a.json`,
+			"{}",
+		);
+		storage.seed(
+			`${prefix}/.recording/sources/preverified/000004-000006-b.json`,
+			"{}",
+		);
+		storage.seed(`${prefix}/.recording/sources/preverified/partial.tmp`, "x");
+		expect(await buildPreverifiedRunUrls(recording())).toEqual([
+			`https://storage.example/${prefix}/.recording/sources/preverified/000001-000003-a.json?signed=1`,
+			`https://storage.example/${prefix}/.recording/sources/preverified/000004-000006-b.json?signed=1`,
+		]);
+		storageFixture("s3", true, { listing: true, copiesKeepIdentity: true });
+		expect(await buildPreverifiedRunUrls(recording())).toEqual([]);
 	});
 });

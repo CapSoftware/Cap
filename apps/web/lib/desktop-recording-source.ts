@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { videos } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
@@ -1209,7 +1210,7 @@ export async function prepareDesktopRecordingSegments(
 			operation.pipe(Effect.timeout(Math.min(5_000, remaining))),
 		);
 	};
-	const [bucket] = await run(
+	const [bucket, customBucket] = await run(
 		Storage.getAccessForVideo(decodeStorageVideo(video), {
 			resolvePublishedOutput: false,
 		}),
@@ -1222,6 +1223,7 @@ export async function prepareDesktopRecordingSegments(
 		concurrency: SOURCE_COMMIT_CONCURRENCY,
 		pageSize: SOURCE_COMMIT_PAGE_SIZE,
 	};
+	const videoCopies: SourceObject[] = [];
 	const unique = [
 		...new Map(
 			requested.map((entry) => [`${entry.track}/${entry.index}`, entry]),
@@ -1243,11 +1245,12 @@ export async function prepareDesktopRecordingSegments(
 						...segment,
 					});
 					if (original.size > 64 * 1024 * 1024) return null;
-					await copySmallObject(
+					const copy = await copySmallObject(
 						{ ...context, prefix: preparedSourcePrefix(video, original) },
 						original,
 						original.index,
 					);
+					if (segment.track === "video") videoCopies.push(copy);
 					return segment;
 				} catch {
 					return null;
@@ -1266,7 +1269,150 @@ export async function prepareDesktopRecordingSegments(
 			markerSaved = true;
 		}
 	}
+	if (
+		bucket.provider === "s3" &&
+		Option.isNone(customBucket) &&
+		videoCopies.length > 0
+	)
+		await requestSegmentPreverification(context, videoCopies).catch(
+			(error: unknown) => {
+				console.warn(
+					"[prepareDesktopRecordingSegments] Preverification skipped",
+					{
+						videoId: video.id,
+						error: error instanceof Error ? error.message : String(error),
+					},
+				);
+			},
+		);
 	return prepared;
+}
+
+function preverifiedRunPrefix(video: DbVideo) {
+	return `${sourcePrefix(video)}preverified/`;
+}
+
+// Asks the media server to decode the video fragments just secured, so the final verification only decodes
+// the tail. Each contiguous run becomes one signed result; nothing depends on the request succeeding.
+async function requestSegmentPreverification(
+	context: SourceContext,
+	copies: SourceObject[],
+) {
+	const env = serverEnv();
+	if (!env.MEDIA_SERVER_URL || !env.MEDIA_SERVER_WEBHOOK_SECRET) return;
+	const secret = env.MEDIA_SERVER_WEBHOOK_SECRET;
+	const { video, bucket } = context;
+	const initKey = `${video.ownerId}/${video.id}/segments/video/init.mp4`;
+	const init = await captureOriginal(context, {
+		originalKey: initKey,
+		track: "video",
+		index: 0,
+	});
+	const sign = (key: string) =>
+		context.run(bucket.getInternalSignedObjectUrl(key, { expiresIn: 3_600 }));
+	const initUrl = await sign(initKey);
+	const sorted = [...copies].sort((left, right) => left.index - right.index);
+	const runs: SourceObject[][] = [];
+	for (const copy of sorted) {
+		const current = runs.at(-1);
+		if (current && current.at(-1)?.index === copy.index - 1) current.push(copy);
+		else runs.push([copy]);
+	}
+	const mediaServerUrl = env.MEDIA_SERVER_URL.replace(/\/$/, "");
+	await Promise.all(
+		runs.map(async (run) => {
+			const first = run[0];
+			const last = run.at(-1);
+			if (!first || !last) return;
+			const digest = hash(
+				JSON.stringify([
+					init.originalIdentity,
+					...run.map((copy) => copy.objectIdentity),
+				]),
+			).slice(0, 16);
+			const resultKey = `${preverifiedRunPrefix(video)}${String(first.index).padStart(6, "0")}-${String(last.index).padStart(6, "0")}-${digest}.json`;
+			const [segments, resultUploadUrl] = await Promise.all([
+				Promise.all(
+					run.map(async (copy) => ({
+						url: await sign(copy.key),
+						objectIdentity: copy.objectIdentity,
+						size: copy.size,
+					})),
+				),
+				context.run(
+					bucket.getInternalPresignedPutUrl(
+						resultKey,
+						{ ContentType: "application/json" },
+						{ expiresIn: 3_600 },
+					),
+				),
+			]);
+			const response = await fetch(
+				`${mediaServerUrl}/video/preverify-segments`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-media-server-secret": secret,
+					},
+					body: JSON.stringify({
+						videoId: video.id,
+						init: {
+							url: initUrl,
+							objectIdentity: init.originalIdentity,
+							size: init.size,
+						},
+						segments,
+						resultUploadUrl,
+					}),
+					signal: AbortSignal.timeout(3_000),
+				},
+			);
+			await response.body?.cancel().catch(() => {});
+		}),
+	);
+}
+
+// Signed URLs for every run decoded during the recording; the media server checks each run's signature
+// and fragment identities itself, so an unusable run only costs a decode it would have done anyway.
+export async function buildPreverifiedRunUrls(
+	video: DbVideo,
+): Promise<string[]> {
+	try {
+		const access = await runWorkflowPromise(
+			Storage.getAccessForVideo(decodeStorageVideo(video), {
+				resolvePublishedOutput: false,
+			}),
+		);
+		const [bucket, customBucket] = access;
+		if (bucket.provider !== "s3" || Option.isSome(customBucket)) return [];
+		const listed = await listObjectsUnder(
+			{
+				video,
+				bucket,
+				run: (operation) =>
+					runWorkflowPromise(operation.pipe(Effect.timeout(10_000))),
+				prefix: sourcePrefix(video).slice(0, -1),
+				...sourceLimits(access),
+			},
+			preverifiedRunPrefix(video),
+		);
+		if (!listed) return [];
+		const keys = [...listed.keys()]
+			.filter((key) => key.endsWith(".json"))
+			.sort()
+			.slice(0, 4_096);
+		return await mapBounded(
+			keys,
+			(key) =>
+				runWorkflowPromise(
+					bucket.getInternalSignedObjectUrl(key, { expiresIn: 6 * 60 * 60 }),
+				),
+			64,
+		);
+	} catch {
+		return [];
+	}
 }
 
 async function advanceMultipartCopy(

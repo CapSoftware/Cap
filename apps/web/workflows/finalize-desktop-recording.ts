@@ -29,6 +29,7 @@ import {
 import {
 	advanceDesktopRecordingSourceCommit,
 	buildDesktopRecordingSourceUrls,
+	buildPreverifiedRunUrls,
 	getDesktopRecordingOutputKey,
 } from "@/lib/desktop-recording-source";
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
@@ -742,12 +743,17 @@ async function dispatchDesktopRecordingJob(
 			);
 		}
 		path = "/video/mux-segments";
+		const [output, preverifiedRunUrls] = await Promise.all([
+			buildDesktopSegmentsOutput({ video, attempt, sourceBytes }),
+			buildPreverifiedRunUrls(video),
+		]);
 		body = {
 			audioLevels: true,
 			...context,
 			...urls,
-			...(await buildDesktopSegmentsOutput({ video, attempt, sourceBytes })),
+			...output,
 			manifestSha256: current.source.manifestSha256,
+			...(preverifiedRunUrls.length > 0 ? { preverifiedRunUrls } : {}),
 		};
 	}
 	try {
