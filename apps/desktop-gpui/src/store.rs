@@ -768,9 +768,9 @@ settings_enum! {
 settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
-        Compatibility = "compatibility", "Compatibility";
-        Balanced = "balanced", "Balanced";
-        Ultra = "ultra", "Ultra";
+        Compatibility = "compatibility", tr::settings::options::studio_quality::compatibility();
+        Balanced = "balanced", tr::settings::options::studio_quality::balanced();
+        Ultra = "ultra", tr::settings::options::studio_quality::ultra();
     }
     default = Balanced
 }
@@ -789,8 +789,8 @@ settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
     MainWindowStartBehaviour {
-        Close = "close", "Close";
-        Minimise = "minimise", "Minimise";
+        Close = "close", tr::settings::options::main_window_start::close();
+        Minimise = "minimise", tr::settings::options::main_window_start::minimise();
     }
     default = Close
 }
@@ -798,9 +798,9 @@ settings_enum! {
 settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show Cap";
-        DoNothing = "doNothing", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
 }
@@ -809,10 +809,10 @@ settings_enum! {
     /// What a finished screenshot does next. GPUI-only: the Tauri app always
     /// opened the editor and never reads this key.
     PostScreenshotBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        Copy = "copy", "Copy to clipboard";
-        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
-        Save = "save", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_screenshot::open_editor();
+        Copy = "copy", tr::settings::options::post_screenshot::copy();
+        CopyAndOpenEditor = "copyAndOpenEditor", tr::settings::options::post_screenshot::copy_and_open_editor();
+        Save = "save", tr::settings::options::post_screenshot::do_nothing();
     }
     default = OpenEditor
 }
@@ -830,8 +830,8 @@ impl PostScreenshotBehaviour {
 settings_enum! {
     /// `PostDeletionBehaviour`.
     PostDeletionBehaviour {
-        DoNothing = "doNothing", "Do nothing";
-        ReopenRecordingWindow = "reopenRecordingWindow", "Reopen recording window";
+        DoNothing = "doNothing", tr::settings::options::post_deletion::do_nothing();
+        ReopenRecordingWindow = "reopenRecordingWindow", tr::settings::options::post_deletion::reopen();
     }
     default = DoNothing
 }
@@ -846,10 +846,19 @@ settings_enum! {
 }
 
 settings_enum! {
+    UpdateDownloadPolicy {
+        Manual = "manual", "Manual";
+        Auto = "auto", "Auto";
+        Never = "never", "Never";
+    }
+    default = Manual
+}
+
+settings_enum! {
     EditorPreviewQuality {
-        Quarter = "quarter", "Quarter";
-        Half = "half", "Half";
-        Full = "full", "Full";
+        Quarter = "quarter", tr::settings::options::preview_quality::quarter();
+        Half = "half", tr::settings::options::preview_quality::half();
+        Full = "full", tr::settings::options::preview_quality::full();
     }
     default = Half
 }
@@ -1031,6 +1040,7 @@ pub struct GeneralSettings {
     pub default_project_name_template: Option<String>,
     pub excluded_windows: Vec<WindowExclusion>,
     pub update_channel: UpdateChannel,
+    pub update_download_policy: UpdateDownloadPolicy,
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
@@ -1052,6 +1062,40 @@ pub struct GeneralSettings {
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+
+/// Changes the recordings folder and remembers the old one, like Tauri's
+/// `remember_previous_recordings_path`, so the library keeps listing projects
+/// left in earlier folders.
+pub fn set_recordings_path(path: Option<&str>) -> bool {
+    const MAX_PREVIOUS_PATHS: usize = 20;
+
+    update_store_section(GENERAL_SETTINGS, |settings| {
+        let mut previous_paths = strings_at(settings, "previousRecordingsPaths");
+        if let Some(path) = path {
+            previous_paths.retain(|previous| previous != path);
+        }
+        if let Some(previous) = opt_string_at(settings, "recordingsPath")
+            && Some(previous.as_str()) != path
+            && !previous_paths.contains(&previous)
+        {
+            previous_paths.push(previous);
+            let len = previous_paths.len();
+            if len > MAX_PREVIOUS_PATHS {
+                previous_paths.drain(..len - MAX_PREVIOUS_PATHS);
+            }
+        }
+        settings.insert(
+            "recordingsPath".into(),
+            path.map_or(Value::Null, Value::from),
+        );
+        settings.insert(
+            "previousRecordingsPaths".into(),
+            Value::from(previous_paths),
+        );
+        true
+    })
+}
+
 /// `audioEnhancementStore` (`apps/desktop/src/store.ts`): whether new Studio
 /// recordings start with Studio Sound on. Defaults on; the editor's Audio tab
 /// and the Recording settings card both write it.
@@ -1097,7 +1141,7 @@ pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIso
     set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
 }
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
-/// the section the tray's Select Mode submenu reads and writes.
+/// the section the tray's mode picker reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1381,6 +1425,7 @@ impl GeneralSettings {
                 })
                 .unwrap_or_else(default_excluded_windows),
             update_channel: enum_at(general, "updateChannel"),
+            update_download_policy: enum_at(general, "updateDownloadPolicy"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
@@ -2377,6 +2422,127 @@ mod tests {
             false
         }));
         assert_eq!(store.read()["auth"]["user_id"], "a");
+    }
+
+    #[test]
+    fn recordings_folder_changes_remember_previous_locations() {
+        let store = TempStore::new(
+            "recordings-folder-history",
+            Some(
+                r#"{"general_settings":{"recordingsPath":"old","previousRecordingsPaths":["older","new"],"maxFps":30,"future":true},"auth":{"user_id":"keep"}}"#,
+            ),
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "new");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old"]
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        assert_eq!(store_section(GENERAL_SETTINGS), reloaded);
+
+        assert!(set_recordings_path(None));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], Value::Null);
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old", "new"]
+        );
+
+        assert!(set_recordings_path(Some("old")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "old");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "new"]
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+        assert_eq!(store.read()[GENERAL_SETTINGS]["future"], true);
+        assert_eq!(store.read()["auth"]["user_id"], "keep");
+    }
+
+    #[test]
+    fn recordings_folder_changes_limit_history_without_duplicates() {
+        let _store = TempStore::new("recordings-folder-history-limit", None);
+        for index in 0..25 {
+            assert!(set_recordings_path(Some(&format!("folder-{index}"))));
+        }
+        let expected = (4..24)
+            .map(|index| format!("folder-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+
+        assert!(set_recordings_path(Some("folder-23")));
+        assert!(set_recordings_path(Some("folder-24")));
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+    }
+
+    #[test]
+    fn recordings_folder_changes_merge_concurrent_updates() {
+        let store = TempStore::new(
+            "recordings-folder-concurrent",
+            Some(r#"{"general_settings":{"recordingsPath":"original","maxFps":30}}"#),
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|index| {
+                let path = store.path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    set_test_tauri_store_path(Some(path));
+                    barrier.wait();
+                    let saved = set_recordings_path(Some(&format!("folder-{index}")));
+                    set_test_tauri_store_path(None);
+                    saved
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            assert!(worker.join().unwrap());
+        }
+        let reloaded = store_section(GENERAL_SETTINGS);
+        let mut paths = strings_at(&reloaded, "previousRecordingsPaths");
+        assert_eq!(paths.remove(0), "original");
+        paths.push(opt_string_at(&reloaded, "recordingsPath").unwrap());
+        paths.sort();
+        assert_eq!(
+            paths,
+            (0..8)
+                .map(|index| format!("folder-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_preferences_when_saving_fails() {
+        let contents = r#"{"general_settings":{"recordingsPath":"old","maxFps":30}}"#;
+        let store = TempStore::new("recordings-folder-write-failure", Some(contents));
+        let staged = store.path.with_extension("gpui-tmp");
+        std::fs::create_dir(&staged).unwrap();
+        let saved = set_recordings_path(Some("new"));
+        std::fs::remove_dir(staged).unwrap();
+
+        assert!(!saved);
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+        assert_eq!(store_section(GENERAL_SETTINGS)["recordingsPath"], "old");
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_unreadable_stores() {
+        let store = TempStore::new("recordings-folder-corrupt", Some("not JSON"));
+        assert!(!set_recordings_path(Some("new")));
+        assert!(!set_recordings_path(None));
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), "not JSON");
     }
 
     #[test]

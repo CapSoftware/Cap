@@ -754,6 +754,14 @@ fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
         })
 }
 
+/// Whether a `.cap` directory is a screenshot rather than a recording. The
+/// same rule `list_screenshots` uses, so the two never disagree on a bundle.
+pub fn is_screenshot_bundle(bundle: &Path) -> bool {
+    bundle.extension().and_then(|ext| ext.to_str()) == Some("cap")
+        && bundle.is_dir()
+        && screenshot_png(bundle).is_some()
+}
+
 fn screenshot_png(bundle: &Path) -> Option<(PathBuf, f64)> {
     let original = bundle.join("original.png");
     if let Ok(metadata) = original.metadata() {
