@@ -252,10 +252,8 @@ add_to_project = "現在のプロジェクトに追加"
 record_new = "新しいクリップを録画"
 
 [main.device]
-camera = "カメラ"
 fallback_camera = "カメラ"
 heading = "カメラとマイクを選択"
-microphone = "マイク"
 no_camera = "カメラなし"
 no_cameras = "カメラが見つかりません"
 no_matching_cameras = "一致するカメラはありません"

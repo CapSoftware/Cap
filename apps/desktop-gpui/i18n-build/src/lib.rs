@@ -14,9 +14,11 @@ pub static PSEUDO: LocaleSpec = LocaleSpec {
 
 const PSEUDO_PADDING: &str = "ļöŕéṁ îþšûṁ ðöļöŕ šîţ åṁéţ ";
 
-const MESSAGE_FIELDS: [&str; 8] = [
-    "text", "one", "few", "many", "other", "context", "max_px", "size",
+const MESSAGE_FIELDS: [&str; 9] = [
+    "text", "one", "few", "many", "other", "context", "max_px", "size", "platform",
 ];
+
+const PLATFORMS: [&str; 3] = ["macos", "windows", "linux"];
 
 const KEYWORDS: &[&str] = &[
     "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
@@ -490,6 +492,7 @@ struct Entry {
     raw: Raw,
     context: Option<String>,
     fit: Option<Fit>,
+    platform: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -501,6 +504,7 @@ enum Forms {
 struct Message {
     context: Option<String>,
     fit: Option<Fit>,
+    platform: Option<String>,
     english: Forms,
     translations: Vec<Option<Forms>>,
 }
@@ -546,6 +550,7 @@ fn flatten(
                         raw: Raw::Text(text.clone()),
                         context: None,
                         fit: None,
+                        platform: None,
                     },
                 );
             }
@@ -572,6 +577,7 @@ fn parse_message_table(table: &Table, source: bool) -> Result<Entry, String> {
     let mut context = None;
     let mut max_px = None;
     let mut size = None;
+    let mut platform = None;
     let mut forms = BTreeMap::new();
     for (field, value) in table.iter() {
         match field.as_str() {
@@ -579,6 +585,7 @@ fn parse_message_table(table: &Table, source: bool) -> Result<Entry, String> {
             "context" if source => context = Some(expect_string(field, value)?),
             "max_px" if source => max_px = Some(expect_positive_number(field, value)?),
             "size" if source => size = Some(expect_positive_number(field, value)?),
+            "platform" if source => platform = Some(expect_platform(field, value)?),
             name => match Category::from_name(name) {
                 Some(category) => {
                     forms.insert(category, expect_string(field, value)?);
@@ -591,7 +598,7 @@ fn parse_message_table(table: &Table, source: bool) -> Result<Entry, String> {
                 None => {
                     return Err(format!(
                         "`{name}` sits beside message fields; a table is either a message \
-                         (text, one, few, many, other, context, max_px, size) or a group of keys"
+                         (text, one, few, many, other, context, max_px, size, platform) or a group of keys"
                     ));
                 }
             },
@@ -617,7 +624,24 @@ fn parse_message_table(table: &Table, source: bool) -> Result<Entry, String> {
     if fit.is_some() && !matches!(raw, Raw::Text(_)) {
         return Err("`max_px` is only measured on plain strings".to_string());
     }
-    Ok(Entry { raw, context, fit })
+    Ok(Entry {
+        raw,
+        context,
+        fit,
+        platform,
+    })
+}
+
+fn expect_platform(field: &str, value: &Value) -> Result<String, String> {
+    let platform = expect_string(field, value)?;
+    if PLATFORMS.contains(&platform.as_str()) {
+        Ok(platform)
+    } else {
+        Err(format!(
+            "`{field}` must be one of {}, got `{platform}`",
+            PLATFORMS.join(", ")
+        ))
+    }
 }
 
 fn expect_string(field: &str, value: &Value) -> Result<String, String> {
@@ -811,6 +835,7 @@ pub fn generate_with(
                     Message {
                         context: entry.context.clone(),
                         fit: entry.fit,
+                        platform: entry.platform.clone(),
                         english,
                         translations: vec![None; locales.len()],
                     },
@@ -1269,6 +1294,11 @@ fn emit_accessor(code: &mut Code, name: &str, key: &str, depth: usize, context: 
         doc.push_str(note);
     }
     code.line(format!("#[doc = {doc:?}]"));
+    if let Some(platform) = &message.platform {
+        code.line(format!(
+            "#[cfg_attr(not(target_os = {platform:?}), allow(dead_code))]"
+        ));
+    }
 
     if let Some(id) = context.text_ids.get(key) {
         code.open(format!("pub fn {name}() -> &'static str {{"));
@@ -1602,6 +1632,28 @@ mod tests {
         .unwrap();
         assert!(output.code.contains("\"Title\","));
         assert!(output.code.contains("Window heading"));
+    }
+
+    #[test]
+    fn platform_messages_allow_dead_code_elsewhere() {
+        let output = run(&[(
+            "en",
+            "[a]\ntip = { text = \"Tip\", platform = \"windows\" }\n",
+        )])
+        .unwrap();
+        assert!(
+            output
+                .code
+                .contains("#[cfg_attr(not(target_os = \"windows\"), allow(dead_code))]"),
+            "{}",
+            output.code
+        );
+
+        let message = errors(&[(
+            "en",
+            "[a]\ntip = { text = \"Tip\", platform = \"amiga\" }\n",
+        )]);
+        assert!(message.contains("`platform` must be one of"), "{message}");
     }
 
     #[test]

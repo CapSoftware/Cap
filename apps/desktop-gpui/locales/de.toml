@@ -252,10 +252,8 @@ add_to_project = "Zum aktuellen Projekt hinzufügen"
 record_new = "Neuen Clip aufnehmen"
 
 [main.device]
-camera = "Kamera"
 fallback_camera = "Kamera"
 heading = "Kamera und Mikrofon wählen"
-microphone = "Mikrofon"
 no_camera = "Keine Kamera"
 no_cameras = "Keine Kameras gefunden"
 no_matching_cameras = "Keine passenden Kameras"

@@ -66,7 +66,7 @@ screenshot_window = "Screenshot Window"
 select_mode = "Select Mode"
 settings = "Settings"
 take_screenshot = "Take a Screenshot"
-tooltip_recording = { text = "Cap - Stop Recording", context = "Windows tray tooltip while a recording runs; clicking the icon stops it." }
+tooltip_recording = { text = "Cap - Stop Recording", context = "Windows tray tooltip while a recording runs; clicking the icon stops it.", platform = "windows" }
 upload_logs = "Upload Logs"
 version = { text = "Cap v{version}", context = "Disabled row showing the app version, for example Cap v0.6.1." }
 view_all_recordings = "View all recordings"
@@ -254,10 +254,8 @@ add_to_project = "Add to your current project"
 record_new = "Record a new clip"
 
 [main.device]
-camera = "Camera"
 fallback_camera = "Camera"
 heading = "Choose your camera and microphone"
-microphone = "Microphone"
 no_camera = { text = "No Camera", max_px = 180, size = 14 }
 no_cameras = "No cameras found"
 no_matching_cameras = "No matching cameras"

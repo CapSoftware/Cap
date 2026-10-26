@@ -94,8 +94,6 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "No matching windows",
         ),
         (tr::main::target::heading(), "Choose a capture source"),
-        (tr::main::device::camera(), "Camera"),
-        (tr::main::device::microphone(), "Microphone"),
         (tr::main::device::no_camera(), "No Camera"),
         (tr::main::device::no_microphone(), "No Microphone"),
         (tr::main::device::no_cameras(), "No cameras found"),

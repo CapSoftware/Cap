@@ -90,12 +90,15 @@ above 92% of the budget, or above the English width where English is already
 wider (the controls' `Resuming…`). Prefer a shorter natural phrase over an
 abbreviation when that happens.
 
+Keys with `platform` (`macos`, `windows` or `linux`) are only shown on that OS,
+so the generated accessor does not warn as unused when building elsewhere.
+
 ## Adding a language
 
 1. Add a `LocaleSpec` to `LOCALES` in `i18n-build/src/lib.rs` with the code,
    an identifier, the endonym and the plural rule.
 2. Copy `en.toml` to `<code>.toml`, keep the keys, and translate every value.
-   Drop `context`, `max_px` and `size`; a translation is a plain string, or the
+   Drop `context`, `max_px`, `size` and `platform`; a translation is a plain string, or the
    locale's plural forms where English has `one`/`other`.
 3. Add a column to the table above and a row to the tone table.
 4. If the script needs fonts the system cascade may pick wrongly, add a list to
