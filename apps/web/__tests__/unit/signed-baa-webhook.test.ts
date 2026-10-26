@@ -1084,6 +1084,35 @@ describe("Signed BAA Payment Link webhooks", () => {
 		}
 	});
 
+	it("saves current subscription status when a retried update is stale", async () => {
+		const pro = {
+			...proSubscription,
+			items: { data: [{ price: { id: "price_pro" }, quantity: 3 }] },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: { object: pro },
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_pro",
+			email: owner.email,
+			metadata: { userId: owner.id },
+		});
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [{ ...pro, status: "canceled" }],
+		});
+		mockDbChain.limit.mockResolvedValue([owner]);
+
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.set).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stripeSubscriptionId: proSubscription.id,
+				stripeSubscriptionStatus: "canceled",
+				inviteQuota: 0,
+			}),
+		);
+	});
+
 	it("preserves ordinary Pro checkout and its seat quota", async () => {
 		const pro = {
 			id: "sub_pro",

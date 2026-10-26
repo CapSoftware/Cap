@@ -753,9 +753,15 @@ export const POST = async (req: Request) => {
 						);
 					}, 0);
 
+				// A retried delivery can be older than the latest change, so save
+				// Stripe's current status rather than the event's snapshot.
+				const currentStatus =
+					subscriptions.data.find((sub) => sub.id === subscription.id)
+						?.status ?? subscription.status;
+
 				console.log("Updating user in database with:", {
 					subscriptionId: subscription.id,
-					status: subscription.status,
+					status: currentStatus,
 					customerId: customer.id,
 					inviteQuota,
 				});
@@ -764,7 +770,7 @@ export const POST = async (req: Request) => {
 					.update(users)
 					.set({
 						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
+						stripeSubscriptionStatus: currentStatus,
 						stripeCustomerId: customer.id,
 						inviteQuota: inviteQuota,
 					})
