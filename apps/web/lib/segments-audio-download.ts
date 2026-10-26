@@ -16,6 +16,54 @@ const MAX_SEGMENTS_AUDIO_BYTES = 192 * 1024 * 1024;
 
 const DEFAULT_DOWNLOAD_CONCURRENCY = 8;
 
+type ByteBudget = { used: number; max: number };
+
+async function readBoundedSegment(
+	response: Response,
+	budget: ByteBudget,
+): Promise<Buffer> {
+	const declaredSize = Number(response.headers?.get("content-length"));
+	if (
+		Number.isFinite(declaredSize) &&
+		declaredSize > budget.max - budget.used
+	) {
+		throw new Error(`Segment audio exceeds ${budget.max} bytes`);
+	}
+
+	const account = (length: number) => {
+		// Every concurrently downloaded segment shares this budget. The update
+		// happens synchronously before awaiting another chunk.
+		if (length > budget.max - budget.used) {
+			throw new Error(`Segment audio exceeds ${budget.max} bytes`);
+		}
+		budget.used += length;
+	};
+
+	if (!response.body) {
+		// Keep compatibility with Response mocks and body-less fetch adapters.
+		const buffer = Buffer.from(await response.arrayBuffer());
+		account(buffer.length);
+		return buffer;
+	}
+
+	const reader = response.body.getReader();
+	const chunks: Buffer[] = [];
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			account(value.byteLength);
+			chunks.push(Buffer.from(value));
+		}
+	} catch (error) {
+		await reader.cancel().catch(() => undefined);
+		throw error;
+	} finally {
+		reader.releaseLock();
+	}
+	return Buffer.concat(chunks);
+}
+
 /**
  * Download objects and byte-concatenate them, in order, into one Buffer. An
  * fMP4 init segment followed by its fragments concatenates into a valid
@@ -39,7 +87,7 @@ export async function downloadConcatenatedSegmentsToBuffer(
 	const fetchImpl = options.fetchImpl ?? fetch;
 
 	const buffers: Buffer[] = [];
-	let totalBytes = 0;
+	const budget: ByteBudget = { used: 0, max: maxBytes };
 
 	for (let start = 0; start < urls.length; start += concurrency) {
 		const batch = urls.slice(start, start + concurrency);
@@ -51,17 +99,11 @@ export async function downloadConcatenatedSegmentsToBuffer(
 						`Segment ${start + offset} not accessible: ${response.status}`,
 					);
 				}
-				return Buffer.from(await response.arrayBuffer());
+				return readBoundedSegment(response, budget);
 			}),
 		);
 
-		for (const buffer of batchBuffers) {
-			totalBytes += buffer.length;
-			if (totalBytes > maxBytes) {
-				throw new Error(`Segment audio exceeds ${maxBytes} bytes`);
-			}
-			buffers.push(buffer);
-		}
+		buffers.push(...batchBuffers);
 	}
 
 	return Buffer.concat(buffers);
@@ -84,7 +126,7 @@ export async function downloadConcatenatedSegments(
 	);
 	const fetchImpl = options.fetchImpl ?? fetch;
 
-	let totalBytes = 0;
+	const budget: ByteBudget = { used: 0, max: MAX_SEGMENTS_AUDIO_BYTES };
 
 	async function* downloadSegments() {
 		for (let start = 0; start < urls.length; start += concurrency) {
@@ -97,22 +139,14 @@ export async function downloadConcatenatedSegments(
 							`Segment ${start + offset} not accessible: ${response.status}`,
 						);
 					}
-					return Buffer.from(await response.arrayBuffer());
+					return readBoundedSegment(response, budget);
 				}),
 			);
 
-			for (const buffer of buffers) {
-				totalBytes += buffer.length;
-				if (totalBytes > MAX_SEGMENTS_AUDIO_BYTES) {
-					throw new Error(
-						`Segment audio exceeds ${MAX_SEGMENTS_AUDIO_BYTES} bytes`,
-					);
-				}
-				yield buffer;
-			}
+			for (const buffer of buffers) yield buffer;
 		}
 	}
 
 	await pipeline(downloadSegments(), createWriteStream(outputPath));
-	return totalBytes;
+	return budget.used;
 }
