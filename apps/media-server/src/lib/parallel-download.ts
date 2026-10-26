@@ -177,10 +177,10 @@ export async function downloadUrlToPathParallel(
 			}
 		};
 		const workers = Array.from(
-			{ length: Math.max(1, Math.min(options.concurrency - 1, ranges.count)) },
+			{ length: Math.max(0, Math.min(options.concurrency - 1, ranges.count)) },
 			() => worker(),
 		);
-		const firstRead = readInto(first, write, 0, firstBytes);
+		const firstRead = readInto(first, write, 0, firstBytes).then(worker);
 		try {
 			await Promise.all([firstRead, ...workers]);
 		} catch (error) {
