@@ -1028,26 +1028,45 @@ const openRecordingDestination = (status: RecordingStatus) => {
 	return run;
 };
 
-let bootstrapRefreshInFlight = false;
+let bootstrapRevision = 0;
+let bootstrapRefreshInFlight: number | null = null;
+
+const bootstrapRequestIsCurrent = async (
+	auth: ExtensionAuth,
+	revision: number,
+) => {
+	if (revision !== bootstrapRevision) return false;
+	const currentAuth = await loadAuth();
+	return (
+		revision === bootstrapRevision &&
+		currentAuth?.authApiKey === auth.authApiKey &&
+		currentAuth.userId === auth.userId
+	);
+};
 
 const refreshBootstrapInBackground = (
 	settings: ExtensionSettings,
 	auth: ExtensionAuth,
 ) => {
-	if (bootstrapRefreshInFlight) return;
-	bootstrapRefreshInFlight = true;
-	fetchBootstrap(settings, auth)
-		.then((bootstrap) => {
+	const revision = bootstrapRevision;
+	if (bootstrapRefreshInFlight === revision) return;
+	bootstrapRefreshInFlight = revision;
+	void fetchBootstrap(settings, auth)
+		.then(async (bootstrap) => {
+			if (!(await bootstrapRequestIsCurrent(auth, revision))) return;
 			bootstrapCache = bootstrap;
-			return saveCachedBootstrap(bootstrap);
+			await saveCachedBootstrap(bootstrap);
 		})
 		.catch(() => undefined)
 		.finally(() => {
-			bootstrapRefreshInFlight = false;
+			if (bootstrapRefreshInFlight === revision) {
+				bootstrapRefreshInFlight = null;
+			}
 		});
 };
 
 const loadSignedInState = async () => {
+	const revision = bootstrapRevision;
 	const [settings, auth, pendingAuth, authError] = await Promise.all([
 		loadSettings(),
 		loadAuth(),
@@ -1059,12 +1078,16 @@ const loadSignedInState = async () => {
 	if (pendingAuth && !authPending) {
 		await clearPendingAuth();
 	}
-	if (!auth) {
+	if (!auth || revision !== bootstrapRevision) {
 		return { settings, auth: null, bootstrap: null, authPending, authError };
 	}
 
 	if (!bootstrapCache) {
-		bootstrapCache = await loadCachedBootstrap();
+		const cached = await loadCachedBootstrap();
+		if (!(await bootstrapRequestIsCurrent(auth, revision))) {
+			return { settings, auth: null, bootstrap: null, authPending, authError };
+		}
+		bootstrapCache = cached;
 	}
 
 	// Serve the cached bootstrap immediately so the popup opens without waiting
@@ -1080,12 +1103,19 @@ const loadSignedInState = async () => {
 		};
 	}
 
-	bootstrapCache = await fetchBootstrap(settings, auth);
-	await saveCachedBootstrap(bootstrapCache);
+	const response = await fetchBootstrap(settings, auth);
+	if (!(await bootstrapRequestIsCurrent(auth, revision))) {
+		return { settings, auth: null, bootstrap: null, authPending, authError };
+	}
+	bootstrapCache = response;
+	await saveCachedBootstrap(response);
+	if (revision !== bootstrapRevision) {
+		return { settings, auth: null, bootstrap: null, authPending, authError };
+	}
 	return {
 		settings,
 		auth,
-		bootstrap: bootstrapCache,
+		bootstrap: response,
 		authPending: false,
 		authError: null,
 	};
@@ -1410,8 +1440,11 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
 				await revokeAuth(settings, previousAuth).catch(() => undefined);
 			}
-			await saveAuth(auth);
+			bootstrapRevision += 1;
+			bootstrapRefreshInFlight = null;
 			bootstrapCache = null;
+			await saveAuth(auth);
+			await clearCachedBootstrap();
 			refreshBootstrapInBackground(settings, auth);
 		})
 		.catch(async (error: unknown) => {
@@ -1491,6 +1524,8 @@ const handleRequest = async (
 	}
 
 	if (message.type === "auth-revoke") {
+		bootstrapRevision += 1;
+		bootstrapRefreshInFlight = null;
 		const settings = await loadSettings();
 		const auth = await loadAuth();
 		if (auth) {
