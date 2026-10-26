@@ -78,6 +78,7 @@ recording engine, which stays in English.
 | clip | 片段 | クリップ | clip | clip | Clip | क्लिप |
 | segment (of a recording) | 分段 | セグメント | segment | segmento | Segment | सेगमेंट |
 | recover / discard | 恢复 / 丢弃 | 復元 / 破棄 | récupérer / supprimer | recuperar / descartar | wiederherstellen / verwerfen | रिकवर करें / हटाएँ |
+| shot (3D camera) | 镜头 | ショット | plan | toma | Einstellung | शॉट |
 | Personal / Commercial plan | 个人版 / 商业版 | 個人 / 商用 | Personnel / Commercial | Personal / Comercial | Privat / Kommerziell | पर्सनल / कमर्शियल |
 
 ## Fitting the UI
