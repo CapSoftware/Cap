@@ -31,16 +31,19 @@ describe("loom-browser-download", () => {
 		"https://www.loom.com/share/aaaaaaaaaa%2Fextra",
 		"https://www.loom.com/share/short",
 		"https://www.loom.com/share/aaaaaaaaaa?irrelevant=no#x",
-	])("rejects invalid Loom browser download URLs or keeps safe IDs: %s", async (url) => {
-		const valid = url.includes("aaaaaaaaaa?irrelevant");
-		expect(extractLoomVideoId(url)).toBe(valid ? "aaaaaaaaaa" : null);
-		if (!valid) {
-			await expect(resolveLoomBrowserDownload(url)).resolves.toMatchObject({
-				success: false,
-			});
-			expect(fetch).not.toHaveBeenCalled();
-		}
-	});
+	])(
+		"rejects invalid Loom browser download URLs or keeps safe IDs: %s",
+		async (url) => {
+			const valid = url.includes("aaaaaaaaaa?irrelevant");
+			expect(extractLoomVideoId(url)).toBe(valid ? "aaaaaaaaaa" : null);
+			if (!valid) {
+				await expect(resolveLoomBrowserDownload(url)).resolves.toMatchObject({
+					success: false,
+				});
+				expect(fetch).not.toHaveBeenCalled();
+			}
+		},
+	);
 
 	it("accepts real Loom subdomains with no credentials", () => {
 		expect(
