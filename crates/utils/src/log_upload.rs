@@ -5,6 +5,7 @@ use std::{
 };
 
 pub const MAX_LOG_BYTES: usize = 512 * 1024;
+const MAX_CRASH_LOG_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const REQUEST_HEADROOM: usize = 64 * 1024;
 const MAX_METADATA_BYTES: usize = 512 * 1024;
@@ -22,6 +23,19 @@ pub struct LogBundle {
     pub files: Vec<LogFile>,
     pub directory_entries_scanned: usize,
     pub directory_available: bool,
+}
+
+impl LogBundle {
+    pub fn unavailable() -> Self {
+        let text = "Log directory is unavailable.\n".to_string();
+        Self {
+            ordinary_end: text.len(),
+            text,
+            files: Vec::new(),
+            directory_entries_scanned: 0,
+            directory_available: false,
+        }
+    }
 }
 
 pub struct PreparedUpload {
@@ -164,8 +178,7 @@ pub fn collect(dir: &Path, prefix: &str) -> LogBundle {
         directory_available: false,
     };
     let Ok(entries) = std::fs::read_dir(dir) else {
-        bundle.text.push_str("Log directory is unavailable.\n");
-        return bundle;
+        return LogBundle::unavailable();
     };
     bundle.directory_available = true;
     let mut candidates = Vec::new();
@@ -194,6 +207,17 @@ pub fn collect(dir: &Path, prefix: &str) -> LogBundle {
         .rev()
         .map(|(name, path)| (name, path, normal_budget))
         .collect();
+    // Crash records and captured stderr: what a process wrote as it died,
+    // which the daily log's non-blocking writer cannot guarantee.
+    for suffix in ["crashes-previous", "crashes", "stderr-previous", "stderr"] {
+        let name = format!("{prefix}.{suffix}");
+        let path = dir.join(&name);
+        if std::fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0)
+        {
+            selected.push((name, path, MAX_CRASH_LOG_BYTES));
+        }
+    }
     for suffix in ["diagnostic-previous.jsonl", "diagnostic-current.jsonl"] {
         let name = format!("{prefix}.{suffix}");
         let path = dir.join(&name);
@@ -249,6 +273,28 @@ pub fn collect(dir: &Path, prefix: &str) -> LogBundle {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn unavailable_directory_produces_an_explicit_support_bundle() {
+        let bundle = LogBundle::unavailable();
+        assert!(!bundle.directory_available);
+        assert_eq!(bundle.directory_entries_scanned, 0);
+        assert!(bundle.files.is_empty());
+        let upload = prepare_upload(
+            bundle,
+            serde_json::json!({}),
+            Some("{}"),
+            Some("synthetic report"),
+            str::to_string,
+        );
+        assert_eq!(upload.log, "Log directory is unavailable.\n");
+        assert_eq!(upload.diagnostics.as_deref(), Some("{}"));
+        assert_eq!(upload.report.as_deref(), Some("synthetic report"));
+        let context: serde_json::Value = serde_json::from_str(&upload.context).unwrap();
+        assert_eq!(context["logCoverage"]["directoryAvailable"], false);
+        assert_eq!(context["logCoverage"]["directoryEntriesScanned"], 0);
+        assert_eq!(context["logCoverage"]["files"], serde_json::json!([]));
+    }
 
     #[test]
     fn retained_history_fits_with_large_metadata_and_recent_events() {
@@ -342,6 +388,38 @@ mod tests {
                 .sum::<usize>()
                 <= MAX_LOG_BYTES
         );
+    }
+
+    #[test]
+    fn carries_crash_records_and_captured_stderr_after_the_daily_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cap-gpui.log.2026-10-22"), "event\n").unwrap();
+        std::fs::write(
+            dir.path().join("cap-gpui.log.crashes"),
+            "native crash: signal 11 (SIGSEGV)\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("cap-gpui.log.stderr-previous"),
+            "thread 'main' has overflowed its stack\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("cap-gpui.log.stderr"), "").unwrap();
+        std::fs::write(dir.path().join("cap-gpui.log.crashes-other"), "private").unwrap();
+        let bundle = collect(dir.path(), "cap-gpui.log");
+        let names: Vec<_> = bundle.files.iter().map(|file| file.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "cap-gpui.log.2026-10-22",
+                "cap-gpui.log.crashes",
+                "cap-gpui.log.stderr-previous"
+            ]
+        );
+        assert!(bundle.text.contains("signal 11 (SIGSEGV)"));
+        assert!(bundle.text.contains("overflowed its stack"));
+        assert!(!bundle.text.contains("private"));
+        assert_eq!(bundle.ordinary_end, bundle.text.len());
     }
 
     #[test]

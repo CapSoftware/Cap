@@ -50,7 +50,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 ## Project Structure & Modules
 - Turborepo monorepo:
-  - `apps/desktop` (Tauri v2 + SolidStart), `apps/web` (Next.js), `apps/cli` (Rust CLI).
+  - `apps/desktop-gpui` (GPUI, ships as Cap), `apps/desktop` (Tauri v2 + SolidStart; last shipped in 0.6.0, kept for the dev harness), `apps/web` (Next.js), `apps/cli` (Rust CLI).
   - `packages/*` shared libs (e.g., `database`, `ui`, `ui-solid`, `utils`, `web-*`).
   - `crates/*` Rust media/recording/rendering/camera crates.
   - `scripts/*`, `infra/`, and `packages/local-docker/` for tooling and local services.
@@ -59,7 +59,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 ## Build, Test, Develop
 - Install: `bun install`; setup: `bun run env-setup` then `bun run cap-setup`.
 - Dev: `bun run dev` (web+desktop). Desktop only: `bun run dev:desktop`. Web only: `bun run dev:web` or `cd apps/web && bun run dev`.
-- Build: `bun run build` (Turbo). Desktop release: `bun run tauri:build`.
+- Build: `bun run build` (Turbo). Desktop release: `bun run gpui:build <target>` (Cap ships as the GPUI app only).
 - DB: `bun run db:generate` → `bun run db:push` → `bun run db:studio`.
 - Docker: `bun run docker:up | docker:stop | docker:clean`.
 - Quality: `bun run lint`, `bun run format`, `bun run typecheck`. Rust: `cargo build -p <crate>`, `cargo test -p <crate>`.
@@ -68,7 +68,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - TypeScript / JS / JSON / CSS: **tab indent** and **double-quoted** strings, enforced by Biome (see `biome.json`). Do not configure per-file overrides.
 - Rust: `rustfmt` default style + the denied clippy lints in the Pre-Generation Invariants above.
 - Naming: files kebab‑case (`user-menu.tsx`); React/Solid components PascalCase; hooks `useX`; Rust modules snake_case; crates kebab‑case.
-- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Docker for MySQL/MinIO.
+- Runtime: Node 24, Bun 1.4.4, Rust 1.88+, Docker for MySQL/MinIO.
 
 (See **Pre-Generation Invariants** at the top of this file for the comments policy and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
 

@@ -97,9 +97,10 @@ describe("MCP OAuth authorization", () => {
 			true,
 		);
 		expect(isMcpRedirectUri("http://127.0.0.1:49152/callback")).toBe(true);
+		expect(isMcpRedirectUri("http://localhost:49152/callback")).toBe(true);
 		for (const uri of [
 			"http://chatgpt.com/connector/callback",
-			"http://localhost:49152/callback",
+			"http://localhost.evil.example:49152/callback",
 			"http://127.0.0.1/callback",
 			"https://chatgpt.com/connector/callback#fragment",
 			"https://user:password@chatgpt.com/callback",

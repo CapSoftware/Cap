@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -11,6 +13,18 @@ const addHttps = (s?: string) => {
 	return `https://${s}`;
 };
 
+const publicDir = resolve(process.cwd(), "public");
+
+const isPublicAsset = (path: string) => {
+	try {
+		const file = resolve(publicDir, `.${decodeURIComponent(path)}`);
+		if (!file.startsWith(`${publicDir}${sep}`)) return false;
+		return statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
+	} catch {
+		return false;
+	}
+};
+
 const mainOrigins = [
 	"https://cap.so",
 	"https://cap.link",
@@ -21,22 +35,47 @@ const mainOrigins = [
 	addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST),
 ].filter(Boolean) as string[];
 
+const FRAME_PROTECTED_PATHS = [
+	"/dashboard",
+	"/onboarding",
+	"/invite",
+	"/cli/authorize",
+	"/mcp/authorize",
+	"/admin",
+	"/signup",
+	"/verify-otp",
+];
+
+const isFrameProtectedPath = (path: string) =>
+	FRAME_PROTECTED_PATHS.some(
+		(protectedPath) =>
+			path === protectedPath || path.startsWith(`${protectedPath}/`),
+	);
+
+const setFrameHeaders = (response: NextResponse) => {
+	response.headers.set("X-Frame-Options", "SAMEORIGIN");
+	response.headers.set(
+		"Content-Security-Policy",
+		"frame-ancestors https://cap.so",
+	);
+	return response;
+};
+
 export async function proxy(request: NextRequest) {
+	const path = new URL(request.url).pathname;
+
+	if (path.startsWith("/login")) return setFrameHeaders(NextResponse.next());
+
+	const response = await route(request);
+	return isFrameProtectedPath(path) ? setFrameHeaders(response) : response;
+}
+
+async function route(request: NextRequest) {
 	const url = new URL(request.url);
 	const path = url.pathname;
 
 	if (path === "/" && request.cookies.has("next-auth.session-token")) {
 		return NextResponse.redirect(new URL("/dashboard/caps", url.origin));
-	}
-
-	if (path.startsWith("/login")) {
-		const response = NextResponse.next();
-		response.headers.set("X-Frame-Options", "SAMEORIGIN");
-		response.headers.set(
-			"Content-Security-Policy",
-			"frame-ancestors https://cap.so",
-		);
-		return response;
 	}
 
 	const shareIframeRedirectUrl = getShareIframeRedirectUrl({
@@ -54,8 +93,11 @@ export async function proxy(request: NextRequest) {
 	const hostname = url.hostname;
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
+		// Files under public/ have no route of their own, so without this every
+		// <img src="/logos/..."> on a self-hosted instance redirects to /login.
 		if (
 			!(
+				isPublicAsset(path) ||
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
 				path.startsWith("/cli/") ||

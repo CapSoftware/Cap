@@ -10,7 +10,11 @@ import {
 	Input,
 	LoadingSpinner,
 } from "@cap/ui";
-import type { Folder as FolderDomain, Video } from "@cap/web-domain";
+import type {
+	Folder as FolderDomain,
+	Organisation,
+	Video,
+} from "@cap/web-domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Folder, FolderInput, FolderRoot, Search } from "lucide-react";
@@ -19,11 +23,16 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	getMoveFolderDestinations,
+	getOwnedVideoMoveDestinations,
 	moveFolder,
 	moveVideos,
+	placeOwnedVideos,
 } from "@/actions/folders/move-items";
+import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import {
 	buildMoveFolderDestinationRows,
+	type MoveDestinationGroup,
 	type MoveLocation,
 	moveLocationKey,
 } from "@/lib/move-items";
@@ -45,6 +54,7 @@ interface MoveItemsDialogProps {
 	onOpenChange: (open: boolean) => void;
 	location: MoveLocation;
 	rootLabel: string;
+	organizationId?: Organisation.OrganisationId;
 	item: MoveItem;
 	onMoved?: () => void;
 }
@@ -54,37 +64,64 @@ export function MoveItemsDialog({
 	onOpenChange,
 	location,
 	rootLabel,
+	organizationId,
 	item,
 	onMoved,
 }: MoveItemsDialogProps) {
 	const router = useRouter();
+	const user = useCurrentUser();
+	const { activeOrganization } = useDashboardContext();
 	const queryClient = useQueryClient();
 	const currentDestinationId =
 		item.type === "videos" ? item.currentFolderId : item.currentParentId;
 	const [selectedFolderId, setSelectedFolderId] =
 		useState<FolderDomain.FolderId | null>(currentDestinationId);
+	const sourceLocationKey = moveLocationKey(location);
+	const [selectedLocationKey, setSelectedLocationKey] =
+		useState(sourceLocationKey);
+	const ownedVideos = item.type === "videos" && location.type === "personal";
 	const [search, setSearch] = useState("");
 
 	useEffect(() => {
 		if (!open) return;
 		setSelectedFolderId(currentDestinationId);
+		setSelectedLocationKey(sourceLocationKey);
 		setSearch("");
-	}, [currentDestinationId, open]);
+	}, [currentDestinationId, open, sourceLocationKey]);
 
 	const destinations = useQuery({
-		queryKey: ["move-folder-destinations", moveLocationKey(location)],
-		queryFn: () => getMoveFolderDestinations(location),
+		queryKey: [
+			"move-folder-destinations",
+			sourceLocationKey,
+			user?.id,
+			organizationId ?? activeOrganization?.organization.id,
+			ownedVideos,
+		],
+		queryFn: async (): Promise<MoveDestinationGroup[]> =>
+			ownedVideos
+				? getOwnedVideoMoveDestinations(organizationId)
+				: [
+						{
+							location,
+							name: rootLabel,
+							folders: await getMoveFolderDestinations(location),
+						},
+					],
 		enabled: open,
 		staleTime: 30_000,
 	});
 
+	const selectedGroup = destinations.data?.find(
+		(group) => moveLocationKey(group.location) === selectedLocationKey,
+	);
+	const sameLocation = selectedLocationKey === sourceLocationKey;
 	const rows = useMemo(
 		() =>
 			buildMoveFolderDestinationRows(
-				destinations.data ?? [],
+				selectedGroup?.folders ?? [],
 				item.type === "folder" ? item.folderId : undefined,
 			),
-		[destinations.data, item],
+		[selectedGroup, item],
 	);
 	const normalizedSearch = search.trim().toLocaleLowerCase();
 	const filteredRows = useMemo(
@@ -100,11 +137,15 @@ export function MoveItemsDialog({
 	const moveMutation = useMutation({
 		mutationFn: async () => {
 			if (item.type === "videos") {
-				await moveVideos({
+				if (!selectedGroup) throw new Error("Select a destination");
+				const placement = {
 					videoIds: item.videoIds,
 					folderId: selectedFolderId,
-					location,
-				});
+					location: selectedGroup.location,
+				};
+				await (ownedVideos
+					? placeOwnedVideos({ ...placement, organizationId })
+					: moveVideos(placement));
 				return;
 			}
 
@@ -119,7 +160,7 @@ export function MoveItemsDialog({
 			toast.success(
 				item.type === "folder"
 					? "Folder moved"
-					: `${count} Cap${count === 1 ? "" : "s"} moved`,
+					: `${count} Cap${count === 1 ? "" : "s"} ${sameLocation ? "moved" : `added to ${selectedGroup?.name}`}`,
 			);
 			onMoved?.();
 			if (item.type === "folder") {
@@ -140,7 +181,9 @@ export function MoveItemsDialog({
 		item.type === "folder"
 			? "Move folder"
 			: `Move ${itemCount} Cap${itemCount === 1 ? "" : "s"}`;
-	const destinationChanged = selectedFolderId !== currentDestinationId;
+	const destinationChanged =
+		!sameLocation || selectedFolderId !== currentDestinationId;
+	const sharing = !sameLocation && selectedGroup?.location.type !== "personal";
 
 	return (
 		<Dialog
@@ -155,6 +198,40 @@ export function MoveItemsDialog({
 				</DialogHeader>
 
 				<div className="flex overflow-hidden flex-col flex-1 gap-3 p-5 min-h-0">
+					{ownedVideos && destinations.data && (
+						<label className="flex flex-col gap-2 text-sm text-gray-12">
+							Location
+							<select
+								value={selectedLocationKey}
+								disabled={moveMutation.isPending}
+								onChange={(event) => {
+									const key = event.target.value;
+									setSelectedLocationKey(key);
+									setSelectedFolderId(
+										key === sourceLocationKey ? currentDestinationId : null,
+									);
+									setSearch("");
+								}}
+								className="h-10 rounded-lg border border-gray-4 bg-gray-1 px-3"
+							>
+								{destinations.data.map((group) => (
+									<option
+										key={moveLocationKey(group.location)}
+										value={moveLocationKey(group.location)}
+									>
+										{group.name}
+									</option>
+								))}
+							</select>
+						</label>
+					)}
+					{sharing && (
+						<p className="text-sm text-gray-11">
+							People with access to {selectedGroup?.name} will be able to view
+							these Caps. Existing sharing and their location in My Caps will be
+							kept.
+						</p>
+					)}
 					<div className="relative shrink-0">
 						<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 pointer-events-none text-gray-9" />
 						<Input
@@ -185,31 +262,36 @@ export function MoveItemsDialog({
 							<div className="py-1">
 								<button
 									type="button"
-									disabled={currentDestinationId === null}
+									disabled={
+										moveMutation.isPending ||
+										(sameLocation && currentDestinationId === null)
+									}
 									onClick={() => setSelectedFolderId(null)}
 									className={clsx(
 										"flex gap-3 items-center px-3 w-full h-11 text-left transition-colors",
-										currentDestinationId === null
+										sameLocation && currentDestinationId === null
 											? "cursor-not-allowed opacity-50"
 											: "hover:bg-gray-3",
 										selectedFolderId === null &&
-											currentDestinationId !== null &&
+											(!sameLocation || currentDestinationId !== null) &&
 											"bg-blue-3",
 									)}
 								>
 									<FolderRoot className="shrink-0 size-4 text-gray-10" />
 									<span className="flex-1 min-w-0 text-sm truncate text-gray-12">
-										{rootLabel}
+										{selectedGroup?.name ?? rootLabel}
 									</span>
 									{selectedFolderId === null &&
-										currentDestinationId !== null && (
+										(!sameLocation || currentDestinationId !== null) && (
 											<Check className="shrink-0 size-4 text-blue-10" />
 										)}
 								</button>
 
 								{filteredRows.map((row) => {
-									const isCurrent = row.id === currentDestinationId;
-									const isDisabled = row.disabled || isCurrent;
+									const isCurrent =
+										sameLocation && row.id === currentDestinationId;
+									const isDisabled =
+										moveMutation.isPending || row.disabled || isCurrent;
 									const isSelected = row.id === selectedFolderId && !isCurrent;
 
 									return (
@@ -272,13 +354,18 @@ export function MoveItemsDialog({
 						spinner={moveMutation.isPending}
 						disabled={
 							!destinationChanged ||
+							!selectedGroup ||
 							destinations.isLoading ||
 							destinations.isError ||
 							moveMutation.isPending
 						}
 						onClick={() => moveMutation.mutate()}
 					>
-						{moveMutation.isPending ? "Moving..." : "Move"}
+						{moveMutation.isPending
+							? "Saving..."
+							: sharing
+								? "Share & move"
+								: "Move"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

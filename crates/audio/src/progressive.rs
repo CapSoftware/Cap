@@ -17,19 +17,35 @@ use std::{
 use tokio::sync::watch;
 
 const BLOCK_FRAMES: usize = 32_768;
+// Eight lanes never run on a decoded block: 8 * 4_800 > BLOCK_FRAMES.
+const WAVEFORM_PEAK_LANES: usize = 4;
 
-pub fn waveform_peaks<'a>(samples: impl Iterator<Item = &'a f32>, channels: u16) -> Vec<f32> {
+pub fn waveform_peaks<'a>(slices: impl IntoIterator<Item = &'a [f32]>, channels: u16) -> Vec<f32> {
     let block_samples = AudioData::SAMPLE_RATE as usize / 10 * usize::from(channels.max(1));
     let mut peaks = Vec::new();
     let mut sum = 0.0_f32;
     let mut count = 0;
-    for sample in samples {
-        sum += sample.abs();
-        count += 1;
-        if count == block_samples {
-            peaks.push(sum / count as f32);
-            sum = 0.0;
-            count = 0;
+    for mut slice in slices {
+        while !slice.is_empty() {
+            if count == 0 && slice.len() >= block_samples * WAVEFORM_PEAK_LANES {
+                let (group, rest) = slice.split_at(block_samples * WAVEFORM_PEAK_LANES);
+                push_waveform_peak_lanes(&mut peaks, group, block_samples);
+                slice = rest;
+            } else if count == 0 && slice.len() >= block_samples * 2 {
+                let (group, rest) = slice.split_at(block_samples * 2);
+                push_waveform_peak_pair(&mut peaks, group, block_samples);
+                slice = rest;
+            } else {
+                let (window, rest) = slice.split_at((block_samples - count).min(slice.len()));
+                sum = window.iter().fold(sum, |sum, sample| sum + sample.abs());
+                count += window.len();
+                slice = rest;
+                if count == block_samples {
+                    peaks.push(sum / count as f32);
+                    sum = 0.0;
+                    count = 0;
+                }
+            }
         }
     }
     if count > 0 {
@@ -43,6 +59,39 @@ pub fn waveform_peaks<'a>(samples: impl Iterator<Item = &'a f32>, channels: u16)
         };
     }
     peaks
+}
+
+fn push_waveform_peak_pair(peaks: &mut Vec<f32>, group: &[f32], block_samples: usize) {
+    let (first, second) = group.split_at(block_samples);
+    let mut first_sum = 0.0_f32;
+    let mut second_sum = 0.0_f32;
+    for index in 0..block_samples {
+        first_sum += first[index].abs();
+        second_sum += second[index].abs();
+    }
+    peaks.push(first_sum / block_samples as f32);
+    peaks.push(second_sum / block_samples as f32);
+}
+
+fn push_waveform_peak_lanes(peaks: &mut Vec<f32>, group: &[f32], block_samples: usize) {
+    let (first, rest) = group.split_at(block_samples);
+    let (second, rest) = rest.split_at(block_samples);
+    let (third, fourth) = rest.split_at(block_samples);
+    let mut first_sum = 0.0_f32;
+    let mut second_sum = 0.0_f32;
+    let mut third_sum = 0.0_f32;
+    let mut fourth_sum = 0.0_f32;
+    for index in 0..block_samples {
+        first_sum += first[index].abs();
+        second_sum += second[index].abs();
+        third_sum += third[index].abs();
+        fourth_sum += fourth[index].abs();
+    }
+    let scale = block_samples as f32;
+    peaks.push(first_sum / scale);
+    peaks.push(second_sum / scale);
+    peaks.push(third_sum / scale);
+    peaks.push(fourth_sum / scale);
 }
 
 pub struct DecodedAudio {
@@ -924,7 +973,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(
-                    waveform_peaks(audio.sample_slices().flatten(), audio.channels()),
+                    waveform_peaks(audio.sample_slices(), audio.channels()),
                     expected
                 );
                 for (position, offset, mode) in [
@@ -1197,5 +1246,220 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    fn xorshift_samples(len: usize) -> Vec<f32> {
+        let mut state = 0x1234_5678_u32;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as f32 / u32::MAX as f32 * 2.0 - 1.0
+            })
+            .collect()
+    }
+
+    fn sequential_waveform_peaks(samples: &[f32], channels: u16) -> Vec<f32> {
+        let window_samples = 4_800 * usize::from(channels.max(1));
+        samples
+            .chunks(window_samples)
+            .map(|window| {
+                let average = window
+                    .iter()
+                    .fold(0.0_f32, |sum, sample| sum + sample.abs())
+                    / window.len() as f32;
+                if average > 0.0 {
+                    20.0 * average.log10()
+                } else {
+                    -60.0
+                }
+            })
+            .collect()
+    }
+
+    fn assert_peak_bits(actual: &[f32], expected: &[f32], channels: u16, block_len: usize) {
+        assert_eq!(actual.len(), expected.len(), "{channels} {block_len}");
+        for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "{channels} {block_len} at {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn waveform_pairs_match_sequential_bits_at_window_and_block_edges() {
+        for channels in [0, 1, 2, 6] {
+            let window = 4_800 * usize::from(channels.max(1));
+            for length in [
+                2 * window - 1,
+                2 * window,
+                2 * window + 1,
+                3 * window + 7,
+                6 * window + 17,
+            ] {
+                for nonfinite in [false, true] {
+                    let mut source = xorshift_samples(length);
+                    if nonfinite {
+                        for (index, value) in [
+                            (0, -0.0),
+                            (window - 1, f32::from_bits(0x7fc0_0123)),
+                            (window, f32::INFINITY),
+                            (window + 1, f32::NEG_INFINITY),
+                        ] {
+                            source[index] = value;
+                        }
+                    }
+                    let expected = sequential_waveform_peaks(&source, channels);
+                    for block in [
+                        2 * window,
+                        2 * window + 1,
+                        6 * window,
+                        32_768 * usize::from(channels.max(1)),
+                    ] {
+                        let slices: Vec<_> = source.chunks(block).collect();
+                        assert_peak_bits(
+                            &waveform_peaks(slices.iter().copied(), channels),
+                            &expected,
+                            channels,
+                            block,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn waveform_peaks_match_a_sequential_sum_across_uneven_blocks() {
+        let samples = xorshift_samples(48_000 * 3 + 1_234);
+        for channels in [1, 2] {
+            let expected = sequential_waveform_peaks(&samples, channels);
+            let window = 4_800 * usize::from(channels);
+            for block_len in [
+                1,
+                7,
+                4_799,
+                window - 1,
+                window,
+                window * WAVEFORM_PEAK_LANES - 1,
+                window * WAVEFORM_PEAK_LANES,
+                window * WAVEFORM_PEAK_LANES + 1,
+                32_768 * usize::from(channels),
+            ] {
+                let blocks: Vec<&[f32]> = samples.chunks(block_len).collect();
+                assert_peak_bits(
+                    &waveform_peaks(blocks.iter().copied(), channels),
+                    &expected,
+                    channels,
+                    block_len,
+                );
+            }
+            let mut with_empty: Vec<&[f32]> = Vec::new();
+            for chunk in samples.chunks(7) {
+                with_empty.push(chunk);
+                with_empty.push(&[]);
+            }
+            assert_peak_bits(
+                &waveform_peaks(with_empty, channels),
+                &expected,
+                channels,
+                7,
+            );
+            assert_peak_bits(
+                &waveform_peaks([&samples[..]], channels),
+                &expected,
+                channels,
+                samples.len(),
+            );
+        }
+
+        let contiguous = xorshift_samples(48_000 * 120 + 17);
+        for channels in [1, 2] {
+            let expected = sequential_waveform_peaks(&contiguous, channels);
+            assert_peak_bits(
+                &waveform_peaks([&contiguous[..]], channels),
+                &expected,
+                channels,
+                contiguous.len(),
+            );
+            let block_len = 32_768 * usize::from(channels);
+            let blocks: Vec<&[f32]> = contiguous.chunks(block_len).collect();
+            assert_peak_bits(
+                &waveform_peaks(blocks, channels),
+                &expected,
+                channels,
+                block_len,
+            );
+        }
+    }
+
+    fn serial_waveform_peaks<'a>(
+        slices: impl IntoIterator<Item = &'a [f32]>,
+        channels: u16,
+    ) -> Vec<f32> {
+        let block_samples = AudioData::SAMPLE_RATE as usize / 10 * usize::from(channels.max(1));
+        let mut peaks = Vec::new();
+        let mut sum = 0.0_f32;
+        let mut count = 0;
+        for mut slice in slices {
+            while !slice.is_empty() {
+                let (window, rest) = slice.split_at((block_samples - count).min(slice.len()));
+                sum = window.iter().fold(sum, |sum, sample| sum + sample.abs());
+                count += window.len();
+                slice = rest;
+                if count == block_samples {
+                    peaks.push(sum / count as f32);
+                    sum = 0.0;
+                    count = 0;
+                }
+            }
+        }
+        if count > 0 {
+            peaks.push(sum / count as f32);
+        }
+        for peak in &mut peaks {
+            *peak = if *peak > 0.0 {
+                20.0 * peak.log10()
+            } else {
+                -60.0
+            };
+        }
+        peaks
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_waveform_peaks() {
+        use std::{hint::black_box, time::Instant};
+
+        for (track, channels) in [("mic", 1_u16), ("system audio", 2)] {
+            let samples = xorshift_samples(48_000 * 3_600 * usize::from(channels));
+            let blocks: Vec<&[f32]> = samples.chunks(32_768 * usize::from(channels)).collect();
+            let serial = serial_waveform_peaks(blocks.iter().copied(), channels);
+            let lanes = waveform_peaks(blocks.iter().copied(), channels);
+            assert_peak_bits(&lanes, &serial, channels, 32_768 * usize::from(channels));
+            let mut serial_runs = Vec::new();
+            let mut lane_runs = Vec::new();
+            for _ in 0..5 {
+                let start = Instant::now();
+                black_box(serial_waveform_peaks(blocks.iter().copied(), channels));
+                serial_runs.push(start.elapsed().as_secs_f64() * 1000.0);
+                let start = Instant::now();
+                black_box(waveform_peaks(blocks.iter().copied(), channels));
+                lane_runs.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            serial_runs.sort_by(f64::total_cmp);
+            lane_runs.sort_by(f64::total_cmp);
+            println!(
+                "{{\"track\":\"{track}\",\"channels\":{channels},\"duration_seconds\":3600,\"block_frames\":32768,\"serial_median_ms\":{:.1},\"serial_min_ms\":{:.1},\"lanes_median_ms\":{:.1},\"lanes_min_ms\":{:.1}}}",
+                serial_runs[serial_runs.len() / 2],
+                serial_runs[0],
+                lane_runs[lane_runs.len() / 2],
+                lane_runs[0]
+            );
+        }
     }
 }

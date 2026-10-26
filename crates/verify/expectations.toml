@@ -1,0 +1,289 @@
+# Strict expected failures for the engine verification suite
+# (`cargo test -p cap-verify`), in the shared format of crates/verify-expect
+# (also used by crates/rendering/src/decoder/model/expectations.toml):
+#
+#   [[xfail]]
+#   case = "<case id as printed by the suite, * globs allowed>"
+#   class = "<stale | future | wrong-segment | unreadable | missing | unexpected
+#             | frame-count | timestamps | nondeterministic | error | coverage
+#             | frames-missing | audio-mic | audio-system | sync-mic | sync-system
+#             | sync-screen-mic | sync-screen-system | sync-system-mic
+#             | sync-camera-mic | start-time | missing-after-hold | colour-level
+#             | colour-matrix | caption-* | mapping | duration>"
+#   bound = { <metric> = <max> or [<min>, <max>], ... }
+#   reason = "<what is wrong>"
+#   link = "<PR or issue that fixes it; empty when no fix exists yet>"
+#   platforms = ["macos"]   (optional; absent = every platform)
+#   flaky = true            (optional; timing-dependent, may pass. State the
+#                            measured rate in the reason.)
+#   starved = true          (optional, flaky only: excuses the failure only
+#                            when the case's starvation sentinel saw the
+#                            machine stall during the case)
+#
+# Every entry carries the bound of its documented mechanism. The suite
+# measures each failing class, and an entry excuses a failure only when every
+# measurement lies inside its bound; a measured metric the bound does not
+# name must be zero. Metrics:
+# - frame classes (stale, future, unreadable, missing, ...): <stream>-frames
+#   (frames affected per stream), frame (range of output frames or seek
+#   positions affected), delta (largest source-frame error);
+# - classes from a single check: count (number of problems), plus the
+#   check's own measurement: offset-ms (A/V offset, audio minus screen, or
+#   screen minus audio for sync-screen-*), spread-ms, missing, unexpected,
+#   drift-ms, luma / cb / cr (code values), off-periods (frame periods off
+#   the timestamp grid), <stream>-start-late-ms, <stream>-end-lost.
+#
+# A listed class that no longer occurs fails the run with "remove this
+# xfail", so fixes stay locked in. A class that occurs and is not listed, or
+# that occurs outside its bound, fails the run. scripts/verify/bless.sh
+# rewrites this file from a local run or from a CI run's report artifacts
+# (`--run <id>`, every platform), keeping reasons, links and bounds; new
+# entries get a TODO reason and their measured range as the bound. Review the
+# diff.
+#
+# "NEW:" marks bugs the suite found that no open PR fixed when they were
+# recorded. #2638 fixes the AVAssetReader and pts-hole decoder entries
+# (it supersedes #2595 and #2603), #2636 the decode-deadline entries.
+
+require_bound = true
+
+[[xfail]]
+case = "export/backward-hold/backward-jumps/mp460/avf"
+class = "stale"
+platforms = ["macos"]
+flaky = true
+bound = { camera-frames = 1, delta = 1, frame = [2579, 2579] }
+reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Every run in probe 38762089521 (42 of 42) and on hosted macOS, but it passed on blacksmith-6vcpu-macos-15 in push run 38846099909: whether the previous vend is still cached depends on the decoder's wall-clock idle timeout, so it is flaky there"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+# Decode deadline under machine starvation. These apply only to a case the
+# starvation sentinel saw stall (starved = true) and only with the signature
+# of the mechanism; the same symptom on a healthy machine is a failure.
+
+[[xfail]]
+case = "playback/backward-hold/backward-jumps/seq30-from0/ffmpeg"
+class = "error"
+platforms = ["windows"]
+flaky = true
+starved = true
+bound = { count = 1 }
+reason = "NEW: under load offline playback gets no frame at all: a decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) leaves the request unanswered (\"decoders returned no frame for clip 0 at 5.000s\"). Seen once on a starved windows-2022 runner (Engine verify 38841241061, windows shard 1, sentinel longest wake gap 3.1 s, 38 gaps over 100 ms); same deadline as the export frame reorder entry. Bound: one error, only under a sentinel-proven stall"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
+
+[[xfail]]
+case = "export/early-camera/full/mp430/ffmpeg"
+class = "frame-count"
+platforms = ["windows"]
+flaky = true
+starved = true
+bound = { count = 1, missing = 1 }
+reason = "NEW: under load an offline export loses its first frame: when the first decodes miss their 2,000 ms deadline the render loop advances before any usable frame exists (crates/rendering/src/lib.rs, initial decode failure path; sol-starved-export.md), so the export has 179 of 180 frames. Seen once on a starved windows-2022 runner (Engine verify 38841241061, windows shard 1, sentinel longest wake gap 4.2 s, 133 gaps over 100 ms). Bound: exactly one frame, only under a sentinel-proven stall"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
+
+[[xfail]]
+case = "export/early-camera/full/mp430/ffmpeg"
+class = "future"
+platforms = ["windows"]
+flaky = true
+starved = true
+bound = { screen-frames = 179, camera-frames = 179, delta = 2, frame = [0, 179] }
+reason = "NEW: same initial decode-deadline loss as the frame-count entry: with the first frame gone every later frame shows the source one or two frames ahead (146 of 178 screen frames). Seen once on a starved windows-2022 runner (Engine verify 38841241061). Bound: at most two source frames ahead, only under a sentinel-proven stall"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
+
+# Instant mode (fixtures recorded through the real Instant muxers and
+# finalize_instant_output). Each audio source is its own class, so a known
+# loss or offset of one source cannot hide the other's.
+
+[[xfail]]
+case = "export/instant-ungated-mic-late/output/mp4/native"
+class = "sync-mic"
+platforms = ["macos", "windows"]
+bound = { count = 1, offset-ms = [-210, -190] }
+reason = "NEW: the Instant audio track is anchored at its first sample (AudioAnchor::FirstFrame) and nothing aligns it to the screen afterwards: a mic that becomes ready 0.2 s after the screen plays 200 ms early in output.mp4 (-198.7 to -201.1 ms measured). Bound: early by the mic's start delay"
+link = ""
+
+
+[[xfail]]
+case = "export/instant-ungated-system-loopback/output/mp4/native"
+class = "sync-system"
+platforms = ["macos", "windows"]
+bound = { count = 1, offset-ms = [-270, -250] }
+reason = "NEW: same anchor, loopback-style system audio (WASAPI delivers packets only while sound plays): the first sound becomes audio zero, so all audio is early by the time to first sound (260 ms here; -253.7 to -260.2 ms measured)"
+link = ""
+
+
+[[xfail]]
+case = "export/instant-gated-system-only/output/mp4/native"
+class = "audio-system"
+flaky = true
+bound = { count = 1, missing = 2, lost = 2 }
+reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early). Bound: at most 2 markers lost, none unexpected"
+link = ""
+
+[[xfail]]
+case = "*/basic/transition/*60*/avf"
+class = "stale"
+platforms = ["macos"]
+flaky = true
+bound = { screen-frames = 1, delta = 1, frame = [149, 149] }
+reason = "During a cross-fade both clips read the same AVAssetReader decoder at two positions; a reset for one position drops the other position's last vended frame from the cache, so at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Not the IOSurface source lifetime bug: it stays with that fix (sol-avf proof run 38762654200). Same frame in export and in offline playback. Fires in almost every run but depends on the decoder's cache state, which its 250 ms idle timeout (IDLE_READER_TIMEOUT) clears: a 300 ms pause in the request stream at 2.0, 2.42 or 2.48 s makes offline playback correct (measured on Apple silicon), and the export passed once on macos-15 (push run 38763177849). Bound: that one screen frame, one source frame stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
+class = "stale"
+platforms = ["macos"]
+flaky = true
+bound = { screen-frames = 2, camera-frames = 2, delta = 1, frame = [126, 127] }
+reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. 3 of 3 runs on Apple silicon, 2 of 4 full runs on runners, where the loop presents fewer frames, so it is timing dependent there"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+# Real capture (crates/verify/tests/recording.rs, verify-recording workflow).
+# Sync classes are per pair (sync-screen-mic is screen minus mic, negative =
+# the screen plays early).
+
+[[xfail]]
+case = "recording/instant/screen-mic-system"
+class = "sync-screen-mic"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, offset-ms = [-200, -10] }
+reason = "NEW: the Instant screen track starts at its first encoded frame (the VideoToolbox encoder starts after the audio pipeline), so the screen plays early against mic and system audio by the encoder start delay: runners -131 to -24 ms (median -53 to -74 over 20 recordings, fix-video-timestamps probes), developer Mac 340 to 570 ms. The delay varies: in Verify recording 38818894595 (macos-26) screen-mic was -8.5 ms, inside the allowed -10..+75 ms, so the check passed; flaky until the screen track is anchored to the recording start. Bound: screen early by at most 200 ms on runners"
+link = ""
+
+[[xfail]]
+case = "recording/instant/long-holds"
+class = "sync-screen-mic"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, offset-ms = [-200, -10] }
+reason = "NEW: same encoder start delay as recording/instant/screen-mic-system on a 30 s recording with screen holds: -61 to -68 ms on runners (developer Mac: screen 375 ms early); flaky for the same reason"
+link = ""
+
+[[xfail]]
+case = "recording/instant/late-mic"
+class = "sync-screen-mic"
+platforms = ["macos", "windows"]
+bound = { count = 1, offset-ms = [900, 1100] }
+reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on macOS and Windows runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "timestamps"
+platforms = ["windows"]
+bound = { count = 2 }
+reason = "NEW: Windows camera encoder frame pacing (WindowsCameraMuxer, crates/recording/src/output_pipeline/win.rs): when no frame arrives within one frame interval it re-encodes the last frame stamped one interval later, the slot the late real frame is stamped for, so the real frame lands on the same timestamp and the muxer moves it by one 90 kHz tick (run 39000141528: 16 duplicated frames, pts 0.266667 then 0.266678). Also in cap-v0.6.0"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "sync-camera-mic"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, camera-mic-ms = [-70, 0] }
+reason = "NEW: same Windows camera frame pacing: the paced duplicates shift the camera track's frames against their capture times (camera vs mic -38.3 ms in run 39000141528, -18.4 ms, inside the limit, in run 39004015045). Bound: two frame periods early"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "camera-clock"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, camera-mic-ms = [-70, 0] }
+reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms in run 39000141528, -18.4 ms in run 39004015045). Bound: two frame periods early"
+link = ""
+
+
+[[xfail]]
+case = "recording/instant/system-only"
+class = "sync-screen-system"
+platforms = ["macos"]
+bound = { count = 1, offset-ms = [100, 250] }
+reason = "NEW: Instant with system audio and no microphone: the first ScreenCaptureKit audio buffer becomes audio zero, so system audio plays 140 to 184 ms early (developer Mac, 8 of 8). Runs only where system audio is played and required (CAP_VERIFY_REQUIRE_SYSTEM_AUDIO); elsewhere it reports unsupported"
+link = ""
+
+[[xfail]]
+case = "recording/instant/system-only"
+class = "unreadable"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, system-markers = 1 }
+reason = "NEW: Instant system-only: one system-audio marker inside the track does not decode (a discontinuity inside the marker) in 4 of 5 developer-Mac runs"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "sync-screen-mic"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, offset-ms = [-150, 150] }
+reason = "NEW: the app's Instant start (start gate armed by the start cue): the screen-to-audio offset varies run to run: runners -55 to +16 ms (6 of 20 runs below the -10 ms floor), developer Mac +2 to +385 ms (3 of 13 above +75 ms); logs show 'Start gate admitted first audio frame at the arm point' followed by overlap trims of up to 124 ms. Bound: the trim size, 150 ms either way"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "missing"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, mic-markers = 1, mic-after-start-s = [0, 1] }
+reason = "NEW: gated Instant with microphone and system audio loses an audio marker near the start in 2 of 5 developer-Mac runs (and 3 of 3 in an earlier batch); not seen on runners. Bound: one mic marker within the first second after the gate"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "unreadable"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, mic-markers = 1 }
+reason = "NEW: see the gated Instant missing-marker entry: the damaged marker straddles the admission point (one marker)"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "timestamps"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, mic-spread-ms = [4, 130] }
+reason = "NEW: gated Instant microphone timeline not continuous after the gate opens: marker offsets vary by 5 to 124 ms within one recording on runners (overlap trims after admission; 852 ms once on a developer Mac). Bound: the trim size"
+link = ""
+
+# Crash recovery on the software (libx264) encoder path. Blacksmith macOS VMs
+# have no VideoToolbox hardware H.264 encoder (VTCompressionSessionCreate with
+# RequireHardwareAcceleratedVideoEncoder returns -12903, probe run
+# 38847791287), so h264_videotoolbox fails to open and every recording falls
+# back to libx264 (`get_codec_and_options`, crates/enc-ffmpeg/src/video/h264.rs),
+# which real Macs also use when the hardware encoder is busy or for targets
+# above its estimated capacity (for example 4K at 60 fps). Its GOP is a frame
+# count: g = 2 s x nominal fps (keyint 120, keyint_min 61 at 60 fps), scenecut=0,
+# and ScreenCaptureKit delivers a variable rate (about 33 fps for this
+# stimulus), so the DASH muxer, which cuts only at keyframes, writes 3.68 s
+# segments instead of 2 s, and the segment in progress is a 0-byte .tmp at the
+# crash (run 38845236912: segment_001 120 frames 3.68 s, segment_002.m4s.tmp
+# empty). Recovery keeps only the complete segments. With the hardware encoder
+# (hosted runners, real Apple silicon Macs) segments stay near 2 s.
+
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "missing"
+platforms = ["macos"]
+flaky = true
+hosts = ["blacksmith"]
+bound = { count = 1, screen-lost-s = [3, 5.5] }
+reason = "NEW: software (libx264) encoder path: keyframes every 120 frames regardless of the variable capture rate make 3.7 s segments, and the in-progress segment is empty at a crash, so recovery loses 4.5 to 4.8 s against the 3 s budget in 9 of 10 Blacksmith runs (flaky: the loss depends on where the crash falls inside the segment). Bound: at most one 3.7 s segment plus the 1 s since the last presented picture"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38845236912"
+
+# First picture after a static screen. During a scripted hold ScreenCaptureKit
+# delivers only Idle status buffers; its first Complete frame after the hold
+# can arrive 70 to 82 ms after the new picture was presented (steady state 23
+# to 31 ms after each present), when it already shows the next picture.
+# Frame-level logs (run 38745219281, macos-15) showed the picture never
+# reaches Cap's capture callback and Cap drops nothing. GitHub-hosted runners
+# and developer Macs resume that late, and Blacksmith VMs have since about
+# 2026-10-23 22:00 UTC (runs 40054572525 and 40056780767). No xfail covers
+# it: the suite excuses a post-hold picture only when the stimulus's own
+# ScreenCaptureKit stream also received no frame while it was on screen,
+# and then requires the first later picture that stream did receive
+# ("capture-service drops" in the case notes; see `missing_required` in
+# tests/recording.rs). A post-hold picture the stimulus's stream received
+# but the recording lacks still fails as missing-after-hold.

@@ -1,25 +1,28 @@
 name: Setup JS (Bun & Node)
-description: Sets up Bun 1.4.0 and Node with frozen dependencies and caching
+description: Sets up Bun 1.4.4 and Node with frozen dependencies and caching
 runs:
   using: "composite"
   steps:
     - name: Setup Node
       uses: actions/setup-node@v4
       with:
-        node-version: 20
+        node-version: 24
 
     - name: Setup Bun
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       with:
-        bun-version: 1.4.0
+        bun-version: 1.4.4
 
-    - name: Cache Bun packages
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+    # Saved from main only: a cache saved on a PR ref is invisible to every
+    # other PR and still counts against the repository cache quota.
+    - name: Restore Bun packages
+      id: bun-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ${{ runner.temp }}/bun-cache
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.0-${{ hashFiles('bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.4-${{ hashFiles('bun.lock') }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-bun-1.4.0-
+          ${{ runner.os }}-${{ runner.arch }}-bun-1.4.4-
 
     - name: Install frontend dependencies
       shell: bash
@@ -36,6 +39,14 @@ runs:
           fi
           sleep $((attempt * 30))
         done
+
+    - name: Save Bun packages
+      if: ${{ github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ runner.temp }}/bun-cache
+        key: ${{ steps.bun-cache.outputs.cache-primary-key }}
 
     - name: Verify Bun installation
       shell: bash

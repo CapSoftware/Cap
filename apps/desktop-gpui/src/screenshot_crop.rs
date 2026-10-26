@@ -86,6 +86,18 @@ pub struct ScreenshotCropDialog {
     _field_subscriptions: Vec<gpui::Subscription>,
 }
 
+impl ScreenshotCropDialog {
+    /// The original is decoded at full resolution (about 59 MB at 5K) and the
+    /// window's atlas keeps every painted image until it is told otherwise, so
+    /// each closed dialog would otherwise stay resident until the editor
+    /// window closes.
+    fn release_image(&mut self, window: &mut Window) {
+        if let Some(image) = self.image.take() {
+            let _ = window.drop_image(image);
+        }
+    }
+}
+
 impl ScreenshotEditorWindow {
     /// The header's crop button (`Header.tsx:84-93`): open the dialog seeded
     /// with the crop in force, or the whole image. Gated on `image_size` the
@@ -163,10 +175,16 @@ impl ScreenshotEditorWindow {
 
     /// Close without writing -- Escape or the backdrop. The project was never
     /// touched, so there is nothing to roll back.
-    pub(crate) fn cancel_crop_dialog(&mut self, reason: &'static str, cx: &mut Context<Self>) {
-        if self.crop.take().is_none() {
+    pub(crate) fn cancel_crop_dialog(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut dialog) = self.crop.take() else {
             return;
-        }
+        };
+        dialog.release_image(window);
         tracing::info!(reason, "screenshot crop cancelled");
         cx.notify();
     }
@@ -174,10 +192,11 @@ impl ScreenshotEditorWindow {
     /// The footer's Save (`Editor.tsx:463-482`): one `setProject` write of
     /// `background.crop`, so one history entry, then close.
     fn save_crop_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dialog) = self.crop.take() else {
+        let Some(mut dialog) = self.crop.take() else {
             return;
         };
         let bounds = dialog.state.real();
+        dialog.release_image(window);
         let crop = Crop {
             position: XY::new(bounds.x.max(0.) as u32, bounds.y.max(0.) as u32),
             size: XY::new(bounds.width.max(0.) as u32, bounds.height.max(0.) as u32),
@@ -470,7 +489,7 @@ impl ScreenshotEditorWindow {
             return true;
         }
         if key == "escape" {
-            self.cancel_crop_dialog("escape", cx);
+            self.cancel_crop_dialog("escape", window, cx);
             return true;
         }
         let Some(nudge) = engine::is_nudge_key(key) else {
@@ -668,8 +687,8 @@ impl ScreenshotEditorWindow {
                         .absolute()
                         .inset_0()
                         .bg(gpui::hsla(0., 0., 0., 0.8))
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.cancel_crop_dialog("backdrop", cx)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.cancel_crop_dialog("backdrop", window, cx)
                         })),
                 )
                 .child(
@@ -1122,7 +1141,7 @@ impl ScreenshotEditorWindow {
 /// can be up to 768 logical (1536 physical) pixels wide and the load path
 /// already refused anything past `MAX_DIMENSION`.
 fn decode_crop_image(path: Option<&Path>) -> Option<Arc<RenderImage>> {
-    let decoded = image::open(path?).ok()?;
+    let decoded = cap_gpui_kernels::codec::open_image(path?).ok()?;
     Some(crate::library::rgba_to_render_image(decoded.into_rgba8()))
 }
 

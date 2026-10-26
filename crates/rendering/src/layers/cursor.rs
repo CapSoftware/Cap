@@ -17,7 +17,7 @@ const CLICK_SHRINK_SIZE: f32 = 0.8;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
-/// Smear length ceiling in output px. Screen Studio semantics: the smear
+/// Smear length ceiling in output px. Length-based semantics: the smear
 /// length equals the cursor's per-frame travel scaled by the user amount —
 /// linear, with no response curve — so this only bounds pathological
 /// single-frame teleports, not real flicks (spring motion peaks well below
@@ -56,6 +56,7 @@ fn recorded_image_shape(image: &image::RgbaImage) -> Option<cap_cursor_info::Cur
 pub struct CursorLayer {
     statics: Statics,
     bind_group: Option<BindGroup>,
+    texture_bind_group: Option<(wgpu::Texture, BindGroup)>,
     cursors: HashMap<String, CursorTexture>,
     circle_cursor: Option<CursorTexture>,
     prev_is_svg_assets_enabled: Option<bool>,
@@ -216,6 +217,7 @@ impl CursorLayer {
         Self {
             statics,
             bind_group: None,
+            texture_bind_group: None,
             cursors: Default::default(),
             circle_cursor: None,
             prev_is_svg_assets_enabled: None,
@@ -453,6 +455,7 @@ impl CursorLayer {
         let time_s = segment_frames.recording_time;
 
         let Some(interpolated_cursor) = &uniforms.interpolated_cursor else {
+            self.bind_group = None;
             return;
         };
 
@@ -490,7 +493,7 @@ impl CursorLayer {
             child_motion
         };
 
-        // Screen Studio semantics: smear length = per-frame travel x amount,
+        // Length-based semantics: smear length = per-frame travel x amount,
         // linear all the way down (a sub-pixel kernel is the identity, so no
         // response ramp is needed to avoid popping).
         let scaled_motion = if cursor_strength > f32::EPSILON {
@@ -511,6 +514,7 @@ impl CursorLayer {
                 cursor,
                 segment_frames.recording_time as f64 * 1000.0,
                 hide_delay_ms,
+                uniforms.cursor_event_order.moves,
             );
             if cursor_opacity <= f32::EPSILON {
                 cursor_opacity = 0.0;
@@ -562,13 +566,18 @@ impl CursorLayer {
             }
             let Some(tex) = self.cursors.get(&interpolated_cursor.cursor_id) else {
                 error!("Cursor {:?} not found!", interpolated_cursor.cursor_id);
+                self.bind_group = None;
                 return;
             };
             tex
         };
 
         let size = {
-            let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
+            let click_t = get_click_t(
+                &cursor.clicks,
+                (time_s as f64) * 1000.0,
+                uniforms.cursor_event_order.clicks,
+            );
             let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
             let display = &uniforms.display;
             let size = cursor_height_px(
@@ -646,10 +655,26 @@ impl CursorLayer {
             bytemuck::cast_slice(&[cursor_uniforms]),
         );
 
-        self.bind_group = Some(
-            self.statics
-                .create_bind_group(&constants.device, &cursor_texture.texture),
-        );
+        let texture = &cursor_texture.texture;
+        if self
+            .texture_bind_group
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != texture)
+        {
+            self.texture_bind_group = Some((
+                texture.clone(),
+                self.statics.create_bind_group(&constants.device, texture),
+            ));
+        }
+        self.bind_group = self
+            .texture_bind_group
+            .as_ref()
+            .map(|(_, bind_group)| bind_group.clone());
+    }
+
+    #[cfg(test)]
+    pub fn bind_group(&self) -> Option<&BindGroup> {
+        self.bind_group.as_ref()
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -770,6 +795,7 @@ fn compute_cursor_idle_opacity(
     cursor: &CursorEvents,
     current_time_ms: f64,
     hide_delay_ms: f64,
+    moves_ordered: bool,
 ) -> f32 {
     if cursor.moves.is_empty() {
         return 0.0;
@@ -791,19 +817,21 @@ fn compute_cursor_idle_opacity(
         return 1.0;
     }
 
-    let Some(last_index) = cursor
-        .moves
-        .iter()
-        .rposition(|event| event.time_ms <= current_time_ms)
-    else {
+    let last_index = if moves_ordered {
+        idx.checked_sub(1)
+    } else {
+        cursor
+            .moves
+            .iter()
+            .rposition(|event| event.time_ms <= current_time_ms)
+    };
+    let Some(last_index) = last_index else {
         return 1.0;
     };
 
     let last_move = &cursor.moves[last_index];
 
     let time_since_move = (current_time_ms - last_move.time_ms).max(0.0);
-
-    let mut opacity = compute_cursor_fade_in(cursor, current_time_ms, hide_delay_ms);
 
     let fade_out = if time_since_move <= hide_delay_ms {
         1.0
@@ -813,8 +841,17 @@ fn compute_cursor_idle_opacity(
         fade.clamp(0.0, 1.0) as f32
     };
 
-    opacity *= fade_out;
-    opacity.clamp(0.0, 1.0)
+    if fade_out == 0.0 {
+        return 0.0;
+    }
+
+    let elapsed_moves = if moves_ordered {
+        &cursor.moves[..idx]
+    } else {
+        &cursor.moves[..]
+    };
+    let opacity = compute_cursor_fade_in(elapsed_moves, current_time_ms, hide_delay_ms);
+    (opacity * fade_out).clamp(0.0, 1.0)
 }
 
 fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -826,9 +863,12 @@ fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-fn compute_cursor_fade_in(cursor: &CursorEvents, current_time_ms: f64, hide_delay_ms: f64) -> f32 {
-    let resume_time = cursor
-        .moves
+fn compute_cursor_fade_in(
+    moves: &[CursorMoveEvent],
+    current_time_ms: f64,
+    hide_delay_ms: f64,
+) -> f32 {
+    let resume_time = moves
         .windows(2)
         .rev()
         .find(|pair| {
@@ -847,13 +887,17 @@ fn compute_cursor_fade_in(cursor: &CursorEvents, current_time_ms: f64, hide_dela
     smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, time_since_resume) as f32
 }
 
-fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
+fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64, clicks_ordered: bool) -> f32 {
     fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
         let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
     }
 
-    let next_click = clicks.iter().find(|c| c.time_ms > time_ms);
+    let split = clicks_ordered.then(|| clicks.partition_point(|c| c.time_ms <= time_ms));
+    let next_click = match split {
+        Some(split) => clicks.get(split).filter(|c| c.time_ms > time_ms),
+        None => clicks.iter().find(|c| c.time_ms > time_ms),
+    };
 
     if let Some(next) = next_click {
         if next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
@@ -869,7 +913,10 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
         }
     }
 
-    let prev_click = clicks.iter().rev().find(|c| c.time_ms <= time_ms);
+    let prev_click = match split {
+        Some(split) => clicks[..split].last(),
+        None => clicks.iter().rev().find(|c| c.time_ms <= time_ms),
+    };
 
     if let Some(prev) = prev_click {
         if prev.down {
@@ -1327,7 +1374,7 @@ mod tests {
 
     #[test]
     fn cursor_blur_vector_is_linear_in_travel_and_amount() {
-        // Screen Studio semantics: smear length == per-frame travel x amount,
+        // Length-based semantics: smear length == per-frame travel x amount,
         // with no response curve shortening slow-to-medium motion.
         let motion = cursor_blur_vector(XY::new(40.0, -30.0), 0.5);
         assert!((motion.x - 20.0).abs() < 1e-4);
@@ -1354,7 +1401,7 @@ mod tests {
     fn opacity_stays_visible_with_recent_move() {
         let cursor = cursor_events(&[(0.0, 0.0, 0.0), (1500.0, 0.1, 0.1)]);
 
-        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0);
+        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0, true);
 
         assert_eq!(opacity, 1.0);
     }
@@ -1363,7 +1410,7 @@ mod tests {
     fn opacity_fades_once_past_delay() {
         let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
 
-        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0);
+        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0, true);
 
         assert_eq!(opacity, 0.0);
     }
@@ -1374,13 +1421,14 @@ mod tests {
 
         let hide_delay_ms = 2000.0;
 
-        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms);
+        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms, true);
         assert_eq!(at_resume, 0.0);
 
         let halfway = compute_cursor_idle_opacity(
             &cursor,
             5000.0 + CURSOR_IDLE_FADE_OUT_MS / 2.0,
             hide_delay_ms,
+            true,
         );
         assert!((halfway - 0.5).abs() < 0.05);
 
@@ -1388,7 +1436,191 @@ mod tests {
             &cursor,
             5000.0 + CURSOR_IDLE_FADE_OUT_MS * 2.0,
             hide_delay_ms,
+            true,
         );
         assert_eq!(after_fade, 1.0);
+    }
+
+    fn idle_opacity_both_paths(cursor: &CursorEvents, time_ms: f64, hide_delay_ms: f64) -> f32 {
+        let unordered = compute_cursor_idle_opacity(cursor, time_ms, hide_delay_ms, false);
+        if cursor.moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms) {
+            let ordered = compute_cursor_idle_opacity(cursor, time_ms, hide_delay_ms, true);
+            assert_eq!(ordered.to_bits(), unordered.to_bits());
+        }
+        unordered
+    }
+
+    #[test]
+    fn opacity_handles_empty_history_and_duplicate_timestamps() {
+        assert_eq!(
+            idle_opacity_both_paths(&CursorEvents::default(), 0.0, 1000.0),
+            0.0
+        );
+        let cursor = cursor_events(&[
+            (0.0, 0.0, 0.0),
+            (5000.0, 0.5, 0.5),
+            (5000.0, 0.6, 0.6),
+            (5010.0, 0.7, 0.7),
+        ]);
+        for (time, expected) in [(0.0, 1.0), (5000.0, 1.0), (5200.0, 0.5), (5400.0, 1.0)] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_preserves_lookahead_boundary_and_resume_fade() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
+        for (time, expected) in [
+            (4749.999, 0.0),
+            (4750.0, 1.0),
+            (4999.0, 1.0),
+            (5000.0, 0.0),
+            (5400.0, 1.0),
+        ] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_is_consistent_when_seeking_back_and_forth() {
+        let cursor = cursor_events(&[
+            (0.0, 0.0, 0.0),
+            (5000.0, 0.5, 0.5),
+            (5010.0, 0.6, 0.6),
+            (10000.0, 0.7, 0.7),
+        ]);
+        for (time, expected) in [
+            (10200.0, 0.5),
+            (8000.0, 0.0),
+            (5200.0, 0.5),
+            (5000.0, 1.0),
+            (5400.0, 1.0),
+            (10000.0, 0.0),
+            (10400.0, 1.0),
+            (5200.0, 0.5),
+        ] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_preserves_fade_out_boundary() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
+        for (time, expected) in [(1000.0, 1.0), (1200.0, 0.5), (1400.0, 0.0), (1400.001, 0.0)] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+        assert!(idle_opacity_both_paths(&cursor, 1399.999, 1000.0) > 0.0);
+    }
+
+    #[test]
+    fn opacity_preserves_recent_resume_for_out_of_order_history() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5), (4000.0, 0.6, 0.6)]);
+        assert_eq!(idle_opacity_both_paths(&cursor, 5200.0, 1000.0), 0.25);
+    }
+
+    fn click_event(time_ms: f64, down: bool) -> CursorClickEvent {
+        CursorClickEvent {
+            active_modifiers: vec![],
+            cursor_num: 0,
+            cursor_id: "pointer".into(),
+            time_ms,
+            down,
+        }
+    }
+
+    fn event_time_cases() -> Vec<Vec<f64>> {
+        vec![
+            vec![],
+            vec![0.0],
+            vec![f64::NAN],
+            vec![0.0, 0.0, 10.0, 10.0, 20.0, 100.0, 100.0],
+            vec![-0.0, 0.0, 0.0, 10.0, 100.0],
+            vec![0.0, 20.0, 10.0, 50.0, 100.0],
+            vec![0.0, 10.0, f64::NAN, 30.0, 100.0],
+            vec![f64::NAN, 10.0, 30.0, 100.0],
+            vec![0.0, 10.0, f64::NAN],
+            vec![f64::NEG_INFINITY, 0.0, 10.0, f64::INFINITY],
+            vec![0.0, f64::INFINITY, 10.0, 100.0],
+            vec![
+                0.0, 16.0, 400.0, 1200.0, 1300.0, 3000.0, 3100.0, 3150.0, 6000.0, 6000.0, 9000.0,
+            ],
+        ]
+    }
+
+    fn lookup_queries(times: &[f64]) -> Vec<f64> {
+        let mut queries = vec![
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            1.0e9,
+        ];
+        for &time in times {
+            for offset in [
+                0.0,
+                CURSOR_CLICK_DURATION_MS,
+                CURSOR_IDLE_RESUME_LOOKAHEAD_MS,
+                CURSOR_IDLE_FADE_OUT_MS,
+                500.0,
+                1000.0,
+                2000.0,
+            ] {
+                for base in [time - offset, time + offset] {
+                    queries.extend([base.next_down(), base, base.next_up()]);
+                }
+            }
+        }
+        queries
+    }
+
+    #[test]
+    fn ordered_cursor_lookups_match_linear_scans() {
+        let mut ordered_moves = 0;
+        let mut ordered_clicks = 0;
+        for times in event_time_cases() {
+            let mut cursor = cursor_events(
+                &times
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &time)| (time, index as f64 * 0.1, 0.5))
+                    .collect::<Vec<_>>(),
+            );
+            for all_down in [false, true] {
+                cursor.clicks = times
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &time)| click_event(time, all_down || index % 2 == 0))
+                    .collect();
+                let order = crate::cursor_interpolation::PrecomputedCursorTimeline::new(
+                    &cursor, None, None,
+                )
+                .event_order();
+                ordered_moves += usize::from(order.moves);
+                ordered_clicks += usize::from(order.clicks);
+                for time in lookup_queries(&times) {
+                    if order.clicks {
+                        assert_eq!(
+                            get_click_t(&cursor.clicks, time, true).to_bits(),
+                            get_click_t(&cursor.clicks, time, false).to_bits(),
+                            "{times:?} clicks at {time}"
+                        );
+                    }
+                    if order.moves {
+                        for delay in [500.0, 1000.0, 2000.0, 2000.5] {
+                            assert_eq!(
+                                compute_cursor_idle_opacity(&cursor, time, delay, true).to_bits(),
+                                compute_cursor_idle_opacity(&cursor, time, delay, false).to_bits(),
+                                "{times:?} moves at {time} with delay {delay}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(ordered_moves, 14);
+        assert_eq!(ordered_clicks, 12);
     }
 }

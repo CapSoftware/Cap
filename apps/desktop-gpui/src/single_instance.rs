@@ -21,11 +21,11 @@ struct ForwardingEndpoint {
 #[derive(Debug, PartialEq, Eq)]
 enum ForwardedRequest {
     DeepLink(String),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     Reopen,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 const REOPEN_ACK: u8 = 1;
 
 fn pidfile() -> PathBuf {
@@ -123,16 +123,18 @@ fn is_cap_gpui(pid: i32) -> bool {
 
 fn is_cap_gpui_image(path: &Path) -> bool {
     #[cfg(windows)]
-    const IMAGE_NAME: &str = "cap-gpui.exe";
+    const IMAGE_NAMES: [&str; 2] = ["Cap.exe", "cap-gpui.exe"];
     #[cfg(not(windows))]
-    const IMAGE_NAME: &str = "cap-gpui";
+    const IMAGE_NAMES: [&str; 2] = ["Cap", "cap-gpui"];
 
     let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
         return false;
     };
     #[cfg(target_os = "linux")]
     let name = name.strip_suffix(" (deleted)").unwrap_or(name);
-    name.eq_ignore_ascii_case(IMAGE_NAME)
+    IMAGE_NAMES
+        .iter()
+        .any(|image| name.eq_ignore_ascii_case(image))
 }
 
 #[cfg(target_os = "macos")]
@@ -457,7 +459,7 @@ fn send_macos_forwarded_request(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 fn acknowledge_reopen(
     writer: &mut impl std::io::Write,
     enqueue: impl FnOnce() -> bool,
@@ -539,18 +541,14 @@ fn linux_reopen_address(
         .parent()
         .ok_or_else(|| std::io::Error::other("The instance directory is missing"))?
         .canonicalize()?;
+    // Only what every launch of this user's Cap sees alike. A terminal and
+    // GNOME's app grid pass different session variables (DISPLAY,
+    // XDG_SESSION_ID), and hashing those sent a relaunch to a socket nobody
+    // listened on. The owner's pid, start time and boot id already make the
+    // name unique, and the peer credentials check keeps it to this user.
     let mut scope = std::collections::hash_map::DefaultHasher::new();
     directory.hash(&mut scope);
     owner.hash(&mut scope);
-    for name in [
-        "XDG_RUNTIME_DIR",
-        "XDG_SESSION_ID",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "WAYLAND_DISPLAY",
-        "DISPLAY",
-    ] {
-        std::env::var_os(name).hash(&mut scope);
-    }
     std::os::unix::net::SocketAddr::from_abstract_name(format!(
         "cap-gpui-reopen-{:016x}",
         scope.finish()
@@ -637,6 +635,38 @@ fn read_linux_reopen_actions(
     reader: &mut impl std::io::Read,
     owner: LinuxInstanceIdentity,
 ) -> std::io::Result<LinuxReopenActions> {
+    read_linux_reopen_request(reader, owner).map(|(actions, _)| actions)
+}
+
+/// The longest activation token a relaunch forwards. Compositors issue short
+/// opaque strings; anything this long is not one.
+#[cfg(target_os = "linux")]
+const MAX_ACTIVATION_TOKEN_BYTES: usize = 4096;
+
+#[cfg(target_os = "linux")]
+fn valid_activation_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= MAX_ACTIVATION_TOKEN_BYTES
+        && token.chars().all(|c| c.is_ascii_graphic())
+}
+
+/// The relaunch's activation token, from the launcher that started it
+/// (`XDG_ACTIVATION_TOKEN` on Wayland). Focus stealing prevention lets the
+/// running instance raise its window with it.
+#[cfg(target_os = "linux")]
+fn launch_activation_token() -> Option<String> {
+    std::env::var("XDG_ACTIVATION_TOKEN")
+        .ok()
+        .filter(|token| valid_activation_token(token))
+}
+
+/// A forwarded relaunch: its actions, and the activation token it came with
+/// (`CAPACTV1` frames, which carry the token ahead of the actions).
+#[cfg(target_os = "linux")]
+fn read_linux_reopen_request(
+    reader: &mut impl std::io::Read,
+    owner: LinuxInstanceIdentity,
+) -> std::io::Result<(LinuxReopenActions, Option<String>)> {
     let invalid = || {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -647,7 +677,27 @@ fn read_linux_reopen_actions(
     reader.read_exact(&mut request)?;
     let mut header = linux_reopen_payload(owner);
     if request == header {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
+    }
+    let mut activation = header;
+    activation[..8].copy_from_slice(b"CAPACTV1");
+    let mut token = None;
+    if request == activation {
+        let mut size = [0; 4];
+        reader.read_exact(&mut size)?;
+        let size = u32::from_be_bytes(size) as usize;
+        if size > MAX_ACTIVATION_TOKEN_BYTES {
+            return Err(invalid());
+        }
+        let mut raw = vec![0; size];
+        reader.read_exact(&mut raw)?;
+        let raw = String::from_utf8(raw).map_err(|_| invalid())?;
+        if !valid_activation_token(&raw) {
+            return Err(invalid());
+        }
+        token = Some(raw);
+        request = header;
+        request[..8].copy_from_slice(b"CAPREOP2");
     }
     header[..8].copy_from_slice(b"CAPREOP2");
     if request != header {
@@ -678,7 +728,42 @@ fn read_linux_reopen_actions(
         actions.push(parse_linux_reopen_action(raw)?);
         remaining = rest;
     }
-    Ok(actions)
+    Ok((actions, token))
+}
+
+/// Writes a relaunch for the running instance, with the activation token
+/// when there is one.
+#[cfg(target_os = "linux")]
+fn write_linux_reopen_request(
+    writer: &mut impl std::io::Write,
+    owner: LinuxInstanceIdentity,
+    actions: &[u8],
+    token: Option<&str>,
+) -> std::io::Result<()> {
+    let Some(token) = token.filter(|token| valid_activation_token(token)) else {
+        return write_linux_reopen_actions(writer, owner, actions);
+    };
+    if actions.len() > MAX_FORWARDED_DEEP_LINK_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Too many forwarded Cap action bytes",
+        ));
+    }
+    let mut header = linux_reopen_payload(owner);
+    header[..8].copy_from_slice(b"CAPACTV1");
+    writer.write_all(&header)?;
+    writer.write_all(&(token.len() as u32).to_be_bytes())?;
+    writer.write_all(token.as_bytes())?;
+    writer.write_all(&(actions.len() as u32).to_be_bytes())?;
+    writer.write_all(actions)
+}
+
+/// The newest activation token a relaunch brought, until the window it
+/// raises is shown.
+#[cfg(target_os = "linux")]
+fn pending_activation_token() -> &'static std::sync::Mutex<Option<String>> {
+    static TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    &TOKEN
 }
 
 #[cfg(target_os = "linux")]
@@ -732,7 +817,12 @@ fn receive_linux_reopen(
     stream.set_read_timeout(Some(std::time::Duration::from_millis(250)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_millis(250)))?;
     linux_peer(stream)?;
-    let actions = read_linux_reopen_actions(stream, owner)?;
+    let (actions, token) = read_linux_reopen_request(stream, owner)?;
+    if let Some(token) = token {
+        *pending_activation_token()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(token);
+    }
     match requests.try_send(actions) {
         Ok(()) => {}
         Err(flume::TrySendError::Full(actions)) if actions.is_empty() => {}
@@ -774,6 +864,16 @@ fn send_linux_reopen(
     owner: LinuxInstanceIdentity,
     actions: &[u8],
 ) -> std::io::Result<()> {
+    send_linux_reopen_with_token(address, owner, actions, None)
+}
+
+#[cfg(target_os = "linux")]
+fn send_linux_reopen_with_token(
+    address: std::os::unix::net::SocketAddr,
+    owner: LinuxInstanceIdentity,
+    actions: &[u8],
+    token: Option<&str>,
+) -> std::io::Result<()> {
     use std::io::Read;
     let started = std::time::Instant::now();
     let mut stream = loop {
@@ -801,7 +901,7 @@ fn send_linux_reopen(
             "The activation socket belongs to another process",
         ));
     }
-    write_linux_reopen_actions(&mut stream, owner, actions)?;
+    write_linux_reopen_request(&mut stream, owner, actions, token)?;
     let mut reply = [0];
     stream.read_exact(&mut reply)?;
     if reply != [1] || linux_instance_identity(owner.pid)? != owner {
@@ -810,6 +910,20 @@ fn send_linux_reopen(
         ));
     }
     Ok(())
+}
+
+/// Whether the running Cap hung up without acknowledging: how an instance from
+/// before activation tokens rejects their frame, and how a current one fails
+/// before it queues anything. A timeout may come after the actions were
+/// queued, so resending then could run them twice.
+#[cfg(target_os = "linux")]
+fn closed_without_queueing(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -821,7 +935,20 @@ fn forward_linux_reopen(path: &Path, pid: u32) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("cap-gpui-reopen-request".into())
         .spawn(move || {
-            let _ = send.send(send_linux_reopen(address, owner, &actions));
+            // An instance from before activation tokens rejects the frame
+            // that carries one; it still reopens without it.
+            let token = launch_activation_token();
+            if token.is_some() {
+                tracing::info!("forwarding the launcher's activation token");
+            }
+            let result = match send_linux_reopen_with_token(address.clone(), owner, &actions, token.as_deref()) {
+                Err(error) if token.is_some() && closed_without_queueing(&error) => {
+                    tracing::info!(%error, "the running Cap refused the activation token; reopening without it");
+                    send_linux_reopen(address, owner, &actions)
+                }
+                result => result,
+            };
+            let _ = send.send(result);
         })?;
     receive.recv_timeout(LINUX_REOPEN_TIMEOUT).map_err(|_| {
         std::io::Error::new(
@@ -843,6 +970,35 @@ fn linux_reopen_allowed(
                 && mode == Some(crate::recording::RecordingMode::Studio)))
 }
 
+/// A hidden main window maps again a moment after it is shown, and an
+/// activation sent before then has no window to raise; the compositor drops
+/// repeats once the token is used.
+#[cfg(target_os = "linux")]
+fn raise_shown_window_with_token(token: String, cx: &mut gpui::App) {
+    let windows = cx.global::<crate::app_windows::AppWindows>();
+    // The reopen brings onboarding forward in place of the main window, which
+    // stays hidden (and unmapped) until onboarding is done.
+    let target: gpui::AnyWindowHandle = match windows.onboarding {
+        Some(onboarding) => onboarding.into(),
+        None => windows.main.into(),
+    };
+    cx.spawn(async move |cx| {
+        for delay in [0, 150, 400, 1000] {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(delay))
+                .await;
+            let token = token.clone();
+            if let Err(error) =
+                target.update(cx, |_, window, _| window.activate_window_with_token(token))
+            {
+                tracing::warn!(%error, "the reopened window was gone before it could be raised");
+                return;
+            }
+        }
+    })
+    .detach();
+}
+
 #[cfg(target_os = "linux")]
 pub fn init_linux_reopen(cx: &mut gpui::App) {
     let requests = linux_reopen_channel().1.clone();
@@ -857,8 +1013,16 @@ pub fn init_linux_reopen(cx: &mut gpui::App) {
                 }
                 let session = crate::session::RecordingSession::global(cx);
                 let current = session.read(cx);
+                let token = pending_activation_token()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
                 if linux_reopen_allowed(current.phase, current.mode(), current.instant_cleanup_safe()) {
                     crate::app_windows::show_main_window(cx);
+                    if let Some(token) = token {
+                        tracing::info!("raising the reopened window with the relaunch's activation token");
+                        raise_shown_window_with_token(token, cx);
+                    }
                 } else {
                     tracing::info!("Cap controls remain hidden while recording is changing state or cannot pause");
                 }
@@ -897,8 +1061,12 @@ fn acquire_windows_instance(path: &Path) {
         for _ in 0..40 {
             if let Some(pid) = windows_instance_pid(path) {
                 tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
-                forward_windows_deep_links(path, pid);
-                activate_windows_instance(pid);
+                if forward_windows_deep_links(path, pid) {
+                    activate_windows_instance(pid);
+                } else if let Err(error) = reopen_windows_instance(path, pid) {
+                    tracing::warn!(%error, "could not reopen the running Cap GPUI");
+                    activate_windows_instance(pid);
+                }
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -954,7 +1122,6 @@ fn start_deep_link_forwarding(path: &Path) -> std::io::Result<()> {
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
                         match read_forwarded_request(&mut stream, endpoint.secret) {
                             Ok(ForwardedRequest::DeepLink(url)) => crate::deeplink::submit_deep_link(&url),
-                            #[cfg(target_os = "macos")]
                             Ok(ForwardedRequest::Reopen) => {
                                 let result = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)))
                                     .and_then(|()| acknowledge_reopen(&mut stream, crate::deeplink::submit_reopen));
@@ -1013,7 +1180,7 @@ fn publish_forwarding_endpoint(temporary_path: &Path, endpoint_path: &Path) -> s
 }
 
 #[cfg(windows)]
-fn forward_windows_deep_links(path: &Path, pid: u32) {
+fn forward_windows_deep_links(path: &Path, pid: u32) -> bool {
     use std::io::Write;
 
     let urls = std::env::args()
@@ -1021,23 +1188,12 @@ fn forward_windows_deep_links(path: &Path, pid: u32) {
         .filter(|argument| is_forwardable_deep_link(argument))
         .collect::<Vec<_>>();
     if urls.is_empty() {
-        return;
+        return false;
     }
 
-    let endpoint_path = path.with_extension("ipc");
-    let endpoint = (0..40).find_map(|attempt| {
-        let endpoint = std::fs::read_to_string(&endpoint_path)
-            .ok()
-            .and_then(|contents| parse_forwarding_endpoint(&contents))
-            .filter(|endpoint| endpoint.pid == pid);
-        if endpoint.is_none() && attempt < 39 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        endpoint
-    });
-    let Some(endpoint) = endpoint else {
+    let Some(endpoint) = windows_forwarding_endpoint(path, pid) else {
         tracing::warn!("could not find the running Cap GPUI deep-link endpoint");
-        return;
+        return true;
     };
 
     for url in urls {
@@ -1052,6 +1208,60 @@ fn forward_windows_deep_links(path: &Path, pid: u32) {
             tracing::warn!(%error, "could not forward a Cap deep link to the running instance");
         }
     }
+    true
+}
+
+#[cfg(windows)]
+fn windows_forwarding_endpoint(path: &Path, pid: u32) -> Option<ForwardingEndpoint> {
+    let endpoint_path = path.with_extension("ipc");
+    (0..40).find_map(|attempt| {
+        let endpoint = std::fs::read_to_string(&endpoint_path)
+            .ok()
+            .and_then(|contents| parse_forwarding_endpoint(&contents))
+            .filter(|endpoint| endpoint.pid == pid);
+        if endpoint.is_none() && attempt < 39 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        endpoint
+    })
+}
+
+#[cfg(windows)]
+fn reopen_windows_instance(path: &Path, pid: u32) -> std::io::Result<()> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
+    let endpoint = windows_forwarding_endpoint(path, pid).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the running Cap GPUI has no forwarding endpoint",
+        )
+    })?;
+    unsafe { AllowSetForegroundWindow(pid) };
+    send_windows_reopen(endpoint)
+}
+
+#[cfg(windows)]
+fn send_windows_reopen(endpoint: ForwardingEndpoint) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+
+    let timeout = std::time::Duration::from_secs(2);
+    let mut stream = std::net::TcpStream::connect_timeout(
+        &(std::net::Ipv4Addr::LOCALHOST, endpoint.port).into(),
+        timeout,
+    )?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.write_all(&endpoint.secret.to_be_bytes())?;
+    stream.write_all(&0_u32.to_be_bytes())?;
+    let mut acknowledgment = [0_u8; 1];
+    stream.read_exact(&mut acknowledgment)?;
+    if acknowledgment[0] != REOPEN_ACK {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Cap GPUI did not acknowledge the reopen request",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(any(windows, target_os = "macos", test))]
@@ -1092,7 +1302,7 @@ fn read_forwarded_request(
     let mut size = [0_u8; 4];
     reader.read_exact(&mut size)?;
     let size = u32::from_be_bytes(size) as usize;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     if size == 0 {
         return Ok(ForwardedRequest::Reopen);
     }
@@ -1209,14 +1419,18 @@ mod tests {
     #[test]
     fn gpui_process_image_must_match_exactly() {
         #[cfg(windows)]
-        let name = "cap-gpui.exe";
+        let names = ["cap-gpui.exe", "Cap.exe"];
         #[cfg(not(windows))]
-        let name = "cap-gpui";
+        let names = ["cap-gpui", "Cap"];
 
-        assert!(is_cap_gpui_image(Path::new(name)));
-        assert!(is_cap_gpui_image(Path::new(&name.to_ascii_uppercase())));
+        for name in names {
+            assert!(is_cap_gpui_image(Path::new(name)));
+            assert!(is_cap_gpui_image(Path::new(&name.to_ascii_uppercase())));
+        }
         assert!(!is_cap_gpui_image(Path::new("not-cap-gpui")));
         assert!(!is_cap_gpui_image(Path::new("cap-gpui-helper")));
+        assert!(!is_cap_gpui_image(Path::new("Cap Helper")));
+        assert!(!is_cap_gpui_image(Path::new("cap-cli")));
     }
 
     #[cfg(target_os = "linux")]
@@ -1229,10 +1443,7 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let binary = directory.join("cap-gpui");
         std::fs::copy("/bin/sleep", &binary).unwrap();
-        let mut child = std::process::Command::new(&binary)
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let mut child = spawn_copied_sleep(&binary);
         let pid = child.id() as i32;
         let started = std::time::Instant::now();
         // spawn can return before /proc stops exposing the child's pre-exec image.
@@ -1280,6 +1491,25 @@ mod tests {
         std::fs::write(marker, std::process::id().to_string()).unwrap();
     }
 
+    /// Runs a fresh copy of `/bin/sleep` for 30 s. A test thread that forks
+    /// while the copy's write descriptor is open holds it until its exec, and
+    /// exec of the copy fails with ETXTBSY until then.
+    #[cfg(target_os = "linux")]
+    fn spawn_copied_sleep(binary: &Path) -> std::process::Child {
+        let started = std::time::Instant::now();
+        loop {
+            match std::process::Command::new(binary).arg("30").spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && started.elapsed() < std::time::Duration::from_secs(5) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                result => break result.unwrap(),
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(super) struct LinuxAcquireFixture {
         directory: std::path::PathBuf,
@@ -1303,10 +1533,7 @@ mod tests {
         pub(super) fn start_incumbent(&mut self) -> u32 {
             let binary = self.directory.join("cap-gpui");
             std::fs::copy("/bin/sleep", &binary).unwrap();
-            let child = std::process::Command::new(&binary)
-                .arg("30")
-                .spawn()
-                .unwrap();
+            let child = spawn_copied_sleep(&binary);
             let pid = child.id();
             self.children.push(child);
             let started = std::time::Instant::now();
@@ -1475,7 +1702,7 @@ mod tests {
         payload.extend_from_slice(url.as_str().as_bytes());
         let authenticated = match read_forwarded_request(&mut payload.as_slice(), secret).unwrap() {
             ForwardedRequest::DeepLink(url) => url,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(windows, target_os = "macos"))]
             ForwardedRequest::Reopen => panic!("A project action must remain a deep link"),
         };
         let authenticated = reqwest::Url::parse(&authenticated).unwrap();
@@ -1534,6 +1761,30 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_reopen_waits_for_the_running_instance_to_queue_it() {
+        for queued in [true, false] {
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let endpoint = ForwardingEndpoint {
+                pid: 123,
+                port: listener.local_addr().unwrap().port(),
+                secret: 456,
+            };
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                assert_eq!(
+                    read_forwarded_request(&mut stream, endpoint.secret).unwrap(),
+                    ForwardedRequest::Reopen
+                );
+                super::acknowledge_reopen(&mut stream, || queued).is_ok()
+            });
+
+            assert_eq!(super::send_windows_reopen(endpoint).is_ok(), queued);
+            assert_eq!(server.join().unwrap(), queued);
+        }
+    }
+
     #[test]
     fn forwarded_deep_links_require_the_owner_secret_and_bounded_payload() {
         let secret = 0x0123_4567_89ab_cdef_u64;
@@ -1561,7 +1812,7 @@ mod tests {
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let mut empty = secret.to_be_bytes().to_vec();
             empty.extend_from_slice(&0_u32.to_be_bytes());
@@ -2285,6 +2536,91 @@ mod linux_reopen_tests {
         payload
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_hang_up_resends_the_request_without_its_token() {
+        use std::io::{Read, Write};
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let reply = |server: Box<dyn FnOnce(std::os::unix::net::UnixStream) + Send>| {
+            let (mut client, server_end) = std::os::unix::net::UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+                .unwrap();
+            let serving = std::thread::spawn(move || server(server_end));
+            write_linux_reopen_request(&mut client, owner, &[], Some("token")).unwrap();
+            let mut ack = [0];
+            let error = client.read_exact(&mut ack).unwrap_err();
+            serving.join().unwrap();
+            error
+        };
+
+        // An instance from before activation tokens reads the frame, fails to
+        // parse it and hangs up.
+        let rejected = reply(Box::new(|mut stream| {
+            let mut frame = [0; 8];
+            stream.read_exact(&mut frame).unwrap();
+            drop(stream);
+        }));
+        assert!(closed_without_queueing(&rejected), "{rejected:?}");
+
+        // One that queued the actions but has not acknowledged them yet.
+        let slow = reply(Box::new(|mut stream| {
+            let mut frame = [0; 8];
+            stream.read_exact(&mut frame).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = stream.write_all(&[1]);
+        }));
+        assert!(!closed_without_queueing(&slow), "{slow:?}");
+    }
+
+    /// A relaunch from a launcher brings an activation token, which the
+    /// running instance needs to raise its window past focus stealing
+    /// prevention. Without one the frame stays the legacy one.
+    #[test]
+    fn a_relaunch_forwards_its_activation_token_with_its_actions() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let mut plain = Vec::new();
+        write_linux_reopen_request(&mut plain, owner, &[], None).unwrap();
+        assert_eq!(plain, linux_reopen_payload(owner));
+
+        let mut bare = Vec::new();
+        write_linux_reopen_request(&mut bare, owner, &[], Some("gnome-shell/Cap/1234-5-host_TIME7")).unwrap();
+        assert_eq!(&bare[..8], b"CAPACTV1");
+        assert_eq!(
+            read_linux_reopen_request(&mut bare.as_slice(), owner).unwrap(),
+            (Vec::new(), Some("gnome-shell/Cap/1234-5-host_TIME7".to_string()))
+        );
+
+        let payload =
+            linux_reopen_action_payload([action_url(&DeepLinkAction::StopRecording)]).unwrap();
+        let mut with_actions = Vec::new();
+        write_linux_reopen_request(&mut with_actions, owner, &payload, Some("token")).unwrap();
+        assert_eq!(
+            read_linux_reopen_request(&mut with_actions.as_slice(), owner).unwrap(),
+            (vec![DeepLinkAction::StopRecording], Some("token".to_string()))
+        );
+
+        // A token with spaces or control characters is not a compositor's.
+        let mut odd = Vec::new();
+        write_linux_reopen_request(&mut odd, owner, &[], Some("two words")).unwrap();
+        assert_eq!(odd, linux_reopen_payload(owner));
+        let mut forged = linux_reopen_payload(owner).to_vec();
+        forged[..8].copy_from_slice(b"CAPACTV1");
+        forged.extend_from_slice(&3u32.to_be_bytes());
+        forged.extend_from_slice(b"a\nb");
+        forged.extend_from_slice(&0u32.to_be_bytes());
+        assert!(read_linux_reopen_request(&mut forged.as_slice(), owner).is_err());
+
+        // Another instance's frame is refused, token or not.
+        let other = LinuxInstanceIdentity {
+            pid: owner.pid.wrapping_add(1),
+            ..owner
+        };
+        let mut foreign = Vec::new();
+        write_linux_reopen_request(&mut foreign, other, &[], Some("token")).unwrap();
+        assert!(read_linux_reopen_request(&mut foreign.as_slice(), owner).is_err());
+    }
+
     #[test]
     fn duplicate_launch_during_startup_is_authenticated_and_coalesced() {
         let owner = linux_instance_identity(std::process::id()).unwrap();
@@ -2568,6 +2904,48 @@ mod linux_reopen_tests {
         let error = send_linux_reopen(address, owner, &[]).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
         assert!(fixture.children[0].try_wait().unwrap().is_none());
+    }
+
+    /// A terminal launch and an app-grid launch carry different session
+    /// variables; both must find the same running instance.
+    #[test]
+    fn launches_with_different_session_variables_find_the_same_instance() {
+        const CHILD: &str = "CAP_REOPEN_ADDRESS_CHILD";
+        const OWNER: &str = "CAP_REOPEN_ADDRESS_OWNER";
+        let name = |address: std::os::unix::net::SocketAddr| {
+            String::from_utf8_lossy(address.as_abstract_name().unwrap()).into_owned()
+        };
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let owner: u32 = std::env::var(OWNER).unwrap().parse().unwrap();
+            let owner = linux_instance_identity(owner).unwrap();
+            let path = std::path::Path::new(&directory).join("cap-gpui.pid");
+            println!(
+                "ADDRESS {}",
+                name(linux_reopen_address(&path, owner).unwrap())
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let here =
+            name(linux_reopen_address(&directory.path().join("cap-gpui.pid"), owner).unwrap());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "single_instance::linux_reopen_tests::launches_with_different_session_variables_find_the_same_instance",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, directory.path())
+            .env(OWNER, std::process::id().to_string())
+            .env_remove("DISPLAY")
+            .env_remove("XDG_SESSION_ID")
+            .env("WAYLAND_DISPLAY", "wayland-9")
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/elsewhere")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(&format!("ADDRESS {here}")), "{stdout}");
     }
 
     #[test]

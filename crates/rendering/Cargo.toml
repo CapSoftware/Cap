@@ -21,7 +21,7 @@ ffmpeg.workspace = true
 futures = { workspace = true }
 futures-intrusive = "0.5.0"
 rayon = "1.10"
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 log = "0.4"
 serde = { workspace = true }
 serde_json = "1.0"
@@ -70,9 +70,12 @@ windows_0_58 = { package = "windows", version = "0.58", features = [
 
 [dev-dependencies]
 cap-media-info = { path = "../media-info" }
+cap-video-decode = { path = "../video-decode", features = ["scripted"] }
+cap-verify-expect = { path = "../verify-expect" }
 tempfile = "3"
 pollster = "0.4.0"
 pretty_assertions = "1.4.1"
+tracing-subscriber = "0.3.19"
 
 [build-dependencies]
 build-time = "0.1"

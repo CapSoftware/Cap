@@ -1,0 +1,60 @@
+[package]
+name = "cap-gpui-kernels"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+cap-audio = { path = "../../../crates/audio" }
+cap-project = { path = "../../../crates/project" }
+crc32fast = "1.5"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
+md-5 = "0.10"
+simd-adler32 = "0.3"
+tracing = "0.1"
+
+[[bench]]
+name = "screenshot_blit"
+harness = false
+
+[[bench]]
+name = "overlay_image_inspection"
+harness = false
+
+[[bench]]
+name = "thumbnail_fit"
+harness = false
+
+[[bench]]
+name = "thumbnail_capture"
+harness = false
+
+[[bench]]
+name = "png_encode"
+harness = false
+
+[[bench]]
+name = "frame_export"
+harness = false
+
+[[bench]]
+name = "screenshot_alpha"
+harness = false
+
+[[bench]]
+name = "frame_unpad"
+harness = false
+
+[[bench]]
+name = "frame_copy_rows"
+harness = false
+
+[[bench]]
+name = "screenshot_mask"
+harness = false
+
+[[bench]]
+name = "screenshot_blur"
+harness = false

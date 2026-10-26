@@ -47,6 +47,7 @@ pub struct PortableCameraBlur {
     device: wgpu::Device,
     queue: wgpu::Queue,
     processor: cap_camera_effects::BlurProcessor,
+    format: wgpu::TextureFormat,
     source: Option<wgpu::Texture>,
     readback: Option<wgpu::Buffer>,
     dimensions: Option<(u32, u32)>,
@@ -54,13 +55,32 @@ pub struct PortableCameraBlur {
     rgba: Vec<u8>,
 }
 
+/// The source and output stay `Bgra8Unorm` where the adapter can sample,
+/// render and copy it, so neither side of the GPU trip swaps channels on the
+/// CPU. Sampling returns the same values for either channel order.
+fn bgra_supported(adapter: &wgpu::Adapter) -> bool {
+    let features = adapter.get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm);
+    features.allowed_usages.contains(
+        wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+    ) && features
+        .flags
+        .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
+}
+
 impl PortableCameraBlur {
     pub fn new() -> anyhow::Result<Self> {
+        Self::with_bgra(true)
+    }
+
+    fn with_bgra(allow_bgra: bool) -> anyhow::Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .context("camera blur runtime")?;
-        let (device, queue) = runtime.block_on(async {
+        let (format, device, queue) = runtime.block_on(async {
             let instance = cap_rendering::create_wgpu_instance_sync();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -70,7 +90,12 @@ impl PortableCameraBlur {
                 })
                 .await
                 .map_err(|error| anyhow!("camera blur adapter: {error}"))?;
-            adapter
+            let format = if allow_bgra && bgra_supported(&adapter) {
+                wgpu::TextureFormat::Bgra8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
+            let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("Camera Preview Blur"),
                     required_features: wgpu::Features::empty(),
@@ -80,17 +105,23 @@ impl PortableCameraBlur {
                     trace: wgpu::Trace::Off,
                 })
                 .await
-                .map_err(|error| anyhow!("camera blur device: {error}"))
+                .map_err(|error| anyhow!("camera blur device: {error}"))?;
+            cap_rendering::log_uncaptured_errors(&device, "camera-preview-blur");
+            anyhow::Ok((format, device, queue))
         })?;
-        let mut processor =
-            cap_camera_effects::BlurProcessor::new(&device, wgpu::TextureFormat::Rgba8Unorm)
-                .context("camera blur processor")?;
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let processor = cap_camera_effects::BlurProcessor::new(&device, format);
+        if let Some(error) = runtime.block_on(device.pop_error_scope()) {
+            anyhow::bail!("camera blur GPU validation: {error}");
+        }
+        let mut processor = processor.context("camera blur processor")?;
         processor.set_inference_interval(INFERENCE_INTERVAL);
 
         Ok(Self {
             device,
             queue,
             processor,
+            format,
             source: None,
             readback: None,
             dimensions: None,
@@ -130,12 +161,12 @@ impl PortableCameraBlur {
         }
 
         self.ensure_resources(width, height)?;
-        self.rgba.clear();
-        self.rgba.reserve(expected_bytes);
-        for pixel in bgra.chunks_exact(4) {
-            self.rgba
-                .extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-        }
+        let pixels = if self.format == wgpu::TextureFormat::Bgra8Unorm {
+            bgra
+        } else {
+            cap_gpui_kernels::frame::swap_red_blue_into(bgra, &mut self.rgba);
+            self.rgba.as_slice()
+        };
 
         let source = self.source.as_ref().context("camera blur source missing")?;
         self.queue.write_texture(
@@ -145,7 +176,7 @@ impl PortableCameraBlur {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &self.rgba,
+            pixels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row_bytes),
@@ -210,18 +241,26 @@ impl PortableCameraBlur {
             .context("camera blur GPU readback channel")?
             .map_err(|error| anyhow!("camera blur GPU readback: {error}"))?;
 
-        let mut pixels = Vec::with_capacity(expected_bytes);
-        {
+        let pixels = {
             let mapped = readback.slice(..).get_mapped_range();
-            let padded = self.padded_bytes_per_row as usize;
-            let row = row_bytes as usize;
-            for source in mapped.chunks_exact(padded).take(height as usize) {
-                for pixel in source[..row].chunks_exact(4) {
-                    pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-                }
+            if self.format == wgpu::TextureFormat::Bgra8Unorm {
+                cap_gpui_kernels::frame::unpad_rows(
+                    &mapped,
+                    width as usize * 4,
+                    self.padded_bytes_per_row as usize,
+                    height as usize,
+                )
+            } else {
+                cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+                    &mapped,
+                    width as usize,
+                    self.padded_bytes_per_row as usize,
+                    height as usize,
+                )
             }
-        }
+        };
         readback.unmap();
+        let pixels = pixels.context("camera blur readback rows")?;
 
         let image = image::RgbaImage::from_raw(width, height, pixels)
             .context("camera blur output image")?;
@@ -262,7 +301,7 @@ impl PortableCameraBlur {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: self.format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         }));
@@ -298,6 +337,49 @@ mod tests {
             blur_allowed(),
             total_memory_bytes().is_none_or(|bytes| bytes > LOW_MEMORY_THRESHOLD_BYTES)
         );
+    }
+
+    fn test_frame(width: u32, height: u32, seed: u32) -> gpui::RenderImage {
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            let inside = (x + seed * 7) % width < width / 3 && (y + seed * 3) % height < height / 2;
+            image::Rgba([
+                (x * 255 / width) as u8,
+                (y * 255 / height) as u8,
+                if inside { 230 } else { (seed * 40) as u8 },
+                255,
+            ])
+        });
+        gpui::RenderImage::new(smallvec::smallvec![image::Frame::new(image)])
+    }
+
+    fn deterministic_blur(allow_bgra: bool) -> Option<PortableCameraBlur> {
+        #[cfg(not(target_os = "macos"))]
+        if std::env::var_os("CAP_GPUI_TEST_PORTABLE_BLUR").is_none() {
+            return None;
+        }
+        match PortableCameraBlur::with_bgra(allow_bgra) {
+            Ok(mut blur) => {
+                blur.processor.set_frame_synchronous(true);
+                Some(blur)
+            }
+            Err(error) => {
+                eprintln!("skipping: portable camera blur unavailable: {error:#}");
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_gpu_returns_an_error_without_panicking() {
+        if std::env::var_os("CAP_GPUI_TEST_UNSUPPORTED_BLUR_GPU").is_none() {
+            return;
+        }
+
+        cap_camera_effects::initialize_onnx_runtime().expect("ONNX Runtime available");
+        let error = PortableCameraBlur::new()
+            .err()
+            .expect("unsupported GPU rejected");
+        assert!(error.to_string().contains("camera blur GPU validation"));
     }
 
     #[test]
@@ -359,6 +441,46 @@ mod tests {
         );
         assert_eq!(processor.dimensions, Some((640, 360)));
         assert_eq!(processor.readback.as_ref().unwrap().size(), 640 * 360 * 4);
+    }
+
+    #[test]
+    fn portable_blur_bgra_textures_match_the_rgba_swap_path() {
+        let Some(mut rgba) = deterministic_blur(false) else {
+            return;
+        };
+        let Some(mut bgra) = deterministic_blur(true) else {
+            return;
+        };
+        assert_eq!(rgba.format, wgpu::TextureFormat::Rgba8Unorm);
+        if bgra.format != wgpu::TextureFormat::Bgra8Unorm {
+            eprintln!("skipping: the adapter cannot sample, render and copy Bgra8Unorm");
+            return;
+        }
+
+        for (dimensions, mode) in [
+            ((640, 360), cap_camera_effects::BlurMode::Heavy),
+            ((480, 360), cap_camera_effects::BlurMode::Light),
+            ((64, 32), cap_camera_effects::BlurMode::Remove),
+        ] {
+            for seed in 0..4 {
+                let frame = test_frame(dimensions.0 as u32, dimensions.1 as u32, seed);
+                let (expected, expected_status) = rgba
+                    .process_with_status(&frame, dimensions, mode)
+                    .expect("rgba path blurred a frame");
+                let (actual, actual_status) = bgra
+                    .process_with_status(&frame, dimensions, mode)
+                    .expect("bgra path blurred a frame");
+                assert_eq!(
+                    actual_status.output_dimensions,
+                    expected_status.output_dimensions
+                );
+                assert!(
+                    actual.as_bytes(0) == expected.as_bytes(0),
+                    "bgra output differs at {dimensions:?} {mode:?} frame {seed}"
+                );
+            }
+        }
+        assert!(bgra.rgba.is_empty());
     }
 
     #[cfg(target_os = "macos")]

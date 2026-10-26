@@ -6,7 +6,9 @@ import { serverEnv } from "@cap/env";
 const ALGORITHM = { name: "AES-GCM", length: 256 };
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
-const KEY_LENGTH = 32;
+// Coolify 4.3.1+ generates SERVICE_HEX_32 values as 16 bytes; keys made
+// before that, and by `openssl rand -hex 32`, are 32 bytes.
+const KEY_LENGTHS = [16, 32];
 const ITERATIONS = 100000;
 
 const ENCRYPTION_KEY = () => {
@@ -15,11 +17,9 @@ const ENCRYPTION_KEY = () => {
 
 	try {
 		const keyBuffer = Buffer.from(key, "hex");
-		if (keyBuffer.length !== KEY_LENGTH) {
+		if (!KEY_LENGTHS.includes(keyBuffer.length)) {
 			throw new Error(
-				`Encryption key must be ${KEY_LENGTH} bytes (${
-					KEY_LENGTH * 2
-				} hex characters)`,
+				"Encryption key must be 16 or 32 bytes (32 or 64 hex characters)",
 			);
 		}
 	} catch (error: unknown) {
@@ -95,6 +95,29 @@ export async function encrypt(text: string): Promise<string> {
 	}
 }
 
+// A stored ciphertext keeps its salt, so decrypting the same value again (a storage integration's config
+// on every Drive request) would repeat the same 100,000-iteration PBKDF2; the key only depends on the salt.
+const DECRYPT_KEY_CACHE_SIZE = 256;
+const decryptKeys = new Map<string, Promise<CryptoKey>>();
+
+function decryptKey(salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+	const id = `${ENCRYPTION_KEY() ?? ""}:${Buffer.from(salt).toString("hex")}`;
+	const cached = decryptKeys.get(id);
+	if (cached) {
+		decryptKeys.delete(id);
+		decryptKeys.set(id, cached);
+		return cached;
+	}
+	const key = deriveKey(salt);
+	decryptKeys.set(id, key);
+	key.catch(() => decryptKeys.delete(id));
+	if (decryptKeys.size > DECRYPT_KEY_CACHE_SIZE) {
+		const oldest = decryptKeys.keys().next().value;
+		if (oldest !== undefined) decryptKeys.delete(oldest);
+	}
+	return key;
+}
+
 export async function decrypt(encryptedText: string): Promise<string> {
 	if (!encryptedText) {
 		throw new Error("Cannot decrypt empty or null text");
@@ -107,7 +130,7 @@ export async function decrypt(encryptedText: string): Promise<string> {
 		const iv = encrypted.subarray(SALT_LENGTH, SALT_LENGTH + IV_LENGTH);
 		const content = encrypted.subarray(SALT_LENGTH + IV_LENGTH);
 
-		const key = await deriveKey(salt);
+		const key = await decryptKey(salt);
 
 		const decrypted = await crypto.subtle.decrypt(
 			{

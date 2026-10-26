@@ -1,4 +1,5 @@
 use super::fragment_metadata::read_fragment_metadata;
+use super::write_behind::{MuxSink, MuxTarget};
 use cap_media_info::VideoInfo;
 use ffmpeg::{format, frame};
 use serde::Serialize;
@@ -25,6 +26,22 @@ pub struct DiskSpaceWarning {
 }
 
 pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
+
+/// Shared so a write-behind muxer can install the callback without waiting
+/// for the writer thread, which may be blocked on storage.
+pub(crate) type SegmentSender =
+    Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>>>;
+
+pub(crate) fn notify_segment(sender: &SegmentSender, event: SegmentCompletedEvent) {
+    let sender = sender
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(tx) = sender.as_ref()
+        && let Err(e) = tx.send(event)
+    {
+        tracing::warn!("Failed to send segment completed event: {e}");
+    }
+}
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
@@ -76,10 +93,19 @@ pub struct SegmentedVideoEncoder {
     base_path: PathBuf,
 
     encoder: H264Encoder,
+    mux: MuxSink<SegmentMux>,
+    segment_tx: SegmentSender,
+
+    segment_duration: Duration,
+
+    disk_space_callback: Option<DiskSpaceCallback>,
+}
+
+struct SegmentMux {
+    base_path: PathBuf,
     output: format::context::Output,
 
     current_index: u32,
-    segment_duration: Duration,
 
     completed_segments: Vec<VideoSegmentInfo>,
 
@@ -87,9 +113,36 @@ pub struct SegmentedVideoEncoder {
 
     codec_info: CodecInfo,
 
-    disk_space_callback: Option<DiskSpaceCallback>,
-    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    segment_tx: SegmentSender,
     init_notified: bool,
+    initial_manifest_pending: bool,
+}
+
+impl MuxTarget for SegmentMux {
+    fn output(&self) -> &format::context::Output {
+        &self.output
+    }
+
+    fn output_mut(&mut self) -> &mut format::context::Output {
+        &mut self.output
+    }
+
+    fn writer_started(&mut self) {
+        self.write_initial_manifest();
+    }
+
+    fn packet_written(&mut self) {
+        // The encoder holds one packet back to stamp real durations, so the
+        // init segment materializes a frame later than the first queue call;
+        // keep trying until it lands (no-op once notified).
+        self.try_notify_init_segment();
+
+        self.frames_since_segment_scan += 1;
+        if self.frames_since_segment_scan >= 10 {
+            self.frames_since_segment_scan = 0;
+            self.flush_pending_segments();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +251,40 @@ impl SegmentedVideoEncoder {
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
     ) -> Result<Self, InitError> {
+        Self::init_with_options(base_path, video_config, config, false, false)
+    }
+
+    pub fn init_with_timed_fragments(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(base_path, video_config, config, timed_fragments, false)
+    }
+
+    /// Like [`Self::init_with_timed_fragments`], but muxing, segment
+    /// publication and manifest writes (including the initial manifest) run on
+    /// a dedicated writer thread with a memory budget sized from the stream
+    /// bitrate, so storage stalls stop blocking the encoder. Output bytes and
+    /// their order are unchanged. Falls back to inline muxing if the thread
+    /// cannot start.
+    pub fn init_write_behind(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(base_path, video_config, config, timed_fragments, true)
+    }
+
+    fn init_with_options(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
+        write_behind: bool,
+    ) -> Result<Self, InitError> {
         std::fs::create_dir_all(&base_path)?;
 
         let manifest_path = base_path.join("dash_manifest.mpd");
@@ -231,6 +318,11 @@ impl SegmentedVideoEncoder {
             set_opt("use_template", "1");
             set_opt("single_file", "0");
             set_opt("hls_playlist", "1");
+            if timed_fragments {
+                set_opt("frag_type", "duration");
+                set_opt("frag_duration", "2");
+                set_opt("streaming", "1");
+            }
         }
 
         let mut builder = H264EncoderBuilder::new(video_config)
@@ -295,21 +387,40 @@ impl SegmentedVideoEncoder {
             "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments)"
         );
 
-        let instance = Self {
-            base_path,
-            encoder,
+        let mux = SegmentMux {
+            base_path: base_path.clone(),
             output,
             current_index: 1,
-            segment_duration: config.segment_duration,
             completed_segments: Vec::new(),
             frames_since_segment_scan: 0,
             codec_info,
-            disk_space_callback: None,
-            segment_tx: None,
+            segment_tx: SegmentSender::default(),
             init_notified: false,
+            initial_manifest_pending: true,
+        };
+        let segment_tx = mux.segment_tx.clone();
+
+        let mut instance = Self {
+            base_path,
+            encoder,
+            mux: MuxSink::Direct(mux),
+            segment_tx,
+            segment_duration: config.segment_duration,
+            disk_space_callback: None,
         };
 
-        instance.write_in_progress_manifest();
+        if write_behind {
+            let budget = super::write_behind::video_budget_bytes(instance.encoder.bit_rate());
+            match instance.mux.enable_write_behind("video", budget) {
+                Ok(()) => tracing::debug!(budget_bytes = budget, "Video write-behind enabled"),
+                Err(error) => {
+                    tracing::warn!(%error, "Video write-behind unavailable, muxing inline");
+                }
+            }
+        }
+        if !instance.mux.is_write_behind() {
+            instance.mux.with_target(SegmentMux::write_initial_manifest);
+        }
 
         Ok(instance)
     }
@@ -319,27 +430,12 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
-        self.segment_tx = Some(tx);
-        self.try_notify_init_segment();
-    }
-
-    fn try_notify_init_segment(&mut self) {
-        if self.init_notified {
-            return;
-        }
-        let init_path = self.init_segment_path();
-        if let Ok(meta) = std::fs::metadata(&init_path)
-            && meta.len() > 0
-        {
-            self.init_notified = true;
-            self.notify_segment(SegmentCompletedEvent {
-                path: init_path,
-                index: 0,
-                duration: 0.0,
-                file_size: meta.len(),
-                is_init: true,
-                media_type: SegmentMediaType::Video,
-            });
+        *self
+            .segment_tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        if !self.mux.is_write_behind() {
+            self.mux.with_target(SegmentMux::try_notify_init_segment);
         }
     }
 
@@ -377,28 +473,121 @@ impl SegmentedVideoEncoder {
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
         self.encoder
-            .queue_frame(frame, timestamp, &mut self.output)?;
+            .queue_frame_to(frame, timestamp, &mut self.mux)?;
 
-        // The encoder holds one packet back to stamp real durations, so the
-        // init segment materializes a frame later than the first queue call;
-        // keep trying until it lands (no-op once notified).
-        self.try_notify_init_segment();
-
-        self.frames_since_segment_scan += 1;
-        if self.frames_since_segment_scan >= 10 {
-            self.frames_since_segment_scan = 0;
-            self.flush_pending_segments();
-        }
+        self.mux.frame_queued();
 
         Ok(())
     }
 
-    fn notify_segment(&self, event: SegmentCompletedEvent) {
-        if let Some(tx) = &self.segment_tx
-            && let Err(e) = tx.send(event)
-        {
-            tracing::warn!("Failed to send segment completed event: {e}");
+    pub fn finish(&mut self) -> Result<(), FinishError> {
+        let encoder = &mut self.encoder;
+        self.mux
+            .finish(
+                |mux| encoder.flush_to(mux),
+                |mux: &mut SegmentMux, flush_result| {
+                    let flush_result = flush_result.inspect_err(|error| {
+                        tracing::warn!(%error, "Video encoder flush failed");
+                    });
+                    mux.finish(flush_result)
+                },
+            )
+            .map_err(std::io::Error::from)?
+    }
+
+    pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
+        self.finish()
+    }
+
+    pub fn completed_segments(&self) -> Vec<VideoSegmentInfo> {
+        self.mux
+            .with_target_ref(|mux| mux.completed_segments.clone())
+    }
+
+    pub fn current_encoder(&self) -> Option<&H264Encoder> {
+        Some(&self.encoder)
+    }
+
+    pub fn current_encoder_mut(&mut self) -> Option<&mut H264Encoder> {
+        Some(&mut self.encoder)
+    }
+
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
+    }
+
+    pub fn segment_duration(&self) -> Duration {
+        self.segment_duration
+    }
+
+    pub fn current_index(&self) -> u32 {
+        self.mux.with_target_ref(|mux| mux.current_index)
+    }
+
+    pub fn init_segment_path(&self) -> PathBuf {
+        self.base_path.join(INIT_SEGMENT_NAME)
+    }
+
+    pub fn validate_init_segment(&self) -> Result<(), String> {
+        let init_path = self.init_segment_path();
+
+        if !init_path.exists() {
+            return Err(format!(
+                "init.mp4 is missing at {}. M4S segments will be unplayable without it.",
+                init_path.display()
+            ));
         }
+
+        match std::fs::metadata(&init_path) {
+            Ok(metadata) => {
+                let size = metadata.len();
+                if size < 100 {
+                    return Err(format!(
+                        "init.mp4 at {} is too small ({} bytes). It may be corrupted.",
+                        init_path.display(),
+                        size
+                    ));
+                }
+                Ok(())
+            }
+            Err(e) => Err(format!(
+                "Cannot read init.mp4 metadata at {}: {}",
+                init_path.display(),
+                e
+            )),
+        }
+    }
+}
+
+impl SegmentMux {
+    fn write_initial_manifest(&mut self) {
+        if std::mem::take(&mut self.initial_manifest_pending) {
+            self.write_in_progress_manifest();
+        }
+    }
+
+    fn try_notify_init_segment(&mut self) {
+        if self.init_notified {
+            return;
+        }
+        let init_path = self.base_path.join(INIT_SEGMENT_NAME);
+        if let Ok(meta) = std::fs::metadata(&init_path)
+            && meta.len() > 0
+        {
+            self.init_notified = true;
+            self.notify_segment(SegmentCompletedEvent {
+                path: init_path,
+                index: 0,
+                duration: 0.0,
+                file_size: meta.len(),
+                is_init: true,
+                media_type: SegmentMediaType::Video,
+            });
+        }
+    }
+
+    fn notify_segment(&self, event: SegmentCompletedEvent) {
+        notify_segment(&self.segment_tx, event);
     }
 
     fn flush_pending_segments(&mut self) {
@@ -493,10 +682,7 @@ impl SegmentedVideoEncoder {
         }
     }
 
-    pub fn finish(&mut self) -> Result<(), FinishError> {
-        let flush_result = self.encoder.flush(&mut self.output).inspect_err(|error| {
-            tracing::warn!(%error, "Video encoder flush failed");
-        });
+    fn finish(&mut self, flush_result: Result<(), ffmpeg::Error>) -> Result<(), FinishError> {
         let trailer_result = self.output.write_trailer().inspect_err(|error| {
             tracing::warn!(%error, "Video trailer publication failed");
         });
@@ -518,10 +704,6 @@ impl SegmentedVideoEncoder {
         self.finalize_manifest()?;
 
         Ok(())
-    }
-
-    pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
-        self.finish()
     }
 
     fn finalize_pending_tmp_files(&self) {
@@ -688,64 +870,6 @@ impl SegmentedVideoEncoder {
         let manifest_path = self.base_path.join("manifest.json");
         atomic_write_json(&manifest_path, &manifest)
     }
-
-    pub fn completed_segments(&self) -> &[VideoSegmentInfo] {
-        &self.completed_segments
-    }
-
-    pub fn current_encoder(&self) -> Option<&H264Encoder> {
-        Some(&self.encoder)
-    }
-
-    pub fn current_encoder_mut(&mut self) -> Option<&mut H264Encoder> {
-        Some(&mut self.encoder)
-    }
-
-    pub fn base_path(&self) -> &Path {
-        &self.base_path
-    }
-
-    pub fn segment_duration(&self) -> Duration {
-        self.segment_duration
-    }
-
-    pub fn current_index(&self) -> u32 {
-        self.current_index
-    }
-
-    pub fn init_segment_path(&self) -> PathBuf {
-        self.base_path.join(INIT_SEGMENT_NAME)
-    }
-
-    pub fn validate_init_segment(&self) -> Result<(), String> {
-        let init_path = self.init_segment_path();
-
-        if !init_path.exists() {
-            return Err(format!(
-                "init.mp4 is missing at {}. M4S segments will be unplayable without it.",
-                init_path.display()
-            ));
-        }
-
-        match std::fs::metadata(&init_path) {
-            Ok(metadata) => {
-                let size = metadata.len();
-                if size < 100 {
-                    return Err(format!(
-                        "init.mp4 at {} is too small ({} bytes). It may be corrupted.",
-                        init_path.display(),
-                        size
-                    ));
-                }
-                Ok(())
-            }
-            Err(e) => Err(format!(
-                "Cannot read init.mp4 metadata at {}: {}",
-                init_path.display(),
-                e
-            )),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -836,6 +960,128 @@ mod tests {
             (manifest["total_duration"].as_f64().unwrap() - durations.iter().sum::<f64>()).abs()
                 <= 1e-5
         );
+    }
+
+    fn record_segments(base_path: &Path, write_behind: bool) -> Vec<(u32, bool, u64)> {
+        let mut encoder = if write_behind {
+            SegmentedVideoEncoder::init_write_behind(
+                base_path.to_path_buf(),
+                test_video_info(),
+                SegmentedVideoEncoderConfig::default(),
+                false,
+            )
+        } else {
+            SegmentedVideoEncoder::init(
+                base_path.to_path_buf(),
+                test_video_info(),
+                SegmentedVideoEncoderConfig::default(),
+            )
+        }
+        .unwrap();
+        assert_eq!(encoder.mux.is_write_behind(), write_behind);
+        let (tx, rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        for i in 0..200 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_320),
+                )
+                .unwrap();
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_secs(7))
+            .unwrap();
+        drop(encoder);
+        rx.try_iter()
+            .map(|event| {
+                assert_eq!(
+                    event.file_size,
+                    std::fs::metadata(&event.path).unwrap().len()
+                );
+                (event.index, event.is_init, (event.duration * 1e6) as u64)
+            })
+            .collect()
+    }
+
+    fn published_index(base_path: &Path) -> (Vec<String>, String, serde_json::Value) {
+        let mut names: Vec<String> = std::fs::read_dir(base_path)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mpd = std::fs::read_to_string(base_path.join("dash_manifest.mpd")).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        for segment in manifest["segments"].as_array_mut().unwrap() {
+            segment.as_object_mut().unwrap().remove("file_size");
+        }
+        (names, mpd, manifest)
+    }
+
+    #[test]
+    fn write_behind_publishes_the_initial_manifest_from_the_writer_thread() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let encoder = SegmentedVideoEncoder::init_write_behind(
+            temp.path().to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+            false,
+        )
+        .unwrap();
+        let manifest_path = temp.path().join("manifest.json");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !manifest_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["is_complete"], false);
+        assert_eq!(manifest["segments"][0]["index"], 1);
+        drop(encoder);
+    }
+
+    #[test]
+    fn write_behind_segment_callback_does_not_wait_for_stalled_storage() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            temp.path().to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+            false,
+        )
+        .unwrap();
+        encoder.mux.drain();
+        let stall = encoder.mux.stall_storage_for(Duration::from_millis(800));
+        let started = std::time::Instant::now();
+        let (tx, _rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        encoder
+            .queue_frame(create_test_frame(320, 240), Duration::ZERO)
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(400));
+        stall.join().unwrap();
+    }
+
+    #[test]
+    fn write_behind_publishes_the_same_segments_as_inline_muxing() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let inline = temp.path().join("inline");
+        let behind = temp.path().join("behind");
+
+        let inline_events = record_segments(&inline, false);
+        let behind_events = record_segments(&behind, true);
+
+        // VideoToolbox payload sizes are not reproducible across sessions, so
+        // the published timeline is compared rather than media bytes.
+        assert!(inline_events.len() >= 3);
+        assert_eq!(inline_events, behind_events);
+        assert_eq!(published_index(&inline), published_index(&behind));
     }
 
     #[test]

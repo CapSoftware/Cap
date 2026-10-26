@@ -193,15 +193,15 @@ export const Caps = ({
 				(e.key === "Delete" || e.key === "Backspace") &&
 				selectedCaps.length > 0
 			) {
-				if (e.key === "Backspace") {
-					e.preventDefault();
-				}
-
 				if (
 					!["INPUT", "TEXTAREA", "SELECT"].includes(
 						document.activeElement?.tagName || "",
 					)
 				) {
+					if (e.key === "Backspace") {
+						e.preventDefault();
+					}
+
 					deleteCaps(selectedCaps);
 				}
 			}

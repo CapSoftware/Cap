@@ -8,15 +8,17 @@ use cap_project::{
 };
 use cap_rendering::{
     PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
-    RenderVideoConstants, SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline,
-    get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
+    RenderVideoConstants, RendererLayers, SegmentVideoPaths, SharedWgpuDevice, Video,
+    ZoomTransformTimeline, get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +27,45 @@ use tracing::warn;
 pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
+const PREVIEW_SCRUB_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
+type PreviewRequest = Option<PreviewFrameInstruction>;
+
+// A scrub sends a new request faster than a seek can decode. Abandoning the
+// in-flight frame for every newer request starves the preview until the mouse
+// stops, so a newer request only wins while a frame was presented recently.
+fn preview_frame_overdue(last_presented: Option<Instant>) -> bool {
+    last_presented.is_none_or(|at| at.elapsed() >= PREVIEW_SCRUB_FRAME_INTERVAL)
+}
+
+fn preview_superseded(
+    preview_rx: &watch::Receiver<PreviewRequest>,
+    last_presented: Option<Instant>,
+) -> bool {
+    preview_rx.has_changed().unwrap_or(false) && !preview_frame_overdue(last_presented)
+}
+
+async fn preview_superseded_while_fresh(
+    mut probe: watch::Receiver<PreviewRequest>,
+    last_presented: Option<Instant>,
+) {
+    if probe.changed().await.is_err() || preview_frame_overdue(last_presented) {
+        std::future::pending::<()>().await;
+    }
+}
+
+pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 7] {
+    let click_spring = cursor.click_spring_config();
+    [
+        u32::from(cursor.raw),
+        cursor.tension.to_bits(),
+        cursor.mass.to_bits(),
+        cursor.friction.to_bits(),
+        click_spring.tension.to_bits(),
+        click_spring.mass.to_bits(),
+        click_spring.friction.to_bits(),
+    ]
+}
 
 #[derive(Default)]
 pub(super) struct PreviewCursorCache {
@@ -72,15 +113,7 @@ impl PreviewCursorCache {
             friction: project.cursor.friction,
         };
         let click_spring = project.cursor.click_spring_config();
-        let settings = [
-            u32::from(project.cursor.raw),
-            smoothing.tension.to_bits(),
-            smoothing.mass.to_bits(),
-            smoothing.friction.to_bits(),
-            click_spring.tension.to_bits(),
-            click_spring.mass.to_bits(),
-            click_spring.friction.to_bits(),
-        ];
+        let settings = cursor_timeline_settings(&project.cursor);
 
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.recording_clip == recording_clip
@@ -112,6 +145,20 @@ impl PreviewCursorCache {
         });
         Some(timeline)
     }
+}
+
+fn refresh_project_snapshot(
+    project_rx: &mut watch::Receiver<ProjectConfiguration>,
+    snapshot: &mut Arc<ProjectConfiguration>,
+) -> Option<Arc<ProjectConfiguration>> {
+    let refreshed = {
+        let project = project_rx.borrow_and_update();
+        if !project.has_changed() {
+            return None;
+        }
+        Arc::new(project.clone())
+    };
+    Some(std::mem::replace(snapshot, refreshed))
 }
 
 fn get_video_duration_fallback(path: &Path) -> Option<f64> {
@@ -201,6 +248,7 @@ pub struct EditorInstance {
     meta: RecordingMeta,
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
+    pub preview_layers: std::sync::Mutex<Option<RendererLayers>>,
     runtime_handle: tokio::runtime::Handle,
     audio_output: Arc<crate::AudioOutput>,
 }
@@ -472,7 +520,7 @@ impl EditorInstance {
         let completed_track_identity = completed_audio
             .as_deref()
             .map(crate::preparing_handoff::completed_track_identity);
-        let segments_task = tokio::spawn({
+        let segments_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let recording_meta = recording_meta.clone();
             let studio_meta = (**meta).clone();
             async move {
@@ -485,7 +533,7 @@ impl EditorInstance {
                 )
                 .await
             }
-        });
+        }));
 
         // Open the session's audio output stream now (in the background) so
         // the first play press doesn't wait on the device — Bluetooth outputs
@@ -531,6 +579,14 @@ impl EditorInstance {
             )?),
         };
 
+        cap_project::clamp_timeline_to_sources(
+            &mut project,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
         cap_project::synchronize_captions(
             &mut project,
@@ -600,6 +656,7 @@ impl EditorInstance {
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            preview_layers: std::sync::Mutex::new(None),
             playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
@@ -726,6 +783,7 @@ impl EditorInstance {
             meta: self.meta.clone(),
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            preview_layers: std::sync::Mutex::new(None),
             runtime_handle: self.runtime_handle.clone(),
             audio_output: self.audio_output.clone(),
         });
@@ -978,11 +1036,16 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
+        mut preview_rx: watch::Receiver<PreviewRequest>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
+            let mut last_presented: Option<Instant> = None;
             let mut cursor_cache = PreviewCursorCache::default();
+            let mut project_rx = self.project_config.1.clone();
+            let mut project = Arc::new(project_rx.borrow_and_update().clone());
+            let mut zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
+            let mut outgoing_zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
 
             loop {
                 preview_rx.changed().await.unwrap();
@@ -1007,7 +1070,27 @@ impl EditorInstance {
                         break;
                     }
 
-                    let project = self.project_config.1.borrow().clone();
+                    if let Some(previous) = refresh_project_snapshot(&mut project_rx, &mut project)
+                        && !ZoomTransformTimeline::project_inputs_match(
+                            &previous,
+                            &project,
+                            self.render_constants.options.screen_size,
+                        )
+                    {
+                        zoom_timelines.clear();
+                        outgoing_zoom_timelines.clear();
+                    }
+                    let total_duration = project
+                        .timeline
+                        .as_ref()
+                        .map(|timeline| timeline.duration())
+                        .unwrap_or(0.0);
+                    let total_frames = (total_duration * f64::from(fps)).ceil() as u32;
+                    let mut last_frame = total_frames.saturating_sub(1);
+                    if f64::from(last_frame) / f64::from(fps) >= total_duration {
+                        last_frame = last_frame.saturating_sub(1);
+                    }
+                    let frame_number = frame_number.min(last_frame);
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {
@@ -1032,7 +1115,16 @@ impl EditorInstance {
                         break;
                     };
 
-                    let segment_medias = &self.segment_medias[segment.recording_clip as usize];
+                    let Some(segment_medias) =
+                        self.segment_medias.get(segment.recording_clip as usize)
+                    else {
+                        warn!(
+                            recording_segment = segment.recording_clip,
+                            available = self.segment_medias.len(),
+                            "Preview renderer: timeline uses a recording segment that does not exist"
+                        );
+                        break;
+                    };
                     let clip_config = project
                         .clips
                         .iter()
@@ -1045,7 +1137,7 @@ impl EditorInstance {
                     tokio::select! {
                         biased;
 
-                        _ = preview_rx.changed() => {
+                        _ = preview_superseded_while_fresh(preview_rx.clone(), last_presented) => {
                             continue;
                         }
 
@@ -1055,7 +1147,7 @@ impl EditorInstance {
                             true,
                             clip_offsets,
                         ) => {
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1064,32 +1156,33 @@ impl EditorInstance {
                                 break;
                             }
 
-                            let total_duration = project
-                                .timeline
-                                .as_ref()
-                                .map(|t| t.duration())
-                                .unwrap_or(0.0);
-
                             // Scrub renders sample the same precomputed spring
                             // timeline playback and export use (the old focus
                             // interpolator was never precomputed here and fell
-                            // back to a divergent direct interpolation).
-                            let mut zoom_timeline =
-                                ZoomTransformTimeline::from_project_for_clip(
-                                &project,
-                                &segment_medias.cursor,
-                                total_duration,
-                                self.render_constants.options.screen_size,
-                                segment.recording_clip,
-                            );
+                            // back to a divergent direct interpolation). The
+                            // timeline is kept until its inputs change: it
+                            // precomputes from t=0, so rebuilding it per frame
+                            // made each scrub frame cost O(playhead).
+                            let zoom_timeline = zoom_timelines
+                                .entry(segment.recording_clip)
+                                .or_insert_with(|| {
+                                    ZoomTransformTimeline::from_project_for_clip(
+                                        &project,
+                                        &segment_medias.cursor,
+                                        total_duration,
+                                        self.render_constants.options.screen_size,
+                                        segment.recording_clip,
+                                    )
+                                });
                             zoom_timeline
                                 .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
 
                             let outgoing_transition = if let Some((outgoing, kind, progress)) =
                                 transition_mapping
+                                && let Some(outgoing_media) = self
+                                    .segment_medias
+                                    .get(outgoing.segment.recording_clip as usize)
                             {
-                                let outgoing_media =
-                                    &self.segment_medias[outgoing.segment.recording_clip as usize];
                                 let outgoing_offsets = project
                                     .clips
                                     .iter()
@@ -1098,25 +1191,42 @@ impl EditorInstance {
                                     .unwrap_or_default();
                                 let outgoing_frames = tokio::select! {
                                     biased;
-                                    _ = preview_rx.changed() => {
+                                    _ = preview_superseded_while_fresh(
+                                        preview_rx.clone(),
+                                        last_presented,
+                                    ) => {
                                         continue;
                                     }
-                                    frames = outgoing_media.decoders.get_frames_initial(
-                                        outgoing.source_time as f32,
-                                        project.requires_camera(),
-                                        true,
-                                        outgoing_offsets,
-                                    ) => frames,
+                                    frames = async {
+                                        let decoders = if outgoing.segment.recording_clip
+                                            == segment.recording_clip
+                                        {
+                                            outgoing_media.decoders.transition_side().await
+                                        } else {
+                                            &outgoing_media.decoders
+                                        };
+                                        decoders
+                                            .get_frames_initial(
+                                                outgoing.source_time as f32,
+                                                project.requires_camera(),
+                                                true,
+                                                outgoing_offsets,
+                                            )
+                                            .await
+                                    } => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
-                                    let mut outgoing_zoom =
-                                        ZoomTransformTimeline::from_project_for_outgoing_clip(
-                                            &project,
-                                            &outgoing_media.cursor,
-                                            total_duration,
-                                            self.render_constants.options.screen_size,
-                                            outgoing.segment.recording_clip,
-                                        );
+                                    let outgoing_zoom = outgoing_zoom_timelines
+                                        .entry(outgoing.segment.recording_clip)
+                                        .or_insert_with(|| {
+                                            ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                                &project,
+                                                &outgoing_media.cursor,
+                                                total_duration,
+                                                self.render_constants.options.screen_size,
+                                                outgoing.segment.recording_clip,
+                                            )
+                                        });
                                     outgoing_zoom.ensure_precomputed_until(
                                         (frame_number as f32 + 1.0) / fps as f32,
                                     );
@@ -1125,7 +1235,7 @@ impl EditorInstance {
                                         &outgoing_media.cursor,
                                         &project,
                                     );
-                                    if preview_rx.has_changed().unwrap_or(false) {
+                                    if preview_superseded(&preview_rx, last_presented) {
                                         continue;
                                     }
                                     let outgoing_uniforms = if let Some(cursor_timeline) =
@@ -1140,7 +1250,7 @@ impl EditorInstance {
                                             &outgoing_media.cursor,
                                             &outgoing_frames,
                                             total_duration,
-                                            &outgoing_zoom,
+                                            outgoing_zoom,
                                             cursor_timeline,
                                         )
                                     } else {
@@ -1153,7 +1263,7 @@ impl EditorInstance {
                                             &outgoing_media.cursor,
                                             &outgoing_frames,
                                             total_duration,
-                                            &outgoing_zoom,
+                                            outgoing_zoom,
                                         )
                                     };
                                     Some((
@@ -1170,7 +1280,7 @@ impl EditorInstance {
                                 None
                             };
 
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1179,7 +1289,7 @@ impl EditorInstance {
                                 &segment_medias.cursor,
                                 &project,
                             );
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1201,7 +1311,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         &segment_frames,
                                         total_duration,
-                                        &zoom_timeline,
+                                        zoom_timeline,
                                         cursor_timeline,
                                     )
                                 } else {
@@ -1214,7 +1324,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         &segment_frames,
                                         total_duration,
-                                        &zoom_timeline,
+                                        zoom_timeline,
                                     )
                                 };
 
@@ -1253,6 +1363,7 @@ impl EditorInstance {
                                 };
                                 if render_confirmed {
                                     rendered = true;
+                                    last_presented = Some(Instant::now());
                                     break;
                                 }
 
@@ -1741,8 +1852,7 @@ async fn create_segments_with_audio(
                     .unwrap_or_else(AudioLoader::none);
 
                 let system_audio = s
-                    .system_audio
-                    .as_ref()
+                    .usable_system_audio()
                     .filter(|_| load_audio)
                     .map(|audio| {
                         audio_loader_with_completed(
@@ -1844,6 +1954,61 @@ mod tests {
     use super::*;
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
 
+    fn scrub_request(frame: u32) -> PreviewRequest {
+        Some((frame, 60, XY::new(960, 540)))
+    }
+
+    fn overdue_frame() -> Option<Instant> {
+        Instant::now().checked_sub(PREVIEW_SCRUB_FRAME_INTERVAL)
+    }
+
+    #[test]
+    fn preview_frames_go_overdue_after_the_scrub_interval() {
+        assert!(preview_frame_overdue(None));
+        assert!(!preview_frame_overdue(Some(Instant::now())));
+        assert!(preview_frame_overdue(overdue_frame()));
+    }
+
+    #[test]
+    fn newer_requests_cancel_only_while_a_frame_is_fresh() {
+        let (tx, rx) = watch::channel(scrub_request(0));
+        assert!(!preview_superseded(&rx, Some(Instant::now())));
+
+        tx.send_modify(|request| *request = scrub_request(10));
+        assert!(preview_superseded(&rx, Some(Instant::now())));
+        assert!(!preview_superseded(&rx, overdue_frame()));
+        assert!(!preview_superseded(&rx, None));
+    }
+
+    #[tokio::test]
+    async fn fresh_frames_yield_to_newer_requests_and_keep_them_queued() {
+        let (tx, mut rx) = watch::channel(scrub_request(0));
+        let superseded = preview_superseded_while_fresh(rx.clone(), Some(Instant::now()));
+        tx.send_modify(|request| *request = scrub_request(10));
+
+        tokio::time::timeout(Duration::from_secs(1), superseded)
+            .await
+            .expect("a newer request should cancel a frame while the last one is fresh");
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), scrub_request(10));
+    }
+
+    #[tokio::test]
+    async fn overdue_frames_finish_before_newer_requests() {
+        let (tx, mut rx) = watch::channel(scrub_request(0));
+        let superseded = preview_superseded_while_fresh(rx.clone(), overdue_frame());
+        tx.send_modify(|request| *request = scrub_request(10));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), superseded)
+                .await
+                .is_err(),
+            "an overdue frame should not be cancelled by a newer request"
+        );
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), scrub_request(10));
+    }
+
     #[tokio::test]
     async fn completed_pcm_loader_reuses_arc_without_opening_a_missing_file() {
         let audio = crate::completed_audio::tests::audio();
@@ -1942,6 +2107,9 @@ mod tests {
         project.cursor.rotation_amount += 0.1;
         project.cursor.stop_movement_in_last_seconds = Some(0.5);
         project.cursor.click_spring = Some(project.cursor.click_spring_config());
+        project.background.padding += 1.0;
+        project.audio.mic_volume_db += 1.0;
+        project.cursor.motion_blur += 0.1;
         let repeated = cache.get(0, &Arc::clone(&cursor), &project).unwrap();
 
         assert!(Arc::ptr_eq(&first, &repeated));
@@ -2220,6 +2388,44 @@ mod tests {
     }
 
     #[test]
+    fn preview_project_snapshot_is_shared_until_the_project_changes() {
+        let (_untouched_tx, untouched_rx) = watch::channel(ProjectConfiguration::default());
+        let (edited_tx, edited_rx) = watch::channel(ProjectConfiguration::default());
+        edited_tx.send_modify(|project| project.background.padding = 12.0);
+
+        for (mut project_rx, padding) in [(untouched_rx, 0.0), (edited_rx, 12.0)] {
+            let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
+            let initial = Arc::clone(&snapshot);
+            for _ in 0..3 {
+                assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot).is_none());
+                assert!(Arc::ptr_eq(&snapshot, &initial));
+            }
+            assert_eq!(snapshot.background.padding, padding);
+        }
+    }
+
+    #[test]
+    fn preview_project_snapshot_refreshes_once_to_the_latest_project() {
+        let (project_tx, mut project_rx) = watch::channel(ProjectConfiguration::default());
+        let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
+        let initial = Arc::clone(&snapshot);
+
+        for padding in [4.0, 8.0, 16.0] {
+            project_tx.send_modify(|project| project.background.padding = padding);
+        }
+
+        let previous = refresh_project_snapshot(&mut project_rx, &mut snapshot).unwrap();
+        assert!(Arc::ptr_eq(&previous, &initial));
+        assert!(!Arc::ptr_eq(&snapshot, &initial));
+        assert_eq!(snapshot.background.padding, 16.0);
+        assert_eq!(initial.background.padding, 0.0);
+
+        let refreshed = Arc::clone(&snapshot);
+        assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot).is_none());
+        assert!(Arc::ptr_eq(&snapshot, &refreshed));
+    }
+
+    #[test]
     fn audio_timing_repair_uses_startup_trimmed_overlap() {
         let summary = AudioGapSummary {
             total_overlap_trimmed_ms: 1_667,
@@ -2311,10 +2517,7 @@ mod initial_clip_configuration_tests {
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0].index, 0);
         assert!(clips[0].offsets_auto_calculated);
-        assert_eq!(
-            clips[0].offsets.camera.to_bits(),
-            ((1.23456789_f64 - 0.987654321) as f32).to_bits()
-        );
+        assert_eq!(clips[0].offsets.camera.to_bits(), 0.0_f32.to_bits());
         assert_eq!(
             clips[0].offsets.mic.to_bits(),
             (((1.23456789_f64 - 0.876543219) as f32) + calibration).to_bits()

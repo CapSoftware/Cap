@@ -12,7 +12,13 @@
 //! file the shipping app uses, one key at a time, through
 //! [`crate::store::set_store_setting`].
 
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
@@ -22,10 +28,13 @@ use gpui::{
 };
 use serde_json::Value;
 
+use crate::theme::LocaleFont as _;
 use crate::{
     devices::WindowOption,
+    i18n::{self, tr},
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     main_window::Mode,
+    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
@@ -114,19 +123,19 @@ impl Page {
     /// and the route disagree in the shipping app.
     fn label(self) -> &'static str {
         match self {
-            Self::General => "General",
-            Self::Quality => "Recording quality",
-            Self::Shortcuts => "Shortcuts",
-            Self::Cli => "CLI",
-            Self::Recordings => "Recordings",
-            Self::Screenshots => "Screenshots",
-            Self::Automations => "Automations",
-            Self::Transcription => "Transcription",
-            Self::Integrations => "Integrations",
-            Self::License => "Plan & license",
-            Self::Experimental => "Experimental",
-            Self::Feedback => "Feedback",
-            Self::Changelog => "Changelog",
+            Self::General => tr::settings::nav::general(),
+            Self::Quality => tr::settings::nav::quality(),
+            Self::Shortcuts => tr::settings::nav::shortcuts(),
+            Self::Cli => tr::settings::nav::cli(),
+            Self::Recordings => tr::settings::nav::recordings(),
+            Self::Screenshots => tr::settings::nav::screenshots(),
+            Self::Automations => tr::settings::nav::automations(),
+            Self::Transcription => tr::settings::nav::transcription(),
+            Self::Integrations => tr::settings::nav::integrations(),
+            Self::License => tr::settings::nav::license(),
+            Self::Experimental => tr::settings::nav::experimental(),
+            Self::Feedback => tr::settings::nav::feedback(),
+            Self::Changelog => tr::settings::nav::changelog(),
         }
     }
 
@@ -155,10 +164,12 @@ impl Page {
     /// for the main window's screenshots button.
     fn icon(self) -> &'static str {
         match self {
-            Self::General | Self::Experimental => "icons/settings.svg",
+            Self::General => "icons/settings.svg",
+            Self::Experimental => "icons/settings-2.svg",
             Self::Shortcuts => "icons/hotkeys.svg",
             Self::Cli => "icons/terminal.svg",
-            Self::Recordings | Self::Quality => "icons/square-play.svg",
+            Self::Quality => "icons/gauge.svg",
+            Self::Recordings => "icons/square-play.svg",
             Self::Screenshots => "icons/image.svg",
             Self::Automations => "icons/zap.svg",
             Self::Transcription => "icons/captions.svg",
@@ -186,6 +197,7 @@ pub(crate) enum MenuKind {
     MainWindowStart,
     PostDeletion,
     MaxFps,
+    Language,
     /// The excluded-windows card's Add button, whose menu is the live window
     /// list rather than a fixed option set.
     AddWindow,
@@ -208,6 +220,7 @@ pub(crate) enum MenuKind {
 
 struct OpenMenu {
     kind: MenuKind,
+    return_focus: Option<FocusHandle>,
     /// Anchor, row count and keyboard highlight. `Menu.popup()` with no
     /// position argument opens at the pointer, so the origin is the faithful
     /// anchor; the highlight is what makes arrows and Enter work.
@@ -215,57 +228,53 @@ struct OpenMenu {
 }
 
 /// `MAX_FPS_OPTIONS` in general.tsx.
-const MAX_FPS_OPTIONS: &[(u32, &str)] = &[
-    (24, "24 FPS"),
-    (25, "25 FPS"),
-    (30, "30 FPS"),
-    (60, "60 FPS (Recommended)"),
-    (120, "120 FPS"),
+const MAX_FPS_OPTIONS: &[(u32, fn() -> &'static str)] = &[
+    (24, tr::settings::general::recording::max_fps::fps_24),
+    (25, tr::settings::general::recording::max_fps::fps_25),
+    (30, tr::settings::general::recording::max_fps::fps_30),
+    (60, tr::settings::general::recording::max_fps::fps_60),
+    (120, tr::settings::general::recording::max_fps::fps_120),
 ];
 
 /// The Countdown select's options.
-const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
-    (0, "Off"),
-    (3, "3 seconds"),
-    (5, "5 seconds"),
-    (10, "10 seconds"),
+const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
+    (0, tr::settings::general::recording::countdown::off),
+    (3, tr::settings::general::recording::countdown::seconds_3),
+    (5, tr::settings::general::recording::countdown::seconds_5),
+    (10, tr::settings::general::recording::countdown::seconds_10),
 ];
 
 const STUDIO_QUALITY_TIERS: &[(StudioQuality, &str, &str)] = &[
     (
         StudioQuality::Balanced,
         "Balanced",
-        "Clear, detailed recordings with a practical file size. Best for everyday use.",
+        "Sharp detail at a sensible file size. Right for most recordings.",
     ),
     (
         StudioQuality::Compatibility,
         "Smaller files",
-        "Uses less disk space. Can reduce detail, especially when recording with a camera.",
+        "Saves disk space. Fine detail can soften, most of all on camera.",
     ),
     (
         StudioQuality::Ultra,
         "Maximum detail",
-        "Preserves more detail for demanding edits. Creates larger files and needs more disk space.",
+        "Keeps the most detail for heavy editing. Uses the most disk space.",
     ),
 ];
 
 const INSTANT_RESOLUTION_TIERS: &[(u32, &str, &str)] = &[
-    (1280, "720p", "Smaller uploads. Good for quick updates."),
     (
-        1920,
-        "1080p",
-        "Clear text and a practical upload size. Recommended with Cap Pro.",
+        1280,
+        "720p",
+        "Smallest uploads, so links are ready fastest.",
     ),
+    (1920, "1080p", "Sharp text at a practical upload size."),
     (
         2560,
         "1440p",
-        "More detail for larger screens. Takes longer to upload.",
+        "Extra detail for large, high-resolution screens.",
     ),
-    (
-        3840,
-        "4K",
-        "The most detail and largest uploads. Best with a fast connection.",
-    ),
+    (3840, "4K", "The most detail. Best on a fast connection."),
 ];
 
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
@@ -277,12 +286,14 @@ enum InstantQualityNotice {
 }
 
 /// `UPDATE_CHANNEL_OPTIONS`.
-const UPDATE_CHANNEL_DESCRIPTIONS: &[(UpdateChannel, &str)] = &[
-    (UpdateChannel::Stable, "Versioned releases (recommended)"),
+const UPDATE_CHANNEL_DESCRIPTIONS: &[(UpdateChannel, fn() -> &'static str)] = &[
+    (
+        UpdateChannel::Stable,
+        tr::settings::general::updates::stable_description,
+    ),
     (
         UpdateChannel::Nightly,
-        "The newest builds, updated automatically in the background when you're \
-         not recording or exporting. May be unstable.",
+        tr::settings::general::updates::nightly_description,
     ),
 ];
 
@@ -371,6 +382,15 @@ struct RecordingRow {
     thumbnail_stale: bool,
 }
 
+impl RecordingRow {
+    fn pending_thumbnail(&self) -> Option<&Path> {
+        self.item
+            .thumbnail
+            .as_deref()
+            .filter(|_| self.thumbnail_stale)
+    }
+}
+
 /// Everything the page owns. The Solid route keeps this in a `createQuery` plus
 /// three signals; the lifetimes are the same, they just live on the window here.
 struct Recordings {
@@ -385,9 +405,12 @@ struct Recordings {
     search: String,
     /// `visibleCount`, reset to `PAGE_SIZE` by a tab or search change.
     visible_count: usize,
-    /// The scan + thumbnail decode task. Dropping it cancels, so a refresh that
-    /// arrives mid-scan replaces the old one rather than racing it.
+    /// The scan task. Dropping it cancels, so a refresh that arrives mid-scan
+    /// replaces the old one rather than racing it.
     scan: Option<gpui::Task<()>>,
+    /// The thumbnail decode for the rows on screen, replaced whenever more of
+    /// them come into view.
+    decode: Option<gpui::Task<()>>,
     /// The 2s poll, armed only while something in the list is still being
     /// written (`refetchInterval`).
     tick: Option<gpui::Task<()>>,
@@ -402,6 +425,7 @@ impl Recordings {
             search: String::new(),
             visible_count: RECORDINGS_PAGE_SIZE,
             scan: None,
+            decode: None,
             tick: None,
         }
     }
@@ -411,14 +435,26 @@ impl Recordings {
         self.search.trim()
     }
 
-    /// `filteredRecordings()`: the tab, then the case-insensitive substring.
-    fn filtered(&self) -> Vec<&RecordingRow> {
+    /// `visibleRecordings()` over `filteredRecordings()`: the tab, then the
+    /// case-insensitive substring.
+    fn visible_rows(&self) -> VisibleRows {
         let query = self.trimmed_search().to_lowercase();
-        self.items
-            .iter()
-            .flatten()
-            .filter(|row| matches_recording_filters(&row.item, self.tab, &query))
-            .collect()
+        visible_rows(
+            self.items
+                .iter()
+                .flatten()
+                .map(|row| matches_recording_filters(&row.item, self.tab, &query)),
+            !query.is_empty(),
+            self.visible_count,
+        )
+    }
+
+    fn pending_thumbnails(&self) -> Vec<(usize, PathBuf)> {
+        pending_thumbnail_decodes(
+            self.items.as_deref().unwrap_or_default(),
+            &self.visible_rows().indices,
+            RecordingRow::pending_thumbnail,
+        )
     }
 }
 
@@ -437,12 +473,22 @@ struct ScreenshotRow {
     thumbnail: Option<Arc<RenderImage>>,
 }
 
+impl ScreenshotRow {
+    fn pending_thumbnail(&self) -> Option<&Path> {
+        self.item
+            .thumbnail
+            .as_deref()
+            .filter(|_| self.thumbnail.is_none())
+    }
+}
+
 struct Screenshots {
     items: Option<Vec<ScreenshotRow>>,
     search_input: Entity<ui::TextInputState>,
     search: String,
     visible_count: usize,
     scan: Option<gpui::Task<()>>,
+    decode: Option<gpui::Task<()>>,
 }
 
 impl Screenshots {
@@ -453,6 +499,7 @@ impl Screenshots {
             search: String::new(),
             visible_count: RECORDINGS_PAGE_SIZE,
             scan: None,
+            decode: None,
         }
     }
 
@@ -460,14 +507,62 @@ impl Screenshots {
         self.search.trim()
     }
 
-    fn filtered(&self) -> Vec<&ScreenshotRow> {
+    fn visible_rows(&self) -> VisibleRows {
         let query = self.trimmed_search().to_lowercase();
-        self.items
-            .iter()
-            .flatten()
-            .filter(|row| query.is_empty() || row.item.pretty_name.to_lowercase().contains(&query))
-            .collect()
+        visible_rows(
+            self.items.iter().flatten().map(|row| {
+                query.is_empty() || row.item.pretty_name.to_lowercase().contains(&query)
+            }),
+            !query.is_empty(),
+            self.visible_count,
+        )
     }
+
+    fn pending_thumbnails(&self) -> Vec<(usize, PathBuf)> {
+        pending_thumbnail_decodes(
+            self.items.as_deref().unwrap_or_default(),
+            &self.visible_rows().indices,
+            ScreenshotRow::pending_thumbnail,
+        )
+    }
+}
+
+/// The rows a list paints, as indices into the unfiltered scan, so the list and
+/// its thumbnail decode agree on what is on screen.
+struct VisibleRows {
+    indices: Vec<usize>,
+    /// `filteredRecordings().length`, which the empty state and "Load more"
+    /// read.
+    matching: usize,
+}
+
+fn visible_rows(
+    matches: impl IntoIterator<Item = bool>,
+    has_search: bool,
+    visible_count: usize,
+) -> VisibleRows {
+    let mut indices: Vec<usize> = matches
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, matched)| matched.then_some(index))
+        .collect();
+    let matching = indices.len();
+    indices.truncate(visible_recordings_len(matching, has_search, visible_count));
+    VisibleRows { indices, matching }
+}
+
+/// The `(row, thumbnail)` decode jobs for the visible rows only. A library can
+/// hold thousands of items while the page paints twenty; rows further down are
+/// queued when "Load more", a tab, or a search brings them on screen.
+fn pending_thumbnail_decodes<R>(
+    rows: &[R],
+    visible: &[usize],
+    pending: impl Fn(&R) -> Option<&Path>,
+) -> Vec<(usize, PathBuf)> {
+    visible
+        .iter()
+        .filter_map(|&index| pending(rows.get(index)?).map(|path| (index, path.to_path_buf())))
+        .collect()
 }
 
 /// `visibleRecordings()`: an active search shows every match, unpaginated.
@@ -487,6 +582,13 @@ fn has_more_recordings(total: usize, has_search: bool, visible_count: usize) -> 
 /// `setVisibleCount(count => Math.min(count + PAGE_SIZE, filtered.length))`.
 fn load_more_count(visible_count: usize, total: usize) -> usize {
     (visible_count + RECORDINGS_PAGE_SIZE).min(total)
+}
+
+fn search_may_have_changed(event: &ui::TextInputEvent) -> bool {
+    matches!(
+        event,
+        ui::TextInputEvent::Changed | ui::TextInputEvent::Cancelled
+    )
 }
 
 /// `emptyMessage()`.
@@ -511,13 +613,13 @@ struct UserProfile {
     image_url: Option<String>,
 }
 
-fn signed_in_user_id() -> Option<Option<String>> {
-    store::auth_snapshot().signed_in().then(|| {
-        store::store_section("auth")
-            .get("user_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
+fn signed_in_profile_session() -> Option<(Option<String>, String, String)> {
+    let token = store::auth_snapshot().token?;
+    let user_id = store::store_section("auth")
+        .get("user_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((user_id, token, crate::auth::server_url()))
 }
 
 fn cached_user_profile(
@@ -661,11 +763,11 @@ pub struct SettingsWindow {
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
     /// its own so the window has something focused when nothing else does.
     pub(crate) focus: FocusHandle,
-    sign_in_pending: bool,
-    sign_in_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    sign_in_task: Option<gpui::Task<()>>,
+    _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 impl SettingsWindow {
@@ -673,7 +775,7 @@ impl SettingsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, true);
         let settings = GeneralSettings::load();
-        let user_profile = signed_in_user_id().and_then(|user_id| {
+        let user_profile = signed_in_profile_session().and_then(|(user_id, _, _)| {
             cached_user_profile(user_id.as_deref(), &store::store_section("user_profile"))
         });
 
@@ -722,16 +824,53 @@ impl SettingsWindow {
             cx.subscribe(&server_url_input, |this, input, event, cx| {
                 this.on_field_event(Field::ServerUrl, input, event, cx)
             }),
-            cx.subscribe(&recordings_search, |this, input, event, cx| {
-                this.on_field_event(Field::RecordingsSearch, input, event, cx)
+            cx.subscribe_in(
+                &recordings_search,
+                window,
+                |this, input, event, window, cx| {
+                    this.on_field_event(Field::RecordingsSearch, input.clone(), event, cx);
+                    if search_may_have_changed(event) {
+                        this.decode_visible_recordings(window, cx);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &screenshots_search,
+                window,
+                |this, input, event, window, cx| {
+                    this.on_field_event(Field::ScreenshotsSearch, input.clone(), event, cx);
+                    if search_may_have_changed(event) {
+                        this.decode_visible_screenshots(window, cx);
+                    }
+                },
+            ),
+        ];
+
+        let sign_in = SignIn::global(cx);
+        let sign_in_subscriptions = [
+            cx.observe_in(&sign_in, window, |_, _, window, cx| {
+                cx.notify();
+                window.refresh();
             }),
-            cx.subscribe(&screenshots_search, |this, input, event, cx| {
-                this.on_field_event(Field::ScreenshotsSearch, input, event, cx)
+            cx.subscribe_in(&sign_in, window, |this, _, event, window, cx| match event {
+                SignInEvent::Finished {
+                    outcome: SignInOutcome::SignedIn,
+                    ..
+                } => this.refresh_user_profile(window, cx),
+                SignInEvent::AccountRefreshed => {
+                    this.has_cap_pro = store::auth_snapshot().is_upgraded();
+                    cx.notify();
+                    window.refresh();
+                }
+                SignInEvent::Finished { .. } => {}
             }),
         ];
 
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
+            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
+        });
 
         Self {
             theme,
@@ -764,11 +903,11 @@ impl SettingsWindow {
             slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
-            sign_in_pending: false,
-            sign_in_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            sign_in_task: None,
+            _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
     }
 
@@ -809,6 +948,7 @@ impl SettingsWindow {
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        self.shortcuts_cancel(cx);
         self.page = page;
         self.menu = None;
         // The store may have changed under us while the window was in the
@@ -854,22 +994,27 @@ impl SettingsWindow {
         }
         if self.page == Page::Recordings {
             self.screenshots.scan = None;
+            self.screenshots.decode = None;
             self.refresh_recordings(window, cx);
             return;
         }
         if self.page == Page::Screenshots {
             self.recordings.scan = None;
+            self.recordings.decode = None;
             self.recordings.tick = None;
             self.refresh_screenshots(window, cx);
             return;
         }
         self.recordings.scan = None;
+        self.recordings.decode = None;
         self.recordings.tick = None;
         self.screenshots.scan = None;
+        self.screenshots.decode = None;
     }
 
     /// The `recordings` query: scan the library on the background executor,
-    /// then decode each thumbnail there too.
+    /// then decode the visible rows' thumbnails there through
+    /// [`library::spawn_decode_pool`].
     ///
     /// Same two-stage shape as the main window's Recents (`refresh_recents`):
     /// the list lands first so the rows can paint with their grey placeholder,
@@ -889,42 +1034,64 @@ impl SettingsWindow {
                 .await;
             tracing::info!(count = items.len(), "scanned the recordings library");
 
-            let Ok(thumbnails) = this.update_in(cx, |this, window, cx| {
-                this.set_recordings(items, window, cx)
-            }) else {
-                return;
-            };
+            this.update_in(cx, |this, window, cx| {
+                this.set_recordings(items, window, cx);
+                let pending = this.recordings.pending_thumbnails();
+                this.decode_recording_thumbnails(pending, window, cx);
+            })
+            .ok();
+        }));
+    }
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn({
-                        let path = path.clone();
-                        async move { library::decode_thumbnail(&path) }
-                    })
-                    .await;
-                let Some(image) = image else { continue };
+    /// After "Load more", a tab, or a search: decode whatever just came on
+    /// screen. With nothing new the running batch, and the poll it arms when it
+    /// finishes, are left alone.
+    fn decode_visible_recordings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = self.recordings.pending_thumbnails();
+        if !pending.is_empty() {
+            self.decode_recording_thumbnails(pending, window, cx);
+        }
+    }
 
+    /// Replaces the running batch rather than adding a second pool: its
+    /// unfinished rows are still pending, so `pending` re-queues the ones that
+    /// are still on screen.
+    fn decode_recording_thumbnails(
+        &mut self,
+        pending: Vec<(usize, PathBuf)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.recordings.decode = Some(cx.spawn_in(window, async move |this, cx| {
+            let (_decodes, results) =
+                library::spawn_decode_pool(cx.background_executor(), pending, |(index, path)| {
+                    library::decode_thumbnail(&path).map(|image| (index, path, image))
+                });
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(row) = this
-                            .recordings
-                            .items
-                            .as_mut()
-                            .and_then(|rows| rows.get_mut(index))
-                        else {
-                            return;
-                        };
-                        // A refresh may have landed while this decode was in
-                        // flight, and the row at this index may now be a
-                        // different recording.
-                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
-                            return;
+                        for (index, path, image) in batch {
+                            let Some(row) = this
+                                .recordings
+                                .items
+                                .as_mut()
+                                .and_then(|rows| rows.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            // A refresh may have landed while this decode was in
+                            // flight, and the row at this index may now be a
+                            // different recording.
+                            if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                                continue;
+                            }
+                            if let Some(old) = row.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
+                            row.thumbnail_stale = false;
                         }
-                        if let Some(old) = row.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
-                        }
-                        row.thumbnail_stale = false;
                         cx.notify();
                         // An unfocused window only repaints when asked.
                         window.refresh();
@@ -940,8 +1107,8 @@ impl SettingsWindow {
         }));
     }
 
-    /// Install a scan result, and hand back the thumbnails that still have to
-    /// be decoded.
+    /// Install a scan result. A row whose thumbnail still has to be decoded is
+    /// left `thumbnail_stale` until it is on screen.
     ///
     /// `reconcile: "path"` on the query is doing real work here: the 2s poll
     /// re-runs the whole scan, and a row that is still in the library must keep
@@ -955,7 +1122,7 @@ impl SettingsWindow {
         items: Vec<RecordingItem>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(usize, PathBuf)> {
+    ) {
         let mut cached: std::collections::HashMap<_, _> = self
             .recordings
             .items
@@ -965,11 +1132,9 @@ impl SettingsWindow {
             .map(|row| (row.item.path.clone(), row))
             .collect();
 
-        let mut pending = Vec::new();
         let rows: Vec<RecordingRow> = items
             .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
+            .map(|item| {
                 let previous = cached.remove(&item.path);
                 let changed = previous.as_ref().is_none_or(|row| {
                     row.item.thumbnail != item.thumbnail
@@ -978,9 +1143,6 @@ impl SettingsWindow {
                         || row.thumbnail.is_none()
                 });
                 let thumbnail = previous.and_then(|row| row.thumbnail);
-                if changed && let Some(path) = item.thumbnail.clone() {
-                    pending.push((index, path));
-                }
                 RecordingRow {
                     item,
                     thumbnail,
@@ -1001,7 +1163,6 @@ impl SettingsWindow {
         // recording is being written into the library, and an inactive gpui
         // window does not repaint from a background-driven model update.
         window.refresh();
-        pending
     }
 
     /// `refetchInterval: data.some(hasActiveRecording) ? 2000 : false` -- armed
@@ -1035,7 +1196,7 @@ impl SettingsWindow {
     /// thread, which is where `NSAlert` has to run, so the task is both the
     /// right thread and the right borrow state.
     fn delete_recording(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 "Are you sure you want to delete this recording?",
@@ -1059,7 +1220,7 @@ impl SettingsWindow {
             }
             tracing::info!(path = %path.display(), "deleted a recording");
 
-            this.update_in(cx, |this, window, cx| this.refresh_recordings(window, cx))
+            cx.update(|_, cx| cx.defer(crate::app_windows::refresh_library_after_delete))
                 .ok();
         })
         .detach();
@@ -1077,36 +1238,53 @@ impl SettingsWindow {
                 .await;
             tracing::info!(count = items.len(), "scanned the screenshots library");
 
-            let Ok(thumbnails) = this.update_in(cx, |this, window, cx| {
-                this.set_screenshots(items, window, cx)
-            }) else {
-                return;
-            };
+            this.update_in(cx, |this, window, cx| {
+                this.set_screenshots(items, window, cx);
+                let pending = this.screenshots.pending_thumbnails();
+                this.decode_screenshot_thumbnails(pending, window, cx);
+            })
+            .ok();
+        }));
+    }
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn({
-                        let path = path.clone();
-                        async move { library::decode_thumbnail(&path) }
-                    })
-                    .await;
-                let Some(image) = image else { continue };
+    fn decode_visible_screenshots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending = self.screenshots.pending_thumbnails();
+        if !pending.is_empty() {
+            self.decode_screenshot_thumbnails(pending, window, cx);
+        }
+    }
+
+    fn decode_screenshot_thumbnails(
+        &mut self,
+        pending: Vec<(usize, PathBuf)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.screenshots.decode = Some(cx.spawn_in(window, async move |this, cx| {
+            let (_decodes, results) =
+                library::spawn_decode_pool(cx.background_executor(), pending, |(index, path)| {
+                    library::decode_thumbnail(&path).map(|image| (index, path, image))
+                });
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(row) = this
-                            .screenshots
-                            .items
-                            .as_mut()
-                            .and_then(|rows| rows.get_mut(index))
-                        else {
-                            return;
-                        };
-                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
-                            return;
-                        }
-                        if let Some(old) = row.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
+                        for (index, path, image) in batch {
+                            let Some(row) = this
+                                .screenshots
+                                .items
+                                .as_mut()
+                                .and_then(|rows| rows.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                                continue;
+                            }
+                            if let Some(old) = row.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
                         }
                         cx.notify();
                         window.refresh();
@@ -1124,7 +1302,7 @@ impl SettingsWindow {
         items: Vec<ScreenshotItem>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<(usize, PathBuf)> {
+    ) {
         let mut cached: std::collections::HashMap<PathBuf, Arc<RenderImage>> = self
             .screenshots
             .items
@@ -1134,17 +1312,10 @@ impl SettingsWindow {
             .filter_map(|row| row.thumbnail.map(|image| (row.item.path, image)))
             .collect();
 
-        let mut pending = Vec::new();
         let rows: Vec<ScreenshotRow> = items
             .into_iter()
-            .enumerate()
-            .map(|(index, item)| {
+            .map(|item| {
                 let thumbnail = cached.remove(&item.path);
-                if thumbnail.is_none()
-                    && let Some(path) = item.thumbnail.clone()
-                {
-                    pending.push((index, path));
-                }
                 ScreenshotRow { item, thumbnail }
             })
             .collect();
@@ -1156,7 +1327,6 @@ impl SettingsWindow {
         self.screenshots.items = Some(rows);
         cx.notify();
         window.refresh();
-        pending
     }
 
     fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -1275,7 +1445,12 @@ impl SettingsWindow {
         self.write(key, Value::from(value), cx);
     }
 
-    fn write_enum<T: SettingsEnum>(&mut self, key: &'static str, value: T, cx: &mut Context<Self>) {
+    pub(crate) fn write_enum<T: SettingsEnum>(
+        &mut self,
+        key: &'static str,
+        value: T,
+        cx: &mut Context<Self>,
+    ) {
         self.write(key, Value::String(value.as_json().to_string()), cx);
     }
 
@@ -1327,11 +1502,15 @@ impl SettingsWindow {
         // them first -- its bindings sit deeper in the dispatch path. Opening
         // a menu therefore takes focus back, which is also what clicking a
         // `<button>` does to a focused `<input>` in the webview.
+        let return_focus = ui::keyboard_nav::active(window, cx)
+            .then(|| window.focused(cx))
+            .flatten();
         let focus = self.focus.clone();
         window.focus(&focus, cx);
         let items = self.menu_items(kind);
         self.menu = Some(OpenMenu {
             kind,
+            return_focus,
             state: ui::MenuState::new(origin, &items),
         });
         cx.notify();
@@ -1354,11 +1533,21 @@ impl SettingsWindow {
                 true
             }
             ui::MenuKey::Dismiss => {
-                self.menu = None;
+                self.close_menu(window, cx);
                 cx.notify();
                 true
             }
             ui::MenuKey::Ignored => false,
+        }
+    }
+
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = self.menu.take()
+            && ui::keyboard_nav::active(window, cx)
+            && self.focus.is_focused(window)
+            && let Some(focus) = menu.return_focus
+        {
+            window.focus(&focus, cx);
         }
     }
 
@@ -1369,13 +1558,19 @@ impl SettingsWindow {
                 let current = self.settings.recording_countdown.unwrap_or(0);
                 COUNTDOWN_OPTIONS
                     .iter()
-                    .map(|(value, label)| ui::MenuItem::new(*label, *value == current))
+                    .map(|(value, label)| ui::MenuItem::new(label(), *value == current))
                     .collect()
             }
             MenuKind::MaxFps => MAX_FPS_OPTIONS
                 .iter()
-                .map(|(value, label)| ui::MenuItem::new(*label, *value == self.settings.max_fps))
+                .map(|(value, label)| ui::MenuItem::new(label(), *value == self.settings.max_fps))
                 .collect(),
+            MenuKind::Language => {
+                let current = self.language_preference();
+                i18n::Preference::options()
+                    .map(|option| ui::MenuItem::new(language_label(option), option == current))
+                    .collect()
+            }
             MenuKind::MainWindowStart => {
                 enum_items(self.settings.main_window_recording_start_behaviour)
             }
@@ -1396,7 +1591,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.menu = None;
+        self.close_menu(window, cx);
         match kind {
             MenuKind::Countdown => {
                 if let Some((value, _)) = COUNTDOWN_OPTIONS.get(index) {
@@ -1408,6 +1603,14 @@ impl SettingsWindow {
                 if let Some((value, _)) = MAX_FPS_OPTIONS.get(index) {
                     self.settings.max_fps = *value;
                     self.write_u32("maxFps", *value, cx);
+                }
+            }
+            MenuKind::Language => {
+                if let Some(option) = i18n::Preference::options().nth(index) {
+                    self.settings.ui_language = Some(option.setting().to_string());
+                    self.write(i18n::SETTING_KEY, Value::from(option.setting()), cx);
+                    let preference = self.language_preference();
+                    cx.defer(move |cx: &mut gpui::App| i18n::apply(preference, cx));
                 }
             }
             MenuKind::MainWindowStart => {
@@ -1473,6 +1676,17 @@ impl SettingsWindow {
     }
 }
 
+/// Each catalog under its own name; System default names the language it
+/// resolves to, in that language.
+fn language_label(option: i18n::Preference) -> SharedString {
+    match option {
+        i18n::Preference::System => {
+            tr::settings::general::language::system_default(i18n::system().endonym()).into()
+        }
+        i18n::Preference::Fixed(locale) => SharedString::new_static(locale.endonym()),
+    }
+}
+
 fn enum_items<T: SettingsEnum>(current: T) -> Vec<ui::MenuItem> {
     T::ALL
         .iter()
@@ -1531,6 +1745,10 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.switch_back_running() {
+            ui::keyboard_nav::leave(window, cx);
+        }
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
             && let Some(mode) = self.quality_scroll_request.take()
@@ -1545,6 +1763,7 @@ impl Render for SettingsWindow {
 
         let shell = div()
             .track_focus(&self.focus)
+            .child(ui::keyboard_nav::pointer_watcher())
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
@@ -1561,10 +1780,21 @@ impl Render for SettingsWindow {
                 if this.shortcuts_capture_key(keystroke, cx) {
                     return;
                 }
-                if keystroke.modifiers.platform && keystroke.key == "w" {
+                // Ctrl+W on Linux, where the platform modifier is Super.
+                let close = if cfg!(target_os = "linux") {
+                    keystroke.modifiers.control
+                } else {
+                    keystroke.modifiers.platform
+                };
+                if close && keystroke.key == "w" {
                     cx.defer(crate::app_windows::close_settings);
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _window, cx| {
+                    this.shortcuts_modifiers_changed(event.modifiers, cx);
+                },
+            ))
             .size_full()
             .flex()
             .flex_row()
@@ -1572,9 +1802,9 @@ impl Render for SettingsWindow {
             .rounded(px(theme
                 .settings_window_radius()
                 .min(SETTINGS_MATERIAL_RADIUS as f32)))
-            .font_family("Geist")
-            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
-            .font_weight(FontWeight::MEDIUM)
+            .font_family(crate::theme::UI_FONT)
+            .locale_font()
+            .font_weight(FontWeight::NORMAL)
             .text_color(theme.settings_text());
 
         #[cfg(target_os = "windows")]
@@ -1615,6 +1845,14 @@ impl Render for SettingsWindow {
             .child(self.render_sidebar(cx))
             .child(self.render_content(window, cx));
 
+        // GNOME and other compositors without server-side decorations leave
+        // the frame to the app; without this the window had no way to close.
+        #[cfg(target_os = "linux")]
+        let shell = shell.when(
+            matches!(window.window_decorations(), gpui::Decorations::Client { .. }),
+            |shell| shell.child(linux_close_button(theme)),
+        );
+
         shell
             // Painted last so it lands over the page: the select menus, and
             // the drag layer the zoom slider needs while the button is held.
@@ -1624,6 +1862,31 @@ impl Render for SettingsWindow {
             // hand-back takes the whole window while it counts down.
             .children(self.render_switch_overlay(cx))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_close_button(theme: Theme) -> impl IntoElement {
+    div()
+        .id("settings-close")
+        .absolute()
+        .top(px(10.))
+        .right(px(10.))
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .occlude()
+        .hover(move |style| style.bg(theme.settings_sidebar_bg()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(|_, _, cx| cx.defer(crate::app_windows::close_settings))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(px(14.))
+                .text_color(theme.settings_text()),
+        )
 }
 
 impl SettingsWindow {
@@ -1748,13 +2011,14 @@ impl SettingsWindow {
 
         div()
             .id("settings-nav")
+            .role(gpui::Role::TabList)
             .flex()
             .flex_col()
             // `.cap-settings-nav { padding: 0 var(--sidebar-padding-x)
             //  var(--sidebar-padding-x); overflow-y: auto }`, `space-y-1`.
             .px(px(SIDEBAR_PADDING_X))
             .pb(px(SIDEBAR_PADDING_X))
-            .gap(px(4.))
+            .gap(px(2.))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -1762,21 +2026,26 @@ impl SettingsWindow {
                 let selected = page == self.page;
                 div()
                     .id(SharedString::from(page.slug()))
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Tab)
+                    .aria_label(page.label())
+                    .aria_selected(selected)
                     .flex()
                     .flex_row()
                     .items_center()
                     // `.cap-settings-nav-item { height: 32px; padding: 6px;
                     //  border-radius: 8px }`, `gap-1.5 text-[13px]`.
-                    .h(px(32.))
+                    .h(px(30.))
                     .px(px(6.))
-                    .gap(px(6.))
+                    .gap(px(8.))
                     .rounded(px(8.))
                     .text_size(px(13.))
                     .when(selected, |this| {
-                        // `.cap-settings-nav-item.bg-gray-5 { background:
-                        //  var(--macos-settings-selection) }`, and the
-                        //  `activeClass` also carries `pointer-events-none`.
-                        this.bg(theme.settings_selection())
+                        this.bg(Theme::with_alpha(
+                            rgb(Theme::SETTINGS_ACCENT),
+                            if theme.is_dark() { 0.22 } else { 0.12 },
+                        ))
+                        .font_weight(FontWeight::MEDIUM)
                     })
                     .when(!selected, |this| {
                         this.hover(|style| style.bg(theme.settings_hover()))
@@ -1787,8 +2056,6 @@ impl SettingsWindow {
                             .size(px(16.))
                             .flex_shrink_0()
                             .text_color(if selected {
-                                // `.cap-settings-nav-item.bg-gray-5 svg
-                                //  { color: var(--macos-settings-accent) }`
                                 rgb(Theme::SETTINGS_ACCENT).into()
                             } else {
                                 theme.settings_muted()
@@ -1805,6 +2072,29 @@ impl SettingsWindow {
 
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let (update_label, update_ready) = match crate::updates::status(cx) {
+            crate::updates::UpdateStatus::Idle => ("Check for updates".to_string(), false),
+            crate::updates::UpdateStatus::Downloading {
+                version,
+                fraction: Some(fraction),
+            } => (
+                format!(
+                    "Downloading v{version}… {}%",
+                    (fraction * 100.).round() as u32
+                ),
+                false,
+            ),
+            crate::updates::UpdateStatus::Downloading { version, .. } => {
+                (format!("Downloading v{version}…"), false)
+            }
+            crate::updates::UpdateStatus::Ready { version }
+            | crate::updates::UpdateStatus::Installed { version, .. } => {
+                (format!("Restart to update to v{version}"), true)
+            }
+            crate::updates::UpdateStatus::Installing { version } => {
+                (format!("Installing v{version}…"), false)
+            }
+        };
 
         let update_links = div()
             .flex()
@@ -1820,10 +2110,7 @@ impl SettingsWindow {
                     .px(px(4.))
                     .py(px(2.))
                     .rounded(px(4.))
-                    .child(format!(
-                        "v{} (Experimental GPUI)",
-                        env!("CARGO_PKG_VERSION")
-                    )),
+                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
             )
             .child(
                 div()
@@ -1836,11 +2123,18 @@ impl SettingsWindow {
                 div()
                     .id("settings-check-updates")
                     .cursor_pointer()
+                    .when(update_ready, |link| {
+                        link.text_color(rgb(Theme::SETTINGS_ACCENT))
+                    })
                     .hover(|style| style.text_color(theme.settings_text()))
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        crate::updates::check_manually(cx);
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        if update_ready {
+                            crate::updates::install_and_relaunch(cx);
+                        } else {
+                            crate::updates::check_manually(cx);
+                        }
                     }))
-                    .child("Check for updates"),
+                    .child(update_label),
             );
 
         div()
@@ -1857,7 +2151,7 @@ impl SettingsWindow {
             .child(update_links)
             .child({
                 let signed_in = store::auth_snapshot().signed_in();
-                let (variant, label) = if self.sign_in_pending {
+                let (variant, label) = if SignIn::global(cx).read(cx).is_pending() {
                     (ui::ButtonVariant::Gray, "Cancel Sign In")
                 } else if signed_in {
                     (ui::ButtonVariant::Gray, "Sign Out")
@@ -1878,53 +2172,16 @@ impl SettingsWindow {
     }
 
     fn toggle_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use std::sync::atomic::Ordering;
-
-        if self.sign_in_pending {
-            self.sign_in_cancel.store(true, Ordering::Relaxed);
-            self.sign_in_pending = false;
-            cx.notify();
+        let sign_in = SignIn::global(cx);
+        if sign_in.read(cx).is_pending() {
+            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
             return;
         }
         if store::auth_snapshot().signed_in() {
             self.clear_local_auth(window, cx);
             return;
         }
-
-        self.sign_in_cancel.store(false, Ordering::Relaxed);
-        let cancel = self.sign_in_cancel.clone();
-        let session = match crate::auth::begin_sign_in(cancel.clone()) {
-            Ok(session) => session,
-            Err(error) => {
-                tracing::error!("starting sign-in: {error}");
-                return;
-            }
-        };
-        cx.open_url(&session.url);
-        self.sign_in_pending = true;
-        self.sign_in_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let signed_in = cx
-                .background_executor()
-                .spawn(async move { session.complete() })
-                .await;
-            if matches!(signed_in, Ok(true))
-                && let Ok(plan) =
-                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
-                && let Err(error) = plan
-            {
-                tracing::warn!("updating auth plan after sign-in: {error}");
-            }
-            crate::platform::activate_app();
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.sign_in_pending = false;
-                if store::auth_snapshot().signed_in() {
-                    this.refresh_user_profile(window, cx);
-                }
-                cx.notify();
-                window.refresh();
-            });
-        }));
-        cx.notify();
+        sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Settings, cx));
     }
 
     pub(crate) fn refresh_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1968,9 +2225,10 @@ impl SettingsWindow {
     fn refresh_user_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.instant_quality_notice = None;
-        let Some(user_id) = signed_in_user_id() else {
+        let Some(profile_session) = signed_in_profile_session() else {
             return;
         };
+        let user_id = profile_session.0.clone();
         cx.spawn_in(window, async move |this, cx| {
             let Ok(task) = cx.update(|_, cx| gpui_tokio::Tokio::spawn(cx, fetch_user_profile()))
             else {
@@ -1983,7 +2241,7 @@ impl SettingsWindow {
                 Ok(profile) => profile,
                 Err(crate::auth::AuthApiError::InvalidAuthentication) => {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if signed_in_user_id().as_ref() == Some(&user_id) {
+                        if signed_in_profile_session().as_ref() == Some(&profile_session) {
                             this.clear_local_auth(window, cx);
                         }
                     });
@@ -2001,7 +2259,7 @@ impl SettingsWindow {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
             let Ok(true) = this.update_in(cx, |this, window, cx| {
-                if signed_in_user_id().as_ref() != Some(&user_id) {
+                if signed_in_profile_session().as_ref() != Some(&profile_session) {
                     return false;
                 }
                 if !store::set_store_value(
@@ -2037,7 +2295,7 @@ impl SettingsWindow {
             match result {
                 Ok(image) => {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if signed_in_user_id().as_ref() != Some(&user_id)
+                        if signed_in_profile_session().as_ref() != Some(&profile_session)
                             || this
                                 .user_profile
                                 .as_ref()
@@ -2056,7 +2314,7 @@ impl SettingsWindow {
                 }
                 Err(crate::auth::AuthApiError::InvalidAuthentication) => {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if signed_in_user_id().as_ref() == Some(&user_id) {
+                        if signed_in_profile_session().as_ref() == Some(&profile_session) {
                             this.clear_local_auth(window, cx);
                         }
                     });
@@ -2241,14 +2499,17 @@ impl SettingsWindow {
 
     fn render_screenshots_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let rows = self.screenshots.filtered();
-        let total = rows.len();
+        let rows = self.screenshots.items.as_deref().unwrap_or_default();
+        let VisibleRows {
+            indices,
+            matching: total,
+        } = self.screenshots.visible_rows();
         let has_search = !self.screenshots.trimmed_search().is_empty();
-        let visible = visible_recordings_len(total, has_search, self.screenshots.visible_count);
+        let visible = indices.len();
         let more = has_more_recordings(total, has_search, self.screenshots.visible_count);
 
         let mut items = Vec::with_capacity(visible);
-        for (index, row) in rows.iter().take(visible).enumerate() {
+        for (index, row) in indices.into_iter().map(|row| &rows[row]).enumerate() {
             items.push(
                 self.render_screenshot_row(index, row, index + 1 == visible, cx)
                     .into_any_element(),
@@ -2287,10 +2548,11 @@ impl SettingsWindow {
                             "Load more",
                             false,
                             cx,
-                            |this, _window, cx| {
-                                let total = this.screenshots.filtered().len();
+                            |this, window, cx| {
+                                let total = this.screenshots.visible_rows().matching;
                                 this.screenshots.visible_count =
                                     load_more_count(this.screenshots.visible_count, total);
+                                this.decode_visible_screenshots(window, cx);
                                 cx.notify();
                             },
                         )),
@@ -2360,13 +2622,14 @@ impl SettingsWindow {
                 {
                     let png = png.clone();
                     move |_this, _window, cx| {
-                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png, cx) {
-                            tracing::warn!("copying screenshot failed: {error}");
-                            cx.spawn(async move |_, _| {
+                        let copied = crate::platform::copy_image_to_clipboard(png.clone(), cx);
+                        cx.spawn(async move |_, _| {
+                            if let Err(error) = copied.await {
+                                tracing::warn!("copying screenshot failed: {error}");
                                 crate::platform::alert_dialog("Could not copy screenshot", &error);
-                            })
-                            .detach();
-                        }
+                            }
+                        })
+                        .detach();
                     }
                 },
             ))
@@ -2386,7 +2649,7 @@ impl SettingsWindow {
                 "Open folder",
                 false,
                 cx,
-                move |_this, _window, _cx| library::reveal_in_folder(&bundle),
+                move |_this, _window, cx| library::reveal_path(&bundle, cx),
             ))
             .child(self.row_button(
                 ("screenshot-delete", index),
@@ -2488,11 +2751,12 @@ impl SettingsWindow {
                     }))
                     // `text-xs text-gray-12`
                     .child(div().text_size(px(12.)).child(tab.label()))
-                    .on_click(cx.listener(move |this, _, _window, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.recordings.tab = tab;
                         // `createEffect(() => { activeTab(); ...
                         //  setVisibleCount(PAGE_SIZE) })`
                         this.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                        this.decode_visible_recordings(window, cx);
                         cx.notify();
                     }))
             }));
@@ -2530,16 +2794,19 @@ impl SettingsWindow {
     /// border-gray-3`, with the "Load more" footer under it.
     fn render_recordings_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let rows = self.recordings.filtered();
-        let total = rows.len();
+        let rows = self.recordings.items.as_deref().unwrap_or_default();
+        let VisibleRows {
+            indices,
+            matching: total,
+        } = self.recordings.visible_rows();
         let has_search = !self.recordings.trimmed_search().is_empty();
-        let visible = visible_recordings_len(total, has_search, self.recordings.visible_count);
+        let visible = indices.len();
         let more = has_more_recordings(total, has_search, self.recordings.visible_count);
 
         // Built up front rather than in a `.children(map(..))`: the closure
         // would have to hold `cx` across every row, which it cannot.
         let mut items = Vec::with_capacity(visible);
-        for (index, row) in rows.iter().take(visible).enumerate() {
+        for (index, row) in indices.into_iter().map(|row| &rows[row]).enumerate() {
             // `not-last:border-b` counts the *rendered* rows, so the border
             // stops at the last visible one rather than the last matching one.
             items.push(
@@ -2581,10 +2848,11 @@ impl SettingsWindow {
                             "Load more",
                             false,
                             cx,
-                            |this, _window, cx| {
-                                let total = this.recordings.filtered().len();
+                            |this, window, cx| {
+                                let total = this.recordings.visible_rows().matching;
                                 this.recordings.visible_count =
                                     load_more_count(this.recordings.visible_count, total);
+                                this.decode_visible_recordings(window, cx);
                                 cx.notify();
                             },
                         )),
@@ -2870,7 +3138,7 @@ impl SettingsWindow {
             "Open recording bundle",
             false,
             cx,
-            move |_this, _window, _cx| library::open_recording_folder(&folder_path, mode),
+            move |_this, _window, cx| library::open_recording_folder(&folder_path, mode, cx),
         ));
         actions.child(self.row_button(
             ("recording-delete", index),
@@ -2935,8 +3203,12 @@ impl SettingsWindow {
     // -- The General page --------------------------------------------------
 
     fn render_general(&self, window: &Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        vec![
-            self.render_appearance(cx).into_any_element(),
+        let mut sections = Vec::with_capacity(10);
+        sections.push(self.render_appearance(cx).into_any_element());
+        if i18n::picker_enabled() {
+            sections.push(self.render_language(cx).into_any_element());
+        }
+        sections.extend([
             self.render_app_section(cx).into_any_element(),
             self.render_recording(cx).into_any_element(),
             self.render_storage(cx).into_any_element(),
@@ -2945,7 +3217,8 @@ impl SettingsWindow {
             self.render_updates(cx).into_any_element(),
             self.render_self_host(window, cx).into_any_element(),
             self.render_privacy(cx).into_any_element(),
-        ]
+        ]);
+        sections
     }
 
     /// `AppearanceSection` -- `theme`.
@@ -3015,27 +3288,53 @@ impl SettingsWindow {
             }));
 
         self.section(
-            "Appearance",
-            Some("Match Cap to your system theme or pick a fixed look."),
+            tr::settings::general::appearance::title(),
+            Some(tr::settings::general::appearance::description()),
             None,
             vec![self.card(true).child(tiles).into_any_element()],
+        )
+    }
+
+    fn language_preference(&self) -> i18n::Preference {
+        i18n::Preference::from_setting(self.settings.ui_language.as_deref())
+    }
+
+    /// `uiLanguage`, a GPUI-only setting.
+    fn render_language(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let label = language_label(self.language_preference());
+        self.section(
+            tr::settings::general::language::title(),
+            Some(tr::settings::general::language::description()),
+            None,
+            vec![
+                self.rows(vec![
+                    self.setting_row(
+                        tr::settings::general::language::label(),
+                        None,
+                        self.select("ui-language", label, MenuKind::Language, cx)
+                            .into_any_element(),
+                    ),
+                ])
+                .into_any_element(),
+            ],
         )
     }
 
     /// The macOS-only App section: `hideDockIcon`, `enableNotifications`.
     fn render_app_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         self.section(
-            "App",
-            Some("Choose how Cap shows up on your system."),
+            tr::settings::general::app::title(),
+            Some(tr::settings::general::app::description()),
             None,
             vec![
                 self.rows(vec![
                     self.setting_row(
-                        "Always show dock icon",
-                        Some("Keep Cap in the dock even when no windows are open."),
+                        tr::settings::general::app::dock_icon::label(),
+                        Some(tr::settings::general::app::dock_icon::description()),
                         // The row is the *inverse* of the stored key.
                         self.toggle(
                             "hide-dock-icon",
+                            tr::settings::general::app::dock_icon::label(),
                             !self.settings.hide_dock_icon,
                             cx,
                             |this, cx| {
@@ -3052,13 +3351,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "System notifications",
-                        Some(
-                            "Show notifications for clipboard copies, saved files, and more. \
-                             You may need to allow Cap in your system's notification settings.",
-                        ),
+                        tr::settings::general::app::notifications::label(),
+                        Some(tr::settings::general::app::notifications::description()),
                         self.toggle(
                             "enable-notifications",
+                            tr::settings::general::app::notifications::label(),
                             self.settings.enable_notifications,
                             cx,
                             |this, cx| {
@@ -3085,7 +3382,8 @@ impl SettingsWindow {
             return;
         };
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
-        if !self.has_cap_pro && resolution != FREE_INSTANT_MODE_MAX_RESOLUTION {
+        if self.instant_resolution_locked(resolution) {
+            cx.open_url(crate::auth::PRICING_URL);
             cx.notify();
             return;
         }
@@ -3104,13 +3402,6 @@ impl SettingsWindow {
 
     fn render_recording_quality(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         vec![
-            self.section(
-                "Recording quality",
-                Some("Choose how new recordings look and how much space they use."),
-                None,
-                vec![],
-            )
-            .into_any_element(),
             self.render_studio_quality(cx).into_any_element(),
             self.render_instant_quality(cx).into_any_element(),
             self.section(
@@ -3124,6 +3415,7 @@ impl SettingsWindow {
                             Some("Open the link in your browser when an upload finishes."),
                             self.toggle(
                                 "auto-open-links",
+                                "Open share links automatically",
                                 !self.settings.disable_auto_open_links,
                                 cx,
                                 |this, cx| {
@@ -3146,40 +3438,80 @@ impl SettingsWindow {
         ]
     }
 
-    fn render_instant_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let effective = if self.has_cap_pro {
+    fn effective_instant_resolution(&self) -> u32 {
+        if self.has_cap_pro {
             self.settings.instant_mode_max_resolution
         } else {
             FREE_INSTANT_MODE_MAX_RESOLUTION
-        };
+        }
+    }
+
+    fn instant_resolution_locked(&self, resolution: u32) -> bool {
+        !self.has_cap_pro && resolution > FREE_INSTANT_MODE_MAX_RESOLUTION
+    }
+
+    fn render_instant_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let effective = self.effective_instant_resolution();
         let summary = INSTANT_RESOLUTION_TIERS
             .iter()
             .find(|(value, _, _)| *value == effective)
             .map(|(_, _, summary)| *summary)
             .unwrap_or_default();
-        let body = self.card(true).child(
-            div().id("settings-instant-quality").anchor_scroll(Some(self.instant_quality_anchor.clone()))
-                .flex().flex_col().gap(px(12.))
-                .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child("Maximum resolution"))
-                .child(self.segmented_raw("instant-resolution", INSTANT_RESOLUTION_TIERS.iter().map(|(value, label, _)| {
-                    let locked = !self.has_cap_pro && *value > FREE_INSTANT_MODE_MAX_RESOLUTION;
-                    ui::SegmentOption::new(if locked { format!("{label} · Pro") } else { (*label).to_string() }, *value == effective).disabled(locked)
-                }).collect(), cx, |this, index, cx| this.select_instant_resolution(index, cx)))
-                .child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child(format!("{summary} Resolution is limited by the screen or area you record.")))
-                .when(!self.has_cap_pro, |this| this.child(
-                    div().flex().flex_col().items_start().gap(px(12.)).pt(px(12.)).border_t_1().border_color(theme.settings_border())
-                        .child(div().text_size(px(12.)).line_height(px(18.)).child("720p is included. Cap Pro unlocks 1080p, 1440p and 4K for Instant recordings."))
-                        .child(ui::Button::settings(&theme, "instant-quality-pricing", ui::ButtonVariant::Gray, ui::ButtonSize::Sm)
-                            .label("View plans ↗").on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)))
-                ))
-                .when_some(self.instant_quality_notice, |this, _| this.child(div().text_size(px(12.)).text_color(Hsla::from(theme.amber_11)).child("Couldn't save your recording settings. Please try again."))),
-        );
+        let description = if self.has_cap_pro {
+            summary.to_string()
+        } else {
+            "720p on the free plan. Cap Pro records up to 4K.".to_string()
+        };
+
+        let options = INSTANT_RESOLUTION_TIERS
+            .iter()
+            .map(|(value, label, _)| {
+                let mut option = ui::SegmentOption::new(*label, *value == effective);
+                if self.instant_resolution_locked(*value) {
+                    option.icon = Some("icons/lock.svg".into());
+                }
+                option
+            })
+            .collect();
+
+        let resolution = div()
+            .id("settings-instant-quality")
+            .anchor_scroll(Some(self.instant_quality_anchor.clone()))
+            .child(
+                ui::SettingRow::settings(
+                    &theme,
+                    "Maximum resolution",
+                    None,
+                    self.segmented_raw("instant-resolution", options, cx, |this, index, cx| {
+                        this.select_instant_resolution(index, cx)
+                    })
+                    .into_any_element(),
+                )
+                .description(description),
+            );
+
+        let mut rows = vec![resolution.into_any_element()];
+        if let Some(InstantQualityNotice::SaveFailed) = self.instant_quality_notice {
+            rows.push(
+                div()
+                    .p(px(12.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.amber_11))
+                    .child("Couldn't save your recording settings. Please try again.")
+                    .into_any_element(),
+            );
+        }
+
         self.section(
-            "Instant",
-            Some("Uploads while you record, so your share link is ready when you stop."),
+            "Instant recordings",
+            Some(
+                "Uploaded while you record, so the link is ready the moment you stop. For the \
+                 best quality, use Studio mode: it records at the highest quality your screen \
+                 allows, and you can export up to 4K.",
+            ),
             None,
-            vec![body.into_any_element()],
+            vec![self.rows(rows).into_any_element()],
         )
     }
 
@@ -3195,41 +3527,138 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn radio_dot(&self, checked: bool) -> gpui::Div {
+        let theme = self.theme;
+        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
+        div()
+            .size(px(16.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .when(checked, |this| {
+                this.bg(accent)
+                    .child(div().size(px(6.)).rounded_full().bg(gpui::white()))
+            })
+            .when(!checked, |this| {
+                this.border_1()
+                    .border_color(theme.settings_muted().opacity(0.55))
+                    .group_hover("studio-quality-option", |style| {
+                        style.border_color(theme.settings_muted())
+                    })
+                    .bg(if theme.is_dark() {
+                        gpui::hsla(0., 0., 1., 0.1)
+                    } else {
+                        gpui::white()
+                    })
+                    .shadow(vec![gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 0., 0.12),
+                        offset: gpui::point(px(0.), px(0.5)),
+                        blur_radius: px(1.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+            })
+    }
+
     fn render_studio_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let current = self.settings.studio_recording_quality;
-        let body = self.card(true).child(
-            div().id("settings-studio-quality").anchor_scroll(Some(self.studio_quality_anchor.clone()))
-                .flex().flex_col().gap(px(8.))
-                .children(STUDIO_QUALITY_TIERS.iter().copied().map(|(quality, label, description)| {
-                    let selected = current == quality;
-                    div().id(SharedString::from(format!("studio-quality-{}", quality.as_json())))
-                        .tab_index(0).aria_label(label).aria_description(description).aria_selected(selected)
-                        .cursor_pointer().flex().flex_col().gap(px(4.)).p(px(12.)).rounded(px(8.))
-                        .border_1().border_color(if selected { Hsla::from(theme.blue_9) } else { theme.settings_border() })
-                        .bg(if selected { theme.settings_selection() } else { theme.settings_card_bg() })
-                        .hover(|style| style.bg(theme.settings_fill()))
-                        .child(div().flex().items_center().gap(px(8.))
-                            .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(label))
-                            .when(quality == StudioQuality::Balanced, |this| this.child(div().text_size(px(10.)).text_color(Hsla::from(theme.blue_11)).child("Recommended")))
-                            .when(selected, |this| this.child(div().text_size(px(12.)).text_color(Hsla::from(theme.blue_11)).child("✓"))))
-                        .child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child(description))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+
+        let mut rows: Vec<gpui::AnyElement> = STUDIO_QUALITY_TIERS
+            .iter()
+            .copied()
+            .map(|(quality, label, description)| {
+                let selected = current == quality;
+                div()
+                    .id(SharedString::from(format!(
+                        "studio-quality-{}",
+                        quality.as_json()
+                    )))
+                    .tab_index(0)
+                    .aria_label(label)
+                    .aria_description(description)
+                    .aria_selected(selected)
+                    .cursor_pointer()
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .p(px(12.))
+                    .group("studio-quality-option")
+                    .child(div().mt(px(1.)).child(self.radio_dot(selected)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(div().text_size(px(13.)).child(label))
+                                    .when(quality == StudioQuality::Balanced, |this| {
+                                        this.child(
+                                            div()
+                                                .px(px(6.))
+                                                .py(px(1.))
+                                                .rounded(px(4.))
+                                                .bg(theme.settings_fill())
+                                                .text_size(px(11.))
+                                                .text_color(theme.settings_muted())
+                                                .child("Recommended"),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(theme.settings_muted())
+                                    .child(description),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_studio_quality(quality, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.modifiers == Default::default()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
                             this.select_studio_quality(quality, cx);
-                        }))
-                        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                            if event.keystroke.modifiers == Default::default()
-                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                            {
-                                this.select_studio_quality(quality, cx);
-                                cx.stop_propagation();
-                            }
-                        }))
-                }))
-                .when(self.studio_quality_save_failed, |this| this.child(div().text_size(px(12.)).line_height(px(18.)).text_color(Hsla::from(theme.amber_11)).child("Couldn't save your recording settings. Please try again.")))
-                .child(div().mt(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child("These options affect the original recording. Choose your final export resolution and file size in the editor.")),
-        );
-        self.section("Studio", Some("Saved to your computer, ready to edit. All three quality options are available on every plan."), None, vec![body.into_any_element()])
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        if self.studio_quality_save_failed {
+            rows.push(
+                div()
+                    .p(px(12.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.amber_11))
+                    .child("Couldn't save your recording settings. Please try again.")
+                    .into_any_element(),
+            );
+        }
+
+        self.section(
+            "Studio recordings",
+            Some("Saved to your computer for editing. You choose the export size later, in the editor."),
+            None,
+            vec![
+                div()
+                    .id("settings-studio-quality")
+                    .anchor_scroll(Some(self.studio_quality_anchor.clone()))
+                    .child(self.rows(rows))
+                    .into_any_element(),
+            ],
+        )
     }
 
     /// The Recording card: thirteen rows, in TSX order.
@@ -3240,35 +3669,33 @@ impl SettingsWindow {
         let countdown_label = COUNTDOWN_OPTIONS
             .iter()
             .find(|(value, _)| *value == settings.recording_countdown.unwrap_or(0))
-            .map(|(_, label)| (*label).to_string())
+            .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.recording_countdown.unwrap_or(0).to_string());
         let fps_label = MAX_FPS_OPTIONS
             .iter()
             .find(|(value, _)| *value == settings.max_fps)
-            .map(|(_, label)| (*label).to_string())
+            .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.default_zoom_amount.unwrap_or(1.5);
 
         self.section(
-            "Recording",
-            Some("Behaviour while you record and after you stop."),
+            tr::settings::general::recording::title(),
+            Some(tr::settings::general::recording::description()),
             None,
             vec![
                 self.rows(vec![
                     self.setting_row(
-                        "Countdown",
-                        Some("Wait before the recording starts."),
+                        tr::settings::general::recording::countdown::label(),
+                        Some(tr::settings::general::recording::countdown::description()),
                         self.select("countdown", countdown_label, MenuKind::Countdown, cx)
                             .into_any_element(),
                     ),
                     self.setting_row(
-                        "Confirm before recording without a microphone",
-                        Some(
-                            "Require confirmation when no microphone is selected or the \
-                             selected microphone is unavailable.",
-                        ),
+                        tr::settings::general::recording::confirm_without_mic::label(),
+                        Some(tr::settings::general::recording::confirm_without_mic::description()),
                         self.toggle(
                             "confirm-without-mic",
+                            tr::settings::general::recording::confirm_without_mic::label(),
                             settings.confirm_without_microphone,
                             cx,
                             |this, cx| {
@@ -3288,13 +3715,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Studio Sound on new recordings",
-                        Some(
-                            "Clean up microphone audio automatically. You can still turn it \
-                             off for any recording in the editor.",
-                        ),
+                        tr::settings::general::recording::studio_sound::label(),
+                        Some(tr::settings::general::recording::studio_sound::description()),
                         self.toggle(
                             "studio-sound-default",
+                            tr::settings::general::recording::studio_sound::label(),
                             settings.studio_sound_by_default,
                             cx,
                             |this, cx| {
@@ -3308,8 +3733,8 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Main window when recording starts",
-                        Some("What happens to the main window once a recording begins."),
+                        tr::settings::general::recording::main_window_start::label(),
+                        Some(tr::settings::general::recording::main_window_start::description()),
                         self.select(
                             "main-window-start",
                             settings.main_window_recording_start_behaviour.label(),
@@ -3318,19 +3743,14 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
-                    // Deviation: general.tsx puts an "After a Studio
-                    // recording" select here (Open editor / Show in overlay).
-                    // The post-capture recordings overlay does not exist in
-                    // this app -- a product decision, not a gap -- so a
-                    // one-option select would be noise and the row is omitted.
-                    // The stored `postStudioRecordingBehaviour` is left
-                    // exactly as the Tauri app wrote it (this page never
-                    // writes the key), and the stop flow treats a stored
-                    // `showOverlay` as "reshow the main window"
-                    // (`app_windows.rs`).
+                    // "After a Studio recording" lives on the Shortcuts page,
+                    // next to the shortcuts it shapes. There is no
+                    // post-capture overlay in this app, so a stored
+                    // `showOverlay` means "reshow the main window"
+                    // (`app_windows.rs`) and is labelled "Show Cap".
                     self.setting_row(
-                        "After deleting a recording",
-                        Some("Whether the recording window should reopen."),
+                        tr::settings::general::recording::post_deletion::label(),
+                        Some(tr::settings::general::recording::post_deletion::description()),
                         self.select(
                             "post-deletion",
                             settings.post_deletion_behaviour.label(),
@@ -3340,10 +3760,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Delete Instant recordings after upload",
-                        Some("Cap removes the local file once it has uploaded successfully."),
+                        tr::settings::general::recording::delete_after_upload::label(),
+                        Some(tr::settings::general::recording::delete_after_upload::description()),
                         self.toggle(
                             "delete-after-upload",
+                            tr::settings::general::recording::delete_after_upload::label(),
                             settings.delete_instant_recordings_after_upload,
                             cx,
                             |this, cx| {
@@ -3356,13 +3777,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Crash-recoverable recording",
-                        Some(
-                            "Record in fragments that can be recovered after a crash or power \
-                             loss. Slightly larger files during capture.",
-                        ),
+                        tr::settings::general::recording::crash_recovery::label(),
+                        Some(tr::settings::general::recording::crash_recovery::description()),
                         self.toggle(
                             "crash-recovery",
+                            tr::settings::general::recording::crash_recovery::label(),
                             settings.crash_recovery_recording,
                             cx,
                             |this, cx| {
@@ -3375,13 +3794,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Custom cursor capture (Studio)",
-                        Some(
-                            "Capture cursor state separately so you can adjust size and \
-                             smoothing in the editor.",
-                        ),
+                        tr::settings::general::recording::custom_cursor::label(),
+                        Some(tr::settings::general::recording::custom_cursor::description()),
                         self.toggle(
                             "custom-cursor",
+                            tr::settings::general::recording::custom_cursor::label(),
                             settings.custom_cursor_capture,
                             cx,
                             |this, cx| {
@@ -3394,21 +3811,25 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Auto zoom on clicks",
-                        Some(
-                            "Automatically add zoom segments around mouse clicks in Studio \
-                             recordings.",
-                        ),
-                        self.toggle("auto-zoom", settings.auto_zoom_on_clicks, cx, |this, cx| {
-                            this.settings.auto_zoom_on_clicks = !this.settings.auto_zoom_on_clicks;
-                            let value = this.settings.auto_zoom_on_clicks;
-                            this.write_bool("autoZoomOnClicks", value, cx);
-                        })
+                        tr::settings::general::recording::auto_zoom::label(),
+                        Some(tr::settings::general::recording::auto_zoom::description()),
+                        self.toggle(
+                            "auto-zoom",
+                            tr::settings::general::recording::auto_zoom::label(),
+                            settings.auto_zoom_on_clicks,
+                            cx,
+                            |this, cx| {
+                                this.settings.auto_zoom_on_clicks =
+                                    !this.settings.auto_zoom_on_clicks;
+                                let value = this.settings.auto_zoom_on_clicks;
+                                this.write_bool("autoZoomOnClicks", value, cx);
+                            },
+                        )
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Default zoom amount",
-                        Some("Zoom level for newly created and auto-generated zoom segments."),
+                        tr::settings::general::recording::default_zoom::label(),
+                        Some(tr::settings::general::recording::default_zoom::description()),
                         div()
                             // `flex gap-2 items-center w-52`
                             .flex()
@@ -3428,10 +3849,11 @@ impl SettingsWindow {
                             .into_any_element(),
                     ),
                     self.setting_row(
-                        "Capture keyboard presses",
-                        Some("Record key presses so you can add keyboard overlays in the editor."),
+                        tr::settings::general::recording::capture_keyboard::label(),
+                        Some(tr::settings::general::recording::capture_keyboard::description()),
                         self.toggle(
                             "capture-keyboard",
+                            tr::settings::general::recording::capture_keyboard::label(),
                             settings.capture_keyboard_events,
                             cx,
                             |this, cx| {
@@ -3444,15 +3866,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Draw the MacBook notch on screen recordings",
-                        Some(
-                            "Automatically restores the notch for new screen and area \
-                             recordings when the selected region contains the complete notch. \
-                             External displays, partial areas, and window recordings are left \
-                             alone. Each recording can override it in the editor.",
-                        ),
+                        tr::settings::general::recording::notch_overlay::label(),
+                        Some(tr::settings::general::recording::notch_overlay::description()),
                         self.toggle(
                             "notch-overlay",
+                            tr::settings::general::recording::notch_overlay::label(),
                             settings.macbook_notch_overlay,
                             cx,
                             |this, cx| {
@@ -3465,12 +3883,11 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
-                        "Max capture framerate",
+                        tr::settings::general::recording::max_fps::label(),
                         Some(if settings.max_fps > 60 {
-                            "Maximum framerate for screen capture. Higher values may cause \
-                             drops or increased CPU usage on some systems."
+                            tr::settings::general::recording::max_fps::description_high()
                         } else {
-                            "Maximum framerate for screen capture."
+                            tr::settings::general::recording::max_fps::description()
                         }),
                         self.select("max-fps", fps_label, MenuKind::MaxFps, cx)
                             .into_any_element(),
@@ -3487,14 +3904,15 @@ impl SettingsWindow {
         let path = self.settings.recordings_path.clone();
         let is_custom = path.is_some();
         // `Default (Application Support)`
-        let display = path.unwrap_or_else(|| "Default (Application Support)".to_string());
+        let display =
+            path.unwrap_or_else(|| tr::settings::general::storage::default_location().to_string());
 
         let mut actions = div().flex().flex_row().justify_end().gap(px(8.));
         if is_custom {
             actions = actions.child(self.button(
                 "recordings-reset",
                 (ui::ButtonVariant::Gray, None),
-                "Reset to Default",
+                tr::common::reset_to_default(),
                 false,
                 cx,
                 |this, _window, cx| {
@@ -3506,7 +3924,7 @@ impl SettingsWindow {
         actions = actions.child(self.button(
             "recordings-pick",
             (ui::ButtonVariant::Dark, None),
-            "Choose Folder",
+            tr::settings::general::storage::choose_folder(),
             false,
             cx,
             |_, window, cx| {
@@ -3537,8 +3955,8 @@ impl SettingsWindow {
         ));
 
         self.section(
-            "Storage",
-            Some("Where Cap saves your recordings."),
+            tr::settings::general::storage::title(),
+            Some(tr::settings::general::storage::description()),
             None,
             vec![
                 self.card(true)
@@ -3599,7 +4017,7 @@ impl SettingsWindow {
             .child(self.button(
                 "project-name-reset",
                 (ui::ButtonVariant::Gray, None),
-                "Reset",
+                tr::common::reset(),
                 reset_disabled,
                 cx,
                 |this, _window, cx| {
@@ -3615,7 +4033,7 @@ impl SettingsWindow {
             .child(self.button(
                 "project-name-save",
                 (ui::ButtonVariant::Dark, None),
-                "Save",
+                tr::common::save(),
                 save_disabled,
                 cx,
                 |this, _window, cx| {
@@ -3628,19 +4046,40 @@ impl SettingsWindow {
 
         let placeholder_rows: Vec<(&str, &str, &str)> = vec![
             (
-                "Recording mode",
+                tr::settings::general::project_name::placeholders::recording_mode(),
                 "{recording_mode}",
-                "\"Studio\", \"Instant\", or \"Screenshot\"",
+                tr::settings::general::project_name::placeholders::recording_mode_values(),
             ),
-            ("", "{mode}", "\"studio\", \"instant\", or \"screenshot\""),
             (
-                "Target",
-                "{target_kind}",
-                "\"Display\", \"Window\", or \"Area\"",
+                "",
+                "{mode}",
+                tr::settings::general::project_name::placeholders::mode_values(),
             ),
-            ("", "{target_name}", "Monitor name or window title."),
-            ("Date & time", "{date}", "the recording's date"),
-            ("", "{time}", "the recording's time"),
+            (
+                tr::settings::general::project_name::placeholders::target(),
+                "{target_kind}",
+                tr::settings::general::project_name::placeholders::target_kind_values(),
+            ),
+            (
+                "",
+                "{target_name}",
+                tr::settings::general::project_name::placeholders::target_name_values(),
+            ),
+            (
+                tr::settings::general::project_name::placeholders::date_time(),
+                "{date}",
+                tr::settings::general::project_name::placeholders::date_values(),
+            ),
+            (
+                "",
+                "{time}",
+                tr::settings::general::project_name::placeholders::time_values(),
+            ),
+            (
+                tr::settings::general::project_name::placeholders::random(),
+                "{random}",
+                tr::settings::general::project_name::placeholders::random_values(),
+            ),
         ];
 
         let body = div()
@@ -3688,7 +4127,7 @@ impl SettingsWindow {
                             .size(px(14.))
                             .text_color(theme.settings_muted()),
                     )
-                    .child("Available placeholders")
+                    .child(tr::settings::general::project_name::available_placeholders())
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_placeholders(cx);
                     })),
@@ -3753,8 +4192,8 @@ impl SettingsWindow {
             );
 
         self.section(
-            "Default project name",
-            Some("Template used for new recordings and exported files."),
+            tr::settings::general::project_name::title(),
+            Some(tr::settings::general::project_name::description()),
             Some(right),
             vec![self.card(true).child(body).into_any_element()],
         )
@@ -3773,7 +4212,7 @@ impl SettingsWindow {
             .child(self.button(
                 "exclusions-reset",
                 (ui::ButtonVariant::Gray, None),
-                "Reset",
+                tr::common::reset(),
                 false,
                 cx,
                 |this, _window, cx| {
@@ -3784,7 +4223,7 @@ impl SettingsWindow {
                 self.button(
                     "exclusions-add",
                     (ui::ButtonVariant::Dark, Some("icons/plus.svg")),
-                    "Add",
+                    tr::common::add(),
                     self.windows.is_empty(),
                     cx,
                     |_, _, _| {},
@@ -3803,7 +4242,7 @@ impl SettingsWindow {
             div()
                 .text_size(px(12.))
                 .text_color(theme.settings_muted())
-                .child("No windows are currently excluded.")
+                .child(tr::settings::general::excluded_windows::empty())
                 .into_any_element()
         } else {
             div()
@@ -3879,6 +4318,8 @@ impl SettingsWindow {
                 .map(|entry| entry.primary_label().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let missing_title = tr::settings::general::excluded_windows::missing_title();
+            let missing_body = tr::settings::general::excluded_windows::missing_body(names);
             card = card.child(
                 // `mb-3 rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5`
                 div()
@@ -3913,17 +4354,19 @@ impl SettingsWindow {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("Recommended Cap windows are not excluded"),
+                                    .child(missing_title),
                             )
-                            .child(div().text_size(px(10.)).line_height(px(14.)).child(format!(
-                                "Camera, settings, or recording windows can appear as black \
-                                 boxes in screen recordings. Missing: {names}."
-                            ))),
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .line_height(px(14.))
+                                    .child(missing_body),
+                            ),
                     )
                     .child(self.button(
                         "exclusions-restore",
                         (ui::ButtonVariant::Gray, None),
-                        "Restore",
+                        tr::settings::general::excluded_windows::restore(),
                         false,
                         cx,
                         |this, _window, cx| {
@@ -3934,8 +4377,8 @@ impl SettingsWindow {
         }
 
         self.section(
-            "Excluded windows",
-            Some("Hide windows from recordings."),
+            tr::settings::general::excluded_windows::title(),
+            Some(tr::settings::general::excluded_windows::description()),
             Some(right),
             vec![card.child(chips).into_any_element()],
         )
@@ -3948,7 +4391,7 @@ impl SettingsWindow {
         let description = UPDATE_CHANNEL_DESCRIPTIONS
             .iter()
             .find(|(channel, _)| *channel == current)
-            .map(|(_, description)| *description)
+            .map(|(_, description)| description())
             .unwrap_or_default();
 
         let body = div()
@@ -3970,13 +4413,17 @@ impl SettingsWindow {
                             .flex_col()
                             .gap(px(2.))
                             .min_w_0()
-                            .child(div().text_size(px(13.)).child("Update channel"))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .child(tr::settings::general::updates::channel::label()),
+                            )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
                                     .text_color(theme.settings_muted())
-                                    .child("Which release channel Cap updates from."),
+                                    .child(tr::settings::general::updates::channel::description()),
                             ),
                     )
                     .child(self.segmented::<UpdateChannel>(
@@ -3984,6 +4431,9 @@ impl SettingsWindow {
                         current,
                         cx,
                         |this, value, cx| {
+                            if this.settings.update_channel == value {
+                                return;
+                            }
                             this.settings.update_channel = value;
                             this.write_enum("updateChannel", value, cx);
                             crate::updates::update_channel_changed(
@@ -4002,17 +4452,14 @@ impl SettingsWindow {
                                 .text_size(px(11.))
                                 .line_height(px(15.))
                                 .text_color(theme.settings_muted())
-                                .child(
-                                    "Switching back to Stable will return you to the latest \
-                                     stable version, which may be older than your current build.",
-                                ),
+                                .child(tr::settings::general::updates::nightly_switch_back()),
                         )
                     }),
             );
 
         self.section(
-            "Updates",
-            Some("Choose which Cap builds you receive."),
+            tr::settings::general::updates::title(),
+            Some(tr::settings::general::updates::description()),
             None,
             vec![self.card(false).child(body).into_any_element()],
         )
@@ -4032,7 +4479,11 @@ impl SettingsWindow {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(div().text_size(px(13.)).child("Cap Server URL"))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .child(tr::settings::general::self_host::server_url()),
+                    )
                     .child(self.text_field(Field::ServerUrl, cx)),
             )
             .child(
@@ -4044,7 +4495,7 @@ impl SettingsWindow {
                     .child(self.button(
                         "server-url-reset",
                         (ui::ButtonVariant::Gray, None),
-                        "Reset to Default",
+                        tr::common::reset_to_default(),
                         stored == DEFAULT_SERVER_URL && draft == DEFAULT_SERVER_URL,
                         cx,
                         |this, window, cx| {
@@ -4062,7 +4513,7 @@ impl SettingsWindow {
                     .child(self.button(
                         "server-url-update",
                         (ui::ButtonVariant::Dark, None),
-                        "Update",
+                        tr::settings::general::self_host::update(),
                         stored == draft,
                         cx,
                         |this, window, cx| {
@@ -4073,8 +4524,8 @@ impl SettingsWindow {
             );
 
         self.section(
-            "Self-host",
-            Some("Only change this if you are running your own instance of Cap Web."),
+            tr::settings::general::self_host::title(),
+            Some(tr::settings::general::self_host::description()),
             None,
             vec![self.card(true).child(body).into_any_element()],
         )
@@ -4088,12 +4539,12 @@ impl SettingsWindow {
         };
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            &format!(
-                "Are you sure you want to change the server URL to '{origin}'? You will need \
-                 to sign in again."
-            ),
+            &tr::settings::general::self_host::confirm_change(&origin),
             None,
-            &["Ok", "Cancel"],
+            &[
+                gpui::PromptButton::ok(tr::common::ok()),
+                gpui::PromptButton::cancel(tr::common::cancel()),
+            ],
             cx,
         );
         cx.spawn(async move |this, cx| {
@@ -4115,20 +4566,17 @@ impl SettingsWindow {
     /// `TelemetryCard` -- `enableTelemetry`.
     fn render_privacy(&self, cx: &mut Context<Self>) -> impl IntoElement {
         self.section(
-            "Privacy",
+            tr::settings::general::privacy::title(),
             None,
             None,
             vec![
                 self.rows(vec![
                     self.setting_row(
-                        "Share anonymous telemetry",
-                        Some(
-                            "Cap uses anonymous telemetry to improve reliability and fix bugs. We \
-                         never collect recording contents, window titles, file paths, or \
-                         personal information.",
-                        ),
+                        tr::settings::general::privacy::telemetry::label(),
+                        Some(tr::settings::general::privacy::telemetry::description()),
                         self.toggle(
                             "telemetry",
+                            tr::settings::general::privacy::telemetry::label(),
                             self.settings.enable_telemetry,
                             cx,
                             |this, cx| {
@@ -4197,11 +4645,13 @@ impl SettingsWindow {
     pub(crate) fn toggle(
         &self,
         id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> ui::Toggle {
         ui::Toggle::settings(&self.theme, id, checked)
+            .label(label)
             .on_click(cx.listener(move |this, _, _window, cx| on_change(this, cx)))
     }
 
@@ -4472,13 +4922,11 @@ const ZOOM_MAX: f32 = 4.5;
 /// origin before storing it, and throws (leaving the setting alone) when it
 /// does not parse.
 fn origin_of(value: &str) -> Option<String> {
-    let value = value.trim();
-    let (scheme, rest) = value.split_once("://")?;
-    if !matches!(scheme, "http" | "https") || rest.is_empty() {
+    let url = reqwest::Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
-    let authority = rest.split(['/', '?', '#']).next()?;
-    (!authority.is_empty()).then(|| format!("{scheme}://{authority}"))
+    Some(url.origin().ascii_serialization())
 }
 
 /// The preview under the project-name template.
@@ -4507,6 +4955,32 @@ fn format_project_name(template: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn profile_request_identity_changes_when_same_user_signs_in_again() {
+        let path =
+            std::env::temp_dir().join(format!("cap-profile-session-{}", store::new_uuid_v4()));
+        store::set_test_tauri_store_path(Some(path.clone()));
+        assert!(store::set_auth(Some(serde_json::json!({
+            "user_id": "user-1",
+            "secret": { "api_key": "old-token" }
+        }))));
+        let old_request = signed_in_profile_session();
+        assert!(store::set_auth(Some(serde_json::json!({
+            "user_id": "user-1",
+            "secret": { "api_key": "new-token" }
+        }))));
+        let new_request = signed_in_profile_session();
+        assert_ne!(old_request, new_request);
+        assert!(store::set_store_setting(
+            GENERAL_SETTINGS,
+            "serverUrl",
+            Value::String("https://other.example.com".into()),
+        ));
+        assert_ne!(new_request, signed_in_profile_session());
+        store::set_test_tauri_store_path(None);
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// The sidebar list and its routes, which `showWindow({ Settings: { page } })`
     /// addresses by slug.
     #[test]
@@ -4533,6 +5007,37 @@ mod tests {
         assert_eq!(origin_of("cap.so"), None);
         assert_eq!(origin_of("ftp://cap.so"), None);
         assert_eq!(origin_of(""), None);
+    }
+
+    #[test]
+    fn invalid_server_authorities_are_rejected_before_saving() {
+        for value in [
+            "https://cap.example.com:invalid",
+            "https://cap.example.com:65536",
+            "https://cap example.com",
+            "http://[::1",
+            "https://user@",
+        ] {
+            assert_eq!(origin_of(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn server_origins_are_normalised_for_api_requests() {
+        for (value, expected) in [
+            ("https://cap.example.com/", "https://cap.example.com"),
+            (
+                "https://user:password@cap.example.com/dashboard?x=1#top",
+                "https://cap.example.com",
+            ),
+            (" HTTPS://CAP.EXAMPLE.COM:443/ ", "https://cap.example.com"),
+            ("http://localhost:3000/path", "http://localhost:3000"),
+            ("http://[::1]:3000/path", "http://[::1]:3000"),
+        ] {
+            let origin = origin_of(value).expect(value);
+            assert_eq!(origin, expected);
+            assert!(reqwest::Url::parse(&format!("{origin}/api/desktop/feedback")).is_ok());
+        }
     }
 
     #[test]
@@ -4702,6 +5207,100 @@ mod tests {
         // An active search is never paginated.
         assert_eq!(visible_recordings_len(53, true, 20), 53);
         assert!(!has_more_recordings(53, true, 20));
+    }
+
+    #[test]
+    fn visible_rows_follow_the_filter_and_the_page() {
+        let all = visible_rows([true; 53], false, 20);
+        assert_eq!(all.indices, (0..20).collect::<Vec<_>>());
+        assert_eq!(all.matching, 53);
+
+        let more = visible_rows([true; 53], false, load_more_count(20, 53));
+        assert_eq!(more.indices, (0..40).collect::<Vec<_>>());
+        let last = visible_rows([true; 53], false, load_more_count(40, 53));
+        assert_eq!(last.indices, (0..53).collect::<Vec<_>>());
+
+        // A tab or a search matches a subset, and the indices still address the
+        // unfiltered rows.
+        let every_third: Vec<bool> = (0..90).map(|index| index % 3 == 0).collect();
+        let paged = visible_rows(every_third.iter().copied(), false, 20);
+        assert_eq!(paged.indices, (0..60).step_by(3).collect::<Vec<_>>());
+        assert_eq!(paged.matching, 30);
+        let searched = visible_rows(every_third.iter().copied(), true, 20);
+        assert_eq!(searched.indices, (0..90).step_by(3).collect::<Vec<_>>());
+        assert_eq!(searched.matching, 30);
+
+        let none = visible_rows([false; 5], true, 20);
+        assert!(none.indices.is_empty());
+        assert_eq!(none.matching, 0);
+    }
+
+    fn recording_row(index: usize, decoded: bool) -> RecordingRow {
+        let mut item = recording(&format!("Recording {index}"), RecordingMode::Studio);
+        item.thumbnail = Some(item.path.join("screenshots/display.jpg"));
+        RecordingRow {
+            item,
+            thumbnail: None,
+            thumbnail_stale: !decoded,
+        }
+    }
+
+    #[test]
+    fn only_visible_rows_are_queued_for_a_thumbnail_decode() {
+        let rows: Vec<RecordingRow> = (0..500).map(|index| recording_row(index, false)).collect();
+        let every_row: Vec<usize> = (0..rows.len()).collect();
+        let before = pending_thumbnail_decodes(&rows, &every_row, RecordingRow::pending_thumbnail);
+        let visible = visible_rows(rows.iter().map(|_| true), false, RECORDINGS_PAGE_SIZE);
+        let after =
+            pending_thumbnail_decodes(&rows, &visible.indices, RecordingRow::pending_thumbnail);
+        println!(
+            "decode jobs for a 500-row scan: every row {}, visible rows {}",
+            before.len(),
+            after.len()
+        );
+        assert_eq!(before.len(), 500);
+        assert_eq!(
+            after,
+            (0..20)
+                .map(|index| (index, rows[index].item.thumbnail.clone().unwrap()))
+                .collect::<Vec<_>>()
+        );
+
+        let mut rows = rows;
+        for row in &mut rows[..20] {
+            row.thumbnail_stale = false;
+        }
+        let more = visible_rows(
+            rows.iter().map(|_| true),
+            false,
+            load_more_count(RECORDINGS_PAGE_SIZE, 500),
+        );
+        let next: Vec<usize> =
+            pending_thumbnail_decodes(&rows, &more.indices, RecordingRow::pending_thumbnail)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect();
+        assert_eq!(next, (20..40).collect::<Vec<_>>());
+
+        // A search reaches past the first page in its own order.
+        let query = "recording 49";
+        let searched = visible_rows(
+            rows.iter()
+                .map(|row| matches_recording_filters(&row.item, RecordingsTab::All, query)),
+            true,
+            RECORDINGS_PAGE_SIZE,
+        );
+        let found: Vec<usize> =
+            pending_thumbnail_decodes(&rows, &searched.indices, RecordingRow::pending_thumbnail)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect();
+        assert_eq!(found, [49].into_iter().chain(490..500).collect::<Vec<_>>());
+
+        rows[30].item.thumbnail = None;
+        assert!(
+            pending_thumbnail_decodes(&rows, &[30], RecordingRow::pending_thumbnail).is_empty()
+        );
     }
 
     /// `emptyMessage()`.

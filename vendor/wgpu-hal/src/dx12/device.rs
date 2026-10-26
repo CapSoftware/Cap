@@ -1992,7 +1992,11 @@ impl crate::Device for super::Device {
             return Ok(true);
         }
 
-        unsafe { fence.raw.SetEventOnCompletion(value, self.idler.event.0) }
+        // Backport of gfx-rs/wgpu#8273: the shared auto-reset idler event loses wakeups when
+        // several threads wait on the same device, stranding a waiter until its timeout.
+        let event = Event::create(false, false)?;
+
+        unsafe { fence.raw.SetEventOnCompletion(value, event.0) }
             .into_device_result("Set event")?;
 
         let start_time = Instant::now();
@@ -2032,7 +2036,7 @@ impl crate::Device for super::Device {
 
             match unsafe {
                 Threading::WaitForSingleObject(
-                    self.idler.event.0,
+                    event.0,
                     remaining_wait_duration.as_millis().try_into().unwrap(),
                 )
             } {

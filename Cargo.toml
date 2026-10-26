@@ -109,6 +109,38 @@ opt-level = 2
 [profile.dev.package.cap-audio]
 opt-level = 2
 
+# opt-level 0 compiles the AVX2 BT.709 kernel into a spill loop. On the
+# ci-verify profile that is 180 ms for 1080p against 3 ms for swscale, and
+# the Windows real-capture job then keeps about 6 fps. opt-level 1 is under
+# 2 ms, still faster than swscale.
+[profile.dev.package.cap-enc-ffmpeg]
+opt-level = 1
+
+# The verification suite decodes markers from every output pixel it reads;
+# unoptimised it spends minutes in its own loops.
+[profile.dev.package.cap-verify]
+opt-level = 3
+
+# Engine verification suite in CI (.github/workflows/engine-verify.yml).
+# Dependencies come from the Rust cache, so optimising them costs nothing on
+# a warm run and speeds up the cases; workspace crates rebuild on every run
+# and stay cheap to compile. No debuginfo or incremental state to cache.
+[profile.ci-verify]
+inherits = "dev"
+debug = 0
+incremental = false
+
+[profile.ci-verify.package."*"]
+opt-level = 1
+
+# `package."*"` does not cover workspace members, so this crate otherwise
+# stays at opt-level 0. See `[profile.dev.package.cap-enc-ffmpeg]`.
+[profile.ci-verify.package.cap-enc-ffmpeg]
+opt-level = 1
+
+[profile.ci-verify.package.cap-verify]
+opt-level = 3
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "unwind"

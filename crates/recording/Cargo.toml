@@ -46,7 +46,7 @@ chrono = "0.4.38"
 uuid = { version = "1.18.1", features = ["v4"] }
 tracing.workspace = true
 device_query = "4.0.1"
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 either = "1.13.0"
 tracing-subscriber = { version = "0.3.19" }
 relative-path = "1.9.3"
@@ -90,6 +90,7 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Performance",
     "Win32_Storage_Xps",
+    "Win32_Storage_FileSystem",
 ] }
 
 cap-d3d-adapter = { path = "../d3d-adapter" }
@@ -102,8 +103,12 @@ scap-cpal = { path = "../scap-cpal" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11.0", default-features = false, features = ["tokio"] }
+# Reads screencast DMA-BUFs with GPU-tiled modifiers (niri on NVIDIA). Both
+# are already in the tree through wgpu's GL backend; libEGL loads at runtime.
+glow = "0.16"
+khronos-egl = { version = "6", features = ["dynamic"] }
 pipewire = "0.10.0"
-x11rb = { version = "0.13.2", features = ["composite", "xfixes"] }
+x11rb = { version = "0.13.2", features = ["composite", "shm", "xfixes"] }
 
 [dev-dependencies]
 tempfile = "3.20.0"

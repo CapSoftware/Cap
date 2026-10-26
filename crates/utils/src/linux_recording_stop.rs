@@ -1,14 +1,23 @@
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use tokio::task::JoinHandle;
-use zbus::{Connection, Proxy, message::Header, proxy::CacheProperties, zvariant::ObjectPath};
+use zbus::{
+    Connection, Proxy,
+    message::Header,
+    proxy::CacheProperties,
+    zvariant::{ObjectPath, OwnedValue, Value},
+};
 
 const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 const ITEM_PATH: &str = "/StatusNotifierItem";
+const MENU_PATH: &str = "/StatusNotifierItem/Menu";
+const MENU_ROOT: i32 = 0;
+const MENU_ENTRY: i32 = 1;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
 const HEALTH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -95,36 +104,42 @@ struct StopItem {
 
 impl StopItem {
     fn activate_for(&self, sender: Option<&str>) -> zbus::fdo::Result<()> {
-        let sender = sender.ok_or_else(|| {
-            zbus::fdo::Error::AccessDenied("The Stop activation has no bus sender".into())
-        })?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| zbus::fdo::Error::Failed("Recording Stop state is unavailable".into()))?;
-        if !state.available {
-            return Err(zbus::fdo::Error::Failed(
-                "The recording Stop control is no longer available".into(),
-            ));
-        }
-        if state
-            .activated_host
-            .as_deref()
-            .is_some_and(|host| host != sender)
-        {
-            return Err(zbus::fdo::Error::AccessDenied(
-                "The recording Stop activation came from a different tray host".into(),
-            ));
-        }
-        state.activated_host = Some(sender.to_owned());
-        match self.events.try_send(StopTrayEvent::Activated {
-            generation: self.generation,
-        }) {
-            Ok(()) | Err(flume::TrySendError::Full(_)) => Ok(()),
-            Err(flume::TrySendError::Disconnected(_)) => Err(zbus::fdo::Error::Failed(
-                "The recording Stop listener has closed".into(),
-            )),
-        }
+        activate(self.generation, &self.events, &self.state, sender)
+    }
+}
+
+fn activate(
+    generation: u64,
+    events: &flume::Sender<StopTrayEvent>,
+    state: &Mutex<ActivationState>,
+    sender: Option<&str>,
+) -> zbus::fdo::Result<()> {
+    let sender = sender.ok_or_else(|| {
+        zbus::fdo::Error::AccessDenied("The Stop activation has no bus sender".into())
+    })?;
+    let mut state = state
+        .lock()
+        .map_err(|_| zbus::fdo::Error::Failed("Recording Stop state is unavailable".into()))?;
+    if !state.available {
+        return Err(zbus::fdo::Error::Failed(
+            "The recording Stop control is no longer available".into(),
+        ));
+    }
+    if state
+        .activated_host
+        .as_deref()
+        .is_some_and(|host| host != sender)
+    {
+        return Err(zbus::fdo::Error::AccessDenied(
+            "The recording Stop activation came from a different tray host".into(),
+        ));
+    }
+    state.activated_host = Some(sender.to_owned());
+    match events.try_send(StopTrayEvent::Activated { generation }) {
+        Ok(()) | Err(flume::TrySendError::Full(_)) => Ok(()),
+        Err(flume::TrySendError::Disconnected(_)) => Err(zbus::fdo::Error::Failed(
+            "The recording Stop listener has closed".into(),
+        )),
     }
 }
 
@@ -231,7 +246,145 @@ impl StopItem {
 
     #[zbus(property)]
     fn menu(&self) -> ObjectPath<'_> {
-        ObjectPath::from_static_str_unchecked("/")
+        ObjectPath::from_static_str_unchecked(MENU_PATH)
+    }
+}
+
+/// A one-entry menu that does what activating the icon does. GNOME's
+/// AppIndicator extension only activates an item on a double click; a single
+/// click opens the item's menu, so without one the icon did nothing.
+struct StopMenu {
+    generation: u64,
+    events: flume::Sender<StopTrayEvent>,
+    state: Arc<Mutex<ActivationState>>,
+}
+
+type MenuProperties = HashMap<String, OwnedValue>;
+
+fn menu_properties(id: i32) -> MenuProperties {
+    let properties: &[(&str, Value<'static>)] = match id {
+        MENU_ROOT => &[("children-display", Value::from("submenu"))],
+        MENU_ENTRY => &[
+            ("label", Value::from("Start or stop recording")),
+            ("enabled", Value::from(true)),
+            ("visible", Value::from(true)),
+        ],
+        _ => &[],
+    };
+    properties
+        .iter()
+        .filter_map(|(name, value)| {
+            OwnedValue::try_from(value.try_clone().ok()?)
+                .ok()
+                .map(|value| ((*name).to_owned(), value))
+        })
+        .collect()
+}
+
+impl StopMenu {
+    fn handle_event(&self, id: i32, event: &str, sender: Option<&str>) -> zbus::fdo::Result<()> {
+        if id == MENU_ENTRY && event == "clicked" {
+            activate(self.generation, &self.events, &self.state, sender)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[zbus::interface(name = "com.canonical.dbusmenu")]
+impl StopMenu {
+    fn get_layout(
+        &self,
+        parent_id: i32,
+        _recursion_depth: i32,
+        _property_names: Vec<String>,
+    ) -> zbus::fdo::Result<(u32, (i32, MenuProperties, Vec<OwnedValue>))> {
+        let mut children = Vec::new();
+        if parent_id == MENU_ROOT {
+            let entry = Value::from((
+                MENU_ENTRY,
+                menu_properties(MENU_ENTRY),
+                Vec::<OwnedValue>::new(),
+            ));
+            children.push(
+                OwnedValue::try_from(entry)
+                    .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?,
+            );
+        }
+        Ok((1, (parent_id, menu_properties(parent_id), children)))
+    }
+
+    fn get_group_properties(
+        &self,
+        ids: Vec<i32>,
+        _property_names: Vec<String>,
+    ) -> Vec<(i32, MenuProperties)> {
+        let ids = if ids.is_empty() {
+            vec![MENU_ROOT, MENU_ENTRY]
+        } else {
+            ids
+        };
+        ids.into_iter()
+            .filter(|id| matches!(*id, MENU_ROOT | MENU_ENTRY))
+            .map(|id| (id, menu_properties(id)))
+            .collect()
+    }
+
+    fn get_property(&self, id: i32, name: String) -> zbus::fdo::Result<OwnedValue> {
+        menu_properties(id)
+            .remove(&name)
+            .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("No property {name} on {id}")))
+    }
+
+    fn event(
+        &self,
+        id: i32,
+        event_id: String,
+        _data: OwnedValue,
+        _timestamp: u32,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        self.handle_event(id, &event_id, header.sender().map(|sender| sender.as_str()))
+    }
+
+    fn event_group(
+        &self,
+        events: Vec<(i32, String, OwnedValue, u32)>,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<Vec<i32>> {
+        let sender = header.sender().map(|sender| sender.as_str());
+        for (id, event_id, _, _) in &events {
+            self.handle_event(*id, event_id, sender)?;
+        }
+        Ok(Vec::new())
+    }
+
+    fn about_to_show(&self, _id: i32) -> bool {
+        false
+    }
+
+    fn about_to_show_group(&self, _ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) {
+        (Vec::new(), Vec::new())
+    }
+
+    #[zbus(property)]
+    fn version(&self) -> u32 {
+        3
+    }
+
+    #[zbus(property)]
+    fn text_direction(&self) -> &str {
+        "ltr"
+    }
+
+    #[zbus(property)]
+    fn status(&self) -> &str {
+        "normal"
+    }
+
+    #[zbus(property)]
+    fn icon_theme_path(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -254,8 +407,14 @@ impl StopTray {
             events: sender.clone(),
             state: state.clone(),
         };
+        let menu = StopMenu {
+            generation,
+            events: sender.clone(),
+            state: state.clone(),
+        };
         let builder = zbus::connection::Builder::session()
             .and_then(|builder| builder.serve_at(ITEM_PATH, item))
+            .and_then(|builder| builder.serve_at(MENU_PATH, menu))
             .map_err(|error| StopTrayOpenError {
                 message: format!("Could not prepare the recording Stop tray: {error}"),
                 can_fallback: true,
@@ -529,12 +688,41 @@ mod tests {
     }
 
     #[test]
-    fn stop_control_has_no_popup_menu_or_scroll_action() {
+    fn the_menu_entry_does_what_activating_the_icon_does() {
         let (item, receiver) = item();
         assert!(!item.item_is_menu());
-        assert_eq!(item.menu().as_str(), "/");
+        assert_eq!(item.menu().as_str(), MENU_PATH);
         item.scroll(1, "vertical");
         assert!(receiver.is_empty());
         assert_eq!(item.icon_pixmap(), vec![(1, 1, vec![255, 10, 20, 30])]);
+
+        let menu = StopMenu {
+            generation: item.generation,
+            events: item.events.clone(),
+            state: item.state.clone(),
+        };
+        let (revision, (root, properties, children)) =
+            menu.get_layout(MENU_ROOT, -1, Vec::new()).unwrap();
+        assert_eq!((revision, root, children.len()), (1, MENU_ROOT, 1));
+        assert!(properties.contains_key("children-display"));
+        assert_eq!(children[0].value_signature().to_string(), "(ia{sv}av)");
+        assert_eq!(menu.get_group_properties(Vec::new(), Vec::new()).len(), 2);
+
+        menu.handle_event(MENU_ENTRY, "hovered", Some(":1.42"))
+            .unwrap();
+        menu.handle_event(MENU_ROOT, "clicked", Some(":1.42"))
+            .unwrap();
+        assert!(receiver.is_empty());
+        menu.handle_event(MENU_ENTRY, "clicked", Some(":1.42"))
+            .unwrap();
+        assert_eq!(
+            receiver.recv().unwrap(),
+            StopTrayEvent::Activated { generation: 42 }
+        );
+        // The panel that opened the menu is the only host that may stop.
+        assert!(
+            menu.handle_event(MENU_ENTRY, "clicked", Some(":1.43"))
+                .is_err()
+        );
     }
 }

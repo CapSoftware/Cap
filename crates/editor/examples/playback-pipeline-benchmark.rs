@@ -423,6 +423,7 @@ async fn run_full_pipeline_benchmark(
     recordings: &ProjectRecordingsMeta,
     config: PipelineBenchmarkConfig,
 ) -> PipelineTimings {
+    let project = &Arc::new(project.clone());
     let PipelineBenchmarkConfig {
         fps,
         frame_count,
@@ -617,6 +618,7 @@ async fn run_scrubbing_benchmark(
     resolution_base: XY<u32>,
     force_ffmpeg: bool,
 ) -> PipelineTimings {
+    let project = &Arc::new(project.clone());
     let mut timings = PipelineTimings::default();
 
     let render_constants = match RenderVideoConstants::new(
@@ -849,6 +851,12 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
     let force_ffmpeg = args.iter().any(|arg| arg == "--force-ffmpeg");
+    // The editor holds a 1ms timer resolution while playing; this measures under the same condition.
+    let timer_1ms = args.iter().any(|arg| arg == "--timer-1ms");
+    #[cfg(target_os = "windows")]
+    if timer_1ms {
+        unsafe { windows::Win32::Media::timeBeginPeriod(1) };
+    }
 
     println!("{}", "=".repeat(60));
     println!("  CAP PLAYBACK PIPELINE BENCHMARK");
@@ -858,6 +866,7 @@ async fn main() {
     println!("Target FPS: {fps}");
     println!("Max frames: {frame_count}");
     println!("Force FFmpeg: {force_ffmpeg}");
+    println!("1ms timer: {timer_1ms}");
     println!();
 
     let (recording_meta, meta, project, recordings) = match load_recording(&recording_path).await {

@@ -695,7 +695,7 @@ export const AgentInvite = Schema.Struct({
 export const AgentOrganizationInviteResponse = Schema.Struct({
 	invite: AgentInvite,
 	inviteUrl: Schema.String,
-	emailDelivery: Schema.Literal("not_requested", "accepted"),
+	emailDelivery: Schema.Literal("not_requested", "accepted", "not_configured"),
 	requestId: Schema.String,
 });
 
@@ -1229,7 +1229,7 @@ export const AgentSpaceMemberUpdateInput = Schema.Struct({
 export const AgentMoveCapInput = Schema.Struct({
 	container: Schema.Literal("personal", "organization", "space"),
 	organizationId: OrganisationId,
-	spaceId: Schema.optional(SpaceIdOrOrganisationId),
+	spaceId: Schema.optional(Schema.NullOr(SpaceIdOrOrganisationId)),
 	folderId: Schema.NullOr(FolderId),
 });
 

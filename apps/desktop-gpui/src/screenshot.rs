@@ -29,6 +29,43 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");
 
+    #[cfg(target_os = "linux")]
+    if cap_recording::screenshot::uses_wayland_portal()
+        && matches!(
+            target,
+            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
+        )
+        && !WAYLAND_SCREENSHOTS_ALLOWED.load(std::sync::atomic::Ordering::Acquire)
+    {
+        // Asked while the picker still has focus: GNOME Shell shows the
+        // permission question only for the focused app, and the capture below
+        // hides the picker first.
+        let request = gpui_tokio::Tokio::spawn_result(
+            cx,
+            cap_recording::screenshot::request_wayland_screenshot_permission(),
+        );
+        cx.spawn(async move |cx| match request.await {
+            Ok(()) => {
+                WAYLAND_SCREENSHOTS_ALLOWED.store(true, std::sync::atomic::Ordering::Release);
+                tracing::info!("the desktop allows Cap's screenshots");
+                cx.update(|cx| capture(target, cx));
+            }
+            // The picker is still up, so the user can try again.
+            Err(error) => tracing::error!("screenshot capture failed: {error:#}"),
+        })
+        .detach();
+        return;
+    }
+    capture(target, cx);
+}
+
+/// Set once the screenshot portal has answered a request: the permission it
+/// may have asked for is granted for the rest of the session.
+#[cfg(target_os = "linux")]
+static WAYLAND_SCREENSHOTS_ALLOWED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn capture(target: ScreenCaptureTarget, cx: &mut App) {
     let settle = app_windows::prepare_for_screenshot_capture(cx);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -150,13 +187,16 @@ async fn write_png(path: PathBuf, image: image::DynamicImage) -> anyhow::Result<
 
         let file =
             std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
-        let encoder = image::codecs::png::PngEncoder::new_with_quality(
-            std::io::BufWriter::new(file),
+        cap_gpui_kernels::codec::write_png_file(
+            file,
+            &data,
+            width,
+            height,
+            color_type.into(),
             compression,
             image::codecs::png::FilterType::Adaptive,
-        );
-        image::ImageEncoder::write_image(encoder, &data, width, height, color_type.into())
-            .context("encoding the screenshot PNG")
+        )
+        .context("encoding the screenshot PNG")
     })
     .await
     .context("the PNG encode task died")?

@@ -5,12 +5,19 @@ import {
 	access,
 	chmod,
 	copyFile,
+	lstat,
+	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
+	readlink,
+	realpath,
 	rename,
 	rm,
+	rmdir,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -98,11 +105,142 @@ esac
 exec "$cap_appdir/AppRun.cap-original" "$@"
 `;
 
-export async function preserveAppImageWorkingDirectory(appDir) {
+// The GPUI app finds every bundled library through RUNPATH, so it starts Cap
+// directly. The generic AppImage launcher's LD_LIBRARY_PATH, PYTHONHOME and
+// friends reached the host's PipeWire plugins inside Cap and every program Cap
+// starts (file managers, xdg-open), which then loaded Ubuntu's libraries: on
+// NixOS and Arch screen capture failed to connect and folders did not open.
+// It keeps what that launcher did for Cap: `usr/bin` first on PATH (Cap runs
+// the bundled pactl), the bundled data directory, and `usr` as the working
+// directory. The bundled libva is only used when the host has none, because
+// host PipeWire plugins link a host FFmpeg that needs the host's newer libva.
+export const directAppRunWrapper = `#!/bin/sh
+unset OWD
+if cap_original_directory="$(pwd -P && printf '.')"; then
+	OWD="\${cap_original_directory%?}"
+	OWD="\${OWD%?}"
+	export OWD
+fi
+case "$0" in
+	*/*) cap_appdir="\${0%/*}" ;;
+	*) cap_appdir=. ;;
+esac
+cap_appdir="$(cd "$cap_appdir" && pwd -P)" || exit 1
+export PATH="$cap_appdir/usr/bin:\${PATH:-/usr/local/bin:/usr/bin:/bin}"
+export XDG_DATA_DIRS="$cap_appdir/usr/share:\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+cap_host_libva=0
+for cap_directory in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu /usr/lib64 /lib64 /usr/lib /lib; do
+	if [ -e "$cap_directory/libva.so.2" ] && [ -e "$cap_directory/libva-drm.so.2" ]; then
+		cap_host_libva=1
+		break
+	fi
+done
+if [ "$cap_host_libva" = 0 ] && ldconfig -p 2>/dev/null | grep -q 'libva-drm[.]so[.]2 '; then
+	cap_host_libva=1
+fi
+if [ "$cap_host_libva" = 0 ]; then
+	export LD_LIBRARY_PATH="$cap_appdir/usr/lib/cap/libva\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+unset cap_original_directory cap_directory cap_host_libva
+cd "$cap_appdir/usr" || exit 1
+exec "$cap_appdir/usr/bin/Cap" "$@"
+`;
+
+const libvaPattern = /^libva(?:-drm)?\.so\.2(?:\..+)?$/;
+
+// The fallback libva, for hosts without one. It must be new enough for the
+// host's own FFmpeg, which host PipeWire plugins load into Cap: NixOS's
+// FFmpeg 9 needs vaMapBuffer2, which the build image's libva 2.20 lacks. A
+// newer libva keeps the ABI the bundled FFmpeg was built against. These need
+// glibc 2.38, older than the build image's.
+export const fallbackLibvaPackages = [
+	{
+		url: "http://archive.ubuntu.com/ubuntu/pool/main/libv/libva/libva2_2.23.0-1ubuntu1_amd64.deb",
+		sha256: "83053abb11b8b0169bfb2abbd209a44ddeb4e56223980cdcfc0218b09e845f00",
+	},
+	{
+		url: "http://archive.ubuntu.com/ubuntu/pool/main/libv/libva/libva-drm2_2.23.0-1ubuntu1_amd64.deb",
+		sha256: "f56b0cb850dcd8af45929b2da7cc1fbdf64245fbcec99033298499a8db2765a3",
+	},
+];
+
+/**
+ * The directory holding the fallback libva: `CAP_APPIMAGE_LIBVA_DIR`, or the
+ * pinned packages above, downloaded, checked and unpacked into `work`.
+ */
+export async function fallbackLibvaDirectory(
+	work,
+	{ env = process.env, run = runCommand, download = fetch } = {},
+) {
+	if (env.CAP_APPIMAGE_LIBVA_DIR) return env.CAP_APPIMAGE_LIBVA_DIR;
+	const root = path.join(work, "libva");
+	await mkdir(root, { recursive: true });
+	for (const { url, sha256 } of fallbackLibvaPackages) {
+		const response = await download(url);
+		if (!response.ok)
+			throw new Error(`Downloading ${url} failed: ${response.status}`);
+		const bytes = Buffer.from(await response.arrayBuffer());
+		const digest = createHash("sha256").update(bytes).digest("hex");
+		if (digest !== sha256) {
+			throw new Error(`${url} has sha256 ${digest}, expected ${sha256}`);
+		}
+		const deb = path.join(root, path.basename(url));
+		await writeFile(deb, bytes);
+		await run("dpkg-deb", ["-x", deb, root], { env, stdio: "inherit" });
+	}
+	return path.join(root, "usr/lib/x86_64-linux-gnu");
+}
+
+/**
+ * Moves the bundled libva out of RUNPATH's reach into the launcher's fallback
+ * directory, replaced by the libraries in `replacement` when given.
+ */
+export async function isolateBundledLibva(appDir, { replacement } = {}) {
+	const libraries = path.join(appDir, "usr/lib");
+	const fallback = path.join(libraries, "cap/libva");
+	const moved = [];
+	for (const entry of await readdir(libraries, { withFileTypes: true })) {
+		if (!libvaPattern.test(entry.name) || entry.isDirectory()) continue;
+		await mkdir(fallback, { recursive: true });
+		await rename(
+			path.join(libraries, entry.name),
+			path.join(fallback, entry.name),
+		);
+		moved.push(entry.name);
+	}
+	if (replacement) {
+		const libraries = (await readdir(replacement)).filter((name) =>
+			libvaPattern.test(name),
+		);
+		for (const name of ["libva.so.2", "libva-drm.so.2"]) {
+			if (!libraries.includes(name)) {
+				throw new Error(`${replacement} has no ${name}`);
+			}
+		}
+		await rm(fallback, { recursive: true, force: true });
+		await mkdir(fallback, { recursive: true });
+		for (const name of libraries) {
+			const source = path.join(replacement, name);
+			const entry = await lstat(source);
+			if (entry.isSymbolicLink()) {
+				await symlink(await readlink(source), path.join(fallback, name));
+			} else {
+				await copyFile(source, path.join(fallback, name));
+			}
+		}
+	}
+	return moved.sort();
+}
+
+export async function preserveAppImageWorkingDirectory(
+	appDir,
+	{ direct = false } = {},
+) {
+	const wrapper = direct ? directAppRunWrapper : appRunWrapper;
 	const launcher = path.join(appDir, "AppRun");
 	const original = path.join(appDir, "AppRun.cap-original");
 	if ((await readdir(appDir)).includes(path.basename(original))) {
-		if ((await readFile(launcher, "utf8")) !== appRunWrapper) {
+		if ((await readFile(launcher, "utf8")) !== wrapper) {
 			throw new Error("AppImage already contains a different AppRun wrapper");
 		}
 		await access(original, constants.X_OK);
@@ -110,7 +248,37 @@ export async function preserveAppImageWorkingDirectory(appDir) {
 	}
 	await access(launcher, constants.X_OK);
 	await rename(launcher, original);
-	await writeFile(launcher, appRunWrapper, { mode: 0o755, flag: "wx" });
+	await writeFile(launcher, wrapper, { mode: 0o755, flag: "wx" });
+}
+
+// Desktop launchers (GNOME's app grid among them) only hand an app an
+// XDG_ACTIVATION_TOKEN when its entry asks for startup notification. Without
+// one, Wayland focus stealing prevention keeps Cap's first window, and the
+// running Cap a relaunch raises, behind whatever had focus.
+export function withStartupNotify(entry) {
+	if (/^StartupNotify=/m.test(entry)) {
+		return entry.replace(/^StartupNotify=.*$/m, "StartupNotify=true");
+	}
+	return entry.replace(
+		/^\[Desktop Entry\]\n/m,
+		"[Desktop Entry]\nStartupNotify=true\n",
+	);
+}
+
+export async function notifyStartupInDesktopEntries(root, entries) {
+	const changed = [];
+	for (const entry of entries) {
+		const filename = path.join(root, entry);
+		const stats = await lstat(filename).catch(() => null);
+		if (!stats?.isFile()) continue;
+		const before = await readFile(filename, "utf8");
+		const after = withStartupNotify(before);
+		if (after !== before) {
+			await writeFile(filename, after);
+			changed.push(entry);
+		}
+	}
+	return changed;
 }
 
 export function runCommand(command, args, options = {}) {
@@ -243,10 +411,203 @@ export async function findConflictingLibraries(appDir, directory = appDir) {
 	return libraries;
 }
 
+const elfMagic = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
+
+async function isElf(filename) {
+	const handle = await open(filename, "r");
+	try {
+		const { buffer, bytesRead } = await handle.read(Buffer.alloc(4), 0, 4, 0);
+		return bytesRead === 4 && buffer.equals(elfMagic);
+	} finally {
+		await handle.close();
+	}
+}
+
+async function neededLibraries(filename, env, run) {
+	const result = await run("readelf", ["--wide", "--dynamic", filename], {
+		env: { ...env, LC_ALL: "C" },
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "inherit"],
+	});
+	if (typeof result.stdout !== "string") {
+		throw new Error(`Could not read the dynamic section of ${filename}`);
+	}
+	return [
+		...result.stdout.matchAll(/\(NEEDED\)\s+Shared library: \[([^\]]+)\]/g),
+	].map((match) => match[1]);
+}
+
+async function elfFiles(directory, libraryDirectory) {
+	const files = [];
+	for (const entry of await readdir(directory, { withFileTypes: true })) {
+		const filename = path.join(directory, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...(await elfFiles(filename, libraryDirectory)));
+		} else if (
+			entry.isFile() &&
+			directory !== libraryDirectory &&
+			(await isElf(filename))
+		) {
+			files.push(filename);
+		}
+	}
+	return files;
+}
+
+const gtkLauncherSource =
+	/^\s*source\s+"\$this_dir"\/apprun-hooks\/"linuxdeploy-plugin-gtk\.sh"\s*$/;
+const gtkLauncherExec = /^\s*exec\s+"\$this_dir"\/AppRun\.wrapped\s+"\$@"\s*$/;
+
+async function removeGtkLauncher(appDir) {
+	const hooks = path.join(appDir, "apprun-hooks");
+	const launcher = path.join(appDir, "AppRun");
+	const wrapped = path.join(appDir, "AppRun.wrapped");
+	const commands = (await readFile(launcher, "utf8"))
+		.split("\n")
+		.filter((line) => line.trim() && !line.trimStart().startsWith("#"));
+	const sources = commands.filter((line) => /^\s*source\b/.test(line));
+	if (
+		(await readdir(hooks)).join() !== "linuxdeploy-plugin-gtk.sh" ||
+		sources.length !== 1 ||
+		!gtkLauncherSource.test(sources[0]) ||
+		!gtkLauncherExec.test(commands.at(-1) ?? "")
+	) {
+		throw new Error(
+			"Unrecognized AppImage launcher; refusing to remove the GTK runtime",
+		);
+	}
+	await access(wrapped, constants.X_OK);
+	await rm(hooks, { recursive: true });
+	await rename(wrapped, launcher);
+}
+
+async function webviewRuntimeDirectories(appDir) {
+	const libraryDirectory = path.join(appDir, "usr/lib");
+	const multiarch = (await readdir(libraryDirectory, { withFileTypes: true }))
+		.filter((entry) => entry.isDirectory() && /-linux-gnu/.test(entry.name))
+		.map((entry) => path.join(libraryDirectory, entry.name));
+	return {
+		multiarch,
+		directories: [
+			"usr/lib/gtk-3.0",
+			"usr/lib/gdk-pixbuf-2.0",
+			"usr/lib/girepository-1.0",
+			"usr/lib/webkit2gtk-4.1",
+			"usr/lib64/webkit2gtk-4.1",
+			"usr/libexec/webkit2gtk-4.1",
+			"usr/share/glib-2.0",
+		]
+			.map((directory) => path.join(appDir, directory))
+			.concat(
+				multiarch.flatMap((directory) => [
+					path.join(directory, "webkit2gtk-4.1"),
+					path.join(directory, "gio"),
+				]),
+			),
+	};
+}
+
+export async function removeWebviewRuntime(
+	appDir,
+	{ env = process.env, run = runCommand } = {},
+) {
+	await removeGtkLauncher(appDir);
+	const removed = [];
+	const { directories, multiarch } = await webviewRuntimeDirectories(appDir);
+	for (const directory of directories) {
+		const entry = await lstat(directory).catch(() => null);
+		if (!entry) continue;
+		await rm(directory, { recursive: true });
+		removed.push(directory);
+	}
+	for (const directory of multiarch) {
+		if ((await readdir(directory)).length === 0) await rmdir(directory);
+	}
+
+	const libraryDirectory = path.join(appDir, "usr/lib");
+	const libraryRoot = await realpath(libraryDirectory);
+	const candidates = new Set(
+		(await readdir(libraryDirectory, { withFileTypes: true }))
+			.filter(
+				(entry) =>
+					(entry.isFile() || entry.isSymbolicLink()) &&
+					/\.so(?:\.|$)/.test(entry.name),
+			)
+			.map((entry) => entry.name),
+	);
+	const pending = [];
+	for (const file of await elfFiles(appDir, libraryDirectory)) {
+		pending.push(...(await neededLibraries(file, env, run)));
+	}
+	const kept = new Set();
+	while (pending.length > 0) {
+		const name = pending.pop();
+		if (kept.has(name) || !candidates.has(name)) continue;
+		kept.add(name);
+		const filename = path.join(libraryDirectory, name);
+		if ((await lstat(filename)).isSymbolicLink()) {
+			const target = await realpath(filename).catch(() => null);
+			if (target && path.dirname(target) === libraryRoot) {
+				pending.push(path.basename(target));
+			}
+		} else if (await isElf(filename)) {
+			pending.push(...(await neededLibraries(filename, env, run)));
+		}
+	}
+	for (const name of candidates) {
+		if (kept.has(name)) continue;
+		const filename = path.join(libraryDirectory, name);
+		await rm(filename);
+		removed.push(filename);
+	}
+	return removed;
+}
+
+export async function relativizeDirIcon(appDir) {
+	const icon = path.join(appDir, ".DirIcon");
+	const target = await readlink(icon).catch(() => null);
+	if (!target || !path.isAbsolute(target)) return;
+	const name = path.basename(target);
+	await access(path.join(appDir, name));
+	await rm(icon);
+	await symlink(name, icon);
+}
+
+const updaterSecrets = [
+	"TAURI_SIGNING_PRIVATE_KEY",
+	"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+	"TAURI_PRIVATE_KEY",
+	"TAURI_PRIVATE_KEY_PASSWORD",
+];
+
+export function withoutUpdaterSecrets(env) {
+	const tools = { ...env };
+	for (const name of updaterSecrets) delete tools[name];
+	return tools;
+}
+
+export async function signUpdaterArtifact(
+	filename,
+	{ env = process.env, run = runCommand } = {},
+) {
+	await run("bun", ["run", "tauri", "signer", "sign", filename], {
+		cwd: desktopDirectory,
+		env: {
+			...env,
+			TAURI_PRIVATE_KEY: env.TAURI_SIGNING_PRIVATE_KEY,
+			TAURI_PRIVATE_KEY_PASSWORD: env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
+		},
+	});
+	if (!(await stat(`${filename}.sig`)).size) {
+		throw new Error(`Updater signature for ${filename} is empty`);
+	}
+}
+
 export async function finalizeLinuxAppImage(
 	filename,
 	{
 		unsigned = false,
+		webview = true,
 		env = process.env,
 		run = runCommand,
 		replace = rename,
@@ -275,25 +636,42 @@ export async function finalizeLinuxAppImage(
 	const work = await mkdtemp(path.join(path.dirname(image), ".cap-appimage-"));
 	let retainWork = false;
 	try {
-		const runtime = await copyRuntime(image, work, env, run);
+		const tools = withoutUpdaterSecrets(env);
+		const runtime = await copyRuntime(image, work, tools, run);
 		await run(image, ["--appimage-extract"], {
 			cwd: work,
-			env,
+			env: tools,
 			stdio: ["ignore", "ignore", "inherit"],
 		});
 		const appDir = path.join(work, "squashfs-root");
 		const excluded = await findConflictingLibraries(appDir);
 		// Host Mesa and ALSA plugins require their matching Wayland and PipeWire ABIs.
 		for (const library of excluded) await rm(library);
-		await selectAppImageGtkBackend(appDir);
-		await preserveAppImageWorkingDirectory(appDir);
+		if (webview) {
+			await selectAppImageGtkBackend(appDir);
+		} else {
+			excluded.push(
+				...(await removeWebviewRuntime(appDir, { env: tools, run })),
+			);
+		}
+		if (!webview) {
+			await isolateBundledLibva(appDir, {
+				replacement: await fallbackLibvaDirectory(work, { env: tools, run }),
+			});
+			await notifyStartupInDesktopEntries(appDir, [
+				"Cap.desktop",
+				"usr/share/applications/Cap.desktop",
+			]);
+		}
+		await relativizeDirIcon(appDir);
+		await preserveAppImageWorkingDirectory(appDir, { direct: !webview });
 		const output = path.join(work, path.basename(image));
 		await run(
 			outputPlugin,
 			["--appimage-extract-and-run", "--appdir", appDir],
 			{
 				env: {
-					...env,
+					...tools,
 					APPIMAGE_EXTRACT_AND_RUN: "1",
 					OUTPUT: output,
 					LDAI_OUTPUT: output,
@@ -309,20 +687,7 @@ export async function finalizeLinuxAppImage(
 			throw new Error("Final AppImage did not preserve its runtime");
 		}
 		await chmod(output, 0o755);
-		if (!unsigned) {
-			await run("bun", ["run", "tauri", "signer", "sign", output], {
-				cwd: desktopDirectory,
-				env: {
-					...env,
-					TAURI_PRIVATE_KEY: env.TAURI_SIGNING_PRIVATE_KEY,
-					TAURI_PRIVATE_KEY_PASSWORD:
-						env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
-				},
-			});
-			if (!(await stat(`${output}.sig`)).size) {
-				throw new Error("Final AppImage updater signature is empty");
-			}
-		}
+		if (!unsigned) await signUpdaterArtifact(output, { env, run });
 		const originalImage = path.join(work, "original-image");
 		const originalImageStat = await stat(image);
 		await copyFile(image, originalImage, constants.COPYFILE_FICLONE);
@@ -356,16 +721,19 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
+	const flags = new Set(["--unsigned", "--without-webview"]);
 	const args = process.argv.slice(2);
-	const unsigned = args[0] === "--unsigned";
-	if (unsigned) args.shift();
-	if (process.platform !== "linux" || args.length !== 1) {
+	const files = args.filter((arg) => !flags.has(arg));
+	if (process.platform !== "linux" || files.length !== 1) {
 		throw new Error(
-			"Run on Linux: node scripts/finalize-linux-appimage.mjs [--unsigned] <Cap.AppImage>",
+			"Run on Linux: node scripts/finalize-linux-appimage.mjs [--unsigned] [--without-webview] <Cap.AppImage>",
 		);
 	}
-	const excluded = await finalizeLinuxAppImage(args[0], { unsigned });
+	const excluded = await finalizeLinuxAppImage(files[0], {
+		unsigned: args.includes("--unsigned"),
+		webview: !args.includes("--without-webview"),
+	});
 	console.log(
-		`Finalized ${args[0]}; excluded ${excluded.join(", ") || "none"}`,
+		`Finalized ${files[0]}; excluded ${excluded.join(", ") || "none"}`,
 	);
 }

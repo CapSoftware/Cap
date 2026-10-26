@@ -1,4 +1,4 @@
-use crate::cpu_yuv;
+use crate::cpu_yuv::{self, YuvMatrix};
 
 #[cfg(target_os = "macos")]
 use crate::iosurface_texture::{
@@ -102,10 +102,28 @@ fn upload_plane_with_stride(
 const MAX_TEXTURE_WIDTH: u32 = 7680;
 const MAX_TEXTURE_HEIGHT: u32 = 4320;
 
+// On macOS, IOSurface frames convert straight into the layer textures, so the
+// converter's own textures start minimal and only grow for a fallback path.
+#[cfg(target_os = "macos")]
+const INITIAL_TEXTURE_WIDTH: u32 = TEXTURE_SIZE_PADDING;
+#[cfg(target_os = "macos")]
+const INITIAL_TEXTURE_HEIGHT: u32 = TEXTURE_SIZE_PADDING;
+#[cfg(not(target_os = "macos"))]
 const INITIAL_TEXTURE_WIDTH: u32 = 1920;
+#[cfg(not(target_os = "macos"))]
 const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
+
+// The 2x2 block kernel was only measured as a win on Linux; Apple GPUs were slower and Windows is untested.
+#[cfg(target_os = "linux")]
+const YUV420P_ENTRY_POINT: &str = "main_block";
+#[cfg(target_os = "linux")]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 16;
+#[cfg(not(target_os = "linux"))]
+const YUV420P_ENTRY_POINT: &str = "main";
+#[cfg(not(target_os = "linux"))]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 8;
 
 fn align_dimension(dim: u32) -> u32 {
     dim.div_ceil(TEXTURE_SIZE_PADDING) * TEXTURE_SIZE_PADDING
@@ -259,9 +277,63 @@ impl BindGroupCache {
 
 use std::sync::Arc;
 
+/// One compute pipeline per source matrix, compiled on first use, so a
+/// project only ever builds the variants its sources need.
+struct MatrixPipelines {
+    device: wgpu::Device,
+    label: &'static str,
+    layout: wgpu::PipelineLayout,
+    module: wgpu::ShaderModule,
+    entry_point: &'static str,
+    bt601: std::sync::OnceLock<wgpu::ComputePipeline>,
+    bt709: std::sync::OnceLock<wgpu::ComputePipeline>,
+}
+
+impl MatrixPipelines {
+    fn new(
+        device: &wgpu::Device,
+        label: &'static str,
+        layout: wgpu::PipelineLayout,
+        module: wgpu::ShaderModule,
+        entry_point: &'static str,
+    ) -> Self {
+        Self {
+            device: device.clone(),
+            label,
+            layout,
+            module,
+            entry_point,
+            bt601: std::sync::OnceLock::new(),
+            bt709: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn get(&self, matrix: YuvMatrix) -> &wgpu::ComputePipeline {
+        let cell = match matrix {
+            YuvMatrix::Bt601 => &self.bt601,
+            YuvMatrix::Bt709 => &self.bt709,
+        };
+        cell.get_or_init(|| {
+            let constants = matrix.shader_constants();
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(self.label),
+                    layout: Some(&self.layout),
+                    module: &self.module,
+                    entry_point: Some(self.entry_point),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..Default::default()
+                    },
+                    cache: None,
+                })
+        })
+    }
+}
+
 pub struct YuvConverterPipelines {
-    pub nv12_pipeline: wgpu::ComputePipeline,
-    pub yuv420p_pipeline: wgpu::ComputePipeline,
+    nv12: MatrixPipelines,
+    yuv420p: MatrixPipelines,
     pub nv12_bind_group_layout: wgpu::BindGroupLayout,
     pub yuv420p_bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -381,37 +453,73 @@ impl YuvConverterPipelines {
                 push_constant_ranges: &[],
             });
 
-        let nv12_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("NV12 Converter Pipeline"),
-            layout: Some(&nv12_pipeline_layout),
-            module: &nv12_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        let yuv420p_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("YUV420P Converter Pipeline"),
-            layout: Some(&yuv420p_pipeline_layout),
-            module: &yuv420p_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
+        let nv12 = MatrixPipelines::new(
+            device,
+            "NV12 Converter Pipeline",
+            nv12_pipeline_layout,
+            nv12_shader,
+            "main",
+        );
+        let yuv420p = MatrixPipelines::new(
+            device,
+            "YUV420P Converter Pipeline",
+            yuv420p_pipeline_layout,
+            yuv420p_shader,
+            YUV420P_ENTRY_POINT,
+        );
         tracing::info!("Shared YUV converter pipelines created successfully");
 
         Self {
-            nv12_pipeline,
-            yuv420p_pipeline,
+            nv12,
+            yuv420p,
             nv12_bind_group_layout,
             yuv420p_bind_group_layout,
         }
     }
 }
 
+/// Conversions whose GPU work can still be pending when a new one starts. The
+/// renderer waits for the previous frame only after submitting the next one,
+/// and a transition frame converts twice (outgoing, then incoming), so up to
+/// three earlier sources may still be sampled.
+#[cfg(target_os = "macos")]
+const RETAINED_IOSURFACE_SOURCES: usize = 4;
+
+#[cfg(target_os = "macos")]
+#[must_use]
+pub struct RetainedImageBuf {
+    _image_buf: cidre::arc::R<cv::ImageBuf>,
+}
+
+#[cfg(target_os = "macos")]
+impl RetainedImageBuf {
+    fn new(image_buf: &cv::ImageBuf) -> Self {
+        Self {
+            _image_buf: image_buf.retained(),
+        }
+    }
+
+    /// Stores `source` in `slot`. The work that sampled the buffer it replaces
+    /// has already been submitted, so that buffer is released once the queue
+    /// has finished it.
+    pub(crate) fn replace(queue: &wgpu::Queue, slot: &mut Option<Self>, source: Option<Self>) {
+        if let Some(previous) = std::mem::replace(slot, source) {
+            queue.on_submitted_work_done(move || drop(previous));
+        }
+    }
+}
+
+// SAFETY: the buffer is only retained and released, never read, and
+// CoreVideo reference counting is thread-safe.
+#[cfg(target_os = "macos")]
+unsafe impl Send for RetainedImageBuf {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for RetainedImageBuf {}
+
 pub struct YuvToRgbaConverter {
     pipelines: Arc<YuvConverterPipelines>,
+    matrix: YuvMatrix,
+    cpu_rgba_scratch: Vec<u8>,
     y_texture: wgpu::Texture,
     y_view: wgpu::TextureView,
     uv_texture: wgpu::Texture,
@@ -429,6 +537,10 @@ pub struct YuvToRgbaConverter {
     bind_group_cache: BindGroupCache,
     #[cfg(target_os = "macos")]
     iosurface_cache: Option<IOSurfaceTextureCache>,
+    #[cfg(target_os = "macos")]
+    iosurface_sources: [Option<RetainedImageBuf>; RETAINED_IOSURFACE_SOURCES],
+    #[cfg(target_os = "macos")]
+    next_iosurface_source: usize,
     #[cfg(target_os = "windows")]
     d3d11_staging_texture: Option<ID3D11Texture2D>,
     #[cfg(target_os = "windows")]
@@ -444,6 +556,11 @@ pub struct YuvToRgbaConverter {
 }
 
 impl YuvToRgbaConverter {
+    /// The matrix of the frames converted next (see [`YuvMatrix`]).
+    pub fn set_matrix(&mut self, matrix: YuvMatrix) {
+        self.matrix = matrix;
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         let pipelines = Arc::new(YuvConverterPipelines::new(device));
         Self::new_with_shared_pipelines(device, pipelines)
@@ -471,6 +588,8 @@ impl YuvToRgbaConverter {
             Self::create_output_textures(device, initial_width, initial_height);
 
         Self {
+            matrix: YuvMatrix::default(),
+            cpu_rgba_scratch: Vec::new(),
             pipelines,
             y_texture,
             y_view,
@@ -489,6 +608,10 @@ impl YuvToRgbaConverter {
             bind_group_cache: BindGroupCache::new(),
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
+            #[cfg(target_os = "macos")]
+            iosurface_sources: Default::default(),
+            #[cfg(target_os = "macos")]
+            next_iosurface_source: 0,
             #[cfg(target_os = "windows")]
             d3d11_staging_texture: None,
             #[cfg(target_os = "windows")]
@@ -629,7 +752,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 CUDA Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -853,11 +976,12 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_height = height / 2;
-        if uv_stride < width {
+        let half_height = height.div_ceil(2);
+        let uv_row_bytes = width.div_ceil(2) * 2;
+        if uv_stride < uv_row_bytes {
             return Err(YuvConversionError::PlaneStrideTooSmall {
                 plane: "UV",
-                expected: width,
+                expected: uv_row_bytes,
                 actual: uv_stride,
             });
         }
@@ -885,7 +1009,7 @@ impl YuvToRgbaConverter {
                 rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
-                width: width / 2,
+                width: width.div_ceil(2),
                 height: half_height,
                 depth_or_array_layers: 1,
             },
@@ -912,7 +1036,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -942,11 +1066,12 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_height = height / 2;
-        if uv_stride < width {
+        let half_height = height.div_ceil(2);
+        let uv_row_bytes = width.div_ceil(2) * 2;
+        if uv_stride < uv_row_bytes {
             return Err(YuvConversionError::PlaneStrideTooSmall {
                 plane: "UV",
-                expected: width,
+                expected: uv_row_bytes,
                 actual: uv_stride,
             });
         }
@@ -974,7 +1099,7 @@ impl YuvToRgbaConverter {
                 rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
-                width: width / 2,
+                width: width.div_ceil(2),
                 height: half_height,
                 depth_or_array_layers: 1,
             },
@@ -997,7 +1122,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass (Batched)"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -1033,9 +1158,9 @@ impl YuvToRgbaConverter {
             return Err(IOSurfaceTextureError::NoMetalDevice.into());
         }
 
-        let io_surface = image_buf
-            .io_surf()
-            .ok_or(IOSurfaceTextureError::NoIOSurface)?;
+        if image_buf.io_surf().is_none() {
+            return Err(IOSurfaceTextureError::NoIOSurface.into());
+        }
 
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
@@ -1045,7 +1170,56 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        let cache = self.iosurface_cache.as_ref().unwrap();
+        self.encode_nv12_from_iosurface(device, encoder, image_buf, self.current_output_view())?;
+
+        // The Metal textures alias the IOSurface without retaining the pixel
+        // buffer, and the decoder recycles released buffers for new pictures.
+        // Hold the source until enough later conversions have started that
+        // the caller has waited for the GPU work that sampled it.
+        self.iosurface_sources[self.next_iosurface_source] = Some(RetainedImageBuf::new(image_buf));
+        self.next_iosurface_source = (self.next_iosurface_source + 1) % RETAINED_IOSURFACE_SOURCES;
+
+        Ok(self.current_output_view())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn convert_nv12_from_iosurface_into(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        image_buf: &cv::ImageBuf,
+        target: &wgpu::TextureView,
+    ) -> Result<RetainedImageBuf, YuvConversionError> {
+        validate_dimensions(
+            image_buf.width() as u32,
+            image_buf.height() as u32,
+            self.gpu_max_texture_size,
+        )?;
+
+        self.encode_nv12_from_iosurface(device, encoder, image_buf, target)?;
+
+        Ok(RetainedImageBuf::new(image_buf))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn encode_nv12_from_iosurface(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        image_buf: &cv::ImageBuf,
+        output_view: &wgpu::TextureView,
+    ) -> Result<(), YuvConversionError> {
+        let io_surface = image_buf
+            .io_surf()
+            .ok_or(IOSurfaceTextureError::NoIOSurface)?;
+
+        let width = image_buf.width() as u32;
+        let height = image_buf.height() as u32;
+
+        let cache = self
+            .iosurface_cache
+            .as_ref()
+            .ok_or(IOSurfaceTextureError::NoMetalDevice)?;
         let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
         let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
 
@@ -1084,7 +1258,7 @@ impl YuvToRgbaConverter {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
+                    resource: wgpu::BindingResource::TextureView(output_view),
                 },
             ],
         });
@@ -1094,12 +1268,12 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 IOSurface Conversion Pass (Batched)"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
-        Ok(self.current_output_view())
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1122,8 +1296,8 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = width.div_ceil(2);
+        let half_height = height.div_ceil(2);
 
         upload_plane_with_stride(
             queue,
@@ -1166,9 +1340,13 @@ impl YuvToRgbaConverter {
                 label: Some("YUV420P Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
+            compute_pass.set_pipeline(self.pipelines.yuv420p.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1197,8 +1375,8 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = width.div_ceil(2);
+        let half_height = height.div_ceil(2);
 
         upload_plane_with_stride(
             queue,
@@ -1237,9 +1415,13 @@ impl YuvToRgbaConverter {
                 label: Some("YUV420P Conversion Pass (Batched)"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
+            compute_pass.set_pipeline(self.pipelines.yuv420p.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         Ok(self.current_output_view())
@@ -1398,7 +1580,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 D3D11 Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -1492,7 +1674,7 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
                 ..Default::default()
             });
-            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
@@ -1593,7 +1775,9 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        let mut rgba_data = vec![0u8; (width * height * 4) as usize];
+        let byte_len = (width * height * 4) as usize;
+        let matrix = self.matrix;
+        let mut rgba_data = self.take_cpu_rgba_scratch(byte_len);
 
         cpu_yuv::nv12_to_rgba_simd(
             y_data,
@@ -1602,7 +1786,8 @@ impl YuvToRgbaConverter {
             height,
             y_stride,
             uv_stride,
-            &mut rgba_data,
+            &mut rgba_data[..byte_len],
+            matrix,
         );
 
         queue.write_texture(
@@ -1612,7 +1797,7 @@ impl YuvToRgbaConverter {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba_data,
+            &rgba_data[..byte_len],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
@@ -1625,6 +1810,7 @@ impl YuvToRgbaConverter {
             },
         );
 
+        self.cpu_rgba_scratch = rgba_data;
         Ok(self.current_output_view())
     }
 
@@ -1646,7 +1832,9 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        let mut rgba_data = vec![0u8; (width * height * 4) as usize];
+        let byte_len = (width * height * 4) as usize;
+        let matrix = self.matrix;
+        let mut rgba_data = self.take_cpu_rgba_scratch(byte_len);
 
         cpu_yuv::yuv420p_to_rgba_simd(
             y_data,
@@ -1656,7 +1844,8 @@ impl YuvToRgbaConverter {
             height,
             y_stride,
             uv_stride,
-            &mut rgba_data,
+            &mut rgba_data[..byte_len],
+            matrix,
         );
 
         queue.write_texture(
@@ -1666,7 +1855,7 @@ impl YuvToRgbaConverter {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba_data,
+            &rgba_data[..byte_len],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
@@ -1679,10 +1868,259 @@ impl YuvToRgbaConverter {
             },
         );
 
+        self.cpu_rgba_scratch = rgba_data;
         Ok(self.current_output_view())
+    }
+
+    fn take_cpu_rgba_scratch(&mut self, byte_len: usize) -> Vec<u8> {
+        let mut rgba = std::mem::take(&mut self.cpu_rgba_scratch);
+        // Kernels write every output byte, including alpha, so a reused
+        // buffer is cleared only when a larger frame grows it.
+        if rgba.len() < byte_len {
+            rgba.resize(byte_len, 0);
+        }
+        rgba
     }
 
     pub fn output_texture(&self) -> Option<&wgpu::Texture> {
         Some(self.current_output_texture())
+    }
+}
+
+/// The GPU conversions against the CPU reference in `cpu_yuv`: the export's
+/// RGBA to NV12 shader must produce BT.709 limited range (the matrix the
+/// encoders tag), and the decode shaders must apply the matrix they are asked
+/// for. Skipped where no adapter exists.
+#[cfg(test)]
+mod colour_matrix_tests {
+    use super::*;
+    use crate::frame_pipeline::RgbaToNv12Converter;
+
+    // Primaries, secondaries, grey axis and the suite's red background.
+    const CHART: [[u8; 3]; 8] = [
+        [0, 0, 0],
+        [255, 255, 255],
+        [128, 128, 128],
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [255, 255, 0],
+        [220, 40, 40],
+    ];
+    // Each chart colour fills a 4x2 block, so chroma averaging is exact.
+    const WIDTH: u32 = 4 * CHART.len() as u32;
+    const HEIGHT: u32 = 2;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = crate::create_wgpu_instance_sync();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    fn reference_bt709(rgb: [u8; 3]) -> [f64; 3] {
+        let (kr, kb) = (0.2126, 0.0722);
+        let [r, g, b] = rgb.map(|v| f64::from(v) / 255.0);
+        let y = kr * r + (1.0 - kr - kb) * g + kb * b;
+        [
+            16.0 + 219.0 * y,
+            128.0 + 224.0 * (b - y) / (2.0 * (1.0 - kb)),
+            128.0 + 224.0 * (r - y) / (2.0 * (1.0 - kr)),
+        ]
+    }
+
+    fn chart_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("colour chart"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let data: Vec<u8> = (0..HEIGHT)
+            .flat_map(|_| {
+                CHART
+                    .iter()
+                    .flat_map(|[r, g, b]| [*r, *g, *b, 255].repeat(4))
+            })
+            .collect();
+        queue.write_texture(
+            texture.as_image_copy(),
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(WIDTH * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture
+    }
+
+    /// The chart as BT.709 NV12 from the CPU encoder (tight strides).
+    fn chart_nv12() -> (Vec<u8>, Vec<u8>) {
+        let mut y = Vec::new();
+        let mut uv = Vec::new();
+        for _ in 0..HEIGHT {
+            for [r, g, b] in CHART.map(|c| c.map(i32::from)) {
+                y.extend([cpu_yuv::bt709_luma(r, g, b); 4]);
+            }
+        }
+        for [r, g, b] in CHART.map(|c| c.map(i32::from)) {
+            let [cb, cr] = cpu_yuv::bt709_chroma(r, g, b);
+            uv.extend([cb, cr, cb, cr]);
+        }
+        (y, uv)
+    }
+
+    fn read_rgba(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+        let padded = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("chart readback"),
+            size: u64::from(padded * HEIGHT),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait).expect("poll");
+        let mapped = buffer.slice(..).get_mapped_range();
+        (0..HEIGHT as usize)
+            .flat_map(|row| {
+                let start = row * padded as usize;
+                mapped[start..start + WIDTH as usize * 4].to_vec()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn export_shader_encodes_bt709_limited_range() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let source = chart_texture(&device, &queue);
+        let mut converter = RgbaToNv12Converter::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(
+            converter
+                .submit_conversion(&device, &queue, &mut encoder, &source, WIDTH, HEIGHT, 0, 30)
+                .await
+                .expect("conversion submission")
+        );
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        converter.after_submit(&queue, &submission);
+        let frame = converter
+            .take_pending()
+            .expect("conversion pending")
+            .wait_with_pool(&device, None)
+            .await
+            .expect("conversion completes");
+        let stride = frame.y_stride as usize;
+        let uv_base = stride * HEIGHT as usize;
+        for (i, rgb) in CHART.iter().enumerate() {
+            let [y, cb, cr] = reference_bt709(*rgb);
+            let x = i * 4;
+            let actual = [
+                frame.data[x],
+                frame.data[uv_base + x],
+                frame.data[uv_base + x + 1],
+            ];
+            for (a, e) in actual.iter().zip([y, cb, cr]) {
+                assert!(
+                    (f64::from(*a) - e).abs() <= 0.5 + 1e-3,
+                    "{rgb:?}: got {actual:?}, BT.709 reference {y:.2} {cb:.2} {cr:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decode_shaders_apply_the_requested_matrix() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (y, uv) = chart_nv12();
+        // The same chroma as separate U and V planes for the planar shader.
+        let u: Vec<u8> = uv.iter().step_by(2).copied().collect();
+        let v: Vec<u8> = uv.iter().skip(1).step_by(2).copied().collect();
+        let mut converter = YuvToRgbaConverter::new(&device);
+        for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709] {
+            converter.set_matrix(matrix);
+            for planar in [false, true] {
+                if planar {
+                    converter
+                        .convert_yuv420p(
+                            &device,
+                            &queue,
+                            &y,
+                            &u,
+                            &v,
+                            WIDTH,
+                            HEIGHT,
+                            WIDTH,
+                            WIDTH / 2,
+                        )
+                        .expect("convert YUV420P");
+                } else {
+                    converter
+                        .convert_nv12(&device, &queue, &y, &uv, WIDTH, HEIGHT, WIDTH, WIDTH)
+                        .expect("convert NV12");
+                }
+                let rgba = read_rgba(&device, &queue, converter.output_texture().unwrap());
+                for (i, rgb) in CHART.iter().enumerate() {
+                    let x = i * 4;
+                    let expected = matrix.ycbcr_to_rgb(
+                        i32::from(y[x]) - 16,
+                        i32::from(uv[x]) - 128,
+                        i32::from(uv[x + 1]) - 128,
+                    );
+                    let actual = &rgba[x * 4..x * 4 + 3];
+                    assert!(
+                        actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 1),
+                        "{matrix:?} planar={planar} {rgb:?}: GPU {actual:?}, CPU {expected:?}"
+                    );
+                    if matrix == YuvMatrix::Bt709 {
+                        assert!(
+                            actual.iter().zip(rgb).all(|(a, e)| a.abs_diff(*e) <= 2),
+                            "planar={planar}: BT.709 round trip of {rgb:?} gave {actual:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -166,7 +166,9 @@ function legacyUpload() {
 
 describe("video edit claims and recovery", () => {
 	it("claims the recording before copying its original source", async () => {
-		mocks.head.mockReturnValue(Effect.fail(new Error("Missing")));
+		mocks.head.mockReturnValue(
+			Effect.fail(Object.assign(new Error("Missing"), { name: "NotFound" })),
+		);
 		mocks.copy.mockImplementation(() => {
 			expect(mocks.upload?.phase).toBe("processing");
 			return Effect.void;

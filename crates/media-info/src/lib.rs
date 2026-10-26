@@ -189,6 +189,10 @@ impl AudioInfo {
         let sample_size = self.sample_size();
         let packed_sample_size = sample_size * input_channels;
         let samples = packed_data.len() / packed_sample_size;
+        // A device callback can end mid-sample or carry no whole sample at
+        // all (empty buffers around device changes); a frame with zero samples
+        // has no planes to copy into.
+        let packed_data = &packed_data[..samples * packed_sample_size];
 
         let mut frame = frame::Audio::new(
             self.sample_format,
@@ -197,21 +201,20 @@ impl AudioInfo {
         );
         frame.set_rate(self.sample_rate);
 
+        if samples == 0 {
+            return frame;
+        }
+
         if input_channels == 1 || (frame.is_packed() && input_channels <= out_channels) {
             // frame is allocated with parameters derived from packed_data, so this is safe
             frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data);
         } else if frame.is_packed() && input_channels > out_channels {
-            for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
-                let start = chunk_index * sample_size * out_channels;
-
-                let copy_len = sample_size * out_channels;
-
-                if let (Some(chunk_slice), Some(frame_slice)) = (
-                    packed_chunk.get(0..copy_len),
-                    frame.data_mut(0).get_mut(start..start + copy_len),
-                ) {
-                    frame_slice.copy_from_slice(chunk_slice);
-                }
+            let copy_len = sample_size * out_channels;
+            for (packed_chunk, frame_chunk) in packed_data
+                .chunks_exact(packed_sample_size)
+                .zip(frame.data_mut(0).chunks_exact_mut(copy_len))
+            {
+                frame_chunk.copy_from_slice(&packed_chunk[..copy_len]);
             }
         } else {
             for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
@@ -449,6 +452,76 @@ mod tests {
             assert_eq!(&frame.data(1)[0..2], &[2, 2]);
             assert_eq!(&frame.data(2)[0..2], &[3, 3]);
             assert_eq!(&frame.data(3)[0..2], &[4, 4]);
+        }
+
+        #[test]
+        fn wrap_empty_and_partial_callbacks() {
+            for format in [Sample::F32(Type::Packed), Sample::F32(Type::Planar)] {
+                for channels in [1, 2, 6] {
+                    let info = AudioInfo::new_raw(format, 48_000, channels);
+                    let sample_bytes = 4 * channels as usize;
+                    for len in [
+                        0,
+                        1,
+                        3,
+                        sample_bytes - 1,
+                        sample_bytes + 1,
+                        3 * sample_bytes + 3,
+                    ] {
+                        let input: Vec<u8> = (0..len).map(|i| i as u8).collect();
+                        let frame = info.wrap_frame(&input);
+                        assert_eq!(
+                            frame.samples(),
+                            len / sample_bytes,
+                            "{format:?} {channels} {len}"
+                        );
+                    }
+                }
+            }
+
+            let info = AudioInfo::new_raw(Sample::U8(Type::Packed), 2, 2);
+            let frame = info.wrap_frame(&[1, 2, 3, 4, 5]);
+            assert_eq!(frame.samples(), 2);
+            assert_eq!(&frame.data(0)[0..4], &[1, 2, 3, 4]);
+        }
+
+        #[test]
+        fn packed_channel_limits_preserve_complete_frames_and_sample_bytes() {
+            for format in [
+                Sample::U8(Type::Packed),
+                Sample::I16(Type::Packed),
+                Sample::I32(Type::Packed),
+                Sample::F32(Type::Packed),
+                Sample::F64(Type::Packed),
+            ] {
+                for channels in [0, 1, 2, 6, 8, 9, 16, 32] {
+                    let info = AudioInfo::new_raw(format, 48_000, channels);
+                    let input_stride = info.sample_size() * usize::from(channels.max(1));
+                    for max in [0, 1, 2, 8, 64] {
+                        let output_channels = usize::from(channels.max(1)).min(max.max(1)).min(8);
+                        let output_stride = info.sample_size() * output_channels;
+                        for samples in [0, 1, 3, 64] {
+                            for tail in [0, input_stride - 1] {
+                                let input = (0..samples * input_stride + tail)
+                                    .map(|index| (index * 97 + 31) as u8)
+                                    .collect::<Vec<_>>();
+                                let expected = input
+                                    .chunks_exact(input_stride)
+                                    .flat_map(|frame| frame[..output_stride].iter().copied())
+                                    .collect::<Vec<_>>();
+                                let frame = info.wrap_frame_with_max_channels(&input, max);
+                                assert_eq!(frame.samples(), samples);
+                                assert_eq!(frame.channels() as usize, output_channels);
+                                assert_eq!(frame.rate(), 48_000);
+                                assert_eq!(frame.format(), format);
+                                if samples > 0 {
+                                    assert_eq!(&frame.data(0)[..expected.len()], expected);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         #[test]
