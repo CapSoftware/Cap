@@ -103,6 +103,11 @@ vi.mock("@/lib/baa/generate-signed-baa-pdf", () => ({
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
 
+const failedWith = (message: string) => ({
+	success: false,
+	error: expect.stringContaining(message),
+});
+
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
 		const fn = mockDb[key as keyof typeof mockDb];
@@ -185,7 +190,7 @@ describe("Signed BAA entitlement", () => {
 				noticesEmail: "legal@acme.com",
 				signatureDataUrl: `data:image/png;base64,${"A".repeat(200)}`,
 			}),
-		).rejects.toThrow("active Cap Pro subscription");
+		).resolves.toEqual(failedWith("active Cap Pro subscription"));
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
 
@@ -220,7 +225,7 @@ describe("Signed BAA entitlement", () => {
 				noticesEmail: "legal@acme.com",
 				signatureDataUrl: `data:image/png;base64,${"A".repeat(200)}`,
 			}),
-		).rejects.toThrow("active Cap Pro subscription");
+		).resolves.toEqual(failedWith("active Cap Pro subscription"));
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
 
@@ -248,7 +253,7 @@ describe("Signed BAA entitlement", () => {
 				noticesEmail: "legal@acme.com",
 				signatureDataUrl: `data:image/png;base64,${"A".repeat(200)}`,
 			}),
-		).rejects.toThrow("active Cap Pro subscription");
+		).resolves.toEqual(failedWith("active Cap Pro subscription"));
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
 
@@ -267,7 +272,7 @@ describe("Signed BAA entitlement", () => {
 		);
 		await expect(
 			purchaseSignedBaa("org-1" as never, VALID_INPUT),
-		).rejects.toThrow("active Cap Pro subscription");
+		).resolves.toEqual(failedWith("active Cap Pro subscription"));
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
 		expect(mockDb.update).not.toHaveBeenCalled();
@@ -315,9 +320,14 @@ describe("Signed BAA Stripe recovery", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		resetMockDb();
+		mockStripe.customers.retrieve.mockReset().mockResolvedValue({
+			id: "cus_1",
+			currency: "usd",
+			invoice_settings: {},
+		});
 	});
 
-	it("uses a stable Stripe idempotency key for the record", async () => {
+	it("scopes the Stripe idempotency key to the purchase claim", async () => {
 		await setupPurchaseAttempt();
 		mockStripe.subscriptions.list.mockResolvedValue({ data: [] });
 		mockStripe.subscriptions.create.mockResolvedValue(recoveredSubscription);
@@ -331,8 +341,51 @@ describe("Signed BAA Stripe recovery", () => {
 			expect.objectContaining({
 				customer: "cus_1",
 			}),
-			{ idempotencyKey: "signed-baa-baa-record-1" },
+			{
+				idempotencyKey: expect.stringMatching(/^signed-baa-baa-record-1-\d+$/),
+			},
 		);
+	});
+
+	it("bills the BAA in the customer's existing currency", async () => {
+		await setupPurchaseAttempt();
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_1",
+			currency: "eur",
+			invoice_settings: {},
+		});
+		mockStripe.subscriptions.list.mockResolvedValue({ data: [] });
+		mockStripe.subscriptions.create.mockResolvedValue(recoveredSubscription);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		await expect(
+			purchaseSignedBaa("org-1" as never, VALID_INPUT),
+		).resolves.toEqual({ success: true, emailSent: true });
+
+		expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
+			expect.objectContaining({ currency: "eur" }),
+			expect.anything(),
+		);
+	});
+
+	it("returns a generic message instead of leaking unexpected errors", async () => {
+		await setupPurchaseAttempt();
+		mockDb.limit.mockReset();
+		mockDb.limit
+			.mockResolvedValueOnce([{ id: "org-1", ownerId: "owner-1" }])
+			.mockRejectedValueOnce(
+				new Error("Deadlock found when trying to get lock"),
+			);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		const result = await purchaseSignedBaa("org-1" as never, VALID_INPUT);
+
+		expect(result).toEqual(failedWith("couldn't complete your Signed BAA"));
+		expect(JSON.stringify(result)).not.toContain("Deadlock");
 	});
 
 	it("activates an existing Stripe subscription after a lost create response", async () => {
@@ -370,7 +423,9 @@ describe("Signed BAA Stripe recovery", () => {
 
 		await expect(
 			purchaseSignedBaa("org-1" as never, VALID_INPUT),
-		).rejects.toThrow("couldn't confirm the Signed BAA subscription");
+		).resolves.toEqual(
+			failedWith("couldn't confirm the Signed BAA subscription"),
+		);
 		expect(mockDb.set).toHaveBeenCalledWith(
 			expect.objectContaining({ status: "pending" }),
 		);
@@ -452,7 +507,7 @@ describe("Signed BAA Stripe recovery", () => {
 		);
 		await expect(
 			purchaseSignedBaa("org-1" as never, VALID_INPUT),
-		).rejects.toThrow("Cap Pro ended");
+		).resolves.toEqual(failedWith("Cap Pro ended"));
 		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledWith(
 			recoveredSubscription.id,
 		);
@@ -498,7 +553,7 @@ describe("Signed BAA Stripe recovery", () => {
 		);
 		await expect(
 			purchaseSignedBaa("org-1" as never, VALID_INPUT),
-		).rejects.toThrow("couldn't confirm");
+		).resolves.toEqual(failedWith("couldn't confirm"));
 		expect(mockDb.set).toHaveBeenCalledWith({ status: "paid" });
 		expect(mockDb.set).not.toHaveBeenCalledWith({ status: "pending" });
 	});
@@ -519,7 +574,7 @@ describe("Signed BAA Stripe recovery", () => {
 		);
 		await expect(
 			purchaseSignedBaa("org-1" as never, VALID_INPUT),
-		).rejects.toThrow("changed while confirming");
+		).resolves.toEqual(failedWith("changed while confirming"));
 		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
 			recoveredSubscription.id,
 		);
@@ -733,8 +788,8 @@ describe("Paid BAA signing", () => {
 				stripeSubscriptionId: "12345",
 			},
 		);
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"active Cap Pro subscription",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("active Cap Pro subscription"),
 		);
 		expect(mockDb.update).not.toHaveBeenCalled();
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
@@ -754,8 +809,8 @@ describe("Paid BAA signing", () => {
 			},
 			{ stripeSubscriptionId: "12345" },
 		);
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"active Cap Pro subscription",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("active Cap Pro subscription"),
 		);
 		expect(mockDb.update).not.toHaveBeenCalled();
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
@@ -770,8 +825,8 @@ describe("Paid BAA signing", () => {
 			},
 			{ stripeSubscriptionId: "12345" },
 		);
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"payment is not confirmed",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("payment is not confirmed"),
 		);
 		expect(mockDb.update).not.toHaveBeenCalled();
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
@@ -786,8 +841,8 @@ describe("Paid BAA signing", () => {
 				{ ...waivedSubscription, status },
 				{ stripeSubscriptionId: "12345" },
 			);
-			await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-				"payment is not confirmed",
+			await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+				failedWith("payment is not confirmed"),
 			);
 			expect(mockDb.update).not.toHaveBeenCalled();
 			expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
@@ -860,8 +915,8 @@ describe("Paid BAA signing", () => {
 	it("keeps payment when the new signature cannot generate a PDF", async () => {
 		const { signPaidBaa } = await setupPaidSigning();
 		vi.mocked(generateSignedBaaPdf).mockRejectedValueOnce(new Error("bad PNG"));
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"generate the agreement",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("generate the agreement"),
 		);
 		expect(mockDb.set).toHaveBeenCalledWith({ status: "paid" });
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
@@ -873,8 +928,8 @@ describe("Paid BAA signing", () => {
 			status: "pending",
 			stripeSubscriptionId: null,
 		});
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"confirmed BAA payment is required",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("confirmed BAA payment is required"),
 		);
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 		expect(mockDb.update).not.toHaveBeenCalled();
@@ -887,8 +942,8 @@ describe("Paid BAA signing", () => {
 			...paidSubscription,
 			status: "canceled",
 		});
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"payment is not confirmed",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("payment is not confirmed"),
 		);
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
@@ -901,8 +956,8 @@ describe("Paid BAA signing", () => {
 			.mockReturnValueOnce({ affectedRows: 1 })
 			.mockReturnValueOnce({ affectedRows: 1 })
 			.mockReturnValueOnce({ affectedRows: 0 });
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"changed while signing",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("changed while signing"),
 		);
 		expect(sendEmail).not.toHaveBeenCalled();
 	});
@@ -929,8 +984,8 @@ describe("Paid BAA signing", () => {
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce({ affectedRows: 0 });
-		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
-			"already in progress",
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+			failedWith("already in progress"),
 		);
 		expect(mockDb.where).toHaveBeenCalledWith([
 			{ field: "signedBaaId", value: "baa-record-1" },

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import TestRenderer, { act } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	RecordingUploadProvider,
 	useRecordingUploadActions,
@@ -8,6 +8,7 @@ import {
 	useRecordingUploadLibraryRevision,
 	useRecordingUploads,
 } from "./recording-upload-provider";
+import type { RecordingUploadJob } from "./recording-upload-queue";
 
 (
 	globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -19,7 +20,9 @@ const fileSystemMock = vi.hoisted(() => ({
 	readAsStringAsync: vi.fn(
 		(): Promise<string> => Promise.reject(new Error("Not found")),
 	),
-	writeAsStringAsync: vi.fn(() => Promise.resolve()),
+	writeAsStringAsync: vi.fn((_uri: string, _value: string) =>
+		Promise.resolve(),
+	),
 }));
 
 const uploadToTarget = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -30,6 +33,7 @@ const screenRecordingState = vi.hoisted(() => ({
 }));
 
 const authState = vi.hoisted(() => ({
+	status: "signedIn" as "loading" | "signedIn" | "signedOut",
 	createRecording: vi.fn(),
 	createRecordingUploadTargets: vi.fn(),
 	completeRecording: vi.fn(() => Promise.resolve({ success: true })),
@@ -52,7 +56,7 @@ vi.mock("../../modules/cap-screen-recorder", () => ({
 }));
 vi.mock("@/auth/AuthContext", () => ({
 	useAuth: () => ({
-		status: "signedIn",
+		status: authState.status,
 		bootstrap: { activeOrganizationId: "org_123" },
 		client: authState,
 		refresh: authState.refresh,
@@ -93,7 +97,63 @@ const flushQueue = async () => {
 	}
 };
 
+const uploadedRecording: RecordingUploadJob = {
+	id: "cap_123",
+	shareUrl: "https://cap.so/s/cap_123",
+	createdAt: "2026-07-23T08:00:00.000Z",
+	status: "processing",
+	durationSeconds: 2,
+	totalBytes: 626_000,
+	uploadedBytes: 626_000,
+	uploadOwner: "app",
+	serverPhase: null,
+	processingProgress: 0,
+	processingMessage: null,
+	error: null,
+	retryCount: 0,
+	segments: [
+		{
+			track: "video",
+			type: "initialization",
+			index: 0,
+			uri: "file:///recording/video_init.mp4",
+			durationSeconds: 0,
+			byteLength: 1_000,
+			uploaded: true,
+		},
+		{
+			track: "video",
+			type: "media",
+			index: 1,
+			uri: "file:///recording/video_segment_001.m4s",
+			durationSeconds: 2,
+			byteLength: 625_000,
+			uploaded: true,
+		},
+	],
+};
+
 describe("RecordingUploadProvider", () => {
+	let recoveryRenderer: ReturnType<typeof TestRenderer.create> | null = null;
+	const mountRecoveryProvider = async () => {
+		await act(async () => {
+			recoveryRenderer = TestRenderer.create(
+				<RecordingUploadProvider>
+					<Harness />
+				</RecordingUploadProvider>,
+			);
+		});
+		await flushQueue();
+	};
+
+	afterEach(async () => {
+		await act(async () => {
+			recoveryRenderer?.unmount();
+			recoveryRenderer = null;
+		});
+		vi.useRealTimers();
+	});
+
 	beforeEach(() => {
 		recordingUploads = null;
 		recordingUploadActions = null;
@@ -103,8 +163,10 @@ describe("RecordingUploadProvider", () => {
 		displayQueueRenderCount = 0;
 		libraryRevisionRenderCount = 0;
 		fileSystemMock.deleteAsync.mockClear();
-		fileSystemMock.readAsStringAsync.mockClear();
-		fileSystemMock.writeAsStringAsync.mockClear();
+		fileSystemMock.readAsStringAsync.mockReset();
+		fileSystemMock.readAsStringAsync.mockRejectedValue(new Error("Not found"));
+		fileSystemMock.writeAsStringAsync.mockReset();
+		fileSystemMock.writeAsStringAsync.mockResolvedValue(undefined);
 		uploadToTarget.mockClear();
 		screenRecordingState.cancel.mockClear();
 		screenRecordingState.getUpdates.mockReset();
@@ -129,7 +191,9 @@ describe("RecordingUploadProvider", () => {
 					),
 				}),
 		);
-		authState.completeRecording.mockClear();
+		authState.status = "signedIn";
+		authState.completeRecording.mockReset();
+		authState.completeRecording.mockResolvedValue({ success: true });
 		authState.deleteCap.mockClear();
 		authState.getCapStatuses.mockReset();
 		authState.getCapStatuses.mockImplementation((ids: readonly string[]) =>
@@ -139,6 +203,261 @@ describe("RecordingUploadProvider", () => {
 		);
 		authState.refresh.mockClear();
 		authState.updateUploadProgress.mockClear();
+	});
+
+	it.each([false, true])(
+		"resumes interrupted completion after restart when the server accepted it: %s",
+		async (acceptedBeforeRestart) => {
+			vi.useFakeTimers();
+			let persisted = "";
+			fileSystemMock.writeAsStringAsync.mockImplementation(
+				(_uri: string, value: string) => {
+					persisted = value;
+					return Promise.resolve();
+				},
+			);
+			let accepted = false;
+			authState.getCapStatuses.mockImplementation(async () => ({
+				caps: [
+					{
+						id: "cap_123",
+						upload: {
+							uploaded: 626_000,
+							total: 626_000,
+							phase: accepted ? "processing" : "uploading",
+							processingProgress: 0,
+							processingMessage: null,
+							processingError: null,
+						},
+					},
+				],
+			}));
+			authState.completeRecording.mockImplementationOnce(() => {
+				accepted = acceptedBeforeRestart;
+				return new Promise<never>(() => {});
+			});
+			await mountRecoveryProvider();
+			await act(async () => {
+				await recordingUploads?.beginRecording({
+					fileName: "Cap Recording.mp4",
+					width: 720,
+					height: 1280,
+					fps: 30,
+				});
+				for (const segment of uploadedRecording.segments) {
+					recordingUploads?.addSegment("cap_123", segment);
+				}
+				recordingUploads?.finishRecording("cap_123", {
+					durationSeconds: 2,
+					totalBytes: 626_000,
+				});
+			});
+			await flushQueue();
+			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+			expect(uploadToTarget).toHaveBeenCalledTimes(2);
+			expect(fileSystemMock.deleteAsync).not.toHaveBeenCalled();
+			const persistedBeforeRestart = persisted;
+			const firstRequest = authState.completeRecording.mock.calls[0];
+			await act(async () => recoveryRenderer?.unmount());
+			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(persisted);
+			authState.completeRecording.mockImplementation(async () => {
+				accepted = true;
+				return { success: true };
+			});
+			await mountRecoveryProvider();
+			expect(authState.completeRecording).toHaveBeenCalledTimes(2);
+			expect(authState.completeRecording.mock.calls[1]).toEqual(firstRequest);
+			expect(JSON.parse(persistedBeforeRestart)).toMatchObject({
+				jobs: [
+					{
+						status: "uploading",
+						serverPhase: null,
+						segments: [{ uploaded: true }, { uploaded: true }],
+					},
+				],
+			});
+			expect(uploadToTarget).toHaveBeenCalledTimes(2);
+			expect(recordingUploads?.queue.jobs[0]?.status).toBe("processing");
+			expect(fileSystemMock.deleteAsync).toHaveBeenCalledWith(
+				"file:///recording",
+				{ idempotent: true },
+			);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(authState.completeRecording).toHaveBeenCalledTimes(2);
+			authState.getCapStatuses.mockResolvedValue({
+				caps: [{ id: "cap_123", upload: null }],
+			});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(3000);
+			});
+			expect(recordingUploads?.queue.jobs[0]?.status).toBe("complete");
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(4000);
+			});
+			expect(recordingUploads?.queue.jobs).toEqual([]);
+		},
+	);
+
+	it.each([
+		{ serverPhase: null, durationSeconds: 2 },
+		{ serverPhase: "uploading", durationSeconds: 2 },
+		{ serverPhase: null, durationSeconds: null },
+		{ serverPhase: "uploading", durationSeconds: null },
+	] as const)(
+		"recovers uploaded recording media with saved state %j once per launch",
+		async ({ serverPhase, durationSeconds }) => {
+			vi.useFakeTimers();
+			let persisted = "";
+			fileSystemMock.writeAsStringAsync.mockImplementation(
+				(_uri: string, value: string) => {
+					persisted = value;
+					return Promise.resolve();
+				},
+			);
+			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(
+				JSON.stringify({
+					jobs: [
+						{
+							...uploadedRecording,
+							status: serverPhase === null ? "processing" : "uploading",
+							serverPhase,
+							durationSeconds,
+						},
+					],
+				}),
+			);
+			authState.getCapStatuses.mockResolvedValue({
+				caps: [
+					{
+						id: "cap_123",
+						upload: {
+							uploaded: 626_000,
+							total: 626_000,
+							phase: "uploading",
+							processingProgress: 0,
+							processingMessage: null,
+							processingError: null,
+						},
+					},
+				],
+			});
+			await mountRecoveryProvider();
+			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+			expect(authState.completeRecording).toHaveBeenCalledWith(
+				"cap_123",
+				expect.objectContaining({ durationSeconds: 2 }),
+			);
+			expect(uploadToTarget).not.toHaveBeenCalled();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+			await act(async () => recoveryRenderer?.unmount());
+			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(persisted);
+			await mountRecoveryProvider();
+			expect(authState.completeRecording).toHaveBeenCalledTimes(2);
+			expect(authState.completeRecording.mock.calls[1]).toEqual(
+				authState.completeRecording.mock.calls[0],
+			);
+			expect(uploadToTarget).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ uploadOwner: "external", serverPhase: null },
+		{ serverPhase: "processing" },
+		{ serverPhase: "generating_thumbnail" },
+		{ status: "complete" },
+		{ segments: [] },
+		{
+			segments: uploadedRecording.segments.map((segment) => ({
+				...segment,
+				uploaded: false,
+			})),
+		},
+	] satisfies Partial<RecordingUploadJob>[])(
+		"preserves startup upload ownership and processing: %j",
+		async (overrides) => {
+			vi.useFakeTimers();
+			const job = { ...uploadedRecording, ...overrides };
+			authState.getCapStatuses.mockImplementation(
+				() => new Promise<never>(() => {}),
+			);
+			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(
+				JSON.stringify({ jobs: [job] }),
+			);
+			screenRecordingState.getUpdates.mockResolvedValue({
+				status: "uploading",
+				durationSeconds: 2,
+				totalBytes: 626_000,
+				segments: [],
+			});
+			await mountRecoveryProvider();
+			expect(recordingUploads?.queue.jobs[0]).toMatchObject({
+				status: job.status,
+				serverPhase: job.serverPhase,
+				uploadOwner: job.uploadOwner,
+			});
+			expect(authState.completeRecording).not.toHaveBeenCalled();
+			expect(uploadToTarget).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["loading", "signedOut"] as const)(
+		"does not recover a camera completion while auth is %s",
+		async (status) => {
+			vi.useFakeTimers();
+			authState.status = status;
+			fileSystemMock.readAsStringAsync.mockResolvedValueOnce(
+				JSON.stringify({ jobs: [uploadedRecording] }),
+			);
+			await mountRecoveryProvider();
+			expect(authState.completeRecording).not.toHaveBeenCalled();
+			expect(uploadToTarget).not.toHaveBeenCalled();
+			if (status === "signedOut") {
+				expect(recordingUploads?.queue.jobs).toEqual([]);
+				return;
+			}
+			expect(recordingUploads?.queue.jobs[0]?.status).toBe("uploading");
+			authState.status = "signedIn";
+			await act(async () => {
+				recoveryRenderer?.update(
+					<RecordingUploadProvider>
+						<Harness />
+					</RecordingUploadProvider>,
+				);
+			});
+			await flushQueue();
+			expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("does not restore a discarded recovery when completion responds late", async () => {
+		vi.useFakeTimers();
+		let acknowledge: (() => void) | undefined;
+		authState.completeRecording.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					acknowledge = () => resolve({ success: true });
+				}),
+		);
+		fileSystemMock.readAsStringAsync.mockResolvedValueOnce(
+			JSON.stringify({ jobs: [uploadedRecording] }),
+		);
+		await mountRecoveryProvider();
+		expect(authState.completeRecording).toHaveBeenCalledTimes(1);
+		expect(fileSystemMock.deleteAsync).not.toHaveBeenCalled();
+		await act(async () => recordingUploads?.discardRecording("cap_123"));
+		expect(authState.deleteCap).toHaveBeenCalledWith("cap_123");
+		await act(async () => acknowledge?.());
+		await flushQueue();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(30_000);
+		});
+		expect(recordingUploads?.queue.jobs).toEqual([]);
+		expect(authState.completeRecording).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps high-frequency segment progress out of unrelated subscriptions", async () => {

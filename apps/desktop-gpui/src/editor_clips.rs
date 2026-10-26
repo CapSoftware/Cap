@@ -42,7 +42,7 @@ use gpui::{
 use crate::{
     app_windows,
     editor_edits::{self as edits, TrackSegmentOps},
-    editor_timeline::clip_timeline_offsets,
+    editor_timeline::{clip_timeline_offsets, format_time},
     editor_window::EditorWindow,
     session::{Phase, RecordingSession},
     theme::Theme,
@@ -53,13 +53,13 @@ use crate::{
 // Naming (`ClipsSidebar.tsx:558-609`)
 // ---------------------------------------------------------------------------
 
-/// `formatClipDuration` (`ClipsSidebar.tsx:79-85`).
+/// `formatClipDuration` (`ClipsSidebar.tsx:79-85`), with hours from an hour on
+/// like the editor's clock, where the source counts minutes past 59.
 pub(crate) fn format_clip_duration(seconds: f64) -> String {
     if !seconds.is_finite() || seconds <= 0.0 {
         return "0:00".to_string();
     }
-    let total = seconds.round() as i64;
-    format!("{}:{:02}", total / 60, total % 60)
+    format_time(seconds.round())
 }
 
 /// `clipLabel` (`:563`).
@@ -119,8 +119,8 @@ fn display_name_at(segments: &[TimelineSegment], index: usize) -> String {
     }
 }
 
-/// `segmentDescription` (`:598-609`): `m:ss`, prefixed with the parent clip's
-/// label for a split.
+/// `segmentDescription` (`:598-609`): `m:ss` (`h:mm:ss` from an hour on),
+/// prefixed with the parent clip's label for a split.
 pub(crate) fn segment_description(segments: &[TimelineSegment], index: usize) -> String {
     let formatted = format_clip_duration(segments[index].duration());
     if segment_split_number(segments, index) > 1 {
@@ -379,6 +379,10 @@ impl Default for ClipsState {
 }
 
 impl ClipsState {
+    pub(crate) fn has_open_menu(&self) -> bool {
+        self.import_menu.is_some()
+    }
+
     pub(crate) fn is_importing(&self) -> bool {
         self.importing
     }
@@ -1932,6 +1936,7 @@ impl PreparedMp4Import {
             start_time: Some(0.0),
             device_id: None,
             gap_summary: None,
+            digital_silence_ms: None,
         });
         Ok(Self {
             target,
@@ -3873,6 +3878,9 @@ mod tests {
         assert_eq!(format_clip_duration(0.6), "0:01");
         assert_eq!(format_clip_duration(59.6), "1:00");
         assert_eq!(format_clip_duration(75.0), "1:15");
+        assert_eq!(format_clip_duration(3_599.4), "59:59");
+        assert_eq!(format_clip_duration(3_599.6), "1:00:00");
+        assert_eq!(format_clip_duration(3_905.0), "1:05:05");
         assert_eq!(format_clip_duration(600.0), "10:00");
     }
 

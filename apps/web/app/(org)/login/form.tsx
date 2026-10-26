@@ -7,6 +7,7 @@ import {
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -162,17 +163,47 @@ export function LoginForm() {
 		});
 		signIn("google", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
+		}).catch((error) => {
+			captureException(error, {
+				tags: { auth_provider: "google", auth_surface: "login" },
+			});
+			toast.error(
+				"Could not start sign-in. Check your connection and try again.",
+			);
 		});
 	}, [getNextPath]);
 
 	const handleAppleSignIn = useCallback(() => {
+		const startAppleSignIn = () => {
+			const nextPath = getNextPath();
+			trackEvent("auth_started", {
+				method: "apple",
+				is_signup: false,
+				auth_surface: "login",
+			});
+			signIn("apple", {
+				...(nextPath ? { callbackUrl: nextPath } : {}),
+			}).catch((error) => {
+				captureException(error, {
+					tags: { auth_provider: "apple", auth_surface: "login" },
+				});
+				toast.error(
+					"Could not start sign-in. Check your connection and try again.",
+					{ action: { label: "Try again", onClick: startAppleSignIn } },
+				);
+			});
+		};
+		startAppleSignIn();
+	}, [getNextPath]);
+
+	const handleOidcSignIn = useCallback(() => {
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
-			method: "apple",
+			method: "oidc",
 			is_signup: false,
 			auth_surface: "login",
 		});
-		signIn("apple", {
+		signIn("oidc", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
 		});
 	}, [getNextPath]);
@@ -430,6 +461,7 @@ export function LoginForm() {
 											loading={loading}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
+											handleOidcSignIn={handleOidcSignIn}
 										/>
 									</motion.form>
 								)}
@@ -530,6 +562,7 @@ const NormalLogin = ({
 	loading,
 	oauthError,
 	handleGoogleSignIn,
+	handleOidcSignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -538,6 +571,7 @@ const NormalLogin = ({
 	loading: boolean;
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
+	handleOidcSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
 	const emailInputId = useId();
@@ -596,7 +630,9 @@ const NormalLogin = ({
 				</Link>
 			</motion.p>
 
-			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
+			{(publicEnv.googleAuthAvailable ||
+				publicEnv.workosAuthAvailable ||
+				publicEnv.oidcAuthAvailable) && (
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">
 						<span className="flex-1 h-px bg-gray-5" />
@@ -631,6 +667,19 @@ const NormalLogin = ({
 									email login. Please enter your email.
 								</p>
 							</div>
+						)}
+						{publicEnv.oidcAuthAvailable && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="w-full"
+								layout
+								onClick={handleOidcSignIn}
+								disabled={loading || emailSent}
+							>
+								<LucideArrowUpRight size={20} />
+								Login with {publicEnv.oidcName}
+							</MotionButton>
 						)}
 						{publicEnv.workosAuthAvailable && (
 							<MotionButton

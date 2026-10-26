@@ -571,7 +571,7 @@ mod fixture {
     use cap_recording::{
         AudioFrame, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
         ChannelVideoSourceConfig, OutputPipeline,
-        ffmpeg::{FFmpegVideoFrame, Mp4Muxer, OggMuxer},
+        ffmpeg::{FFmpegVideoFrame, Mp4Muxer, OggMuxer, OggMuxerConfig},
     };
     use cap_timestamp::{Timestamp, Timestamps};
     use relative_path::RelativePathBuf;
@@ -783,7 +783,7 @@ mod fixture {
                 audio_info, mic_rx,
             ))
             .with_timestamps(timestamps)
-            .build::<OggMuxer>(())
+            .build::<OggMuxer>(OggMuxerConfig::default())
             .await
             .map_err(|e| format!("mic pipeline: {e}"))?;
         let sys_pipeline = OutputPipeline::builder(audio_path.clone())
@@ -794,7 +794,7 @@ mod fixture {
             // System audio anchors at the recording epoch, exactly like the
             // studio recorder configures it.
             .with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch)
-            .build::<OggMuxer>(())
+            .build::<OggMuxer>(OggMuxerConfig::default())
             .await
             .map_err(|e| format!("system audio pipeline: {e}"))?;
 
@@ -860,12 +860,14 @@ mod fixture {
                 start_time: Some(mic_start),
                 device_id: None,
                 gap_summary: finished_mic.audio_gap_summary.map(to_project_gap_summary),
+                digital_silence_ms: finished_mic.digital_silence_ms,
             }),
             system_audio: Some(AudioMeta {
                 path: RelativePathBuf::from("content/segments/segment-0/system_audio.ogg"),
                 start_time: Some(sys_start),
                 device_id: None,
                 gap_summary: finished_sys.audio_gap_summary.map(to_project_gap_summary),
+                digital_silence_ms: None,
             }),
             cursor: None,
             keyboard: None,

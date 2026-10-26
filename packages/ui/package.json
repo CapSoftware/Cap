@@ -1,6 +1,9 @@
 {
 	"name": "@cap/ui",
 	"version": "0.0.0",
+	"sideEffects": [
+		"*.css"
+	],
 	"main": "./src/index.tsx",
 	"types": "./src/index.tsx",
 	"exports": {

@@ -25,6 +25,7 @@ use crate::doodle;
 use crate::onboarding_doodles as art;
 use crate::permissions::OSPermission;
 use crate::platform;
+use crate::theme::LocaleFont as _;
 use crate::theme::Theme;
 
 const PANEL_W: f32 = 404.;
@@ -111,6 +112,8 @@ pub fn start(permission: OSPermission, cx: &mut App) {
 
     let opened = cx.open_window(
         WindowOptions {
+            #[cfg(target_os = "linux")]
+            app_id: Some(crate::app_windows::app_id().into()),
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: point(px(0.), px(0.)),
                 size: size(px(PANEL_W), px(PANEL_H)),
@@ -330,6 +333,7 @@ impl Render for PermissionGuide {
             .size_full()
             .p(px(SHADOW_INSET))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             .child(
                 div()
                     .size_full()
