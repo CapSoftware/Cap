@@ -586,3 +586,382 @@ click_or_press = "ここをクリックするか、次のキーを押す:"
 get_started = "はじめる"
 space_key = "スペース"
 tagline = "誰もが使えるオープンソースの画面共有アプリ。"
+
+[auth]
+sign_in_failed = "サインインに失敗しました"
+
+[diagnostics]
+already_running = "診断はすでに実行中です。"
+cancelled = "診断はキャンセルされました。"
+mode_both = "両方"
+
+[diagnostics.error]
+create_folder = "診断フォルダを作成できませんでした：{error}"
+exited = "セルフテストが終了しました：{status}"
+no_output = "セルフテストから出力が得られませんでした"
+serialize = "レポートをシリアライズできませんでした：{error}"
+start_failed = "{program} を起動できませんでした：{error}"
+upload_logs = "ログをアップロードできませんでした：{error}"
+upload_status = "アップロードに失敗しました。ステータス：{status}"
+wait_failed = "セルフテストの終了を待てませんでした：{error}"
+write_failed = "{path} に書き込めませんでした：{error}"
+
+[diagnostics.stage]
+analyzing = "録画を分析中..."
+analyzing_instant = "Instant録画を分析中..."
+analyzing_studio = "Studio録画を分析中..."
+cancelling = "キャンセル中..."
+collecting = "システム情報を収集中..."
+done = "同期テストを仕上げ中..."
+exporting = "録画を書き出し中..."
+exporting_instant = "Instant録画を書き出し中..."
+exporting_studio = "Studio録画を書き出し中..."
+finalizing = "録画を仕上げ中..."
+finalizing_instant = "Instant録画を仕上げ中..."
+finalizing_studio = "Studio録画を仕上げ中..."
+pattern = "テストパターンを再生中..."
+pattern_instant = "テストパターンを再生中（Instant）..."
+pattern_studio = "テストパターンを再生中（Studio）..."
+preparing = "テストを準備中..."
+preparing_instant = "Instantテストを準備中..."
+preparing_studio = "Studioテストを準備中..."
+recording = "テストを録画中..."
+recording_instant = "Instantテストを録画中..."
+recording_studio = "Studioテストを録画中..."
+starting = "診断を開始中..."
+
+[dialog]
+no_microphone_body = "この録画にはあなたの声は入りません。"
+open_recording_failed = "この録画を開けませんでした：{error}"
+
+[dialog.capture]
+approve_shortcut = "録画用のショートカットを承認するか、Cap の停止トレイアイコンが表示されたらそれをクリックしてください。録画はまだ始まっていません。"
+area_unavailable = "選択した範囲が変更されたか、使用できなくなりました。もう一度選択してください。"
+camera_needs_x11 = "Linux で Instant のカメラオーバーレイを使うには X11 デスクトップが必要です"
+camera_notice = "Cap はカメラのプレビューと録画コントロールを非表示にします。選択したカメラは、個別に編集できるトラックとして録画され続けます。"
+camera_notice_instant = "Cap はプレビューとコントロールを非表示にします。選択したカメラは、選んだ形とエフェクトでプレビューの位置に表示されます。プレビュー全体をキャプチャ範囲内に収めてください。Cap を開くと、コントロールを表示する前にこの Instant 録画が停止します。"
+camera_outside_area = "Instant 録画を始める前に、カメラのプレビュー全体をキャプチャ範囲内に移動してください"
+camera_preview_closed = "Instant 録画の前に、選択したカメラのプレビューを開いてください"
+cleanup_incomplete = "録画のクリーンアップが完了していません：{error}。新しい録画は開始できません。"
+devices_changed = "選択したデバイスが変更されました。新しい録画の入力を確認するため、もう一度開始してください。"
+devices_changed_before_start = "録画の開始前に選択したデバイスが変更されました。入力を確認するため、もう一度開始してください。"
+shortcut_conflict = "Ctrl+Shift+F9 は Cap の別の操作に割り当てられています。録画の前にそのショートカットを変更してください。"
+shortcut_description = "この Cap 録画を開始または停止"
+shortcut_hint = "{shortcut} を押して離すと開始します。同じショートカットで停止できます。この一時的なショートカットは設定を変更しません。"
+tray_stop_hint = "Cap の停止トレイアイコンをクリックすると開始します。同じアイコンをもう一度クリックすると停止します。このコントロールを使うまで録画は始まりません。"
+window_unavailable = "選択したウィンドウは使用できなくなりました。もう一度選択してください。"
+
+[dialog.clipboard]
+copy_file = "ファイルをクリップボードにコピーできませんでした：{error}"
+copy_file_failed = "ファイルをクリップボードにコピーできませんでした"
+copy_image = "画像をクリップボードにコピーできませんでした：{error}"
+copy_image_failed = "画像をクリップボードにコピーできませんでした"
+not_a_file = "クリップボードにコピーできるのはファイルだけです"
+unavailable = "クリップボードを使用できません"
+unavailable_error = "クリップボードを使用できません：{error}"
+
+[dialog.delete_recording]
+already_deleting = "この録画はすでに削除中です。"
+close_failed = "エディタを閉じられませんでした：{error}"
+editor_changed = "削除の確認中にエディタが変更されました。録画は削除されていません。"
+editor_closed = "エディタはすでに閉じられています。録画は削除されていません。"
+failed = "録画を削除できませんでした：{error}"
+failed_title = "録画を削除できませんでした"
+finishing_body = "Cap は録画のクリーンアップが終わるのを待ってから、この削除を完了します。"
+finishing_title = "削除はまだ完了していません"
+in_use = "この録画はまだ使用中です。アップロードを完了またはキャンセルしてから、もう一度お試しください：{error}"
+outside_library = "この録画は録画ライブラリの外にあります。ファイルは変更されていません。"
+recording_active = "このプロジェクトを削除する前に、録画を終了またはキャンセルしてください。"
+retained_title = "録画は残されています"
+
+[dialog.file]
+audio_filter = "オーディオ"
+busy = "ファイルダイアログがすでに開いています。完了するかキャンセルしてから、もう一度お試しください。"
+export_filter = "書き出し"
+failed = "ファイルダイアログを完了できませんでした：{error}"
+images_filter = "画像"
+unavailable_title = "ファイルダイアログを使用できません"
+unconfirmed = "Cap はファイルダイアログが閉じたことを確認できませんでした。残っているファイルダイアログを閉じ、Cap を再起動してからもう一度お試しください。"
+
+[dialog.mode_select]
+instant = "リンクですぐに共有。録画しながらアップロードします。"
+screenshot = "スクリーンショットを撮ってすぐに注釈を付けられます。"
+studio = "あとで編集するための最高画質のローカル録画です。"
+subtitle = "画面のキャプチャ方法を選んでください"
+title = "録画モードを選択"
+
+[dialog.storage]
+stopped_kept = "ストレージが不足しているため録画を停止しました。録画ファイルは残されています。空き容量を確保してから、下で録画を復元してください。"
+stopped_saved = "ストレージが不足しているため録画を停止しました。録画は保存されています。"
+stopping = "ストレージが不足しています。録画を停止して保存しています…"
+
+[dialog.teleprompter]
+cue_markers = "キューマーカー"
+hidden = "このウィンドウは Cap の録画に映りません"
+mirror = "テキストを反転"
+paused = "録画とともにスクロールを一時停止中"
+placeholder = "台本を貼り付けるか入力してください…"
+
+[import]
+error_title = "読み込みエラー"
+image_failed = "画像を読み込めませんでした：{error}"
+unsupported = "サポートされていないメディアファイルです。"
+video_failed = "動画を読み込めませんでした：{error}"
+
+[import.filter]
+image = "画像ファイル"
+media = "メディアファイル"
+video = "動画ファイル"
+
+[import.progress]
+analyzing = "動画ファイルを分析中..."
+complete = "読み込みが完了しました！"
+converting = "動画を変換中... {percent}%"
+image = "画像を読み込み中..."
+metadata = "プロジェクトのメタデータを作成中..."
+starting = "変換を開始しています..."
+
+[overlay]
+choose_mode = "録画モードを選択"
+countdown_tooltip = "録画のカウントダウン"
+display_fallback = "ディスプレイ {id}"
+
+[overlay.area]
+draw = "範囲を描く"
+free_ratio = "自由"
+hint = "クリックしてドラッグし、範囲を選択"
+minimum_size = "最小サイズは {width} x {height} です"
+too_small = "{width} x {height} は小さすぎます"
+
+[overlay.camera_only]
+description = "カメラとマイクだけで録画します"
+select_camera = "カメラを選択してください"
+
+[overlay.device]
+camera_allow = "カメラへのアクセスを許可…"
+camera_turn_on = "設定でカメラへのアクセスをオンにする…"
+microphone_allow = "マイクへのアクセスを許可…"
+microphone_turn_on = "設定でマイクへのアクセスをオンにする…"
+
+[overlay.start]
+instant = "Instantモード：共有リンクを録画"
+instant_sign_in = "Instantモード：サインインしてすぐに録画"
+sign_in = "サインインして使用"
+start_recording = "録画を開始"
+studio = "Studioモード：ローカルで録画して編集"
+take_screenshot = "スクリーンショットを撮る"
+
+[permission.guide]
+accessibility_body = "上の「アクセシビリティ」のリストにドロップし、スイッチがオンになっていることを確認してください。"
+screen_body = "上の「画面収録とシステムオーディオ録音」のリストにドロップし、スイッチがオンになっていることを確認してください。"
+title = "Cap をリストにドラッグ"
+
+[permission.name]
+accessibility = "アクセシビリティ"
+camera = "カメラ"
+microphone = "マイク"
+screen_recording = "画面収録"
+
+[permission.onboarding]
+open_settings_again = "システム設定をもう一度開く"
+skip = "今はスキップ"
+switch_on_title = "システム設定で Cap をオンにする"
+
+[permission.onboarding.accessibility]
+allow = "アクセシビリティを許可"
+body = "アクセシビリティを許可すると、Cap がこの Mac 上だけでクリックとカーソルを把握し、自動ズームがどこを映すべきかわかるようになります。"
+done_body = "自動ズームがクリックを追えるようになりました。"
+done_title = "アクセシビリティはオンです"
+title = "Cap がカーソルを追えるようにする"
+
+[permission.onboarding.all_set]
+body = "Cap に必要なものはすべてそろいました。次は、できることをざっと見てみましょう。"
+regained = "ありがとうございます。Cap で再び録画できます。"
+title = "準備完了です"
+
+[permission.onboarding.camera]
+allow = "カメラを許可"
+body = "録画の隅に自分を映せます。必要なければスキップしてください。"
+done_body = "どの録画にもカメラを追加できます。"
+done_title = "カメラはオンです"
+title = "Cap にあなたを映させる"
+
+[permission.onboarding.checklist]
+lede = "最初に macOS がいくつかの許可を求めます。1分ほどで終わります。"
+regained_lede = "システム設定でオフにされた項目があります。録画を続けるにはオンに戻してください。"
+regained_title = "Cap に権限を戻してください"
+title = "Cap の準備をしましょう"
+
+[permission.onboarding.hint]
+drag_into_list = "システム設定の下にあるパネルから Cap をリストにドラッグしてください。すでにリストにある場合は、オンにするだけです。"
+find_in_list = "リストで Cap を見つけてオンにしてください。macOS から先に確認された場合は、「システム設定を開く」を選んでください。"
+no_prompt = "確認ダイアログが表示されませんか？システム設定で Cap をオンにしてください。"
+open_settings = "システム設定を開き、リストで Cap を見つけてオンにしてください。"
+turned_off = "以前オフにされているため、システム設定で Cap をオンにしてください。今はスキップすることもできます。"
+
+[permission.onboarding.microphone]
+allow = "マイクを許可"
+body = "録画に声を入れられます。スキップして後でオンにすることもできます。"
+done_body = "録画に声を入れられるようになりました。"
+done_title = "マイクはオンです"
+title = "Cap に声を届ける"
+
+[permission.onboarding.relaunch]
+body = "Cap を再起動すると macOS が画面収録をオンにします。この画面から続けられます。"
+button = "再起動"
+hint = "オンにしたのにまだ待機中ですか？Cap を再起動すると反映されます。"
+later = "macOS は Cap の再起動後にこれを反映します。ここでの設定が終わってから再起動できます。"
+title = "再起動すれば準備完了です"
+
+[permission.onboarding.screen]
+allow = "画面収録を許可"
+body = "画面収録を許可すると、Cap がディスプレイ、ウィンドウ、システムオーディオをキャプチャできます。"
+done_body = "Cap で画面をキャプチャできるようになりました。"
+done_title = "画面収録はオンです"
+title = "Cap に画面を見せる"
+
+[permission.onboarding.status]
+allowed = "許可済み"
+off = "システム設定でオフ"
+optional = "任意"
+required = "必須"
+skipped = "今はスキップ"
+
+[permission.onboarding.waiting]
+prompt = "macOS の確認ダイアログで「許可」を選択"
+system_settings = "システム設定を待っています"
+
+[screenshot_editor]
+loading_preview = "プレビューを読み込み中..."
+zoom_in = "拡大"
+zoom_out = "縮小"
+
+[screenshot_editor.annotation]
+default_text = "テキスト"
+done = "完了"
+fill = "塗りつぶし"
+intensity = "強さ"
+mask_style = "スタイル"
+pixelate = "ピクセル化"
+stroke = "線"
+transparent = "透明"
+
+[screenshot_editor.aspect]
+auto = "自動"
+classic = "クラシック ⋅4:3"
+square = "正方形 ⋅1:1"
+tall = "縦長 ⋅3:4"
+vertical = "縦 ⋅9:16"
+wide = "ワイド ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "スクリーンショットではアニメーショングラデーションは静止画として描画されます。置き換えるには別の背景を選んでください。"
+blur_title = "背景のぼかし"
+choose_image = "クリックして選択するか、画像をドラッグ＆ドロップ"
+color = "カラー"
+gradient = "グラデーション"
+image = "画像"
+image_files = "画像"
+image_title = "背景画像"
+wallpaper = "壁紙"
+
+[screenshot_editor.corner]
+rounded = "角丸"
+squircle = "スクワークル"
+style = "角のスタイル"
+
+[screenshot_editor.crop]
+full = "全体"
+loading_frame = "フレームを読み込み中…"
+position = "位置"
+
+[screenshot_editor.error]
+encode = "スクリーンショットの書き出しをエンコードできませんでした：{error}"
+load_meta = "スクリーンショットのメタデータを読み込めませんでした：{error}"
+load_metadata = "スクリーンショットのメタデータを読み込めませんでした：{error}"
+no_image = "{path} に PNG が見つかりません"
+not_screenshot = "スクリーンショットのバンドルではありません"
+open_image = "画像を開けませんでした：{error}"
+renderer_failed = "GPU レンダラーを起動できませんでした：{error}"
+renderer_not_running = "スクリーンショットのレンダラーが動作していません"
+renderer_stopped = "書き出しが終わる前にレンダラーが停止しました"
+save_project = "プロジェクトの保存中にエラーが発生しました：{error}"
+serialize = "スクリーンショットの設定をシリアライズできませんでした：{error}"
+sign_in_to_share = "ブラウザで Cap にサインインしてから、もう一度共有してください"
+too_large = "画像サイズが上限を超えています：{width}x{height}"
+upgrade_required = "この機能を使うにはプランのアップグレードが必要です"
+upload_task = "アップロード処理に失敗しました：{error}"
+
+[screenshot_editor.header]
+aspect_ratio = "アスペクト比"
+copy = "クリップボードにコピー"
+crop_image = "画像を切り抜く"
+more_actions = "その他の操作"
+
+[screenshot_editor.layers]
+empty = "レイヤーはまだありません"
+empty_hint = "上のツールで注釈を追加できます"
+reorder_hint = "ドラッグで並べ替え • 上 = 最前面"
+title = "レイヤー"
+
+[screenshot_editor.menu]
+delete = "削除"
+open_folder = "フォルダを開く"
+
+[screenshot_editor.share]
+create_link = "共有リンクを作成"
+preparing = "アップロードを準備中"
+rendering = "スクリーンショットを描画中"
+uploading = "スクリーンショットをアップロード中"
+
+[screenshot_editor.style]
+advanced_shadow = "シャドウの詳細設定"
+background = "背景"
+blur = "ぼかし"
+border = "枠線"
+color = "色"
+corner_rounding = "角の丸み"
+opacity = "不透明度"
+padding = "余白"
+rounding = "角の丸み"
+shadow = "シャドウ"
+size_label = "サイズ"
+width = "幅"
+
+[screenshot_editor.toast]
+copied = "スクリーンショットをクリップボードにコピーしました！"
+link_copied = "共有リンクをクリップボードにコピーしました"
+saved = "スクリーンショットを保存しました！"
+
+[screenshot_editor.tool]
+arrow = "矢印"
+circle = "円"
+draw = "描画"
+mask = "マスク"
+rectangle = "四角形"
+select = "選択"
+text_label = "テキスト"
+
+[transcription.download]
+complete = "ダウンロード完了"
+failed = "ダウンロードに失敗しました：{error}"
+file_progress = "{file} をダウンロード中：{percent}%"
+preparing = "モデルのダウンロードを準備中"
+progress = "モデルをダウンロード中：{percent}%"
+
+[transcription.error]
+intel_mac = "Parakeet モデルは Intel Mac では使えません。代わりに Whisper モデルを使ってください"
+model_load = "字幕モデルを読み込めませんでした。もう一度ダウンロードしてください"
+model_missing = "字幕モデルが見つかりません。先にダウンロードしてください"
+no_audio = "動画ファイルに音声がありません"
+unsupported_language = "「推奨」モデルと「高精度」モデルは英語とその他24のヨーロッパ言語のみ文字起こしできます。この言語の字幕を作るには「小」または「中」モデルをダウンロードしてください"
+
+[upload.status]
+failed = "アップロードに対応が必要です"
+paused = "アップロードを一時停止中"
+prepared = "アップロードの準備完了"
+processing = "アップロードを処理中"
+retrying = "アップロードを再試行します"
+sign_in = "サインインしてアップロードを再試行"
+uploaded = "アップロード済み"
+uploading = "アップロード中"

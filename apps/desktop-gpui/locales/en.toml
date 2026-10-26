@@ -588,3 +588,382 @@ click_or_press = "Click here, or press"
 get_started = "Get Started"
 space_key = "Space"
 tagline = "The open source screen sharing app for everyone."
+
+[auth]
+sign_in_failed = "Sign in failed"
+
+[diagnostics]
+already_running = "A diagnostic is already running."
+cancelled = "The diagnostic was cancelled."
+mode_both = { text = "Both", context = "Segment beside Studio and Instant: run the sync test in both modes." }
+
+[diagnostics.error]
+create_folder = { text = "Failed to create the diagnostics folder: {error}", context = "{error} is a technical error message, usually in English." }
+exited = { text = "The self-test exited with {status}", context = "{status} is a process exit status such as \"exit status: 1\"." }
+no_output = "The self-test produced no output stream"
+serialize = { text = "Failed to serialize the report: {error}", context = "{error} is a technical error message, usually in English." }
+start_failed = { text = "Failed to start {program}: {error}", context = "{program} is a file path; {error} is a technical error message, usually in English." }
+upload_logs = { text = "Failed to upload logs: {error}", context = "{error} is a technical error message, usually in English." }
+upload_status = { text = "Upload failed with status: {status}", context = "{status} is an HTTP status such as 500 Internal Server Error." }
+wait_failed = { text = "The self-test could not be waited on: {error}", context = "{error} is a technical error message, usually in English." }
+write_failed = { text = "Failed to write {path}: {error}", context = "{path} is a file path; {error} is a technical error message, usually in English." }
+
+[diagnostics.stage]
+analyzing = "Analyzing the recording..."
+analyzing_instant = "Analyzing the instant recording..."
+analyzing_studio = "Analyzing the studio recording..."
+cancelling = "Cancelling..."
+collecting = "Collecting system information..."
+done = "Wrapping up the sync test..."
+exporting = "Exporting the recording..."
+exporting_instant = "Exporting the instant recording..."
+exporting_studio = "Exporting the studio recording..."
+finalizing = "Finalizing the recording..."
+finalizing_instant = "Finalizing the instant recording..."
+finalizing_studio = "Finalizing the studio recording..."
+pattern = "Playing the test pattern..."
+pattern_instant = "Playing the test pattern instant..."
+pattern_studio = "Playing the test pattern studio..."
+preparing = "Preparing the test..."
+preparing_instant = "Preparing the instant test..."
+preparing_studio = "Preparing the studio test..."
+recording = "Recording the test..."
+recording_instant = "Recording the instant test..."
+recording_studio = "Recording the studio test..."
+starting = "Starting the diagnostic..."
+
+[dialog]
+no_microphone_body = "This recording will not include your voice."
+open_recording_failed = { text = "Opening this recording failed: {error}", context = "{error} is a technical error message, usually in English." }
+
+[dialog.capture]
+approve_shortcut = "Approve a recording shortcut, or activate the Cap Stop tray icon when it appears. Recording has not started."
+area_unavailable = "The selected area changed or is no longer available. Select it again."
+camera_needs_x11 = "Instant camera overlays require an X11 desktop on Linux"
+camera_notice = "Cap will hide its camera preview and recording controls. Any selected camera will keep recording as a separate editable track."
+camera_notice_instant = "Cap will hide its preview and controls. Any selected camera will appear at its preview position with the selected shape and effects. Keep the whole preview inside the capture area. Opening Cap will stop this Instant recording before showing its controls."
+camera_outside_area = "Move the whole camera preview inside the capture area before starting Instant recording"
+camera_preview_closed = "Open the selected camera preview before Instant recording"
+cleanup_incomplete = { text = "Recording cleanup is incomplete: {error}. A new recording is blocked.", context = "{error} is a technical error message, usually in English." }
+devices_changed = "Selected devices changed. Start again to confirm the new recording inputs."
+devices_changed_before_start = "Selected devices changed before recording started. Start again to confirm the inputs."
+shortcut_conflict = "Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before recording."
+shortcut_description = { text = "Start or stop this Cap recording", context = "Shown by the Linux desktop when it asks the user to approve a global shortcut." }
+shortcut_hint = { text = "Press and release {shortcut} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.", context = "{shortcut} is a key combination such as Ctrl+Shift+F9." }
+tray_stop_hint = "Activate the Cap Stop tray icon to start. Activate the same icon again to stop. Recording will not start until you use that control."
+window_unavailable = "The selected window is no longer available. Select it again."
+
+[dialog.clipboard]
+copy_file = { text = "Could not copy the file to the clipboard: {error}", context = "{error} is a technical error message, usually in English." }
+copy_file_failed = "Failed to copy file to clipboard"
+copy_image = { text = "Could not copy the image to the clipboard: {error}", context = "{error} is a technical error message, usually in English." }
+copy_image_failed = "Failed to copy image to clipboard"
+not_a_file = "Only files can be copied to the clipboard"
+unavailable = "Clipboard unavailable"
+unavailable_error = { text = "Clipboard unavailable: {error}", context = "{error} is a technical error message, usually in English." }
+
+[dialog.delete_recording]
+already_deleting = "This recording is already being deleted."
+close_failed = { text = "Could not close the editor: {error}", context = "{error} is a technical error message, usually in English." }
+editor_changed = "The editor changed while deletion was being confirmed. The recording was not deleted."
+editor_closed = "The editor has already closed. The recording was not deleted."
+failed = { text = "Recording deletion failed: {error}", context = "{error} is a technical error message, usually in English." }
+failed_title = "Could not delete recording"
+finishing_body = "Cap is waiting for recording cleanup to finish before completing this deletion."
+finishing_title = "Deletion is still finishing"
+in_use = { text = "This recording is still in use. Finish or cancel its upload and try again: {error}", context = "{error} is a technical error message, usually in English." }
+outside_library = "This recording is outside the recordings library. Its files were not changed."
+recording_active = "Finish or cancel the recording before deleting this project."
+retained_title = "Recording retained"
+
+[dialog.file]
+audio_filter = { text = "Audio", context = "File type name in the file picker's filter list." }
+busy = "A file dialog is already open. Finish or cancel it before trying again."
+export_filter = { text = "Export", context = "File type name in the save dialog's filter list." }
+failed = { text = "The file dialog could not complete: {error}", context = "{error} is a technical error message, usually in English." }
+images_filter = { text = "Images", context = "File type name in the file picker's filter list." }
+unavailable_title = "File dialog unavailable"
+unconfirmed = "Cap could not confirm that the file dialog closed. Close any remaining file dialog and restart Cap before trying again."
+
+[dialog.mode_select]
+instant = "Share instantly with a link. Uploads as you record."
+screenshot = "Capture and annotate screenshots instantly."
+studio = "Highest quality local recording for editing later."
+subtitle = "Select how you want to capture your screen"
+title = "Choose Recording Mode"
+
+[dialog.storage]
+stopped_kept = "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below."
+stopped_saved = "Recording stopped because storage is low. Your recording was saved."
+stopping = "Low storage. Stopping and saving your recording…"
+
+[dialog.teleprompter]
+cue_markers = { text = "Cue markers", context = "Toggle in a 192px popover." }
+hidden = "This window is hidden from Cap recordings"
+mirror = { text = "Mirror text", context = "Toggle in a 192px popover." }
+paused = "Scrolling paused with recording"
+placeholder = "Paste or type your script…"
+
+[import]
+error_title = "Import Error"
+image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
+unsupported = "Unsupported media file."
+video_failed = { text = "Failed to import video: {error}", context = "{error} is a technical error message, usually in English." }
+
+[import.filter]
+image = { text = "Image Files", context = "File type name in the file picker's filter list." }
+media = { text = "Media Files", context = "File type name in the file picker's filter list." }
+video = { text = "Video Files", context = "File type name in the file picker's filter list." }
+
+[import.progress]
+analyzing = "Analyzing video file..."
+complete = "Import complete!"
+converting = { text = "Converting video... {percent}%", context = "{percent} is a whole number." }
+image = "Importing image..."
+metadata = "Creating project metadata..."
+starting = "Starting conversion..."
+
+[overlay]
+choose_mode = "Choose recording mode"
+countdown_tooltip = "Recording countdown"
+display_fallback = { text = "Display {id}", context = "Name for a display the system does not name; {id} is a number." }
+
+[overlay.area]
+draw = "Draw an area"
+free_ratio = { text = "Free", context = "Aspect ratio button with no ratio locked; the button is about 56px wide." }
+hint = "Click and drag to select an area"
+minimum_size = { text = "Minimum size is {width} x {height}", context = "{width} and {height} are pixel sizes." }
+too_small = { text = "{width} x {height} is too small", context = "{width} and {height} are pixel sizes." }
+
+[overlay.camera_only]
+description = "Record using only your camera and microphone"
+select_camera = "Please select a camera"
+
+[overlay.device]
+camera_allow = "Allow camera access…"
+camera_turn_on = "Turn on camera access in Settings…"
+microphone_allow = "Allow microphone access…"
+microphone_turn_on = "Turn on microphone access in Settings…"
+
+[overlay.start]
+instant = { text = "Instant Mode — Record shareable link", context = "Second line of the start button, 11px, truncates." }
+instant_sign_in = { text = "Instant Mode — Sign in to record instantly", context = "Second line of the start button, 11px, truncates." }
+sign_in = "Sign In To Use"
+start_recording = "Start Recording"
+studio = { text = "Studio Mode — Record and edit locally", context = "Second line of the start button, 11px, truncates." }
+take_screenshot = "Take Screenshot"
+
+[permission.guide]
+accessibility_body = { text = "Drop it on the Accessibility list above, then make sure its switch is on.", context = "Accessibility is the name of the macOS System Settings pane; use the name macOS shows in this language." }
+screen_body = { text = "Drop it on the Screen & System Audio Recording list above, then make sure its switch is on.", context = "Screen & System Audio Recording is the name of the macOS System Settings pane; use the name macOS shows in this language." }
+title = "Drag Cap into the list"
+
+[permission.name]
+accessibility = "Accessibility"
+camera = "Camera"
+microphone = "Microphone"
+screen_recording = "Screen Recording"
+
+[permission.onboarding]
+open_settings_again = "Open System Settings again"
+skip = "Skip for now"
+switch_on_title = "Switch Cap on in System Settings"
+
+[permission.onboarding.accessibility]
+allow = "Allow accessibility"
+body = "Accessibility lets Cap see your clicks and cursor, on this Mac only, so auto zoom knows where to look."
+done_body = "Auto zoom can follow your clicks."
+done_title = "Accessibility is on"
+title = "Let Cap follow your cursor"
+
+[permission.onboarding.all_set]
+body = "Cap has everything it needs. Next, a quick look at what it can do."
+regained = "Thanks. Cap can record again."
+title = "You're all set"
+
+[permission.onboarding.camera]
+allow = "Allow camera"
+body = "Show yourself in a corner of your recordings. Skip it if you don't need it."
+done_body = "You can add your camera to any recording."
+done_title = "Camera is on"
+title = "Let Cap see you"
+
+[permission.onboarding.checklist]
+lede = "macOS asks you to OK a few things first. It only takes a minute."
+regained_lede = "Something was switched off in System Settings. Turn it back on to keep recording."
+regained_title = "Cap needs a permission back"
+title = "Let's get Cap ready"
+
+[permission.onboarding.hint]
+drag_into_list = "Drag Cap from the panel under System Settings into the list. Already listed? Just switch it on."
+find_in_list = "Find Cap in the list and switch it on. If macOS asked first, choose Open System Settings."
+no_prompt = "No prompt showed up? Switch Cap on in System Settings."
+open_settings = "Open System Settings, find Cap in the list and switch it on."
+turned_off = "It was turned off earlier, so switch Cap on in System Settings. Or skip it for now."
+
+[permission.onboarding.microphone]
+allow = "Allow microphone"
+body = "Add your voice to your recordings. You can skip this and turn it on later."
+done_body = "Your voice can be in your recordings."
+done_title = "Microphone is on"
+title = "Let Cap hear you"
+
+[permission.onboarding.relaunch]
+body = "macOS turns on screen recording once Cap restarts. You'll pick up right here."
+button = { text = "Relaunch", context = "Small secondary button beside a hint." }
+hint = "Switched on but still waiting? Restart Cap to apply it."
+later = "macOS applies it after Cap restarts. You can do that once you're done here."
+title = "One restart and you're set"
+
+[permission.onboarding.screen]
+allow = "Allow screen recording"
+body = "Screen Recording lets Cap capture your displays, windows and system audio."
+done_body = "Cap can capture your screen."
+done_title = "Screen recording is on"
+title = "Let Cap see your screen"
+
+[permission.onboarding.status]
+allowed = "Allowed"
+off = "Off in System Settings"
+optional = "Optional"
+required = "Required"
+skipped = "Skipped for now"
+
+[permission.onboarding.waiting]
+prompt = "Choose Allow in the macOS prompt"
+system_settings = "Waiting for System Settings"
+
+[screenshot_editor]
+loading_preview = "Loading preview..."
+zoom_in = "Zoom In"
+zoom_out = "Zoom Out"
+
+[screenshot_editor.annotation]
+default_text = { text = "Text", context = "Initial content of a new text annotation drawn on a screenshot." }
+done = "Done"
+fill = "Fill"
+intensity = "Intensity"
+mask_style = { text = "Style", context = "Picks how a mask hides content: blur or pixelate." }
+pixelate = "Pixelate"
+stroke = { text = "Stroke", context = "Outline colour of a shape annotation." }
+transparent = "Transparent"
+
+[screenshot_editor.aspect]
+auto = { text = "Auto", context = "Aspect ratio follows the image. Shown in an 80px button." }
+classic = "Classic ⋅4:3"
+square = "Square ⋅1:1"
+tall = "Tall ⋅3:4"
+vertical = "Vertical ⋅9:16"
+wide = "Wide ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "Animated Gradient is rendered as a still image for screenshots. Choose another background to replace it."
+blur_title = "Background Blur"
+choose_image = "Click to select or drag and drop image"
+color = { text = "Color", context = "Background source tab; four tabs share a 400px popover." }
+gradient = { text = "Gradient", context = "Background source tab; four tabs share a 400px popover." }
+image = { text = "Image", context = "Background source tab; four tabs share a 400px popover." }
+image_files = { text = "Image", context = "File type name in the file picker's filter list." }
+image_title = "Background Image"
+wallpaper = { text = "Wallpaper", context = "Background source tab; four tabs share a 400px popover." }
+
+[screenshot_editor.corner]
+rounded = "Rounded"
+squircle = "Squircle"
+style = { text = "CORNER STYLE", context = "Small all-caps heading above the corner style picker." }
+
+[screenshot_editor.crop]
+full = "Full"
+loading_frame = "Loading frame…"
+position = "Position"
+
+[screenshot_editor.error]
+encode = { text = "Failed to encode screenshot export: {error}", context = "{error} is a technical error message, usually in English." }
+load_meta = { text = "Failed to load screenshot meta: {error}", context = "{error} is a technical error message, usually in English." }
+load_metadata = { text = "Failed to load screenshot metadata: {error}", context = "{error} is a technical error message, usually in English." }
+no_image = { text = "No PNG found in {path}", context = "{path} is a folder path." }
+not_screenshot = "Not a screenshot bundle"
+open_image = { text = "Failed to open image: {error}", context = "{error} is a technical error message, usually in English." }
+renderer_failed = { text = "The GPU renderer failed to start: {error}", context = "{error} is a technical error message, usually in English." }
+renderer_not_running = "The screenshot renderer is not running"
+renderer_stopped = "The renderer stopped before the export finished"
+save_project = { text = "Error saving project: {error}", context = "{error} is a technical error message, usually in English." }
+serialize = { text = "Failed to serialize screenshot config: {error}", context = "{error} is a technical error message, usually in English." }
+sign_in_to_share = "Sign in to Cap in your browser, then share again"
+too_large = { text = "Image dimensions exceed maximum: {width}x{height}", context = "{width} and {height} are pixel sizes." }
+upgrade_required = "This feature requires an upgraded plan"
+upload_task = { text = "The upload task failed: {error}", context = "{error} is a technical error message, usually in English." }
+
+[screenshot_editor.header]
+aspect_ratio = "Aspect Ratio"
+copy = "Copy to Clipboard"
+crop_image = "Crop Image"
+more_actions = "More Actions"
+
+[screenshot_editor.layers]
+empty = "No layers yet"
+empty_hint = "Use the tools above to add annotations"
+reorder_hint = "Drag to reorder • Top = front"
+title = "Layers"
+
+[screenshot_editor.menu]
+delete = "Delete"
+open_folder = "Open Folder"
+
+[screenshot_editor.share]
+create_link = "Create shareable link"
+preparing = "Preparing upload"
+rendering = "Rendering screenshot"
+uploading = "Uploading screenshot"
+
+[screenshot_editor.style]
+advanced_shadow = "Advanced shadow settings"
+background = "Background"
+blur = "Blur"
+border = "Border"
+color = "Color"
+corner_rounding = "Corner Rounding"
+opacity = "Opacity"
+padding = "Padding"
+rounding = "Rounding"
+shadow = "Shadow"
+size_label = "Size"
+width = "Width"
+
+[screenshot_editor.toast]
+copied = "Screenshot copied to clipboard!"
+link_copied = "Share link copied to clipboard"
+saved = "Screenshot saved!"
+
+[screenshot_editor.tool]
+arrow = "Arrow"
+circle = "Circle"
+draw = "Draw"
+mask = "Mask"
+rectangle = "Rectangle"
+select = "Select"
+text_label = "Text"
+
+[transcription.download]
+complete = "Download complete"
+failed = { text = "Download failed: {error}", context = "{error} is a technical error message, usually in English." }
+file_progress = { text = "Downloading {file}: {percent}%", context = "{file} is a model file name; {percent} is a whole number." }
+preparing = "Preparing model download"
+progress = { text = "Downloading model: {percent}%", context = "{percent} is a whole number." }
+
+[transcription.error]
+intel_mac = "Parakeet models are not available on Intel Macs. Use a Whisper model instead"
+model_load = "Failed to load the caption model. Try downloading it again"
+model_missing = "Caption model not found. Please download it first"
+no_audio = "No audio found in the video file"
+unsupported_language = "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language"
+
+[upload.status]
+failed = "Upload needs attention"
+paused = "Upload paused"
+prepared = "Upload prepared"
+processing = "Processing upload"
+retrying = "Upload will retry"
+sign_in = "Sign in to retry upload"
+uploaded = "Uploaded"
+uploading = "Uploading"

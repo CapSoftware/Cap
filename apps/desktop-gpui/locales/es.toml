@@ -586,3 +586,382 @@ click_or_press = "Haz clic aquí o pulsa"
 get_started = "Empezar"
 space_key = "Espacio"
 tagline = "La app de código abierto para compartir pantalla, para todo el mundo."
+
+[auth]
+sign_in_failed = "No se pudo iniciar sesión"
+
+[diagnostics]
+already_running = "Ya hay un diagnóstico en curso."
+cancelled = "Se canceló el diagnóstico."
+mode_both = "Ambos"
+
+[diagnostics.error]
+create_folder = "No se pudo crear la carpeta de diagnóstico: {error}"
+exited = "La autoprueba terminó con {status}"
+no_output = "La autoprueba no produjo ningún flujo de salida"
+serialize = "No se pudo serializar el informe: {error}"
+start_failed = "No se pudo iniciar {program}: {error}"
+upload_logs = "No se pudieron subir los registros: {error}"
+upload_status = "La subida falló con el estado: {status}"
+wait_failed = "No se pudo esperar a la autoprueba: {error}"
+write_failed = "No se pudo escribir {path}: {error}"
+
+[diagnostics.stage]
+analyzing = "Analizando la grabación..."
+analyzing_instant = "Analizando la grabación Instant..."
+analyzing_studio = "Analizando la grabación Studio..."
+cancelling = "Cancelando..."
+collecting = "Recopilando información del sistema..."
+done = "Terminando la prueba de sincronización..."
+exporting = "Exportando la grabación..."
+exporting_instant = "Exportando la grabación Instant..."
+exporting_studio = "Exportando la grabación Studio..."
+finalizing = "Finalizando la grabación..."
+finalizing_instant = "Finalizando la grabación Instant..."
+finalizing_studio = "Finalizando la grabación Studio..."
+pattern = "Reproduciendo el patrón de prueba..."
+pattern_instant = "Reproduciendo el patrón de prueba (Instant)..."
+pattern_studio = "Reproduciendo el patrón de prueba (Studio)..."
+preparing = "Preparando la prueba..."
+preparing_instant = "Preparando la prueba Instant..."
+preparing_studio = "Preparando la prueba Studio..."
+recording = "Grabando la prueba..."
+recording_instant = "Grabando la prueba Instant..."
+recording_studio = "Grabando la prueba Studio..."
+starting = "Iniciando el diagnóstico..."
+
+[dialog]
+no_microphone_body = "Esta grabación no incluirá tu voz."
+open_recording_failed = "No se pudo abrir esta grabación: {error}"
+
+[dialog.capture]
+approve_shortcut = "Aprueba un atajo de grabación o activa el icono de detener de Cap en la bandeja cuando aparezca. La grabación no ha empezado."
+area_unavailable = "El área seleccionada cambió o ya no está disponible. Vuelve a seleccionarla."
+camera_needs_x11 = "En Linux, las superposiciones de cámara de Instant requieren un escritorio X11"
+camera_notice = "Cap ocultará la vista previa de la cámara y los controles de grabación. La cámara seleccionada seguirá grabándose como una pista editable aparte."
+camera_notice_instant = "Cap ocultará su vista previa y sus controles. La cámara seleccionada aparecerá en la posición de su vista previa con la forma y los efectos elegidos. Mantén toda la vista previa dentro del área de captura. Abrir Cap detendrá esta grabación Instant antes de mostrar sus controles."
+camera_outside_area = "Mueve toda la vista previa de la cámara dentro del área de captura antes de iniciar la grabación Instant"
+camera_preview_closed = "Abre la vista previa de la cámara seleccionada antes de grabar en Instant"
+cleanup_incomplete = "La limpieza de la grabación no se completó: {error}. Se bloqueó una nueva grabación."
+devices_changed = "Los dispositivos seleccionados cambiaron. Vuelve a empezar para confirmar las nuevas entradas de grabación."
+devices_changed_before_start = "Los dispositivos seleccionados cambiaron antes de empezar la grabación. Vuelve a empezar para confirmar las entradas."
+shortcut_conflict = "Ctrl+Shift+F9 está asignado a otra acción de Cap. Cambia ese atajo antes de grabar."
+shortcut_description = "Iniciar o detener esta grabación de Cap"
+shortcut_hint = "Pulsa y suelta {shortcut} para empezar. Usa el mismo atajo para detener. Este atajo temporal no cambia tus ajustes."
+tray_stop_hint = "Activa el icono de detener de Cap en la bandeja para empezar. Vuelve a activarlo para detener. La grabación no empezará hasta que uses ese control."
+window_unavailable = "La ventana seleccionada ya no está disponible. Vuelve a seleccionarla."
+
+[dialog.clipboard]
+copy_file = "No se pudo copiar el archivo al portapapeles: {error}"
+copy_file_failed = "No se pudo copiar el archivo al portapapeles"
+copy_image = "No se pudo copiar la imagen al portapapeles: {error}"
+copy_image_failed = "No se pudo copiar la imagen al portapapeles"
+not_a_file = "Solo se pueden copiar archivos al portapapeles"
+unavailable = "Portapapeles no disponible"
+unavailable_error = "Portapapeles no disponible: {error}"
+
+[dialog.delete_recording]
+already_deleting = "Esta grabación ya se está eliminando."
+close_failed = "No se pudo cerrar el editor: {error}"
+editor_changed = "El editor cambió mientras se confirmaba la eliminación. La grabación no se eliminó."
+editor_closed = "El editor ya se cerró. La grabación no se eliminó."
+failed = "No se pudo eliminar la grabación: {error}"
+failed_title = "No se pudo eliminar la grabación"
+finishing_body = "Cap está esperando a que termine la limpieza de la grabación antes de completar la eliminación."
+finishing_title = "La eliminación aún está terminando"
+in_use = "Esta grabación aún está en uso. Termina o cancela su subida e inténtalo de nuevo: {error}"
+outside_library = "Esta grabación está fuera de la biblioteca de grabaciones. Sus archivos no se modificaron."
+recording_active = "Termina o cancela la grabación antes de eliminar este proyecto."
+retained_title = "Grabación conservada"
+
+[dialog.file]
+audio_filter = "Audio"
+busy = "Ya hay un cuadro de diálogo de archivos abierto. Termina o cancélalo antes de volver a intentarlo."
+export_filter = "Exportación"
+failed = "El cuadro de diálogo de archivos no pudo completarse: {error}"
+images_filter = "Imágenes"
+unavailable_title = "Cuadro de diálogo de archivos no disponible"
+unconfirmed = "Cap no pudo confirmar que el cuadro de diálogo de archivos se cerró. Cierra cualquier cuadro de diálogo abierto y reinicia Cap antes de volver a intentarlo."
+
+[dialog.mode_select]
+instant = "Comparte al instante con un enlace. Se sube mientras grabas."
+screenshot = "Haz y anota capturas de pantalla al instante."
+studio = "Grabación local de máxima calidad para editar después."
+subtitle = "Elige cómo quieres capturar tu pantalla"
+title = "Elegir modo de grabación"
+
+[dialog.storage]
+stopped_kept = "La grabación se detuvo porque queda poco espacio. Tus archivos de grabación se conservaron. Libera espacio y recupera la grabación abajo."
+stopped_saved = "La grabación se detuvo porque queda poco espacio. Tu grabación se guardó."
+stopping = "Queda poco espacio. Deteniendo y guardando tu grabación…"
+
+[dialog.teleprompter]
+cue_markers = "Marcadores"
+hidden = "Esta ventana no aparece en las grabaciones de Cap"
+mirror = "Texto en espejo"
+paused = "Desplazamiento en pausa junto con la grabación"
+placeholder = "Pega o escribe tu guion…"
+
+[import]
+error_title = "Error de importación"
+image_failed = "No se pudo importar la imagen: {error}"
+unsupported = "Archivo multimedia no compatible."
+video_failed = "No se pudo importar el video: {error}"
+
+[import.filter]
+image = "Archivos de imagen"
+media = "Archivos multimedia"
+video = "Archivos de video"
+
+[import.progress]
+analyzing = "Analizando el archivo de video..."
+complete = "¡Importación completada!"
+converting = "Convirtiendo el video... {percent} %"
+image = "Importando la imagen..."
+metadata = "Creando los metadatos del proyecto..."
+starting = "Iniciando la conversión..."
+
+[overlay]
+choose_mode = "Elegir modo de grabación"
+countdown_tooltip = "Cuenta atrás de la grabación"
+display_fallback = "Pantalla {id}"
+
+[overlay.area]
+draw = "Dibuja un área"
+free_ratio = "Libre"
+hint = "Haz clic y arrastra para seleccionar un área"
+minimum_size = "El tamaño mínimo es {width} x {height}"
+too_small = "{width} x {height} es demasiado pequeño"
+
+[overlay.camera_only]
+description = "Graba solo con tu cámara y tu micrófono"
+select_camera = "Selecciona una cámara"
+
+[overlay.device]
+camera_allow = "Permitir acceso a la cámara…"
+camera_turn_on = "Activar el acceso a la cámara en Ajustes…"
+microphone_allow = "Permitir acceso al micrófono…"
+microphone_turn_on = "Activar el acceso al micrófono en Ajustes…"
+
+[overlay.start]
+instant = "Modo Instant: graba un enlace para compartir"
+instant_sign_in = "Modo Instant: inicia sesión para grabar al instante"
+sign_in = "Inicia sesión para usar"
+start_recording = "Iniciar grabación"
+studio = "Modo Studio: graba y edita en local"
+take_screenshot = "Hacer captura de pantalla"
+
+[permission.guide]
+accessibility_body = "Suéltalo en la lista «Accesibilidad» de arriba y asegúrate de que su interruptor esté activado."
+screen_body = "Suéltalo en la lista «Grabación de pantalla y audio del sistema» de arriba y asegúrate de que su interruptor esté activado."
+title = "Arrastra Cap a la lista"
+
+[permission.name]
+accessibility = "Accesibilidad"
+camera = "Cámara"
+microphone = "Micrófono"
+screen_recording = "Grabación de pantalla"
+
+[permission.onboarding]
+open_settings_again = "Abrir Ajustes del Sistema otra vez"
+skip = "Omitir por ahora"
+switch_on_title = "Activa Cap en Ajustes del Sistema"
+
+[permission.onboarding.accessibility]
+allow = "Permitir accesibilidad"
+body = "La accesibilidad permite que Cap vea tus clics y tu cursor, solo en este Mac, para que el zoom automático sepa dónde mirar."
+done_body = "El zoom automático puede seguir tus clics."
+done_title = "La accesibilidad está activada"
+title = "Deja que Cap siga tu cursor"
+
+[permission.onboarding.all_set]
+body = "Cap tiene todo lo que necesita. Ahora, un vistazo rápido a lo que puede hacer."
+regained = "Gracias. Cap ya puede volver a grabar."
+title = "Todo listo"
+
+[permission.onboarding.camera]
+allow = "Permitir cámara"
+body = "Aparece en una esquina de tus grabaciones. Omítelo si no lo necesitas."
+done_body = "Puedes añadir tu cámara a cualquier grabación."
+done_title = "La cámara está activada"
+title = "Deja que Cap te vea"
+
+[permission.onboarding.checklist]
+lede = "macOS te pedirá primero que autorices algunas cosas. Solo lleva un minuto."
+regained_lede = "Algo se desactivó en Ajustes del Sistema. Vuelve a activarlo para seguir grabando."
+regained_title = "Cap necesita recuperar un permiso"
+title = "Preparemos Cap"
+
+[permission.onboarding.hint]
+drag_into_list = "Arrastra Cap desde el panel bajo Ajustes del Sistema a la lista. ¿Ya aparece? Solo actívalo."
+find_in_list = "Busca Cap en la lista y actívalo. Si macOS te preguntó antes, elige «Abrir Ajustes del Sistema»."
+no_prompt = "¿No apareció ningún aviso? Activa Cap en Ajustes del Sistema."
+open_settings = "Abre Ajustes del Sistema, busca Cap en la lista y actívalo."
+turned_off = "Se desactivó antes, así que activa Cap en Ajustes del Sistema. O omítelo por ahora."
+
+[permission.onboarding.microphone]
+allow = "Permitir micrófono"
+body = "Añade tu voz a tus grabaciones. Puedes omitirlo y activarlo más tarde."
+done_body = "Tu voz puede aparecer en tus grabaciones."
+done_title = "El micrófono está activado"
+title = "Deja que Cap te oiga"
+
+[permission.onboarding.relaunch]
+body = "macOS activa la grabación de pantalla cuando Cap se reinicia. Continuarás justo aquí."
+button = "Reiniciar"
+hint = "¿Lo activaste y sigue esperando? Reinicia Cap para aplicarlo."
+later = "macOS lo aplica cuando Cap se reinicia. Puedes hacerlo cuando termines aquí."
+title = "Un reinicio y listo"
+
+[permission.onboarding.screen]
+allow = "Permitir grabación de pantalla"
+body = "La grabación de pantalla permite que Cap capture tus pantallas, ventanas y el audio del sistema."
+done_body = "Cap puede capturar tu pantalla."
+done_title = "La grabación de pantalla está activada"
+title = "Deja que Cap vea tu pantalla"
+
+[permission.onboarding.status]
+allowed = "Permitido"
+off = "Desactivado en Ajustes del Sistema"
+optional = "Opcional"
+required = "Obligatorio"
+skipped = "Omitido por ahora"
+
+[permission.onboarding.waiting]
+prompt = "Elige «Permitir» en el aviso de macOS"
+system_settings = "Esperando a Ajustes del Sistema"
+
+[screenshot_editor]
+loading_preview = "Cargando vista previa..."
+zoom_in = "Acercar"
+zoom_out = "Alejar"
+
+[screenshot_editor.annotation]
+default_text = "Texto"
+done = "Listo"
+fill = "Relleno"
+intensity = "Intensidad"
+mask_style = "Estilo"
+pixelate = "Pixelar"
+stroke = "Trazo"
+transparent = "Transparente"
+
+[screenshot_editor.aspect]
+auto = "Auto"
+classic = "Clásico ⋅4:3"
+square = "Cuadrado ⋅1:1"
+tall = "Alto ⋅3:4"
+vertical = "Vertical ⋅9:16"
+wide = "Panorámico ⋅16:9"
+
+[screenshot_editor.background]
+animated_gradient = "El degradado animado se muestra como imagen fija en las capturas de pantalla. Elige otro fondo para reemplazarlo."
+blur_title = "Desenfoque del fondo"
+choose_image = "Haz clic para elegir o arrastra y suelta una imagen"
+color = "Color"
+gradient = "Degradado"
+image = "Imagen"
+image_files = "Imagen"
+image_title = "Imagen de fondo"
+wallpaper = "Fondo"
+
+[screenshot_editor.corner]
+rounded = "Redondeado"
+squircle = "Squircle"
+style = "ESTILO DE ESQUINAS"
+
+[screenshot_editor.crop]
+full = "Completo"
+loading_frame = "Cargando fotograma…"
+position = "Posición"
+
+[screenshot_editor.error]
+encode = "No se pudo codificar la captura de pantalla exportada: {error}"
+load_meta = "No se pudieron cargar los metadatos de la captura de pantalla: {error}"
+load_metadata = "No se pudieron cargar los metadatos de la captura de pantalla: {error}"
+no_image = "No se encontró ningún PNG en {path}"
+not_screenshot = "No es un paquete de captura de pantalla"
+open_image = "No se pudo abrir la imagen: {error}"
+renderer_failed = "No se pudo iniciar el renderizador de GPU: {error}"
+renderer_not_running = "El renderizador de capturas de pantalla no está en ejecución"
+renderer_stopped = "El renderizador se detuvo antes de terminar la exportación"
+save_project = "Error al guardar el proyecto: {error}"
+serialize = "No se pudo serializar la configuración de la captura de pantalla: {error}"
+sign_in_to_share = "Inicia sesión en Cap en tu navegador y vuelve a compartir"
+too_large = "Las dimensiones de la imagen superan el máximo: {width}x{height}"
+upgrade_required = "Esta función requiere un plan superior"
+upload_task = "La tarea de subida falló: {error}"
+
+[screenshot_editor.header]
+aspect_ratio = "Relación de aspecto"
+copy = "Copiar al portapapeles"
+crop_image = "Recortar imagen"
+more_actions = "Más acciones"
+
+[screenshot_editor.layers]
+empty = "Aún no hay capas"
+empty_hint = "Usa las herramientas de arriba para añadir anotaciones"
+reorder_hint = "Arrastra para reordenar • Arriba = delante"
+title = "Capas"
+
+[screenshot_editor.menu]
+delete = "Eliminar"
+open_folder = "Abrir carpeta"
+
+[screenshot_editor.share]
+create_link = "Crear enlace para compartir"
+preparing = "Preparando la subida"
+rendering = "Renderizando la captura de pantalla"
+uploading = "Subiendo la captura de pantalla"
+
+[screenshot_editor.style]
+advanced_shadow = "Ajustes avanzados de sombra"
+background = "Fondo"
+blur = "Desenfoque"
+border = "Borde"
+color = "Color"
+corner_rounding = "Redondeo de esquinas"
+opacity = "Opacidad"
+padding = "Margen"
+rounding = "Redondeo"
+shadow = "Sombra"
+size_label = "Tamaño"
+width = "Ancho"
+
+[screenshot_editor.toast]
+copied = "¡Captura de pantalla copiada al portapapeles!"
+link_copied = "Enlace para compartir copiado al portapapeles"
+saved = "¡Captura de pantalla guardada!"
+
+[screenshot_editor.tool]
+arrow = "Flecha"
+circle = "Círculo"
+draw = "Dibujar"
+mask = "Máscara"
+rectangle = "Rectángulo"
+select = "Seleccionar"
+text_label = "Texto"
+
+[transcription.download]
+complete = "Descarga completada"
+failed = "La descarga falló: {error}"
+file_progress = "Descargando {file}: {percent} %"
+preparing = "Preparando la descarga del modelo"
+progress = "Descargando el modelo: {percent} %"
+
+[transcription.error]
+intel_mac = "Los modelos Parakeet no están disponibles en Mac con Intel. Usa un modelo Whisper"
+model_load = "No se pudo cargar el modelo de subtítulos. Intenta descargarlo de nuevo"
+model_missing = "No se encontró el modelo de subtítulos. Descárgalo primero"
+no_audio = "No se encontró audio en el archivo de video"
+unsupported_language = "Los modelos Recomendado y Alta precisión solo transcriben inglés y otros 24 idiomas europeos. Descarga el modelo Pequeño o Mediano para subtitular este idioma"
+
+[upload.status]
+failed = "La subida necesita atención"
+paused = "Subida en pausa"
+prepared = "Subida preparada"
+processing = "Procesando la subida"
+retrying = "La subida se reintentará"
+sign_in = "Inicia sesión para reintentar la subida"
+uploaded = "Subido"
+uploading = "Subiendo"
