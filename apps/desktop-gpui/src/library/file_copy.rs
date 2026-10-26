@@ -45,7 +45,13 @@ fn duplicate(source: &Path) -> io::Result<PathBuf> {
                 }
                 return Ok(destination);
             }
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => number += 1,
+            // Windows reports a directory already at the name as access denied.
+            Err(error)
+                if error.kind() == ErrorKind::AlreadyExists
+                    || (error.kind() == ErrorKind::PermissionDenied && destination.is_dir()) =>
+            {
+                number += 1;
+            }
             Err(error) => return Err(error),
         }
     }
@@ -88,6 +94,7 @@ mod tests {
             b"first"
         );
         assert_eq!(std::fs::read(source).unwrap(), b"original");
+        assert!(dir.path().join("video.final copy 2.mp4").is_dir());
     }
 
     #[test]
