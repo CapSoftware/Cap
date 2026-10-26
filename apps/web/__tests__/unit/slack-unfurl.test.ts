@@ -236,10 +236,10 @@ describe("Slack video unfurls", () => {
 
 		expect(getVideo).toHaveBeenCalledTimes(2);
 		expect(sendUnfurl).toHaveBeenCalledTimes(1);
-		expect(warning).toHaveBeenCalledWith(
-			"Slack unfurl video lookup failed",
-			{ videoId: "unavailable", error: expect.any(Error) },
-		);
+		expect(warning).toHaveBeenCalledWith("Slack unfurl video lookup failed", {
+			videoId: "unavailable",
+			error: expect.any(Error),
+		});
 		expect(sendUnfurl).toHaveBeenCalledWith(
 			expect.objectContaining({
 				unfurls: {
@@ -269,10 +269,10 @@ describe("Slack video unfurls", () => {
 		});
 
 		expect(sendUnfurl).not.toHaveBeenCalled();
-		expect(warning).toHaveBeenCalledWith(
-			"Slack unfurl video lookup failed",
-			{ videoId: "abc123", error: expect.any(Error) },
-		);
+		expect(warning).toHaveBeenCalledWith("Slack unfurl video lookup failed", {
+			videoId: "abc123",
+			error: expect.any(Error),
+		});
 		warning.mockRestore();
 	});
 	it("degrades silently when a link is restricted or the app is not installed", async () => {
