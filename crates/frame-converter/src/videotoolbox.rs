@@ -71,7 +71,7 @@ fn create_pool(
             cv::pixel_buffer::keys::io_surf_props(),
         ],
         &[
-            format.as_ref(),
+            format.to_cf_number().as_ref(),
             width.as_type_ref(),
             height.as_type_ref(),
             io_surface.as_type_ref(),

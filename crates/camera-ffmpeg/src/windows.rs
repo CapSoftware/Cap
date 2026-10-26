@@ -341,6 +341,38 @@ fn mf_row_bytes(format: PixelFormat, width: usize) -> Option<usize> {
     })
 }
 
+fn contiguous_stride(
+    format: PixelFormat,
+    width: usize,
+    height: usize,
+    len: usize,
+) -> Option<usize> {
+    let row_bytes = mf_row_bytes(format, width)?;
+    let total_rows = match format {
+        PixelFormat::NV12 | PixelFormat::NV21 | PixelFormat::P010 => {
+            height.checked_add(height / 2)?
+        }
+        PixelFormat::YUV420P | PixelFormat::YV12 => height.checked_add(height / 2)?,
+        PixelFormat::YUYV422
+        | PixelFormat::UYVY422
+        | PixelFormat::ARGB
+        | PixelFormat::RGB32
+        | PixelFormat::RGB24
+        | PixelFormat::BGR24
+        | PixelFormat::GRAY8
+        | PixelFormat::GRAY16
+        | PixelFormat::RGB565 => height,
+        PixelFormat::MJPEG | PixelFormat::H264 => return None,
+    };
+
+    if total_rows == 0 || !len.is_multiple_of(total_rows) {
+        return None;
+    }
+
+    let stride = len / total_rows;
+    (stride >= row_bytes).then_some(stride)
+}
+
 fn mf_planes(
     format: PixelFormat,
     width: usize,
@@ -462,9 +494,8 @@ fn lock_mf_buffer(
         if buffer.Lock(&mut data, None, Some(&mut len)).is_ok() {
             if !data.is_null()
                 && len > 0
-                && let Some(row_bytes) = mf_row_bytes(format, width)
-                && let Some(planes) =
-                    mf_planes(format, width, height, data, len as usize, row_bytes)
+                && let Some(stride) = contiguous_stride(format, width, height, len as usize)
+                && let Some(planes) = mf_planes(format, width, height, data, len as usize, stride)
             {
                 return Some((
                     WrappedMfBuffer {
@@ -1026,6 +1057,49 @@ mod conversion_tests {
         assert_eq!(frame.data(0)[0], 0);
         assert_eq!(frame.data(0)[stride + 1], 2);
         assert_eq!(frame.data(1)[0], 0);
+        assert_eq!(frame.data(1)[stride + 2], 5);
+    }
+
+    #[test]
+    fn padded_nv12_memory_buffer_uses_inferred_stride() {
+        cap_mediafoundation_utils::thread_init();
+
+        let width = 80;
+        let height = 48;
+        let stride = 96;
+        let len = stride * height + stride * (height / 2);
+        let buffer = unsafe { MFCreateMemoryBuffer(len as u32) }.expect("buffer");
+
+        {
+            let mut lock = buffer.lock_for_write().expect("write lock");
+            for row in 0..height {
+                for column in 0..width {
+                    lock[row * stride + column] = (row + column) as u8;
+                }
+            }
+            let uv = stride * height;
+            for row in 0..height / 2 {
+                for column in 0..width {
+                    lock[uv + row * stride + column] = (row * 3 + column) as u8;
+                }
+            }
+        }
+        unsafe { buffer.SetCurrentLength(len as u32) }.expect("length");
+
+        let base_ptr = {
+            let lock = buffer.lock().expect("read lock");
+            lock.as_ptr()
+        };
+        let frame = media_buffer_as_ffmpeg(&buffer, PixelFormat::NV12, width, height, false)
+            .expect("padded zero-copy frame");
+
+        assert_eq!(frame.stride(0), stride);
+        assert_eq!(frame.stride(1), stride);
+        assert_eq!(frame.data(0).as_ptr(), base_ptr);
+        assert_eq!(frame.data(1).as_ptr(), unsafe {
+            base_ptr.add(stride * height)
+        });
+        assert_eq!(frame.data(0)[stride + 1], 2);
         assert_eq!(frame.data(1)[stride + 2], 5);
     }
 
