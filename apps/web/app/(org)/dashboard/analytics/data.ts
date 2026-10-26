@@ -22,18 +22,7 @@ type SpaceOrOrgId = SpaceVideoRow["spaceId"];
 
 type CountSeriesRow = { bucket: string; count: number };
 type ViewSeriesRow = { bucket: string; views: number };
-type BreakdownSourceRow = { name: string; views: number; subtitle?: string };
 type TopCapRow = { videoId: string; views: number };
-
-type TinybirdAnalyticsData = {
-	viewSeries: ViewSeriesRow[];
-	countries: BreakdownSourceRow[];
-	cities: BreakdownSourceRow[];
-	browsers: BreakdownSourceRow[];
-	devices: BreakdownSourceRow[];
-	operatingSystems: BreakdownSourceRow[];
-	topCapsRaw: TopCapRow[];
-};
 
 type RollingAnalyticsRange = Exclude<AnalyticsRange, "lifetime">;
 
@@ -227,80 +216,53 @@ export const getOrgAnalyticsData = async (
 		};
 	}
 
-	const [capsSeries, commentSeries, reactionSeries] = await Promise.all([
-		queryVideoSeries(typedOrgId, from, to, bucket, videoIds),
-		queryCommentsSeries(typedOrgId, from, to, "text", bucket, videoIds),
-		queryCommentsSeries(typedOrgId, from, to, "emoji", bucket, videoIds),
-	]);
+	const [[capsSeries, commentSeries, reactionSeries], tinybirdData] =
+		await Promise.all([
+			Promise.all([
+				queryVideoSeries(typedOrgId, from, to, bucket, videoIds),
+				queryCommentsSeries(typedOrgId, from, to, "text", bucket, videoIds),
+				queryCommentsSeries(typedOrgId, from, to, "emoji", bucket, videoIds),
+			]),
+			runPromise(
+				Effect.gen(function* () {
+					const tinybird = yield* Tinybird;
 
-	const tinybirdData = await runPromise(
-		Effect.gen(function* () {
-			const tinybird = yield* Tinybird;
-
-			const viewSeries = yield* queryViewSeries(
-				tinybird,
-				typedOrgId,
-				from,
-				to,
-				bucket,
-				videoIds,
-			);
-
-			const countries = yield* queryCountries(
-				tinybird,
-				typedOrgId,
-				from,
-				to,
-				videoIds,
-			);
-
-			const cities = yield* queryCities(
-				tinybird,
-				typedOrgId,
-				from,
-				to,
-				videoIds,
-			);
-
-			const browsers = yield* queryBrowsers(
-				tinybird,
-				typedOrgId,
-				from,
-				to,
-				videoIds,
-			);
-
-			const devices = yield* queryDevices(
-				tinybird,
-				typedOrgId,
-				from,
-				to,
-				videoIds,
-			);
-
-			const operatingSystems = yield* queryOperatingSystems(
-				tinybird,
-				typedOrgId,
-				from,
-				to,
-				videoIds,
-			);
-
-			const topCapsRaw = capId
-				? []
-				: yield* queryTopCaps(tinybird, typedOrgId, from, to, videoIds);
-
-			return {
-				viewSeries,
-				countries,
-				cities,
-				browsers,
-				devices,
-				operatingSystems,
-				topCapsRaw,
-			} satisfies TinybirdAnalyticsData;
-		}),
-	);
+					return yield* Effect.all(
+						{
+							viewSeries: queryViewSeries(
+								tinybird,
+								typedOrgId,
+								from,
+								to,
+								bucket,
+								videoIds,
+							),
+							countries: queryCountries(
+								tinybird,
+								typedOrgId,
+								from,
+								to,
+								videoIds,
+							),
+							cities: queryCities(tinybird, typedOrgId, from, to, videoIds),
+							browsers: queryBrowsers(tinybird, typedOrgId, from, to, videoIds),
+							devices: queryDevices(tinybird, typedOrgId, from, to, videoIds),
+							operatingSystems: queryOperatingSystems(
+								tinybird,
+								typedOrgId,
+								from,
+								to,
+								videoIds,
+							),
+							topCapsRaw: capId
+								? Effect.succeed<TopCapRow[]>([])
+								: queryTopCaps(tinybird, typedOrgId, from, to, videoIds),
+						},
+						{ concurrency: "unbounded" },
+					);
+				}),
+			),
+		]);
 
 	const totalViews = tinybirdData.viewSeries.reduce(
 		(sum: number, row: ViewSeriesRow) => sum + row.views,
