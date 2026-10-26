@@ -183,7 +183,8 @@ export const processSlackEvent = async ({
 	const uniqueLinks = [
 		...new Map(payload.event.links.map((link) => [link.url, link])).values(),
 	].slice(0, 5);
-	const resolved = await Promise.all(
+	// A failed lookup must not suppress unfurls for other links in the event.
+	const resolved = await Promise.allSettled(
 		uniqueLinks.map(async (link) => {
 			const videoId = parseCapShareUrl(link.url);
 			if (!videoId) return null;
@@ -202,8 +203,10 @@ export const processSlackEvent = async ({
 		}),
 	);
 	const unfurls = Object.fromEntries(
-		resolved.filter(
-			(entry): entry is NonNullable<typeof entry> => entry !== null,
+		resolved.flatMap((result) =>
+			result.status === "fulfilled" && result.value !== null
+				? [result.value]
+				: [],
 		),
 	);
 	if (Object.keys(unfurls).length === 0) return;
