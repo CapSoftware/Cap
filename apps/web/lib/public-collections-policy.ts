@@ -31,6 +31,10 @@ export function getPublicCollectionHref(id: string, page: number): string {
 	return page <= 1 ? `/c/${id}` : `/c/${id}?page=${page}`;
 }
 
+export function getPublicCollectionLoginHref(id: string, page: number): string {
+	return `/login?next=${encodeURIComponent(getPublicCollectionHref(id, page))}`;
+}
+
 export function resolvePublicCollectionCandidate<
 	TFolder extends PublicCollectionCandidate,
 >(folder: TFolder | null, space: null): TFolder | null;
