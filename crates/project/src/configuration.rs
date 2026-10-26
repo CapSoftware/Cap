@@ -17,6 +17,9 @@ use crate::DisplayNotch;
 #[cfg(test)]
 mod style_resolution_tests;
 
+#[cfg(test)]
+mod cursor_visibility_tests;
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AspectRatio {
@@ -2216,13 +2219,10 @@ impl TimelineConfiguration {
         }
     }
 
-    /// Gapless-time windows covered by clips that hide the cursor, with
-    /// touching windows merged so a run of hidden clips fades once at each
-    /// end rather than at every boundary. A window opens where its clip's
-    /// incoming transition starts and closes where the next transition
-    /// starts, matching the frame mapping above.
-    fn hidden_cursor_windows(&self) -> (Vec<(f64, f64)>, f64) {
-        let mut windows: Vec<(f64, f64)> = Vec::new();
+    fn hidden_cursor_window_at(&self, time: f64) -> (Option<(f64, f64)>, f64) {
+        let mut window: Option<(f64, f64)> = None;
+        let mut active_window = None;
+        let contains_time = |(start, end): &(f64, f64)| !(time < *start || time >= *end);
         let mut segment_start = 0.0;
         for (index, segment) in self.segments.iter().enumerate() {
             let next_duration = self
@@ -2230,14 +2230,20 @@ impl TimelineConfiguration {
                 .map_or(0.0, |transition| transition.duration);
             let end = segment_start + segment.duration() - next_duration;
             if segment.hides_cursor() {
-                match windows.last_mut() {
+                match window.as_mut() {
                     Some(last) if (last.1 - segment_start).abs() < 1e-9 => last.1 = end,
-                    _ => windows.push((segment_start, end)),
+                    _ => {
+                        active_window = active_window.or_else(|| window.filter(contains_time));
+                        window = Some((segment_start, end));
+                    }
                 }
             }
             segment_start = end;
         }
-        (windows, segment_start)
+        (
+            active_window.or_else(|| window.filter(contains_time)),
+            segment_start,
+        )
     }
 
     /// 0..1 multiplier for the cursor (and its click ripples) at an output
@@ -2245,17 +2251,20 @@ impl TimelineConfiguration {
     /// a [`CLIP_CURSOR_FADE_SECS`] smoothstep ramp just inside each end of the
     /// hidden run. The ramp is skipped at the timeline's own start and end so
     /// the cursor never blinks in for a hidden first or last clip.
+    #[inline]
     pub fn cursor_visibility_at(&self, output_time: f64) -> f64 {
         if !self.segments.iter().any(TimelineSegment::hides_cursor) {
             return 1.0;
         }
+        self.cursor_visibility_with_hidden_clips(output_time)
+    }
+
+    #[inline(never)]
+    fn cursor_visibility_with_hidden_clips(&self, output_time: f64) -> f64 {
         let holds = self.hold_windows();
         let time = output_time - held_time_before(&holds, output_time);
-        let (windows, total) = self.hidden_cursor_windows();
-        for (start, end) in windows {
-            if time < start || time >= end {
-                continue;
-            }
+        let (window, total) = self.hidden_cursor_window_at(time);
+        if let Some((start, end)) = window {
             let from_start = if start <= 1e-9 {
                 f64::INFINITY
             } else {
