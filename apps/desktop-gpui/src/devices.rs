@@ -990,6 +990,11 @@ fn linux_window_targets_from_snapshot() -> Option<Vec<(WindowOption, Window)>> {
                 if app == "Window Server" {
                     return None;
                 }
+                // As on macOS: recording one of our own windows records a
+                // window the recording hides.
+                if snapshot.owner_pid == Some(std::process::id()) {
+                    return None;
+                }
                 Some((
                     WindowOption {
                         id,
