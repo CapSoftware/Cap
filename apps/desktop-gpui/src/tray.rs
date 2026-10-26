@@ -1006,6 +1006,7 @@ mod mac {
         stop_recording,
     };
     use crate::main_window::{Mode, TargetType};
+    use crate::platform;
 
     /// `NSVariableStatusItemLength`.
     const NS_VARIABLE_STATUS_ITEM_LENGTH: f64 = -1.0;
@@ -1500,9 +1501,7 @@ mod mac {
         };
         image.setTemplate(true);
         item.setImage(Some(&image));
-        if objc2::available!(macos = 27.0) {
-            let _: () = unsafe { msg_send![item, setPreferredImageVisibility: 1isize] };
-        }
+        crate::platform::set_nsmenu_item_prefers_visible_image(&*item);
     }
 
     pub(super) fn start_option_tracking() {
@@ -1623,12 +1622,7 @@ mod mac {
                 if let Some(image) = image {
                     image.setTemplate(!photo);
                     menu_item.setImage(Some(&image));
-
-                    if objc2::available!(macos = 27.0) {
-                        // NSMenuItemImageVisibility: automatic = 0, visible = 1, hidden = 2
-                        let _: () =
-                            unsafe { msg_send![&*menu_item, setPreferredImageVisibility: 1isize] };
-                    }
+                    crate::platform::set_nsmenu_item_prefers_visible_image(&*menu_item);
                 }
                 menu_item
             }

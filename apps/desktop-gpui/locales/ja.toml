@@ -21,7 +21,6 @@ about = "Capについて"
 hide = "Capを非表示"
 hide_others = "ほかを非表示"
 quit = "Capを終了"
-preferences = "環境設定…"
 services = "サービス"
 settings = "設定…"
 

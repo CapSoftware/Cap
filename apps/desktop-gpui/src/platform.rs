@@ -691,7 +691,7 @@ mod mac {
         NSApplication, NSDocumentController, NSMenu, NSMenuItem, NSView, NSWindow,
         NSWindowCollectionBehavior,
     };
-    use objc2_foundation::{NSObjectNSKeyValueCoding, NSString};
+    use objc2_foundation::{NSObjectNSKeyValueCoding, NSString, ns_string};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{ForcedAppearance, MaterialKind, PanelBehavior};
@@ -704,13 +704,12 @@ mod mac {
     const APP_MENU: isize = 0;
     const ABOUT_ROW: isize = 0;
     const UPDATE_ROW: isize = 1;
-    const PREFERENCES_ROW: isize = 3;
+    const SETTINGS_ROW: isize = 3;
     const FILE_MENU: isize = 1;
     const OPEN_RECENT_ROW: isize = 1;
 
     pub fn patch_standard_application_menu() {
         use objc2::{exception, msg_send, runtime::AnyObject, sel};
-        use std::panic::AssertUnwindSafe;
 
         let Some(main_thread) = objc2_foundation::MainThreadMarker::new() else {
             tracing::error!("Cannot patch the application menu off the main thread");
@@ -727,6 +726,7 @@ mod mac {
         else {
             return;
         };
+
         // gpui's `validateMenuItem:` answers only "is this action available?",
         // which is always yes for Cap's global listeners -- so AppKit's
         // auto-enable pass overwrites `MenuItem::Action`'s `disabled` every
@@ -735,25 +735,20 @@ mod mac {
         // muda.
         app_menu.setAutoenablesItems(false);
 
-        if let Some(about) = app_menu.itemAtIndex(ABOUT_ROW) {
-            unsafe {
-                about.setAction(Some(sel!(orderFrontStandardAboutPanel:)));
-                about.setTarget(None);
-                about.setAllowsAutomaticKeyEquivalentLocalization(true);
+        if objc2::available!(macos = 15.0) {
+            if let Some(about) = app_menu.itemAtIndex(ABOUT_ROW) {
+                set_nsmenu_system_symbol(&about, "info.icon");
             }
-        }
-        if let Some(preferences) = app_menu.itemAtIndex(PREFERENCES_ROW) {
-            preferences.setAllowsAutomaticKeyEquivalentLocalization(true);
-        }
-        if let Some(quit) = app_menu
-            .numberOfItems()
-            .checked_sub(1)
-            .and_then(|index| app_menu.itemAtIndex(index))
-        {
-            unsafe {
-                quit.setAction(Some(sel!(terminate:)));
-                quit.setTarget(None);
-                quit.setAllowsAutomaticKeyEquivalentLocalization(true);
+            if let Some(settings) = app_menu.itemAtIndex(SETTINGS_ROW) {
+                set_nsmenu_system_symbol(&settings, "gear");
+                set_nsmenu_item_prefers_visible_image(&settings);
+            }
+            if let Some(quit) = &app_menu
+                .numberOfItems()
+                .checked_sub(1)
+                .and_then(|index| app_menu.itemAtIndex(index))
+            {
+                set_nsmenu_system_symbol(quit, "xmark.rectangle");
             }
         }
 
@@ -763,6 +758,7 @@ mod mac {
         else {
             return;
         };
+
         let has_recent_menu = file_menu.itemAtIndex(OPEN_RECENT_ROW).is_some_and(|item| {
             item.title().isEqualToString(&NSString::from_str(
                 crate::i18n::tr::menu::file::open_recent(),
@@ -778,7 +774,7 @@ mod mac {
         ));
         let name = NSString::from_str("NSRecentDocumentsMenu");
         let key = NSString::from_str("menuName");
-        let registered = exception::catch(AssertUnwindSafe(|| {
+        let registered = exception::catch(std::panic::AssertUnwindSafe(|| {
             unsafe { recent_menu.setValue_forKey(Some(&*name as &AnyObject), &key) };
         }));
         if let Err(error) = registered {
@@ -2747,6 +2743,21 @@ mod mac {
             w.level(),
             w.windowNumber(),
         ))
+    }
+
+    pub fn set_nsmenu_item_prefers_visible_image(item: &NSMenuItem) {
+        if objc2::available!(macos = 27.0) {
+            // NSMenuItemImageVisibility: automatic = 0, visible = 1, hidden = 2
+            let _: () = unsafe { objc2::msg_send![&*item, setPreferredImageVisibility: 1isize] };
+        }
+    }
+
+    fn set_nsmenu_system_symbol(item: &NSMenuItem, symbol: &str) {
+        let image = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &objc2_foundation::NSString::from_str(symbol),
+            None,
+        );
+        item.setImage(image.as_deref());
     }
 }
 

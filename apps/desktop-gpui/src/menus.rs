@@ -58,14 +58,6 @@ struct UpdateRow {
     badge: Option<String>,
 }
 
-fn settings_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        tr::menu::app::preferences()
-    } else {
-        tr::menu::app::settings()
-    }
-}
-
 impl UpdateRow {
     fn of(status: &updates::UpdateStatus) -> Self {
         use updates::UpdateStatus;
@@ -357,7 +349,7 @@ pub fn build_menus(update_status: &updates::UpdateStatus) -> Vec<Menu> {
                 MenuItem::action(tr::menu::app::about(), About),
                 MenuItem::action(update_row.title, CheckForUpdate).disabled(!update_row.enabled),
                 MenuItem::separator(),
-                MenuItem::action(settings_label(), OpenSettings),
+                MenuItem::action(tr::menu::app::settings(), OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu(tr::menu::app::services(), SystemMenuType::Services),
                 MenuItem::separator(),
@@ -1243,7 +1235,7 @@ mod tests {
                         "About Cap".to_string(),
                         "Check for Update".into(),
                         "-".into(),
-                        settings_label().into(),
+                        tr::menu::app::settings().into(),
                         "-".into(),
                         "Services".into(),
                         "-".into(),

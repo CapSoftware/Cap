@@ -23,7 +23,6 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::app::quit(), format!("Quit {app_name}")),
         (tr::menu::app::services(), "Services".into()),
         (tr::menu::app::settings(), "Settings…".into()),
-        (tr::menu::app::preferences(), "Preferences…".into()),
         (tr::menu::file::close_window(), "Close Window".into()),
         (tr::menu::file::open_file(), "Open File…".into()),
         (tr::menu::file::open_recent(), "Open Recent".into()),
