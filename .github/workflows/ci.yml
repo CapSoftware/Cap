@@ -155,6 +155,7 @@ jobs:
           __tests__/unit/share-transcript-rendering.test.ts
           __tests__/unit/share-video-quota-loading.test.ts
           __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/sitemap.test.ts
           __tests__/unit/space-folder-page-access.test.ts
           __tests__/unit/space-page-round-trips.test.ts
           __tests__/unit/speed-controller-playback-failure.test.ts
