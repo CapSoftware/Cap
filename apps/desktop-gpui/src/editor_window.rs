@@ -7227,10 +7227,7 @@ impl EditorWindow {
     /// The built-in Default row: Cap's own look, with this project's timeline
     /// and clips kept.
     fn apply_default_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut next = crate::presets::default_project_config();
-        next.timeline = self.project.timeline.clone();
-        next.overlay_order = self.project.overlay_order.clone();
-        next.clips = self.project.clips.clone();
+        let next = crate::presets::default_project_config(&self.project);
         self.apply_project_preset(next, window, cx);
     }
 
