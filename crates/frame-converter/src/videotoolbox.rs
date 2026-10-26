@@ -8,8 +8,6 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-type CVPixelBufferRef = *mut c_void;
-
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
     fn CVPixelBufferGetBaseAddress(pixel_buffer: &cv::PixelBuf) -> *mut u8;
