@@ -324,6 +324,7 @@ function ChatView({
 	const prevMessageCountRef = useRef(initialMessages.length);
 	const userScrolledRef = useRef(false);
 	const isSendingRef = useRef(false);
+	const messageVersionRef = useRef(0);
 	const wasPendingRef = useRef(false);
 	const isHoveringRef = useRef(false);
 	const agentMsgCountRef = useRef(
@@ -406,12 +407,23 @@ function ChatView({
 	}, []);
 
 	useEffect(() => {
+		let active = true;
+		let pollVersion = 0;
 		const interval = setInterval(async () => {
 			if (isSendingRef.current) return;
+			const requestVersion = ++pollVersion;
+			const messageVersion = messageVersionRef.current;
 			const data = await fetchMessengerConversation(
 				initialConversation.id,
 			).catch(() => null);
-			if (!data || isSendingRef.current) return;
+			if (
+				!active ||
+				!data ||
+				isSendingRef.current ||
+				requestVersion !== pollVersion ||
+				messageVersion !== messageVersionRef.current
+			)
+				return;
 
 			const newAgentCount = data.messages.filter(
 				(m) => m.role === "agent" || m.role === "admin",
@@ -432,7 +444,10 @@ function ChatView({
 				}
 			}
 		}, WIDGET_POLL_MS);
-		return () => clearInterval(interval);
+		return () => {
+			active = false;
+			clearInterval(interval);
+		};
 	}, [initialConversation.id]);
 
 	const sendMessage = (text: string) => {
@@ -448,6 +463,7 @@ function ChatView({
 		};
 		setMessages((prev) => [...prev, optimistic]);
 		isSendingRef.current = true;
+		messageVersionRef.current++;
 
 		startTransition(async () => {
 			await sendMessengerUserMessage({
