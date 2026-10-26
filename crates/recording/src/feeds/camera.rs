@@ -25,7 +25,9 @@ use tokio::{sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
 
 use crate::ffmpeg::FFmpegVideoFrame;
-use crate::output_pipeline::{CameraBuffer, NativeCameraFrame, VideoFrame};
+#[cfg(windows)]
+use crate::output_pipeline::CameraBuffer;
+use crate::output_pipeline::{NativeCameraFrame, VideoFrame};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
