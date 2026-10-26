@@ -51,6 +51,8 @@ mod jpeg_thumbnail;
 mod linux_dialog;
 #[cfg(target_os = "linux")]
 mod linux_portal_id;
+#[cfg(target_os = "linux")]
+mod linux_wallpaper;
 mod library;
 mod main_window;
 mod media_access;

@@ -51,6 +51,13 @@ the editor and presses the Image background's picker
 portal's file chooser through `mutter-keys.py --type` and presses Select.
 Mutter's RemoteDesktop drops the first key of each session, so `mutter-keys.py`
 leads every session with a Shift tap.
+`SCENARIO=wallpaper` records a clip, opens it in the editor and imports the
+desktop's wallpaper as its background (`CAP_GPUI_AUTO_DESKTOP_BACKGROUND=1`).
+GNOME keeps its default JPEG XL wallpaper; `WALLPAPER=swaybg` starts swaybg
+with a PNG first, as Omarchy does on Hyprland.
+`SCENARIO=register` launches Cap from a shell `ROUNDS` times, each time once
+with its `so.cap.Cap.desktop` entry removed and once with it in place, and
+counts the launches that registered the app id with the portals.
 
 `report.sh <out-dir>` prints the results with Cap's own log lines. The
 Hyprland image needs `modprobe vkms` on the host. With `GNOME_UNSAFE=1`,

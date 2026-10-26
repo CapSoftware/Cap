@@ -158,6 +158,21 @@ jobs:
           grep -qx attempt1_control=shortcut "$RUNNER_TEMP/out/gnome-terminal/result.txt"
           grep -qx app_id_required=0 "$RUNNER_TEMP/out/gnome-terminal/result.txt"
 
+      # Every shell launch names itself to the portals, including the ones
+      # that have just written the desktop entry the portal looks the id up in.
+      - name: GNOME 50 shell launches register Cap's app id
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: register
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-register" ROUNDS=4
+          cat "$RUNNER_TEMP/out/gnome-register/result.txt"
+          for line in fresh_registered=4 again_registered=4 entry_written=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-register/result.txt"
+          done
+
       # Fedora's GNOME without the AppIndicator extension, launched where the
       # portal grants no shortcut: no tray and no Stop shortcut. Cap records
       # with its controls visible instead of refusing to start.
@@ -221,6 +236,21 @@ jobs:
           cat "$RUNNER_TEMP/out/gnome-pick-background/result.txt"
           for line in recorded=yes editor_opened=yes chooser_opened=yes background_chosen=yes cap_alive=yes; do
             grep -qx "$line" "$RUNNER_TEMP/out/gnome-pick-background/result.txt"
+          done
+
+      # GNOME's default wallpaper is JPEG XL.
+      - name: GNOME 50 editor background from the desktop wallpaper
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: wallpaper
+        run: |
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/gnome-wallpaper" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6
+          cat "$RUNNER_TEMP/out/gnome-wallpaper/result.txt"
+          for line in recorded=yes expected_exists=yes editor_opened=yes wallpaper_found=yes wallpaper_imported=yes \
+            cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/gnome-wallpaper/result.txt"
           done
 
       - name: Check results
@@ -298,6 +328,19 @@ jobs:
             "$RUNNER_TEMP/out/hyprland-clipboard"
           for key in typing_reached_field paste_reached_field copy_reached_clipboard; do
             grep -qx "$key=yes" "$RUNNER_TEMP/out/hyprland-clipboard/result.txt"
+          done
+
+      # Omarchy draws its wallpaper with swaybg.
+      - name: Hyprland editor background from the swaybg wallpaper
+        env:
+          SCENARIO: wallpaper
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-wallpaper" LAUNCH=dock WALLPAPER=swaybg
+          cat "$RUNNER_TEMP/out/hyprland-wallpaper/result.txt"
+          for line in recorded=yes editor_opened=yes wallpaper_found=yes wallpaper_imported=yes cap_alive=yes; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-wallpaper/result.txt"
           done
 
       - name: Check results
