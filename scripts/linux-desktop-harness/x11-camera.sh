@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Usage: x11-camera.sh <cap-gpui> <ffmpeg lib dir> <out-dir>
+# CAMERA_FORMAT picks what the virtual camera sends: yuyv422 (default), nv12
+# or mjpeg, the three formats Cap's Linux camera path converts.
 set -uo pipefail
 for tool in Xvfb xdotool ffmpeg ffprobe; do
   command -v "$tool" >/dev/null || { echo "install xvfb, xdotool and ffmpeg" >&2; exit 2; }
@@ -12,21 +14,44 @@ mkdir -p "$out" && : >"$out/result.txt" || { echo "x11-camera: cannot write to $
 result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
 
 device=/dev/video42
+format=${CAMERA_FORMAT:-yuyv422}
+case $format in
+  yuyv422|nv12) encode=(-pix_fmt "$format") ;;
+  mjpeg) encode=(-pix_fmt yuvj422p -c:v mjpeg -q:v 4) ;;
+  *) echo "x11-camera: unknown CAMERA_FORMAT $format" >&2; exit 2 ;;
+esac
+# A fresh device per run, so the format of an earlier run cannot stick. The
+# previous run waited for its feeder and Cap to exit, but the module can stay
+# busy for a moment after; never reuse a device that would not unload.
+for _ in $(seq 20); do
+  lsmod | grep -q '^v4l2loopback ' || break
+  sudo modprobe -r v4l2loopback 2>/dev/null || sleep 0.5
+done
+if lsmod | grep -q '^v4l2loopback '; then
+  echo "x11-camera: v4l2loopback is still in use and cannot be reloaded" >&2
+  exit 2
+fi
 sudo modprobe v4l2loopback video_nr=42 card_label="Cap Test Camera" exclusive_caps=1 || exit 2
 # udev applies its own mode to the new node after modprobe returns; let it
 # finish first so it cannot reset the chmod below.
 sudo udevadm settle --timeout=10
 sudo chmod 666 "$device"
-ffmpeg -hide_banner -loglevel error -nostdin -re -f lavfi -i testsrc2=size=1280x720:rate=30 -pix_fmt yuyv422 \
+ffmpeg -hide_banner -loglevel error -nostdin -re -f lavfi -i testsrc2=size=1280x720:rate=30 "${encode[@]}" \
   -f v4l2 "$device" >"$out/feeder.log" 2>&1 &
 feeder=$!
 unset WAYLAND_DISPLAY
 export DISPLAY=:73 XDG_SESSION_TYPE=x11
 Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
 xvfb=$!
-trap 'kill $feeder $xvfb 2>/dev/null' EXIT
+pid=""
+# Wait for every child, so the next run finds the camera device closed.
+cleanup() {
+  kill $feeder $xvfb $pid 2>/dev/null
+  wait $feeder $xvfb $pid 2>/dev/null
+}
+trap cleanup EXIT
 sleep 2
-echo "feeder: $(kill -0 $feeder 2>/dev/null && echo running || echo exited) $(head -c 300 "$out/feeder.log")" >>"$out/actions.log"
+echo "feeder ($format): $(kill -0 $feeder 2>/dev/null && echo running || echo exited) $(head -c 300 "$out/feeder.log")" >>"$out/actions.log"
 
 profile=$out/profile
 log=$out/cap.log
