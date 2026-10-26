@@ -253,37 +253,71 @@ function getAdaptationSetType(adaptationSet: Element) {
 	return null;
 }
 
+const MAX_LOOM_DASH_SEGMENTS = 20_000;
+
 function expandDashSegments({
 	mediaTemplate,
 	segmentTimeline,
 	startNumber,
 	timescale,
 	manifestUrl,
+	periodDurationSeconds,
 }: {
 	mediaTemplate: string;
 	segmentTimeline: Element[];
 	startNumber: number;
 	timescale: number;
 	manifestUrl: string;
+	periodDurationSeconds?: number;
 }) {
+	// Never allocate an unbounded list of URLs from untrusted MPD repeat values.
+	if (!Number.isSafeInteger(startNumber) || startNumber < 0 || timescale <= 0 || !Number.isFinite(timescale))
+		return [];
+
 	const segments: LoomDashSegment[] = [];
 	let segmentNumber = startNumber;
+	let nextTime = 0;
 
-	for (const segment of segmentTimeline) {
+	for (const [position, segment] of segmentTimeline.entries()) {
 		const duration = parseOptionalNumber(segment.getAttribute("d"));
-		if (!duration) continue;
+		if (duration === undefined || duration <= 0) return [];
+		const startTime = parseOptionalNumber(segment.getAttribute("t")) ?? nextTime;
+		if (!Number.isSafeInteger(startTime) || startTime < 0) return [];
 
 		const repeat = parseOptionalNumber(segment.getAttribute("r")) ?? 0;
-		for (let index = 0; index <= repeat; index += 1) {
+		let count: number;
+		if (repeat === -1) {
+			// A negative repeat extends to the next S@t or the end of the Period.
+			const nextElement = segmentTimeline[position + 1];
+			const endTime =
+				parseOptionalNumber(nextElement?.getAttribute("t") ?? null) ??
+				(periodDurationSeconds === undefined
+					? undefined
+					: periodDurationSeconds * timescale);
+			if (endTime === undefined || endTime <= startTime) return [];
+			count = Math.ceil((endTime - startTime) / duration);
+		} else {
+			if (!Number.isSafeInteger(repeat) || repeat < 0) return [];
+			count = repeat + 1;
+		}
+
+		if (!Number.isSafeInteger(count) || count > MAX_LOOM_DASH_SEGMENTS - segments.length)
+			return [];
+
+		for (let index = 0; index < count; index += 1) {
+			const segmentTime = startTime + index * duration;
 			segments.push({
 				url: withInheritedQuery(
-					mediaTemplate.replace("$Number$", String(segmentNumber)),
+					mediaTemplate
+						.replace("$Number$", String(segmentNumber))
+						.replace("$Time$", String(segmentTime)),
 					manifestUrl,
 				),
 				durationSeconds: duration / timescale,
 			});
 			segmentNumber += 1;
 		}
+		nextTime = startTime + count * duration;
 	}
 
 	return segments;
@@ -294,11 +328,13 @@ function parseDashRepresentation({
 	representation,
 	manifestUrl,
 	type,
+	periodDurationSeconds,
 }: {
 	adaptationSet: Element;
 	representation: Element;
 	manifestUrl: string;
 	type: "audio" | "video";
+	periodDurationSeconds?: number;
 }) {
 	const template =
 		getFirstChildByName(representation, "SegmentTemplate") ??
@@ -323,6 +359,7 @@ function parseDashRepresentation({
 		startNumber,
 		timescale,
 		manifestUrl,
+		periodDurationSeconds,
 	});
 	if (segments.length === 0) return null;
 
@@ -382,7 +419,11 @@ export function parseLoomDashManifest(
 		videoRepresentations: [],
 	};
 
-	for (const period of getChildrenByName(mpd, "Period")) {
+	const periods = getChildrenByName(mpd, "Period");
+	for (const period of periods) {
+		const periodDurationSeconds =
+			parseIsoDurationSeconds(period.getAttribute("duration")) ??
+			(periods.length === 1 ? manifest.durationSeconds : undefined);
 		for (const adaptationSet of getChildrenByName(period, "AdaptationSet")) {
 			const type = getAdaptationSetType(adaptationSet);
 			if (!type) continue;
@@ -396,6 +437,7 @@ export function parseLoomDashManifest(
 					representation,
 					manifestUrl,
 					type,
+					periodDurationSeconds,
 				});
 				if (!parsed) continue;
 
