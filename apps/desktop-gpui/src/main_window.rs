@@ -169,7 +169,7 @@ impl Mode {
 
     /// [`Self::panel_title`] in the UI language. `panel_title` stays English:
     /// it names element ids and log fields.
-    fn display_name(self) -> &'static str {
+    pub(crate) fn display_name(self) -> &'static str {
         match self {
             Self::Instant => tr::main::mode::name::instant(),
             Self::Studio => tr::main::mode::name::studio(),

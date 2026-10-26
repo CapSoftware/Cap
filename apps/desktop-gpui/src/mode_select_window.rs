@@ -112,7 +112,7 @@ impl ModeSelectWindow {
             .id(SharedString::from(mode.panel_title()))
             .when(self.keyboard_nav, keyboard_nav::stop)
             .role(Role::Button)
-            .aria_label(mode.panel_title())
+            .aria_label(mode.display_name())
             .aria_description(mode.card_description())
             .aria_selected(selected)
             .relative()
@@ -228,7 +228,7 @@ impl ModeSelectWindow {
                             } else {
                                 Hsla::from(theme.gray_12)
                             })
-                            .child(mode.panel_title()),
+                            .child(mode.display_name()),
                     )
                     .child(
                         // `text-xs leading-relaxed text-gray-11 line-clamp-3`
