@@ -131,19 +131,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		}
 
 		const revision = sessionRevision.current;
-		refresh().catch((error: unknown) => {
-			if (
-				revision !== sessionRevision.current ||
-				!(error instanceof MobileApiError && error.status === 401)
-			)
-				return;
-			sessionRevision.current += 1;
-			setApiKey(null);
-			setUserId(null);
-			setBootstrap(null);
-			SecureStore.deleteItemAsync(sessionKey).catch(() => {});
-			SecureStore.deleteItemAsync(userIdKey).catch(() => {});
-		});
+		let cancelled = false;
+		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+		let retryDelayMs = 2_000;
+		const attemptBootstrap = () => {
+			void refresh().catch((error: unknown) => {
+				if (cancelled || revision !== sessionRevision.current) return;
+				if (error instanceof MobileApiError && error.status === 401) {
+					sessionRevision.current += 1;
+					setApiKey(null);
+					setUserId(null);
+					setBootstrap(null);
+					SecureStore.deleteItemAsync(sessionKey).catch(() => {});
+					SecureStore.deleteItemAsync(userIdKey).catch(() => {});
+					return;
+				}
+				retryTimer = setTimeout(attemptBootstrap, retryDelayMs);
+				retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+			});
+		};
+		attemptBootstrap();
+		return () => {
+			cancelled = true;
+			if (retryTimer !== null) clearTimeout(retryTimer);
+		};
 	}, [apiKey, refresh]);
 
 	const storeSession = useCallback(
