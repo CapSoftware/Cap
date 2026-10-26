@@ -202,25 +202,45 @@ describe("parallel download", () => {
 		},
 	);
 
-	test("does not write beyond a declared range before rejecting an oversized body", async () => {
-		const path = join(dir, "oversized.bin");
-		const fetchImpl = Object.assign(
-			async () =>
-				new Response(new Uint8Array(MB + 1), {
-					status: 206,
-					headers: { "Content-Range": `bytes 0-${MB - 1}/${MB}` },
+	test.each(["buffer", "stream"])(
+		"does not write beyond a declared range before rejecting an oversized %s",
+		async (mode) => {
+			const path = join(dir, `oversized-${mode}.bin`);
+			const chunks = [
+				new Uint8Array(MB / 2),
+				new Uint8Array(MB / 2),
+				new Uint8Array(1),
+			];
+			const body =
+				mode === "buffer"
+					? new Uint8Array(MB + 1)
+					: new ReadableStream<Uint8Array>({
+							pull(controller) {
+								const chunk = chunks.shift();
+								if (chunk) controller.enqueue(chunk);
+								else controller.close();
+							},
+						});
+			const fetchImpl = Object.assign(
+				async () =>
+					new Response(body, {
+						status: 206,
+						headers: { "Content-Range": `bytes 0-${MB - 1}/${MB}` },
+					}),
+				{ preconnect: fetch.preconnect },
+			);
+			await expect(
+				downloadUrlToPathParallel("https://media.test/file", path, {
+					concurrency: 2,
+					partBytes: MB,
+					fetchImpl,
 				}),
-			{ preconnect: fetch.preconnect },
-		);
-		await expect(
-			downloadUrlToPathParallel("https://media.test/file", path, {
-				concurrency: 2,
-				partBytes: MB,
-				fetchImpl,
-			}),
-		).rejects.toThrow("expected");
-		expect((await readFile(path)).length).toBeLessThanOrEqual(MB);
-	});
+			).rejects.toThrow("expected");
+			const saved = await readFile(path);
+			expect(saved.length).toBeLessThanOrEqual(MB);
+			if (mode === "stream") expect(saved.length).toBe(MB);
+		},
+	);
 
 	test("cancels an unread response whose range cannot be placed", async () => {
 		let cancelled = false;
