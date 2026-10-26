@@ -1561,7 +1561,7 @@ mod tests {
             |project| {
                 project.timeline.as_mut().unwrap().text_segments.push(
                     serde_json::from_value(serde_json::json!({
-                        "start": 50.0, "end": 52.0, "layout": "fullscreen"
+                        "start": 12.0, "end": 14.0, "layout": "fullscreen"
                     }))
                     .unwrap(),
                 );
