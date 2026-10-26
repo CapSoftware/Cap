@@ -1,9 +1,8 @@
+use crate::caption_words::{MAX_CAPTION_WORD_DURATION, caption_text_from_words};
 use crate::{
     CaptionSegment, CaptionTrackSegment, CaptionWord, ProjectConfiguration, TimelineConfiguration,
 };
 use std::collections::HashMap;
-
-const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
 
 pub(crate) fn clip_timeline_offsets(timeline: &TimelineConfiguration) -> Vec<f64> {
     let mut offset = 0.0;
@@ -20,55 +19,6 @@ pub(crate) fn clip_timeline_offsets(timeline: &TimelineConfiguration) -> Vec<f64
             start
         })
         .collect()
-}
-
-fn caption_char_attaches_to_previous(value: char) -> bool {
-    matches!(
-        value,
-        ',' | '.'
-            | '!'
-            | '?'
-            | ';'
-            | ':'
-            | '%'
-            | ')'
-            | ']'
-            | '}'
-            | '\''
-            | '’'
-            | '、'
-            | '。'
-            | '！'
-            | '？'
-            | '；'
-            | '：'
-            | '，'
-    )
-}
-
-fn caption_token_attaches_to_previous(text: &str) -> bool {
-    text.trim()
-        .chars()
-        .next()
-        .is_some_and(caption_char_attaches_to_previous)
-}
-
-fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
-    let mut text = String::new();
-
-    for word in words {
-        let word_text = word.text.trim();
-        if word_text.is_empty() {
-            continue;
-        }
-
-        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
-            text.push(' ');
-        }
-        text.push_str(word_text);
-    }
-
-    text
 }
 
 const CAPTION_EDL_SEPARATOR: &str = "::edl";
@@ -220,6 +170,12 @@ fn map_captions_to_edited_timeline(
     }
 
     let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mappings_ordered = mappings
+        .iter()
+        .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())
+        && mappings.windows(2).all(|pair| {
+            pair[0].source_start <= pair[1].source_start && pair[0].source_end <= pair[1].source_end
+        });
     let holds = timeline.hold_windows();
     let hold_adjusted = |start: f64, end: f64| {
         if holds.is_empty() {
@@ -253,7 +209,21 @@ fn map_captions_to_edited_timeline(
             )
         };
 
-        for mapping in &mappings {
+        let bounds = if caption.words.is_empty() {
+            Some((f64::from(caption.start), f64::from(caption.end)))
+        } else {
+            word_bounds
+        };
+        let caption_mappings = match bounds {
+            Some((start, end)) if mappings_ordered && start.is_finite() && end.is_finite() => {
+                let first = mappings.partition_point(|mapping| mapping.source_end <= start);
+                let count = mappings[first..].partition_point(|mapping| mapping.source_start < end);
+                &mappings[first..first + count]
+            }
+            _ => &mappings,
+        };
+
+        for mapping in caption_mappings {
             if !caption.words.is_empty() {
                 if let Some((word_start, word_end)) = word_bounds
                     && (word_end <= mapping.source_start || word_start >= mapping.source_end)
@@ -329,27 +299,11 @@ pub fn derive_caption_track_segments(
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<CaptionTrackSegment> {
-    struct TrackOverrides {
-        fade_duration: Option<f32>,
-        linger_duration: Option<f32>,
-        position: Option<String>,
-        color: Option<String>,
-        background_color: Option<String>,
-        font_size: Option<u32>,
-    }
-
-    let mut overrides_by_source_id: HashMap<String, TrackOverrides> = HashMap::new();
+    let mut overrides_by_source_id = HashMap::new();
     for segment in &timeline.caption_segments {
         overrides_by_source_id
-            .entry(source_caption_id(&segment.id).to_string())
-            .or_insert_with(|| TrackOverrides {
-                fade_duration: segment.fade_duration_override,
-                linger_duration: segment.linger_duration_override,
-                position: segment.position_override.clone(),
-                color: segment.color_override.clone(),
-                background_color: segment.background_color_override.clone(),
-                font_size: segment.font_size_override,
-            });
+            .entry(source_caption_id(&segment.id))
+            .or_insert(segment);
     }
 
     let mut mapped =
@@ -361,17 +315,18 @@ pub fn derive_caption_track_segments(
         .map(|segment| {
             let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
             CaptionTrackSegment {
-                id: segment.id.clone(),
+                id: segment.id,
                 start: segment.start,
                 end: segment.end,
                 text: segment.text,
                 words: segment.words,
-                fade_duration_override: overrides.and_then(|o| o.fade_duration),
-                linger_duration_override: overrides.and_then(|o| o.linger_duration),
-                position_override: overrides.and_then(|o| o.position.clone()),
-                color_override: overrides.and_then(|o| o.color.clone()),
-                background_color_override: overrides.and_then(|o| o.background_color.clone()),
-                font_size_override: overrides.and_then(|o| o.font_size),
+                fade_duration_override: overrides.and_then(|o| o.fade_duration_override),
+                linger_duration_override: overrides.and_then(|o| o.linger_duration_override),
+                position_override: overrides.and_then(|o| o.position_override.clone()),
+                color_override: overrides.and_then(|o| o.color_override.clone()),
+                background_color_override: overrides
+                    .and_then(|o| o.background_color_override.clone()),
+                font_size_override: overrides.and_then(|o| o.font_size_override),
             }
         })
         .collect()

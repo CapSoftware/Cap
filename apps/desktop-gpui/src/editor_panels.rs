@@ -2727,36 +2727,79 @@ impl EditorWindow {
         self.fields.insert(key, input);
     }
 
-    /// The `createWritableMemo` half: re-derive a field's text whenever the
-    /// value moves under it (an undo, a preset, a timeline drag), but never
-    /// while it has focus. Runs from `render`, like `sync_hex_inputs`, because
-    /// the focus test needs a `&Window`.
+    /// The all-fields path: every field ever created, whether the frame draws
+    /// it or not. Kept as the faithful "before" for the benchmark and the
+    /// equivalence tests; production renders go through
+    /// [`Self::sync_visible_fields`].
     pub(crate) fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for (key, input) in self.fields.clone() {
-            if input.read(cx).focus_handle().is_focused(window) {
-                continue;
-            }
-            let Some(value) = self.field_value(key) else {
-                continue;
-            };
-            if input.read(cx).text() != value {
-                input.update(cx, |input, cx| input.set_text(value, cx));
-            }
+        // The value is written into one reused buffer and only copied out
+        // when it moved.
+        let mut value = String::new();
+        for (key, input) in &self.fields {
+            self.sync_field(input, *key, &mut value, window, cx);
         }
     }
 
-    /// What a field should read when it is not being typed into.
-    fn field_value(&self, key: FieldKey) -> Option<String> {
+    /// The production path: only the fields [`Self::prepare_sidebar_fields`]
+    /// says the next frame draws. A field that is not listed keeps its old
+    /// text until a later frame lists it again -- that is how a hidden field
+    /// catches up when it becomes visible. Focused fields are never written,
+    /// exactly as on the all-fields path.
+    pub(crate) fn sync_visible_fields(
+        &mut self,
+        keys: &[FieldKey],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut value = String::new();
+        for key in keys {
+            let Some(input) = self.fields.get(key) else {
+                continue;
+            };
+            self.sync_field(input, *key, &mut value, window, cx);
+        }
+    }
+
+    /// One field, shared by both sync paths so the visible-only path cannot
+    /// drift from the all-fields one.
+    fn sync_field(
+        &self,
+        input: &Entity<ui::TextInputState>,
+        key: FieldKey,
+        value: &mut String,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let state = input.read(cx);
+        if state.is_focused(window) {
+            return;
+        }
+        value.clear();
+        if self.write_field_value(key, value).is_none() {
+            return;
+        }
+        if state.text() != value {
+            let text = value.clone();
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+    }
+
+    /// What a field should read when it is not being typed into, appended to
+    /// `out`. `None` leaves the field alone.
+    fn write_field_value(&self, key: FieldKey, out: &mut String) -> Option<()> {
+        use std::fmt::Write as _;
+
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
         if let FieldKey::Crop(field) = key {
             let state = self.crop.as_ref()?;
-            return Some(ui::format_number(field.read(state.real())));
+            out.push_str(&ui::format_number(field.read(state.real())));
+            return Some(());
         }
         let timeline = self.project.timeline.as_ref()?;
-        Some(match key {
-            FieldKey::StyleName(index) => timeline.style_segments.get(index)?.name.clone(),
-            FieldKey::ImageName(index) => timeline.image_segments.get(index)?.name.clone(),
+        match key {
+            FieldKey::StyleName(index) => out.push_str(&timeline.style_segments.get(index)?.name),
+            FieldKey::ImageName(index) => out.push_str(&timeline.image_segments.get(index)?.name),
             FieldKey::StyleCrop(index, axis) => {
                 let background = timeline
                     .style_segments
@@ -2769,37 +2812,40 @@ impl EditorWindow {
                     position: XY::new(0, 0),
                     size: XY::new(width, height),
                 });
-                match axis {
+                let value = match axis {
                     0 => crop.position.x,
                     1 => crop.position.y,
                     2 => crop.size.x,
                     _ => crop.size.y,
-                }
-                .to_string()
+                };
+                let _ = write!(out, "{value}");
             }
-            FieldKey::TextContent(index) => timeline.text_segments.get(index)?.content.clone(),
-            FieldKey::CaptionText(index) => timeline.caption_segments.get(index)?.text.clone(),
-            FieldKey::AudioName(index) => timeline
-                .audio_segments
-                .get(index)?
-                .name
-                .clone()
-                .unwrap_or_default(),
+            FieldKey::TextContent(index) => {
+                out.push_str(&timeline.text_segments.get(index)?.content)
+            }
+            FieldKey::CaptionText(index) => {
+                out.push_str(&timeline.caption_segments.get(index)?.text)
+            }
+            FieldKey::AudioName(index) => {
+                if let Some(name) = &timeline.audio_segments.get(index)?.name {
+                    out.push_str(name);
+                }
+            }
             FieldKey::KeyboardText(index) => {
-                timeline.keyboard_segments.get(index)?.display_text.clone()
+                out.push_str(&timeline.keyboard_segments.get(index)?.display_text)
             }
             // `value={props.segment.start.toFixed(2)}` on all four.
             FieldKey::CaptionStart(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.start);
             }
             FieldKey::CaptionEnd(index) => {
-                format!("{:.2}", timeline.caption_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.caption_segments.get(index)?.end);
             }
             FieldKey::KeyboardStart(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.start)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.start);
             }
             FieldKey::KeyboardEnd(index) => {
-                format!("{:.2}", timeline.keyboard_segments.get(index)?.end)
+                let _ = write!(out, "{:.2}", timeline.keyboard_segments.get(index)?.end);
             }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
@@ -2810,10 +2856,11 @@ impl EditorWindow {
                     .iter()
                     .find(|item| item.index as usize == clip)
                     .map_or(0., |item| kind.read(&item.offsets));
-                ui::format_number(f64::from((offset * 1000.).round()))
+                out.push_str(&ui::format_number(f64::from((offset * 1000.).round())));
             }
             _ => return None,
-        })
+        }
+        Some(())
     }
 
     /// A live keystroke in a segment field.
@@ -7916,7 +7963,7 @@ impl EditorWindow {
 }
 
 impl EditorWindow {
-    /// Every text field the frame about to be built will draw.
+    /// Every text field the frame about to be built may draw.
     ///
     /// Creating one needs `&mut Window`, and the sidebar's render chain is
     /// threaded with `&self`, so the set is computed here from the same state
@@ -7928,9 +7975,8 @@ impl EditorWindow {
         let mut colors: Vec<ColorTarget> = Vec::new();
 
         // The crop dialog's four `BoundInput`s, while it is open. Created up
-        // front rather than pushed onto `fields`, because the match below
-        // bails early when the project has no timeline and the dialog is
-        // independent of it.
+        // front because the match below bails early when the project has no
+        // timeline and the dialog is independent of it.
         if self.crop.is_some() {
             use crate::editor_crop::CropField;
             for field in [
@@ -7939,7 +7985,9 @@ impl EditorWindow {
                 CropField::X,
                 CropField::Y,
             ] {
-                self.ensure_field(FieldKey::Crop(field), window, cx);
+                let key = FieldKey::Crop(field);
+                self.ensure_field(key, window, cx);
+                fields.push(key);
             }
         }
 
@@ -7952,6 +8000,9 @@ impl EditorWindow {
                     warm_installed_fonts();
                 }
                 let Some(timeline) = self.timeline() else {
+                    // The crop dialog does not need the timeline, and its
+                    // fields were already ensured above.
+                    self.sync_visible_fields(&fields, window, cx);
                     return;
                 };
                 let indices = |length: usize| -> Vec<usize> {
@@ -8054,13 +8105,13 @@ impl EditorWindow {
             },
         }
 
-        for key in fields {
+        for &key in &fields {
             self.ensure_field(key, window, cx);
         }
         for target in colors {
             self.ensure_hex_input(target, window, cx);
         }
-        self.sync_fields(window, cx);
+        self.sync_visible_fields(&fields, window, cx);
     }
 }
 

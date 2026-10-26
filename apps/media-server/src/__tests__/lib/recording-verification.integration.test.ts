@@ -15,6 +15,7 @@ import { Readable } from "node:stream";
 import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import { muxMediaTracksToMp4 } from "../../lib/media-video";
 import {
+	describeTrackDifference,
 	proveRecordingPackets,
 	readRecordingAudioTail,
 } from "../../lib/recording-packet-proof";
@@ -24,8 +25,10 @@ import {
 	timingMetadataBudget,
 } from "../../lib/recording-timing";
 import {
+	decodePreverifiedRun,
 	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
+	type PreverifiedVideoRun,
 	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
@@ -606,6 +609,34 @@ describe("encoded recording preservation", () => {
 		expect(verified.audio).toEqual(source.audio);
 		expect(verified.video).toEqual(source.video);
 	});
+	test("preserves a recording whose source track carries a creation time", async () => {
+		const input = join(directory, "creation-time-source.mp4");
+		const output = join(directory, "creation-time-remux.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-video_track_timescale",
+			"600",
+			"-movflags",
+			"frag_keyframe+empty_moov+default_base_moof",
+			"-metadata",
+			"creation_time=2026-09-17T10:29:10.000000Z",
+			input,
+		]);
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRemuxedRecording(input, input, output, {
+			requireAudio: true,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.integrity).toBeUndefined();
+	});
 	test("refuses identical corrupt packets rather than treating preservation as decodability", async () => {
 		await expect(
 			verifyRemuxedRecording(corruptTail, corruptTail, corruptTail, {
@@ -746,6 +777,32 @@ describe("encoded recording preservation", () => {
 			/audio does not preserve the source \(.*first difference at packet 0: pts -?[\d.]+ vs [\d.]+, dts/,
 		);
 
+		const retagged = join(directory, "proof-explained-tags.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0",
+			"-c",
+			"copy",
+			"-metadata:s:v:0",
+			"handler_name=Retagged",
+			retagged,
+		]);
+		await expect(
+			proveRecordingPackets(
+				silent,
+				silent,
+				retagged,
+				AbortSignal.timeout(5000),
+			),
+		).rejects.toThrow(
+			/video does not preserve the source \(tags\.handler_name "[^"]*" vs "Retagged"/,
+		);
+
 		const changed = join(directory, "proof-explained-data.mp4");
 		const bytes = await readFile(silent);
 		const mdat = bytes.indexOf(Buffer.from("mdat"));
@@ -757,6 +814,45 @@ describe("encoded recording preservation", () => {
 		).rejects.toThrow(
 			/does not preserve the source \(first difference at packet \d+: data differs\)/,
 		);
+	});
+	test("shows both time bases when packet timing differs", () => {
+		const summary = (packets: string) => ({
+			configuration: { codec_type: "video" as const, start: "0/1" },
+			count: 2,
+			packets,
+			startTime: 0,
+			tail: undefined,
+		});
+		expect(
+			describeTrackDifference(
+				{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+				{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+			),
+		).toBe("time base 1/15000 vs 1/90000");
+	});
+	test("keeps the time bases when many tags differ", () => {
+		const summary = (value: string) => ({
+			configuration: {
+				codec_type: "video" as const,
+				start: "0/1",
+				tags: Object.fromEntries(
+					Array.from({ length: 20 }, (_, index) => [
+						`tag_${index}`,
+						`${value}-${"x".repeat(30)}`,
+					]),
+				),
+			},
+			count: 2,
+			packets: value,
+			startTime: 0,
+			tail: undefined,
+		});
+		const explanation = describeTrackDifference(
+			{ summary: summary("a"), log: undefined, timeBase: "1/15000" },
+			{ summary: summary("b"), log: undefined, timeBase: "1/90000" },
+		);
+		expect(explanation.length).toBeLessThanOrEqual(400);
+		expect(explanation).toStartWith("time base 1/15000 vs 1/90000; tags.tag_0");
 	});
 	test("does not start cancelled packet verification", async () => {
 		const controller = new AbortController();
@@ -2870,6 +2966,184 @@ describe("chunked packet-proven verification", () => {
 		} finally {
 			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
 		}
+	});
+
+	async function preverify(
+		recording: { init: string; segments: string[] },
+		from: number,
+		to: number,
+	): Promise<PreverifiedVideoRun> {
+		const work = await mkdtemp(join(directory, "preverify-"));
+		const lines = await decodePreverifiedRun(
+			recording.init,
+			recording.segments.slice(from, to),
+			work,
+		);
+		if (!lines) throw new Error("Expected a decodable preverified run");
+		return { segments: to - from, lines };
+	}
+
+	async function withRuns(
+		recording: Awaited<ReturnType<typeof segmentedRecording>>,
+		runs: PreverifiedVideoRun[],
+		chunks?: string,
+	) {
+		if (chunks === undefined)
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		else process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = chunks;
+		const warn = spyOn(console, "warn");
+		try {
+			const result = await verifyRemuxedRecording(
+				recording.combined,
+				silent,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+				runs,
+			);
+			const fallbacks = warn.mock.calls.filter((call) =>
+				String(call[0]).includes("recording_chunked_decode_fallback"),
+			);
+			return { result, fallbacks };
+		} finally {
+			warn.mockRestore();
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	}
+
+	test.each([undefined, "3"])(
+		"returns the same evidence from preverified runs as one full decode (chunks %s)",
+		async (chunks) => {
+			const recording = await segmentedRecording("preverified-parity", 15);
+			expect(recording.segments.length).toBeGreaterThanOrEqual(6);
+			const { single } = await both(recording);
+			const runs = [
+				await preverify(recording, 0, 2),
+				await preverify(recording, 2, 4),
+			];
+			const { result, fallbacks } = await withRuns(recording, runs, chunks);
+			expect(fallbacks).toHaveLength(0);
+			expect(result).toEqual(single);
+			expect(result.video.frameCount).toBe(120);
+		},
+	);
+
+	test("accepts runs that cover every fragment", async () => {
+		const recording = await segmentedRecording("preverified-complete", 15);
+		const { single } = await both(recording);
+		const { result, fallbacks } = await withRuns(recording, [
+			await preverify(recording, 0, recording.segments.length),
+		]);
+		expect(fallbacks).toHaveLength(0);
+		expect(result).toEqual(single);
+	});
+
+	test.each([
+		"dropped frame",
+		"extra frame",
+		"shifted timestamps",
+		"changed header",
+	])(
+		"falls back to one full decode when a cached run has a %s",
+		async (defect) => {
+			const recording = await segmentedRecording(
+				`preverified-${defect.replaceAll(" ", "-")}`,
+				15,
+			);
+			const { single } = await both(recording);
+			const run = await preverify(recording, 0, 3);
+			const frames = run.lines.filter((line) => !line.startsWith("#"));
+			const header = run.lines.filter((line) => line.startsWith("#"));
+			const changed =
+				defect === "dropped frame"
+					? [...header, ...frames.slice(0, -1)]
+					: defect === "extra frame"
+						? [...header, ...frames, frames.at(-1) as string]
+						: defect === "shifted timestamps"
+							? [
+									...header,
+									...frames.map((line) =>
+										line.replace(
+											/^0,\s*(\d+),\s*(\d+)/,
+											(_, dts, pts) =>
+												`0, ${Number(dts) + 1}, ${Number(pts) + 1}`,
+										),
+									),
+								]
+							: [
+									...header.map((line) =>
+										line.replace(/^#dimensions 0: .*/, "#dimensions 0: 1x1"),
+									),
+									...frames,
+								];
+			const { result, fallbacks } = await withRuns(recording, [
+				{ segments: run.segments, lines: changed },
+			]);
+			expect(fallbacks).toHaveLength(1);
+			expect(result).toEqual(single);
+		},
+	);
+
+	test("drops a cached run whose next fragment cannot be decoded on its own", async () => {
+		const recording = await misalignedRecording("preverified-misaligned");
+		const { single } = await both(recording);
+		const work = await mkdtemp(join(directory, "preverify-misaligned-"));
+		const lines = await decodePreverifiedRun(
+			recording.init,
+			recording.segments.slice(0, 1),
+			work,
+		);
+		expect(lines).not.toBeNull();
+		const { result } = await withRuns(recording, [
+			{ segments: 1, lines: lines ?? [] },
+		]);
+		expect(result).toEqual(single);
+	});
+
+	test("does not preverify a run that does not start on a keyframe", async () => {
+		const recording = await misalignedRecording("preverified-unaligned-start");
+		const work = await mkdtemp(join(directory, "preverify-unaligned-"));
+		expect(
+			await decodePreverifiedRun(
+				recording.init,
+				recording.segments.slice(1, 3),
+				work,
+			),
+		).toBeNull();
+	});
+
+	test("does not preverify fragments that fail to decode", async () => {
+		const recording = await segmentedRecording("preverified-corrupt", 15);
+		const [first, second] = recording.segments;
+		if (!first || !second) throw new Error("Expected two fragments");
+		const packets = JSON.parse(
+			await run([
+				"ffprobe",
+				"-v",
+				"error",
+				"-protocol_whitelist",
+				"file,concat",
+				"-select_streams",
+				"v:0",
+				"-show_packets",
+				"-show_entries",
+				"packet=pos,size",
+				"-of",
+				"json",
+				`concat:${recording.init}|${second}`,
+			]),
+		) as { packets: { pos: string; size: string }[] };
+		const last = packets.packets.at(-1);
+		if (!last) throw new Error("Fragment has no video packet");
+		const offset = Number(last.pos) - (await readFile(recording.init)).length;
+		const bytes = Buffer.from(await readFile(second));
+		bytes.fill(0, offset, offset + Number(last.size));
+		const corrupt = join(directory, "preverified-corrupt-fragment.m4s");
+		await writeFile(corrupt, bytes);
+		const work = await mkdtemp(join(directory, "preverify-corrupt-"));
+		expect(
+			await decodePreverifiedRun(recording.init, [first, corrupt], work),
+		).toBeNull();
 	});
 });
 

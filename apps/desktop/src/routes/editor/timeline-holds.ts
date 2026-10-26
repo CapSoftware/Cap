@@ -13,8 +13,12 @@ export type HoldWindow = [number, number];
 export type HoldSourceSegment = Pick<TextSegment, "start" | "end"> &
 	Partial<Pick<TextSegment, "enabled" | "layout">>;
 
+// Pass `clipsEnd` (the clips' gapless duration) to leave out holds that start
+// after the clips have ended: they hold no frame and are never reached, so
+// they add nothing to the timeline, as in Rust.
 export function holdWindows(
 	textSegments: readonly HoldSourceSegment[] | null | undefined,
+	clipsEnd?: number,
 ): HoldWindow[] {
 	if (!textSegments?.length) return [];
 	const windows = textSegments
@@ -35,8 +39,20 @@ export function holdWindows(
 			merged.push([window[0], window[1]]);
 		}
 	}
-	return merged;
+	if (clipsEnd === undefined) return merged;
+	const reachable: HoldWindow[] = [];
+	let held = 0;
+	for (const window of merged) {
+		if (window[0] - held > clipsEnd + CLOSING_HOLD_TOLERANCE) break;
+		held += window[1] - window[0];
+		reachable.push(window);
+	}
+	return reachable;
 }
+
+// CLOSING_HOLD_TOLERANCE in configuration.rs: a hold starting this close to
+// the clips' end is a closing title.
+const CLOSING_HOLD_TOLERANCE = 1e-9;
 
 export function totalHeldDuration(holds: HoldWindow[]): number {
 	return holds.reduce((sum, [start, end]) => sum + (end - start), 0);

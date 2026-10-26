@@ -28,7 +28,7 @@ use cap_project::{
     StudioRecordingStatus,
 };
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
-use gpui::RenderImage;
+use gpui::{App, RenderImage};
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
@@ -279,20 +279,17 @@ impl RecordingItem {
     }
 }
 
-/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`).
-fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
-    let mode = match &meta.inner {
+/// `RecordingMetaWithMetadata::new`'s mode (`lib.rs:3888-3925`).
+fn recording_mode(meta: &RecordingMeta) -> RecordingMode {
+    match &meta.inner {
         RecordingMetaInner::Studio(_) => RecordingMode::Studio,
         RecordingMetaInner::Instant(_) => RecordingMode::Instant,
-    };
-    let clip_count = match &meta.inner {
-        RecordingMetaInner::Studio(studio) => match &**studio {
-            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
-            StudioRecordingMeta::SingleSegment { .. } => 1,
-        },
-        RecordingMetaInner::Instant(_) => 1,
-    };
-    let status = match &meta.inner {
+    }
+}
+
+/// `RecordingMetaWithMetadata::new`'s status (`lib.rs:3888-3925`).
+fn recording_status(meta: &RecordingMeta) -> RecordingStatus {
+    match &meta.inner {
         RecordingMetaInner::Studio(studio) => match &**studio {
             // A `MultipleSegments` meta with no `status` key at all is
             // Complete -- `.unwrap_or(StudioRecordingStatus::Complete)`.
@@ -320,7 +317,31 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
             RecordingStatus::Complete
         }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Full [`RecordingItem`]s built on this test thread. Recovery must stay on
+    /// [`ScannedRecording`], so its tests can pin that this does not move.
+    static RECORDING_ITEM_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`), plus the filesystem
+/// lookups a card needs.
+fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
+    let mode = recording_mode(&meta);
+    let clip_count = match &meta.inner {
+        RecordingMetaInner::Studio(studio) => match &**studio {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+        },
+        RecordingMetaInner::Instant(_) => 1,
     };
+    let status = recording_status(&meta);
+
+    #[cfg(test)]
+    RECORDING_ITEM_BUILDS.with(|builds| builds.set(builds.get() + 1));
 
     let preview = path.join("screenshots/preview.jpg");
     let thumbnail = if preview.is_file() {
@@ -360,6 +381,37 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
 }
 
 fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
+    scanned_recordings_in(dirs).map(ScannedRecording::into_item)
+}
+
+/// A recording directory after its metadata has been parsed, before the
+/// filesystem work a card needs (upload state, thumbnails, preview mtimes).
+///
+/// Both the library listing and the recovery scan walk every bundle, but
+/// recovery drops complete recordings before it needs any of those fields.
+/// Keeping this intermediate means the scan parses each `recording-meta.json`
+/// once and recovery only pays for recordings it can actually return.
+///
+/// Skipping the fields is state-neutral: `upload::queue::status` only reads the
+/// saved upload state (and settings for legacy records), and the thumbnail
+/// checks are `stat`s.
+struct ScannedRecording {
+    path: PathBuf,
+    meta: RecordingMeta,
+    sort_time_millis: f64,
+}
+
+impl ScannedRecording {
+    fn status(&self) -> RecordingStatus {
+        recording_status(&self.meta)
+    }
+
+    fn into_item(self) -> RecordingItem {
+        recording_item(self.path, self.meta, self.sort_time_millis)
+    }
+}
+
+fn scanned_recordings_in(dirs: &[PathBuf]) -> impl Iterator<Item = ScannedRecording> {
     let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -377,7 +429,11 @@ fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
     paths.sort_by(|(_, a), (_, b)| b.total_cmp(a));
     paths.into_iter().filter_map(|(path, sort_time_millis)| {
         let meta = RecordingMeta::load_for_project(&path).ok()?;
-        Some(recording_item(path, meta, sort_time_millis))
+        Some(ScannedRecording {
+            path,
+            meta,
+            sort_time_millis,
+        })
     })
 }
 
@@ -396,18 +452,21 @@ pub fn find_incomplete_recordings_in(
     dirs: &[PathBuf],
     active_recording: Option<&Path>,
 ) -> Vec<IncompleteRecordingItem> {
-    list_recordings_in(dirs)
-        .into_iter()
-        .filter(|item| {
+    scanned_recordings_in(dirs)
+        .filter(|recording| {
             matches!(
-                item.status,
+                recording.status(),
                 RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-            ) && active_recording != Some(item.path.as_path())
-                && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
+            ) && active_recording != Some(recording.path.as_path())
+                && is_recording_after_recovery_cutoff(
+                    &recording.meta.pretty_name,
+                    recording.sort_time_millis,
+                )
         })
-        .filter_map(|item| {
-            if item.mode == RecordingMode::Instant {
-                let display = item.path.join("content/display");
+        .filter_map(|recording| {
+            let ScannedRecording { path, meta, .. } = recording;
+            if recording_mode(&meta) == RecordingMode::Instant {
+                let display = path.join("content/display");
                 if !display.join("init.mp4").is_file() {
                     return None;
                 }
@@ -417,16 +476,16 @@ pub fn find_incomplete_recordings_in(
                     .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
                     .count();
                 return (segment_count > 0).then_some(IncompleteRecordingItem {
-                    project_path: item.path,
-                    pretty_name: item.pretty_name,
+                    project_path: path,
+                    pretty_name: meta.pretty_name,
                     segment_count,
                     estimated_duration_secs: 0.0,
                 });
             }
-            let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+            let incomplete = RecoveryManager::inspect_recording(&path)?;
             (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
-                project_path: item.path,
-                pretty_name: item.pretty_name,
+                project_path: path,
+                pretty_name: meta.pretty_name,
                 segment_count: incomplete.recoverable_segments.len(),
                 estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
             })
@@ -595,61 +654,23 @@ pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
 /// An instant recording opens its `content` directory --
 /// `commands.openFilePath` is `open <dir>` on macOS -- and anything else, or a
 /// bundle with no `content` directory, is revealed in the file manager.
-pub fn open_recording_folder(path: &Path, mode: RecordingMode) {
+pub fn open_recording_folder(path: &Path, mode: RecordingMode, cx: &App) {
     let content = path.join("content");
     if mode == RecordingMode::Instant && content.is_dir() {
-        open_path(&content);
+        open_with_system(&content, cx);
     } else {
-        reveal_in_folder(path);
+        reveal_path(path, cx);
     }
 }
 
-pub fn open_path(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open").arg(path).spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", &path.to_string_lossy()])
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            std::process::Command::new("xdg-open").arg(path).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "opening a path failed: {error}");
-    }
+// `std::fs::canonicalize` yields `\\?\` verbatim paths on Windows, which the
+// shell APIs behind GPUI's reveal and open reject with E_INVALIDARG.
+pub fn reveal_path(path: &Path, cx: &App) {
+    cx.reveal_path(dunce::simplified(path));
 }
 
-pub fn reveal_in_folder(path: &Path) {
-    let result = {
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(path)
-                .spawn()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path.display()))
-                .spawn()
-        }
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        {
-            let parent = path.parent().unwrap_or(path);
-            std::process::Command::new("xdg-open").arg(parent).spawn()
-        }
-    };
-    if let Err(error) = result {
-        tracing::warn!(path = %path.display(), "revealing a path failed: {error}");
-    }
+pub fn open_with_system(path: &Path, cx: &App) {
+    cx.open_with_system(dunce::simplified(path));
 }
 
 pub fn copy_file_to_path(src: &Path, dest: &Path) -> Result<(), String> {
@@ -672,6 +693,30 @@ pub struct ScreenshotItem {
     pub pretty_name: String,
     pub sort_time_millis: f64,
     pub thumbnail: Option<PathBuf>,
+    /// The thumbnail PNG's version (mtime plus length), so a row can tell a
+    /// re-scan that found the same file from one whose screenshot was
+    /// rewritten in place.
+    pub thumbnail_version: Option<u128>,
+}
+
+/// Whether a library row can keep the image it already has for `item`.
+///
+/// The PNG path and its version both have to match, the previous row must have
+/// finished decoding, and it must not already be waiting on a newer decode: a
+/// row whose decode never landed (or was cancelled) still has to ask again.
+pub(crate) fn screenshot_thumbnail_is_current(
+    item: &ScreenshotItem,
+    previous: Option<&ScreenshotItem>,
+    previous_has_thumbnail: bool,
+    previous_stale: bool,
+) -> bool {
+    !previous_stale
+        && previous.is_some_and(|previous| {
+            previous.thumbnail == item.thumbnail
+                && previous.thumbnail_version.is_some()
+                && previous.thumbnail_version == item.thumbnail_version
+                && previous_has_thumbnail
+        })
 }
 
 /// `list_screenshots` (`lib.rs:4055-4091`): `*.cap` directories only, and the
@@ -702,6 +747,7 @@ fn screenshot_items_in(dir: &Path) -> impl Iterator<Item = ScreenshotItem> {
                 path: png.clone(),
                 pretty_name: meta.pretty_name,
                 sort_time_millis,
+                thumbnail_version: source_version(&png),
                 thumbnail: Some(png),
                 bundle,
             })
@@ -781,7 +827,7 @@ fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
                 pretty_name: item.pretty_name,
                 clip_count: 1,
                 sort_time_millis: item.sort_time_millis,
-                thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
+                thumbnail_version: item.thumbnail_version,
                 thumbnail: item.thumbnail,
                 sharing: None,
             }),
@@ -932,6 +978,24 @@ fn source_mtime_nanos(path: &Path) -> Option<u128> {
         .map(|elapsed| elapsed.as_nanos())
 }
 
+/// A source file's version: its mtime plus its length, so a rewrite that
+/// preserves the timestamp but changes the length (`cp -p` of a re-encoded
+/// file, `touch -r` after an edit) still invalidates the image a screenshot
+/// library row is holding and misses the decode cache. A rewrite that
+/// preserves both is undetectable without reading the file. The high and low
+/// halves cannot overlap (mtime is well under 2^64 nanos, length is shifted
+/// above it), so this is a lossless encoding rather than a hash.
+fn source_version(path: &Path) -> Option<u128> {
+    let metadata = path.metadata().ok()?;
+    let mtime = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(mtime ^ ((metadata.len() as u128) << 64))
+}
+
 /// FNV-1a, spelled out because `DefaultHasher`'s algorithm is unspecified
 /// across Rust releases and a silent change would orphan every cached file.
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -957,15 +1021,16 @@ fn is_bundle_display(path: &Path) -> bool {
             .is_some_and(|name| name == "screenshots")
 }
 
-/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<mtime>.jpg`.
+/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<version>.jpg`.
 ///
-/// The source's mtime is baked into the file name, so freshness is exact-name
-/// existence -- no comparison logic, and a source rewritten in place simply
-/// misses. [`Self::store`] sweeps the stale mtime variants after writing.
+/// The source's version (mtime plus length) is baked into the file name, so
+/// freshness is exact-name existence -- no comparison logic, and a source
+/// whose version changes simply misses. [`Self::store`] sweeps the stale
+/// version variants after writing.
 pub struct CacheSlot {
     dir: PathBuf,
     prefix: String,
-    mtime: u128,
+    version: u128,
 }
 
 impl CacheSlot {
@@ -975,7 +1040,7 @@ impl CacheSlot {
     /// screenshot PNGs live in bundles both apps extension-scan, so extra
     /// files are not written there.
     fn for_source(source: &Path) -> Option<Self> {
-        let mtime = source_mtime_nanos(source)?;
+        let version = source_version(source)?;
         if is_bundle_display(source) {
             return Some(Self {
                 dir: source.parent()?.to_path_buf(),
@@ -984,7 +1049,7 @@ impl CacheSlot {
                 } else {
                     "thumbnail".to_string()
                 },
-                mtime,
+                version,
             });
         }
         Some(Self {
@@ -993,7 +1058,7 @@ impl CacheSlot {
                 "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}",
                 fnv1a64(source.to_string_lossy().as_bytes())
             ),
-            mtime,
+            version,
         })
     }
 
@@ -1005,13 +1070,13 @@ impl CacheSlot {
         Some(Self {
             dir: thumbnail_cache_dir(),
             prefix,
-            mtime: source_mtime_nanos(source)?,
+            version: source_version(source)?,
         })
     }
 
     fn file(&self) -> PathBuf {
         self.dir
-            .join(format!("{}-{:x}.jpg", self.prefix, self.mtime))
+            .join(format!("{}-{:x}.jpg", self.prefix, self.version))
     }
 
     pub fn load(&self) -> Option<Arc<RenderImage>> {
@@ -1038,12 +1103,12 @@ impl CacheSlot {
             return;
         };
         let file = self.file();
-        // The prefix keeps two same-mtime slots (wallpapers installed in one
+        // The prefix keeps two same-version slots (wallpapers installed in one
         // copy) from interleaving writes into one tmp file.
         let tmp = self.dir.join(format!(
             "{}-{:x}.{}.tmp",
             self.prefix,
-            self.mtime,
+            self.version,
             std::process::id()
         ));
         if std::fs::write(&tmp, &encoded).is_err() || std::fs::rename(&tmp, &file).is_err() {
@@ -1053,7 +1118,7 @@ impl CacheSlot {
         self.remove_stale_variants(&file);
     }
 
-    /// Sweep the other `<prefix>-<hex>.jpg` mtime variants. The remainder must
+    /// Sweep the other `<prefix>-<hex>.jpg` version variants. The remainder must
     /// parse as bare hex so that one key can never delete another key's files
     /// when it happens to be a string prefix of it (`wallpaper-a-128` vs a
     /// hypothetical `wallpaper-a-128-128`), and so `display.jpg` next to a
@@ -1788,6 +1853,7 @@ mod tests {
                     path: png.clone(),
                     pretty_name: meta.pretty_name,
                     sort_time_millis: media_sort_time_millis(&png),
+                    thumbnail_version: source_version(&png),
                     thumbnail: Some(png),
                     bundle,
                 });
@@ -1959,6 +2025,232 @@ mod tests {
         );
     }
 
+    /// Same-process old vs new benchmark for the startup recovery scan.
+    ///
+    /// Old is the pre-change implementation: `list_recordings_in` (a full
+    /// `RecordingItem` per recording) followed by the recovery filter. New is
+    /// `find_incomplete_recordings_in`, which filters on parsed metadata first.
+    ///
+    /// Set `CAP_GPUI_RECOVERY_BENCH_DIR` to measure a real library. Without it
+    /// the benchmark generates 600 complete Studio + 300 complete Instant
+    /// recordings, with thumbnails and saved upload state where real ones have
+    /// them, plus four recoverable incomplete recordings, one pre-cutoff
+    /// recording, one corrupt meta and one missing meta: 907 directories,
+    /// 905 parsed recordings. Run with:
+    ///
+    /// `cargo test -p cap-desktop-gpui recovery_scan_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual filesystem benchmark; set CAP_GPUI_RECOVERY_BENCH_DIR for a real library"]
+    fn recovery_scan_benchmark() {
+        fn write_complete_studio(recordings: &Path, index: usize) {
+            let bundle = recordings.join(format!("complete-studio-{index:04}.cap"));
+            std::fs::create_dir_all(&bundle).unwrap();
+            let segment_count = if index % 5 == 0 { 3 } else { 1 };
+            let segments: Vec<String> = (0..segment_count)
+                .map(|segment| {
+                    format!(
+                        r#"{{"display":{{"path":"content/segments/segment-{segment}/display.mp4","fps":30}}}}"#
+                    )
+                })
+                .collect();
+            let sharing = if index % 4 == 0 {
+                r#"{"id":"share","link":"https://cap.so/s/share"}"#
+            } else {
+                "null"
+            };
+            std::fs::write(
+                bundle.join("recording-meta.json"),
+                format!(
+                    r#"{{"pretty_name":"Studio {index}","sharing":{sharing},"segments":[{}]}}"#,
+                    segments.join(",")
+                ),
+            )
+            .unwrap();
+            if index % 3 == 0 {
+                let screenshots = bundle.join("screenshots");
+                std::fs::create_dir_all(&screenshots).unwrap();
+                std::fs::write(
+                    screenshots.join(if index % 6 == 0 {
+                        "preview.jpg"
+                    } else {
+                        "display.jpg"
+                    }),
+                    b"thumbnail",
+                )
+                .unwrap();
+            }
+        }
+
+        fn write_complete_instant(recordings: &Path, index: usize) {
+            let bundle = recordings.join(format!("complete-instant-{index:04}.cap"));
+            std::fs::create_dir_all(&bundle).unwrap();
+            std::fs::write(
+                bundle.join("recording-meta.json"),
+                format!(
+                    r#"{{"pretty_name":"Instant {index}","sharing":null,"fps":30,"sample_rate":48000}}"#
+                ),
+            )
+            .unwrap();
+            if index % 2 == 0 {
+                let state = serde_json::json!({
+                    "version": 1,
+                    "video_id": format!("bench-{index}"),
+                    "server_url": "https://cap.example.invalid",
+                    "owner_id": null,
+                    "kind": "Mp4",
+                    "requested_audio": null,
+                    "preserve_local": true,
+                    "phase": "Verified",
+                    "attempt_count": 0,
+                    "last_error": null,
+                    "next_retry_at": null,
+                    "verification": null,
+                    "receipt": null,
+                });
+                std::fs::write(
+                    bundle.join("instant-upload.json"),
+                    serde_json::to_vec(&state).unwrap(),
+                )
+                .unwrap();
+            }
+            if index % 3 == 1 {
+                let screenshots = bundle.join("screenshots");
+                std::fs::create_dir_all(&screenshots).unwrap();
+                std::fs::write(screenshots.join("display.jpg"), b"thumbnail").unwrap();
+            }
+        }
+
+        let from_env = std::env::var("CAP_GPUI_RECOVERY_BENCH_DIR").ok();
+        let generated = from_env.is_none().then(|| temp_dir("recovery-bench"));
+        let dirs = match (&from_env, &generated) {
+            (Some(dir), _) => vec![PathBuf::from(dir)],
+            (None, Some(root)) => {
+                let recordings = root.join("recordings");
+                std::fs::create_dir_all(&recordings).unwrap();
+                for index in 0..600 {
+                    write_complete_studio(&recordings, index);
+                }
+                for index in 0..300 {
+                    write_complete_instant(&recordings, index);
+                }
+                for index in 0..2 {
+                    write_incomplete_bundle(
+                        &recordings,
+                        &format!("incomplete-studio-{index}"),
+                        &format!("Cap 2026-02-0{index} at 10.00.00"),
+                        "InProgress",
+                        true,
+                    );
+                }
+                write_incomplete_bundle(
+                    &recordings,
+                    "remux-studio",
+                    "Cap 2026-02-03 at 10.00.00",
+                    "NeedsRemux",
+                    true,
+                );
+                write_incomplete_instant_bundle(
+                    &recordings,
+                    "incomplete-instant",
+                    "Cap 2026-02-04 at 10.00.00",
+                    false,
+                );
+                write_incomplete_bundle(
+                    &recordings,
+                    "pre-cutoff",
+                    "Cap 2025-12-31 at 10.00.00",
+                    "InProgress",
+                    true,
+                );
+                write_bundle(&recordings, "corrupt-meta", "{ not json ");
+                std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
+                assert_eq!(
+                    std::fs::read_dir(&recordings).unwrap().count(),
+                    907,
+                    "the generated fixture must keep its documented shape"
+                );
+                vec![recordings]
+            }
+            (None, None) => unreachable!(),
+        };
+
+        let expected = find_incomplete_recordings_in(&dirs, None);
+        if from_env.is_none() {
+            assert_eq!(
+                expected.len(),
+                4,
+                "the generated fixture has four recoverable recordings"
+            );
+        }
+        assert_eq!(
+            find_incomplete_recordings_by_full_listing(&dirs, None),
+            expected,
+            "both implementations must agree before timing"
+        );
+
+        let old = || find_incomplete_recordings_by_full_listing(&dirs, None);
+        let new = || find_incomplete_recordings_in(&dirs, None);
+        let time = |scan: &dyn Fn() -> Vec<IncompleteRecordingItem>| {
+            let started = std::time::Instant::now();
+            let items = std::hint::black_box(scan());
+            let millis = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(items, expected);
+            millis
+        };
+
+        for _ in 0..3 {
+            std::hint::black_box(old());
+            std::hint::black_box(new());
+        }
+        let mut old_samples = Vec::new();
+        let mut new_samples = Vec::new();
+        for sample in 0..15 {
+            // Alternate the order so neither side systematically warms the
+            // directory and metadata caches for the other.
+            let (old_ms, new_ms) = if sample % 2 == 0 {
+                (time(&old), time(&new))
+            } else {
+                let new_ms = time(&new);
+                let old_ms = time(&old);
+                (old_ms, new_ms)
+            };
+            old_samples.push(old_ms);
+            new_samples.push(new_ms);
+        }
+        old_samples.sort_by(f64::total_cmp);
+        new_samples.sort_by(f64::total_cmp);
+        let median = |samples: &[f64]| samples[samples.len() / 2];
+
+        let recordings = scanned_recordings_in(&dirs).count();
+        let complete = scanned_recordings_in(&dirs)
+            .filter(|recording| recording.status() == RecordingStatus::Complete)
+            .count();
+        if from_env.is_none() {
+            assert_eq!(recordings, 905, "the generated fixture parses 905 bundles");
+            assert_eq!(
+                complete, 900,
+                "the generated fixture has 900 complete bundles"
+            );
+        }
+        println!(
+            "{}",
+            serde_json::json!({
+                "fixture": if from_env.is_some() { "env" } else { "generated" },
+                "recordings": recordings,
+                "complete_recordings": complete,
+                "recovered_recordings": expected.len(),
+                "samples": old_samples.len(),
+                "old_median_ms": median(&old_samples),
+                "new_median_ms": median(&new_samples),
+                "speedup": median(&old_samples) / median(&new_samples),
+            })
+        );
+
+        if let Some(root) = generated {
+            std::fs::remove_dir_all(root).ok();
+        }
+    }
+
     /// `RecordingMetaWithMetadata::new`: the mode, the clip count and the
     /// status for each shape of meta the two recorders write.
     #[test]
@@ -1999,11 +2291,31 @@ mod tests {
             ),
         );
         std::thread::sleep(std::time::Duration::from_millis(6));
-        write_bundle(
+        let instant_complete = write_bundle(
             &recordings,
             "instant-complete",
             r#"{"pretty_name":"Instant complete","sharing":null,"fps":30,"sample_rate":48000}"#,
         );
+        std::fs::write(
+            instant_complete.join("instant-upload.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "video_id": "listing-instant",
+                "server_url": "https://cap.example.invalid",
+                "owner_id": null,
+                "kind": "Mp4",
+                "requested_audio": null,
+                "preserve_local": true,
+                "phase": "Verified",
+                "attempt_count": 0,
+                "last_error": null,
+                "next_retry_at": null,
+                "verification": null,
+                "receipt": null,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(6));
         write_bundle(
             &recordings,
@@ -2088,6 +2400,10 @@ mod tests {
         assert_eq!(complete.clip_count, 1, "an instant recording is one clip");
         assert_eq!(complete.status, RecordingStatus::Complete);
         assert!(
+            complete.upload.is_some(),
+            "the listing still reads saved instant upload state"
+        );
+        assert!(
             !complete.opens_editor(),
             "instant rows never open the editor, complete or not"
         );
@@ -2143,6 +2459,292 @@ mod tests {
             .unwrap();
         }
         bundle
+    }
+
+    fn write_incomplete_instant_bundle(
+        recordings: &Path,
+        name: &str,
+        pretty_name: &str,
+        recording: bool,
+    ) -> PathBuf {
+        let bundle = write_bundle(
+            recordings,
+            name,
+            &format!(r#"{{"pretty_name":"{pretty_name}","sharing":null,"recording":{recording}}}"#),
+        );
+        let display = bundle.join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+        std::fs::write(display.join("segment_001.m4s"), complete_m4s_fragment()).unwrap();
+        bundle
+    }
+
+    /// The recovery scan before the lean path: list every recording (building
+    /// every `RecordingItem`), then filter. This is the reference implementation
+    /// production must agree with, and the "old" side of the benchmark.
+    fn find_incomplete_recordings_by_full_listing(
+        dirs: &[PathBuf],
+        active_recording: Option<&Path>,
+    ) -> Vec<IncompleteRecordingItem> {
+        list_recordings_in(dirs)
+            .into_iter()
+            .filter(|item| {
+                matches!(
+                    item.status,
+                    RecordingStatus::InProgress | RecordingStatus::NeedsRemux
+                ) && active_recording != Some(item.path.as_path())
+                    && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
+            })
+            .filter_map(|item| {
+                if item.mode == RecordingMode::Instant {
+                    let display = item.path.join("content/display");
+                    if !display.join("init.mp4").is_file() {
+                        return None;
+                    }
+                    let segment_count = std::fs::read_dir(display)
+                        .ok()?
+                        .filter_map(Result::ok)
+                        .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
+                        .count();
+                    return (segment_count > 0).then_some(IncompleteRecordingItem {
+                        project_path: item.path,
+                        pretty_name: item.pretty_name,
+                        segment_count,
+                        estimated_duration_secs: 0.0,
+                    });
+                }
+                let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+                (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
+                    project_path: item.path,
+                    pretty_name: item.pretty_name,
+                    segment_count: incomplete.recoverable_segments.len(),
+                    estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
+                })
+            })
+            .collect()
+    }
+
+    fn recording_item_builds() -> usize {
+        RECORDING_ITEM_BUILDS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn lean_recovery_matches_the_full_listing_on_a_mixed_library() {
+        let root = temp_dir("recovery-equivalence");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        // Created oldest first; the recovery scan's order is creation order
+        // reversed, so the expected output below is the reverse of the
+        // recoverable fixtures' creation order.
+        let pre_cutoff = write_incomplete_bundle(
+            &recordings,
+            "pre-cutoff",
+            "Cap 2025-12-31 at 23.59.59",
+            "InProgress",
+            true,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let complete_studio = write_incomplete_bundle(
+            &recordings,
+            "complete-studio",
+            "Cap 2026-01-02 at 10.00.00",
+            "Complete",
+            true,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(&recordings, "corrupt-meta", "{ not json ");
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::fs::create_dir_all(recordings.join("missing-meta")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let active = write_incomplete_bundle(
+            &recordings,
+            "active",
+            "Cap 2026-01-05 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let in_progress = write_incomplete_bundle(
+            &recordings,
+            "in-progress",
+            "Cap 2026-01-01 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let remux = write_incomplete_bundle(
+            &recordings,
+            "remux",
+            "Cap 2026-01-04 at 10.00.00",
+            "NeedsRemux",
+            true,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let instant = write_incomplete_instant_bundle(
+            &recordings,
+            "instant-incomplete",
+            "Cap 2026-01-03 at 10.00.00",
+            false,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let complete_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "complete-instant",
+            "Cap 2026-01-06 at 10.00.00",
+            false,
+        );
+        // Complete status with fragments still on disk: recovery must trust
+        // the metadata and leave them alone.
+        std::fs::write(
+            complete_instant.join("recording-meta.json"),
+            r#"{"pretty_name":"Cap 2026-01-06 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        let unrecoverable = write_incomplete_bundle(
+            &recordings,
+            "unrecoverable",
+            "Cap 2026-01-07 at 10.00.00",
+            "InProgress",
+            false,
+        );
+
+        let dirs = std::slice::from_ref(&recordings);
+        let found = find_incomplete_recordings_in(dirs, Some(active.as_path()));
+        let reference = find_incomplete_recordings_by_full_listing(dirs, Some(active.as_path()));
+        assert_eq!(
+            found, reference,
+            "the lean scan must stay byte-for-byte equivalent to listing everything"
+        );
+
+        let names: Vec<&str> = found.iter().map(|item| item.pretty_name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Cap 2026-01-03 at 10.00.00",
+                "Cap 2026-01-04 at 10.00.00",
+                "Cap 2026-01-01 at 10.00.00",
+            ],
+            "newest first, with only the eligible recoverable recordings"
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|item| (item.project_path.clone(), item.segment_count))
+                .collect::<Vec<_>>(),
+            [
+                (instant.clone(), 1),
+                (remux.clone(), 1),
+                (in_progress.clone(), 1),
+            ]
+        );
+        assert!(
+            found
+                .iter()
+                .find(|item| item.project_path == instant)
+                .is_some_and(|item| item.estimated_duration_secs == 0.0),
+            "an Instant recording reports its measured segment count and zero duration"
+        );
+        for excluded in [
+            &pre_cutoff,
+            &complete_studio,
+            &complete_instant,
+            &active,
+            &unrecoverable,
+        ] {
+            assert!(
+                !found.iter().any(|item| &item.project_path == excluded),
+                "{} must not be recoverable",
+                excluded.display()
+            );
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_cutoff_is_strictly_after_2025() {
+        assert!(!is_recording_after_recovery_cutoff(
+            "Cap 2025-12-31 at 23.59.59",
+            0.0
+        ));
+        assert!(is_recording_after_recovery_cutoff(
+            "Cap 2026-01-01 at 00.00.00",
+            0.0
+        ));
+        assert!(
+            !is_recording_after_recovery_cutoff("Custom instant recording", 0.0),
+            "a name without a date falls back to the sort time"
+        );
+    }
+
+    #[test]
+    fn recovery_skips_full_item_work_and_inspection_for_complete_recordings() {
+        let root = temp_dir("recovery-lean");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        // The complete Studio bundle contains exactly the fragments that make
+        // `inspect_recording` return a recoverable recording. The complete
+        // Instant bundle contains the init + m4s fragments the Instant path
+        // counts. Recovery must filter both out on metadata alone.
+        let complete_studio = write_incomplete_bundle(
+            &recordings,
+            "complete-studio",
+            "Cap 2026-01-10 at 10.00.00",
+            "Complete",
+            true,
+        );
+        let complete_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "complete-instant",
+            "Cap 2026-01-11 at 10.00.00",
+            false,
+        );
+        std::fs::write(
+            complete_instant.join("recording-meta.json"),
+            r#"{"pretty_name":"Cap 2026-01-11 at 10.00.00","sharing":null,"fps":30,"sample_rate":48000}"#,
+        )
+        .unwrap();
+        let in_progress = write_incomplete_bundle(
+            &recordings,
+            "in-progress",
+            "Cap 2026-01-12 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        let remux_instant = write_incomplete_instant_bundle(
+            &recordings,
+            "remux-instant",
+            "Cap 2026-01-13 at 10.00.00",
+            false,
+        );
+
+        let builds_before = recording_item_builds();
+        let found = find_incomplete_recordings_in(std::slice::from_ref(&recordings), None);
+        assert_eq!(
+            recording_item_builds(),
+            builds_before,
+            "recovery must not construct a full RecordingItem, even for complete recordings"
+        );
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|item| item.project_path == in_progress));
+        assert!(found.iter().any(|item| item.project_path == remux_instant));
+
+        // Behavior preservation: `inspect_recording` creates `.recovery.lock`
+        // in the bundle it examines (and leaves it there after unlocking), so
+        // a complete recording without one was never inspected.
+        assert!(in_progress.join(".recovery.lock").is_file());
+        assert!(!complete_studio.join(".recovery.lock").exists());
+        assert!(!complete_instant.join(".recovery.lock").exists());
+        assert!(
+            !remux_instant.join(".recovery.lock").exists(),
+            "instant recovery reads fragments directly and never calls inspect_recording"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2595,21 +3197,21 @@ mod tests {
 
         assert!(
             CacheSlot::for_source(&root.join("missing.jpg")).is_none(),
-            "no mtime, no slot"
+            "no version, no slot"
         );
 
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn store_sweeps_stale_mtime_variants_but_not_lookalike_keys() {
+    fn store_sweeps_stale_version_variants_but_not_lookalike_keys() {
         let root = temp_dir("sweep");
         let rgba = image::RgbaImage::from_pixel(8, 6, image::Rgba([200, 40, 40, 255]));
 
         let stale = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 1,
+            version: 1,
         };
         stale.store(&rgba);
         assert!(stale.file().is_file());
@@ -2624,11 +3226,11 @@ mod tests {
         let fresh = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 2,
+            version: 2,
         };
         fresh.store(&rgba);
 
-        assert!(!stale.file().exists(), "the old mtime variant is swept");
+        assert!(!stale.file().exists(), "the old version variant is swept");
         assert!(fresh.file().is_file());
         assert!(lookalike.is_file(), "another key's file survives the sweep");
         assert!(display.is_file());
@@ -2639,11 +3241,11 @@ mod tests {
         let missing = CacheSlot {
             dir: root.clone(),
             prefix: "wallpaper-a-128".to_string(),
-            mtime: 3,
+            version: 3,
         };
         assert!(
             missing.load().is_none(),
-            "a missing mtime variant is a miss, not a fallback"
+            "a missing version variant is a miss, not a fallback"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -2696,5 +3298,191 @@ mod tests {
         assert_eq!(image::image_dimensions(&second[0]).unwrap(), (392, 392));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_same_mtime_length_change_misses_the_decode_cache() {
+        let root = temp_dir("same-mtime-cache");
+        let screenshots = root.join("bundle.cap").join("screenshots");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        let display = screenshots.join("display.jpg");
+        image::RgbImage::from_pixel(800, 600, image::Rgb([10, 120, 240]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        let modified = std::fs::metadata(&display).unwrap().modified().unwrap();
+        let first_len = std::fs::metadata(&display).unwrap().len();
+
+        assert!(decode_thumbnail(&display).is_some());
+        let first = thumbnail_cache_file(&display).expect("a cache slot");
+        assert_eq!(image::image_dimensions(&first).unwrap(), (392, 294));
+
+        // Rewrite the pixels, then put the old timestamp back: the only
+        // difference the scan can see is the length.
+        image::RgbImage::from_pixel(600, 600, image::Rgb([240, 120, 10]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&display)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&display).unwrap().len(),
+            first_len,
+            "the test needs a length change"
+        );
+
+        assert!(decode_thumbnail(&display).is_some());
+        let second = thumbnail_cache_file(&display).expect("a cache slot");
+        assert_ne!(
+            second, first,
+            "a length change at the same mtime is a new cache slot"
+        );
+        assert_eq!(
+            image::image_dimensions(&second).unwrap(),
+            (392, 392),
+            "the new pixels are decoded, not the old cache entry"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn screenshot_thumbnail_reuse_tracks_the_png_version() {
+        let item = ScreenshotItem {
+            path: PathBuf::from("/lib/shot.cap/original.png"),
+            bundle: PathBuf::from("/lib/shot.cap"),
+            pretty_name: "shot".into(),
+            sort_time_millis: 1.,
+            thumbnail: Some(PathBuf::from("/lib/shot.cap/original.png")),
+            thumbnail_version: Some(1),
+        };
+        assert!(!screenshot_thumbnail_is_current(&item, None, false, false));
+        assert!(
+            !screenshot_thumbnail_is_current(&item, Some(&item), false, false),
+            "a row whose decode never landed still asks for one"
+        );
+        assert!(
+            !screenshot_thumbnail_is_current(&item, Some(&item), true, true),
+            "a row already waiting on a newer decode asks again"
+        );
+        assert!(screenshot_thumbnail_is_current(
+            &item,
+            Some(&item),
+            true,
+            false
+        ));
+
+        let mut changed = item.clone();
+        changed.thumbnail_version = Some(2);
+        assert!(
+            !screenshot_thumbnail_is_current(&changed, Some(&item), true, false),
+            "a rewritten png is a new version"
+        );
+
+        let mut moved = item.clone();
+        moved.thumbnail = Some(PathBuf::from("/lib/other.cap/original.png"));
+        assert!(
+            !screenshot_thumbnail_is_current(&moved, Some(&item), true, false),
+            "a different png path is a new source"
+        );
+
+        let mut unknown = item.clone();
+        unknown.thumbnail_version = None;
+        assert!(
+            !screenshot_thumbnail_is_current(&unknown, Some(&unknown), true, false),
+            "an unknown version cannot be reused"
+        );
+    }
+
+    #[test]
+    fn screenshot_items_stamp_the_png_they_thumbnail() {
+        let root = temp_dir("screenshot-version");
+        let bundle = write_screenshot_bundle(&root, "shot");
+        let png = bundle.join("shot.png");
+        let items = list_screenshots_in(&root);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].thumbnail.as_deref(), Some(png.as_path()));
+        assert_eq!(items[0].thumbnail_version, source_version(&png));
+
+        let modified = std::fs::metadata(&png).unwrap().modified().unwrap();
+        let original_len = std::fs::metadata(&png).unwrap().len();
+        std::fs::write(&png, b"new png with a different length").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&png)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&png).unwrap().len(),
+            original_len,
+            "the test needs a length change"
+        );
+        let rewritten = list_screenshots_in(&root);
+        assert_eq!(rewritten.len(), 1);
+        assert_ne!(
+            rewritten[0].thumbnail_version, items[0].thumbnail_version,
+            "a length change bumps the version even at the same mtime"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The library panel drops and rebuilds its rows on every open; before
+    /// the reconcile, that re-decoded all 20 thumbnails (a native PNG decode
+    /// on the first pass, then a cache JPEG decode plus an atlas upload).
+    #[test]
+    #[ignore = "manual screenshot thumbnail reuse benchmark"]
+    fn benchmark_screenshot_thumbnail_reuse() {
+        let root = temp_dir("screenshot-bench");
+        let dir = root.join("screenshots");
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = root.join("source.png");
+        image::RgbaImage::from_pixel(3024, 1964, image::Rgba([120, 90, 60, 255]))
+            .save_with_format(&source, image::ImageFormat::Png)
+            .unwrap();
+        for i in 0..20 {
+            let bundle = write_screenshot_bundle(&dir, &format!("shot-{i:02}"));
+            std::fs::copy(&source, bundle.join("shot.png")).unwrap();
+        }
+        let items = list_screenshots_in(&dir);
+        assert_eq!(items.len(), 20);
+        let thumbnails: Vec<_> = items
+            .iter()
+            .filter_map(|item| item.thumbnail.as_deref())
+            .collect();
+        assert_eq!(thumbnails.len(), 20);
+        for path in &thumbnails {
+            if let Some(cache) = thumbnail_cache_file(path) {
+                std::fs::remove_file(cache).ok();
+            }
+        }
+
+        let cold_start = std::time::Instant::now();
+        for path in &thumbnails {
+            assert!(decode_thumbnail(path).is_some());
+        }
+        let cold = cold_start.elapsed();
+
+        let warm_start = std::time::Instant::now();
+        for path in &thumbnails {
+            assert!(decode_thumbnail(path).is_some());
+        }
+        let warm = warm_start.elapsed();
+
+        println!(
+            "screenshots=20 first_open_cold={:.1}ms reopen_warm={:.1}ms",
+            cold.as_secs_f64() * 1e3,
+            warm.as_secs_f64() * 1e3,
+        );
+
+        for path in &thumbnails {
+            if let Some(cache) = thumbnail_cache_file(path) {
+                std::fs::remove_file(cache).ok();
+            }
+        }
+        std::fs::remove_dir_all(root).ok();
     }
 }

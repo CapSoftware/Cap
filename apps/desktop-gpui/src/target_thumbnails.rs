@@ -669,6 +669,11 @@ async fn capture_windows_inner(
     events: flume::Sender<WindowEvent>,
     current: HashMap<String, CapturedWindow>,
 ) {
+    #[cfg(target_os = "windows")]
+    let mut window_cache = scap_targets::platform::WindowListCache::default();
+    #[cfg(target_os = "windows")]
+    let targets = crate::devices::list_window_targets_inner(&mut window_cache);
+    #[cfg(not(target_os = "windows"))]
     let targets = crate::devices::list_window_targets();
     let total = targets.len();
     let mut captured = 0usize;
@@ -716,7 +721,11 @@ async fn capture_windows_inner(
             return;
         };
         let image = capture.map(crate::library::rgba_to_render_image);
-        let app_icon = window.app_icon().filter(|bytes| !bytes.is_empty());
+        #[cfg(target_os = "windows")]
+        let app_icon = window_cache.app_icon(&window);
+        #[cfg(not(target_os = "windows"))]
+        let app_icon = window.app_icon();
+        let app_icon = app_icon.filter(|bytes| !bytes.is_empty());
         if image.is_some() {
             captured += 1;
         }

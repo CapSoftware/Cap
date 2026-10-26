@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 
+use cap_audio::high_quality_resampler_options;
 use cap_editor::{TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio};
 use cap_project::{
     CaptionSegment, CaptionSettings, CaptionTrackSegment, CaptionWord, CaptionsData,
@@ -980,10 +981,6 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
 
     let target_channels: u16 = if source_channels <= 1 { 1 } else { 2 };
     let target_channel_layout = ChannelLayout::default(i32::from(target_channels));
-    let mut options = ffmpeg::Dictionary::new();
-    options.set("filter_size", "128");
-    options.set("cutoff", "0.97");
-
     let mut resampler = resampling::Context::get_with(
         decoder.format(),
         decoder.channel_layout(),
@@ -991,7 +988,7 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, usize), String> {
         avformat::Sample::F32(avformat::sample::Type::Packed),
         target_channel_layout,
         DECODE_SAMPLE_RATE,
-        options,
+        high_quality_resampler_options(),
     )
     .map_err(|e| format!("Resampler / {e}"))?;
 
@@ -1859,167 +1856,10 @@ fn extract_audio_from_video(video_path: &Path, output_path: &Path) -> Result<(),
 // Caption words & chunking
 // ---------------------------------------------------------------------------
 
-/// `MAX_CAPTION_WORD_DURATION` (`captions.rs:75`): Whisper/Parakeet sometimes
-/// stretch a trailing word's end across a following silence, which leaves the
-/// rendered caption stuck on screen and duplicates the word across timeline
-/// cuts once projected.
-pub const MAX_CAPTION_WORD_DURATION: f32 = 2.5;
-/// `captions.rs:67-69`.
-const TARGET_CAPTION_WORDS_PER_SEGMENT: usize = 6;
-const MAX_CAPTION_WORDS_PER_SEGMENT: usize = 8;
-const MIN_FINAL_CAPTION_WORDS: usize = 3;
-
-/// `caption_char_attaches_to_previous` (`captions.rs:745-767`).
-fn caption_char_attaches_to_previous(value: char) -> bool {
-    matches!(
-        value,
-        ',' | '.'
-            | '!'
-            | '?'
-            | ';'
-            | ':'
-            | '%'
-            | ')'
-            | ']'
-            | '}'
-            | '\''
-            | '’'
-            | '、'
-            | '。'
-            | '！'
-            | '？'
-            | '；'
-            | '：'
-            | '，'
-    )
-}
-
-fn caption_token_attaches_to_previous(text: &str) -> bool {
-    text.trim()
-        .chars()
-        .next()
-        .is_some_and(caption_char_attaches_to_previous)
-}
-
-/// `caption_boundary_word_is_weak` (`captions.rs:769-801`).
-fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
-    let normalized = word
-        .text
-        .trim()
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect::<String>()
-        .to_lowercase();
-
-    normalized.chars().count() <= 1
-        || matches!(
-            normalized.as_str(),
-            "an" | "as"
-                | "at"
-                | "be"
-                | "by"
-                | "do"
-                | "he"
-                | "if"
-                | "in"
-                | "is"
-                | "it"
-                | "me"
-                | "my"
-                | "of"
-                | "on"
-                | "or"
-                | "so"
-                | "to"
-                | "up"
-                | "we"
-        )
-}
-
-/// `normalize_caption_words` (`captions.rs:803-831`).
-fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
-    let mut normalized: Vec<CaptionWord> = Vec::with_capacity(words.len());
-
-    for word in words {
-        let text = word.text.trim();
-        if text.is_empty() {
-            continue;
-        }
-
-        if caption_token_attaches_to_previous(text)
-            && let Some(previous) = normalized.last_mut()
-        {
-            previous.text.push_str(text);
-            previous.end = word.end;
-        } else {
-            normalized.push(CaptionWord {
-                text: text.to_string(),
-                start: word.start,
-                end: word.end,
-            });
-        }
-    }
-
-    for word in &mut normalized {
-        word.end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
-    }
-
-    normalized
-}
-
-/// `caption_text_from_words` (`captions.rs:833-849`).
-fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
-    let mut text = String::new();
-
-    for word in words {
-        let word_text = word.text.trim();
-        if word_text.is_empty() {
-            continue;
-        }
-
-        if !text.is_empty() && !caption_token_attaches_to_previous(word_text) {
-            text.push(' ');
-        }
-        text.push_str(word_text);
-    }
-
-    text
-}
-
-/// `caption_word_chunks` (`captions.rs:851-883`).
-fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < words.len() {
-        let remaining = words.len() - start;
-        if remaining <= TARGET_CAPTION_WORDS_PER_SEGMENT {
-            chunks.push(&words[start..]);
-            break;
-        }
-
-        let mut end = (start + TARGET_CAPTION_WORDS_PER_SEGMENT).min(words.len());
-        while end < words.len()
-            && caption_boundary_word_is_weak(&words[end - 1])
-            && end - start < MAX_CAPTION_WORDS_PER_SEGMENT
-        {
-            end += 1;
-        }
-
-        let remaining_after = words.len() - end;
-        if remaining_after > 0
-            && remaining_after < MIN_FINAL_CAPTION_WORDS
-            && caption_boundary_word_is_weak(&words[end])
-        {
-            end = words.len();
-        }
-
-        chunks.push(&words[start..end]);
-        start = end;
-    }
-
-    chunks
-}
+use cap_project::caption_words::{
+    caption_text_from_words, caption_word_chunks, normalize_caption_words,
+    MAX_CAPTION_WORD_DURATION,
+};
 
 // ---------------------------------------------------------------------------
 // Track derivation -- deriveCaptionTrackSegments, in Rust

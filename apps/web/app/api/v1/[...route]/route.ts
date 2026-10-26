@@ -9,6 +9,7 @@ import {
 import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -4922,8 +4923,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											}),
 											idempotencyKey: providerIdempotencyKey,
 										});
-										if (delivery?.error)
+										if (delivery?.error) {
+											if (delivery.error.name === "email_not_configured") {
+												return {
+													...invitation,
+													emailDelivery: "not_configured" as const,
+												};
+											}
 											throw new Error(delivery.error.message);
+										}
 										return {
 											...invitation,
 											emailDelivery: "accepted" as const,
@@ -5201,53 +5209,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.update(Db.organizationMembers)
 										.set({ hasProSeat: false })
 										.where(eq(Db.organizationMembers.id, path.memberId));
-									const otherProSeats = await tx
-										.select({ id: Db.organizationMembers.id })
-										.from(Db.organizationMembers)
-										.where(
-											and(
-												eq(Db.organizationMembers.userId, member.userId),
-												eq(Db.organizationMembers.hasProSeat, true),
-											),
-										)
-										.limit(1);
-									if (otherProSeats.length === 0) {
-										await tx
-											.update(Db.users)
-											.set({ thirdPartyStripeSubscriptionId: null })
-											.where(eq(Db.users.id, member.userId));
-									} else {
-										const [remainingOrganization] = await tx
-											.select({
-												stripeSubscriptionId: Db.users.stripeSubscriptionId,
-											})
-											.from(Db.organizationMembers)
-											.innerJoin(
-												Db.organizations,
-												eq(
-													Db.organizationMembers.organizationId,
-													Db.organizations.id,
-												),
-											)
-											.innerJoin(
-												Db.users,
-												eq(Db.organizations.ownerId, Db.users.id),
-											)
-											.where(
-												and(
-													eq(Db.organizationMembers.userId, member.userId),
-													eq(Db.organizationMembers.hasProSeat, true),
-												),
-											)
-											.limit(1);
-										await tx
-											.update(Db.users)
-											.set({
-												thirdPartyStripeSubscriptionId:
-													remainingOrganization?.stripeSubscriptionId ?? null,
-											})
-											.where(eq(Db.users.id, member.userId));
-									}
+									await releaseProSeatSubscription(tx, member.userId);
 								}
 								const now = new Date();
 								return {
@@ -5301,6 +5263,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.select({
 										userId: Db.organizationMembers.userId,
 										role: Db.organizationMembers.role,
+										hasProSeat: Db.organizationMembers.hasProSeat,
 										email: Db.users.email,
 									})
 									.from(Db.organizationMembers)
@@ -5336,6 +5299,21 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								) {
 									return { state: "forbidden" };
 								}
+								const result = await tx
+									.delete(Db.organizationMembers)
+									.where(
+										and(
+											eq(Db.organizationMembers.id, path.memberId),
+											eq(
+												Db.organizationMembers.organizationId,
+												path.organizationId,
+											),
+										),
+									);
+								if (affectedRows(result) === 0) return { state: "not_found" };
+								if (member.hasProSeat) {
+									await releaseProSeatSubscription(tx, member.userId);
+								}
 								const organizationSpaces = await tx
 									.select({ id: Db.spaces.id })
 									.from(Db.spaces)
@@ -5362,18 +5340,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											sql`LOWER(TRIM(${Db.organizationInvites.invitedEmail})) = ${member.email.toLowerCase()}`,
 										),
 									);
-								const result = await tx
-									.delete(Db.organizationMembers)
-									.where(
-										and(
-											eq(Db.organizationMembers.id, path.memberId),
-											eq(
-												Db.organizationMembers.organizationId,
-												path.organizationId,
-											),
-										),
-									);
-								if (affectedRows(result) === 0) return { state: "not_found" };
 								const now = new Date();
 								return {
 									state: "success",

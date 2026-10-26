@@ -3,6 +3,7 @@ import { z } from "zod";
 export const SOURCE_COMMIT_PAGE_SIZE = 16;
 // Cap's own AWS bucket answers fast enough to finish 16x larger pages well inside a step's deadline.
 export const SOURCE_COMMIT_AWS_PAGE_SIZE = 256;
+export const SOURCE_COMMIT_GOOGLE_DRIVE_PAGE_SIZE = 64;
 export const SOURCE_COMMIT_PART_BATCH_SIZE = 4;
 export const SOURCE_COMMIT_PART_PAGE_SIZE = 64;
 // Readers accept larger tree pages than writers produce, so a deployment can be rolled back while commits written by a newer one are in flight.

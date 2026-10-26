@@ -1,0 +1,12 @@
+[common]
+save = "Save"
+braces = "Use {{name}} in templates"
+greeting = "Hello, {name}!"
+untranslated = "Only in English"
+
+[common.meta]
+title = { text = "Title", context = "Window heading", max_px = 120, size = 13 }
+
+[editor.selection]
+clips = { one = "One clip", other = "{count} clips" }
+segments = { one = "{count} {kind} segment selected", other = "{count} {kind} segments selected" }

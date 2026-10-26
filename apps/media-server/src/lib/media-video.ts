@@ -795,8 +795,13 @@ function buildDashSegments(
 	if (timeline) {
 		const timelineSegments = getXmlElementBlocks(timeline.content, "S");
 		let currentTime = 0;
+		let number = startNumber;
 
 		for (const [index, segment] of timelineSegments.entries()) {
+			if (parseNumber(segment.attributes.d) === 0) {
+				number++;
+				continue;
+			}
 			const duration = parsePositiveNumber(segment.attributes.d);
 			if (!duration) {
 				throw new Error("DASH SegmentTimeline entry is missing duration");
@@ -823,10 +828,9 @@ function buildDashSegments(
 				throw new Error("Playlist resource count limit exceeded");
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
-				const number = startNumber + segments.length;
 				const resource = substituteDashTemplate(media, {
 					bandwidth,
-					number,
+					number: number++,
 					representationId,
 					time,
 				});
@@ -1798,6 +1802,7 @@ export async function processVideo(
 	abortSignal?: AbortSignal,
 	resilientFlags?: ResilientInputFlags,
 ): Promise<TempFileHandle> {
+	abortSignal?.throwIfAborted();
 	const definedOptions = Object.fromEntries(
 		Object.entries(options).filter(([, value]) => value !== undefined),
 	) as VideoProcessingOptions;
@@ -1809,6 +1814,7 @@ export async function processVideo(
 		!remuxOnly && metadata.videoCodec === "h264"
 			? await probeH264Level(inputPath, abortSignal)
 			: null;
+	abortSignal?.throwIfAborted();
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
@@ -1848,9 +1854,11 @@ export async function processVideo(
 				onProgress,
 				abortSignal,
 			);
+			abortSignal?.throwIfAborted();
 			return outputTempFile;
 		} catch (err) {
 			await outputTempFile.cleanup();
+			abortSignal?.throwIfAborted();
 			throw err;
 		}
 	}
@@ -1898,6 +1906,7 @@ export async function processVideo(
 					abortSignal,
 				);
 				recordNvencAttempt("process");
+				abortSignal?.throwIfAborted();
 				return outputTempFile;
 			} catch (error) {
 				const reason = nvencFallbackReason(
@@ -1923,9 +1932,11 @@ export async function processVideo(
 			onProgress,
 			abortSignal,
 		);
+		abortSignal?.throwIfAborted();
 		return outputTempFile;
 	} catch (err) {
 		await outputTempFile.cleanup();
+		abortSignal?.throwIfAborted();
 		throw err;
 	}
 }
