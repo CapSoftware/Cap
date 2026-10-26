@@ -54,8 +54,9 @@ fn convert(
     let mut pixels = Vec::with_capacity(output_len);
     let src = data.as_ptr();
     // SAFETY: `covers` makes every row's `row_bytes` readable. `pixels` has
-    // `output_len` bytes of spare capacity. Both writers fill that range
-    // before `set_len`. The AVX2 writer runs only after a runtime check.
+    // `output_len` bytes of spare capacity. Both writers initialize that range
+    // through raw pointers before `set_len`. The AVX2 writer runs only after a
+    // runtime check.
     unsafe {
         let dst = pixels.spare_capacity_mut().as_mut_ptr().cast::<u8>();
         match dispatch {
@@ -94,31 +95,40 @@ fn convert_scalar(
     let row_bytes = width * 2;
     let out_row = width * 4;
     for row in 0..height {
-        // SAFETY: caller checked `covers` and the output length.
+        // SAFETY: caller checked `covers` and reserved `width * height * 4`
+        // writable bytes. `convert_tail` initializes every output pixel.
         unsafe {
             let input = std::slice::from_raw_parts(src.add(row * stride), row_bytes);
-            let output = std::slice::from_raw_parts_mut(dst.add(row * out_row), out_row);
-            convert_tail(input, output, 0, mirrored);
+            convert_tail(input, dst.add(row * out_row), width, 0, mirrored);
         }
     }
 }
 
-fn convert_tail(src: &[u8], dst: &mut [u8], x_start: usize, mirrored: bool) {
-    let width = dst.len() / 4;
+/// # Safety
+/// `src` holds `width * 2` initialized bytes. `dst` can store `width` BGRA
+/// pixels and may be uninitialized. `width` is even, `x_start` is even, and
+/// `x_start <= width`. Pixels before `x_start` are left untouched.
+unsafe fn convert_tail(src: &[u8], dst: *mut u8, width: usize, x_start: usize, mirrored: bool) {
     let mut x = x_start;
     while x + 1 < width {
         let offset = x * 2;
         let u = src[offset + 1];
         let v = src[offset + 3];
-        put(dst, width, x, bt601(src[offset], u, v), mirrored);
-        put(dst, width, x + 1, bt601(src[offset + 2], u, v), mirrored);
+        unsafe {
+            put(dst, width, x, bt601(src[offset], u, v), mirrored);
+            put(dst, width, x + 1, bt601(src[offset + 2], u, v), mirrored);
+        }
         x += 2;
     }
 }
 
-fn put(dst: &mut [u8], width: usize, x: usize, pixel: [u8; 4], mirrored: bool) {
+/// # Safety
+/// `dst` can store `width` BGRA pixels. `x < width`.
+unsafe fn put(dst: *mut u8, width: usize, x: usize, pixel: [u8; 4], mirrored: bool) {
     let index = if mirrored { width - 1 - x } else { x };
-    dst[index * 4..index * 4 + 4].copy_from_slice(&pixel);
+    unsafe {
+        dst.add(index * 4).cast::<[u8; 4]>().write(pixel);
+    }
 }
 
 #[inline(always)]
@@ -241,8 +251,7 @@ mod avx2 {
                 }
                 if x < width {
                     let input = std::slice::from_raw_parts(s, row_bytes);
-                    let output = std::slice::from_raw_parts_mut(d, out_row);
-                    convert_tail(input, output, x, MIRROR);
+                    convert_tail(input, d, width, x, MIRROR);
                 }
             }
         }

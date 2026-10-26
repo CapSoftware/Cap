@@ -165,7 +165,8 @@ fn time_avx(frame: &ffmpeg::frame::Video, mirrored: bool) -> u64 {
         black_box(frame.stride(0)),
         black_box(frame.height() as usize),
         black_box(mirrored),
-    );
+    )
+    .expect("kernel");
     black_box(pixels);
     start.elapsed().as_nanos() as u64
 }
@@ -178,7 +179,8 @@ fn time_scalar(frame: &ffmpeg::frame::Video, mirrored: bool) -> u64 {
         black_box(frame.stride(0)),
         black_box(frame.height() as usize),
         black_box(mirrored),
-    );
+    )
+    .expect("scalar");
     black_box(pixels);
     start.elapsed().as_nanos() as u64
 }
