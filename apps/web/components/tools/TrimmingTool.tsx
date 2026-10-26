@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { formatClock } from "@/lib/player-time";
 
 const SUPPORTED_VIDEO_FORMATS = ["mp4", "webm", "mov", "avi", "mkv"];
 
@@ -260,12 +261,6 @@ export const TrimmingTool = () => {
 			error: errorMsg,
 			isLoading: false,
 		}));
-	};
-
-	const formatTime = (seconds: number) => {
-		const minutes = Math.floor(seconds / 60);
-		const remainingSeconds = Math.floor(seconds % 60);
-		return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 	};
 
 	const trimVideo = async () => {
@@ -840,12 +835,12 @@ export const TrimmingTool = () => {
 						<div className="mb-4">
 							<div className="flex items-center justify-between mb-2">
 								<div className="text-sm font-medium text-gray-700">
-									Current: {formatTime(videoState.currentTime)}
+									Current: {formatClock(videoState.currentTime)}
 								</div>
 								<div className="text-sm font-medium text-gray-700">
 									Duration:{" "}
 									{videoState.info
-										? formatTime(videoState.info.duration)
+										? formatClock(videoState.info.duration)
 										: "--:--"}
 								</div>
 							</div>
@@ -853,7 +848,7 @@ export const TrimmingTool = () => {
 							<div className="flex items-center space-x-4 mb-4">
 								<div className="flex-1">
 									<label className="block text-sm font-medium text-gray-700 mb-1">
-										Start Time: {formatTime(trimState.startTime)}
+										Start Time: {formatClock(trimState.startTime)}
 									</label>
 									<div className="flex items-center space-x-2">
 										<input
@@ -897,7 +892,7 @@ export const TrimmingTool = () => {
 
 								<div className="flex-1">
 									<label className="block text-sm font-medium text-gray-700 mb-1">
-										End Time: {formatTime(trimState.endTime)}
+										End Time: {formatClock(trimState.endTime)}
 									</label>
 									<div className="flex items-center space-x-2">
 										<input
@@ -942,9 +937,9 @@ export const TrimmingTool = () => {
 
 							<div className="text-sm text-gray-600">
 								<span className="font-medium">Selected segment:</span>{" "}
-								{formatTime(trimState.startTime)} to{" "}
-								{formatTime(trimState.endTime)} (
-								{formatTime(trimState.endTime - trimState.startTime)} duration)
+								{formatClock(trimState.startTime)} to{" "}
+								{formatClock(trimState.endTime)} (
+								{formatClock(trimState.endTime - trimState.startTime)} duration)
 							</div>
 						</div>
 
