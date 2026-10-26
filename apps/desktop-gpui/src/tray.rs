@@ -708,15 +708,10 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         // `TrayItem::TakeScreenshot` captures the display under the cursor,
         // primary as the fallback (`tray.rs:816` over there).
         TrayItem::TakeScreenshot | TrayItem::ScreenshotDisplay => take_display_screenshot(cx),
-        TrayItem::ScreenshotWindow => match crate::devices::topmost_foreign_window_at_cursor() {
-            Some(window) => crate::screenshot::take_screenshot(
-                cap_recording::sources::screen_capture::ScreenCaptureTarget::Window {
-                    id: window.id(),
-                },
-                cx,
-            ),
-            None => tracing::warn!("no window under the cursor to screenshot"),
-        },
+        TrayItem::ScreenshotWindow => {
+            set_mode(Mode::Screenshot, cx);
+            app_windows::arm_target_mode(TargetType::Window, cx);
+        }
         TrayItem::ScreenshotArea => {
             set_mode(Mode::Screenshot, cx);
             app_windows::arm_target_mode(TargetType::Area, cx);
