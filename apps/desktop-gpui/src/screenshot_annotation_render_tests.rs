@@ -174,28 +174,35 @@ fn cached_paths_match_fresh_tessellation_after_edits_and_transform_changes() {
         |a| a.annotation_type = AnnotationType::Mask,
         |a| a.annotation_type = AnnotationType::Text,
     ];
+    let transforms = [
+        (gpui::point(px(11.25), px(27.5)), 0.5),
+        (gpui::point(px(-9.5), px(0.)), 0.5),
+        (gpui::point(px(-9.5), px(0.)), 1.25),
+    ];
     let mut cache = None;
+    let mut check = |annotation: &Annotation, origin: Point<Pixels>, scale: f32| {
+        let expected = annotation_paths(annotation, origin, scale);
+        for _ in 0..2 {
+            assert_paths_eq(
+                cached_annotation_paths(&mut cache, annotation, origin, scale),
+                &expected,
+            );
+        }
+    };
     for base in annotations(4) {
-        for edit in edits {
-            let mut edited = base.clone();
-            edit(&mut edited);
-            for annotation in [&base, &edited, &base] {
-                for (origin, scale) in [
-                    (gpui::point(px(11.25), px(27.5)), 0.5),
-                    (gpui::point(px(-9.5), px(0.)), 0.5),
-                    (gpui::point(px(-9.5), px(0.)), 1.25),
-                ] {
-                    let expected = annotation_paths(annotation, origin, scale);
-                    assert_paths_eq(
-                        cached_annotation_paths(&mut cache, annotation, origin, scale),
-                        &expected,
-                    );
-                    assert_paths_eq(
-                        cached_annotation_paths(&mut cache, annotation, origin, scale),
-                        &expected,
-                    );
+        // A fixed transform per pass, so only the edited field can force a
+        // rebuild.
+        for (origin, scale) in transforms {
+            for edit in edits {
+                let mut edited = base.clone();
+                edit(&mut edited);
+                for annotation in [&base, &edited, &base] {
+                    check(annotation, origin, scale);
                 }
             }
+        }
+        for (origin, scale) in transforms {
+            check(&base, origin, scale);
         }
     }
 }
