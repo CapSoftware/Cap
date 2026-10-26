@@ -2976,6 +2976,32 @@ describe("decoding prepared fragments during the recording", () => {
 		expect(prepared).toHaveLength(2);
 	});
 
+	it("warns when the media server refuses a run without failing preparation", async () => {
+		mocks.env.mockReturnValue(mediaEnv);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({ code: "SERVER_BUSY" }, { status: 503 }),
+			),
+		);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const storage = listedStorage();
+		seedRecording(storage, 4, 0);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[1, 2].map((index) => ({ track: "video" as const, index })),
+			async () => true,
+		);
+		expect(prepared).toHaveLength(2);
+		expect(warn).toHaveBeenCalledWith(
+			"[prepareDesktopRecordingSegments] Preverification skipped",
+			expect.objectContaining({
+				error: "Preverification request failed: HTTP 503",
+			}),
+		);
+		warn.mockRestore();
+	});
+
 	it("signs every saved run for the final verification on Cap's bucket only", async () => {
 		const storage = listedStorage();
 		storage.seed(

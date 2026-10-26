@@ -1369,6 +1369,10 @@ async function requestSegmentPreverification(
 				},
 			);
 			await response.body?.cancel().catch(() => {});
+			if (!response.ok)
+				throw new Error(
+					`Preverification request failed: HTTP ${response.status}`,
+				);
 		}),
 	);
 }
