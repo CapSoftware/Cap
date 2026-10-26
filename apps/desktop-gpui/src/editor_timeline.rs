@@ -472,12 +472,17 @@ pub fn marking_resolution(zoom: f64) -> f64 {
 }
 
 /// `formatTime` (`routes/editor/utils.ts:1-13`) -- `M:SS`, which is both the
-/// transport clock and the **ruler's** label (`TL/index.tsx:48, 1597`).
+/// transport clock and the **ruler's** label (`TL/index.tsx:48, 1597`). One
+/// deliberate deviation: from an hour on it prints `H:MM:SS`, where the source
+/// prints a minute count such as `65:05`.
 pub fn format_time(seconds: f64) -> String {
-    let seconds = seconds.max(0.0);
-    let minutes = (seconds / 60.0).floor() as u64;
-    let secs = (seconds % 60.0).floor() as u64;
-    format!("{minutes}:{secs:02}")
+    let total = seconds.max(0.0).floor() as u64;
+    let (hours, minutes, secs) = (total / 3600, total / 60 % 60, total % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes}:{secs:02}")
+    }
 }
 
 /// The *other* `formatTime`, the clip track's own (`TL/ClipTrack.tsx:129-141`):
@@ -1947,8 +1952,8 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
                             // overhang into the icon gutter
                             // (`TL/index.tsx:1591-1594`). gpui has no
                             // transform, so the label sits in a fixed box wide
-                            // enough for `M:SS` at any minute count and is
-                            // centred inside it.
+                            // enough for `M:SS`, or `H:MM:SS` below ten hours,
+                            // and is centred inside it.
                             .when(second != 0., |this| this.left(px(-22.)))
                             .w(px(44.))
                             .flex()
@@ -3791,6 +3796,18 @@ mod tests {
     const AUDIO_SAMPLE_RATE: usize = 48_000;
 
     // -- The ruler ----------------------------------------------------------
+
+    #[test]
+    fn the_clock_and_ruler_show_hours_from_an_hour_on() {
+        assert_eq!(format_time(0.), "0:00");
+        assert_eq!(format_time(95.7), "1:35");
+        assert_eq!(format_time(3599.9), "59:59");
+        assert_eq!(format_time(3600.), "1:00:00");
+        assert_eq!(format_time(3905.), "1:05:05");
+        assert_eq!(format_time(5400.), "1:30:00");
+        assert_eq!(format_time(36000.), "10:00:00");
+        assert_eq!(format_time(-3.), "0:00");
+    }
 
     #[test]
     fn clip_markings_stop_at_the_clip_edge() {

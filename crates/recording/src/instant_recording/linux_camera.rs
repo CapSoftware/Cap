@@ -848,7 +848,9 @@ struct OverlayRunKey {
     generation: u64,
     width: u32,
     height: u32,
+    radius_bits: u64,
     mask: Arc<[f64]>,
+    from_mask: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -858,32 +860,68 @@ struct OverlayRunCache {
     builds: u64,
 }
 
+fn stored_mask_matches(key: &OverlayRunKey, mask: &Arc<[f64]>) -> bool {
+    Arc::ptr_eq(&key.mask, mask) || key.mask.as_ref() == mask.as_ref()
+}
+
 impl OverlayRunCache {
-    fn matches(&self, generation: u64, mask: &Arc<[f64]>, width: u32, height: u32) -> bool {
+    fn matches_current(
+        &self,
+        generation: u64,
+        radius_bits: u64,
+        mask: &Arc<[f64]>,
+        width: u32,
+        height: u32,
+    ) -> bool {
         let Some(key) = &self.key else {
             return false;
         };
-        key.generation == generation
-            && key.width == width
+        key.width == width
             && key.height == height
-            && (Arc::ptr_eq(&key.mask, mask) || key.mask.as_ref() == mask.as_ref())
+            && stored_mask_matches(key, mask)
+            && if key.from_mask {
+                key.radius_bits == radius_bits
+            } else {
+                key.generation == generation
+            }
     }
 
-    fn install(
-        &mut self,
-        generation: u64,
+    fn matches_mask(&self, radius_bits: u64, mask: &Arc<[f64]>, width: u32, height: u32) -> bool {
+        let Some(key) = &self.key else {
+            return false;
+        };
+        key.from_mask
+            && key.radius_bits == radius_bits
+            && key.width == width
+            && key.height == height
+            && stored_mask_matches(key, mask)
+    }
+
+    fn matches_frame(&self, generation: u64, mask: &Arc<[f64]>, width: u32, height: u32) -> bool {
+        let Some(key) = &self.key else {
+            return false;
+        };
+        !key.from_mask
+            && key.generation == generation
+            && key.width == width
+            && key.height == height
+            && stored_mask_matches(key, mask)
+    }
+
+    fn prepared_mask_runs(
+        &self,
+        radius_bits: u64,
+        mask: &Arc<[f64]>,
         width: u32,
         height: u32,
-        mask: Arc<[f64]>,
-        runs: OverlayRuns,
-    ) {
+    ) -> Option<&OverlayRuns> {
+        self.matches_mask(radius_bits, mask, width, height)
+            .then_some(&self.runs)
+    }
+
+    fn install(&mut self, key: OverlayRunKey, runs: OverlayRuns) {
         self.builds += 1;
-        self.key = Some(OverlayRunKey {
-            generation,
-            width,
-            height,
-            mask,
-        });
+        self.key = Some(key);
         self.runs = runs;
     }
 
@@ -895,11 +933,21 @@ impl OverlayRunCache {
     ) -> &OverlayRuns {
         let width = frame.width();
         let height = frame.height();
-        if self.matches(generation, mask, width, height) {
+        if self.matches_frame(generation, mask, width, height) {
             return &self.runs;
         }
         let runs = overlay_runs(frame);
-        self.install(generation, width, height, Arc::clone(mask), runs);
+        self.install(
+            OverlayRunKey {
+                generation,
+                width,
+                height,
+                radius_bits: 0,
+                mask: Arc::clone(mask),
+                from_mask: false,
+            },
+            runs,
+        );
         &self.runs
     }
 }
@@ -994,7 +1042,13 @@ impl Compositor {
         let Some(mask) = self.camera_mask.as_ref() else {
             return false;
         };
-        self.run_cache.matches(generation, mask, width, height)
+        self.run_cache.matches_current(
+            generation,
+            self.presentation.radius().to_bits(),
+            mask,
+            width,
+            height,
+        )
     }
 
     fn ensure_camera_overlay(
@@ -1013,8 +1067,32 @@ impl Compositor {
         }
         let rgba = self.convert_camera(input, width, height)?;
         let mask = Arc::clone(self.camera_mask.as_ref().expect("camera mask"));
-        let frame = crop_camera(&rgba, presentation, mask.as_ref())?;
-        self.run_cache.resolve(generation, &mask, &frame);
+        let radius_bits = presentation.radius().to_bits();
+        let (frame, applied) = {
+            let prepared = self
+                .run_cache
+                .prepared_mask_runs(radius_bits, &mask, width, height);
+            crop_camera_with_runs(&rgba, presentation, mask.as_ref(), prepared)?
+        };
+        if !applied {
+            self.run_cache.resolve(generation, &mask, &frame);
+        } else if !self
+            .run_cache
+            .matches_mask(radius_bits, &mask, width, height)
+        {
+            let runs = mask_overlay_runs(mask.as_ref(), width as usize, height as usize);
+            self.run_cache.install(
+                OverlayRunKey {
+                    generation: 0,
+                    width,
+                    height,
+                    radius_bits,
+                    mask: Arc::clone(&mask),
+                    from_mask: true,
+                },
+                runs,
+            );
+        }
         self.camera_overlay = Some((generation, frame));
         Ok(())
     }
@@ -1309,11 +1387,45 @@ fn camera_mask(presentation: LinuxCameraPresentation) -> Vec<f64> {
     mask
 }
 
+fn mask_alpha(mask: &[f64], index: usize) -> u8 {
+    match mask.get(index) {
+        Some(coverage) => (f64::from(255u8) * coverage).round() as u8,
+        None => 255,
+    }
+}
+
+fn mask_overlay_runs(mask: &[f64], width: usize, height: usize) -> OverlayRuns {
+    let mut spans = Vec::new();
+    let mut row_starts = Vec::with_capacity(height + 1);
+    for y in 0..height {
+        row_starts.push(spans.len() as u32);
+        let row = y * width;
+        push_alpha_runs(&mut spans, (0..width).map(|x| mask_alpha(mask, row + x)));
+    }
+    row_starts.push(spans.len() as u32);
+    OverlayRuns {
+        width,
+        height,
+        spans,
+        row_starts,
+    }
+}
+
+#[cfg(test)]
 fn crop_camera(
     source: &ffmpeg::frame::Video,
     presentation: LinuxCameraPresentation,
     mask: &[f64],
 ) -> anyhow::Result<ffmpeg::frame::Video> {
+    crop_camera_with_runs(source, presentation, mask, None).map(|(frame, _applied)| frame)
+}
+
+fn crop_camera_with_runs(
+    source: &ffmpeg::frame::Video,
+    presentation: LinuxCameraPresentation,
+    mask: &[f64],
+    runs: Option<&OverlayRuns>,
+) -> anyhow::Result<(ffmpeg::frame::Video, bool)> {
     let rect = presentation.rect;
     if source.format() != Pixel::RGBA
         || rect.width == 0
@@ -1332,10 +1444,9 @@ fn crop_camera(
     let output_stride = output.stride(0);
     let source_data = source.data(0);
     let output_data = output.data_mut(0);
-    if mask.is_empty()
-        && rgba_window_is_opaque(source_data, source_stride, crop_x, crop_y, width, height)
-        && rgba_rows_fit(output_data.len(), output_stride, 0, width * 4, 0, height)
-    {
+    let opaque = rgba_window_is_opaque(source_data, source_stride, crop_x, crop_y, width, height);
+    let rows_fit = rgba_rows_fit(output_data.len(), output_stride, 0, width * 4, 0, height);
+    if opaque && rows_fit && mask.is_empty() {
         copy_cropped_rgba_rows(
             output_data,
             source_data,
@@ -1352,7 +1463,36 @@ fn crop_camera(
             presentation.mirrored,
         );
         output.set_pts(source.pts());
-        return Ok(output);
+        return Ok((output, false));
+    }
+    if opaque && rows_fit && !mask.is_empty() {
+        let owned_runs;
+        let runs = match runs {
+            Some(runs) if runs.width == width && runs.height == height => runs,
+            _ => {
+                owned_runs = mask_overlay_runs(mask, width, height);
+                &owned_runs
+            }
+        };
+        copy_masked_rgba_rows(
+            output_data,
+            source_data,
+            PlaneWindow {
+                source_stride,
+                destination_stride: output_stride,
+                source_x: crop_x,
+                source_y: crop_y,
+                destination_x: 0,
+                destination_y: 0,
+                width,
+                height,
+            },
+            mask,
+            runs,
+            presentation.mirrored,
+        );
+        output.set_pts(source.pts());
+        return Ok((output, true));
     }
     for y in 0..height {
         for x in 0..width {
@@ -1377,7 +1517,7 @@ fn crop_camera(
         }
     }
     output.set_pts(source.pts());
-    Ok(output)
+    Ok((output, false))
 }
 
 #[cfg(test)]
@@ -1394,11 +1534,83 @@ fn rgba_window_is_opaque(
     height: usize,
 ) -> bool {
     let row_bytes = width * 4;
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        return unsafe {
+            rgba_window_is_opaque_avx2(data, stride, origin_x, origin_y, row_bytes, height)
+        };
+    }
+    rgba_window_is_opaque_scalar(data, stride, origin_x, origin_y, row_bytes, height)
+}
+
+fn rgba_window_is_opaque_scalar(
+    data: &[u8],
+    stride: usize,
+    origin_x: usize,
+    origin_y: usize,
+    row_bytes: usize,
+    height: usize,
+) -> bool {
     (0..height).all(|row| {
         let start = (origin_y + row) * stride + origin_x * 4;
         data.get(start..start + row_bytes)
-            .is_some_and(|pixels| pixels.chunks_exact(4).all(|pixel| pixel[3] == 255))
+            .is_some_and(rgba_bytes_are_opaque)
     })
+}
+
+fn rgba_bytes_are_opaque(pixels: &[u8]) -> bool {
+    const ALPHA_PAIR: u64 = 0xFF00_0000_FF00_0000;
+    let (pairs, rest) = pixels.as_chunks::<8>();
+    if pairs.iter().any(|pair| {
+        let word = u64::from_le_bytes(*pair);
+        (word & ALPHA_PAIR) != ALPHA_PAIR
+    }) {
+        return false;
+    }
+    rest.chunks_exact(4).all(|pixel| pixel[3] == 255)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn rgba_window_is_opaque_avx2(
+    data: &[u8],
+    stride: usize,
+    origin_x: usize,
+    origin_y: usize,
+    row_bytes: usize,
+    height: usize,
+) -> bool {
+    for row in 0..height {
+        let start = (origin_y + row) * stride + origin_x * 4;
+        let Some(pixels) = data.get(start..start + row_bytes) else {
+            return false;
+        };
+        if unsafe { !rgba_bytes_are_opaque_avx2(pixels) } {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn rgba_bytes_are_opaque_avx2(pixels: &[u8]) -> bool {
+    use std::arch::x86_64::*;
+
+    let alpha = _mm256_set1_epi32(i32::from_le_bytes([0x00, 0x00, 0x00, 0xFF]));
+    let mut offset = 0;
+    while offset + 32 <= pixels.len() {
+        unsafe {
+            let loaded = _mm256_loadu_si256(pixels.as_ptr().add(offset).cast());
+            let masked = _mm256_and_si256(loaded, alpha);
+            let same = _mm256_cmpeq_epi32(masked, alpha);
+            if _mm256_movemask_epi8(same) != -1 {
+                return false;
+            }
+        }
+        offset += 32;
+    }
+    rgba_bytes_are_opaque(&pixels[offset..])
 }
 
 fn rgba_rows_fit(
@@ -1445,6 +1657,78 @@ fn copy_cropped_rgba_rows(
             }
         } else {
             dst.copy_from_slice(src);
+        }
+    }
+}
+
+fn copy_masked_rgba_rows(
+    destination: &mut [u8],
+    source: &[u8],
+    window: PlaneWindow,
+    mask: &[f64],
+    runs: &OverlayRuns,
+    mirrored: bool,
+) {
+    for row in 0..window.height {
+        for span in runs.row(row).iter().copied() {
+            copy_masked_span(destination, source, &window, mask, row, span, mirrored);
+        }
+    }
+}
+
+fn copy_masked_span(
+    destination: &mut [u8],
+    source: &[u8],
+    window: &PlaneWindow,
+    mask: &[f64],
+    row: usize,
+    span: OverlaySpan,
+    mirrored: bool,
+) {
+    let start = span.start as usize;
+    let len = span.len as usize;
+    let src_origin = if mirrored {
+        window.source_x + window.width - (start + len)
+    } else {
+        window.source_x + start
+    };
+    let src_start = (window.source_y + row) * window.source_stride + src_origin * 4;
+    let dst_start = (window.destination_y + row) * window.destination_stride
+        + (window.destination_x + start) * 4;
+    match span.kind {
+        OverlaySpanKind::Opaque | OverlaySpanKind::Transparent => {
+            let src = &source[src_start..src_start + len * 4];
+            let dst = &mut destination[dst_start..dst_start + len * 4];
+            if mirrored {
+                for (dst_pixel, src_pixel) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4).rev())
+                {
+                    dst_pixel.copy_from_slice(src_pixel);
+                    if span.kind == OverlaySpanKind::Transparent {
+                        dst_pixel[3] = 0;
+                    }
+                }
+            } else {
+                dst.copy_from_slice(src);
+                if span.kind == OverlaySpanKind::Transparent {
+                    for pixel in dst.chunks_exact_mut(4) {
+                        pixel[3] = 0;
+                    }
+                }
+            }
+        }
+        OverlaySpanKind::Edge => {
+            for offset in 0..len {
+                let x = start + offset;
+                let source_x = window.source_x + if mirrored { window.width - 1 - x } else { x };
+                let src_offset = (window.source_y + row) * window.source_stride + source_x * 4;
+                let dst_offset = (window.destination_y + row) * window.destination_stride
+                    + (window.destination_x + x) * 4;
+                let dst_pixel = &mut destination[dst_offset..dst_offset + 4];
+                dst_pixel.copy_from_slice(&source[src_offset..src_offset + 4]);
+                if let Some(&coverage) = mask.get(row * window.width + x) {
+                    dst_pixel[3] = (f64::from(dst_pixel[3]) * coverage).round() as u8;
+                }
+            }
         }
     }
 }
@@ -3474,6 +3758,32 @@ mod tests {
         assert_eq!(actual.data(0)[7], 50);
         assert_eq!(actual.data(0)[11], 200);
         assert_eq!(actual.data(0)[19], 200);
+
+        let mut rounding = ffmpeg::frame::Video::new(Pixel::RGBA, 4, 1);
+        rounding.set_pts(Some(9));
+        paint_rgba(&mut rounding, |x, _| [10 + x as u8, 20, 30, 255]);
+        let rounding_mask = [0.001_f64, 0.999, 1.0, 0.5];
+        for mirrored in [false, true] {
+            let rounding_presentation = LinuxCameraPresentation {
+                mirrored,
+                rect: LinuxCameraRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 1,
+                },
+                shape: LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+                effect: LinuxCameraEffect::None,
+            };
+            let actual = crop_camera(&rounding, rounding_presentation, &rounding_mask)
+                .expect("rounding crop");
+            let expected = formula_crop_camera(&rounding, rounding_presentation, &rounding_mask);
+            assert_planes_equal(&actual, &expected);
+            assert_eq!(actual.data(0)[3], 0, "mirrored={mirrored}");
+            assert_eq!(actual.data(0)[7], 255, "mirrored={mirrored}");
+            assert_eq!(actual.data(0)[11], 255, "mirrored={mirrored}");
+            assert_eq!(actual.data(0)[15], 128, "mirrored={mirrored}");
+        }
     }
 
     #[test]
@@ -3701,6 +4011,127 @@ mod tests {
             .ensure_camera_overlay(&camera, 8)
             .expect("generation change rebuilds overlay");
         assert_eq!(compositor.run_cache.builds, 3);
+    }
+
+    #[test]
+    fn opaque_round_mask_runs_are_reused_across_generations() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let size = 32_u32;
+        let info = VideoInfo::from_raw_ffmpeg(Pixel::BGRA, size + 4, size + 4, 30);
+        for (shape, mirrored) in [
+            (LinuxCameraShape::Round, false),
+            (LinuxCameraShape::Round, true),
+            (
+                LinuxCameraShape::RoundedRectangle { radius_pixels: 8 },
+                false,
+            ),
+        ] {
+            let presentation = LinuxCameraPresentation {
+                rect: LinuxCameraRect {
+                    x: 1,
+                    y: 2,
+                    width: size,
+                    height: size,
+                },
+                shape,
+                mirrored,
+                effect: LinuxCameraEffect::None,
+            };
+            let mut compositor = Compositor::new(info, presentation);
+            let mut camera = ffmpeg::frame::Video::new(Pixel::RGBA, size + 6, size + 2);
+            paint_rgba(&mut camera, opaque_pixel);
+            compositor
+                .ensure_camera_overlay(&camera, 1)
+                .expect("first overlay");
+            assert_eq!(
+                compositor.run_cache.builds, 1,
+                "{shape:?} mirrored={mirrored}"
+            );
+            assert!(
+                compositor
+                    .run_cache
+                    .key
+                    .as_ref()
+                    .expect("run key")
+                    .from_mask,
+                "{shape:?}"
+            );
+            let cached_runs = compositor.run_cache.runs.clone();
+            assert!(
+                cached_runs
+                    .spans
+                    .iter()
+                    .any(|span| span.kind == OverlaySpanKind::Opaque),
+                "{shape:?}"
+            );
+            assert!(
+                cached_runs
+                    .spans
+                    .iter()
+                    .any(|span| span.kind == OverlaySpanKind::Edge),
+                "{shape:?}"
+            );
+            let mask = compositor.camera_mask.clone().expect("mask");
+            let scaled = compositor
+                .convert_camera(&camera, size, size)
+                .expect("scale camera");
+            let overlay = &compositor.camera_overlay.as_ref().expect("overlay").1;
+            assert_eq!(overlay_runs(overlay).spans, cached_runs.spans);
+            assert_planes_equal(
+                overlay,
+                &formula_crop_camera(&scaled, presentation, mask.as_ref()),
+            );
+            let first_pixels = overlay.data(0).to_vec();
+
+            paint_rgba(&mut camera, |x, y| opaque_pixel(x + 5, y + 1));
+            compositor
+                .ensure_camera_overlay(&camera, 2)
+                .expect("next generation");
+            assert_eq!(
+                compositor.run_cache.builds, 1,
+                "{shape:?} mirrored={mirrored}"
+            );
+            assert_eq!(compositor.run_cache.runs, cached_runs);
+            let scaled = compositor
+                .convert_camera(&camera, size, size)
+                .expect("scale next camera");
+            let overlay = &compositor.camera_overlay.as_ref().expect("overlay").1;
+            assert_planes_equal(
+                overlay,
+                &formula_crop_camera(&scaled, presentation, mask.as_ref()),
+            );
+            assert_ne!(overlay.data(0), first_pixels.as_slice());
+            assert_eq!(overlay_runs(overlay).spans, cached_runs.spans);
+
+            paint_rgba(&mut camera, |x, y| {
+                let mut pixel = opaque_pixel(x, y);
+                pixel[3] = 180;
+                pixel
+            });
+            compositor
+                .ensure_camera_overlay(&camera, 3)
+                .expect("partial alpha");
+            assert_eq!(
+                compositor.run_cache.builds, 2,
+                "{shape:?} mirrored={mirrored}"
+            );
+            assert!(
+                !compositor
+                    .run_cache
+                    .key
+                    .as_ref()
+                    .expect("run key")
+                    .from_mask
+            );
+            let scaled = compositor
+                .convert_camera(&camera, size, size)
+                .expect("scale partial camera");
+            let overlay = &compositor.camera_overlay.as_ref().expect("overlay").1;
+            assert_planes_equal(
+                overlay,
+                &formula_crop_camera(&scaled, presentation, mask.as_ref()),
+            );
+        }
     }
 
     #[test]
@@ -4155,6 +4586,105 @@ mod tests {
                 print_overlay_time(&format!("{prefix}=previous"), previous_time);
                 print_overlay_time(&format!("{prefix}=rework"), rework_time);
             }
+        }
+    }
+
+    fn time_crop(warmup: usize, runs: usize, mut crop: impl FnMut()) -> (u128, u128, u128) {
+        for _ in 0..warmup {
+            crop();
+        }
+        let mut samples = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            let started = Instant::now();
+            crop();
+            samples.push(started.elapsed().as_nanos());
+        }
+        let min = samples.iter().copied().min().unwrap_or(0);
+        let max = samples.iter().copied().max().unwrap_or(0);
+        (min, median_nanos(&mut samples), max)
+    }
+
+    #[test]
+    #[ignore = "release timing benchmark; run with --release --ignored --nocapture"]
+    fn crop_run_timing_benchmark() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        const WARMUP: usize = 20;
+        const RUNS: usize = 101;
+        println!("crop_run_bench warmup={WARMUP} runs={RUNS} median");
+        for size in [230_u32, 324, 460, 648] {
+            let mut source = ffmpeg::frame::Video::new(Pixel::RGBA, size, size);
+            source.set_pts(Some(1));
+            paint_rgba(&mut source, opaque_pixel);
+            let presentation = LinuxCameraPresentation {
+                rect: LinuxCameraRect {
+                    x: 0,
+                    y: 0,
+                    width: size,
+                    height: size,
+                },
+                shape: LinuxCameraShape::Round,
+                mirrored: false,
+                effect: LinuxCameraEffect::None,
+            };
+            let mask = camera_mask(presentation);
+            let started = Instant::now();
+            let runs = mask_overlay_runs(&mask, size as usize, size as usize);
+            let build_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let (opaque, transparent, edge) = span_pixel_counts(&runs);
+            let (cached, applied) =
+                crop_camera_with_runs(&source, presentation, &mask, Some(&runs))
+                    .expect("cached crop");
+            assert!(applied);
+            assert_planes_equal(&cached, &formula_crop_camera(&source, presentation, &mask));
+            println!(
+                "size={size} runs_build_ms={build_ms:.4} opaque={opaque} transparent={transparent} edge={edge}"
+            );
+            let millis = |nanos: u128| nanos as f64 / 1_000_000.0;
+            let print_sample = |algo: &str, sample: (u128, u128, u128)| {
+                println!(
+                    "size={size} algo={algo} median_ms={:.4} min_ms={:.4} max_ms={:.4}",
+                    millis(sample.1),
+                    millis(sample.0),
+                    millis(sample.2),
+                );
+            };
+            print_sample(
+                "scalar",
+                time_crop(WARMUP, RUNS, || {
+                    let output = formula_crop_camera(
+                        std::hint::black_box(&source),
+                        presentation,
+                        std::hint::black_box(&mask),
+                    );
+                    std::hint::black_box(output.data(0)[size as usize / 2 * output.stride(0)]);
+                }),
+            );
+            print_sample(
+                "cached_runs",
+                time_crop(WARMUP, RUNS, || {
+                    let (output, applied) = crop_camera_with_runs(
+                        std::hint::black_box(&source),
+                        presentation,
+                        std::hint::black_box(&mask),
+                        Some(std::hint::black_box(&runs)),
+                    )
+                    .expect("timed cached crop");
+                    assert!(applied);
+                    std::hint::black_box(output.data(0)[size as usize / 2 * output.stride(0)]);
+                }),
+            );
+            print_sample(
+                "rebuild_runs",
+                time_crop(WARMUP, RUNS, || {
+                    let output = crop_camera(
+                        std::hint::black_box(&source),
+                        presentation,
+                        std::hint::black_box(&mask),
+                    )
+                    .expect("timed rebuild crop");
+                    std::hint::black_box(output.data(0)[size as usize / 2 * output.stride(0)]);
+                }),
+            );
         }
     }
 }

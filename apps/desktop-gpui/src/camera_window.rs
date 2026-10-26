@@ -57,6 +57,8 @@ use gpui::{
 };
 use serde_json::Value;
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     camera_loading,
     feeds::Feeds,
@@ -735,22 +737,51 @@ fn awaiting_camera_access(cx: &gpui::App) -> bool {
 fn camera_issue(error: &str) -> (&'static str, &'static str) {
     if error.contains("access is unavailable") {
         return (
-            "Camera access needed",
-            "Click to allow Cap to use your camera in System Settings.",
+            tr::camera::issue::access_title(),
+            tr::camera::issue::access_message(),
         );
     }
     let message = if error.contains("DeviceNotFound") {
-        "This camera is no longer available. Check that it is connected and allowed by system permissions."
+        tr::camera::issue::not_found()
     } else if error.contains("CameraTimeout") {
-        "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app."
+        tr::camera::issue::timeout()
     } else if error.contains("StartCapturing") {
-        "The system could not start this camera. It may be unavailable or in use by another app."
+        tr::camera::issue::start_failed()
     } else if error.contains("InvalidFormat") {
-        "This camera did not report a usable capture format."
+        tr::camera::issue::invalid_format()
     } else {
-        "The selected camera could not be started. Choose another camera or reconnect this one."
+        tr::camera::issue::generic()
     };
-    ("Camera unavailable", message)
+    (tr::camera::issue::unavailable_title(), message)
+}
+
+/// Which preview effect failed. Kept instead of its text so the overlay reads
+/// the current language when it renders.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectIssue {
+    Mirror,
+    Blur,
+    Both,
+}
+
+impl EffectIssue {
+    fn text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Mirror => (
+                tr::camera::effects::mirror_title(),
+                tr::camera::effects::mirror_message(),
+            ),
+            Self::Blur => (
+                tr::camera::effects::blur_title(),
+                tr::camera::effects::blur_message(),
+            ),
+            Self::Both => (
+                tr::camera::effects::both_title(),
+                tr::camera::effects::both_message(),
+            ),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -762,15 +793,12 @@ struct PreviewEffectFailures {
 
 #[cfg(target_os = "macos")]
 impl PreviewEffectFailures {
-    fn issue(self) -> Option<(&'static str, &'static str)> {
+    fn issue(self) -> Option<EffectIssue> {
         match (self.mirror, self.blur) {
             (false, false) => None,
-            (true, false) => Some(("Mirror unavailable", "Your camera preview is not mirrored.")),
-            (false, true) => Some(("Background blur unavailable", "Your camera is unblurred.")),
-            (true, true) => Some((
-                "Camera effects unavailable",
-                "Your camera is unblurred and not mirrored.",
-            )),
+            (true, false) => Some(EffectIssue::Mirror),
+            (false, true) => Some(EffectIssue::Blur),
+            (true, true) => Some(EffectIssue::Both),
         }
     }
 
@@ -798,6 +826,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("not mirrored")
         );
@@ -808,6 +837,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("unblurred")
         );
@@ -818,6 +848,7 @@ mod preview_effect_failure_tests {
             }
             .issue()
             .unwrap()
+            .text()
             .1
             .contains("unblurred and not mirrored")
         );
@@ -1025,7 +1056,7 @@ struct CameraPreviewView {
     /// ~20Hz whenever a microphone is selected, and each of those would
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
-    effect_issue: Option<(&'static str, &'static str)>,
+    effect_issue: Option<EffectIssue>,
     awaiting_access: bool,
     _feeds_subscription: Subscription,
     _access_subscription: Subscription,
@@ -1361,11 +1392,13 @@ impl Render for CameraPreviewView {
             .camera_error
             .as_deref()
             .map(camera_issue)
-            .or(self.effect_issue)
-            .or(awaiting_access.then_some((
-                "Waiting for camera access",
-                "Choose Allow in the macOS prompt.",
-            )))
+            .or(self.effect_issue.map(EffectIssue::text))
+            .or(awaiting_access.then(|| {
+                (
+                    tr::camera::waiting_title(),
+                    tr::common::choose_allow_prompt(),
+                )
+            }))
         {
             let metrics = overlay_metrics(self.size);
             container = container.child(
@@ -2764,6 +2797,7 @@ impl Render for CameraWindow {
             .flex()
             .flex_col()
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and
@@ -2916,20 +2950,106 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
 /// Tauri default slot -- bottom-right of the preferred monitor measured with
 /// `DEFAULT_WINDOW_SIZE = 230.0 * 2.0` (`windows.rs:2160, 2340-2344`; the
 /// constant, not the actual window size, is what the shipping app subtracts).
-pub fn opening_position(preferred: &scap_targets::Display) -> (f32, f32) {
-    if let Some((x, y)) = saved_position(preferred) {
-        tracing::info!(x, y, "camera window restored to its saved position");
+/// Clamp against the actual size before the camera can deliver its first frame.
+pub fn opening_position(preferred: &scap_targets::Display, window_size: (f32, f32)) -> (f32, f32) {
+    let saved = saved_position(preferred);
+    let bounds = saved
+        .and_then(|(x, y)| display_for_point(x, y))
+        .and_then(|display| display.raw_handle().logical_bounds())
+        .or_else(|| preferred.raw_handle().logical_bounds());
+    opening_position_in_bounds(saved, bounds, window_size)
+}
+
+fn opening_position_in_bounds(
+    saved: Option<(f64, f64)>,
+    bounds: Option<scap_targets::bounds::LogicalBounds>,
+    window_size: (f32, f32),
+) -> (f32, f32) {
+    let Some(bounds) = bounds else {
+        let (x, y) = saved.unwrap_or((100., 100.));
         return (x as f32, y as f32);
-    }
+    };
     const TAURI_DEFAULT_WINDOW_SIZE: f64 = 230.0 * 2.0;
-    match preferred.raw_handle().logical_bounds() {
-        Some(bounds) => (
-            (bounds.position().x() + bounds.size().width() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-            (bounds.position().y() + bounds.size().height() - TAURI_DEFAULT_WINDOW_SIZE - 100.)
-                as f32,
-        ),
-        None => (100., 100.),
+    let (dx, dy) = (bounds.position().x(), bounds.position().y());
+    let (dw, dh) = (bounds.size().width(), bounds.size().height());
+    let (x, y) = saved.unwrap_or((
+        dx + dw - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+        dy + dh - TAURI_DEFAULT_WINDOW_SIZE - 100.,
+    ));
+    (
+        x.clamp(dx, dx + (dw - f64::from(window_size.0)).max(0.)) as f32,
+        y.clamp(dy, dy + (dh - f64::from(window_size.1)).max(0.)) as f32,
+    )
+}
+
+#[cfg(test)]
+mod opening_position_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    fn display(x: f64, y: f64, width: f64, height: f64) -> Option<LogicalBounds> {
+        Some(LogicalBounds::new(
+            LogicalPosition::new(x, y),
+            LogicalSize::new(width, height),
+        ))
+    }
+
+    #[test]
+    fn restored_wide_preview_fits_after_display_resolution_changes() {
+        let state = CameraWindowState {
+            size: 600.,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        let dimensions = window_size(&state, Some(16. / 9.));
+        let (x, y) = opening_position_in_bounds(
+            Some((1800., 1000.)),
+            display(0., 0., 1920., 1080.),
+            dimensions,
+        );
+        assert!((x + dimensions.0 - 1920.).abs() < 0.001);
+        assert_eq!(y + dimensions.1, 1080.);
+    }
+
+    #[test]
+    fn fresh_large_preview_fits_on_a_display_with_negative_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-1280., -800., 1280., 800.), (600., 656.)),
+            (-600., -656.),
+        );
+    }
+
+    #[test]
+    fn oversized_preview_is_anchored_to_the_display_origin() {
+        assert_eq!(
+            opening_position_in_bounds(None, display(-640., 200., 640., 480.), (1066., 656.)),
+            (-640., 200.),
+        );
+    }
+
+    #[test]
+    fn valid_saved_position_and_default_slot_are_preserved() {
+        let bounds = display(1920., 0., 1920., 1080.);
+        assert_eq!(
+            opening_position_in_bounds(Some((2000., 400.)), bounds, (230., 286.)),
+            (2000., 400.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(None, bounds, (230., 286.)),
+            (3280., 520.),
+        );
+    }
+
+    #[test]
+    fn missing_display_geometry_preserves_the_existing_fallback() {
+        assert_eq!(
+            opening_position_in_bounds(None, None, (600., 656.)),
+            (100., 100.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(Some((300., 400.)), None, (600., 656.)),
+            (300., 400.),
+        );
     }
 }
 

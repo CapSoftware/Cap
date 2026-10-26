@@ -38,7 +38,6 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardSpacesData,
 	type OrganizationSettings,
@@ -46,6 +45,7 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
+import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -62,7 +62,10 @@ import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
-import { getSharePlaybackUrl } from "@/lib/share-playback";
+import {
+	canStartPlaybackInHtml,
+	getSharePlaybackSource,
+} from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { resolveShareWebUrl } from "@/lib/share-web-url";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
@@ -78,6 +81,7 @@ import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { getVideoViewCount } from "@/lib/video-view-count";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
@@ -125,6 +129,25 @@ function toShareVideo<
 }
 
 // Helper function to fetch shared spaces data for a video
+// The longest the page waits for the playback URL beyond its other queries.
+const SERVER_PLAYBACK_WAIT_MS = 50;
+
+function resolveWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(null), ms);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			() => {
+				clearTimeout(timer);
+				resolve(null);
+			},
+		);
+	});
+}
+
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Space-level and organization-level sharing are independent queries.
 	const [spaceSharing, orgSharing] = await Promise.all([
@@ -501,6 +524,10 @@ async function AuthorizedContent({
 		Option.map(Comment.CommentId.make),
 	);
 	const recordingStopped = hasRecordingStoppedParam(searchParams);
+	const earlySegmentPlayback =
+		recordingStopped &&
+		video.source?.type === "desktopSegments" &&
+		isEarlyInstantPlaybackEnabled(video.owner.id);
 
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
@@ -544,14 +571,31 @@ async function AuthorizedContent({
 				);
 				return false;
 			});
-	const initialPlaybackUrlPromise =
+	const initialPlaybackSourcePromise =
 		!video.isScreenshot &&
 		!hasActiveUpload &&
 		(video.source.type === "desktopMP4" || video.source.type === "webMP4")
 			? overShareLimitPromise.then((overLimit) =>
-					overLimit ? null : getSharePlaybackUrl(video),
+					overLimit ? null : getSharePlaybackSource(video),
 				)
 			: undefined;
+	const initialPlaybackUrlPromise = initialPlaybackSourcePromise?.then(
+		(source) => source?.url ?? null,
+	);
+	// On Cap's own CDN the signed URL is ready as soon as the share-limit check
+	// is (signing is local), so it is awaited with the rest of the page and
+	// rendered into the HTML: the browser starts the video download before the
+	// player hydrates. Custom buckets and storage integrations keep resolving it
+	// on the client, behind the probe that falls back to the playlist route, and
+	// so does this source if it is not ready in time.
+	const serverPlaybackSourcePromise =
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true" &&
+		!video.bucket &&
+		!video.storageIntegrationId &&
+		initialPlaybackSourcePromise &&
+		canStartPlaybackInHtml((await headers()).get("user-agent"))
+			? resolveWithin(initialPlaybackSourcePromise, SERVER_PLAYBACK_WAIT_MS)
+			: Promise.resolve(null);
 
 	const aiGenerationEnabledPromise = isAiGenerationEnabled(video.owner);
 	const imagesPromise = Effect.gen(function* () {
@@ -717,7 +761,7 @@ async function AuthorizedContent({
 			);
 	}).pipe(EffectRuntime.runPromise);
 
-	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const viewsPromise = getVideoViewCount(videoId).then((v) => v.count);
 
 	const videoOrganizationRolePromise = (async () => {
 		if (!userId) return null;
@@ -810,6 +854,7 @@ async function AuthorizedContent({
 		ownerIsOverShareLimit,
 		resolvedImages,
 		dashboardDestination,
+		serverPlaybackSource,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -825,6 +870,7 @@ async function AuthorizedContent({
 		overShareLimitPromise,
 		imagesPromise,
 		dashboardDestinationPromise,
+		serverPlaybackSourcePromise,
 		viewNotificationPromise,
 	]);
 
@@ -986,6 +1032,9 @@ async function AuthorizedContent({
 				dashboardDestination={dashboardDestination}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
+				serverPlaybackUrl={
+					serverPlaybackSource?.defaultStorage ? serverPlaybackSource.url : null
+				}
 				screenshotImageUrl={screenshotImageUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
 				comments={commentsPromise}
@@ -1000,6 +1049,7 @@ async function AuthorizedContent({
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}
+				earlySegmentPlayback={earlySegmentPlayback}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
 				aiGenerationAvailable={aiGenerationEnabled && aiProviderAvailable}

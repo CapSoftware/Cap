@@ -106,6 +106,7 @@ impl PortableCameraBlur {
                 })
                 .await
                 .map_err(|error| anyhow!("camera blur device: {error}"))?;
+            cap_rendering::log_uncaptured_errors(&device, "camera-preview-blur");
             anyhow::Ok((format, device, queue))
         })?;
         device.push_error_scope(wgpu::ErrorFilter::Validation);

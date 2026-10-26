@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	transcribe: vi.fn(),
 	invalidateQuota: vi.fn(),
 	audio: vi.fn(),
+	signal: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -73,6 +74,10 @@ vi.mock("@/lib/google-drive-storage-quota-cache", () => ({
 vi.mock("@/lib/queue-video-transcription", () => ({
 	queueVideoTranscription: mocks.transcribe,
 	shouldQueueTranscriptionAfterMediaComplete: () => true,
+}));
+
+vi.mock("@/lib/loom-import-signal", () => ({
+	signalLoomImportFinished: mocks.signal,
 }));
 
 import { POST } from "@/app/api/webhooks/media-server/progress/route";
@@ -944,6 +949,56 @@ describe("Loom importer completions", () => {
 		);
 		for (const write of metadataWrites(database.mutations))
 			expect(write.sql).not.toContain("loomPreviewGif");
+	});
+
+	it("wakes the waiting import once the finished state is saved", async () => {
+		const database = loomVideo();
+		mocks.signal.mockReset().mockImplementation(async () => {
+			expect(database.mutations).toContainEqual({
+				operation: "delete",
+				table: mocks.tables.uploads,
+			});
+		});
+		const token = `loom-import:${videoId}:run-1:0`;
+		const response = await request(
+			complete(),
+			"media-secret",
+			`?retryable=true&signal=${encodeURIComponent(token)}`,
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.signal).toHaveBeenCalledWith(token, videoId, "complete");
+	});
+
+	it("wakes the waiting import when the worker fails", async () => {
+		loomVideo();
+		mocks.signal.mockReset().mockResolvedValue(undefined);
+		await request(
+			{
+				jobId: "importer-1",
+				videoId,
+				phase: "error",
+				progress: 40,
+				error: "Loom 404",
+			},
+			"media-secret",
+			"?retryable=true&signal=loom-import%3Aowned-video%3Arun-1%3A0",
+		);
+		expect(mocks.signal).toHaveBeenCalledWith(
+			"loom-import:owned-video:run-1:0",
+			videoId,
+			"error",
+		);
+	});
+
+	it("does not wake the import for progress updates", async () => {
+		loomVideo();
+		mocks.signal.mockReset().mockResolvedValue(undefined);
+		await request(
+			{ jobId: "importer-1", videoId, phase: "downloading", progress: 40 },
+			"media-secret",
+			"?retryable=true&signal=loom-import%3Aowned-video%3Arun-1%3A0",
+		);
+		expect(mocks.signal).not.toHaveBeenCalled();
 	});
 
 	it("keeps queueing transcription for media server completions", async () => {

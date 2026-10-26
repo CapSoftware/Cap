@@ -15,6 +15,8 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _, px, svg,
 };
 
+use crate::i18n::tr;
+use crate::theme::LocaleFont as _;
 use crate::{
     feeds::Feeds,
     recording::RecordingMode,
@@ -128,10 +130,10 @@ impl ControlsWindow {
         })
     }
 
-    /// `formatTime`: `M:SS`, hours folded into minutes the same way.
+    /// `formatTime`, through the editor clock's formatter, so a recording past
+    /// an hour reads `H:MM:SS` where the source folds the hours into minutes.
     fn format_elapsed(elapsed: Duration) -> String {
-        let total = elapsed.as_secs();
-        format!("{}:{:02}", total / 60, total % 60)
+        crate::editor_timeline::format_time(elapsed.as_secs_f64())
     }
 
     fn action_button(
@@ -171,20 +173,20 @@ impl ControlsWindow {
         let label: SharedString = if let Some(countdown) = countdown.filter(|value| *value > 0) {
             countdown.to_string().into()
         } else if starting {
-            "Starting".into()
+            tr::controls::stop::starting().into()
         } else if stopping {
-            "Saving…".into()
+            tr::controls::stop::saving().into()
         } else if session.pause_pending() {
             if session.is_paused() {
-                "Resuming…"
+                tr::controls::stop::resuming()
             } else {
-                "Pausing…"
+                tr::controls::stop::pausing()
             }
             .into()
         } else if session.is_paused() {
-            "Paused".into()
+            tr::controls::stop::paused().into()
         } else if session.error.is_some() {
-            "Error".into()
+            tr::controls::stop::error().into()
         } else {
             Self::format_elapsed(session.elapsed()).into()
         };
@@ -293,14 +295,14 @@ impl ControlsWindow {
     ) {
         let (title, message, accept) = match action {
             DestructiveAction::Restart => (
-                "Confirm Restart",
-                "Are you sure you want to restart the recording? The current recording will be discarded.",
-                "Restart",
+                tr::controls::confirm::restart_title(),
+                tr::controls::confirm::restart_message(),
+                tr::controls::confirm::restart(),
             ),
             DestructiveAction::Delete => (
-                "Confirm Delete",
-                "Are you sure you want to delete the recording?",
-                "Delete",
+                tr::controls::confirm::delete_title(),
+                tr::controls::confirm::delete_message(),
+                tr::controls::confirm::delete(),
             ),
         };
 
@@ -318,8 +320,14 @@ impl ControlsWindow {
                 return;
             };
             self.confirmation_pending = true;
-            let response =
-                crate::editor_modal::confirm_action(title, message, accept, "Cancel", window, cx);
+            let response = crate::editor_modal::confirm_action(
+                title,
+                message,
+                accept,
+                tr::common::cancel(),
+                window,
+                cx,
+            );
             cx.spawn_in(window, async move |this, cx| {
                 let confirmed = response.await;
                 let _ = this.update_in(cx, |this, window, cx| {
@@ -346,7 +354,8 @@ impl ControlsWindow {
 
         #[cfg(not(target_os = "linux"))]
         cx.spawn_in(window, async move |this, cx| {
-            if !crate::platform::confirm_dialog(title, message, accept, "Cancel", true) {
+            if !crate::platform::confirm_dialog(title, message, accept, tr::common::cancel(), true)
+            {
                 return;
             }
 
@@ -368,17 +377,17 @@ impl ControlsWindow {
         let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
         let pause_pending = session.pause_pending();
         let pause_tooltip = if session.pause_uncertain() {
-            "Capture state is unconfirmed. Use Stop."
+            tr::controls::pause::unconfirmed()
         } else if pause_pending {
             if paused {
-                "Resuming recording…"
+                tr::controls::pause::resuming()
             } else {
-                "Pausing recording…"
+                tr::controls::pause::pausing()
             }
         } else if paused {
-            "Resume recording"
+            tr::controls::pause::resume()
         } else {
-            "Pause recording"
+            tr::controls::pause::pause()
         };
 
         div()
@@ -506,7 +515,7 @@ impl Render for ControlsWindow {
         let issue = session.error.clone().or_else(|| {
             session
                 .storage_warning
-                .then(|| "Low storage. Cap will stop soon to save your recording.".to_owned())
+                .then(|| tr::controls::low_storage().to_owned())
         });
 
         div()
@@ -516,6 +525,7 @@ impl Render for ControlsWindow {
             .justify_end()
             .p(px(12.))
             .font_family(crate::theme::UI_FONT)
+            .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .when_some(issue, |this, issue| {
@@ -557,14 +567,15 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
         .max_h(px(56.))
         .overflow_x_scroll()
         .overflow_y_scroll()
-        .child(if error.contains("Insufficient disk space")
-            && error.contains("Your recording is still paused")
-        {
-            "Not enough disk space to resume. Free up space and try again, or press Stop to save."
-                .to_owned()
-        } else {
-            error
-        })
+        .child(
+            if error.contains("Insufficient disk space")
+                && error.contains("Your recording is still paused")
+            {
+                tr::controls::disk_full_resume().to_owned()
+            } else {
+                error
+            },
+        )
 }
 
 fn tick_delay(live: bool, elapsed: Duration) -> Duration {
@@ -596,6 +607,16 @@ mod repaint_tests {
             Duration::from_millis(20)
         );
         assert_eq!(until_next_second(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_timer_shows_hours_from_an_hour_on() {
+        let label = |seconds| ControlsWindow::format_elapsed(Duration::from_secs_f64(seconds));
+        assert_eq!(label(0.), "0:00");
+        assert_eq!(label(95.7), "1:35");
+        assert_eq!(label(3_599.9), "59:59");
+        assert_eq!(label(3_600.), "1:00:00");
+        assert_eq!(label(3_905.), "1:05:05");
     }
 
     #[test]
