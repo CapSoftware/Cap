@@ -259,7 +259,6 @@ describe("bootstrap session ownership", () => {
 		expect(stored[BOOTSTRAP_CACHE_KEY]).toBeUndefined();
 	});
 
-
 	it("does not expose old cached data during the account switch", async () => {
 		stored[AUTH_KEY] = { authApiKey: "old_key", userId: "old_user" };
 		stored[BOOTSTRAP_CACHE_KEY] = {
@@ -275,7 +274,12 @@ describe("bootstrap session ownership", () => {
 			}
 			const token = new Headers(init?.headers).get("Authorization");
 			return Promise.resolve(
-				Response.json(bootstrapFor(token === "Bearer old_key" ? "old_user" : "new_user", token === "Bearer old_key" ? 300 : 0)),
+				Response.json(
+					bootstrapFor(
+						token === "Bearer old_key" ? "old_user" : "new_user",
+						token === "Bearer old_key" ? 300 : 0,
+					),
+				),
 			);
 		});
 		vi.stubGlobal("fetch", fetchMock);
