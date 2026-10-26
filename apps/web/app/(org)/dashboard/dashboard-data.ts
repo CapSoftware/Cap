@@ -365,21 +365,100 @@ async function loadActiveOrganizationData(
 	};
 }
 
+async function loadOrganizationDetails(
+	user: typeof userSelectProps,
+	userOrganizations: OrganizationRow[],
+) {
+	if (userOrganizations.length === 0) {
+		return { allMembers: [], managers: [], memberCounts: [], inviteCounts: [] };
+	}
+
+	const organizationIds = userOrganizations.map(
+		(organization) => organization.id,
+	);
+	const ownerIds = [
+		...new Set(userOrganizations.map((organization) => organization.ownerId)),
+	];
+	const managerIds = [...new Set([...ownerIds, user.id])];
+	const [allMembers, managers, memberCounts, inviteCounts] = await Promise.all([
+		db()
+			.select({
+				member: organizationMembers,
+				user: {
+					id: users.id,
+					name: users.name,
+					lastName: users.lastName,
+					email: users.email,
+					image: users.image,
+				},
+			})
+			.from(organizationMembers)
+			.leftJoin(users, eq(organizationMembers.userId, users.id))
+			.where(inArray(organizationMembers.organizationId, organizationIds)),
+		db()
+			.select({
+				id: users.id,
+				inviteQuota: users.inviteQuota,
+				stripeSubscriptionId: users.stripeSubscriptionId,
+				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			})
+			.from(users)
+			.where(inArray(users.id, managerIds)),
+		db()
+			.select({ ownerId: organizations.ownerId, value: count() })
+			.from(organizationMembers)
+			.innerJoin(
+				organizations,
+				eq(organizationMembers.organizationId, organizations.id),
+			)
+			.where(
+				and(
+					inArray(organizations.ownerId, ownerIds),
+					isNull(organizations.tombstoneAt),
+				),
+			)
+			.groupBy(organizations.ownerId),
+		db()
+			.select({ ownerId: organizations.ownerId, value: count() })
+			.from(organizationInvites)
+			.innerJoin(
+				organizations,
+				eq(organizationInvites.organizationId, organizations.id),
+			)
+			.where(
+				and(
+					inArray(organizations.ownerId, ownerIds),
+					isNull(organizations.tombstoneAt),
+				),
+			)
+			.groupBy(organizations.ownerId),
+	]);
+
+	return { allMembers, managers, memberCounts, inviteCounts };
+}
+
 export async function getDashboardData(user: typeof userSelectProps) {
 	try {
 		const userOrganizations = await loadUserOrganizations(user);
 		const organizationIds = userOrganizations.map((org) => org.id);
 		const active = resolveActiveOrganization(user, userOrganizations);
 
-		const [organizationInvitesData, activeData] = await Promise.all([
-			organizationIds.length > 0
-				? db()
-						.select()
-						.from(organizationInvites)
-						.where(inArray(organizationInvites.organizationId, organizationIds))
-				: Promise.resolve<(typeof organizationInvites.$inferSelect)[]>([]),
-			active ? loadActiveOrganizationData(user, active) : Promise.resolve(null),
-		]);
+		const [organizationInvitesData, activeData, organizationDetails] =
+			await Promise.all([
+				organizationIds.length > 0
+					? db()
+							.select()
+							.from(organizationInvites)
+							.where(
+								inArray(organizationInvites.organizationId, organizationIds),
+							)
+					: Promise.resolve<(typeof organizationInvites.$inferSelect)[]>([]),
+				active
+					? loadActiveOrganizationData(user, active)
+					: Promise.resolve(null),
+				loadOrganizationDetails(user, userOrganizations),
+			]);
 
 		const spacesData: Spaces[] = activeData?.spacesData ?? [];
 		const organizationSettings: OrganizationSettings | null =
@@ -391,59 +470,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 		const organizationSelect: Organization[] = await Effect.all(
 			userOrganizations.map(
 				Effect.fn(function* (organization) {
-					const db = yield* Database;
 					const iconImages = yield* ImageUploads;
-
-					const managerIds = Array.from(
-						new Set([organization.ownerId, user.id]),
-					);
-					const [allMembers, managers, ownedIds] = yield* Effect.all(
-						[
-							db.use((db) =>
-								db
-									.select({
-										member: organizationMembers,
-										user: {
-											id: users.id,
-											name: users.name,
-											lastName: users.lastName,
-											email: users.email,
-											image: users.image,
-										},
-									})
-									.from(organizationMembers)
-									.leftJoin(users, eq(organizationMembers.userId, users.id))
-									.where(
-										eq(organizationMembers.organizationId, organization.id),
-									),
-							),
-							db.use((db) =>
-								db
-									.select({
-										id: users.id,
-										inviteQuota: users.inviteQuota,
-										stripeSubscriptionId: users.stripeSubscriptionId,
-										stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-										thirdPartyStripeSubscriptionId:
-											users.thirdPartyStripeSubscriptionId,
-									})
-									.from(users)
-									.where(inArray(users.id, managerIds)),
-							),
-							db.use((db) =>
-								db
-									.select({ id: organizations.id })
-									.from(organizations)
-									.where(
-										and(
-											eq(organizations.ownerId, organization.ownerId),
-											isNull(organizations.tombstoneAt),
-										),
-									)
-									.then((rows) => rows.map((r) => r.id)),
-							),
-						],
-						{ concurrency: "unbounded" },
+					const { managers, memberCounts, inviteCounts } = organizationDetails;
+					const allMembers = organizationDetails.allMembers.filter(
+						({ member }) => member.organizationId === organization.id,
 					);
 					const owner = managers.find(
 						(manager) => manager.id === organization.ownerId,
@@ -465,35 +495,11 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						actorCanManageProSeats: canManageOrganizationProSeats(currentRole),
 					});
 
-					const [memberCountResult, inviteCountResult] = yield* Effect.all(
-						[
-							db.use((db) =>
-								ownedIds.length > 0
-									? db
-											.select({ value: count() })
-											.from(organizationMembers)
-											.where(
-												inArray(organizationMembers.organizationId, ownedIds),
-											)
-									: Promise.resolve([{ value: 0 }]),
-							),
-							db.use((db) =>
-								ownedIds.length > 0
-									? db
-											.select({ value: count() })
-											.from(organizationInvites)
-											.where(
-												inArray(organizationInvites.organizationId, ownedIds),
-											)
-									: Promise.resolve([{ value: 0 }]),
-							),
-						],
-						{ concurrency: "unbounded" },
-					);
-
 					const totalInvites =
-						(memberCountResult[0]?.value || 0) +
-						(inviteCountResult[0]?.value || 0);
+						(memberCounts.find((row) => row.ownerId === organization.ownerId)
+							?.value ?? 0) +
+						(inviteCounts.find((row) => row.ownerId === organization.ownerId)
+							?.value ?? 0);
 
 					return {
 						organization: {
