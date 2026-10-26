@@ -1030,15 +1030,17 @@ const openRecordingDestination = (status: RecordingStatus) => {
 
 let bootstrapRevision = 0;
 let bootstrapRefreshInFlight: number | null = null;
+let authTransitionInFlight = false;
 
 const bootstrapRequestIsCurrent = async (
 	auth: ExtensionAuth,
 	revision: number,
 ) => {
-	if (revision !== bootstrapRevision) return false;
+	if (revision !== bootstrapRevision || authTransitionInFlight) return false;
 	const currentAuth = await loadAuth();
 	return (
 		revision === bootstrapRevision &&
+		!authTransitionInFlight &&
 		currentAuth?.authApiKey === auth.authApiKey &&
 		currentAuth.userId === auth.userId
 	);
@@ -1078,7 +1080,7 @@ const loadSignedInState = async () => {
 	if (pendingAuth && !authPending) {
 		await clearPendingAuth();
 	}
-	if (!auth || revision !== bootstrapRevision) {
+	if (!auth || revision !== bootstrapRevision || authTransitionInFlight) {
 		return { settings, auth: null, bootstrap: null, authPending, authError };
 	}
 
@@ -1440,11 +1442,18 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
 				await revokeAuth(settings, previousAuth).catch(() => undefined);
 			}
+			authTransitionInFlight = true;
 			bootstrapRevision += 1;
 			bootstrapRefreshInFlight = null;
 			bootstrapCache = null;
-			await saveAuth(auth);
-			await clearCachedBootstrap();
+			try {
+				// Invalidate the old cache before exposing the new credentials.
+				// Readers must not observe a partially switched account.
+				await clearCachedBootstrap();
+				await saveAuth(auth);
+			} finally {
+				authTransitionInFlight = false;
+			}
 			refreshBootstrapInBackground(settings, auth);
 		})
 		.catch(async (error: unknown) => {
