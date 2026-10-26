@@ -540,6 +540,11 @@ impl DeepLinkAction {
             DeepLinkAction::OpenEditor { project_path } => {
                 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingStatus};
 
+                if crate::library::is_screenshot_bundle(&project_path) {
+                    cx.defer(move |cx| app_windows::open_screenshot_editor(project_path, cx));
+                    return Ok(());
+                }
+
                 let meta =
                     RecordingMeta::load_for_project(&project_path).map_err(|v| v.to_string())?;
                 match &meta.inner {
