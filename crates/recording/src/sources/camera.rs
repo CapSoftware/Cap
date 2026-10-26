@@ -67,6 +67,7 @@ pub struct Camera {
     stop_tx: Option<oneshot::Sender<()>>,
     stopped: Arc<AtomicBool>,
     original_video_info: VideoInfo,
+    _full_res: camera::MjpegFullResHold,
 }
 
 impl VideoSource for Camera {
@@ -83,6 +84,7 @@ impl VideoSource for Camera {
     {
         let (tx, rx) = flume::bounded(256);
         let stall_health_tx = ctx.health_tx().clone();
+        let full_res = feed_lock.hold_full_resolution();
 
         let original_video_info = *feed_lock.video_info();
         let original_width = original_video_info.width;
@@ -272,6 +274,7 @@ impl VideoSource for Camera {
             stop_tx: Some(stop_tx),
             stopped,
             original_video_info,
+            _full_res: full_res,
         })
     }
 
