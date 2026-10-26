@@ -360,6 +360,93 @@ describe("AuthProvider", () => {
 		}
 	});
 
+	it("cancels the scheduled retry after a manual refresh recovers", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+		vi.useFakeTimers();
+		let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+		try {
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+			await act(async () => {
+				await latestAuth?.refresh();
+			});
+			expect(latestAuth?.bootstrap?.activeOrganizationId).toBe("org_123");
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+		} finally {
+			await act(async () => renderer?.unmount());
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["success", "unauthorized", "offline"] as const)(
+		"ignores a retry's late %s after an organization switch",
+		async (outcome) => {
+			secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+				Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+			);
+			const oldRetry = createDeferred<{
+				activeOrganizationId: string;
+				user: { email: string; name: string };
+			}>();
+			apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+			apiMock.bootstrap.mockReturnValueOnce(oldRetry.promise);
+			apiMock.setActiveOrganization.mockResolvedValueOnce({
+				activeOrganizationId: "org_new",
+				user: { email: "richie@cap.so", name: "Richie" },
+			});
+			vi.useFakeTimers();
+			let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+			try {
+				await act(async () => {
+					renderer = TestRenderer.create(
+						React.createElement(AuthProvider, null, React.createElement(Probe)),
+					);
+					await flushMicrotasks();
+				});
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(2_000);
+				});
+				expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+				await act(async () => {
+					await latestAuth?.setActiveOrganization("org_new");
+				});
+				await act(async () => {
+					if (outcome === "success") {
+						oldRetry.resolve({
+							activeOrganizationId: "org_old",
+							user: { email: "richie@cap.so", name: "Richie" },
+						});
+					} else {
+						oldRetry.reject(
+							outcome === "unauthorized"
+								? new MobileApiError("Expired", 401, null)
+								: new TypeError("Offline"),
+						);
+					}
+					await flushMicrotasks();
+					await vi.advanceTimersByTimeAsync(30_000);
+				});
+				expect(latestAuth?.bootstrap?.activeOrganizationId).toBe("org_new");
+				expect(latestAuth?.status).toBe("signedIn");
+				expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+				expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+			} finally {
+				await act(async () => renderer?.unmount());
+				vi.useRealTimers();
+			}
+		},
+	);
+
 	it("does not retry a transient failure after explicit sign-out", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
 			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
