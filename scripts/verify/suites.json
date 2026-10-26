@@ -340,7 +340,7 @@
 			"target": "aarch64-apple-darwin",
 			"shards": {
 				"fast": 1,
-				"full": 2
+				"full": 3
 			},
 			"archive": false
 		},
