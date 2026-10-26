@@ -2979,8 +2979,8 @@ pub(crate) const APP_ID: &str = "Cap";
 /// (screenshot access) only for the focused app, matched as the window's app
 /// id against the id Cap gave the portals, so a launch that named itself
 /// `so.cap.Cap` there names its windows the same.
+#[cfg(target_os = "linux")]
 pub(crate) fn app_id() -> &'static str {
-    #[cfg(target_os = "linux")]
     if crate::linux_portal_id::windows_use_portal_app_id() {
         return crate::linux_portal_id::PORTAL_APP_ID;
     }
