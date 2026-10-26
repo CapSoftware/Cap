@@ -15,6 +15,7 @@ import {
 import {
 	createMobileApiClient,
 	createSessionRequestUrl,
+	MobileApiError,
 	type MobileApiClient,
 	type MobileAuthConfigResponse,
 	type MobileBootstrapResponse,
@@ -130,8 +131,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		}
 
 		const revision = sessionRevision.current;
-		refresh().catch(() => {
-			if (revision !== sessionRevision.current) return;
+		refresh().catch((error: unknown) => {
+			if (
+				revision !== sessionRevision.current ||
+				!(error instanceof MobileApiError && error.status === 401)
+			)
+				return;
 			sessionRevision.current += 1;
 			setApiKey(null);
 			setUserId(null);
