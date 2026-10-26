@@ -93,3 +93,29 @@ export function resolvePreverifiedRuns(
 	}
 	return resolved;
 }
+
+// Reads at most `limit` bytes, whatever the response claims about its length.
+export async function readBoundedText(
+	response: Response,
+	limit: number,
+): Promise<string | null> {
+	const reader = response.body?.getReader();
+	if (!reader) return null;
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			bytes += value.byteLength;
+			if (bytes > limit) {
+				await reader.cancel().catch(() => {});
+				return null;
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return new TextDecoder().decode(Buffer.concat(chunks));
+}

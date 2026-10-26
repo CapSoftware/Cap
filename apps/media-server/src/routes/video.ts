@@ -87,6 +87,7 @@ import { findJobOnPeer, isPeerLookup } from "../lib/peer-jobs";
 import {
 	MAX_PREVERIFIED_RUN_BYTES,
 	type PreverifiedRunPayload,
+	readBoundedText,
 	readPreverifiedRun,
 	resolvePreverifiedRuns,
 	signPreverifiedRun,
@@ -2735,21 +2736,31 @@ async function preverifySegments(
 				path: segmentPaths[index] as string,
 			})),
 		];
+		// One failed download stops the others, and the run only ends once none is still writing.
+		const downloadAbort = new AbortController();
+		const downloadSignal = AbortSignal.any([signal, downloadAbort.signal]);
 		let next = 0;
-		await Promise.all(
+		const workers = await Promise.allSettled(
 			Array.from({ length: Math.min(8, downloads.length) }, async () => {
-				while (next < downloads.length) {
+				while (next < downloads.length && !downloadSignal.aborted) {
 					const download = downloads[next++];
 					if (!download) return;
-					await downloadUrlToFile(
-						download.source.url,
-						download.path,
-						signal,
-						download.source,
-					);
+					try {
+						await downloadUrlToFile(
+							download.source.url,
+							download.path,
+							downloadSignal,
+							download.source,
+						);
+					} catch (error) {
+						downloadAbort.abort();
+						throw error;
+					}
 				}
 			}),
 		);
+		const failed = workers.find((worker) => worker.status === "rejected");
+		if (failed?.status === "rejected") throw failed.reason;
 		const lines = await decodePreverifiedRun(
 			initPath,
 			segmentPaths,
@@ -2816,16 +2827,14 @@ async function loadPreverifiedRuns(
 				if (!url) return;
 				try {
 					const response = await fetch(url, { signal: budget });
-					const length = Number(response.headers.get("content-length"));
-					if (
-						!response.ok ||
-						!Number.isSafeInteger(length) ||
-						length > MAX_PREVERIFIED_RUN_BYTES
-					) {
+					const text = response.ok
+						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
+						: null;
+					if (text === null) {
 						await response.body?.cancel().catch(() => {});
 						continue;
 					}
-					const run = readPreverifiedRun(await response.text(), secret);
+					const run = readPreverifiedRun(text, secret);
 					if (run) runs.push(run);
 				} catch {
 					signal.throwIfAborted();

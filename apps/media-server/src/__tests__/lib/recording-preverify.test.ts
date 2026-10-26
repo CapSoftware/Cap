@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type PreverifiedRunPayload,
+	readBoundedText,
 	readPreverifiedRun,
 	resolvePreverifiedRuns,
 	signPreverifiedRun,
@@ -107,5 +108,28 @@ describe("chaining preverified runs", () => {
 		expect(
 			resolvePreverifiedRuns([run(0, 8)], init, segments.slice(0, 5)),
 		).toEqual([]);
+	});
+});
+
+describe("bounded run reads", () => {
+	const stream = (sizes: number[]) =>
+		new Response(
+			new ReadableStream({
+				start(controller) {
+					for (const size of sizes)
+						controller.enqueue(new Uint8Array(size).fill(97));
+					controller.close();
+				},
+			}),
+		);
+
+	test("reads a body within the limit", async () => {
+		expect(await readBoundedText(stream([3, 4]), 7)).toBe("aaaaaaa");
+	});
+
+	test("stops at the limit even without a Content-Length", async () => {
+		const response = stream([4, 4, 4]);
+		expect(response.headers.get("content-length")).toBeNull();
+		expect(await readBoundedText(response, 7)).toBeNull();
 	});
 });
