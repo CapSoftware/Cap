@@ -1013,11 +1013,16 @@ fn frame_from_pipewire_data(
     let fd = data.fd();
     let dmabuf = data_type == spa::buffer::DataType::DmaBuf;
     let memfd = data_type == spa::buffer::DataType::MemFd;
+    // `chunk.offset` is relative to the producer's mapping, which starts at
+    // `spa_data.mapoffset`. The fd mapping, its bounds, and the cache key use
+    // that base; `offset` stays inside the mapping.
+    let map_offset = data.as_raw().mapoffset as usize;
     let plane = if (dmabuf || memfd) && fd >= 0 {
         SourcePlane {
             data: std::ptr::null_mut(),
             data_len: 0,
             fd,
+            map_offset,
             sync_dma_buf: dmabuf,
             pw_buffer,
         }
@@ -1028,6 +1033,7 @@ fn frame_from_pipewire_data(
             data,
             data_len,
             fd: -1,
+            map_offset: 0,
             sync_dma_buf: false,
             pw_buffer,
         }
@@ -3604,6 +3610,70 @@ mod pipewire_frame_tests {
         for y in 0..height {
             let row = &frame.data(0)[y * frame.stride(0)..][..width * 4];
             assert_eq!(row, &bytes[y * stride..][..width * 4], "row {y}");
+        }
+    }
+
+    /// A packed memfd places this buffer at `spa_data.mapoffset`. `chunk.offset`
+    /// is relative to that mapping, so both the borrowed frame and the copy
+    /// have to start there rather than at byte zero of the fd.
+    #[test]
+    fn memfd_map_offset_is_applied_to_borrowed_and_copied_frames() {
+        let page =
+            usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).expect("page size");
+        let (width, height, stride) = (4usize, 2usize, 32usize);
+        let chunk_offset = 48usize;
+        let map_offset = page;
+        let mut bytes = vec![0x5Au8; map_offset + chunk_offset + stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = &mut bytes[map_offset + chunk_offset + y * stride + x * 4..][..4];
+                pixel.copy_from_slice(&[x as u8, y as u8, 0x80, 0xff]);
+            }
+        }
+        let file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut &file, &bytes).unwrap();
+
+        let mut chunk = spa::sys::spa_chunk {
+            offset: chunk_offset as u32,
+            size: (stride * height) as u32,
+            stride: stride as i32,
+            flags: 0,
+        };
+        let mut raw: spa::sys::spa_data = unsafe { std::mem::zeroed() };
+        raw.type_ = spa::sys::SPA_DATA_MemFd;
+        raw.flags = spa::sys::SPA_DATA_FLAG_READABLE;
+        raw.fd = i64::from(file.as_raw_fd());
+        raw.mapoffset = map_offset as u32;
+        raw.maxsize = (bytes.len() - map_offset) as u32;
+        raw.data = std::ptr::null_mut();
+        raw.chunk = &mut chunk;
+        let data = unsafe { &mut *(&mut raw as *mut spa::sys::spa_data as *mut spa::buffer::Data) };
+
+        let mut format = spa::param::video::VideoInfoRaw::new();
+        format.set_format(spa::param::video::VideoFormat::BGRx);
+        format.set_size(spa::utils::Rectangle {
+            width: width as u32,
+            height: height as u32,
+        });
+        let frames = PipewireFrames::new();
+        for lease in [true, false] {
+            let (frame, leased) = frame_from_pipewire_data(data, format, None, &frames, 0, lease)
+                .unwrap()
+                .expect("a frame");
+            assert_eq!(leased, lease);
+            assert_eq!(
+                (frame.width(), frame.height()),
+                (width as u32, height as u32)
+            );
+            for y in 0..height {
+                let row = &frame.data(0)[y * frame.stride(0)..][..width * 4];
+                let source = map_offset + chunk_offset + y * stride;
+                assert_eq!(
+                    row,
+                    &bytes[source..source + width * 4],
+                    "lease {lease} row {y}"
+                );
+            }
         }
     }
 

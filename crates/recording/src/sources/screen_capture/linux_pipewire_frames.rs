@@ -4,7 +4,7 @@
 //! view stays alive until the last frame reference is dropped: the encoder
 //! reads it, and the muxer also holds the latest frame so a static tail can
 //! be repeated. DMA-BUF and memfd mappings are cached and replaced only when
-//! the fd or the mapped size changes.
+//! the fd, the map offset, or the mapped size changes.
 //!
 //! Two paths still allocate a private writable copy:
 //! - Instant mode with a camera. The alias is created with
@@ -47,6 +47,10 @@ pub(super) struct SourcePlane {
     pub data_len: usize,
     /// Negative when the plane has no fd of its own.
     pub fd: i32,
+    /// `spa_data.mapoffset` for an fd plane. Chunk offsets are relative to
+    /// this byte of the file, which is where the producer's mapping starts.
+    /// Zero when [`Self::data`] is already that mapping.
+    pub map_offset: usize,
     pub sync_dma_buf: bool,
     /// `pw_buffer` address, queued back when the last frame reference drops.
     /// Zero in tests that have no PipeWire buffer.
@@ -70,6 +74,8 @@ pub(super) struct LinearGeometry {
 struct MappedBuffer {
     /// Producer fd. PipeWire may close it while an alias is still borrowed.
     fd: RawFd,
+    /// `spa_data.mapoffset` this mapping was established at.
+    map_offset: usize,
     /// Dup of `fd`, used for mmap and the read fence so that close cannot
     /// recycle the descriptor under the encoder.
     owned: RawFd,
@@ -86,9 +92,18 @@ struct DmaBufCache {
 }
 
 impl DmaBufCache {
-    fn map(&mut self, fd: RawFd, minimum_len: usize) -> anyhow::Result<(*mut u8, usize)> {
-        let len = mapped_len(fd, minimum_len)?;
-        if let Some(index) = self.maps.iter().position(|map| map.fd == fd && !map.retire) {
+    fn map(
+        &mut self,
+        fd: RawFd,
+        map_offset: usize,
+        minimum_len: usize,
+    ) -> anyhow::Result<(*mut u8, usize)> {
+        let len = mapped_len(fd, map_offset, minimum_len)?;
+        if let Some(index) = self
+            .maps
+            .iter()
+            .position(|map| map.fd == fd && map.map_offset == map_offset && !map.retire)
+        {
             if self.maps[index].len == len {
                 return Ok((self.maps[index].pointer as *mut u8, len));
             }
@@ -100,6 +115,9 @@ impl DmaBufCache {
             return Err(std::io::Error::last_os_error())
                 .context("dup the PipeWire screen capture DMA-BUF");
         }
+        let offset = libc::off_t::try_from(map_offset).map_err(|_| {
+            anyhow!("PipeWire screen capture map offset does not fit in a file offset")
+        })?;
         let pointer = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -107,7 +125,7 @@ impl DmaBufCache {
                 libc::PROT_READ,
                 libc::MAP_SHARED,
                 owned,
-                0,
+                offset,
             )
         };
         if pointer == libc::MAP_FAILED {
@@ -121,6 +139,7 @@ impl DmaBufCache {
         self.map_calls += 1;
         self.maps.push(MappedBuffer {
             fd,
+            map_offset,
             owned,
             len,
             pointer,
@@ -461,7 +480,12 @@ pub(super) fn linear_frame(
     let (base, len, sync_fd) = if source.data.is_null() && source.fd < 0 {
         bail!("PipeWire screen capture buffer was not memory-mapped");
     } else if source.data.is_null() {
-        let (base, len) = frames.inner.cache.lock().map(source.fd, frame_bytes)?;
+        let (base, len) =
+            frames
+                .inner
+                .cache
+                .lock()
+                .map(source.fd, source.map_offset, frame_bytes)?;
         let sync_fd = if source.sync_dma_buf {
             frames
                 .inner
@@ -670,14 +694,16 @@ fn alias_window_fits(start: usize, stride: usize, height: usize, limit: usize) -
         .is_some_and(|end| end <= limit)
 }
 
-fn mapped_len(fd: RawFd, minimum_len: usize) -> anyhow::Result<usize> {
+fn mapped_len(fd: RawFd, map_offset: usize, minimum_len: usize) -> anyhow::Result<usize> {
     if fd < 0 {
         bail!("PipeWire screen capture DMA-BUF had no file descriptor");
     }
-    let len = file_len(fd)
-        .ok()
-        .filter(|len| *len > 0)
-        .unwrap_or(minimum_len);
+    let len = match file_len(fd) {
+        Ok(len) if len > 0 => len.checked_sub(map_offset).ok_or_else(|| {
+            anyhow!("PipeWire screen capture map offset {map_offset} is past the end of the buffer")
+        })?,
+        _ => minimum_len,
+    };
     if len < minimum_len {
         bail!("PipeWire screen capture DMA-BUF holds {len} bytes, the frame needs {minimum_len}");
     }
@@ -761,6 +787,7 @@ mod tests {
             data: bytes.as_mut_ptr(),
             data_len: bytes.len(),
             fd: -1,
+            map_offset: 0,
             sync_dma_buf: false,
             pw_buffer: 0,
         }
@@ -843,6 +870,7 @@ mod tests {
             data: std::ptr::null_mut(),
             data_len: 0,
             fd,
+            map_offset: 0,
             sync_dma_buf: true,
             pw_buffer: 0,
         };
@@ -934,7 +962,110 @@ mod tests {
     }
 
     #[test]
+    fn memfd_map_offset_selects_the_producer_region_and_cache_entry() {
+        ffmpeg::init().expect("ffmpeg");
+        let page = page_size();
+        let (width, height, stride) = (4usize, 2usize, 16usize);
+        let chunk_offset = 16usize;
+        let mut bytes = vec![0u8; page * 2];
+        bytes[..page].fill(0xA1);
+        bytes[page..].fill(0xB2);
+        bytes[chunk_offset] = 0x10;
+        bytes[page + chunk_offset] = 0x20;
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &bytes).unwrap();
+        let fd = file.as_raw_fd();
+        let frames = PipewireFrames::new();
+        let mut geometry = geometry(width, height, stride, 0, 0, width, height);
+        geometry.offset = chunk_offset;
+        let plane = |map_offset| SourcePlane {
+            data: std::ptr::null_mut(),
+            data_len: 0,
+            fd,
+            map_offset,
+            sync_dma_buf: false,
+            pw_buffer: 0,
+        };
+
+        let (borrowed, leased) = linear_frame(&frames, &plane(page), &geometry, true).unwrap();
+        assert!(leased);
+        assert_eq!(borrowed.data(0)[0], 0x20);
+        let (copied, leased) = linear_frame(&frames, &plane(page), &geometry, false).unwrap();
+        assert!(!leased);
+        assert_eq!(copied.data(0)[0], 0x20);
+        assert_ne!(copied.data(0).as_ptr(), borrowed.data(0).as_ptr());
+
+        let (region_a, _) = linear_frame(&frames, &plane(0), &geometry, true).unwrap();
+        assert_eq!(region_a.data(0)[0], 0x10);
+        assert_eq!(borrowed.data(0)[0], 0x20);
+        assert_eq!(frames.inner.cache.lock().map_calls, 2);
+
+        drop(borrowed);
+        drop(copied);
+        drop(region_a);
+        let (again, _) = linear_frame(&frames, &plane(page), &geometry, true).unwrap();
+        assert_eq!(again.data(0)[0], 0x20);
+        assert_eq!(frames.inner.cache.lock().map_calls, 2);
+    }
+
+    #[test]
     fn four_k_bgra_alias_avoids_the_row_copy_and_keeps_the_mapping() {
+        ffmpeg::init().expect("ffmpeg");
+        const WIDTH: usize = 3840;
+        const HEIGHT: usize = 2160;
+        const STRIDE: usize = WIDTH * 4;
+        let mut bytes = vec![0u8; STRIDE * HEIGHT];
+        bytes[0] = 11;
+        bytes[STRIDE * HEIGHT - 1] = 22;
+        let frames = PipewireFrames::new();
+        let geometry = geometry(WIDTH, HEIGHT, STRIDE, 0, 0, WIDTH, HEIGHT);
+
+        let plane = memptr_plane(&mut bytes);
+        let (frame, leased) = linear_frame(&frames, &plane, &geometry, true).unwrap();
+        assert!(leased);
+        assert_eq!(frame.data(0).as_ptr(), bytes.as_ptr());
+        assert_eq!(frame.data(0)[0], 11);
+        assert_eq!(frame.data(0)[frame.data(0).len() - 1], 22);
+        drop(frame);
+
+        let copied_plane = SourcePlane {
+            data: bytes.as_mut_ptr(),
+            data_len: bytes.len(),
+            fd: -1,
+            map_offset: 0,
+            sync_dma_buf: false,
+            pw_buffer: 1,
+        };
+        let (copied, leased) = linear_frame(&frames, &copied_plane, &geometry, false).unwrap();
+        assert!(!leased);
+        assert_ne!(copied.data(0).as_ptr(), bytes.as_ptr());
+        assert_eq!(copied.data(0)[0], 11);
+        assert_eq!(copied.data(0)[copied.data(0).len() - 1], 22);
+
+        let file = tempfile::tempfile().unwrap();
+        file.set_len((STRIDE * HEIGHT) as u64).unwrap();
+        let fd = file.as_raw_fd();
+        let cached = PipewireFrames::new();
+        let mapped = SourcePlane {
+            data: std::ptr::null_mut(),
+            data_len: 0,
+            fd,
+            map_offset: 0,
+            sync_dma_buf: true,
+            pw_buffer: 0,
+        };
+        let (first, leased) = linear_frame(&cached, &mapped, &geometry, true).unwrap();
+        assert!(leased);
+        let pointer = first.data(0).as_ptr();
+        drop(first);
+        let (second, _) = linear_frame(&cached, &mapped, &geometry, true).unwrap();
+        assert_eq!(second.data(0).as_ptr(), pointer);
+        assert_eq!(cached.inner.cache.lock().map_calls, 1);
+    }
+
+    #[test]
+    #[ignore = "scheduler-sensitive timing; pointer and map-count checks stay in four_k_bgra_alias_avoids_the_row_copy_and_keeps_the_mapping"]
+    fn four_k_bgra_alias_is_faster_than_the_row_copy() {
         ffmpeg::init().expect("ffmpeg");
         const WIDTH: usize = 3840;
         const HEIGHT: usize = 2160;
@@ -950,6 +1081,7 @@ mod tests {
                 data: bytes.as_mut_ptr(),
                 data_len: bytes.len(),
                 fd: -1,
+                map_offset: 0,
                 sync_dma_buf: false,
                 pw_buffer: 1,
             };
@@ -977,6 +1109,7 @@ mod tests {
                 data: std::ptr::null_mut(),
                 data_len: 0,
                 fd,
+                map_offset: 0,
                 sync_dma_buf: true,
                 pw_buffer: 0,
             };
@@ -991,6 +1124,7 @@ mod tests {
             data: std::ptr::null_mut(),
             data_len: 0,
             fd,
+            map_offset: 0,
             sync_dma_buf: true,
             pw_buffer: 0,
         };
@@ -1016,6 +1150,11 @@ mod tests {
         let _ = std::fs::write("/opt/cursor/artifacts/pipewire-alias-4k.log", &report);
         assert!(copy_ms.is_finite() && alias_ms.is_finite());
         assert!(alias_ms < copy_ms);
+    }
+
+    fn page_size() -> usize {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        usize::try_from(page).expect("page size")
     }
 
     fn median_ms(mut measure: impl FnMut()) -> f64 {
