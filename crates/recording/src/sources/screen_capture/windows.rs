@@ -3,10 +3,20 @@ use crate::{
     screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate},
 };
 use ::windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ,
+    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_VPIV,
+    D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_STREAM,
+    D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, ID3D11Device,
+    ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
+    ID3D11VideoProcessor, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
 };
-use ::windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+use ::windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_RATIONAL,
+    DXGI_SAMPLE_DESC,
+};
+use ::windows::core::Interface;
 use anyhow::anyhow;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
@@ -17,7 +27,9 @@ use futures::{
 };
 use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
+use std::mem::ManuallyDrop;
 use std::{
+    borrow::Cow,
     sync::{
         Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32},
@@ -100,13 +112,330 @@ pub enum ScreenFrame {
 
 pub struct ScaledScreenFrame {
     texture: ID3D11Texture2D,
-    pixel_data: Vec<u8>,
+    pixel_data: Option<Vec<u8>>,
+    readback: Option<Arc<D3D11FrameReadback>>,
     width: u32,
     height: u32,
     pixel_format: scap_direct3d::PixelFormat,
 }
 
 unsafe impl Send for ScaledScreenFrame {}
+
+struct D3D11FrameReadback {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    staging: Mutex<Option<ID3D11Texture2D>>,
+    width: u32,
+    height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+}
+
+impl D3D11FrameReadback {
+    fn read(&self, texture: &ID3D11Texture2D) -> Result<Vec<u8>, ::windows::core::Error> {
+        let mut staging = self
+            .staging
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if staging.is_none() {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: self.width,
+                Height: self.height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: pixel_format_dxgi(self.pixel_format),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut created = None;
+            unsafe {
+                self.device
+                    .CreateTexture2D(&desc, None, Some(&mut created))?;
+            }
+            *staging = Some(created.ok_or_else(::windows::core::Error::from_win32)?);
+        }
+        let staging = staging
+            .as_ref()
+            .ok_or_else(::windows::core::Error::from_win32)?;
+
+        unsafe {
+            self.context.CopyResource(staging, texture);
+        }
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.context
+                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+        }
+
+        let row_length = self.width as usize * 4;
+        let source_stride = mapped.RowPitch as usize;
+        let mut pixels = vec![0; row_length * self.height as usize];
+        for row in 0..self.height as usize {
+            let source_start = row * source_stride;
+            let destination_start = row * row_length;
+            let copy_length = row_length.min(source_stride);
+            unsafe {
+                // SAFETY: Map keeps pData valid until the matching Unmap.
+                let source = std::slice::from_raw_parts(
+                    (mapped.pData as *const u8).add(source_start),
+                    copy_length,
+                );
+                pixels[destination_start..destination_start + copy_length].copy_from_slice(source);
+            }
+        }
+        unsafe {
+            self.context.Unmap(staging, 0);
+        }
+
+        Ok(pixels)
+    }
+}
+
+const D3D11_SCALE_TARGET_POOL_SIZE: usize = 3;
+
+struct D3D11ScaleTarget {
+    texture: ID3D11Texture2D,
+    view: ID3D11VideoProcessorOutputView,
+}
+
+struct D3D11VideoScaler {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    video_context: ID3D11VideoContext,
+    processor: ID3D11VideoProcessor,
+    input_texture: ID3D11Texture2D,
+    input_view: ID3D11VideoProcessorInputView,
+    targets: Vec<D3D11ScaleTarget>,
+    next_target: usize,
+    target_width: u32,
+    target_height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+    readback: Arc<D3D11FrameReadback>,
+}
+
+impl D3D11VideoScaler {
+    fn new(
+        device: ID3D11Device,
+        source_width: u32,
+        source_height: u32,
+        target_width: u32,
+        target_height: u32,
+        pixel_format: scap_direct3d::PixelFormat,
+    ) -> Result<Self, ::windows::core::Error> {
+        let context = unsafe { device.GetImmediateContext()? };
+        let video_device: ID3D11VideoDevice = device.cast()?;
+        let video_context: ID3D11VideoContext = context.cast()?;
+        let content_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+            InputFrameFormat:
+                ::windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            InputFrameRate: DXGI_RATIONAL {
+                Numerator: 30,
+                Denominator: 1,
+            },
+            InputWidth: source_width,
+            InputHeight: source_height,
+            OutputFrameRate: DXGI_RATIONAL {
+                Numerator: 30,
+                Denominator: 1,
+            },
+            OutputWidth: target_width,
+            OutputHeight: target_height,
+            Usage: ::windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+        };
+        let enumerator = unsafe { video_device.CreateVideoProcessorEnumerator(&content_desc)? };
+        let processor = unsafe { video_device.CreateVideoProcessor(&enumerator, 0)? };
+        let input_texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: source_width,
+            Height: source_height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: pixel_format_dxgi(pixel_format),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut input_texture = None;
+        unsafe {
+            device.CreateTexture2D(&input_texture_desc, None, Some(&mut input_texture))?;
+        }
+        let input_texture = input_texture.ok_or_else(::windows::core::Error::from_win32)?;
+        let input_view_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+            FourCC: 0,
+            ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+            Anonymous:
+                ::windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_VPIV {
+                        MipSlice: 0,
+                        ArraySlice: 0,
+                    },
+                },
+        };
+        let mut input_view = None;
+        unsafe {
+            video_device.CreateVideoProcessorInputView(
+                &input_texture,
+                &enumerator,
+                &input_view_desc,
+                Some(&mut input_view),
+            )?;
+        }
+        let input_view: ID3D11VideoProcessorInputView =
+            input_view.ok_or_else(::windows::core::Error::from_win32)?;
+        let output_view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+            Anonymous:
+                ::windows::Win32::Graphics::Direct3D11::D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+                },
+        };
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: target_width,
+            Height: target_height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: pixel_format_dxgi(pixel_format),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut targets = Vec::with_capacity(D3D11_SCALE_TARGET_POOL_SIZE);
+        for _ in 0..D3D11_SCALE_TARGET_POOL_SIZE {
+            let mut texture = None;
+            unsafe {
+                device.CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+            }
+            let texture = texture.ok_or_else(::windows::core::Error::from_win32)?;
+            let mut view = None;
+            unsafe {
+                video_device.CreateVideoProcessorOutputView(
+                    &texture,
+                    &enumerator,
+                    &output_view_desc,
+                    Some(&mut view),
+                )?;
+            }
+            targets.push(D3D11ScaleTarget {
+                texture,
+                view: view.ok_or_else(::windows::core::Error::from_win32)?,
+            });
+        }
+        let readback = Arc::new(D3D11FrameReadback {
+            device: device.clone(),
+            context: context.clone(),
+            staging: Mutex::new(None),
+            width: target_width,
+            height: target_height,
+            pixel_format,
+        });
+
+        Ok(Self {
+            device,
+            context,
+            video_context,
+            processor,
+            input_texture,
+            input_view,
+            targets,
+            next_target: 0,
+            target_width,
+            target_height,
+            pixel_format,
+            readback,
+        })
+    }
+
+    fn scale_frame(
+        &mut self,
+        input: &ID3D11Texture2D,
+    ) -> Result<ScaledScreenFrame, ::windows::core::Error> {
+        unsafe {
+            self.context.CopyResource(&self.input_texture, input);
+        }
+        let target_index = self.next_target;
+        self.next_target = (self.next_target + 1) % self.targets.len();
+        let target = &self.targets[target_index];
+        let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
+            Enable: true.into(),
+            pInputSurface: ManuallyDrop::new(Some(self.input_view.clone())),
+            ..Default::default()
+        };
+        let blt = unsafe {
+            self.video_context.VideoProcessorBlt(
+                &self.processor,
+                &target.view,
+                0,
+                std::slice::from_ref(&stream),
+            )
+        };
+        unsafe {
+            ManuallyDrop::drop(&mut stream.pInputSurface);
+        }
+        blt?;
+
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: self.target_width,
+            Height: self.target_height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: pixel_format_dxgi(self.pixel_format),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut output = None;
+        unsafe {
+            self.device
+                .CreateTexture2D(&texture_desc, None, Some(&mut output))?;
+        }
+        let output = output.ok_or_else(::windows::core::Error::from_win32)?;
+        unsafe {
+            self.context.CopyResource(&output, &target.texture);
+        }
+
+        Ok(ScaledScreenFrame {
+            texture: output,
+            pixel_data: None,
+            readback: Some(self.readback.clone()),
+            width: self.target_width,
+            height: self.target_height,
+            pixel_format: self.pixel_format,
+        })
+    }
+}
+
+fn pixel_format_ffmpeg(pixel_format: scap_direct3d::PixelFormat) -> ffmpeg::format::Pixel {
+    match pixel_format {
+        scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
+        scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+    }
+}
+
+fn pixel_format_dxgi(pixel_format: scap_direct3d::PixelFormat) -> DXGI_FORMAT {
+    match pixel_format {
+        scap_direct3d::PixelFormat::R8G8B8A8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        scap_direct3d::PixelFormat::B8G8R8A8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
+    }
+}
 
 impl ScreenFrame {
     pub fn texture(&self) -> &ID3D11Texture2D {
@@ -137,9 +466,18 @@ impl ScreenFrame {
                 frame.as_ffmpeg()
             }
             ScreenFrame::Scaled(scaled) => {
-                let ffmpeg_pixel = match scaled.pixel_format {
-                    scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
-                    scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+                let ffmpeg_pixel = pixel_format_ffmpeg(scaled.pixel_format);
+                let readback;
+                let pixel_data = match &scaled.pixel_data {
+                    Some(pixel_data) => Cow::Borrowed(pixel_data.as_slice()),
+                    None => {
+                        readback = scaled
+                            .readback
+                            .as_ref()
+                            .ok_or_else(::windows::core::Error::from_win32)?
+                            .read(&scaled.texture)?;
+                        Cow::Borrowed(readback.as_slice())
+                    }
                 };
                 let mut ff_frame =
                     ffmpeg::frame::Video::new(ffmpeg_pixel, scaled.width, scaled.height);
@@ -151,15 +489,14 @@ impl ScreenFrame {
                     let src_start = row * row_length;
                     let dst_start = row * dest_stride;
                     let copy_len = row_length.min(
-                        scaled
-                            .pixel_data
+                        pixel_data
                             .len()
                             .saturating_sub(src_start)
                             .min(dest_bytes.len().saturating_sub(dst_start)),
                     );
                     if copy_len > 0 {
                         dest_bytes[dst_start..dst_start + copy_len]
-                            .copy_from_slice(&scaled.pixel_data[src_start..src_start + copy_len]);
+                            .copy_from_slice(&pixel_data[src_start..src_start + copy_len]);
                     }
                 }
 
@@ -170,7 +507,8 @@ impl ScreenFrame {
 }
 
 struct FrameScalerState {
-    context: ffmpeg::software::scaling::Context,
+    context: Option<ffmpeg::software::scaling::Context>,
+    video_scaler: Option<D3D11VideoScaler>,
     source_width: u32,
     source_height: u32,
 }
@@ -211,11 +549,55 @@ impl WindowsFrameScaler {
             .is_none_or(|s| s.source_width != src_width || s.source_height != src_height);
 
         if needs_reinit {
-            let src_pixel = match self.pixel_format {
-                scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
-                scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+            let video_scaler = match D3D11VideoScaler::new(
+                self.d3d_device.clone(),
+                src_width,
+                src_height,
+                self.target_width,
+                self.target_height,
+                self.pixel_format,
+            ) {
+                Ok(scaler) => Some(scaler),
+                Err(error) => {
+                    warn!(?error, "D3D11 screen scaling unavailable; using CPU scaler");
+                    None
+                }
             };
+            self.state = Some(FrameScalerState {
+                context: None,
+                video_scaler,
+                source_width: src_width,
+                source_height: src_height,
+            });
+        }
 
+        let gpu_result = self
+            .state
+            .as_mut()?
+            .video_scaler
+            .as_mut()
+            .map(|scaler| scaler.scale_frame(frame.texture()));
+        if let Some(result) = gpu_result {
+            match result {
+                Ok(scaled) => return Some(ScreenFrame::Scaled(scaled)),
+                Err(error) => {
+                    warn!(?error, "D3D11 screen scaling failed; using CPU scaler");
+                    self.state.as_mut()?.video_scaler = None;
+                }
+            }
+        }
+
+        self.scale_frame_cpu(frame, src_width, src_height)
+    }
+
+    fn scale_frame_cpu(
+        &mut self,
+        frame: &scap_direct3d::Frame,
+        src_width: u32,
+        src_height: u32,
+    ) -> Option<ScreenFrame> {
+        if self.state.as_ref()?.context.is_none() {
+            let src_pixel = pixel_format_ffmpeg(self.pixel_format);
             let context = ffmpeg::software::scaling::Context::get(
                 src_pixel,
                 src_width,
@@ -226,23 +608,14 @@ impl WindowsFrameScaler {
                 ffmpeg::software::scaling::Flags::BILINEAR,
             )
             .ok()?;
-
-            self.state = Some(FrameScalerState {
-                context,
-                source_width: src_width,
-                source_height: src_height,
-            });
+            self.state.as_mut()?.context = Some(context);
         }
 
         let buffer = frame.as_buffer().ok()?;
         let src_data = buffer.data();
         let src_stride = buffer.stride() as usize;
         let row_length = (src_width * 4) as usize;
-
-        let src_pixel = match self.pixel_format {
-            scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
-            scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
-        };
+        let src_pixel = pixel_format_ffmpeg(self.pixel_format);
 
         let mut src_frame = ffmpeg::frame::Video::new(src_pixel, src_width, src_height);
         let ff_stride = src_frame.stride(0);
@@ -268,7 +641,11 @@ impl WindowsFrameScaler {
         let state = self.state.as_mut()?;
         let mut dst_frame =
             ffmpeg::frame::Video::new(src_pixel, self.target_width, self.target_height);
-        state.context.run(&src_frame, &mut dst_frame).ok()?;
+        state
+            .context
+            .as_mut()?
+            .run(&src_frame, &mut dst_frame)
+            .ok()?;
 
         let dst_stride = dst_frame.stride(0);
         let dst_row_length = (self.target_width * 4) as usize;
@@ -291,21 +668,12 @@ impl WindowsFrameScaler {
             }
         }
 
-        let dxgi_format = match self.pixel_format {
-            scap_direct3d::PixelFormat::R8G8B8A8Unorm => {
-                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM
-            }
-            scap_direct3d::PixelFormat::B8G8R8A8Unorm => {
-                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM
-            }
-        };
-
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: self.target_width,
             Height: self.target_height,
             MipLevels: 1,
             ArraySize: 1,
-            Format: dxgi_format,
+            Format: pixel_format_dxgi(self.pixel_format),
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -332,7 +700,8 @@ impl WindowsFrameScaler {
 
         Some(ScreenFrame::Scaled(ScaledScreenFrame {
             texture,
-            pixel_data,
+            pixel_data: Some(pixel_data),
+            readback: None,
             width: self.target_width,
             height: self.target_height,
             pixel_format: self.pixel_format,
@@ -1596,5 +1965,300 @@ mod first_screen_frame_tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("closed before its first frame"));
+    }
+}
+#[cfg(test)]
+mod windows_screen_scale_benchmark {
+    use super::*;
+    use ::windows::Win32::Graphics::Direct3D11::{
+        D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SUBRESOURCE_DATA,
+        D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    };
+    use ::windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+    use std::time::Instant;
+
+    struct CpuScaler {
+        device: ID3D11Device,
+        context: ::windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+        staging: ID3D11Texture2D,
+        scaler: ffmpeg::software::scaling::Context,
+        source_width: u32,
+        source_height: u32,
+        target_width: u32,
+        target_height: u32,
+    }
+
+    impl CpuScaler {
+        fn new(
+            device: ID3D11Device,
+            source_width: u32,
+            source_height: u32,
+            target_width: u32,
+            target_height: u32,
+        ) -> Self {
+            let context = unsafe { device.GetImmediateContext().unwrap() };
+            let staging_desc = D3D11_TEXTURE2D_DESC {
+                Width: source_width,
+                Height: source_height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            unsafe {
+                device
+                    .CreateTexture2D(&staging_desc, None, Some(&mut staging))
+                    .unwrap();
+            }
+            let scaler = ffmpeg::software::scaling::Context::get(
+                ffmpeg::format::Pixel::RGBA,
+                source_width,
+                source_height,
+                ffmpeg::format::Pixel::RGBA,
+                target_width,
+                target_height,
+                ffmpeg::software::scaling::Flags::BILINEAR,
+            )
+            .unwrap();
+            Self {
+                device,
+                context,
+                staging: staging.unwrap(),
+                scaler,
+                source_width,
+                source_height,
+                target_width,
+                target_height,
+            }
+        }
+
+        fn scale(&mut self, texture: &ID3D11Texture2D) -> ScreenFrame {
+            unsafe {
+                self.context.CopyResource(&self.staging, texture);
+            }
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            unsafe {
+                self.context
+                    .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    .unwrap();
+            }
+            let source_stride = mapped.RowPitch as usize;
+            let source_row_length = self.source_width as usize * 4;
+            let mut source_frame = ffmpeg::frame::Video::new(
+                ffmpeg::format::Pixel::RGBA,
+                self.source_width,
+                self.source_height,
+            );
+            let source_ffmpeg_stride = source_frame.stride(0);
+            let source_ffmpeg_data = source_frame.data_mut(0);
+            for row in 0..self.source_height as usize {
+                let source_start = row * source_stride;
+                let destination_start = row * source_ffmpeg_stride;
+                let copy_length = source_row_length
+                    .min(source_ffmpeg_data.len().saturating_sub(destination_start));
+                unsafe {
+                    // SAFETY: Map keeps pData valid until the matching Unmap.
+                    let source = std::slice::from_raw_parts(
+                        (mapped.pData as *const u8).add(source_start),
+                        copy_length,
+                    );
+                    source_ffmpeg_data[destination_start..destination_start + copy_length]
+                        .copy_from_slice(source);
+                }
+            }
+            unsafe {
+                self.context.Unmap(&self.staging, 0);
+            }
+
+            let mut output_frame = ffmpeg::frame::Video::new(
+                ffmpeg::format::Pixel::RGBA,
+                self.target_width,
+                self.target_height,
+            );
+            self.scaler.run(&source_frame, &mut output_frame).unwrap();
+            let row_length = self.target_width as usize * 4;
+            let mut pixel_data = vec![0; row_length * self.target_height as usize];
+            let output_stride = output_frame.stride(0);
+            let output_data = output_frame.data(0);
+            for row in 0..self.target_height as usize {
+                let source_start = row * output_stride;
+                let destination_start = row * row_length;
+                pixel_data[destination_start..destination_start + row_length]
+                    .copy_from_slice(&output_data[source_start..source_start + row_length]);
+            }
+
+            let texture_desc = D3D11_TEXTURE2D_DESC {
+                Width: self.target_width,
+                Height: self.target_height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let data = D3D11_SUBRESOURCE_DATA {
+                pSysMem: pixel_data.as_ptr().cast(),
+                SysMemPitch: row_length as u32,
+                SysMemSlicePitch: 0,
+            };
+            let mut output_texture = None;
+            unsafe {
+                self.device
+                    .CreateTexture2D(&texture_desc, Some(&data), Some(&mut output_texture))
+                    .unwrap();
+            }
+            ScreenFrame::Scaled(ScaledScreenFrame {
+                texture: output_texture.unwrap(),
+                pixel_data: Some(pixel_data),
+                readback: None,
+                width: self.target_width,
+                height: self.target_height,
+                pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
+            })
+        }
+    }
+
+    fn create_source_texture(device: &ID3D11Device, width: u32, height: u32) -> ID3D11Texture2D {
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        for y in 0..height {
+            for x in 0..width {
+                let index = (y as usize * width as usize + x as usize) * 4;
+                pixels[index] = (x * 255 / (width - 1)) as u8;
+                pixels[index + 1] = (y * 255 / (height - 1)) as u8;
+                pixels[index + 2] = ((x + y) * 255 / (width + height - 2)) as u8;
+                pixels[index + 3] = 255;
+            }
+        }
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: pixels.as_ptr().cast(),
+            SysMemPitch: width * 4,
+            SysMemSlicePitch: 0,
+        };
+        let mut texture = None;
+        unsafe {
+            device
+                .CreateTexture2D(&desc, Some(&data), Some(&mut texture))
+                .unwrap();
+        }
+        texture.unwrap()
+    }
+
+    fn run_scenario(source: (u32, u32), target: (u32, u32)) {
+        ffmpeg::init().unwrap();
+        let device = crate::capture_pipeline::create_d3d_device().unwrap();
+        let source_texture = create_source_texture(&device, source.0, source.1);
+        let mut cpu_scaler = CpuScaler::new(device.clone(), source.0, source.1, target.0, target.1);
+        let mut video_scaler = D3D11VideoScaler::new(
+            device,
+            source.0,
+            source.1,
+            target.0,
+            target.1,
+            scap_direct3d::PixelFormat::R8G8B8A8Unorm,
+        )
+        .unwrap();
+        for _ in 0..3 {
+            std::hint::black_box(cpu_scaler.scale(&source_texture));
+            let scaled = ScreenFrame::Scaled(video_scaler.scale_frame(&source_texture).unwrap());
+            std::hint::black_box(scaled.as_ffmpeg().unwrap());
+        }
+
+        let cpu_output = cpu_scaler.scale(&source_texture).as_ffmpeg().unwrap();
+        let gpu_output = ScreenFrame::Scaled(video_scaler.scale_frame(&source_texture).unwrap())
+            .as_ffmpeg()
+            .unwrap();
+        let mut max_error = 0u8;
+        let mut total_error = 0u64;
+        let mut compared_channels = 0u64;
+        let row_length = target.0 as usize * 4;
+        for row in 0..target.1 as usize {
+            let cpu_start = row * cpu_output.stride(0);
+            let gpu_start = row * gpu_output.stride(0);
+            let cpu_row = &cpu_output.data(0)[cpu_start..cpu_start + row_length];
+            let gpu_row = &gpu_output.data(0)[gpu_start..gpu_start + row_length];
+            for (cpu, gpu) in cpu_row.iter().zip(gpu_row) {
+                let error = cpu.abs_diff(*gpu);
+                max_error = max_error.max(error);
+                total_error += error as u64;
+                compared_channels += 1;
+            }
+        }
+        let mean_error = total_error as f64 / compared_channels as f64;
+        println!(
+            "PIXELS {}x{} -> {}x{} max error {} mean error {:.3}",
+            source.0, source.1, target.0, target.1, max_error, mean_error
+        );
+        assert!(mean_error <= 4.0 && max_error <= 20);
+
+        let mut scale_samples = Vec::new();
+        let mut software_samples = Vec::new();
+        for _ in 0..3 {
+            let started = Instant::now();
+            for _ in 0..12 {
+                std::hint::black_box(video_scaler.scale_frame(&source_texture).unwrap());
+            }
+            scale_samples.push(started.elapsed().as_secs_f64() * 1000.0 / 12.0);
+
+            let started = Instant::now();
+            for _ in 0..12 {
+                let scaled =
+                    ScreenFrame::Scaled(video_scaler.scale_frame(&source_texture).unwrap());
+                std::hint::black_box(scaled.as_ffmpeg().unwrap());
+            }
+            software_samples.push(started.elapsed().as_secs_f64() * 1000.0 / 12.0);
+        }
+        scale_samples.sort_by(f64::total_cmp);
+        software_samples.sort_by(f64::total_cmp);
+        println!(
+            "D3D11 {}x{} -> {}x{} scale median {:.3} ms/frame (runs {:.3}, {:.3}, {:.3}); software-output median {:.3} ms/frame (runs {:.3}, {:.3}, {:.3})",
+            source.0,
+            source.1,
+            target.0,
+            target.1,
+            scale_samples[1],
+            scale_samples[0],
+            scale_samples[1],
+            scale_samples[2],
+            software_samples[1],
+            software_samples[0],
+            software_samples[1],
+            software_samples[2]
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn run_windows_screen_scale_benchmark() {
+        run_scenario((1920, 1080), (1280, 720));
+        run_scenario((3840, 2160), (1920, 1080));
     }
 }
