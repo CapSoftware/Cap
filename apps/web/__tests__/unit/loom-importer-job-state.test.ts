@@ -53,6 +53,38 @@ describe("getLoomImporterJobState", () => {
 		).resolves.toBe("unknown");
 	});
 
+	it.each(["complete", "error", "cancelled"])(
+		"recognizes %s job states without a persisted job id",
+		async (phase) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn().mockResolvedValue(
+					Response.json({ jobs: [{ jobId: "old", videoId: "video", phase }] }),
+				),
+			);
+			await expect(getLoomImporterJobState({ videoId: "video" })).resolves.toBe(
+				"finished",
+			);
+		},
+	);
+
+	it("keeps newer active jobs running when an older matching job finished", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				Response.json({
+					jobs: [
+						{ jobId: "old", videoId: "video", phase: "complete" },
+						{ jobId: "new", videoId: "video", phase: "processing" },
+					],
+				}),
+			),
+		);
+		await expect(getLoomImporterJobState({ videoId: "video" })).resolves.toBe(
+			"running",
+		);
+	});
+
 	it("looks a video up in the importer's job list when there is no job id", async () => {
 		const fetch = vi.fn().mockResolvedValue(
 			Response.json({
