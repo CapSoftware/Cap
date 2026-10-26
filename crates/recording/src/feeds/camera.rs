@@ -382,6 +382,7 @@ impl MjpegOverlayBudget {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn overlay_target(&self) -> Option<(u32, u32)> {
         let state = self.lock();
         if state.full_res_holds > 0 {
