@@ -4,14 +4,16 @@ import { Blob, File } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseMedia } from "@remotion/media-parser";
-import { ALL_FORMATS, BlobSource, Input, MP3 } from "mediabunny";
+import { ALL_FORMATS, BlobSource, Conversion, Input, MP3 } from "mediabunny";
 import {
+	type AnchorHTMLAttributes,
 	type ButtonHTMLAttributes,
 	createElement,
 	type PropsWithChildren,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { trackEvent } from "@/app/utils/analytics";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 
 vi.mock("@cap/ui", () => ({
@@ -19,7 +21,11 @@ vi.mock("@cap/ui", () => ({
 		createElement("button", { ...props, type: "button" }),
 }));
 vi.mock("next/link", () => ({
-	default: ({ children }: PropsWithChildren) => children,
+	default: ({
+		children,
+		...props
+	}: PropsWithChildren<AnchorHTMLAttributes<HTMLAnchorElement>>) =>
+		createElement("a", props, children),
 }));
 vi.mock("next/navigation", () => ({
 	usePathname: () => "/tools/convert/mov-to-mp4",
@@ -275,4 +281,37 @@ it("says when an MP4 has no audio to extract", async () => {
 		expect(container.textContent).toContain("This video has no audio track."),
 	);
 	expect(output).toBeUndefined();
+});
+
+it("says an MP3 conversion was cancelled when the format changes while converting", async () => {
+	const execute = Conversion.prototype.execute;
+	vi.spyOn(Conversion.prototype, "execute").mockImplementation(function (
+		this: Conversion,
+	) {
+		const onProgress = this.onProgress;
+		this.onProgress = (progress, processedTime) => {
+			onProgress?.(progress, processedTime);
+			if (progress < 1) {
+				this.onProgress = onProgress;
+				container
+					.querySelector<HTMLAnchorElement>(
+						'a[aria-label="Convert to GIF format"]',
+					)
+					?.click();
+			}
+		};
+		return execute.call(this);
+	});
+	vi.mocked(trackEvent).mockClear();
+
+	await convertToMp3("converter-audio.mp4");
+
+	await vi.waitFor(() =>
+		expect(container.textContent).toContain("Conversion was cancelled"),
+	);
+	expect(container.textContent).not.toContain("Conversion failed");
+	expect(trackEvent).not.toHaveBeenCalledWith(
+		"media_format_conversion_failed",
+		expect.anything(),
+	);
 });

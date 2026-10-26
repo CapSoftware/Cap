@@ -366,7 +366,10 @@ export const MediaFormatConverter = ({
 		} catch (err: any) {
 			console.error("Detailed conversion error:", err);
 
-			if (MediaParser.hasBeenAborted?.(err)) {
+			if (
+				MediaParser.hasBeenAborted?.(err) ||
+				err?.name === "ConversionCanceledError"
+			) {
 				setError("Conversion was cancelled");
 			} else {
 				let errorMessage = "Conversion failed: ";
@@ -394,19 +397,20 @@ export const MediaFormatConverter = ({
 	};
 
 	const extractAudioFromVideo = async (inputFile: File): Promise<void> => {
+		const {
+			ALL_FORMATS,
+			BlobSource,
+			BufferTarget,
+			Conversion,
+			ConversionCanceledError,
+			Input,
+			Mp3OutputFormat,
+			Output,
+			canEncodeAudio,
+		} = await import("mediabunny");
 		let input: import("mediabunny").Input | undefined;
+		let canceled = false;
 		try {
-			const {
-				ALL_FORMATS,
-				BlobSource,
-				BufferTarget,
-				Conversion,
-				Input,
-				Mp3OutputFormat,
-				Output,
-				canEncodeAudio,
-			} = await import("mediabunny");
-
 			// Browsers can't encode MP3 through WebCodecs, so use LAME instead.
 			if (!(await canEncodeAudio("mp3"))) {
 				const { registerMp3Encoder } = await import("@mediabunny/mp3-encoder");
@@ -435,6 +439,7 @@ export const MediaFormatConverter = ({
 
 			parserControllerRef.current = {
 				abort: () => {
+					canceled = true;
 					void conversion.cancel();
 				},
 			};
@@ -457,7 +462,9 @@ export const MediaFormatConverter = ({
 			});
 		} catch (error) {
 			console.error("Error extracting audio:", error);
-			throw error;
+			// Canceling mid-write can reject with the output's "Output has been
+			// canceled." error rather than ConversionCanceledError.
+			throw canceled ? new ConversionCanceledError() : error;
 		} finally {
 			input?.dispose();
 		}
