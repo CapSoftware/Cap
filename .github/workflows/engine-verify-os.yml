@@ -273,8 +273,8 @@ jobs:
           for dump in "$RUNNER_TEMP"/verify-report/crash-dumps/*.dmp; do
             [[ -f "$dump" ]] || continue
             echo "::group::$(basename "$dump")"
-            "$cdb" -z "$(cygpath -w "$dump")" -y "$symbols" -c ".ecxr; kb 40; q" 2>&1 |
-              grep -E 'ExceptionCode|Access violation|Child-SP|^[0-9a-f]{2} [0-9a-f]{8}`' | head -60
+            "$cdb" -z "$(cygpath -w "$dump")" -y "$symbols" -c ".ecxr; kn 40; q" 2>&1 |
+              grep -E 'Access violation|code [0-9a-f]{8} |^[^ ]+![^ ]+.*:$|^ # Child-SP|^[0-9a-f]{2} ' | head -60
             echo "::endgroup::"
           done
 
