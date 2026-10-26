@@ -463,6 +463,7 @@ struct TimeMapSegment {
     timeline_start: f64,
     timeline_end: f64,
     recording_start: f64,
+    recording_end: f64,
     timescale: f64,
     recording_clip: u32,
 }
@@ -488,6 +489,7 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
             timeline_start: accum,
             timeline_end: accum + duration,
             recording_start: segment.start,
+            recording_end: segment.end,
             timescale: segment.timescale,
             recording_clip: segment.recording_clip,
         });
@@ -521,6 +523,7 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
                     timeline_start: piece_start_out,
                     timeline_end: hold_start,
                     recording_start: piece_start_rec,
+                    recording_end: piece_start_rec + len * segment.timescale,
                     timescale: segment.timescale,
                     recording_clip: segment.recording_clip,
                 });
@@ -533,6 +536,7 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
                 timeline_start: piece_start_out,
                 timeline_end: piece_start_out + hold_len,
                 recording_start: piece_start_rec,
+                recording_end: piece_start_rec,
                 timescale: 0.0,
                 recording_clip: segment.recording_clip,
             });
@@ -545,6 +549,7 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
                 timeline_start: piece_start_out,
                 timeline_end: piece_start_out + remaining,
                 recording_start: piece_start_rec,
+                recording_end: segment.recording_end,
                 timescale: segment.timescale,
                 recording_clip: segment.recording_clip,
             });
@@ -781,21 +786,65 @@ impl ZoomTransformTimeline {
             .iter()
             .map(|segment| match segment.mode {
                 ZoomMode::Auto => {
-                    let recording_start = map_timeline_to_recording_secs(
+                    let mut recording_start = map_timeline_to_recording_secs(
                         &time_map,
                         segment.start,
                         recording_clip,
                         prefer_outgoing,
                     );
-                    let recording_end = map_timeline_to_recording_secs(
+                    let mut recording_end = map_timeline_to_recording_secs(
                         &time_map,
                         segment.end,
                         recording_clip,
                         prefer_outgoing,
                     )
                     .max(recording_start);
+                    let mut spans: Vec<_> = time_map
+                        .iter()
+                        .filter(|span| {
+                            span.timeline_start < segment.end && span.timeline_end > segment.start
+                        })
+                        .collect();
+                    let has_cut = spans.windows(2).any(|pair| {
+                        pair[0].recording_clip != pair[1].recording_clip
+                            || pair[0].recording_end != pair[1].recording_start
+                    });
+                    spans.retain(|span| {
+                        recording_clip.is_none_or(|clip| span.recording_clip == clip)
+                    });
+                    let cut_cursor_events = if has_cut && !spans.is_empty() {
+                        recording_start = f64::INFINITY;
+                        recording_end = f64::NEG_INFINITY;
+                        for span in &spans {
+                            let start = segment.start.max(span.timeline_start);
+                            let end = segment.end.min(span.timeline_end);
+                            recording_start = recording_start.min(
+                                span.recording_start
+                                    + (start - span.timeline_start) * span.timescale,
+                            );
+                            recording_end = recording_end.max(
+                                span.recording_start + (end - span.timeline_start) * span.timescale,
+                            );
+                        }
+                        Some(CursorEvents {
+                            moves: cursor_events
+                                .moves
+                                .iter()
+                                .filter(|event| {
+                                    spans.iter().any(|span| {
+                                        event.time_ms >= span.recording_start * 1000.0
+                                            && event.time_ms < span.recording_end * 1000.0
+                                    })
+                                })
+                                .cloned()
+                                .collect(),
+                            clicks: Vec::new(),
+                        })
+                    } else {
+                        None
+                    };
                     Some(ZoomClusters::new(
-                        cursor_events,
+                        cut_cursor_events.as_ref().unwrap_or(cursor_events),
                         moves_time_ordered,
                         recording_start,
                         recording_end,
@@ -1358,6 +1407,7 @@ mod tests {
             timeline_start: start,
             timeline_end: end,
             recording_start: -0.0,
+            recording_end: (end - start) * 1.5,
             timescale: 1.5,
             recording_clip: clip,
         };
@@ -2713,6 +2763,145 @@ mod tests {
                     percentile(&mut rebuild_times, 0.5),
                     percentile(&mut rebuild_times, 0.95),
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn auto_zoom_ignores_cursor_moves_in_timeline_cuts() {
+        for (first, second, timescale) in [(0.0, 10.0, 1.0), (10.0, 0.0, 2.0)] {
+            let mut project =
+                project_with_crop_styles(vec![auto_segment(0.5, 7.9 / timescale, 2.0)], Vec::new());
+            project.timeline.as_mut().unwrap().segments = [first, second]
+                .into_iter()
+                .map(|start| TimelineSegment {
+                    start,
+                    end: start + 4.0,
+                    timescale,
+                    ..Default::default()
+                })
+                .collect();
+            let retained = vec![move_event(0.0, 0.2, 0.2), move_event(10000.0, 0.8, 0.8)];
+            let mut polluted = retained.clone();
+            polluted.extend([move_event(4000.0, 0.9, 0.9), move_event(7000.0, 0.1, 0.1)]);
+            for sorted in [false, true] {
+                let build = |mut moves: Vec<CursorMoveEvent>| {
+                    if sorted {
+                        moves.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+                    }
+                    let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                        &project,
+                        &CursorEvents {
+                            moves,
+                            clicks: Vec::new(),
+                        },
+                        8.0 / timescale,
+                        XY::new(1920, 1080),
+                        0,
+                    );
+                    timeline.precompute();
+                    timeline
+                };
+                let expected = build(retained.clone());
+                assert_samples_identical(&expected, &build(polluted.clone()));
+                for (time, position) in [(2.0 / timescale, first), (6.0 / timescale, second)] {
+                    let focus = if position == 0.0 { 0.2 } else { 0.8 };
+                    assert_eq!(
+                        expected.targets_at(time, XY::new(0.5, 0.5)).center,
+                        follow_center((focus, focus))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auto_zoom_without_internal_cuts_matches_original_clusters() {
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.1, 0.1),
+                move_event(2000.0, 0.3, 0.2),
+                move_event(4000.0, 0.4, 0.3),
+                move_event(6000.0, 0.9, 0.9),
+                move_event(10000.0, 0.2, 0.2),
+            ],
+            clicks: Vec::new(),
+        };
+        for split in [None, Some(3.0), Some(3.754321)] {
+            for (timescale, held) in [(1.0, false), (1.5, false), (1.5, true)] {
+                let mut project = project_with_crop_styles(
+                    vec![auto_segment(0.5, 6.0 / timescale, 2.0)],
+                    vec![crop_style(
+                        1.0,
+                        3.0,
+                        0,
+                        Some(Crop {
+                            position: XY::new(100, 100),
+                            size: XY::new(1000, 800),
+                        }),
+                    )],
+                );
+                let config = project.timeline.as_mut().unwrap();
+                config.segments = vec![TimelineSegment {
+                    start: 0.0,
+                    end: split.unwrap_or(8.0),
+                    timescale,
+                    ..Default::default()
+                }];
+                if let Some(split) = split {
+                    config.segments.push(TimelineSegment {
+                        start: split,
+                        end: 8.0,
+                        timescale,
+                        ..Default::default()
+                    });
+                }
+                config.segments.push(TimelineSegment {
+                    start: 12.0,
+                    end: 16.0,
+                    timescale: 1.0,
+                    ..Default::default()
+                });
+                if held {
+                    config.text_segments.push(
+                        serde_json::from_value(serde_json::json!({
+                            "start": 2.0, "end": 3.0, "layout": "fullscreen"
+                        }))
+                        .unwrap(),
+                    );
+                }
+                let build = || {
+                    ZoomTransformTimeline::from_project_for_clip(
+                        &project,
+                        &cursor,
+                        12.0,
+                        XY::new(1920, 1080),
+                        0,
+                    )
+                };
+                let mut actual = build();
+                let mut original = build();
+                let segment = &original.zoom_segments[0];
+                let start = map_timeline_to_recording_secs(
+                    &original.time_map,
+                    segment.start,
+                    Some(0),
+                    false,
+                );
+                let end =
+                    map_timeline_to_recording_secs(&original.time_map, segment.end, Some(0), false)
+                        .max(start);
+                original.clusters[0] = Some(ZoomClusters::new(
+                    &cursor,
+                    true,
+                    start,
+                    end,
+                    segment,
+                    &CursorCropMaps::from_project(&project, XY::new(1920, 1080)),
+                ));
+                actual.precompute();
+                original.precompute();
+                assert_samples_identical(&actual, &original);
             }
         }
     }
