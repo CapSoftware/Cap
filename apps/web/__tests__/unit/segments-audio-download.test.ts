@@ -60,13 +60,9 @@ describe("segment audio output errors", () => {
 
 	it("cancels an oversized declared segment without reading the response", async () => {
 		let cancelled = false;
-		let read = false;
 		const fetchImpl = (async () =>
 			new Response(
 				new ReadableStream({
-					pull() {
-						read = true;
-					},
 					cancel() {
 						cancelled = true;
 					},
