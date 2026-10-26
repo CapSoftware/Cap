@@ -118,6 +118,9 @@ pub(crate) struct InstantAttempt(Arc<InstantAttemptInner>);
 #[cfg(target_os = "linux")]
 struct InstantAttemptInner {
     lifecycle: Mutex<Option<instant_recording::InstantLifecycle>>,
+    /// The server video and folder of a start still being built. A cancelled
+    /// start drops the build before it can clean up, so the attempt does it.
+    video: Mutex<Option<(String, PathBuf)>>,
     cancelled: tokio::sync::watch::Sender<bool>,
     startup: tokio::sync::watch::Sender<StartupState>,
 }
@@ -136,6 +139,7 @@ impl InstantAttempt {
     pub fn new() -> Self {
         Self(Arc::new(InstantAttemptInner {
             lifecycle: Mutex::new(None),
+            video: Mutex::new(None),
             cancelled: tokio::sync::watch::channel(false).0,
             startup: tokio::sync::watch::channel(StartupState::Unstarted).0,
         }))
@@ -313,9 +317,14 @@ where
             if result.is_err() {
                 attempt.cancel();
                 let lifecycle = attempt.0.lifecycle.lock().unwrap().clone();
-                if let Some(lifecycle) = lifecycle {
-                    lifecycle.wait_for_quiescence().await;
-                }
+                let joined = match lifecycle {
+                    Some(lifecycle) => {
+                        lifecycle.wait_for_quiescence().await
+                            == instant_recording::InstantQuiescence::Joined
+                    }
+                    None => true,
+                };
+                discard_unstarted_video(&attempt, joined).await;
             }
             if let Err(Ok(active)) = sender.send(result) {
                 let _ = cleanup(active).await;
@@ -1127,9 +1136,15 @@ impl ActiveRecording {
     }
 
     /// `cancel_and_delete` for a start that was superseded before it began,
-    /// telling the server why its Instant video is deleted.
-    #[cfg(not(target_os = "linux"))]
+    /// telling the server why its Instant video is deleted. On Linux a start
+    /// that already wrote media keeps it, as after a crash.
     pub(crate) async fn discard_cancelled_start(self) -> anyhow::Result<()> {
+        #[cfg(target_os = "linux")]
+        if !matches!(self.handle, Handle::Instant(_))
+            || crate::upload::instant_cleanup::project_holds_media(&self.project_dir)
+        {
+            return self.cancel_preserving().await;
+        }
         let query = crate::upload::instant_cleanup::delete_query(
             crate::upload::instant_cleanup::CleanupReason::StartCancelled,
             None,
@@ -1167,9 +1182,15 @@ impl ActiveRecording {
             Handle::Instant(handle) => {
                 #[cfg(target_os = "linux")]
                 {
-                    let (_, result) =
+                    let (joined, result) =
                         joined_instant_result(handle.lifecycle(), handle.cancel()).await;
-                    result
+                    if joined {
+                        result
+                    } else {
+                        Err(anyhow!(
+                            "Instant capture cleanup is unconfirmed; local files preserved"
+                        ))
+                    }
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
@@ -2137,6 +2158,35 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
     .await
 }
 
+/// The server video of a start whose build was dropped: deleted with its
+/// folder when capture stopped without writing media, as a cancelled start is
+/// on macOS and Windows. Otherwise the cleanup journal keeps it for the sweep,
+/// which never deletes a recording that holds media.
+#[cfg(target_os = "linux")]
+async fn discard_unstarted_video(attempt: &InstantAttempt, joined: bool) {
+    use crate::upload::instant_cleanup::{self, CleanupReason};
+    let Some((video_id, project_dir)) = attempt.0.video.lock().unwrap().take() else {
+        return;
+    };
+    if !joined || instant_cleanup::project_holds_media(&project_dir) {
+        instant_cleanup::abandon(&video_id, CleanupReason::StartCancelled, None);
+        return;
+    }
+    let query = instant_cleanup::delete_query(CleanupReason::StartCancelled, None);
+    match crate::upload::delete_instant_video_with_query(&video_id, query.as_deref()).await {
+        Ok(()) => {
+            instant_cleanup::resolved(&video_id);
+            if let Err(error) = tokio::fs::remove_dir_all(&project_dir).await {
+                tracing::warn!(%error, path = %project_dir.display(), "Could not remove a cancelled start's folder");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, video_id, "Could not delete a cancelled start's video");
+            instant_cleanup::abandon(&video_id, CleanupReason::StartCancelled, None);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn start_tracked(
     config: StartConfig,
@@ -2145,7 +2195,7 @@ pub(crate) fn start_tracked(
     owned_instant_start(
         attempt.clone(),
         start_internal(config, Some(attempt)),
-        ActiveRecording::cancel_preserving,
+        ActiveRecording::discard_cancelled_start,
     )
 }
 
@@ -2188,6 +2238,10 @@ async fn start_internal(
         .await
         .map_err(anyhow::Error::msg)?;
         crate::upload::instant_cleanup::begin(&video.id, &project_dir);
+        #[cfg(target_os = "linux")]
+        if let Some(attempt) = &attempt {
+            *attempt.0.video.lock().unwrap() = Some((video.id.clone(), project_dir.clone()));
+        }
         Some(video)
     } else {
         None
@@ -2226,9 +2280,17 @@ async fn start_internal(
             Err(error) => {
                 instant_cleanup::abandon(&video.id, CleanupReason::StartFailed, Some(cause));
                 tracing::error!(video_id = %video.id, "Failed to clean up instant recording: {error}");
+                #[cfg(target_os = "linux")]
+                if let Some(attempt) = &attempt {
+                    attempt.0.video.lock().unwrap().take();
+                }
                 return Err(anyhow!("Failed to clean up instant recording: {error}"));
             }
         }
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(attempt) = &attempt {
+        attempt.0.video.lock().unwrap().take();
     }
     result
 }

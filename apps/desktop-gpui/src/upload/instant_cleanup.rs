@@ -353,11 +353,8 @@ fn abandon_at(
 
 /// Records a pre-created Instant video before capture starts, so a crash,
 /// panic or aborted discard during startup still gets its server copy
-/// deleted on the next sweep. Linux keeps its own startup cleanup contract.
+/// deleted on the next sweep.
 pub(crate) fn begin(video_id: &str, project_dir: &Path) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     let Some(owner_id) = current_owner_id() else {
         return;
     };
@@ -372,16 +369,10 @@ pub(crate) fn begin(video_id: &str, project_dir: &Path) {
 }
 
 pub(crate) fn started(video_id: &str) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     remove_at(&journal_path(), video_id);
 }
 
 pub(crate) fn resolved(video_id: &str) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     remove_at(&journal_path(), video_id);
 }
 
@@ -390,16 +381,10 @@ pub(crate) fn resolved(video_id: &str) {
 /// removed and delete the uploaded video. False when the entry is still there,
 /// so the caller keeps the local copy.
 pub(crate) fn forget_verified(video_id: &str) -> bool {
-    if cfg!(target_os = "linux") {
-        return true;
-    }
     forget_at(&journal_path(), video_id)
 }
 
 pub(crate) fn abandon(video_id: &str, reason: CleanupReason, cause: Option<StartFailureCause>) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     let identity = current_owner_id().map(|owner| (auth::server_url(), owner));
     abandon_at(&journal_path(), video_id, reason, cause, identity, now());
 }
@@ -431,6 +416,12 @@ fn meta_claims(meta: &RecordingMeta, video_id: &str) -> bool {
         .as_ref()
         .is_some_and(|share| share.id == video_id)
         || upload_meta_video_id(meta) == Some(video_id)
+}
+
+/// Whether a recording folder holds media a crash or a cancelled start must
+/// not delete.
+pub(crate) fn project_holds_media(project: &Path) -> bool {
+    has_recorded_media(&project.join("content"), MEDIA_SCAN_DEPTH)
 }
 
 /// True when the folder holds recorded media, or when part of it cannot be
@@ -809,9 +800,6 @@ async fn run() {
 }
 
 pub(crate) fn init(cx: &mut gpui::App) {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     session_id();
     launched_at();
     gpui_tokio::Tokio::spawn(cx, run()).detach();
