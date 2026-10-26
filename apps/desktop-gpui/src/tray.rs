@@ -773,11 +773,12 @@ pub(crate) fn open_previous_item(path: PathBuf, cx: &mut App) {
     use cap_project::{RecordingMeta, RecordingMetaInner};
 
     let screenshots_dir = library::screenshots_dir();
-    let is_screenshot = path.extension().and_then(|ext| ext.to_str()) == Some("cap")
+    let is_screenshot = (path.extension().and_then(|ext| ext.to_str()) == Some("cap")
         && path
             .parent()
             .map(|parent| parent == screenshots_dir)
-            .unwrap_or(false);
+            .unwrap_or(false))
+        || library::is_screenshot_bundle(&path);
 
     if is_screenshot {
         app_windows::open_screenshot_editor(path, cx);
@@ -1622,7 +1623,7 @@ mod mac {
                 title,
                 enabled,
                 items,
-                ..
+                icon,
             } => {
                 let menu_item = new_menu_item(title, Some(sel!(capTrayItem:)), mtm);
                 unsafe { menu_item.setTarget(Some(target)) };
@@ -1635,7 +1636,7 @@ mod mac {
                 // Only Previous carries a header glyph; its own rows keep
                 // their photos, its header gets the symbol Windows draws the
                 // raster for.
-                if title == "Previous"
+                if icon.is_some()
                     && let Some(image) = symbol_image(PREVIOUS_SYMBOL)
                 {
                     image.setTemplate(true);
