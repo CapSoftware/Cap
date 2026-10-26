@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
@@ -5,7 +6,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Option } from "effect";
-import { sleep } from "workflow";
+import { getStepMetadata, sleep } from "workflow";
 import { z } from "zod";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import { observeDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
@@ -130,7 +131,7 @@ export async function finalizeDesktopRecordingWorkflow(
 	processing: for (;;) {
 		const next = retainedAttempt
 			? { status: "attempt" as const, attempt: retainedAttempt }
-			: await acquireDesktopRecordingAttempt({
+			: await acquireAndStartDesktopRecordingAttempt({
 					...payload,
 					generation,
 				});
@@ -145,7 +146,12 @@ export async function finalizeDesktopRecordingWorkflow(
 		}
 		const attempt = next.attempt;
 		try {
-			let committed = await commitAndStartDesktopRecordingAttempt(attempt);
+			if ("failure" in next && next.failure)
+				throw new AttemptStepFailure(next.failure.message, next.failure.code);
+			let committed =
+				"started" in next && next.started
+					? next.started
+					: await commitAndStartDesktopRecordingAttempt(attempt);
 			while (committed.committed === "progress") {
 				committed = await commitAndStartDesktopRecordingAttempt(attempt);
 			}
@@ -234,15 +240,7 @@ async function ensureWorkflowJob(
 	return job.generation;
 }
 
-export async function acquireDesktopRecordingAttempt({
-	videoId,
-	userId,
-	generation,
-}: {
-	videoId: string;
-	userId: User.UserId;
-	generation: string;
-}): Promise<
+type AttemptAcquisition =
 	| { status: "attempt"; attempt: DesktopRecordingAttempt }
 	| { status: "wait"; until: Date }
 	| {
@@ -251,29 +249,102 @@ export async function acquireDesktopRecordingAttempt({
 				| "source-blocked"
 				| "superseded"
 				| "already-processing";
-	  }
-> {
-	"use step";
+	  };
 
+async function acquireAttempt({
+	videoId,
+	userId,
+	generation,
+	attemptId,
+}: {
+	videoId: string;
+	userId: User.UserId;
+	generation: string;
+	attemptId?: string;
+}): Promise<AttemptAcquisition> {
 	const id = Video.VideoId.make(videoId);
 	const job = await getProcessingState({ videoId: id, generation });
 	if (!job || job.ownerId !== userId) return { status: "superseded" };
 	if (job.state === "verified") return { status: "verified" };
 	if (job.state === "source-blocked") return { status: "source-blocked" };
 	const now = new Date();
-	if (job.leaseExpiresAt && job.leaseExpiresAt > now) {
+	const own = attemptId !== undefined && job.attemptId === attemptId;
+	if (!own && job.leaseExpiresAt && job.leaseExpiresAt > now) {
 		return { status: "already-processing" };
 	}
-	if (job.nextRetryAt > now) return { status: "wait", until: job.nextRetryAt };
+	if (!own && job.nextRetryAt > now)
+		return { status: "wait", until: job.nextRetryAt };
 	const attempt = await claimProcessingAttempt({
 		videoId: id,
 		generation,
+		attemptId,
 		now,
 	});
 	return attempt
 		? { status: "attempt", attempt }
 		: { status: "already-processing" };
 }
+
+class AttemptStepFailure extends Error {
+	constructor(
+		message: string,
+		readonly code: ReturnType<typeof getSourceErrorCode>,
+	) {
+		super(message);
+	}
+}
+
+// A retried step keeps its step id, so an attempt id derived from it lets the retry resume its own claim.
+function stepAttemptId(stepId: string) {
+	const digest = createHash("sha256").update(stepId).digest("hex");
+	const variant = (8 + (Number.parseInt(digest.charAt(16), 16) % 4)).toString(
+		16,
+	);
+	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
+const ACQUIRE_AND_START_RETRIES = 3;
+
+// Claiming an attempt and committing its source share one step, saving the queue hop between them. A failure
+// is retried as a step, which resumes the same attempt; after the last try it comes back as data so the
+// workflow retries the claimed attempt as the separate commit step would have.
+export async function acquireAndStartDesktopRecordingAttempt(input: {
+	videoId: string;
+	userId: User.UserId;
+	generation: string;
+}): Promise<
+	| Exclude<AttemptAcquisition, { status: "attempt" }>
+	| {
+			status: "attempt";
+			attempt: DesktopRecordingAttempt;
+			started?: Awaited<ReturnType<typeof commitAndStart>>;
+			failure?: {
+				message: string;
+				code: ReturnType<typeof getSourceErrorCode>;
+			};
+	  }
+> {
+	"use step";
+
+	const acquired = await acquireAttempt({
+		...input,
+		attemptId: stepAttemptId(getStepMetadata().stepId),
+	});
+	if (acquired.status !== "attempt") return acquired;
+	try {
+		return { ...acquired, started: await commitAndStart(acquired.attempt) };
+	} catch (error) {
+		if (getStepMetadata().attempt <= ACQUIRE_AND_START_RETRIES) throw error;
+		return {
+			...acquired,
+			failure: {
+				message: getErrorMessage(error),
+				code: getSourceErrorCode(error),
+			},
+		};
+	}
+}
+acquireAndStartDesktopRecordingAttempt.maxRetries = ACQUIRE_AND_START_RETRIES;
 
 export async function commitDesktopRecordingAttempt(
 	attempt: DesktopRecordingAttempt,
@@ -287,12 +358,18 @@ export async function commitDesktopRecordingAttempt(
 // A slow commit returns without dispatching and the workflow runs startDesktopRecordingJob as its own step.
 export async function commitAndStartDesktopRecordingAttempt(
 	attempt: DesktopRecordingAttempt,
+) {
+	"use step";
+
+	return commitAndStart(attempt);
+}
+
+async function commitAndStart(
+	attempt: DesktopRecordingAttempt,
 ): Promise<
 	| { committed: SourceCommitResult; dispatched?: undefined }
 	| { committed: "ready"; dispatched: true; started: DesktopRecordingDispatch }
 > {
-	"use step";
-
 	const startedAt = Date.now();
 	const committed = await commitDesktopRecordingBatch(attempt);
 	if (

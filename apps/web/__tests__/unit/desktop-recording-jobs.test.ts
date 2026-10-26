@@ -302,6 +302,78 @@ describe("durable recording job ownership", () => {
 		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
 	});
 
+	it("returns a live attempt to the caller that claimed it under the same id", async () => {
+		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
+		const first = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptId: "step-attempt",
+		});
+		expect(first).toMatchObject({ attemptId: "step-attempt", attemptCount: 1 });
+		const output = {
+			kind: "desktop-recording-source-commit",
+			revision: 3,
+		};
+		Object.assign(rows.jobs?.[0] ?? {}, { output });
+		const resumed = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptId: "step-attempt",
+		});
+		expect(resumed).toMatchObject({
+			attemptId: "step-attempt",
+			attemptCount: 1,
+			output,
+		});
+		expect(
+			await claimProcessingAttempt({
+				videoId,
+				generation: job.generation,
+				attemptId: "other-step",
+			}),
+		).toBeNull();
+		expect(
+			await claimProcessingAttempt({ videoId, generation: job.generation }),
+		).toBeNull();
+		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
+	});
+
+	it("claims a fresh id when the caller's own attempt has expired", async () => {
+		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
+		await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptId: "step-attempt",
+		});
+		vi.setSystemTime(new Date(now.getTime() + 6 * 60_000));
+		const next = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptId: "step-attempt",
+		});
+		expect(next?.attemptId).toBeTruthy();
+		expect(next?.attemptId).not.toBe("step-attempt");
+		expect(next?.attemptCount).toBe(2);
+	});
+
+	it("does not resume a finished attempt under its old id", async () => {
+		const { job } = await ensureSegmentProcessingJob({ videoId, userId });
+		const first = await claimProcessingAttempt({
+			videoId,
+			generation: job.generation,
+			attemptId: "step-attempt",
+		});
+		if (!first) throw new Error("Fixture attempt was not claimed");
+		Object.assign(rows.jobs?.[0] ?? {}, { state: "verified" });
+		expect(
+			await claimProcessingAttempt({
+				videoId,
+				generation: job.generation,
+				attemptId: "step-attempt",
+			}),
+		).toBeNull();
+	});
+
 	it("keeps physical worker leases private and clears their checkpoint for a new attempt", async () => {
 		const first = await createAttempt();
 		expect(await persistCommittedSource(first, source)).toBe(true);

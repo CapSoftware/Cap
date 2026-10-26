@@ -434,13 +434,16 @@ async function pauseExhaustedRecording(
 		.where(eq(videoUploads.videoId, videoId));
 }
 
+// A caller that retries with the same attemptId gets its own live attempt back instead of being locked out by its lease.
 export async function claimProcessingAttempt({
 	videoId,
 	generation,
+	attemptId,
 	now = new Date(),
 }: {
 	videoId: Video.VideoId;
 	generation: string;
+	attemptId?: string;
 	now?: Date;
 }): Promise<DesktopRecordingAttempt | null> {
 	return db().transaction(async (tx) => {
@@ -456,6 +459,16 @@ export async function claimProcessingAttempt({
 			.for("update");
 		if (!row) return null;
 		const job = parseDesktopRecordingJob(row);
+		const resumed = attemptId !== undefined && job.attemptId === attemptId;
+		if (
+			resumed &&
+			job.leaseExpiresAt &&
+			job.leaseExpiresAt > now &&
+			(job.state === "committing" ||
+				job.state === "queued" ||
+				job.state === "processing")
+		)
+			return { ...job, attemptId };
 		if (!isDesktopRecordingJobRecoverable(job, now)) return null;
 		if (job.attemptCount >= MAX_AUTOMATIC_ATTEMPTS) {
 			await pauseExhaustedRecording(
@@ -469,7 +482,8 @@ export async function claimProcessingAttempt({
 		const attempt: DesktopRecordingAttempt = {
 			...job,
 			state: job.source ? "processing" : "committing",
-			attemptId: randomUUID(),
+			// An expired attempt never comes back under its old id, so a retry claims a fresh one.
+			attemptId: resumed ? randomUUID() : (attemptId ?? randomUUID()),
 			attemptCount: job.attemptCount + 1,
 			leaseExpiresAt: new Date(now.getTime() + DESKTOP_RECORDING_LEASE_MS),
 			remoteJobId: null,

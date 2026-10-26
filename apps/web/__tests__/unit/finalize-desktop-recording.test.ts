@@ -35,6 +35,8 @@ const mocks = vi.hoisted(() => ({
 	reserveBudget: vi.fn(),
 	storage: vi.fn(),
 	multipartCreate: vi.fn(),
+	// Plain calls stand in for a step's last try; retry tests lower the attempt.
+	stepMetadata: vi.fn(() => ({ stepId: "step_test", attempt: 4 })),
 }));
 vi.mock("@/lib/media-processing-budget", () => ({
 	reserveMediaProcessingBudget: mocks.reserveBudget,
@@ -56,7 +58,10 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/database/schema", () => ({ users: {}, videos: {} }));
 vi.mock("drizzle-orm", () => ({ and: vi.fn(), eq: vi.fn() }));
 vi.mock("@cap/env", () => ({ serverEnv: mocks.env }));
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", () => ({
+	sleep: mocks.sleep,
+	getStepMetadata: () => mocks.stepMetadata(),
+}));
 vi.mock("@/lib/desktop-recording-jobs", () => ({
 	getProcessingState: mocks.state,
 	claimProcessingAttempt: mocks.claim,
@@ -105,6 +110,7 @@ vi.mock("@cap/web-backend/src/Storage/index", async () => {
 });
 
 import {
+	acquireAndStartDesktopRecordingAttempt,
 	commitAndStartDesktopRecordingAttempt,
 	commitDesktopRecordingAttempt,
 	finalizeDesktopRecordingWorkflow,
@@ -164,6 +170,7 @@ function withCurrent(update: Partial<DesktopRecordingJob>) {
 }
 
 beforeEach(() => {
+	mocks.stepMetadata.mockReturnValue({ stepId: "step_test", attempt: 4 });
 	mocks.reserveBudget.mockResolvedValue(100_000_000);
 	mocks.storage.mockImplementation(() => storageAccess("test"));
 	mocks.multipartCreate.mockImplementation(() =>
@@ -1168,6 +1175,148 @@ describe("source commitment and media request compatibility", () => {
 		await startDesktopRecordingJob(fixture);
 		const body = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body ?? "{}");
 		expect(body).toMatchObject({ duration: 91.6, requiredAudio: true });
+	});
+});
+
+describe("first attempt step", () => {
+	it("claims, commits and dispatches the first attempt in one step", async () => {
+		withCurrent({
+			state: "committing",
+			source: null,
+			leaseExpiresAt: null,
+			attemptId: null,
+		});
+		const result = await acquireAndStartDesktopRecordingAttempt({
+			videoId,
+			userId,
+			generation: fixture.generation,
+		});
+		expect(result).toMatchObject({
+			status: "attempt",
+			started: { committed: "ready", dispatched: true, started: "remote-job" },
+		});
+		expect(mocks.claim).toHaveBeenCalledWith(
+			expect.objectContaining({
+				attemptId: expect.stringMatching(
+					/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+				),
+			}),
+		);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("derives the same attempt id when the step is retried", async () => {
+		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
+		await acquireAndStartDesktopRecordingAttempt({
+			videoId,
+			userId,
+			generation: fixture.generation,
+		});
+		const first = mocks.claim.mock.calls[0]?.[0].attemptId;
+		withCurrent({ attemptId: first });
+		await acquireAndStartDesktopRecordingAttempt({
+			videoId,
+			userId,
+			generation: fixture.generation,
+		});
+		expect(mocks.claim.mock.calls[1]?.[0].attemptId).toBe(first);
+	});
+
+	it("resumes its own live attempt instead of reporting it as already processing", async () => {
+		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
+		await acquireAndStartDesktopRecordingAttempt({
+			videoId,
+			userId,
+			generation: fixture.generation,
+		});
+		const own = mocks.claim.mock.calls[0]?.[0].attemptId;
+		withCurrent({
+			attemptId: own,
+			leaseExpiresAt: new Date(Date.now() + 60_000),
+			nextRetryAt: new Date(Date.now() + 60_000),
+		});
+		mocks.claim.mockImplementationOnce(async () => current);
+		const retried = await acquireAndStartDesktopRecordingAttempt({
+			videoId,
+			userId,
+			generation: fixture.generation,
+		});
+		expect(retried.status).toBe("attempt");
+		withCurrent({ attemptId: "someone-else" });
+		expect(
+			await acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toEqual({ status: "already-processing" });
+	});
+
+	it("rethrows an early failure so the step retry resumes the same attempt", async () => {
+		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
+		mocks.stepMetadata.mockReturnValue({ stepId: "step_retry", attempt: 1 });
+		mocks.commitSource.mockRejectedValueOnce(new Error("storage blip"));
+		await expect(
+			acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).rejects.toThrow("storage blip");
+		const claimed = mocks.claim.mock.calls[0]?.[0].attemptId;
+		withCurrent({ attemptId: claimed });
+		mocks.claim.mockImplementationOnce(async () => current);
+		mocks.stepMetadata.mockReturnValue({ stepId: "step_retry", attempt: 2 });
+		expect(
+			await acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toMatchObject({
+			status: "attempt",
+			attempt: { attemptId: claimed },
+			started: { committed: "ready", dispatched: true, started: "remote-job" },
+		});
+		expect(mocks.claim.mock.calls[1]?.[0].attemptId).toBe(claimed);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("returns a failure after the last try as data for the workflow to retry", async () => {
+		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
+		mocks.commitSource.mockRejectedValueOnce(
+			new Error("provider copy unavailable"),
+		);
+		expect(
+			await acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toMatchObject({
+			status: "attempt",
+			failure: { message: "provider copy unavailable", code: null },
+		});
+	});
+
+	it("blocks a missing source inside the step like the commit step does", async () => {
+		withCurrent({ state: "committing", source: null, leaseExpiresAt: null });
+		mocks.commitSource.mockRejectedValueOnce(
+			Object.assign(new Error("fragment missing"), { code: "source-missing" }),
+		);
+		expect(
+			await acquireAndStartDesktopRecordingAttempt({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toMatchObject({
+			status: "attempt",
+			started: { committed: "source-blocked" },
+		});
+		expect(mocks.blocked).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: "source-missing" }),
+		);
 	});
 });
 
