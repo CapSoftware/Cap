@@ -35,7 +35,7 @@ export class CapRecorder {
 	private _videoId: string | null = null;
 	private _durationMs = 0;
 	private recorder: MediaRecorder | null = null;
-	private recordingStopped = Promise.resolve();
+	private recordingStopped: Promise<Error | null> = Promise.resolve(null);
 	private streams: ManagedStreams | null = null;
 	private startup: AbortController | null = null;
 	private chunks: Blob[] = [];
@@ -84,9 +84,10 @@ export class CapRecorder {
 			this.listeners.set(event, new Set());
 		}
 		const set = this.listeners.get(event);
-		if (set) set.add(handler as EventHandler<keyof RecorderEventMap>);
+		const registeredHandler = handler as EventHandler<keyof RecorderEventMap>;
+		if (set) set.add(registeredHandler);
 		return () => {
-			this.listeners.get(event)?.delete(handler);
+			this.listeners.get(event)?.delete(registeredHandler);
 		};
 	}
 
@@ -149,8 +150,19 @@ export class CapRecorder {
 				mimeType: mimeType || undefined,
 			});
 			this.recorder = recorder;
-			this.recordingStopped = new Promise<void>((resolve) => {
-				recorder.onstop = () => resolve();
+			this.recordingStopped = new Promise<Error | null>((resolve) => {
+				recorder.onstop = () => resolve(null);
+				recorder.onerror = (event) => {
+					if (this.recorder !== recorder) return;
+					const error =
+						"error" in event && event.error instanceof Error
+							? event.error
+							: new Error("Recording failed");
+					resolve(error);
+					this.cleanup();
+					this.setPhase("error");
+					this.emit("error", { error });
+				};
 			});
 
 			this.chunks = [];
@@ -228,7 +240,8 @@ export class CapRecorder {
 		this.stopDurationTimer();
 
 		if (recorder.state !== "inactive") recorder.stop();
-		await stopped;
+		const error = await stopped;
+		if (error) throw error;
 		if (this.recorder !== recorder) {
 			throw new DOMException("Recording was canceled", "AbortError");
 		}
