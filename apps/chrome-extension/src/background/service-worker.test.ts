@@ -16,6 +16,8 @@ let onMessage: MessageListener;
 let stored: Record<string, unknown>;
 let pollReplies: Array<(response: OffscreenResponse) => void>;
 let contextReplies: Array<(contexts: object[]) => void>;
+let holdCacheRemoval: boolean;
+let completeCacheRemoval: (() => void) | null;
 
 const liveStatus: RecordingStatus = {
 	phase: "recording",
@@ -29,6 +31,8 @@ beforeEach(async () => {
 	stored = {};
 	pollReplies = [];
 	contextReplies = [];
+	holdCacheRemoval = false;
+	completeCacheRemoval = null;
 	const storage = {
 		get: (_keys: string[], callback: (items: object) => void) =>
 			callback({ ...stored }),
@@ -37,10 +41,17 @@ beforeEach(async () => {
 			callback();
 		},
 		remove: (keys: string | string[], callback: () => void) => {
-			for (const key of Array.isArray(keys) ? keys : [keys]) {
-				delete stored[key];
+			const finish = () => {
+				for (const key of Array.isArray(keys) ? keys : [keys]) {
+					delete stored[key];
+				}
+				callback();
+			};
+			if (holdCacheRemoval && keys === "cap-extension-bootstrap-cache") {
+				completeCacheRemoval = finish;
+				return;
 			}
-			callback();
+			finish();
 		},
 		setAccessLevel: vi.fn(),
 	};
@@ -49,13 +60,10 @@ beforeEach(async () => {
 		identity: {
 			getRedirectURL: () => "https://extension.chromiumapp.org/",
 			launchWebAuthFlow: vi.fn(
-				(
-					options: { url: string },
-					callback: (url: string) => void,
-				) => {
+				(options: { url: string }, callback: (url: string) => void) => {
 					const state = new URL(options.url).searchParams.get("state");
 					callback(
-					`https://extension.chromiumapp.org/#state=${state}&authApiKey=new_key&userId=new_user`,
+						`https://extension.chromiumapp.org/#state=${state}&authApiKey=new_key&userId=new_user`,
 					);
 				},
 			),
@@ -249,6 +257,59 @@ describe("bootstrap session ownership", () => {
 
 		expect(stored[AUTH_KEY]).toBeUndefined();
 		expect(stored[BOOTSTRAP_CACHE_KEY]).toBeUndefined();
+	});
+
+
+	it("does not expose old cached data during the account switch", async () => {
+		stored[AUTH_KEY] = { authApiKey: "old_key", userId: "old_user" };
+		stored[BOOTSTRAP_CACHE_KEY] = {
+			bootstrap: bootstrapFor("old_user", 300),
+			cachedAt: Date.now(),
+		};
+		const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.redirect === "manual") {
+				return Promise.resolve(new Response(null, { status: 302 }));
+			}
+			if (init?.method === "POST") {
+				return Promise.resolve(Response.json({ success: true }));
+			}
+			const token = new Headers(init?.headers).get("Authorization");
+			return Promise.resolve(
+				Response.json(bootstrapFor(token === "Bearer old_key" ? "old_user" : "new_user", token === "Bearer old_key" ? 300 : 0)),
+			);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		holdCacheRemoval = true;
+
+		expect(await requestWorker("auth-start")).toMatchObject({
+			ok: true,
+			authPending: true,
+		});
+		await vi.waitFor(() => expect(completeCacheRemoval).not.toBeNull());
+		const duringSwitch = requestWorker("bootstrap");
+		await resolveBootstrapContext();
+		expect(await duringSwitch).toMatchObject({
+			ok: true,
+			auth: null,
+		});
+		const removeCache = completeCacheRemoval;
+		if (!removeCache) throw new Error("Cache removal was not pending");
+		holdCacheRemoval = false;
+		removeCache();
+		await vi.waitFor(() => {
+			expect(stored[AUTH_KEY]).toMatchObject({ authApiKey: "new_key" });
+			expect(stored[BOOTSTRAP_CACHE_KEY]).toMatchObject({
+				bootstrap: { organization: { id: "org_new_user" } },
+			});
+		});
+
+		const current = requestWorker("bootstrap");
+		await resolveBootstrapContext();
+		expect(await current).toMatchObject({
+			ok: true,
+			auth: { authApiKey: "new_key" },
+			bootstrap: { organization: { id: "org_new_user" } },
+		});
 	});
 
 	it("loads a new account while the previous account's refresh is pending", async () => {
