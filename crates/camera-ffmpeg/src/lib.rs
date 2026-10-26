@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 mod mjpeg_idct;
 
 #[cfg(target_os = "macos")]
