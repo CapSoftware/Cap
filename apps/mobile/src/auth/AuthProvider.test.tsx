@@ -303,8 +303,9 @@ describe("AuthProvider", () => {
 			});
 			apiMock.bootstrap.mockRejectedValueOnce(error);
 
+			let renderer: ReturnType<typeof TestRenderer.create> | null = null;
 			await act(async () => {
-				TestRenderer.create(
+				renderer = TestRenderer.create(
 					React.createElement(AuthProvider, null, React.createElement(Probe)),
 				);
 				await flushMicrotasks();
@@ -317,8 +318,73 @@ describe("AuthProvider", () => {
 			});
 			expect(latestAuth?.bootstrap).toBeNull();
 			expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+			await act(async () => {
+				renderer?.unmount();
+			});
 		},
 	);
+
+	it("retries transient bootstrap failures and restores the library session", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+		vi.useFakeTimers();
+		let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+		try {
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+			expect(latestAuth?.status).toBe("signedIn");
+			expect(latestAuth?.bootstrap).toBeNull();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(2_000);
+				await flushMicrotasks();
+			});
+			expect(apiMock.bootstrap).toHaveBeenCalledTimes(2);
+			expect(latestAuth?.bootstrap?.activeOrganizationId).toBe("org_123");
+			expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
+		} finally {
+			await act(async () => {
+				renderer?.unmount();
+			});
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not retry a transient failure after explicit sign-out", async () => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
+			Promise.resolve(key === "cap.mobile.apiKey" ? "key_123" : "user_123"),
+		);
+		apiMock.bootstrap.mockRejectedValueOnce(new TypeError("Offline"));
+		vi.useFakeTimers();
+		let renderer: ReturnType<typeof TestRenderer.create> | null = null;
+		try {
+			await act(async () => {
+				renderer = TestRenderer.create(
+					React.createElement(AuthProvider, null, React.createElement(Probe)),
+				);
+				await flushMicrotasks();
+			});
+			await act(async () => {
+				await latestAuth?.signOut();
+			});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(apiMock.bootstrap).toHaveBeenCalledTimes(1);
+			expect(latestAuth?.status).toBe("signedOut");
+		} finally {
+			await act(async () => {
+				renderer?.unmount();
+			});
+			vi.useRealTimers();
+		}
+	});
 
 	it("does not restore account data when a refresh finishes after sign-out", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) =>
@@ -441,7 +507,7 @@ describe("AuthProvider", () => {
 		expect(latestAuth?.bootstrap?.user.email).toBe("new@cap.so");
 
 		await act(async () => {
-			oldBootstrap.reject(new Error("Old session expired"));
+			oldBootstrap.reject(new MobileApiError("Old session expired", 401, null));
 			await flushMicrotasks();
 		});
 		expect(latestAuth?.status).toBe("signedIn");
