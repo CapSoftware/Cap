@@ -1,6 +1,7 @@
 import React, { type ReactNode } from "react";
 import TestRenderer, { act } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MobileApiError } from "@/api/mobile";
 import { AuthProvider, useAuth } from "./AuthContext";
 
 type HostProps = {
@@ -69,6 +70,15 @@ vi.mock("expo-secure-store", () => secureStoreMock);
 vi.mock("expo-web-browser", () => webBrowserMock);
 
 vi.mock("@/api/mobile", () => ({
+	MobileApiError: class MobileApiError extends Error {
+		constructor(
+			message: string,
+			readonly status: number,
+			readonly payload: unknown,
+		) {
+			super(message);
+		}
+	},
 	createMobileApiClient: vi.fn(() => ({
 		bootstrap: apiMock.bootstrap,
 		getAuthConfig: apiMock.getAuthConfig,
@@ -239,13 +249,15 @@ describe("AuthProvider", () => {
 		);
 	});
 
-	it("clears the stored user id when bootstrapping a stored session fails", async () => {
+	it("clears a stored session when bootstrap rejects its credentials", async () => {
 		secureStoreMock.getItemAsync.mockImplementation((key: string) => {
 			if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
 			if (key === "cap.mobile.userId") return Promise.resolve("user_123");
 			return Promise.resolve(null);
 		});
-		apiMock.bootstrap.mockRejectedValueOnce(new Error("Session expired"));
+		apiMock.bootstrap.mockRejectedValueOnce(
+			new MobileApiError("Session expired", 401, null),
+		);
 
 		await act(async () => {
 			TestRenderer.create(
@@ -265,6 +277,44 @@ describe("AuthProvider", () => {
 		expect(secureStoreMock.deleteItemAsync).toHaveBeenCalledWith(
 			"cap.mobile.userId",
 		);
+	});
+
+	it.each([
+		{ name: "a network error", error: new TypeError("Network request failed") },
+		{
+			name: "HTTP 429",
+			error: new MobileApiError("Rate limited", 429, null),
+		},
+		{
+			name: "HTTP 503",
+			error: new MobileApiError("Service unavailable", 503, null),
+		},
+		{
+			name: "an invalid HTTP response",
+			error: new MobileApiError("Invalid response", 502, null),
+		},
+	])("preserves a saved session after $name during bootstrap", async ({ error }) => {
+		secureStoreMock.getItemAsync.mockImplementation((key: string) => {
+			if (key === "cap.mobile.apiKey") return Promise.resolve("key_123");
+			if (key === "cap.mobile.userId") return Promise.resolve("user_123");
+			return Promise.resolve(null);
+		});
+		apiMock.bootstrap.mockRejectedValueOnce(error);
+
+		await act(async () => {
+			TestRenderer.create(
+				React.createElement(AuthProvider, null, React.createElement(Probe)),
+			);
+			await flushMicrotasks();
+		});
+
+		expect(states.at(-1)).toMatchObject({
+			apiKey: "key_123",
+			status: "signedIn",
+			userId: "user_123",
+		});
+		expect(latestAuth?.bootstrap).toBeNull();
+		expect(secureStoreMock.deleteItemAsync).not.toHaveBeenCalled();
 	});
 
 	it("does not restore account data when a refresh finishes after sign-out", async () => {
