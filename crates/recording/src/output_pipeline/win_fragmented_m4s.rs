@@ -822,7 +822,9 @@ impl WindowsFragmentedM4SCameraMuxer {
                 }
 
                 let mut pacer = FramePacer::new(video_config.fps());
-                let mut last_frame: Option<NativeCameraFrame> = None;
+                // Repeats share the last converted frame so the capture buffer
+                // is locked once instead of on every paced repeat.
+                let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                 let mut first_timestamp: Option<Duration> = None;
 
                 let mut slow_convert_count = 0u32;
@@ -844,17 +846,14 @@ impl WindowsFragmentedM4SCameraMuxer {
                         }
                     };
 
-                let encode_camera_frame_fn =
+                let convert_camera_frame =
                     |camera_frame: &NativeCameraFrame,
-                     timestamp: Duration,
                      slow_convert_count: &mut u32,
-                     slow_encode_count: &mut u32,
-                     total_frames: &mut u64,
-                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>,
                      mjpeg_decoder: &mut MjpegDecoder|
-                     -> anyhow::Result<()> {
+                     -> anyhow::Result<ffmpeg::frame::Video> {
                         let convert_start = std::time::Instant::now();
-                        let ffmpeg_frame_result = camera_frame_to_ffmpeg(camera_frame, mjpeg_decoder);
+                        let ffmpeg_frame_result =
+                            camera_frame_to_ffmpeg(camera_frame, mjpeg_decoder);
                         let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
                         if convert_elapsed_ms > SLOW_THRESHOLD_MS {
@@ -869,41 +868,42 @@ impl WindowsFragmentedM4SCameraMuxer {
                             }
                         }
 
-                        match ffmpeg_frame_result {
-                            Ok(ffmpeg_frame) => {
-                                let encode_start = std::time::Instant::now();
+                        ffmpeg_frame_result
+                    };
 
-                                match encoder.lock() {
-                                    Ok(mut enc) => {
-                                        if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
-                                            warn!("Failed to encode camera frame: {e}");
-                                        }
-                                    }
-                                    Err(_) => {
-                                        return Err(anyhow!(
-                                            "Camera encoder mutex poisoned - all subsequent frames would be lost"
-                                        ));
-                                    }
-                                }
+                let encode_camera_frame_fn =
+                    |ffmpeg_frame: ffmpeg::frame::Video,
+                     timestamp: Duration,
+                     slow_encode_count: &mut u32,
+                     total_frames: &mut u64,
+                     encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                     -> anyhow::Result<()> {
+                        let encode_start = std::time::Instant::now();
 
-                                let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                                if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                                    *slow_encode_count += 1;
-                                    if *slow_encode_count <= 5
-                                        || slow_encode_count.is_multiple_of(100)
-                                    {
-                                        debug!(
-                                            elapsed_ms = encode_elapsed_ms,
-                                            count = *slow_encode_count,
-                                            "Camera encoder.queue_frame exceeded {}ms threshold",
-                                            SLOW_THRESHOLD_MS
-                                        );
-                                    }
+                        match encoder.lock() {
+                            Ok(mut enc) => {
+                                if let Err(e) = enc.queue_frame(ffmpeg_frame, timestamp) {
+                                    warn!("Failed to encode camera frame: {e}");
                                 }
                             }
-                            Err(e) => {
-                                warn!("Failed to convert camera frame: {e:?}");
+                            Err(_) => {
+                                return Err(anyhow!(
+                                    "Camera encoder mutex poisoned - all subsequent frames would be lost"
+                                ));
+                            }
+                        }
+
+                        let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                        if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                            *slow_encode_count += 1;
+                            if *slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = encode_elapsed_ms,
+                                    count = *slow_encode_count,
+                                    "Camera encoder.queue_frame exceeded {}ms threshold",
+                                    SLOW_THRESHOLD_MS
+                                );
                             }
                         }
 
@@ -923,17 +923,30 @@ impl WindowsFragmentedM4SCameraMuxer {
                         break;
                     }
 
-                    let (camera_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
-                        Paced::Frame(frame, ts) => {
-                            last_frame = Some(frame.clone());
-                            (frame, ts)
-                        }
+                    let (ffmpeg_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
+                        Paced::Frame(frame, ts) => match convert_camera_frame(
+                            &frame,
+                            &mut slow_convert_count,
+                            &mut mjpeg_decoder,
+                        ) {
+                            Ok(ffmpeg_frame) => {
+                                last_ffmpeg_frame = Some(reference_video_frame(&ffmpeg_frame));
+                                (ffmpeg_frame, ts)
+                            }
+                            Err(e) => {
+                                warn!("Failed to convert camera frame: {e:?}");
+                                let Some(last) = last_ffmpeg_frame.as_ref() else {
+                                    continue;
+                                };
+                                (reference_video_frame(last), ts)
+                            }
+                        },
                         Paced::Repeat(ts) => {
-                            let Some(frame) = &last_frame else {
+                            let Some(last) = last_ffmpeg_frame.as_ref() else {
                                 continue;
                             };
                             duplicated_frames += 1;
-                            (frame.clone(), ts)
+                            (reference_video_frame(last), ts)
                         }
                         Paced::End => {
                             let mut drained = 0u64;
@@ -945,14 +958,25 @@ impl WindowsFragmentedM4SCameraMuxer {
                                     Ok(Some((frame, ts))) => {
                                         let normalized_ts =
                                             normalize_timestamp(ts, &mut first_timestamp);
-                                        if let Err(e) = encode_camera_frame_fn(
+                                        let ffmpeg_frame = match convert_camera_frame(
                                             &frame,
-                                            normalized_ts,
                                             &mut slow_convert_count,
+                                            &mut mjpeg_decoder,
+                                        ) {
+                                            Ok(ffmpeg_frame) => ffmpeg_frame,
+                                            Err(e) => {
+                                                warn!(
+                                                    "Failed to convert drained camera frame: {e:?}"
+                                                );
+                                                continue;
+                                            }
+                                        };
+                                        if let Err(e) = encode_camera_frame_fn(
+                                            ffmpeg_frame,
+                                            normalized_ts,
                                             &mut slow_encode_count,
                                             &mut total_frames,
                                             &encoder_clone,
-                                            &mut mjpeg_decoder,
                                         ) {
                                             warn!("Failed to encode drained camera frame: {e}");
                                             break;
@@ -981,13 +1005,11 @@ impl WindowsFragmentedM4SCameraMuxer {
 
                     let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
                     if let Err(e) = encode_camera_frame_fn(
-                        &camera_frame,
+                        ffmpeg_frame,
                         normalized_ts,
-                        &mut slow_convert_count,
                         &mut slow_encode_count,
                         &mut total_frames,
                         &encoder_clone,
-                        &mut mjpeg_decoder,
                     ) {
                         error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
                         return Err(e);

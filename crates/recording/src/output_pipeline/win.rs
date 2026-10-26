@@ -120,10 +120,13 @@ use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
     Win32::Graphics::{
-        Direct3D11::ID3D11Device,
+        Direct3D11::{
+            D3D11_TEXTURE2D_DESC, ID3D11Device, ID3D11DeviceContext, ID3D11Resource,
+            ID3D11Texture2D,
+        },
         Dxgi::Common::{
             DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM,
-            DXGI_FORMAT_YUY2,
+            DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_YUY2,
         },
     },
 };
@@ -506,7 +509,51 @@ impl Muxer for WindowsMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::reference_video_frame;
+    use super::{
+        CameraBuffer, MjpegDecoder, NativeCameraFrame, camera_frame_to_ffmpeg,
+        reference_video_frame,
+    };
+    use cap_camera_windows::PixelFormat;
+    use cap_mediafoundation_utils::IMFMediaBufferExt;
+    use cap_timestamp::Timestamp;
+    use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
+
+    #[test]
+    fn native_nv12_frame_converts_without_copying() {
+        cap_mediafoundation_utils::thread_init();
+
+        let width = 80;
+        let height = 48;
+        let stride = 80;
+        let len = stride * height + stride * (height / 2);
+        let buffer = unsafe { MFCreateMemoryBuffer(len as u32) }.expect("buffer");
+        {
+            let mut lock = buffer.lock_for_write().expect("write lock");
+            for (index, byte) in lock.iter_mut().enumerate() {
+                *byte = (index * 13) as u8;
+            }
+        }
+        unsafe { buffer.SetCurrentLength(len as u32) }.expect("length");
+
+        let base_ptr = {
+            let lock = buffer.lock().expect("read lock");
+            lock.as_ptr()
+        };
+
+        let frame = NativeCameraFrame {
+            buffer: CameraBuffer::new(buffer),
+            pixel_format: PixelFormat::NV12,
+            width: width as u32,
+            height: height as u32,
+            is_bottom_up: false,
+            timestamp: Timestamp::Instant(std::time::Instant::now()),
+        };
+        let mut decoder = MjpegDecoder::default();
+        let converted = camera_frame_to_ffmpeg(&frame, &mut decoder).expect("conversion");
+
+        assert_eq!(converted.format(), ffmpeg::format::Pixel::NV12);
+        assert_eq!(converted.data(0).as_ptr(), base_ptr);
+    }
 
     #[test]
     fn retained_software_frame_shares_pixels_and_survives_original() {
@@ -601,10 +648,29 @@ fn duration_to_timespan(duration: Duration) -> TimeSpan {
     }
 }
 
+type CameraMediaBuffer = windows::Win32::Media::MediaFoundation::IMFMediaBuffer;
+
+#[derive(Clone)]
+pub struct CameraBuffer(CameraMediaBuffer);
+
+impl CameraBuffer {
+    pub fn new(buffer: CameraMediaBuffer) -> Self {
+        Self(buffer)
+    }
+
+    pub fn get(&self) -> &CameraMediaBuffer {
+        &self.0
+    }
+}
+
+// Media Foundation buffers are free-threaded; pixel access is guarded by the
+// per-frame 2D or contiguous lock held by the consumer.
+unsafe impl Send for CameraBuffer {}
+unsafe impl Sync for CameraBuffer {}
+
 #[derive(Clone)]
 pub struct NativeCameraFrame {
-    pub buffer:
-        std::sync::Arc<std::sync::Mutex<windows::Win32::Media::MediaFoundation::IMFMediaBuffer>>,
+    pub buffer: CameraBuffer,
     pub pixel_format: cap_camera_windows::PixelFormat,
     pub width: u32,
     pub height: u32,
@@ -878,7 +944,8 @@ impl Muxer for WindowsCameraMuxer {
                         let mut last_frame: Option<NativeCameraFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count = 0u64;
-                        let mut camera_buffers = CameraBuffers::new();
+                        let mut camera_buffers =
+                            CameraBuffers::with_texture(encoder.input_texture().clone());
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
@@ -1098,6 +1165,11 @@ impl AudioMuxer for WindowsCameraMuxer {
 pub struct CameraBuffers {
     uyvy_buffer: Vec<u8>,
     flip_buffer: Vec<u8>,
+    texture: Option<ID3D11Texture2D>,
+    texture_width: u32,
+    texture_height: u32,
+    texture_format: DXGI_FORMAT,
+    context: Option<ID3D11DeviceContext>,
 }
 
 impl CameraBuffers {
@@ -1105,7 +1177,64 @@ impl CameraBuffers {
         Self {
             uyvy_buffer: Vec::new(),
             flip_buffer: Vec::new(),
+            texture: None,
+            texture_width: 0,
+            texture_height: 0,
+            texture_format: DXGI_FORMAT_UNKNOWN,
+            context: None,
         }
+    }
+
+    pub fn with_texture(texture: ID3D11Texture2D) -> Self {
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { texture.GetDesc(&mut desc) };
+
+        Self {
+            texture: Some(texture),
+            texture_width: desc.Width,
+            texture_height: desc.Height,
+            texture_format: desc.Format,
+            ..Self::new()
+        }
+    }
+
+    fn ensure_texture(
+        &mut self,
+        device: &ID3D11Device,
+        desc: &D3D11_TEXTURE2D_DESC,
+    ) -> windows::core::Result<ID3D11Texture2D> {
+        if self.texture.is_none()
+            || self.texture_width != desc.Width
+            || self.texture_height != desc.Height
+            || self.texture_format != desc.Format
+        {
+            let mut texture = None;
+            unsafe { device.CreateTexture2D(desc, None, Some(&mut texture))? };
+            self.texture = texture;
+            self.texture_width = desc.Width;
+            self.texture_height = desc.Height;
+            self.texture_format = desc.Format;
+        }
+
+        self.texture.clone().ok_or_else(|| {
+            windows::core::Error::new(
+                windows::core::HRESULT(-1),
+                "CreateTexture2D succeeded but returned no texture",
+            )
+        })
+    }
+
+    fn context(&mut self, device: &ID3D11Device) -> windows::core::Result<ID3D11DeviceContext> {
+        if self.context.is_none() {
+            self.context = Some(unsafe { device.GetImmediateContext()? });
+        }
+
+        self.context.clone().ok_or_else(|| {
+            windows::core::Error::new(
+                windows::core::HRESULT(-1),
+                "GetImmediateContext returned no context",
+            )
+        })
     }
 
     fn ensure_uyvy_capacity(&mut self, size: usize) -> &mut [u8] {
@@ -1357,6 +1486,19 @@ pub(crate) fn camera_frame_to_ffmpeg(
         return decode_mjpeg_frame(frame, mjpeg_decoder);
     }
 
+    if cap_camera_ffmpeg::should_use_2d_lock(frame.pixel_format, frame.is_bottom_up)
+        && let Some(frame) = cap_camera_ffmpeg::media_buffer_as_ffmpeg(
+            frame.buffer.get(),
+            frame.pixel_format,
+            frame.width as usize,
+            frame.height as usize,
+            frame.is_bottom_up,
+        )
+    {
+        cap_camera_ffmpeg::CONVERSION_STATS.record_zero_copy();
+        return Ok(frame);
+    }
+
     let ffmpeg_format = match frame.pixel_format {
         cap_camera_windows::PixelFormat::NV12 => ffmpeg::format::Pixel::NV12,
         cap_camera_windows::PixelFormat::YUYV422 => ffmpeg::format::Pixel::YUYV422,
@@ -1372,11 +1514,9 @@ pub(crate) fn camera_frame_to_ffmpeg(
         other => anyhow::bail!("Unsupported camera pixel format: {:?}", other),
     };
 
-    let buffer_guard = frame
+    let lock = frame
         .buffer
-        .lock()
-        .map_err(|_| anyhow!("Failed to lock camera buffer"))?;
-    let lock = buffer_guard
+        .get()
         .lock()
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
@@ -1636,11 +1776,9 @@ fn decode_mjpeg_frame(
 ) -> anyhow::Result<ffmpeg::frame::Video> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
 
-    let buffer_guard = frame
+    let lock = frame
         .buffer
-        .lock()
-        .map_err(|_| anyhow!("Failed to lock camera buffer"))?;
-    let lock = buffer_guard
+        .get()
         .lock()
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
@@ -1809,25 +1947,41 @@ pub fn upload_mf_buffer_to_texture(
     buffers: &mut CameraBuffers,
 ) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
-    use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-        D3D11_USAGE_DEFAULT,
-    };
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
-    let dxgi_format = frame.dxgi_format();
+    let buffer = frame.buffer.get();
 
-    let buffer_guard = frame
-        .buffer
-        .lock()
-        .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?;
-    let lock = buffer_guard.lock()?;
-    let original_data = &*lock;
+    // The zero-copy and preview paths lock these formats with Lock2D; the
+    // upload must use the same lock type to avoid MF_E_INVALIDREQUEST.
+    if cap_camera_ffmpeg::should_use_2d_lock(frame.pixel_format, frame.is_bottom_up)
+        && let Some(texture) = cap_camera_ffmpeg::with_media_buffer_data(
+            buffer,
+            frame.pixel_format,
+            frame.width as usize,
+            frame.height as usize,
+            |data, primary_stride, secondary_stride| {
+                upload_mf_buffer_data_to_texture(
+                    device,
+                    frame,
+                    data,
+                    CameraBufferLayout {
+                        primary_stride,
+                        secondary_stride,
+                    },
+                    buffers,
+                )
+            },
+        )
+    {
+        return texture;
+    }
+
+    let lock = buffer.lock()?;
+    let data = &*lock;
     let layout = infer_camera_buffer_layout(
         frame.pixel_format,
         frame.width as usize,
         frame.height as usize,
-        original_data.len(),
+        data.len(),
     )
     .ok_or_else(|| {
         windows::core::Error::new(
@@ -1837,10 +1991,43 @@ pub fn upload_mf_buffer_to_texture(
                 frame.pixel_format,
                 frame.width,
                 frame.height,
-                original_data.len()
+                data.len()
             ),
         )
     })?;
+
+    upload_mf_buffer_data_to_texture(device, frame, data, layout, buffers)
+}
+
+fn upload_mf_buffer_data_to_texture(
+    device: &ID3D11Device,
+    frame: &NativeCameraFrame,
+    original_data: &[u8],
+    layout: CameraBufferLayout,
+    buffers: &mut CameraBuffers,
+) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
+    use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_SHADER_RESOURCE, D3D11_USAGE_DEFAULT};
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+    use windows::core::Interface;
+
+    let dxgi_format = frame.dxgi_format();
+    let texture_desc = D3D11_TEXTURE2D_DESC {
+        Width: frame.width,
+        Height: frame.height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: dxgi_format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let texture: ID3D11Texture2D = buffers.ensure_texture(device, &texture_desc)?;
+    let context: ID3D11DeviceContext = buffers.context(device)?;
 
     let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
     let needs_flip = frame.is_bottom_up;
@@ -1926,36 +2113,11 @@ pub fn upload_mf_buffer_to_texture(
         }
     };
 
-    let texture_desc = D3D11_TEXTURE2D_DESC {
-        Width: frame.width,
-        Height: frame.height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: dxgi_format,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-
-    let subresource_data = D3D11_SUBRESOURCE_DATA {
-        pSysMem: data.as_ptr() as *const _,
-        SysMemPitch: row_pitch,
-        SysMemSlicePitch: 0,
-    };
+    let resource = texture.cast::<ID3D11Resource>()?;
 
     unsafe {
-        let mut texture = None;
-        device.CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut texture))?;
-        texture.ok_or_else(|| {
-            windows::core::Error::new(
-                windows::core::HRESULT(-1),
-                "CreateTexture2D succeeded but returned no texture",
-            )
-        })
+        context.UpdateSubresource(&resource, 0, None, data.as_ptr() as *const _, row_pitch, 0);
     }
+
+    Ok(texture)
 }
