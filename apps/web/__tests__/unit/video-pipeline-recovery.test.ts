@@ -1,3 +1,4 @@
+import { inArray, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = vi.fn();
@@ -393,5 +394,81 @@ describe("recoverStalledVideoPipeline", () => {
 
 		expect(mockStartAiGeneration).toHaveBeenCalledWith("video-ai", "user-1");
 		expect(result.ai.statuses).toEqual({ started: 1 });
+	});
+
+	it("selects only entitled AI candidates in SQL so ineligible videos cannot fill the batch", async () => {
+		const chains = [
+			makeSelectChain([]),
+			makeSelectChain([]),
+			makeSelectChain([]),
+		];
+		let dbCall = 0;
+		mockDb.mockImplementation(() => chains[dbCall++]);
+
+		const { recoverStalledVideoPipeline, STALLED_AI_RECOVERY_BATCH_SIZE } =
+			await import("@/lib/video-pipeline-recovery");
+		await recoverStalledVideoPipeline({ now, concurrency: 1 });
+
+		expect(chains[2]?.limit).toHaveBeenCalledWith(
+			STALLED_AI_RECOVERY_BATCH_SIZE,
+		);
+		expect(inArray).toHaveBeenCalledWith("users.stripeSubscriptionStatus", [
+			"active",
+			"trialing",
+			"complete",
+			"paid",
+			"past_due",
+		]);
+		const sqlText = vi
+			.mocked(sql)
+			.mock.calls.map(([strings]) =>
+				(strings as TemplateStringsArray).join("?"),
+			);
+		expect(sqlText).toContain("COALESCE(?, '') <> ''");
+	});
+
+	it("never starts AI for transcribe-on-view videos but still resumes AI a view started", async () => {
+		const chains = [
+			makeSelectChain([]),
+			makeSelectChain([]),
+			makeSelectChain([]),
+		];
+		let dbCall = 0;
+		mockDb.mockImplementation(() => chains[dbCall++]);
+
+		const { recoverStalledVideoPipeline } = await import(
+			"@/lib/video-pipeline-recovery"
+		);
+		await recoverStalledVideoPipeline({ now, concurrency: 1 });
+
+		const aiWhere = JSON.stringify(chains[2]?.where.mock.calls[0]?.[0]);
+		expect(aiWhere).toContain("$.transcribeOnView') IS NULL");
+		expect(aiWhere).toContain('"QUEUED","PROCESSING"');
+	});
+
+	it("still drops ineligible rows if the database returns them", async () => {
+		const freeCandidate = {
+			videoId: "video-free",
+			userId: "user-free",
+			metadata: null,
+			updatedAt: staleAt,
+			stripeSubscriptionStatus: "canceled",
+			thirdPartyStripeSubscriptionId: "",
+		};
+
+		let dbCall = 0;
+		mockDb.mockImplementation(() => {
+			dbCall++;
+			if (dbCall < 3) return makeSelectChain([]);
+			return makeSelectChain([freeCandidate]);
+		});
+
+		const { recoverStalledVideoPipeline } = await import(
+			"@/lib/video-pipeline-recovery"
+		);
+		const result = await recoverStalledVideoPipeline({ now, concurrency: 1 });
+
+		expect(mockStartAiGeneration).not.toHaveBeenCalled();
+		expect(result.ai.statuses).toEqual({});
 	});
 });
