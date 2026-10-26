@@ -412,9 +412,9 @@ async fn download_whisper_model(model: &str) -> Result<(), String> {
 
     let result = write_whisper_parts(model, model_parts, &path, total_size).await;
     if result.is_err() {
-        // Unlike the Tauri version, drop the half-written file: it lives at
-        // the final path, and a later existence check would call it a model.
-        let _ = std::fs::remove_file(&path);
+        // An interrupted process can leave this file behind without making
+        // an incomplete download look installed on the next disk scan.
+        let _ = std::fs::remove_file(staging_path(&path));
     }
     result
 }
@@ -425,7 +425,8 @@ async fn write_whisper_parts(
     path: &Path,
     total_size: u64,
 ) -> Result<(), String> {
-    let mut file = File::create(path).map_err(|e| format!("Failed to create file: {e}"))?;
+    let staging = staging_path(path);
+    let mut file = File::create(&staging).map_err(|e| format!("Failed to create file: {e}"))?;
 
     let mut downloaded: u64 = 0;
     let part_count = model_parts.len() as f64;
@@ -474,7 +475,15 @@ async fn write_whisper_parts(
     }
 
     file.flush()
-        .map_err(|e| format!("Failed to flush file: {e}"))
+        .map_err(|e| format!("Failed to flush file: {e}"))?;
+    drop(file);
+    std::fs::rename(&staging, path).map_err(|e| format!("Failed to install model: {e}"))
+}
+
+/// Downloads land here and are renamed into place once complete, so a
+/// half-written file never sits at the path that marks a model installed.
+fn staging_path(path: &Path) -> PathBuf {
+    path.with_extension("bin.downloading")
 }
 
 /// `total_content_length` (`captions.rs:2198-2218`).
@@ -1768,8 +1777,8 @@ pub fn transcribe_blocking(
     language: &str,
 ) -> Result<Vec<CaptionSegment>, String> {
     let requested = model;
-    // A download writes straight to the model's final path, so a model still
-    // downloading looks present but cannot load yet.
+    // A model being downloaded should not be selected as a fallback, even
+    // if an older copy still exists at its final path.
     let model = transcription_model(model, language, |model| {
         model_files_present(model) && !hub().downloading(model)
     })?;
@@ -2141,6 +2150,8 @@ pub fn caption_generation_error_message(message: &str) -> String {
     message.to_string()
 }
 
+#[cfg(test)]
+mod download_tests;
 #[cfg(test)]
 mod verify_tests;
 
