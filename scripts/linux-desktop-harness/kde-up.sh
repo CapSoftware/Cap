@@ -45,10 +45,15 @@ dbus-update-activation-environment --systemd WAYLAND_DISPLAY "${session[@]%%=*}"
 
 systemd-run --user --unit=plasmashell --collect \
   -p StandardOutput=file:"$out/plasmashell.log" -p StandardError=inherit plasmashell
+tray=no
 for _ in $(seq 300); do
-  gdbus call --session --dest org.kde.StatusNotifierWatcher --object-path /StatusNotifierWatcher \
+  if gdbus call --session --dest org.kde.StatusNotifierWatcher --object-path /StatusNotifierWatcher \
     --method org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher \
-    IsStatusNotifierHostRegistered >/dev/null 2>&1 && break
+    IsStatusNotifierHostRegistered 2>/dev/null | grep -q "<true>"; then
+    tray=yes
+    break
+  fi
   sleep 0.1
 done
+[[ $tray == yes ]] || { echo "kde-up: plasmashell registered no tray host" >&2; exit 1; }
 echo "kde-up: $(kwin_wayland --version 2>/dev/null) on wayland-0"
