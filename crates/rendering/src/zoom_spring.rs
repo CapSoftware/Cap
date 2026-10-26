@@ -657,6 +657,9 @@ fn cursor_events_across_cut(
             (
                 to_recording_ms(segment.start.max(span.timeline_start)),
                 to_recording_ms(segment.end.min(span.timeline_end)),
+                // A span's own end is the cut-out instant; only a zoom ending
+                // inside the span keeps its end inclusive.
+                segment.end < span.timeline_end,
             )
         })
         .collect();
@@ -674,14 +677,13 @@ fn cursor_events_across_cut(
         .moves
         .iter()
         .filter(|event| event.x.is_finite() && event.y.is_finite() && event.time_ms.is_finite());
-    // The cursor shown when a kept range starts is the last position before
-    // it, even if that move was cut out.
-    let carried = ranges.iter().filter_map(|&(start_ms, _)| {
+    // The cursor shown when a kept range starts is the last position at or
+    // before it, even if that move was cut out.
+    let carried = ranges.iter().filter_map(|&(start_ms, ..)| {
         finite_moves
             .clone()
             .filter(|event| event.time_ms <= start_ms)
             .max_by(|a, b| a.time_ms.total_cmp(&b.time_ms))
-            .filter(|event| event.time_ms < start_ms)
             .map(|event| cap_project::CursorMoveEvent {
                 time_ms: start_ms,
                 ..event.clone()
@@ -690,9 +692,10 @@ fn cursor_events_across_cut(
     let mut moves: Vec<_> = finite_moves
         .clone()
         .filter(|event| {
-            ranges
-                .iter()
-                .any(|&(start_ms, end_ms)| event.time_ms >= start_ms && event.time_ms <= end_ms)
+            ranges.iter().any(|&(start_ms, end_ms, closed)| {
+                event.time_ms > start_ms
+                    && (event.time_ms < end_ms || closed && event.time_ms == end_ms)
+            })
         })
         .cloned()
         .chain(carried)
@@ -2919,6 +2922,15 @@ mod tests {
             expected.targets_at(2.0, XY::new(0.5, 0.5)).center,
             follow_center((0.2, 0.2))
         );
+    }
+
+    #[test]
+    fn auto_zoom_across_cut_ignores_moves_at_the_cut_instant() {
+        let build = |moves| cut_zoom_timeline(auto_segment(0.5, 7.9, 2.0), [0.0, 10.0], moves);
+        let kept = vec![move_event(1000.0, 0.4, 0.4), move_event(10000.0, 0.8, 0.8)];
+        let mut with_cut_move = kept.clone();
+        with_cut_move.push(move_event(4000.0, 0.6, 0.4));
+        assert_samples_identical(&build(kept), &build(with_cut_move));
     }
 
     #[test]
