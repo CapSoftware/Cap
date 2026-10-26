@@ -58,9 +58,13 @@ describe("getLoomImporterJobState", () => {
 		async (phase) => {
 			vi.stubGlobal(
 				"fetch",
-				vi.fn().mockResolvedValue(
-					Response.json({ jobs: [{ jobId: "old", videoId: "video", phase }] }),
-				),
+				vi
+					.fn()
+					.mockResolvedValue(
+						Response.json({
+							jobs: [{ jobId: "old", videoId: "video", phase }],
+						}),
+					),
 			);
 			await expect(getLoomImporterJobState({ videoId: "video" })).resolves.toBe(
 				"finished",
