@@ -49,6 +49,7 @@ use std::{
 
 use cap_cursor_info::CursorFamily;
 use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
+use cap_project::caption_words::caption_text_from_words;
 use cap_project::{
     ClipSpeedAudioMode, Cursors, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, TimelineConfiguration, XY,
@@ -5345,44 +5346,6 @@ pub(crate) struct EditorNotice {
 
 /// How long a notice stays up.
 const EDITOR_NOTICE_DURATION: Duration = Duration::from_millis(2500);
-
-fn caption_text_from_words(words: &[cap_project::CaptionWord]) -> String {
-    let mut text = String::new();
-    for word in words {
-        let value = word.text.trim();
-        if value.is_empty() {
-            continue;
-        }
-        let attaches = value.chars().next().is_some_and(|value| {
-            matches!(
-                value,
-                ',' | '.'
-                    | '!'
-                    | '?'
-                    | ';'
-                    | ':'
-                    | '%'
-                    | ')'
-                    | ']'
-                    | '}'
-                    | '\''
-                    | '’'
-                    | '、'
-                    | '。'
-                    | '！'
-                    | '？'
-                    | '；'
-                    | '：'
-                    | '，'
-            )
-        });
-        if !text.is_empty() && !attaches {
-            text.push(' ');
-        }
-        text.push_str(value);
-    }
-    text
-}
 
 fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
     use std::hash::{BuildHasher, Hasher};
