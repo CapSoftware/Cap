@@ -1,6 +1,6 @@
 //! The in-progress recording bar -- `in-progress-recording.tsx`, natively.
 //!
-//! A 320x150 transparent panel whose visible content is a 40px card hugging the
+//! A transparent panel whose visible content is a 40px card hugging the
 //! bottom: stop button with the elapsed timer on the left, mic indicator and
 //! action buttons on the right, a drag handle on the trailing edge. The window
 //! itself is a non-activating panel at the maximum window level (see
@@ -12,7 +12,7 @@ use std::time::Duration;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled,
-    Window, div, prelude::FluentBuilder as _, px, svg,
+    Window, div, prelude::FluentBuilder as _, px, size, svg,
 };
 
 use crate::i18n::tr;
@@ -24,6 +24,11 @@ use crate::{
     theme::Theme,
     ui,
 };
+
+pub const CONTROLS_PADDING: f32 = 12.;
+pub const CONTROLS_BAR_HEIGHT: f32 = 40.;
+
+pub const FIT_WINDOW_TO_CONTENT: bool = cfg!(target_os = "macos");
 
 pub struct ControlsWindow {
     session: Entity<RecordingSession>,
@@ -391,7 +396,7 @@ impl ControlsWindow {
         };
 
         div()
-            .h(px(40.))
+            .h(px(CONTROLS_BAR_HEIGHT))
             .flex_shrink_0()
             .w_full()
             .flex()
@@ -518,12 +523,11 @@ impl Render for ControlsWindow {
                 .then(|| tr::controls::low_storage().to_owned())
         });
 
-        div()
-            .size_full()
+        let content = div()
             .flex()
             .flex_col()
             .justify_end()
-            .p(px(12.))
+            .p(px(CONTROLS_PADDING))
             .font_family(crate::theme::UI_FONT)
             .locale_font()
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
@@ -554,7 +558,26 @@ impl Render for ControlsWindow {
                         .child(recording_issue_text(issue)),
                 )
             })
-            .child(self.render_bar(cx))
+            .child(self.render_bar(cx));
+
+        if !FIT_WINDOW_TO_CONTENT {
+            return content.size_full();
+        }
+
+        // Transparent areas still take clicks on macOS, so the window hugs its content (#3357).
+        div()
+            .size_full()
+            .relative()
+            .child(content.absolute().left_0().right_0().bottom_0())
+            .on_children_prepainted(|bounds, window, _| {
+                let Some(content) = bounds.first() else {
+                    return;
+                };
+                let height = content.size.height.ceil();
+                if (window.viewport_size().height - height).abs() >= px(1.) {
+                    window.resize(size(px(crate::app_windows::CONTROLS_WIDTH), height));
+                }
+            })
     }
 }
 

@@ -44,6 +44,14 @@ pub const CONTROLS_HEIGHT: f32 = 150.;
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
+fn controls_height() -> f32 {
+    if crate::controls_window::FIT_WINDOW_TO_CONTENT {
+        crate::controls_window::CONTROLS_BAR_HEIGHT + crate::controls_window::CONTROLS_PADDING * 2.
+    } else {
+        CONTROLS_HEIGHT
+    }
+}
+
 #[cfg(any(target_os = "macos", test))]
 mod editor_placement;
 
@@ -6666,7 +6674,7 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
     use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 
     let width = CONTROLS_WIDTH as f64;
-    let height = CONTROLS_HEIGHT as f64;
+    let height = controls_height() as f64;
 
     if let ScreenCaptureTarget::Window { id } = &config.target
         && let Some(window) = scap_targets::Window::from_id(id)
@@ -6705,7 +6713,7 @@ fn open_controls(
     let (x, y) = controls_origin(config);
     let bounds = Bounds {
         origin: point(px(x as f32), px(y as f32)),
-        size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
+        size: size(px(CONTROLS_WIDTH), px(controls_height())),
     };
     let display = config
         .target
