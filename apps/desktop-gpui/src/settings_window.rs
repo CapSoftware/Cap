@@ -244,37 +244,31 @@ const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
     (10, tr::settings::general::recording::countdown::seconds_10),
 ];
 
-const STUDIO_QUALITY_TIERS: &[(StudioQuality, &str, &str)] = &[
+type Label = fn() -> &'static str;
+
+const STUDIO_QUALITY_TIERS: &[(StudioQuality, Label, Label)] = &[
     (
         StudioQuality::Balanced,
-        "Balanced",
-        "Sharp detail at a sensible file size. Right for most recordings.",
+        tr::settings::quality::studio::balanced,
+        tr::settings::quality::studio::balanced_description,
     ),
     (
         StudioQuality::Compatibility,
-        "Smaller files",
-        "Saves disk space. Fine detail can soften, most of all on camera.",
+        tr::settings::quality::studio::compatibility,
+        tr::settings::quality::studio::compatibility_description,
     ),
     (
         StudioQuality::Ultra,
-        "Maximum detail",
-        "Keeps the most detail for heavy editing. Uses the most disk space.",
+        tr::settings::quality::studio::ultra,
+        tr::settings::quality::studio::ultra_description,
     ),
 ];
 
-const INSTANT_RESOLUTION_TIERS: &[(u32, &str, &str)] = &[
-    (
-        1280,
-        "720p",
-        "Smallest uploads, so links are ready fastest.",
-    ),
-    (1920, "1080p", "Sharp text at a practical upload size."),
-    (
-        2560,
-        "1440p",
-        "Extra detail for large, high-resolution screens.",
-    ),
-    (3840, "4K", "The most detail. Best on a fast connection."),
+const INSTANT_RESOLUTION_TIERS: &[(u32, &str, Label)] = &[
+    (1280, "720p", tr::settings::quality::instant::res_720p),
+    (1920, "1080p", tr::settings::quality::instant::res_1080p),
+    (2560, "1440p", tr::settings::quality::instant::res_1440p),
+    (3840, "4K", tr::settings::quality::instant::res_4k),
 ];
 
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
@@ -350,7 +344,7 @@ impl RecordingsTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::All => "Show all",
+            Self::All => tr::settings::recordings::show_all(),
             Self::Instant => "Instant",
             Self::Studio => "Studio",
         }
@@ -592,17 +586,15 @@ fn search_may_have_changed(event: &ui::TextInputEvent) -> bool {
 }
 
 /// `emptyMessage()`.
-fn recordings_empty_message(tab: RecordingsTab, trimmed_search: &str) -> String {
-    let tab_label = match tab {
-        RecordingsTab::All => "recordings".to_string(),
-        tab => format!("{} recordings", tab.id()),
-    };
-    let prefix = if trimmed_search.is_empty() {
-        "No"
-    } else {
-        "No matching"
-    };
-    format!("{prefix} {tab_label}")
+fn recordings_empty_message(tab: RecordingsTab, trimmed_search: &str) -> &'static str {
+    match (tab, trimmed_search.is_empty()) {
+        (RecordingsTab::All, true) => tr::settings::recordings::empty::all(),
+        (RecordingsTab::All, false) => tr::settings::recordings::empty::all_matching(),
+        (RecordingsTab::Instant, true) => tr::settings::recordings::empty::instant(),
+        (RecordingsTab::Instant, false) => tr::settings::recordings::empty::instant_matching(),
+        (RecordingsTab::Studio, true) => tr::settings::recordings::empty::studio(),
+        (RecordingsTab::Studio, false) => tr::settings::recordings::empty::studio_matching(),
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -639,7 +631,7 @@ fn cached_user_profile(
 
 fn account_name(signed_in: bool, profile: Option<&UserProfile>) -> String {
     if !signed_in {
-        return "Click to sign in".to_string();
+        return tr::settings::sidebar::click_to_sign_in().to_string();
     }
     profile
         .and_then(|profile| {
@@ -649,7 +641,7 @@ fn account_name(signed_in: bool, profile: Option<&UserProfile>) -> String {
                 .map(str::trim)
                 .find(|value| !value.is_empty())
         })
-        .unwrap_or("Signed in")
+        .unwrap_or(tr::settings::sidebar::signed_in())
         .to_string()
 }
 
@@ -806,17 +798,8 @@ impl SettingsWindow {
             input.set_text(settings.server_url.clone(), cx);
             input
         });
-        let recordings_search = cx.new(|cx| {
-            let mut input = ui::TextInputState::single_line(window, cx);
-            // `placeholder="Search"`.
-            input.set_placeholder("Search");
-            input
-        });
-        let screenshots_search = cx.new(|cx| {
-            let mut input = ui::TextInputState::single_line(window, cx);
-            input.set_placeholder("Search");
-            input
-        });
+        let recordings_search = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let screenshots_search = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let field_events = [
             cx.subscribe(&project_name_input, |this, input, event, cx| {
                 this.on_field_event(Field::ProjectName, input, event, cx)
@@ -1199,9 +1182,9 @@ impl SettingsWindow {
         cx.spawn_in(window, async move |_, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
-                "Are you sure you want to delete this recording?",
-                "Yes",
-                "No",
+                tr::main::delete_recording_confirm(),
+                tr::common::yes(),
+                tr::common::no(),
                 false,
             );
             if !confirmed {
@@ -1333,9 +1316,9 @@ impl SettingsWindow {
         cx.spawn_in(window, async move |this, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
-                "Are you sure you want to delete this screenshot?",
-                "Yes",
-                "No",
+                tr::main::delete_screenshot_confirm(),
+                tr::common::yes(),
+                tr::common::no(),
                 false,
             );
             if !confirmed {
@@ -1398,11 +1381,10 @@ impl SettingsWindow {
         }
         cx.spawn_in(window, async move |_this, cx| {
             let confirmed = crate::platform::confirm_dialog(
-                "Recording is potentially corrupted",
-                "The recording failed so this file may have issues in the editor! If your \
-                 having issues recovering the file please reach out to support!",
-                "Ok",
-                "Cancel",
+                tr::settings::recordings::corrupted_title(),
+                tr::settings::recordings::corrupted_body(),
+                tr::settings::prompt::ok(),
+                tr::common::cancel(),
                 true,
             );
             if !confirmed {
@@ -1994,7 +1976,7 @@ impl SettingsWindow {
                             .text_size(px(11.))
                             .line_height(px(13.))
                             .text_color(theme.settings_muted())
-                            .child("Account"),
+                            .child(tr::settings::sidebar::account()),
                     ),
             )
             .on_click(cx.listener(|this, _, window, cx| {
@@ -2073,26 +2055,29 @@ impl SettingsWindow {
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (update_label, update_ready) = match crate::updates::status(cx) {
-            crate::updates::UpdateStatus::Idle => ("Check for updates".to_string(), false),
+            crate::updates::UpdateStatus::Idle => (
+                tr::settings::sidebar::check_for_updates().to_string(),
+                false,
+            ),
             crate::updates::UpdateStatus::Downloading {
                 version,
                 fraction: Some(fraction),
             } => (
-                format!(
-                    "Downloading v{version}… {}%",
-                    (fraction * 100.).round() as u32
+                tr::settings::sidebar::downloading_progress(
+                    version,
+                    (fraction * 100.).round() as u32,
                 ),
                 false,
             ),
             crate::updates::UpdateStatus::Downloading { version, .. } => {
-                (format!("Downloading v{version}…"), false)
+                (tr::settings::sidebar::downloading(version), false)
             }
             crate::updates::UpdateStatus::Ready { version }
             | crate::updates::UpdateStatus::Installed { version, .. } => {
-                (format!("Restart to update to v{version}"), true)
+                (tr::settings::sidebar::restart_to_update(version), true)
             }
             crate::updates::UpdateStatus::Installing { version } => {
-                (format!("Installing v{version}…"), false)
+                (tr::settings::sidebar::installing(version), false)
             }
         };
 
@@ -2115,13 +2100,15 @@ impl SettingsWindow {
             .child(
                 div()
                     .id("settings-previous-versions")
-                    .child("View previous versions")
+                    .child(tr::settings::sidebar::previous_versions())
                     .hover(|style| style.text_color(theme.settings_text()))
                     .on_click(|_, _, cx| cx.open_url("https://cap.so/download/versions")),
             )
             .child(
                 div()
                     .id("settings-check-updates")
+                    .max_w_full()
+                    .truncate()
                     .cursor_pointer()
                     .when(update_ready, |link| {
                         link.text_color(rgb(Theme::SETTINGS_ACCENT))
@@ -2152,11 +2139,14 @@ impl SettingsWindow {
             .child({
                 let signed_in = store::auth_snapshot().signed_in();
                 let (variant, label) = if SignIn::global(cx).read(cx).is_pending() {
-                    (ui::ButtonVariant::Gray, "Cancel Sign In")
+                    (
+                        ui::ButtonVariant::Gray,
+                        tr::settings::sidebar::cancel_sign_in(),
+                    )
                 } else if signed_in {
-                    (ui::ButtonVariant::Gray, "Sign Out")
+                    (ui::ButtonVariant::Gray, tr::settings::sidebar::sign_out())
                 } else {
-                    (ui::ButtonVariant::Primary, "Sign In")
+                    (ui::ButtonVariant::Primary, tr::settings::sidebar::sign_in())
                 };
                 self.button(
                     "settings-sign-in",
@@ -2391,7 +2381,7 @@ impl SettingsWindow {
             .button(
                 "recordings-import",
                 (ui::ButtonVariant::Gray, Some("icons/import.svg")),
-                "Import",
+                tr::settings::recordings::import(),
                 false,
                 cx,
                 |_, _, cx| crate::import::pick_and_import_video(cx),
@@ -2410,7 +2400,7 @@ impl SettingsWindow {
 
         let children = if empty_library {
             vec![
-                self.recordings_message("No recordings found")
+                self.recordings_message(tr::settings::recordings::empty_library())
                     .into_any_element(),
             ]
         } else {
@@ -2422,8 +2412,8 @@ impl SettingsWindow {
 
         vec![
             self.section(
-                "Recordings",
-                Some("Manage your recordings and perform actions."),
+                tr::settings::recordings::title(),
+                Some(tr::settings::recordings::description()),
                 Some(import),
                 children,
             )
@@ -2437,7 +2427,7 @@ impl SettingsWindow {
             .button(
                 "screenshots-import",
                 (ui::ButtonVariant::Gray, Some("icons/import.svg")),
-                "Import image",
+                tr::settings::screenshots::import(),
                 false,
                 cx,
                 |_, _, cx| crate::import::pick_and_import_image(cx),
@@ -2453,7 +2443,7 @@ impl SettingsWindow {
 
         let children = if empty_library {
             vec![
-                self.recordings_message("No screenshots found")
+                self.recordings_message(tr::settings::screenshots::empty_library())
                     .into_any_element(),
             ]
         } else {
@@ -2465,8 +2455,8 @@ impl SettingsWindow {
 
         vec![
             self.section(
-                "Screenshots",
-                Some("Manage your screenshots and perform actions."),
+                tr::settings::screenshots::title(),
+                Some(tr::settings::screenshots::description()),
                 Some(import),
                 children,
             )
@@ -2474,8 +2464,11 @@ impl SettingsWindow {
         ]
     }
 
-    fn render_screenshots_filters(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_screenshots_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        self.screenshots
+            .search_input
+            .update(cx, |input, _| input.set_placeholder(tr::common::search()));
         let search = div().flex().flex_row().items_center().w(px(260.)).child(
             ui::TextInput::search(&theme, "screenshots-search", &self.screenshots.search_input)
                 .height(px(36.))
@@ -2527,9 +2520,9 @@ impl SettingsWindow {
             .overflow_hidden()
             .when(total == 0, |this| {
                 this.child(self.recordings_message(if has_search {
-                    "No matching screenshots"
+                    tr::settings::screenshots::empty_matching()
                 } else {
-                    "No screenshots"
+                    tr::settings::screenshots::empty()
                 }))
             })
             .child(div().flex().flex_col().w_full().children(items))
@@ -2545,7 +2538,7 @@ impl SettingsWindow {
                         .child(self.button(
                             "screenshots-load-more",
                             (ui::ButtonVariant::Gray, None),
-                            "Load more",
+                            tr::settings::screenshots::load_more(),
                             false,
                             cx,
                             |this, window, cx| {
@@ -2616,7 +2609,7 @@ impl SettingsWindow {
             .child(self.row_button(
                 ("screenshot-copy", index),
                 "icons/copy.svg",
-                "Copy to clipboard",
+                tr::settings::screenshots::copy(),
                 false,
                 cx,
                 {
@@ -2626,7 +2619,10 @@ impl SettingsWindow {
                         cx.spawn(async move |_, _| {
                             if let Err(error) = copied.await {
                                 tracing::warn!("copying screenshot failed: {error}");
-                                crate::platform::alert_dialog("Could not copy screenshot", &error);
+                                crate::platform::alert_dialog(
+                                    tr::main::library::copy_screenshot_failed(),
+                                    &error,
+                                );
                             }
                         })
                         .detach();
@@ -2636,7 +2632,7 @@ impl SettingsWindow {
             .child(self.row_button(
                 ("screenshot-save", index),
                 "icons/download.svg",
-                "Save as",
+                tr::settings::screenshots::save_as(),
                 false,
                 cx,
                 move |this, window, cx| {
@@ -2646,7 +2642,7 @@ impl SettingsWindow {
             .child(self.row_button(
                 ("screenshot-folder", index),
                 "icons/folder.svg",
-                "Open folder",
+                tr::settings::screenshots::open_folder(),
                 false,
                 cx,
                 move |_this, _window, cx| library::reveal_path(&bundle, cx),
@@ -2654,7 +2650,7 @@ impl SettingsWindow {
             .child(self.row_button(
                 ("screenshot-delete", index),
                 "icons/trash.svg",
-                "Delete",
+                tr::settings::screenshots::delete(),
                 false,
                 cx,
                 {
@@ -2704,6 +2700,9 @@ impl SettingsWindow {
     /// The filter bar: `flex flex-col gap-3 pb-4 w-full border-b border-gray-2`.
     fn render_recordings_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        self.recordings
+            .search_input
+            .update(cx, |input, _| input.set_placeholder(tr::common::search()));
         let active = self.recordings.tab;
 
         let tabs = div()
@@ -2845,7 +2844,7 @@ impl SettingsWindow {
                         .child(self.button(
                             "recordings-load-more",
                             (ui::ButtonVariant::Gray, None),
-                            "Load more",
+                            tr::settings::recordings::load_more(),
                             false,
                             cx,
                             |this, window, cx| {
@@ -3017,13 +3016,16 @@ impl SettingsWindow {
                 )
             })
             .when(item.clip_count > 1, |this| {
-                this.child(pill(theme.settings_fill()).child(format!("{} clips", item.clip_count)))
+                this.child(
+                    pill(theme.settings_fill())
+                        .child(tr::main::library::clips(item.clip_count as usize)),
+                )
             })
             .when(item.status.is_in_progress(), |this| {
                 this.child(
                     pill(Hsla::from(theme.blue_500))
                         .child(glyph("icons/record-fill.svg"))
-                        .child("Recording in progress"),
+                        .child(tr::settings::recordings::in_progress()),
                 )
             })
             .when_some(item.status.error().map(str::to_string), |this, error| {
@@ -3033,7 +3035,7 @@ impl SettingsWindow {
                     pill(Hsla::from(theme.red_9))
                         .id("recording-failed")
                         .child(glyph("icons/warning-bold.svg"))
-                        .child("Recording failed")
+                        .child(tr::settings::recordings::failed())
                         .tooltip(move |_window, cx| {
                             ui::Tooltip::new(&theme, error.clone())
                                 .style(ui::TooltipStyle::Light)
@@ -3066,7 +3068,7 @@ impl SettingsWindow {
                 actions = actions.child(self.row_button(
                     ("recording-link", index),
                     "icons/link.svg",
-                    "Open link",
+                    tr::settings::recordings::open_link(),
                     false,
                     cx,
                     move |_this, _window, cx| cx.open_url(&link),
@@ -3076,7 +3078,7 @@ impl SettingsWindow {
             actions = actions.child(self.row_button(
                 ("recording-edit", index),
                 "icons/edit.svg",
-                "Edit",
+                tr::settings::recordings::edit(),
                 // `disabled={status === "InProgress"}`
                 in_progress,
                 cx,
@@ -3092,7 +3094,7 @@ impl SettingsWindow {
                 self.row_button(
                     ("recording-reupload", index),
                     "icons/rotate-ccw.svg",
-                    "Retry upload",
+                    tr::settings::recordings::retry_upload(),
                     !item
                         .upload
                         .as_ref()
@@ -3123,7 +3125,7 @@ impl SettingsWindow {
                 actions = actions.child(self.row_button(
                     ("recording-instant-link", index),
                     "icons/link.svg",
-                    "Open link",
+                    tr::settings::recordings::open_link(),
                     false,
                     cx,
                     move |_this, _window, cx| cx.open_url(&link),
@@ -3135,7 +3137,7 @@ impl SettingsWindow {
         actions = actions.child(self.row_button(
             ("recording-folder", index),
             "icons/folder.svg",
-            "Open recording bundle",
+            tr::settings::recordings::open_bundle(),
             false,
             cx,
             move |_this, _window, cx| library::open_recording_folder(&folder_path, mode, cx),
@@ -3143,7 +3145,7 @@ impl SettingsWindow {
         actions.child(self.row_button(
             ("recording-delete", index),
             "icons/trash.svg",
-            "Delete",
+            tr::settings::recordings::delete(),
             false,
             cx,
             move |this, window, cx| this.delete_recording(path.clone(), window, cx),
@@ -3405,17 +3407,17 @@ impl SettingsWindow {
             self.render_studio_quality(cx).into_any_element(),
             self.render_instant_quality(cx).into_any_element(),
             self.section(
-                "Sharing",
+                tr::settings::quality::sharing::title(),
                 None,
                 None,
                 vec![
                     self.rows(vec![
                         self.setting_row(
-                            "Open share links automatically",
-                            Some("Open the link in your browser when an upload finishes."),
+                            tr::settings::quality::sharing::auto_open(),
+                            Some(tr::settings::quality::sharing::auto_open_description()),
                             self.toggle(
                                 "auto-open-links",
-                                "Open share links automatically",
+                                tr::settings::quality::sharing::auto_open(),
                                 !self.settings.disable_auto_open_links,
                                 cx,
                                 |this, cx| {
@@ -3456,12 +3458,12 @@ impl SettingsWindow {
         let summary = INSTANT_RESOLUTION_TIERS
             .iter()
             .find(|(value, _, _)| *value == effective)
-            .map(|(_, _, summary)| *summary)
+            .map(|(_, _, summary)| summary())
             .unwrap_or_default();
         let description = if self.has_cap_pro {
-            summary.to_string()
+            summary
         } else {
-            "720p on the free plan. Cap Pro records up to 4K.".to_string()
+            tr::settings::quality::instant::free_plan()
         };
 
         let options = INSTANT_RESOLUTION_TIERS
@@ -3481,7 +3483,7 @@ impl SettingsWindow {
             .child(
                 ui::SettingRow::settings(
                     &theme,
-                    "Maximum resolution",
+                    tr::settings::quality::instant::max_resolution(),
                     None,
                     self.segmented_raw("instant-resolution", options, cx, |this, index, cx| {
                         this.select_instant_resolution(index, cx)
@@ -3498,18 +3500,14 @@ impl SettingsWindow {
                     .p(px(12.))
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.amber_11))
-                    .child("Couldn't save your recording settings. Please try again.")
+                    .child(tr::settings::quality::save_failed())
                     .into_any_element(),
             );
         }
 
         self.section(
-            "Instant recordings",
-            Some(
-                "Uploaded while you record, so the link is ready the moment you stop. For the \
-                 best quality, use Studio mode: it records at the highest quality your screen \
-                 allows, and you can export up to 4K.",
-            ),
+            tr::settings::quality::instant::title(),
+            Some(tr::settings::quality::instant::description()),
             None,
             vec![self.rows(rows).into_any_element()],
         )
@@ -3570,6 +3568,7 @@ impl SettingsWindow {
             .iter()
             .copied()
             .map(|(quality, label, description)| {
+                let (label, description) = (label(), description());
                 let selected = current == quality;
                 div()
                     .id(SharedString::from(format!(
@@ -3602,15 +3601,18 @@ impl SettingsWindow {
                                     .child(div().text_size(px(13.)).child(label))
                                     .when(quality == StudioQuality::Balanced, |this| {
                                         this.child(
-                                            div()
-                                                .px(px(6.))
-                                                .py(px(1.))
-                                                .rounded(px(4.))
-                                                .bg(theme.settings_fill())
-                                                .text_size(px(11.))
-                                                .text_color(theme.settings_muted())
-                                                .child("Recommended"),
-                                        )
+                                                div()
+                                                    .px(px(6.))
+                                                    .py(px(1.))
+                                                    .rounded(px(4.))
+                                                    .bg(theme.settings_fill())
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.settings_muted())
+                                                    .child(
+                                                        tr::settings::quality::studio::recommended(
+                                                        ),
+                                                    ),
+                                            )
                                     }),
                             )
                             .child(
@@ -3642,14 +3644,14 @@ impl SettingsWindow {
                     .p(px(12.))
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.amber_11))
-                    .child("Couldn't save your recording settings. Please try again.")
+                    .child(tr::settings::quality::save_failed())
                     .into_any_element(),
             );
         }
 
         self.section(
-            "Studio recordings",
-            Some("Saved to your computer for editing. You choose the export size later, in the editor."),
+            tr::settings::quality::studio::title(),
+            Some(tr::settings::quality::studio::description()),
             None,
             vec![
                 div()

@@ -440,6 +440,7 @@ fn english_matches_the_literals_it_replaced() {
         .filter(|key| {
             !key.starts_with(NEW_IN_THE_LANGUAGE_PICKER)
                 && !super::surface_tests::is_main_surface_key(key)
+                && !super::settings_surface_tests::is_settings_surface_key(key)
         })
         .count()
         - 3;
